@@ -217,13 +217,84 @@ def save_load_roundtrip(lg, user, day, path, story, n, continue_from=False):
         return None, None
 
 
-def run_campaign(tag, seasons=6):
-    fantasy = (tag == "A")
-    cdir = os.path.join(BASE, f"campaign_{tag}")
-    os.makedirs(cdir, exist_ok=True)
-    strategies = STRATEGIES_A if fantasy else STRATEGIES_B
-    story = StoryLog()
+def play_season(tag, cdir, n, lg, user, strategies, story):
+    """Run one season; returns (lg, user) possibly replaced by a loaded game."""
+    from playtest_season import SeasonDriver  # noqa (already imported)
+    strategy = strategies[n]
+    print(f"\n===== CAMPAIGN {tag} SEASON {n} ({strategy}) "
+          f"year={lg.season_year} =====", flush=True)
+    drv = SeasonDriver(lg, n, strategy, story)
+    try:
+        drv.preseason()
+        psys.preseason_systems(drv)
+        lg.generate_schedule(lg.season_year)
+        # log the derived trade deadline for this season
+        dl = _derived_dl(lg)
+        if dl is not None:
+            story.add(n, dl, "deadline_derived", ["trade_deadline_manager"],
+                      f"Derived trade deadline: {dl.isoformat()} "
+                      f"(40d before last RS game)", "")
+        drv.regular_season()
+        drv._awards()
+        champ = drv._playoffs()
+        drv._champ = champ
+        summ = season_summary(lg, user, champ)
+        summ["trades"] = drv.trades_made
+        summ["strategy"] = strategy
+        summ["year"] = lg.season_year
+        summ["user_team"] = USER_TEAM
+        summ["derived_deadline"] = dl.isoformat() if dl else None
+        drv._offseason()
+        psys.offseason_systems(drv)
+        # save/load every season; season 4 continues from the loaded game
+        sp = os.path.join(cdir, f"save_s{n}.dat")
+        lg2, user2 = save_load_roundtrip(
+            lg, user, drv.day, sp, story, n, continue_from=(n == 4))
+        if lg2 is not None:
+            lg, user = lg2, user2
+            print(f"  [season {n}] continuing campaign from loaded game",
+                  flush=True)
+        with open(os.path.join(cdir, f"season{n}.json"), "w") as f:
+            json.dump({"summary": summ,
+                       "events": [e for e in story.events if e["season"] == n],
+                       "bugs": [b for b in story.bugs if b["season"] == n]},
+                      f, indent=1, default=str)
+        print(f"Season {n}: {summ['user_record']} "
+              f"({summ['user_points']} pts, rank {summ['league_rank']}), "
+              f"champ={summ['champion']}", flush=True)
+    except Exception as e:
+        story.bug(n, "season driver",
+                  f"UNHANDLED: {e}\n{traceback.format_exc()[-800:]}",
+                  False, "")
+        print(f"SEASON {n} CRASHED: {e}", flush=True)
+        traceback.print_exc()
+    return lg, user
 
+
+def write_campaign_md(tag, cdir, seasons, story, fantasy):
+    with open(os.path.join(cdir, "CAMPAIGN.md"), "w") as f:
+        f.write(f"# Campaign {tag} ({'fantasy-draft' if fantasy else 'standard'} league)\n\n")
+        f.write(f"User team: {USER_TEAM}\n\n")
+        for n in range(1, seasons + 1):
+            p = os.path.join(cdir, f"season{n}.json")
+            if not os.path.exists(p):
+                continue
+            d = json.load(open(p))
+            sm = d["summary"]
+            f.write(f"## Season {n} ({sm['year']}-{sm['year']+1}, {sm['strategy']})\n")
+            f.write(f"{USER_TEAM}: {sm['user_record']} ({sm['user_points']} pts, "
+                    f"rank {sm['league_rank']}/32). Champion: {sm['champion']}\n")
+            f.write(f"Derived deadline: {sm.get('derived_deadline')}\n")
+            f.write(f"Trades: {sm['trades']}\n\n")
+        f.write(f"## Bugs ({len(story.bugs)})\n")
+        for b in story.bugs:
+            f.write(f"- S{b['season']} [{b['where']}] {b['what'][:160]} "
+                    f"(fixed={b['fixed']}) {b.get('file_line','')}\n")
+
+
+def _setup_league(tag, cdir, story):
+    """Build the league + user team for a fresh campaign."""
+    fantasy = (tag == "A")
     if fantasy:
         import playtest_fantasy as pf
         print(f"Campaign {tag}: running fantasy draft "
@@ -268,81 +339,60 @@ def run_campaign(tag, seasons=6):
     except Exception as e:
         story.bug(1, "rivalry seeding", f"{e}", False, "reputation_system.py")
     print(f"User team: {user.team_name} ({len(user.roster)} players)", flush=True)
+    return lg, user
 
+
+def run_campaign(tag, seasons=6):
+    fantasy = (tag == "A")
+    cdir = os.path.join(BASE, f"campaign_{tag}")
+    os.makedirs(cdir, exist_ok=True)
+    strategies = STRATEGIES_A if fantasy else STRATEGIES_B
+    story = StoryLog()
+    lg, user = _setup_league(tag, cdir, story)
     for n in range(1, seasons + 1):
-        strategy = strategies[n]
-        print(f"\n===== CAMPAIGN {tag} SEASON {n} ({strategy}) "
-              f"year={lg.season_year} =====", flush=True)
-        drv = SeasonDriver(lg, n, strategy, story)
-        try:
-            drv.preseason()
-            psys.preseason_systems(drv)
-            lg.generate_schedule(lg.season_year)
-            # log the derived trade deadline for this season
-            dl = _derived_dl(lg)
-            if dl is not None:
-                story.add(n, dl, "deadline_derived", ["trade_deadline_manager"],
-                          f"Derived trade deadline: {dl.isoformat()} "
-                          f"(40d before last RS game)", "")
-            drv.regular_season()
-            drv._awards()
-            champ = drv._playoffs()
-            drv._champ = champ
-            summ = season_summary(lg, user, champ)
-            summ["trades"] = drv.trades_made
-            summ["strategy"] = strategy
-            summ["year"] = lg.season_year
-            summ["user_team"] = USER_TEAM
-            summ["derived_deadline"] = dl.isoformat() if dl else None
-            drv._offseason()
-            psys.offseason_systems(drv)
-            # save/load every season; season 4 continues from the loaded game
-            sp = os.path.join(cdir, f"save_s{n}.dat")
-            lg2, user2 = save_load_roundtrip(
-                lg, user, drv.day, sp, story, n, continue_from=(n == 4))
-            if lg2 is not None:
-                lg, user = lg2, user2
-                print(f"  [season {n}] continuing campaign from loaded game",
-                      flush=True)
-            with open(os.path.join(cdir, f"season{n}.json"), "w") as f:
-                json.dump({"summary": summ,
-                           "events": [e for e in story.events if e["season"] == n],
-                           "bugs": [b for b in story.bugs if b["season"] == n]},
-                          f, indent=1, default=str)
-            print(f"Season {n}: {summ['user_record']} "
-                  f"({summ['user_points']} pts, rank {summ['league_rank']}), "
-                  f"champ={summ['champion']}", flush=True)
-        except Exception as e:
-            story.bug(n, "season driver",
-                      f"UNHANDLED: {e}\n{traceback.format_exc()[-800:]}",
-                      False, "")
-            print(f"SEASON {n} CRASHED: {e}", flush=True)
-            traceback.print_exc()
-
+        lg, user = play_season(tag, cdir, n, lg, user, strategies, story)
     story.dump(os.path.join(cdir, "story_all.json"))
-    # campaign summary markdown
-    with open(os.path.join(cdir, "CAMPAIGN.md"), "w") as f:
-        f.write(f"# Campaign {tag} ({'fantasy-draft' if fantasy else 'standard'} league)\n\n")
-        f.write(f"User team: {USER_TEAM}\n\n")
-        for n in range(1, seasons + 1):
-            p = os.path.join(cdir, f"season{n}.json")
-            if not os.path.exists(p):
-                continue
-            d = json.load(open(p))
-            sm = d["summary"]
-            f.write(f"## Season {n} ({sm['year']}-{sm['year']+1}, {sm['strategy']})\n")
-            f.write(f"{USER_TEAM}: {sm['user_record']} ({sm['user_points']} pts, "
-                    f"rank {sm['league_rank']}/32). Champion: {sm['champion']}\n")
-            f.write(f"Derived deadline: {sm.get('derived_deadline')}\n")
-            f.write(f"Trades: {sm['trades']}\n\n")
-        f.write(f"## Bugs ({len(story.bugs)})\n")
-        for b in story.bugs:
-            f.write(f"- S{b['season']} [{b['where']}] {b['what'][:160]} "
-                    f"(fixed={b['fixed']}) {b.get('file_line','')}\n")
+    write_campaign_md(tag, cdir, seasons, story, fantasy)
+    print(f"\nDone. Logs in {cdir}")
+
+
+def resume_campaign(tag, from_season, seasons=6):
+    """Resume after a crash: load save_s{from_season-1}.dat, continue."""
+    fantasy = (tag == "A")
+    cdir = os.path.join(BASE, f"campaign_{tag}")
+    strategies = STRATEGIES_A if fantasy else STRATEGIES_B
+    story = StoryLog()
+    # restore prior story
+    sp_all = os.path.join(cdir, "story_all.json")
+    if os.path.exists(sp_all):
+        try:
+            d = json.load(open(sp_all))
+            story.events = d.get("events", [])
+            story.bugs = d.get("bugs", [])
+        except Exception:
+            pass
+    from save_load_system import GameSaveManager
+    from types import SimpleNamespace
+    sp = os.path.join(cdir, f"save_s{from_season - 1}.dat")
+    stub = SimpleNamespace(league=None, current_date=None, user_team=None)
+    if not GameSaveManager(stub).load_game(sp):
+        raise RuntimeError(f"resume failed: could not load {sp}")
+    lg = stub.league
+    user = get_team(lg, USER_TEAM)
+    print(f"Resumed campaign {tag} at season {from_season} "
+          f"(year={lg.season_year})", flush=True)
+    for n in range(from_season, seasons + 1):
+        lg, user = play_season(tag, cdir, n, lg, user, strategies, story)
+    story.dump(os.path.join(cdir, "story_all.json"))
+    write_campaign_md(tag, cdir, seasons, story, fantasy)
     print(f"\nDone. Logs in {cdir}")
 
 
 if __name__ == "__main__":
     tag = sys.argv[1] if len(sys.argv) > 1 else "A"
-    seasons = int(sys.argv[2]) if len(sys.argv) > 2 else 6
-    run_campaign(tag, seasons)
+    if len(sys.argv) > 2 and sys.argv[2] == "resume":
+        resume_campaign(tag, int(sys.argv[3]),
+                        int(sys.argv[4]) if len(sys.argv) > 4 else 6)
+    else:
+        seasons = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+        run_campaign(tag, seasons)
