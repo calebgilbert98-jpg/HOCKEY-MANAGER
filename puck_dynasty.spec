@@ -1,9 +1,24 @@
 # PyInstaller spec for Puck Dynasty.
 # Built by GitHub Actions on every push to main; produces a standalone
 # folder (not a single .exe) so startup stays fast with 95 modules.
-# Adding new .py files requires no spec changes -- they're auto-discovered.
+# Adding new .py files requires no spec changes -- they're force-included
+# below (see _first_party). Do NOT rely on Analysis auto-discovery alone:
+# on 2026-09-28 the CI-built exe silently dropped ui_components even though
+# main.py imports it at top level, breaking every launch.
+
+import os as _os
 
 block_cipher = None
+
+# Every first-party top-level module, force-bundled. Excludes the entry
+# script itself, QA scripts, and the headless dev loader.
+_spec_dir = _os.path.dirname(_os.path.abspath(SPEC))
+_first_party = sorted(
+    _f[:-3] for _f in _os.listdir(_spec_dir)
+    if _f.endswith('.py')
+    and _f != 'main.py'
+    and not _f.startswith(('qa_', 'pt'))
+)
 
 a = Analysis(
     ['main.py'],
@@ -18,7 +33,7 @@ a = Analysis(
         'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
         'PIL.ImageFont', 'PIL.ImageOps',
         'customtkinter',
-    ],
+    ] + _first_party,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
