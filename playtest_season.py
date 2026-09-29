@@ -76,7 +76,7 @@ class SeasonDriver:
                 ensure_lineup(home)
                 ensure_lineup(away)
             try:
-                sim = AdvancedGameSim(home, away)
+                sim = AdvancedGameSim(home, away, league=lg)
                 winner, loser, scores, events, notable = sim.run()
             except Exception as e:
                 s.bug(self.n, "game sim",
@@ -85,7 +85,13 @@ class SeasonDriver:
                 continue
             hs, ag = scores
             distribute_stats(home, away, hs, ag)
-            apply_standings(lg, home, away, hs, ag)
+            # OT detection: match production (main.py) -- any GOAL or
+            # SHOOTOUT GOAL with period > 3. Raw events are wrong here:
+            # late-3rd-period shots/dekes leak into period 4 when the
+            # clock crosses 3600 mid-shift.
+            went_ot = any(isinstance(_e, dict) and _e.get("period", 0) > 3
+                          for _e in (notable or []))
+            apply_standings(lg, home, away, hs, ag, went_ot=went_ot)
             # analytics-hub feed: per-game record on both clubs
             try:
                 shots = [{"team": (e.get("team") or ""),

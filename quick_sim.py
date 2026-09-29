@@ -299,9 +299,13 @@ def flatten_lineup(lineup):
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
-    def __init__(self, home_team, away_team, atmosphere=None):
+    def __init__(self, home_team, away_team, atmosphere=None, league=None):
         self.home_team = home_team
         self.away_team = away_team
+        # League passthrough (ot_drama): enables rivalry heat, which reads
+        # league.rivalries and is otherwise always 0 in headless use.
+        # Default None = today's behavior exactly.
+        self.league = league
         # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
         # team_name), same shape as GameSim's, for line-combination
         # analytics.
@@ -1183,6 +1187,21 @@ class AdvancedGameSim:
         overtime_limit = 300  # 5 minutes OT (NHL regular season)
         shootout_rounds = 3  # Initial shootout rounds, then sudden death
 
+        # OT drama (ot_drama, additive): high-drama games get a slightly
+        # longer OT runway, so the better 3v3 side decides it instead of a
+        # shootout coin flip. No league -> exactly today's behavior.
+        _ot_ctx = None
+        if getattr(self, "league", None) is not None:
+            try:
+                from ot_drama import ot_context
+                _ot_ctx = ot_context(
+                    self.home_team, self.away_team, league=self.league,
+                    atmosphere={"energy": getattr(self, "_crowd_energy", 50.0)})
+                overtime_limit = int(300 * (0.85 + 0.3 * _ot_ctx["drama01"]))
+            except Exception:
+                _ot_ctx = None
+                overtime_limit = 300
+
         # Fresh game: no stale last-passer carried over from a previous game
         for _t in (self.home_team, self.away_team):
             for _p in getattr(_t, 'roster', []) or []:
@@ -1194,6 +1213,42 @@ class AdvancedGameSim:
         # Regulation: 60 minutes
         while self.time < 3600:
             self._simulate_shift()
+
+        # OT drama equalizer (ot_drama, additive): a 1-goal regulation game
+        # in a hot context can see the trailing team pull the goalie and
+        # force OT. Runs AFTER regulation, outside the shift loop: it only
+        # adjusts the team total and appends a game-record event. Caleb's
+        # shift/chance/shot logic is untouched, and per-player attribution
+        # flows from team totals via distribute_stats. No league -> skipped.
+        if getattr(self, "league", None) is not None and _ot_ctx is not None:
+            try:
+                _r_hs = self.score[self.home_team.team_name]
+                _r_ag = self.score[self.away_team.team_name]
+                if abs(_r_hs - _r_ag) == 1:
+                    from ot_drama import (late_equalizer_roll as _eq_roll,
+                                          ADVANCED_ONE_GOAL_SHARE as _eq_share)
+                    if _eq_roll(_ot_ctx,
+                                trailing_team_is_home=(_r_hs < _r_ag),
+                                one_goal_share=_eq_share):
+                        _trail = self.home_team if _r_hs < _r_ag else self.away_team
+                        self.score[_trail.team_name] += 1
+                        _scorer = None
+                        try:
+                            _cands = [p for p in (getattr(_trail, "roster", []) or [])
+                                      if p is not None and "goalie" not in
+                                      str(getattr(p, "primary_position", "")).lower()]
+                            if _cands:
+                                _scorer = random.choice(_cands)
+                        except Exception:
+                            _scorer = None
+                        self.events.append({
+                            "time": self.time, "period": 3,
+                            "team": _trail.team_name, "player": _scorer,
+                            "event": "Goal", "assists": [],
+                            "note": "late equalizer (ot_drama)",
+                        })
+            except Exception:
+                pass
         
         # Overtime: 3v3 sudden death - first goal wins (divergence #3:
         # GameSim skates 3v3; this engine used to run full-strength OT).
@@ -1249,10 +1304,21 @@ class AdvancedGameSim:
 
                 ONE decision: the shared player_traits core -- the same
                 skill-roll + traits resolution GameSim uses. The old
-                0.33 + linear formula is retired.
+                0.33 + linear formula is retired. ot_drama may add a small
+                edge via the optional parameter (default 0.0 = today's
+                behavior exactly).
                 """
                 from player_traits import resolve_shootout_attempt as _so
-                if _so(shooter, goalie):
+                _edge = 0.0
+                if _ot_ctx is not None:
+                    try:
+                        from ot_drama import shootout_edge as _se
+                        _edge = _se(
+                            _ot_ctx,
+                            shooter_is_home=(team_name == self.home_team.team_name))
+                    except Exception:
+                        _edge = 0.0
+                if _so(shooter, goalie, edge=_edge):
                     self.events.append({'time': self.time, 'period': 5, 'team': team_name, 'player': shooter, 'event': 'Shootout Goal'})
                     return True
                 return False

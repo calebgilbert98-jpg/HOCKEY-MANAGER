@@ -144,7 +144,7 @@ def distribute_stats(home, away, hs, ag):
             else:
                 st.stats.losses += 1
 
-def apply_standings(league, home, away, hs, ag):
+def apply_standings(league, home, away, hs, ag, went_ot=False):
     st = league.standings
     ot = (hs == ag)  # shouldn't happen (shootout decides), kept for safety
     if hs > ag:
@@ -153,7 +153,14 @@ def apply_standings(league, home, away, hs, ag):
         w, l = away, home
     st[w.team_name]["W"] += 1
     st[w.team_name]["Points"] += 2
-    st[l.team_name]["L"] += 1
+    if went_ot:
+        # NHL: an OT/shootout loss earns a point and is tracked separately
+        # from a regulation loss (previously the harness credited every
+        # loss as regulation, leaving OTL at 0 league-wide).
+        st[l.team_name]["OTL"] = st[l.team_name].get("OTL", 0) + 1
+        st[l.team_name]["Points"] += 1
+    else:
+        st[l.team_name]["L"] += 1
     # track team W/L too
     for t, tag in ((w, "W"), (l, "L")):
         try:
