@@ -424,6 +424,12 @@ class Player:
     
     id: int = field(default_factory=lambda: next(player_id_counter), init=False)
     jersey_number: int = field(default_factory=lambda: random.randint(1, 98))
+    # Favorite numbers, dealt once at creation by position (never re-dealt).
+    # jersey_number_since: season_year the current number was adopted --
+    # drives the "started a legacy with it" rule. None = grandfathered.
+    preferred_number: int = 0
+    second_number: int = 0
+    jersey_number_since: int = None
     captaincy: str = None # 'C', 'A', or None
     
     # Personal information with realistic defaults
@@ -743,6 +749,16 @@ class Player:
             self.faceoffs = random.randint(30, 45)
         elif self.primary_position == PlayerPosition.GOALIE:
             self.goaltending = random.randint(30, 45)
+        # Deal favorite numbers once -- position-aware pools, never re-dealt.
+        try:
+            if not self.preferred_number:
+                from immortality import deal_favorite_numbers as _deal
+                _pref, _sec = _deal(
+                    self.primary_position == PlayerPosition.GOALIE)
+                self.preferred_number = _pref
+                self.second_number = _sec
+        except Exception:
+            pass
 
     @property
     def full_name(self) -> str:

@@ -2390,6 +2390,17 @@ class HockeyManagerGUI(tk.Tk):
                             original_team.prospects.append(player)
                     else:
                         original_team.ahl_roster.append(player)
+                        # Jersey number: the drafted prospect wants his
+                        # favorite -- preferred, else second choice, else
+                        # first free legal number in the org pool.
+                        try:
+                            import immortality as _im_arr
+                            _im_arr.assign_arrival_number(
+                                original_team, player,
+                                int(getattr(getattr(self, "league", None),
+                                            "season_year", 2026) or 2026))
+                        except Exception:
+                            pass
                         # New-CBA paper-transaction rule: the assignment
                         # stamps the recall gate -- he must play an AHL
                         # game before he can come back up.
@@ -6101,6 +6112,31 @@ class HockeyManagerGUI(tk.Tk):
                                     f"{getattr(_t, 'team_name', 'club')}.")
                         except Exception:
                             pass
+                    # Numbers finalized with the captaincy: freed favorites
+                    # get claimed unless the player started a legacy with
+                    # his current number. Old saves backfill retired
+                    # numbers first so nothing legal gets repaired away.
+                    try:
+                        import immortality as _im2
+                        for _t in (getattr(getattr(self, 'league', None),
+                                           'teams', None) or []):
+                            try:
+                                if (getattr(_t, 'league_name', '')
+                                        != "National Hockey League"):
+                                    continue
+                                _im2.seed_retired_numbers(_t)
+                                for _sw in _im2.finalize_team_numbers(_t, _sy):
+                                    if _t is _ut and _sw.get("reason") == "favorite":
+                                        _p = _sw.get("player")
+                                        self.add_news(
+                                            f"{getattr(_p, 'full_name', 'A player')} "
+                                            f"switches from No. {_sw.get('old')} to "
+                                            f"No. {_sw.get('new')} -- his favorite "
+                                            f"number freed up.")
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
 
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
@@ -12394,9 +12430,14 @@ class HockeyManagerGUI(tk.Tk):
                     try:
                         import accolades as _acc
                         _syr = getattr(self.league, "season_year", 0)
-                        _acc.bank_accolade(
-                            p, "stanley_cup",
-                            f"{_syr}-{str(_syr + 1)[-2:]}")
+                        if _acc.bank_accolade(
+                                p, "stanley_cup",
+                                f"{_syr}-{str(_syr + 1)[-2:]}"):
+                            # Legacy counter: career Cups. Idempotent via
+                            # bank_accolade's True-on-new-add return, so
+                            # immortality snapshots see the real total.
+                            p.stanley_cups = int(
+                                getattr(p, "stanley_cups", 0) or 0) + 1
                     except Exception:
                         pass
                 # Playoff success builds reputation for every playoff team,
@@ -16341,16 +16382,34 @@ class HockeyManagerGUI(tk.Tk):
             # Retired numbers stay retired -- the rafters are not negotiable.
             try:
                 import immortality as _im
+                from game_classes import PlayerPosition as _PP
                 _team = getattr(self, "user_team", None)
-                if _team is not None and _im.is_number_retired(_team, new_number):
-                    messagebox.showwarning(
-                        "Retired Number",
-                        f"No. {new_number} is retired by "
-                        f"{_team.team_name} -- pick another.")
+                _goalie = getattr(player, "primary_position", None) == _PP.GOALIE
+                if not _im.number_selectable(_team, new_number, _goalie):
+                    if _team is not None and _im.is_number_retired(_team, new_number):
+                        messagebox.showwarning(
+                            "Retired Number",
+                            f"No. {new_number} is retired by "
+                            f"{_team.team_name} -- pick another.")
+                    elif (not _goalie
+                          and int(new_number) in _im.SKATER_BARRED_NUMBERS):
+                        messagebox.showwarning(
+                            "Goalie Number",
+                            f"No. {new_number} is reserved for goaltenders -- "
+                            f"pick another.")
+                    else:
+                        messagebox.showwarning(
+                            "Number Taken",
+                            f"No. {new_number} is unavailable -- pick another.")
                     return
             except Exception:
                 pass
             player.jersey_number = new_number
+            try:
+                player.jersey_number_since = int(
+                    getattr(getattr(self, "league", None), "season_year", 2026))
+            except Exception:
+                pass
             self.update_all_views()
 
     def set_best_lines(self):

@@ -395,7 +395,9 @@ def test_fire_hire_update_staff(t):
     t.check("promoted assistant has Head Coach role",
             dr._is_head_coach_role(asst))
     heads = [s for s in team2.staff if dr._is_head_coach_role(s)]
-    t.check("exactly one head coach on staff", len(heads) == 1)
+    nhl_heads = [s for s in heads
+                 if getattr(s, "assignment", "nhl") != "ahl"]
+    t.check("exactly one NHL head coach on staff", len(nhl_heads) == 1)
 
 
 def test_is_user_team(t):

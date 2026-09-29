@@ -70,8 +70,8 @@ signed = []
 closed = []
 
 
-def fake_sign(st, salary, years):
-    signed.append((st, salary, years))
+def fake_sign(st, salary, years, assignment="nhl"):
+    signed.append((st, salary, years, assignment))
     return True
 
 

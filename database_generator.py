@@ -408,6 +408,21 @@ class DatabaseGenerator:
         # Generate staff for teams
         self._generate_team_staff(main_league.teams)
 
+        # Jersey numbers: seed every club's real retired numbers (plus
+        # league-wide 99), then deal numbers in seniority order so
+        # established players land their favorites.
+        try:
+            import immortality as _im
+            _yr = int(getattr(main_league, "season_year", 2026) or 2026)
+            for _t in main_league.teams:
+                try:
+                    _im.seed_retired_numbers(_t)
+                    _im.initial_number_assignment(_t, _yr)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         # Link family members across the league (rare shared surnames)
         # and seed their relationships warm -- brothers start close.
         self._link_family_members(main_league)
