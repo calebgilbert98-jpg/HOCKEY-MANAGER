@@ -4248,7 +4248,10 @@ class League:
         remaining_matchups = all_matchups.copy()
         
         max_games_per_day = 16  # Maximum NHL games per day (each game uses 2 teams)
-        max_back_to_backs_per_team = 25  # More flexible to ensure all games get scheduled
+        # Real NHL back-to-back load: 11-16 per team per season. The old
+        # budget (22-28) scheduled ~27 per team -- two-thirds of every
+        # club's games in back-to-backs, which reads as broken.
+        max_back_to_backs_per_team = 14
         
         # Track progress and apply progressive flexibility
         days_into_season = 0
@@ -4321,7 +4324,32 @@ class League:
             
             daily_games = []
             teams_playing_today = games_by_date[current_date].copy()
-            
+
+            # EHM-style rest preference: order today's candidates so the
+            # most-rested teams get picked first -- but with jitter, so
+            # the schedule doesn't become unnaturally back-to-back-free
+            # (real NHL: 11-16 per team). The hard cap above keeps the
+            # total realistic; the jitter lets a natural number through.
+            # Ground truth: most recent game date from games_by_date.
+            _team_dates_cache = {}
+            def _rest_days(team_name):
+                if team_name not in _team_dates_cache:
+                    _latest = None
+                    for _d, _teams in games_by_date.items():
+                        if team_name in _teams and (_latest is None or _d > _latest):
+                            _latest = _d
+                    _team_dates_cache[team_name] = _latest
+                _latest = _team_dates_cache[team_name]
+                if _latest is None:
+                    return 999
+                return (current_date - _latest).days
+            import random as _sched_rng
+            remaining_matchups.sort(
+                key=lambda m: (_rest_days(m[0].team_name)
+                               + _rest_days(m[1].team_name)
+                               + _sched_rng.uniform(0, 14)),
+                reverse=True)
+
             # Try to schedule games for today
             attempts = 0
             max_attempts = len(remaining_matchups) * 3  # More attempts to find valid games
@@ -4341,13 +4369,17 @@ class League:
                     # Relaxed constraints in emergency mode
                     if not emergency_mode:
                         # ENHANCED RULE: Prevent 3+ consecutive games with stricter enforcement
+                        # Ground truth from games_by_date (the last-played dicts
+                        # can go stale across the three scheduling paths).
                         yesterday = current_date - timedelta(days=1)
                         day_before_yesterday = current_date - timedelta(days=2)
-                        
-                        team1_played_yesterday = team_last_played.get(team1_name) == yesterday
-                        team1_played_day_before = team_second_last_played.get(team1_name) == day_before_yesterday
-                        team2_played_yesterday = team_last_played.get(team2_name) == yesterday
-                        team2_played_day_before = team_second_last_played.get(team2_name) == day_before_yesterday
+                        _yd = games_by_date.get(yesterday, set())
+                        _dbd = games_by_date.get(day_before_yesterday, set())
+
+                        team1_played_yesterday = team1_name in _yd
+                        team1_played_day_before = team1_name in _dbd
+                        team2_played_yesterday = team2_name in _yd
+                        team2_played_day_before = team2_name in _dbd
                         
                         # STRONGER 3-consecutive prevention - now includes late season
                         if (team1_played_yesterday and team1_played_day_before) or (team2_played_yesterday and team2_played_day_before):
@@ -4357,8 +4389,10 @@ class League:
                         is_back_to_back_team1 = team1_played_yesterday
                         is_back_to_back_team2 = team2_played_yesterday
                         
-                        # More generous back-to-back limits but stricter consecutive limits
-                        progressive_limit = max(22, int(28 - (6 * season_progress)))
+                        # Realistic back-to-back budget: 12-16 per team over the
+                        # season, matching the real NHL. Tighter early (when
+                        # dates are plentiful), slightly looser late.
+                        progressive_limit = max(12, int(16 - (4 * season_progress)))
                         
                         if is_back_to_back_team1 and team_back_to_backs[team1_name] >= progressive_limit:
                             continue  # Team1 has used up their progressive back-to-back budget
@@ -4366,19 +4400,23 @@ class League:
                             continue  # Team2 has used up their progressive back-to-back budget
                     else:
                         # EMERGENCY MODE: Still prevent 3+ consecutive even in emergency
+                        # (ground truth -- see above).
                         yesterday = current_date - timedelta(days=1)
                         day_before_yesterday = current_date - timedelta(days=2)
-                        
-                        team1_played_yesterday = team_last_played.get(team1_name) == yesterday
-                        team1_played_day_before = team_second_last_played.get(team1_name) == day_before_yesterday
-                        team2_played_yesterday = team_last_played.get(team2_name) == yesterday
-                        team2_played_day_before = team_second_last_played.get(team2_name) == day_before_yesterday
+                        _yd = games_by_date.get(yesterday, set())
+                        _dbd = games_by_date.get(day_before_yesterday, set())
+
+                        team1_played_yesterday = team1_name in _yd
+                        team1_played_day_before = team1_name in _dbd
+                        team2_played_yesterday = team2_name in _yd
+                        team2_played_day_before = team2_name in _dbd
                         
                         # Even in emergency mode, prevent excessive consecutive games
                         if (team1_played_yesterday and team1_played_day_before) or (team2_played_yesterday and team2_played_day_before):
                             continue  # Still prevent 3+ consecutive in emergency mode
                     
                     # This game is valid - schedule it!
+
                     game_data = {
                         'date': current_date,
                         'home_team': team1 if venue == 'HOME' else team2,
@@ -4428,19 +4466,23 @@ class League:
                             continue  # Skip - one of the teams already has a game today
                         
                         # IMPROVED: Still prevent 3+ consecutive games even in relaxed mode
+                        # (ground truth -- see above).
                         yesterday = current_date - timedelta(days=1)
                         day_before = current_date - timedelta(days=2)
-                        
-                        team1_played_yesterday = team_last_played.get(team1_name) == yesterday
-                        team1_played_day_before = team_second_last_played.get(team1_name) == day_before
-                        team2_played_yesterday = team_last_played.get(team2_name) == yesterday
-                        team2_played_day_before = team_second_last_played.get(team2_name) == day_before
+                        _yd = games_by_date.get(yesterday, set())
+                        _dbd = games_by_date.get(day_before, set())
+
+                        team1_played_yesterday = team1_name in _yd
+                        team1_played_day_before = team1_name in _dbd
+                        team2_played_yesterday = team2_name in _yd
+                        team2_played_day_before = team2_name in _dbd
                         
                         # Still enforce 3-consecutive limit even in relaxed mode (prevents 9-game streaks!)
                         if (team1_played_yesterday and team1_played_day_before) or (team2_played_yesterday and team2_played_day_before):
                             continue  # Would create 3+ consecutive - still forbidden even in relaxed mode
                         
                         # Valid game found with careful relaxed rules
+
                         game_data = {
                             'date': current_date,
                             'home_team': team1 if venue == 'HOME' else team2,
@@ -4579,20 +4621,34 @@ class League:
                     check_date += timedelta(days=1)
                     continue
                 
-                # Check no-three-in-a-row (hard constraint)
+                # Check no-three-in-a-row (hard constraint) -- from ground truth.
+                # The team_last_played dicts are unreliable here (the main
+                # loop's games are spread across the season while we scan
+                # forward from opening night), so read actual game dates.
+                # Check BOTH directions: a game placed today completes a
+                # streak with games on either side (force-scheduling runs
+                # forward, so tomorrow's games may already be placed).
+                def _played_on(team_name, d):
+                    return team_name in games_by_date.get(d, set())
                 yesterday = check_date - timedelta(days=1)
                 day_before = check_date - timedelta(days=2)
-                
-                t1_y = team_last_played.get(team1_name) == yesterday
-                t1_db = team_second_last_played.get(team1_name) == day_before
-                t2_y = team_last_played.get(team2_name) == yesterday
-                t2_db = team_second_last_played.get(team2_name) == day_before
-                
-                if (t1_y and t1_db) or (t2_y and t2_db):
+                tomorrow = check_date + timedelta(days=1)
+                day_after = check_date + timedelta(days=2)
+
+                def _would_streak(team_name):
+                    y = _played_on(team_name, yesterday)
+                    db = _played_on(team_name, day_before)
+                    t = _played_on(team_name, tomorrow)
+                    da = _played_on(team_name, day_after)
+                    # Three in a row with today as first, middle, or last.
+                    return (y and db) or (y and t) or (t and da)
+
+                if _would_streak(team1_name) or _would_streak(team2_name):
                     check_date += timedelta(days=1)
                     continue
                 
                 # Valid date found! Schedule the game
+
                 game_data = {
                     'date': check_date,
                     'home_team': team1 if venue == 'HOME' else team2,
@@ -4607,8 +4663,11 @@ class League:
                 games_by_date[check_date].add(team1_name)
                 games_by_date[check_date].add(team2_name)
                 
-                # Update last played (need to be careful - this is simplified)
-                # For force-schedule, we just update the most recent
+                # Update tracking (both stamps -- the 3-in-a-row check reads
+                # team_second_last_played, so leaving it stale blinds it and
+                # lets force-scheduled games stack into 3+ streaks).
+                team_second_last_played[team1_name] = team_last_played.get(team1_name)
+                team_second_last_played[team2_name] = team_last_played.get(team2_name)
                 team_last_played[team1_name] = check_date
                 team_last_played[team2_name] = check_date
                 team_games_scheduled[team1_name] += 1
