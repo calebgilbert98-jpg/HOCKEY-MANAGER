@@ -473,13 +473,33 @@ def locker_room_impact(player: Any, team_context: Optional[Dict[str, Any]] = Non
         return 0.0
 
 
-def award_championship(entity: Any) -> int:
+def award_championship(entity: Any, season_year: int = None) -> int:
     """Flat reputation bonus for winning the Stanley Cup. Ratchet-safe by
     construction (pure addition, capped at 100). Call at the offseason
     rollover for every player/staff member on the champion team.
+
+    Season-idempotent: when season_year is given, re-running the rollover
+    for the same season never double-pays (credited seasons persist on
+    the entity). Callers that omit it keep the legacy always-pay behavior.
     """
     ensure_reputation_fields(entity)
     try:
+        if season_year is not None:
+            try:
+                credited = getattr(entity, "_championship_rep_seasons",
+                                   None)
+                credited = set(credited) if credited else set()
+            except Exception:
+                credited = set()
+            if season_year in credited:
+                if hasattr(entity, "career_reputation"):
+                    return int(entity.career_reputation or 0)
+                return int(entity.reputation or 0)
+            credited.add(season_year)
+            try:
+                entity._championship_rep_seasons = credited
+            except Exception:
+                pass
         if hasattr(entity, "career_reputation"):
             entity.career_reputation = min(100, entity.career_reputation + 8)
             return entity.career_reputation

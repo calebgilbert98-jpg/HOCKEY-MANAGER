@@ -12829,6 +12829,18 @@ class HockeyManagerGUI(tk.Tk):
                 _season_labels = {str(_syr + 1), _slabel}
             except Exception:
                 _season_labels = set()
+            # Captaincy growth: the room's regime figure for mentorship
+            # (best letter-wearer's leadership). Computed once per team,
+            # before any leadership moves, so every learner sees the same
+            # number regardless of roster order.
+            _cg_mentor_lead = None
+            try:
+                for _cap in team.roster:
+                    if getattr(_cap, "captaincy", "") in ("C", "A"):
+                        _cl = float(getattr(_cap, "leadership", 0) or 0)
+                        _cg_mentor_lead = max(_cl, _cg_mentor_lead or 0)
+            except Exception:
+                pass
             for p in team.roster:
                 incidents = sum(
                     1 for e in getattr(p, 'controversy_history', []) or []
@@ -12839,7 +12851,23 @@ class HockeyManagerGUI(tk.Tk):
                                      coach=getattr(team, 'head_coach', None),
                                      win_pct=win_pct)
                 if is_champ:
-                    rs.award_championship(p)  # +8, ratchet-safe
+                    rs.award_championship(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0)
+                            or 0))  # +8, ratchet-safe, season-idempotent
+                    # The captain who lifts the Cup banks a little extra
+                    # standing -- leading a champion is the signature
+                    # leadership credential.
+                    try:
+                        import captaincy_growth as _cg1
+                        _cg1.cup_captain_rep_bonus(
+                            p, is_champ=is_champ,
+                            season_year=int(
+                                getattr(self.league, "season_year", 0)
+                                or 0))
+                    except Exception:
+                        pass
                     # Trophy case: bank the Cup on every champion-roster
                     # player, labeled by season (e.g. "2026-27").
                     # Idempotent -- re-runs never duplicate.
@@ -12881,6 +12909,40 @@ class HockeyManagerGUI(tk.Tk):
                             playoff_rounds_won=playoff_rounds_won)
                     except Exception:
                         pass
+                # Captaincy forges leaders: tenure + team results + personal
+                # impact grow leadership (the Toews/Crosby arc). Additive --
+                # the development engine is never touched. Season-stamped
+                # inside the module, so re-runs are safe.
+                try:
+                    import captaincy_growth as _cg2
+                    _cg_res = _cg2.apply_captaincy_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        league_avg_ppg=league_avg_ppg)
+                    _cg_story = _cg_res.get("milestone_story")
+                    if _cg_story:
+                        # add_news lives on the GUI; the manager only holds
+                        # it via .app.
+                        _cg_add = getattr(getattr(self, "app", None),
+                                          "add_news", None)
+                        if callable(_cg_add):
+                            _cg_add(_cg_story)
+                    # The Yzerman effect: young letter-less players absorb
+                    # leadership from an elite, winning room.
+                    _cg2.apply_mentorship_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        best_letter_leadership=_cg_mentor_lead)
+                except Exception:
+                    pass
             for s in getattr(team, 'staff', []) or []:
                 is_adams = adams_staff is not None and s is adams_staff
                 # +12 for a Cup on the 0-100 career scale; +8 for a Jack
