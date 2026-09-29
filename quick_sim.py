@@ -223,6 +223,31 @@ def best_lines(team):
     return flatten_lineup(lines)
 
 
+def user_controlled_lines(team):
+    """Item 5 (line_control wiring): the lineup a sim path must dress for `team`.
+
+    The lineup pen lives on team.line_control ('coach' | 'gm'; see
+    reputation_system.set_line_control):
+    - 'gm': the GM holds the pen, so the team's USER-SET lines
+      (team.lineup, as arranged in the lineup editor) are what the sim
+      must dress. Returns the stored dict when one exists; None when the
+      team has no user-set lines stored -- the caller then falls back to
+      the coach's builder exactly as it does today.
+    - anything else (including a missing flag): None. The caller keeps
+      today's behavior byte-for-byte.
+    Pure: never raises, never mutates.
+    """
+    try:
+        if getattr(team, "line_control", "coach") != "gm":
+            return None
+        lineup = getattr(team, "lineup", None)
+        if isinstance(lineup, dict) and lineup:
+            return lineup
+    except Exception:
+        pass
+    return None
+
+
 def flatten_lineup(lineup):
     """Add flat F1_LW..F4_RW / D1_L..D3_R keys the sim reads, from nested lines.
 
@@ -340,7 +365,13 @@ class AdvancedGameSim:
                 _scrub_suspended_from_lineup(team)
             except Exception:
                 pass
-            lineup = getattr(team, 'lineup', None)
+            # Item 5: the GM holds the pen -> his set lines are the law.
+            # user_controlled_lines() returns None unless the flag is 'gm'
+            # with stored user lines, so every other case keeps today's
+            # behavior byte-for-byte.
+            _gm_lines = user_controlled_lines(team)
+            lineup = (_gm_lines if _gm_lines is not None
+                      else getattr(team, 'lineup', None))
             if not lineup or not isinstance(lineup, dict):
                 return best_lines(team)
             # Defensive: fill missing keys with best_lines

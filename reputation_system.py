@@ -1834,6 +1834,19 @@ def preview_line_control_discussion(coach: Any,
             "text": f"{cname} is furious. Taking his lines is taking his authority -- he'll remember this."}
 
 
+def _install_coach_lines(team: Any) -> None:
+    """Item 5: the coach takes the lineup pen back, so he re-installs HIS
+    lines -- the best_lines builder output (even strength + special teams).
+    Previously the GM's stale user lines kept dressing while the UI said
+    "Coach", so the flag was a lie in the coach direction. Only called on a
+    real gm->coach transition inside set_line_control; never raises."""
+    try:
+        from quick_sim import best_lines  # local: avoid import cycles
+        team.lineup = best_lines(team)
+    except Exception:
+        pass
+
+
 def set_line_control(team: Any, who: str,
                      team_context: Optional[Dict[str, Any]] = None,
                      roster: Optional[List[Any]] = None,
@@ -1856,6 +1869,12 @@ def set_line_control(team: Any, who: str,
         _shift_happiness(roster, 2)
         text = "Coach has the lineup pen back. Clarity restored."
         record_team_event(team, "line_control", text, morale_delta=2, tone="up")
+        # Item 5: the pen is real now -- the coach's own lines dress from
+        # here on (before, the GM's stale lines kept dressing). This branch
+        # is only reached on a genuine gm->coach transition (no-change
+        # calls return early above), so untouched teams keep today's
+        # behavior byte-for-byte.
+        _install_coach_lines(team)
         return {"changed": True, "text": text, "approach": approach}
 
     # ---- GM takes the pen ----
@@ -1895,6 +1914,14 @@ def set_line_control(team: Any, who: str,
                 "strong_affected": n_strong}
     _shift_happiness(roster, 3, lambda p: (getattr(p, "happiness", 70) or 70) < 55)
     _shift_happiness(roster, -2, lambda p: (getattr(p, "age", 27) or 27) >= 32)
+    # Item 5 adjacent fix (pre-existing): this path fell off the end with no
+    # return, so seize-on-a-losing-team set the flag but callers reading
+    # out['text'] crashed silently. Return the same contract as the others.
+    text = ("GM seized the lineup pen. The room understands -- something had "
+            "to change.")
+    record_team_event(team, "line_control", text, morale_delta=-2, tone="down")
+    return {"changed": True, "text": text, "approach": "seize",
+            "strong_affected": 0}
 
 
 # ---------------------------------------------------------------------------
