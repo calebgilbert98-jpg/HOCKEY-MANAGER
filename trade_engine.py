@@ -525,6 +525,20 @@ def will_waive_ntc(player, from_team, to_team=None, league=None, rng=None,
     import random as _random
     rng = rng or _random
     name = getattr(player, "full_name", str(player))
+    # Offer-sheet match no-trade year: not waivable. A club that matches
+    # an offer sheet can't trade the player for one year (real NHL rule);
+    # there is no consent-ask flow for this protection, so every waiver
+    # path refuses. Scoped to trades -- waiver-wire consent is untouched.
+    if context == "trade":
+        try:
+            _os_until = int(getattr(player,
+                                    "offer_sheet_match_no_trade_until",
+                                    0) or 0)
+        except Exception:
+            _os_until = 0
+        if _os_until > _season_year(league):
+            return False, (f"{name} matched an offer sheet -- he can't be "
+                           f"traded until {_os_until}.")
     kind, detail = clause_of(player)
     if kind is None:
         return True, f"{name} has no clause to waive."
@@ -672,6 +686,24 @@ def trade_vetoes(from_team, to_team, assets, league=None):
     vetoes = []
     for a in assets or []:
         if _is_pick(a):
+            continue
+        # Offer-sheet match no-trade year (real NHL rule): a club that
+        # matches an offer sheet can't trade the player for one year.
+        # Hard block -- no consent-ask flow applies. Compared against the
+        # league's season_year; without a league we can't prove expiry,
+        # so any set flag blocks (fail-closed).
+        try:
+            _os_until = int(getattr(a, "offer_sheet_match_no_trade_until",
+                                    0) or 0)
+        except Exception:
+            _os_until = 0
+        if _os_until > _season_year(league):
+            vetoes.append({
+                "player": a,
+                "clause": "OFFER-SHEET-NO-TRADE",
+                "detail": ("1-year offer-sheet no-trade protection "
+                           f"(expires {_os_until})"),
+            })
             continue
         kind, detail = clause_of(a)
         if kind is None:
