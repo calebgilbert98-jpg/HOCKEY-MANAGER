@@ -868,9 +868,17 @@ def credit_forwards_elapsed(sim: Any, team: Any, st: Any,
         mode, unit_idx = _special_teams_state(sim, team)
         lineup = _game_lineup_for(sim, team)
         if mode == "PP":
-            players = _unit_players(lineup, "PP", unit_idx)
+            # Forwards hook credits the FORWARD slice of the unit only: the
+            # defense hook (credit_defense_elapsed) credits the D slice of
+            # the same unit for the same elapsed window. Crediting the whole
+            # unit here double-counted every PP/PK defenseman's special-teams
+            # TOI (found 2026-09-29: a PP1/PK1 D reading 65 min in a 60-min
+            # game), which also fed the soft-cap governor phantom minutes.
+            players = [p for p in _unit_players(lineup, "PP", unit_idx)
+                       if not _is_defenseman(p)]
         elif mode == "PK":
-            players = _unit_players(lineup, "PK", unit_idx)
+            players = [p for p in _unit_players(lineup, "PK", unit_idx)
+                       if not _is_defenseman(p)]
         else:
             players = _unit_players(lineup, "F", getattr(st, "f_line", 1))
         _credit_players(sim, players, elapsed)
@@ -891,15 +899,16 @@ def credit_defense_elapsed(sim: Any, team: Any, st: Any,
         mode, unit_idx = _special_teams_state(sim, team)
         lineup = _game_lineup_for(sim, team)
         if mode == "PP":
+            # Defense slice only (the forwards hook credits the F slice of
+            # the same unit). No whole-unit fallback: on a 5-forward PP
+            # there is simply no D TOI to credit, and falling back to the
+            # whole unit would double-count the forwards (same 2026-09-29
+            # fix as credit_forwards_elapsed).
             players = [p for p in _unit_players(lineup, "PP", unit_idx)
                        if _is_defenseman(p)]
-            if not players:  # unit shape unknown: credit the whole unit
-                players = _unit_players(lineup, "PP", unit_idx)
         elif mode == "PK":
             players = [p for p in _unit_players(lineup, "PK", unit_idx)
                        if _is_defenseman(p)]
-            if not players:
-                players = _unit_players(lineup, "PK", unit_idx)
         else:
             players = _unit_players(lineup, "D", getattr(st, "d_pair", 1))
         _credit_players(sim, players, elapsed)

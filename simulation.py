@@ -7550,14 +7550,20 @@ class GameSim:
         A nearby forechecker can still blow it up (rare).
         """
         import random as _r
+        # BUG-026 (icetime-ecosystem, 2026-09-29): players are LEFT_DEFENSE /
+        # RIGHT_DEFENSE, never the generic DEFENSE -- the old check matched
+        # nothing, dmen was always empty, and every keep-in auto-failed
+        # (measured 0.0% success, 35 zone exits/game). Check all D slots.
+        _D_POS = (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                  PlayerPosition.RIGHT_DEFENSE)
         dmen = [p for p in self._get_on_ice(attacking_team)
-                if p.primary_position == PlayerPosition.DEFENSE]
+                if p.primary_position in _D_POS]
         if not dmen:
             # Fallback: anyone on the roster who plays the point.
             try:
                 dmen = [p for p in attacking_team.roster
                         if getattr(p, "primary_position", None)
-                        == PlayerPosition.DEFENSE][:2]
+                        in _D_POS][:2]
             except Exception:
                 dmen = []
         if not dmen:
@@ -7572,7 +7578,12 @@ class GameSim:
             pincher = _r.choice(dmen)
         skill = (pincher.defensive_awareness + pincher.puck_handling
                  + pincher.composure) / 3.0
-        keep_prob = max(0.40, min(0.80, 0.60 + (skill - 68.0) * 0.012))
+        # Part B (icetime-ecosystem, 2026-09-29): keep-in recalibrated to
+        # its design intent -- good puck-moving D hold ~2 in 3, pylons ~1
+        # in 3. The old 0.60 base underdelivered (measured 43% for average
+        # D after the forechecker blow-up; 35 zone exits/game starving
+        # shot volume). Attribute-driven, never guaranteed.
+        keep_prob = max(0.40, min(0.85, 0.68 + (skill - 68.0) * 0.012))
         # A forechecker bearing down contests the keep -- if he wins the
         # battle he takes the puck (turnover), not just the zone exit.
         try:
@@ -7584,9 +7595,11 @@ class GameSim:
             if _fc is not None:
                 _fskill = (_fc.forechecking + _fc.checking
                            + _fc.anticipation) / 3.0
-                # Forechecker wins outright ~1 in 4 contested keeps.
-                if _r.random() < max(0.10, min(0.40,
-                                               0.25 + (_fskill - 68.0) * 0.010)):
+                # Forechecker wins outright ~1 in 8 contested keeps
+                # (was 1 in 4 -- too punitive; NHL forecheckers don't blow
+                # up the point 25% of the time). Skill-scaled, floored.
+                if _r.random() < max(0.05, min(0.30,
+                                               0.13 + (_fskill - 68.0) * 0.010)):
                     self._log_event(
                         f"{_fc.full_name} blows up the keep-in, takes the puck.",
                         "TURNOVER")
@@ -7879,8 +7892,12 @@ class GameSim:
             # ~5 in 6 (the defense is scrambling, not set).
             _fr = random.random()
             if _fr < 0.85:
+                # BUG-026 companion: exclude LEFT/RIGHT_DEFENSE too, not
+                # just the generic DEFENSE (which never occurs on players).
+                _D = (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                      PlayerPosition.RIGHT_DEFENSE)
                 _fwds = [p for p in attacking_skaters
-                         if p.primary_position != PlayerPosition.DEFENSE
+                         if p.primary_position not in _D
                          and p.primary_position != PlayerPosition.GOALIE]
                 _fs = (self._weighted_skater_choice(_fwds, "shoot")
                        if _fwds else
