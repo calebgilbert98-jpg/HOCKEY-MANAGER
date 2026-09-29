@@ -201,6 +201,114 @@ def interpret(event: Dict[str, Any], audience: str,
 
 
 # ---------------------------------------------------------------------------
+# Matchup narrative — one call for the schedule/calendar presentation layer
+# ---------------------------------------------------------------------------
+
+def matchup_narrative(home: Any, away: Any, league: Any = None,
+                      ledger: Any = None) -> Dict[str, Any]:
+    """Presentation metadata for a matchup from the four narrative systems.
+
+    Reads (never writes): the rivalry store (league.rivalries heat), the
+    narrative ledger (grudge memory + playoff-series history), and each
+    club's iconic-games list (legacy rematches).
+
+    Returns {"rivalry_heat", "mem_weight", "hype_tags", "marquee",
+    "grudge", "iconic_headline"}. Thresholds mirror pregame_crowd and the
+    playoff _compute_series_hype so the building, the bracket and the
+    calendar tell one story. Never raises; missing inputs -> quiet neutral.
+    """
+    out: Dict[str, Any] = {
+        "rivalry_heat": 0.0, "mem_weight": 0.0, "hype_tags": [],
+        "marquee": False, "grudge": False, "iconic_headline": None,
+    }
+    try:
+        n1 = getattr(home, "team_name", None) or str(home or "")
+        n2 = getattr(away, "team_name", None) or str(away or "")
+        if not n1 or not n2 or n1 == n2:
+            return out
+        heat = 0.0
+        tags: List[str] = []
+        # -- rivalry store -------------------------------------------------
+        try:
+            from reputation_system import get_rivalry_heat, rivalry_between
+            rivalries = getattr(league, "rivalries", None) or []
+            try:
+                heat = float(get_rivalry_heat(rivalries, home, away)
+                             .get("heat", 0.0) or 0.0)
+            except Exception:
+                heat = 0.0
+            try:
+                rec = rivalry_between(rivalries, home, away, "team_team")
+                story = str((rec or {}).get("story", "") or "")
+                if rec and (rec.get("origin") == "playoff_series"
+                            or "Playoff series:" in story):
+                    tags.append("Playoff rematch")
+                    if "Seven games" in story:
+                        tags.append("Seven-game war")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # -- ledger: grudge memory smolders where the store is quiet ------
+        mem = 0.0
+        try:
+            if ledger is not None:
+                mem = float(ledger.memory_weight(n1, n2) or 0.0)
+                if mem >= 70.0:
+                    heat = max(heat, 65.0)
+                try:
+                    if ledger.series_history(n1, n2) \
+                            and "Playoff rematch" not in tags:
+                        tags.append("Playoff rematch")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        if heat >= 65.0:
+            tags.insert(0, "Bad blood")
+        elif heat >= 35.0:
+            tags.append("Heated rivalry")
+        elif mem >= 40.0 and "Heated rivalry" not in tags:
+            tags.append("History between these two")
+        # -- iconic legacy: a past classic between these clubs ------------
+        iconic_headline = None
+        try:
+            seen_pair = {n1, n2}
+            for club in (home, away):
+                for e in getattr(club, "iconic_games", None) or []:
+                    try:
+                        if not isinstance(e, dict):
+                            continue
+                        if {str(e.get("home", "")),
+                                str(e.get("away", ""))} == seen_pair:
+                            iconic_headline = str(
+                                e.get("headline", "") or "") or None
+                            break
+                    except Exception:
+                        continue
+                if iconic_headline:
+                    break
+            if iconic_headline and "Iconic rematch" not in tags:
+                tags.append("Iconic rematch")
+        except Exception:
+            pass
+        # Dedupe while keeping order.
+        seen = set()
+        tags = [t for t in tags if not (t in seen or seen.add(t))]
+        out.update(
+            rivalry_heat=max(0.0, min(100.0, heat)),
+            mem_weight=max(0.0, mem),
+            hype_tags=tags,
+            marquee=(heat >= 50.0) or ("Playoff rematch" in tags)
+            or (iconic_headline is not None),
+            grudge=(heat >= 35.0) or (mem >= 40.0),
+            iconic_headline=iconic_headline)
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Playoff-series memory
 # ---------------------------------------------------------------------------
 

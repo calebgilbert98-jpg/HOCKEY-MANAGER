@@ -7968,6 +7968,32 @@ class ScheduleView(ctk.CTkFrame):
             return
         GameDetailWindow(self.app, result, initial_tab="recap")
 
+    def _matchup_narrative(self, home, away):
+        """Live narrative metadata for a regular-season matchup.
+
+        Reads the rivalry store, ledger grudge memory and iconic history
+        (narrative_ledger.matchup_narrative); cached per matchup for the
+        render pass so the 82-game list stays cheap. Playoff rows never
+        reach here -- the bracket's stamp wins.
+        """
+        try:
+            hn = getattr(home, "team_name", "") or ""
+            an = getattr(away, "team_name", "") or ""
+            key = (hn, an)
+            cache = self.__dict__.setdefault("_narrative_cache", {})
+            if key not in cache:
+                from narrative_ledger import get_ledger, matchup_narrative
+                try:
+                    _led = get_ledger(self.app)
+                except Exception:
+                    _led = None
+                cache[key] = matchup_narrative(
+                    home, away, league=getattr(self.app, "league", None),
+                    ledger=_led)
+            return cache[key]
+        except Exception:
+            return None
+
     @staticmethod
     def _playoff_entry_result(raw):
         """(score, status) for a bracket-stamped playoff entry, else None.
@@ -8073,6 +8099,9 @@ class ScheduleView(ctk.CTkFrame):
 
         self.schedule_data.clear()
         self._first_upcoming = None
+        # Fresh narrative read each render: grudges form mid-season, and
+        # the matchup cache must not outlive the data it was built from.
+        self.__dict__.pop("_narrative_cache", None)
 
         # Month filter options
         month_values = ['All'] + self._schedule_months()
@@ -8124,6 +8153,20 @@ class ScheduleView(ctk.CTkFrame):
             is_playoff = bool(raw.get("round_key") or raw.get("series_id"))
             marquee = bool(raw.get("marquee"))
             hype_tags = list(raw.get("hype_tags") or [])
+            if not is_playoff:
+                # Regular-season grudge games: the schedule generator
+                # doesn't stamp narrative metadata (and the template cache
+                # would strip it), so enrich live from the four narrative
+                # systems -- rivalry store, ledger grudge memory, iconic
+                # history. Cached per matchup for the render pass.
+                try:
+                    _narr = self._matchup_narrative(home, away)
+                except Exception:
+                    _narr = None
+                if _narr:
+                    marquee = marquee or bool(_narr.get("marquee"))
+                    if not hype_tags:
+                        hype_tags = list(_narr.get("hype_tags") or [])
 
             # Color tag for games involving the user's team (win/loss/today)
             row_tag = self._game_row_tag(home, away, score, status)

@@ -942,6 +942,41 @@ class CalendarView(ctk.CTkFrame):
             lines.append("No further meetings scheduled.")
         return lines
 
+    def _insert_matchup_narrative(self, home_team, away_team):
+        """Insert grudge/rivalry/history lines for a regular-season matchup.
+
+        Reads the rivalry store, ledger grudge memory, and iconic-game
+        history via narrative_ledger.matchup_narrative (read-only -- no
+        history is invented or duplicated here). Silent when the matchup
+        is ordinary.
+        """
+        try:
+            from narrative_ledger import get_ledger, matchup_narrative
+            try:
+                _ledger = get_ledger(self.app)
+            except Exception:
+                _ledger = None
+            narr = matchup_narrative(
+                home_team, away_team,
+                league=getattr(self.app, "league", None), ledger=_ledger)
+        except Exception:
+            return
+        tags = list(narr.get("hype_tags") or [])
+        headline = narr.get("iconic_headline")
+        if not tags and not headline:
+            return
+        self.events_text.insert("end", "\nHistory & Heat\n", tags='section')
+        for tag in tags:
+            self.events_text.insert("end", f"  ★ {tag}\n", tags='team_bold')
+        if headline:
+            self.events_text.insert("end", f"  Last classic: {headline}\n")
+        mem = narr.get("mem_weight") or 0.0
+        heat = narr.get("rivalry_heat") or 0.0
+        if mem >= 40.0 or heat >= 35.0:
+            self.events_text.insert(
+                "end",
+                f"  Bad-blood index: rivalry {heat:.0f} / grudge {mem:.0f}\n")
+
     def _insert_game_details(self, event):
         """Insert enriched details for a game event.
 
@@ -972,11 +1007,15 @@ class CalendarView(ctk.CTkFrame):
                                     tags='section')
             for line in self._season_series_lines(opponent):
                 self.events_text.insert("end", line + "\n")
+            self._insert_matchup_narrative(event.get('home_team'),
+                                           event.get('away_team'))
         else:
             # League game not involving the user team
             home = self._team_label(event.get('home_team'))
             away = self._team_label(event.get('away_team'))
             self.events_text.insert("end", f"Matchup: {away} @ {home}\n")
+            self._insert_matchup_narrative(event.get('home_team'),
+                                           event.get('away_team'))
 
     def _get_game_result(self, game_date, opponent):
         """Get the result of a game if it has been played."""

@@ -1871,7 +1871,7 @@ def clamp(val, minv, maxv):
 
 def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
                         elimination_game=False, milestone_home=False,
-                        ceremony=False, outdoor=False):
+                        ceremony=False, outdoor=False, league=None):
     """Build the crowd state for tonight (arena_atmosphere).
 
     One dict lookup + arithmetic per game -- no per-tick cost. Returns a
@@ -1880,12 +1880,25 @@ def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
     try:
         from arena_atmosphere import pregame_crowd
         from narrative_ledger import active_ledger
+        # Rivalry-store heat: the grudge-match boost. The ledger path
+        # inside pregame_crowd reads narrative memory; this reads the
+        # rivalry system's intensity (playoff wars, declared hate,
+        # regional bad blood) -- regular-season games get the same heat
+        # the playoff path already passes via series.rivalry_heat.
+        _heat = 0.0
+        try:
+            from reputation_system import get_rivalry_heat
+            _riv = getattr(league, "rivalries", None) or []
+            _heat = float(get_rivalry_heat(_riv, home_team, away_team)
+                          .get("heat", 0.0) or 0.0)
+        except Exception:
+            _heat = 0.0
         return pregame_crowd(
             home_team, away_team, ledger=active_ledger(),
             is_playoff=is_playoff, series_game=series_game,
             elimination_game=elimination_game,
             milestone_home=milestone_home, ceremony=ceremony,
-            outdoor=outdoor)
+            outdoor=outdoor, rivalry_heat=_heat)
     except Exception:
         return {"energy": 50.0, "mood": 30.0, "drivers": [],
                 "big_game": False}
@@ -10302,6 +10315,7 @@ class HockeyManagerGUI(tk.Tk):
                     home_team, away_team,
                     atmosphere=_pregame_atmosphere(
                         home_team, away_team,
+                        league=getattr(self, "league", None),
                         milestone_home=home_team.team_name in
                         getattr(self, "_milestone_watch_teams", set()),
                         ceremony=bool(getattr(home_team, "_pending_ceremony",
@@ -11833,6 +11847,7 @@ class HockeyManagerGUI(tk.Tk):
         from arena_atmosphere import crowd_hype_for_tension
         _atm = _pregame_atmosphere(
             home_team, away_team,
+            league=getattr(self, "league", None),
             milestone_home=home_team.team_name in
             getattr(self, "_milestone_watch_teams", set()),
             ceremony=bool(getattr(home_team, "_pending_ceremony", None)))
