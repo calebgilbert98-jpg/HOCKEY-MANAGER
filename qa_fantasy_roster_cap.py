@@ -126,7 +126,15 @@ def main():
     #    undrafted netminder; club with 2 centers signs an undrafted C
     from fantasy_draft import DraftPick
     fa_pool = [make_player(200 + i, 58 - i, goalie=True) for i in range(2)]
-    fa_pool += [make_player(300 + i, 52 - i) for i in range(3)]  # centers
+    fa_pool += [make_player(300 + i, 52 - i) for i in range(3)]  # C,LW,RW
+    fa_pool += [make_player(310 + i, 50 - i) for i in range(4)]  # D,D,W?,...
+    # force the 310s to defense, add two more wingers
+    for i, p in enumerate(fa_pool[5:9]):
+        p.primary_position = (PlayerPosition.LEFT_DEFENSE if i % 2 == 0
+                              else PlayerPosition.RIGHT_DEFENSE)
+    fa_pool += [make_player(320, 49), make_player(321, 48)]
+    fa_pool[9].primary_position = PlayerPosition.LEFT_WING
+    fa_pool[10].primary_position = PlayerPosition.RIGHT_WING
     t6 = make_team("ShortG")
     drafted = [make_player(i, 70, goalie=(i == 0)) for i in range(21)]
     t6.roster, t6.ahl_roster, t6.prospects = list(drafted), [], []
@@ -157,6 +165,74 @@ def main():
     c7 = sum(1 for p in t7.roster
              if p.primary_position == PlayerPosition.CENTER)
     check("FA fill signs a 3rd center", c7 == 3, f"centers={c7}")
+
+    # 8. wing gap: 5W org-wide -> FA winger signed (worst D demoted)
+    t8 = make_team("ShortW")
+    ros8 = []
+    for i in range(20):
+        p = make_player(500 + i, 66)
+        p.primary_position = PlayerPosition.CENTER if i < 4 else (
+            PlayerPosition.LEFT_WING if i < 9 else
+            PlayerPosition.LEFT_DEFENSE)
+        p.overall_rating = lambda _o=66: _o
+        ros8.append(p)
+    ros8[0].primary_position = PlayerPosition.GOALIE
+    ros8[1].primary_position = PlayerPosition.GOALIE
+    t8.roster, t8.ahl_roster, t8.prospects = ros8, [], []
+    mgr8 = FantasyDraftManager([t8], ros8 + fa_pool)
+    mgr8.draft_picks = [DraftPick(1, i + 1, i + 1, t8, p)
+                        for i, p in enumerate(ros8)]
+    mgr8.normalize_post_draft_rosters()
+    w8 = sum(1 for p in t8.roster if p.primary_position in
+             (PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING))
+    check("FA fill signs a 6th winger", w8 >= 6, f"wingers={w8}")
+    check("wing FA keeps roster <= 23", len(t8.roster) <= 23,
+          f"roster={len(t8.roster)}")
+
+    # 9. defense gap: 5D org-wide -> FA defenseman signed
+    t9 = make_team("ShortD")
+    ros9 = []
+    for i in range(20):
+        p = make_player(600 + i, 66)
+        p.primary_position = PlayerPosition.CENTER if i < 4 else (
+            PlayerPosition.LEFT_WING if i < 10 else
+            PlayerPosition.LEFT_DEFENSE if i < 15 else
+            PlayerPosition.RIGHT_WING)
+        p.overall_rating = lambda _o=66: _o
+        ros9.append(p)
+    ros9[0].primary_position = PlayerPosition.GOALIE
+    ros9[1].primary_position = PlayerPosition.GOALIE
+    t9.roster, t9.ahl_roster, t9.prospects = ros9, [], []
+    mgr9 = FantasyDraftManager([t9], ros9 + fa_pool)
+    mgr9.draft_picks = [DraftPick(1, i + 1, i + 1, t9, p)
+                        for i, p in enumerate(ros9)]
+    mgr9.normalize_post_draft_rosters()
+    d9 = sum(1 for p in t9.roster if p.primary_position in
+             (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE,
+              PlayerPosition.DEFENSE))
+    check("FA fill signs a 6th defenseman", d9 >= 6, f"dmen={d9}")
+
+    # 10. per-side wing: 1 LW / 5 RW -> FA left winger signed
+    t10 = make_team("ShortLW")
+    ros10 = []
+    for i in range(20):
+        p = make_player(700 + i, 66)
+        p.primary_position = PlayerPosition.CENTER if i < 4 else (
+            PlayerPosition.LEFT_WING if i == 4 else
+            PlayerPosition.RIGHT_WING if i < 10 else
+            PlayerPosition.LEFT_DEFENSE)
+        p.overall_rating = lambda _o=66: _o
+        ros10.append(p)
+    ros10[0].primary_position = PlayerPosition.GOALIE
+    ros10[1].primary_position = PlayerPosition.GOALIE
+    t10.roster, t10.ahl_roster, t10.prospects = ros10, [], []
+    mgr10 = FantasyDraftManager([t10], ros10 + fa_pool)
+    mgr10.draft_picks = [DraftPick(1, i + 1, i + 1, t10, p)
+                         for i, p in enumerate(ros10)]
+    mgr10.normalize_post_draft_rosters()
+    lw10 = sum(1 for p in t10.roster if p.primary_position ==
+               PlayerPosition.LEFT_WING)
+    check("FA fill signs a 2nd left winger", lw10 >= 2, f"lw={lw10}")
 
     fails = [(n, d) for n, ok, d in res if not ok]
     for n, ok, d in res:

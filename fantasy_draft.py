@@ -468,6 +468,8 @@ class FantasyDraftManager:
                 nm = p.primary_position.name
             except Exception:
                 return "W"
+            if nm == "GOALIE":
+                return "G"
             if nm == "CENTER":
                 return "C"
             if nm in ("LEFT_WING", "RIGHT_WING"):
@@ -541,6 +543,30 @@ class FantasyDraftManager:
         fa_centers = sorted([p for p in undrafted
                              if _pos_group(p) == "C"],
                             key=_ovr, reverse=True)
+        def _wing_side(p):
+            try:
+                nm = p.primary_position.name
+            except Exception:
+                return "W"
+            if nm == "LEFT_WING":
+                return "LW"
+            if nm == "RIGHT_WING":
+                return "RW"
+            return "W"
+
+        fa_pools = {
+            "G": fa_goalies,
+            "C": fa_centers,
+            "W": sorted([p for p in undrafted if _pos_group(p) == "W"],
+                        key=_ovr, reverse=True),
+            "D": sorted([p for p in undrafted if _pos_group(p) == "D"],
+                        key=_ovr, reverse=True),
+        }
+        # (group, floor): a real GM signs FAs to reach these. Wings get
+        # a per-side floor first so a 1-LW/5-RW club signs a left winger,
+        # then the combined floor tops up to six.
+        floors = [("G", 2), ("C", 3), ("LW", 2), ("RW", 2), ("W", 6),
+                  ("D", 6)]
         for team in self.teams:
             ros = team.roster
             ahl = team.ahl_roster
@@ -558,10 +584,17 @@ class FantasyDraftManager:
                 c = getattr(p, "contract", None)
                 return int(getattr(c, "salary", 0) or 0)
 
+            def _count(group):
+                if group == "G":
+                    return sum(1 for p in ros if _goalie(p))
+                if group in ("LW", "RW"):
+                    return sum(1 for p in ros if _wing_side(p) == group)
+                return sum(1 for p in ros if _pos_group(p) == group)
+
             def _make_room():
-                # demote the worst non-critical skater to fit a FA
-                # signing (never a goalie or a center -- those are the
-                # scarce positions we're filling)
+                # demote the worst expendable skater to fit a FA
+                # signing -- never a goalie or a center, the scarcest
+                # positions
                 cands = sorted(
                     [p for p in ros if not _goalie(p)
                      and _pos_group(p) != "C"], key=_ovr)
@@ -572,19 +605,27 @@ class FantasyDraftManager:
                 ahl.append(out)
                 return True
 
-            while (sum(1 for p in ros if _goalie(p)) < 2 and fa_goalies):
-                if _salary(fa_goalies[0]) > _space():
-                    break  # can't afford him; leave the gap for the GM
-                if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
-                    break
-                ros.append(fa_goalies.pop(0))
-            while (sum(1 for p in ros if _pos_group(p) == "C") < 3
-                   and fa_centers):
-                if _salary(fa_centers[0]) > _space():
-                    break
-                if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
-                    break
-                ros.append(fa_centers.pop(0))
+            for group, floor in floors:
+                if group in ("LW", "RW"):
+                    # sign the best FA winger on the thin side only --
+                    # no cross-side fallback (the combined W floor tops
+                    # up regardless)
+                    pool = sorted(
+                        [p for p in fa_pools["W"]
+                         if _wing_side(p) == group],
+                        key=_ovr, reverse=True)
+                else:
+                    pool = fa_pools[group]
+                while _count(group) < floor and pool:
+                    if _salary(pool[0]) > _space():
+                        break  # can't afford him; leave it to the GM
+                    if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
+                        break
+                    signed = pool.pop(0)
+                    # keep the shared W pool in sync for side fills
+                    if group in ("LW", "RW") and signed in fa_pools["W"]:
+                        fa_pools["W"].remove(signed)
+                    ros.append(signed)
 
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
