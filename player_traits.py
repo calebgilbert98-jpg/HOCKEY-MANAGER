@@ -332,8 +332,13 @@ def get_sim_bonus(player, effect_key: str, default: float = 1.0) -> float:
 # more, elite goalies stop more. Never 0% or 100%.
 # ---------------------------------------------------------------------------
 
-def resolve_shootout_attempt(shooter, goalie) -> bool:
-    """True if the shooter scores. Pure probability -- no logging."""
+def resolve_shootout_attempt(shooter, goalie, edge: float = 0.0) -> bool:
+    """True if the shooter scores. Pure probability -- no logging.
+
+    edge: small probability nudge in [-1, 1] applied to the outcome
+    (positive favors the shooter). Default 0.0 = today's behavior exactly:
+    no extra RNG is drawn and the comparison is untouched.
+    """
     import random as _rng
     _bonus = get_sim_bonus
     shot_roll = ((getattr(shooter, "shooting", 50)
@@ -347,4 +352,10 @@ def resolve_shootout_attempt(shooter, goalie) -> bool:
     # Traits: wall goalies stop more, big-game goalies elevate in shootouts.
     save_roll *= _bonus(goalie, "save_chance_mult")
     save_roll *= _bonus(goalie, "shootout_mult")
-    return shot_roll > save_roll
+    _base = shot_roll > save_roll
+    if edge:
+        # Probabilistic nudge: with probability |edge| the edge decides the
+        # attempt outright; otherwise the normal resolution stands.
+        if _rng.random() < abs(edge):
+            return edge > 0
+    return _base

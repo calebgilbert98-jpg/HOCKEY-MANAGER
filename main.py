@@ -10325,7 +10325,8 @@ class HockeyManagerGUI(tk.Tk):
                         getattr(self, "_milestone_watch_teams", set()),
                         ceremony=bool(getattr(home_team, "_pending_ceremony",
                                               None)),
-                        outdoor=_outdoor_info is not None))
+                        outdoor=_outdoor_info is not None),
+                    league=getattr(self, "league", None))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 # Pregame ceremony (if one is queued): electric building via
@@ -12023,9 +12024,54 @@ class HockeyManagerGUI(tk.Tk):
         # Handle ties (NHL: 5-min 3v3 OT, then shootout)
         # Track if game went to OT for OTL point
         went_to_ot = False
+        _drama_ctx = None  # ot_drama context; computed lazily, only when needed
+        def _drama():
+            # Local lazy loader: keeps the fast path fast when the game is
+            # decided in regulation by 2+.
+            nonlocal _drama_ctx
+            if _drama_ctx is None:
+                try:
+                    from ot_drama import ot_context
+                    _drama_ctx = ot_context(
+                        home_team, away_team,
+                        league=getattr(self, "league", None),
+                        atmosphere=_pregame_atmosphere(
+                            home_team, away_team,
+                            league=getattr(self, "league", None)))
+                except Exception:
+                    _drama_ctx = {"ot_mult": 1.0, "home_win_edge": 0.0,
+                                  "drama01": 0.3, "drivers": []}
+            return _drama_ctx
         if home_goals == away_goals:
             went_to_ot = True
-            home_ot_chance = 0.55 + (home_star_effects['clutch_factor'] * 0.1)  # Star players help in OT
+        elif abs(home_goals - away_goals) == 1:
+            # Drama equalizer (ot_drama): pulled goalie / 6-on-5 forces OT
+            # in big games. The equalizer is a real scored goal plus the
+            # ensuing OT winner (~+0.08 GPG league-wide at full drama --
+            # negligible, and inherent to having more OT games at all).
+            # Regulation scoring means are never touched.
+            try:
+                from ot_drama import late_equalizer_roll, LIGHTWEIGHT_ONE_GOAL_SHARE
+                _eq_ctx = _drama()
+                if late_equalizer_roll(
+                        _eq_ctx,
+                        trailing_team_is_home=(home_goals < away_goals),
+                        one_goal_share=LIGHTWEIGHT_ONE_GOAL_SHARE):
+                    went_to_ot = True
+                    _trailing_is_home = home_goals < away_goals
+                    if _trailing_is_home:
+                        home_goals += 1
+                    else:
+                        away_goals += 1
+                    self._ot_equalizer_news(home_team, away_team, _eq_ctx,
+                                            trailing_team_is_home=_trailing_is_home)
+            except Exception:
+                pass
+        if went_to_ot:
+            _ctx = _drama()
+            home_ot_chance = (0.55 + (home_star_effects['clutch_factor'] * 0.1)
+                              + _ctx.get("home_win_edge", 0.0))  # Star players help in OT
+            home_ot_chance = max(0.35, min(0.75, home_ot_chance))
             if random.random() < home_ot_chance:
                 home_goals += 1
             else:
@@ -12059,6 +12105,32 @@ class HockeyManagerGUI(tk.Tk):
                         pass
         
         return winner, loser, (home_goals, away_goals), went_to_ot
+
+    def _ot_equalizer_news(self, home_team, away_team, ctx,
+                           trailing_team_is_home=False):
+        """One headline when the drama equalizer forces OT (ot_drama).
+
+        Single hook: uses the existing GameManager -> GUI news path
+        (add_news lives on the GUI; the manager only holds it via .app).
+        No-op headless. Never raises.
+        """
+        try:
+            _drivers = (ctx or {}).get("drivers") or []
+            _flavor = _drivers[0] if _drivers else "Sheer desperation"
+            _trail_team = home_team if trailing_team_is_home else away_team
+            _lead_team = away_team if trailing_team_is_home else home_team
+            _trailing = (getattr(_trail_team, "team_name", "")
+                         or "The visitors")
+            _story = (
+                f"\u00a9 LATE EQUALIZER: {_trailing} pull the goalie and force "
+                f"overtime against {getattr(_lead_team, 'team_name', 'the hosts')} -- "
+                f"{_flavor.lower()} willed it to OT.")
+            _add = getattr(self, "add_news", None) or getattr(
+                getattr(self, "app", None), "add_news", None)
+            if callable(_add):
+                _add(_story)
+        except Exception:
+            pass
     
     def _calculate_team_strength(self, team):
         """Quick team strength calculation for lightweight simulation"""
