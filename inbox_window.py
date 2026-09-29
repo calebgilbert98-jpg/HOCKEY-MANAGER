@@ -660,6 +660,7 @@ class InboxView(ctk.CTkFrame):
                 "game_day", "postmatch_presser",
                 "trade_offer", "trade_counter", "contract_counter",
                 "rfa_qualifying", "offer_sheet_match",
+                "offer_sheet_trade_alt",
                 "arbitration_walkaway", "buyout_window"):
             self._show_interactive_action(message)
         else:
@@ -860,6 +861,8 @@ class InboxView(ctk.CTkFrame):
             self._render_rfa_qualifying(message)
         elif message.action_type == "offer_sheet_match":
             self._render_offer_sheet_match(message)
+        elif message.action_type == "offer_sheet_trade_alt":
+            self._render_offer_sheet_trade_alt(message)
         elif message.action_type == "arbitration_walkaway":
             self._render_arbitration_walkaway(message)
         elif message.action_type == "buyout_window":
@@ -1322,6 +1325,49 @@ class InboxView(ctk.CTkFrame):
             self.app.apply_offer_sheet_match_decision(message, match)
         except Exception as e:
             print(f"offer sheet match failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    def _render_offer_sheet_trade_alt(self, message):
+        data = message.action_data or {}
+        self._iwrap("TRADE ALTERNATIVE", size=15, bold=True, padx=10,
+                    pady=(10, 2))
+        if message.action_done:
+            self._iwrap("Decision made.", size=11, dim=True, padx=10)
+            return
+        aav = data.get("aav", 0)
+        years = data.get("years", 1)
+        comp = data.get("compensation", "")
+        pkg_ids = data.get("package_player_ids") or []
+        pkg_val = data.get("package_value", 0)
+        self._iwrap(f"${aav:,}/yr x {years}y.", size=12, bold=True,
+                    padx=10, pady=(2, 2))
+        self._iwrap(f"Trade offer: {len(pkg_ids)} player(s) "
+                    f"(~${pkg_val:,} trade value) instead of: {comp}",
+                    size=11, padx=10, pady=(0, 2))
+        self._iwrap("Accepting trades his rights for the package -- the "
+                    "picks stay with the offering club. Declining takes "
+                    "the pick compensation, exactly as the original "
+                    "decline.",
+                    size=10, dim=True, padx=10, pady=(0, 4))
+        btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=10, pady=6)
+        self._primary_button(
+            btn_row, text="Accept the trade",
+            command=lambda m=message: self._on_offer_sheet_trade_alt(
+                m, True),
+        ).pack(fill="x", pady=(0, 8))
+        self._secondary_button(
+            btn_row, text="Decline, take the picks",
+            command=lambda m=message: self._on_offer_sheet_trade_alt(
+                m, False),
+        ).pack(fill="x")
+
+    def _on_offer_sheet_trade_alt(self, message, accept):
+        try:
+            self.app.apply_offer_sheet_trade_alt_decision(message, accept)
+        except Exception as e:
+            print(f"offer sheet trade alternative failed: {e}")
         self._refresh_inbox()
         self._display_message_preview(message)
 

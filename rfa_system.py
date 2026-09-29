@@ -138,6 +138,21 @@ OFFER_SHEET_BASE_RATE = 0.008
 # sit pending indefinitely.
 OFFER_SHEET_MATCH_WINDOW_DAYS = 7
 
+# Offer-sheet trade alternative (the sign-and-trade door): when the
+# original club declines to match, a player/prospect package can replace
+# the pick compensation when BOTH clubs prefer it --
+#   * the original club takes the trade only if the package beats the
+#     comp picks' trade value (a live player beats mystery picks);
+#   * the offering club gives players instead of its picks only up to
+#     GIVE_UP_MULT x the comp value.
+# A user-involved club gets the choice (inbox message for the original
+# club, dialog for the offering club); the choice window is stamped on
+# the message and the daily sweep defaults an unanswered one to the
+# picks, exactly as today. (TUNING: 1.0 / 1.25 / 3)
+OFFER_SHEET_TRADE_ASK_MULT = 1.0
+OFFER_SHEET_TRADE_GIVE_UP_MULT = 1.25
+OFFER_SHEET_TRADE_WINDOW_DAYS = 3
+
 # The jointly-appointed neutral panel (CBA: NHL + NHLPA appoint independent
 # arbitrators yearly; cases assigned from the panel). Fictional names.
 ARBITRATOR_PANEL = [
@@ -200,6 +215,39 @@ def is_rfa(player) -> bool:
 def is_ufa(player) -> bool:
     """An expired-contract player who IS UFA-eligible is a UFA."""
     return contract_expired(player) and is_ufa_eligible(player)
+
+
+def rfa_rights_at_impasse(player) -> bool:
+    """True when an unsigned RFA's rights are shoppable at a risk discount.
+
+    A genuine signing impasse: the club holds his rights (he was
+    qualified) but he won't sign -- he wants out (the holdout path in
+    process_rfa_offseason: he refuses the QO and holds out into the
+    offer-sheet pool) or the relationship is in arbitration (a formal
+    valuation dispute). A player with a live offer-sheet decision
+    pending is excluded -- his rights aren't shoppable mid-decision.
+    Plain unsigned RFAs still in normal July talks are NOT at an
+    impasse. Used by trade_engine.player_trade_value as one additive
+    risk adjustment; the base weights are never retuned here.
+    """
+    try:
+        if not is_rfa(player):
+            return False
+        if not bool(getattr(player, "qo_extended", False)):
+            return False  # unqualified: the club holds no rights
+        if bool(getattr(player, "offer_sheet_pending", False)):
+            return False
+        if bool(getattr(player, "arbitration_filed", False)):
+            return True
+        try:
+            import player_decision as _pd
+            if _pd.wants_out(player):
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -1022,7 +1070,8 @@ def market_value_estimate(player) -> int:
 
 def execute_offer_sheet(league, offering_team, original_team, player,
                         aav: int, years: int, app=None, rng=None,
-                        as_of=None) -> Dict[str, Any]:
+                        as_of=None, expired=False,
+                        _skip_trade_alt=False) -> Dict[str, Any]:
     """Sign an unsigned RFA to an offer sheet.
 
     Moves the player, transfers the real compensation picks, feeds the
@@ -1033,6 +1082,15 @@ def execute_offer_sheet(league, offering_team, original_team, player,
     as_of: the date the window is judged on. The July RFA pass runs while
     the stamped game date is still late June, so it passes July 1
     explicitly (the pass models July mechanics).
+
+    expired: True when the 7-day match clock already ran out (the daily
+    sweep path). An expired decline goes straight to the compensation --
+    the club already forfeited its decision window, so no trade
+    alternative is offered.
+
+    _skip_trade_alt: internal. The trade-alternative fallback paths set
+    this so a declined/expired trade choice runs the compensation
+    exactly as today without re-triggering the hook.
     """
     # Offer-sheet window (real NHL: July 1 - December 1). One rulebook in
     # transaction_windows.py. The AI caller runs inside the July pass; this
@@ -1077,6 +1135,49 @@ def execute_offer_sheet(league, offering_team, original_team, player,
     if missing:
         return {"ok": False, "reason": "missing_own_picks",
                 "missing_rounds": missing}
+
+    # --- Trade alternative (the sign-and-trade door) -------------------
+    # Before the compensation executes, check whether both clubs would
+    # rather do a trade: the original club takes a player/prospect
+    # package instead of the comp picks, the offering club gives players
+    # instead of picks. AI-AI resolves immediately; a user-involved club
+    # gets the choice (inbox message for the original club, a dialog for
+    # the offering club when a UI is present). When no trade is agreed
+    # the compensation below executes exactly as today.
+    if not _skip_trade_alt and not expired:
+        _alt = consider_offer_sheet_trade_alternative(
+            app, league, offering_team, original_team, player, aav, years,
+            gathered, rng=r)
+        if _alt.get("agreed"):
+            _user_side = _alt.get("user_side")
+            if _user_side == "original":
+                # The user's call: queue the choice, defer the
+                # compensation until the inbox decision (or its expiry,
+                # which defaults to the picks).
+                _queue_offer_sheet_trade_alt(
+                    app, league, offering_team, original_team, player,
+                    aav, years, _alt)
+                return {"ok": True, "pending_trade_choice": True,
+                        "story": _alt.get("queued_story", "")}
+            if _user_side == "offering":
+                if _ask_user_offering_trade_alt(
+                        app, offering_team, original_team, player, aav,
+                        years, _alt):
+                    _tres = execute_offer_sheet_trade(
+                        league, offering_team, original_team, player,
+                        aav, years, _alt, app=app)
+                    if _tres is not None:
+                        return _tres
+                # Declined (or no interactive UI): the compensation
+                # executes exactly as today.
+            else:
+                _tres = execute_offer_sheet_trade(
+                    league, offering_team, original_team, player,
+                    aav, years, _alt, app=app)
+                if _tres is not None:
+                    return _tres
+                # The trade can't complete (cap/veto/freeze): fall
+                # through to the compensation exactly as today.
     transferred = []
     for pk in gathered:
         _transfer_pick(pk, offering_team, original_team)
@@ -1145,6 +1246,394 @@ def execute_offer_sheet(league, offering_team, original_team, player,
         pass
     return {"ok": True, "compensation": label, "picks": transferred,
             "story": story}
+
+
+# ---------------------------------------------------------------------------
+# Offer-sheet trade alternative (the sign-and-trade door)
+# ---------------------------------------------------------------------------
+
+def consider_offer_sheet_trade_alternative(app, league, offering_team,
+                                           original_team, player, aav: int,
+                                           years: int, compensation_picks,
+                                           rng=None) -> Dict[str, Any]:
+    """Clean boolean + package decision: would both clubs rather do a
+    sign-and-trade than the pick compensation?
+
+    The original club (declined to match -- not trying to keep him)
+    takes the trade only if a player/prospect package from the offering
+    club beats the comp picks' trade value (>= comp_value *
+    OFFER_SHEET_TRADE_ASK_MULT): a live player beats mystery picks.
+    The offering club gives players/prospects instead of its picks only
+    if the package costs at most comp_value *
+    OFFER_SHEET_TRADE_GIVE_UP_MULT. Both clubs must stay cap-legal.
+
+    Returns {"agreed": bool, "package": [players], "comp_value": int,
+    "package_value": int, "comp_label": str, "package_names": [str],
+    "user_side": None | "original" | "offering"}. Pure evaluation -- it
+    moves nothing. Not a negotiation engine: one package, take it or
+    leave it.
+    """
+    import trade_engine as _te
+    no = {"agreed": False, "package": [], "comp_value": 0,
+          "package_value": 0, "comp_label": "", "package_names": [],
+          "user_side": None}
+
+    def _no_with_comp(comp_value=0, comp_label=""):
+        # Negative answers still carry the computed compensation value
+        # so callers (and QA) can see WHY no package fit.
+        d = dict(no)
+        d["comp_value"] = int(comp_value)
+        d["comp_label"] = comp_label
+        return d
+
+    try:
+        comp_label, _bands = offer_sheet_compensation(aav)
+        comp_value = sum(_te.pick_trade_value(pk)
+                         for pk in (compensation_picks or []))
+        if comp_value <= 0:
+            return _no_with_comp()
+        floor = comp_value * OFFER_SHEET_TRADE_ASK_MULT
+        ceiling = comp_value * OFFER_SHEET_TRADE_GIVE_UP_MULT
+
+        # Candidate package pieces: signed roster players of the
+        # offering club whose clause (if any) doesn't veto the move.
+        candidates = []
+        for p in list(getattr(offering_team, "roster", []) or []):
+            if p is player:
+                continue
+            if contract_expired(p):
+                continue  # unsigned: the original club would inherit
+            try:
+                if _te.trade_vetoes(offering_team, original_team, [p]):
+                    continue
+            except Exception:
+                pass
+            try:
+                v = int(_te.asset_value(p))
+            except Exception:
+                continue
+            candidates.append((v, p))
+        candidates.sort(key=lambda vp: vp[0])
+
+        package = None
+        for v, p in candidates:
+            if v >= floor and v <= ceiling:
+                package = [(v, p)]
+                break
+        if package is None:
+            # Two-player combo: the cheapest pair inside the window.
+            pool = candidates[:8]
+            best = None
+            for i in range(len(pool)):
+                for j in range(i + 1, len(pool)):
+                    tot = pool[i][0] + pool[j][0]
+                    if floor <= tot <= ceiling:
+                        if best is None or tot < best[0]:
+                            best = (tot, [pool[i], pool[j]])
+            if best is not None:
+                package = best[1]
+        if not package:
+            return _no_with_comp(comp_value, comp_label)
+        package_players = [p for _v, p in package]
+        package_value = sum(v for v, _p in package)
+
+        # Cap reality: the original club absorbs the package's hits; the
+        # offering club sheds them and then signs the sheet AAV.
+        try:
+            pkg_hits = sum(int(_te._player_cap_hit(p))
+                           for p in package_players)
+        except Exception:
+            pkg_hits = 0
+        try:
+            if _cap_room(original_team) < pkg_hits:
+                return _no_with_comp(comp_value, comp_label)
+            if _cap_room(offering_team) + pkg_hits < aav:
+                return _no_with_comp(comp_value, comp_label)
+        except Exception:
+            pass
+
+        try:
+            _names = [str(getattr(p, "full_name",
+                                 getattr(p, "name", "a player")))
+                      for p in package_players]
+        except Exception:
+            _names = []
+        user_side = None
+        try:
+            if _is_user_team(original_team):
+                user_side = "original"
+            elif _is_user_team(offering_team):
+                user_side = "offering"
+        except Exception:
+            pass
+        return {"agreed": True, "package": package_players,
+                "comp_value": int(comp_value),
+                "package_value": int(package_value),
+                "comp_label": comp_label, "package_names": _names,
+                "user_side": user_side}
+    except Exception:
+        return no
+
+
+def execute_offer_sheet_trade(league, offering_team, original_team, player,
+                              aav: int, years: int, alt: Dict[str, Any],
+                              app=None) -> Optional[Dict[str, Any]]:
+    """Execute the agreed sign-and-trade: the original club trades the
+    RFA's rights to the offering club for the package, and the offering
+    club signs him at the sheet terms.
+
+    Cap, picks, and players all land through trade_engine.execute_trade
+    (ownership, clause vetoes, cap legality, freeze gates -- Caleb's
+    internals are called, never redesigned), then the standard signing
+    path (_sign_player + market registration + the offer-sheet
+    reputation/rivalry/dressing-room hooks, exactly like the
+    compensation path). Emits the league news story.
+
+    Returns None when the trade can't complete -- the caller falls back
+    to pick compensation exactly as today.
+    """
+    import trade_engine as _te
+    try:
+        package = list(alt.get("package") or [])
+        if not package:
+            return None
+        try:
+            _cd = getattr(app, "current_date", None)
+            _date_str = _cd.isoformat()[:10] if (
+                _cd is not None and hasattr(_cd, "isoformat")) else ""
+        except Exception:
+            _date_str = ""
+        done = _te.execute_trade(offering_team, original_team, package,
+                                 [player], date_str=_date_str,
+                                 league=league)
+        if done is None or str(getattr(done, "summary", "")) \
+                .startswith("BLOCKED"):
+            return None
+        # He signs with the offering club at the sheet terms (this also
+        # clears the offer-sheet-pending flag).
+        _sign_player(offering_team, player, aav, years)
+        _register_market_signing(league, player, aav)
+        try:
+            import reputation_system as _rep
+            _rep.record_offer_sheet(
+                getattr(league, "rivalries", []), offering_team,
+                original_team, player, aav)
+        except Exception:
+            pass
+        try:
+            import reputation_system as _rep2
+            _rivs = getattr(league, "rivalries", None)
+            if isinstance(_rivs, list):
+                _rep2.on_player_transfer(_rivs, player,
+                                         from_team=original_team,
+                                         to_team=offering_team)
+        except Exception:
+            pass
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(offering_team, player,
+                                       how="offer sheet")
+        except Exception:
+            pass
+        pname = getattr(player, "full_name",
+                        getattr(player, "name", "Unknown"))
+        _names = ", ".join(alt.get("package_names") or
+                           [getattr(p, "full_name", "a player")
+                            for p in package])
+        story = (f"\U0001f501 SIGN-AND-TRADE: "
+                 f"{_team_name(original_team)} trade {pname}'s rights to "
+                 f"{_team_name(offering_team)} for {_names} instead of "
+                 f"matching the ${_format_money(aav)}/yr x {years}y offer "
+                 f"sheet (compensation was: "
+                 f"{alt.get('comp_label', 'picks')}).")
+        if app is not None:
+            try:
+                app.add_news(story)
+            except Exception:
+                pass
+        return {"ok": True, "trade_alternative": True,
+                "package": package, "story": story}
+    except Exception:
+        return None
+
+
+def _ask_user_offering_trade_alt(app, offering_team, original_team, player,
+                                 aav: int, years: int,
+                                 alt: Dict[str, Any]) -> bool:
+    """Synchronous choice for the user-as-offering club: accept the
+    sign-and-trade package, or decline and let the pick compensation
+    execute exactly as today. True = accept. False = decline, or no
+    interactive UI available (headless callers fall through to the
+    compensation). Separated for QA patching."""
+    if app is None:
+        return False
+    try:
+        from tkinter import messagebox as _mb
+    except Exception:
+        return False
+    try:
+        pname = getattr(player, "full_name",
+                        getattr(player, "name", "Unknown"))
+        _names = ", ".join(alt.get("package_names") or [])
+        return bool(_mb.askyesno(
+            "Trade alternative",
+            f"{_team_name(original_team)} declined to match your offer "
+            f"sheet on {pname} (${_format_money(aav)}/yr x {years}y), "
+            f"but will trade his rights for {_names} instead of the "
+            f"{alt.get('comp_label', 'pick compensation')}.\n\n"
+            f"Accept the trade? (No = he signs and the picks transfer.)"))
+    except Exception:
+        return False
+
+
+def _queue_offer_sheet_trade_alt(app, league, offering_team, original_team,
+                                 player, aav: int, years: int,
+                                 alt: Dict[str, Any]) -> None:
+    """Interactive inbox message for the user-as-original club: accept
+    the sign-and-trade package or take the pick compensation. Stamps a
+    choice deadline; an unanswered message defaults to the picks via
+    the daily sweep -- the compensation is never lost to inaction."""
+    if app is None:
+        return
+    try:
+        from game_classes import EmailMessage
+    except Exception:
+        return
+    pname = getattr(player, "full_name", getattr(player, "name", "Unknown"))
+    _names = ", ".join(alt.get("package_names") or [])
+    try:
+        from datetime import timedelta as _td
+        _today = getattr(app, "current_date", None)
+        if _today is not None and hasattr(_today, "isoformat"):
+            _deadline = _today + _td(days=OFFER_SHEET_TRADE_WINDOW_DAYS)
+            _deadline_iso = _deadline.isoformat()
+            _deadline_txt = _deadline.strftime("%b %d, %Y")
+        else:
+            _deadline_iso, _deadline_txt = None, (
+                f"{OFFER_SHEET_TRADE_WINDOW_DAYS} days from today")
+    except Exception:
+        _deadline_iso, _deadline_txt = None, (
+            f"{OFFER_SHEET_TRADE_WINDOW_DAYS} days from today")
+    msg = EmailMessage(
+        sender=_team_name(offering_team),
+        sender_type="System",
+        subject=f"Trade alternative: {pname} -- players or picks?",
+        content=(f"You declined to match the offer sheet on {pname} "
+                 f"(${_format_money(aav)}/yr x {years}y). "
+                 f"{_team_name(offering_team)} would rather trade for his "
+                 f"rights than lose the {alt.get('comp_label', 'picks')}: "
+                 f"they offer {_names} "
+                 f"(~{_format_money(alt.get('package_value', 0))} in trade "
+                 f"value).\n\n"
+                 f"Accept the trade, or decline and take the pick "
+                 f"compensation: {alt.get('comp_label', '')}.\n\n"
+                 f"You have until {_deadline_txt} to decide -- if the "
+                 f"clock runs out he walks for the picks."),
+        category="Contracts",
+        is_important=True,
+        requires_response=True,
+        game_date_sent=getattr(app, "current_date", None),
+        action_type="offer_sheet_trade_alt",
+        action_data={
+            "player_id": getattr(player, "id", None),
+            "offering_team_id": getattr(offering_team, "id", None),
+            "original_team_id": getattr(original_team, "id", None),
+            "aav": aav,
+            "years": years,
+            "compensation": alt.get("comp_label", ""),
+            "package_player_ids": [getattr(p, "id", None)
+                                   for p in (alt.get("package") or [])],
+            "package_value": int(alt.get("package_value", 0) or 0),
+            "comp_value": int(alt.get("comp_value", 0) or 0),
+            "trade_deadline": _deadline_iso,
+            "offering_team_name": _team_name(offering_team),
+            "original_team_name": _team_name(original_team),
+        },
+    )
+    try:
+        app.send_email_to_user(msg)
+    except Exception:
+        pass
+
+
+def _find_trade_alt_message(app, player_id):
+    try:
+        inbox = getattr(getattr(app, "user_team", None), "inbox", None)
+        messages = getattr(inbox, "messages", None) or []
+    except Exception:
+        return None
+    for m in messages:
+        if (getattr(m, "action_type", None) == "offer_sheet_trade_alt"
+                and not getattr(m, "action_done", False)
+                and (m.action_data or {}).get("player_id") == player_id):
+            return m
+    return None
+
+
+def apply_offer_sheet_trade_alt(app, league, player_id, accept: bool,
+                                rng=None) -> Dict[str, Any]:
+    """Apply the user's accept/decline on a queued trade alternative.
+
+    Accept: run the sign-and-trade (falls back to the pick compensation
+    if the trade can no longer complete). Decline: the compensation
+    executes exactly as today. Either way the queued message is closed.
+    """
+    r = rng or random.Random()
+    msg = _find_trade_alt_message(app, player_id)
+    if msg is None:
+        return {"ok": False, "reason": "no_pending_trade_alt"}
+    data = msg.action_data or {}
+    league_teams = getattr(league, "teams", []) or []
+    offering = _find_team(league_teams, data.get("offering_team_id"),
+                          data.get("offering_team_name"))
+    original = _find_team(league_teams, data.get("original_team_id"),
+                          data.get("original_team_name"))
+    player = _find_player(league, original, player_id)
+    if offering is None or original is None or player is None:
+        return {"ok": False, "reason": "stale_trade_alt"}
+    aav = int(data.get("aav", 0) or 0)
+    years = int(data.get("years", 1) or 1)
+    if accept:
+        # Rebuild the exact package the user was shown.
+        _wanted = set(data.get("package_player_ids") or [])
+        _package = [p for p in
+                    list(getattr(offering, "roster", []) or [])
+                    if getattr(p, "id", None) in _wanted]
+        _alt = {"package": _package,
+                "package_names": [],
+                "comp_label": data.get("compensation", ""),
+                "package_value": int(data.get("package_value", 0) or 0),
+                "comp_value": int(data.get("comp_value", 0) or 0)}
+        try:
+            _alt["package_names"] = [
+                str(getattr(p, "full_name",
+                            getattr(p, "name", "a player")))
+                for p in _package]
+        except Exception:
+            pass
+        res = execute_offer_sheet_trade(league, offering, original, player,
+                                        aav, years, _alt, app=app)
+        if res is None:
+            # The trade can't complete anymore: compensation as today.
+            res = execute_offer_sheet(league, offering, original, player,
+                                      aav, years, app=app, rng=r,
+                                      _skip_trade_alt=True)
+            if not res.get("ok"):
+                return {"ok": False,
+                        "reason": res.get("reason", "failed")}
+        story = res.get("story", "")
+    else:
+        res = execute_offer_sheet(league, offering, original, player, aav,
+                                  years, app=app, rng=r,
+                                  _skip_trade_alt=True)
+        if not res.get("ok"):
+            return {"ok": False, "reason": res.get("reason", "failed")}
+        story = res.get("story", "")
+    try:
+        msg.action_done = True
+    except Exception:
+        pass
+    return {"ok": True, "accepted": bool(accept), "story": story}
 
 
 def ai_offer_sheet_target_score(offering_team, player, aav: int) -> float:
@@ -1489,10 +1978,11 @@ def _offer_sheet_deadline(msg, app=None):
 
     Prefers the stamped match_deadline in action_data; falls back to
     game_date_sent + 7 days; None when neither is known (e.g. old saves --
-    those are never auto-resolved).
+    those are never auto-resolved). Trade-alternative messages stamp
+    "trade_deadline" instead -- read either key.
     """
     data = getattr(msg, "action_data", None) or {}
-    iso = data.get("match_deadline")
+    iso = data.get("match_deadline") or data.get("trade_deadline")
     if iso:
         try:
             from datetime import date as _d
@@ -1526,6 +2016,8 @@ def process_offer_sheet_deadlines(app, league) -> int:
     run out resolves as a decline -- the player goes to the offering club
     at the sheet terms (real CBA rule), compensation transfers, cap is
     registered. Idempotent; only touches expired, unanswered sheets.
+    Trade-alternative choices ("offer_sheet_trade_alt") whose own clock
+    has run out default to the pick compensation, exactly as today.
     Called once per day-advance from the daily loop.
     """
     if app is None or league is None:
@@ -1537,6 +2029,25 @@ def process_offer_sheet_deadlines(app, league) -> int:
         return 0
     resolved = 0
     for m in messages:
+        if getattr(m, "action_type", None) == "offer_sheet_trade_alt":
+            if getattr(m, "action_done", False):
+                continue
+            if not _offer_sheet_expired(m, app):
+                continue
+            data = getattr(m, "action_data", None) or {}
+            res = apply_offer_sheet_trade_alt(
+                app, league, data.get("player_id"), False)
+            if res.get("ok"):
+                resolved += 1
+                if app is not None:
+                    try:
+                        app.add_news(
+                            f"\u23f0 Trade-alternative clock expired: "
+                            f"{_team_name(_find_team(getattr(league, 'teams', []), data.get('original_team_id'), data.get('original_team_name')))} "
+                            f"takes the pick compensation.")
+                    except Exception:
+                        pass
+            continue
         if getattr(m, "action_type", None) != "offer_sheet_match":
             continue
         if getattr(m, "action_done", False):
@@ -1596,7 +2107,7 @@ def apply_offer_sheet_match(app, league, player_id, match: bool,
         story = res.get("story", "")
     else:
         res = execute_offer_sheet(league, offering, original, player, aav,
-                                  years, app=app, rng=r)
+                                  years, app=app, rng=r, expired=expired)
         if not res.get("ok"):
             return {"ok": False, "reason": res.get("reason", "failed")}
         story = res.get("story", "")

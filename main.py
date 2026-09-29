@@ -16790,6 +16790,21 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return bool(res.get("ok"))
 
+    def apply_offer_sheet_trade_alt_decision(self, message, accept):
+        """Inbox action: accept the sign-and-trade package or take the
+        pick compensation on a declined offer sheet."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_trade_alt(
+            self, self.league, data.get("player_id"), bool(accept))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
     def apply_arbitration_walkaway_decision(self, message, walk_away):
         """Inbox action: walk away from an arbitration award (48h window)."""
         import rfa_system as _rfa

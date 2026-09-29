@@ -1037,6 +1037,14 @@ def apply_retention(retaining_team, player, pct, trade_date=None,
                   f"{getattr(player, 'full_name', 'the player')}'s cap hit.")
 
 
+# Unsigned-RFA rights at a genuine signing impasse trade at a risk
+# discount: the acquiring club still has to sign a player who already
+# refused his own club, so the rights are worth less than the same
+# player under contract. One additive adjustment on top of the base
+# value -- no existing weight retuned. (TUNING: 0.75)
+RFA_IMPASSE_RIGHTS_MULT = 0.75
+
+
 def player_trade_value(player) -> int:
     """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000)."""
     ovr = player.overall_rating()
@@ -1098,6 +1106,19 @@ def player_trade_value(player) -> int:
         from game_classes import PlayerPosition
         if player.primary_position == PlayerPosition.GOALIE and ovr >= 48:
             base *= 1.15
+    except Exception:
+        pass
+
+    # Unsigned-RFA rights at a signing impasse: risk-adjusted rights
+    # value so a holdout is genuinely shoppable. The acquiring club must
+    # still sign a player who already refused his own club, so his rights
+    # trade below signed-player value. Additive -- every weight above is
+    # untouched; only impasse RFAs (rfa_system.rfa_rights_at_impasse)
+    # see this line.
+    try:
+        import rfa_system as _rfa_mod
+        if _rfa_mod.rfa_rights_at_impasse(player):
+            base *= RFA_IMPASSE_RIGHTS_MULT
     except Exception:
         pass
 
