@@ -139,6 +139,43 @@ class PlayoffSeries:
             self.winner = self.team2
 
 
+def _game7_ot_hero(pgr: Dict, team1: Any, team2: Any
+                  ) -> Optional[Tuple[Any, str, str]]:
+    """Resolve a Game-7 OT winner to (player, name, team_name).
+
+    Prefers the actual OT scorer (the period-4 goal in notable_events);
+    falls back to the 1st star (the OT-winner bonus usually puts him
+    there). Returns None when nobody resolves. Additive helper for the
+    clutch story line in PlayoffBracket.simulate_playoff_game."""
+    pid = None
+    try:
+        from stars import _ot_scorer_id as _otid
+        pid = _otid(pgr or {})
+    except Exception:
+        pid = None
+    if pid is None:
+        try:
+            _stars = (pgr or {}).get("three_stars") or []
+            if _stars:
+                pid = (_stars[0] or {}).get("player_id")
+        except Exception:
+            pid = None
+    if pid is None:
+        return None
+    for t in (team1, team2):
+        for p in getattr(t, "roster", None) or []:
+            try:
+                if getattr(p, "id", None) == pid:
+                    nm = getattr(p, "full_name", None) or (
+                        f"{getattr(p, 'first_name', '')} "
+                        f"{getattr(p, 'last_name', '')}").strip()
+                    return p, (nm or "A playoff hero"), str(
+                        getattr(t, "team_name", "") or "")
+            except Exception:
+                continue
+    return None
+
+
 class PlayoffBracket:
     """Manages the entire NHL playoff bracket"""
     
@@ -426,6 +463,11 @@ class PlayoffBracket:
         from arena_atmosphere import pregame_crowd, crowd_hype_for_tension
         _elim = (series.team1_wins == 3 or series.team2_wins == 3)
         _game_no = series.games_played + 1
+        # Clutch tracking (additive): a Game 7 is the 7th game of a
+        # best-of-7 series. Computed BEFORE add_game_result bumps
+        # games_played below.
+        _is_game7 = (_game_no == 7
+                     and int(getattr(series, "series_format", 7) or 7) == 7)
         try:
             from narrative_ledger import active_ledger as _al
             _led = _al()
@@ -503,12 +545,49 @@ class PlayoffBracket:
                              "current_date", None)
             _pgr = {
                 "game_stats": getattr(game_sim, "game_stats", None) or {},
+                # The existing OT-winner +3 in select_three_stars reads
+                # notable_events -- hand it over so playoff stars credit
+                # the OT hero exactly like regular-season stars do.
+                "notable_events": getattr(game_sim, "notable_events",
+                                         None) or [],
                 "home_score": home_score,
                 "away_score": away_score,
                 "winner": series.team1 if team1_won else series.team2,
             }
             _rgs(_pgr, series.team1, series.team2, preseason=False,
-                 game_date=_pdate, playoff=True)
+                 game_date=_pdate, playoff=True, game7=_is_game7)
+            # Clutch lore (additive): announce newly-earned tags, and make
+            # a Game-7 OT winner read like it. News-feed only, rare by
+            # construction (tag grants happen once per tag per player;
+            # Game-7 OT deciders are a few per postseason).
+            try:
+                from clutch import clutch_epithet as _cep7
+                _app7 = getattr(self, "app", None)
+                _news7 = (getattr(_app7, "add_news", None)
+                          if _app7 is not None else None)
+                if _news7 is not None:
+                    for _g7 in (_pgr.get("clutch_tags_granted") or []):
+                        _lbl7 = str(_g7.get("label", "") or "")
+                        if _lbl7:
+                            _news7(
+                                f"\U0001f3f7\ufe0f Reputation earned: "
+                                f"{_g7.get('name', 'A playoff hero')} is "
+                                f"now known around the league as "
+                                f"\"{_lbl7}\".")
+                    if _is_game7 and game_info.get("ot"):
+                        _hero7 = _game7_ot_hero(
+                            _pgr, series.team1, series.team2)
+                        if _hero7 is not None:
+                            _hp, _hn, _ht = _hero7
+                            _ep7 = _cep7(_hp)
+                            _who7 = (f"{_ep7} {_hn}".strip()
+                                     if _ep7 else _hn)
+                            _news7(
+                                f"\u2b50 GAME 7, OVERTIME: {_who7} "
+                                f"({_ht}) buries the winner -- {_ht} "
+                                f"take the series in the decider.")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -2038,6 +2117,31 @@ def _series_storylines(series):
                 lines.append(f"{a2} is one win from the sweep.")
             if int(getattr(series, 'games_played', 0) or 0) == 6:
                 lines.append("Game 7 will decide it — winner takes all.")
+                # Clutch tags (additive): a tagged player skating in a
+                # looming Game 7 gets a named beat -- the room knows his
+                # reputation. No tagged players: no line (graceful).
+                try:
+                    from clutch import clutch_epithet as _cep_sl
+                    _seen_ep = set()
+                    for _tm in (getattr(series, 'team1', None),
+                                getattr(series, 'team2', None)):
+                        for _p in (getattr(_tm, 'roster', None) or []):
+                            _ep = _cep_sl(_p)
+                            if not _ep or _ep in _seen_ep:
+                                continue
+                            _seen_ep.add(_ep)
+                            _nm = (getattr(_p, 'full_name', None) or
+                                   (f"{getattr(_p, 'first_name', '')} "
+                                    f"{getattr(_p, 'last_name', '')}")
+                                   .strip()) or "A playoff hero"
+                            lines.append(f"{_ep} {_nm} skates in Game 7 "
+                                         f"-- this is his stage.")
+                            if len(_seen_ep) >= 2:
+                                break
+                        if len(_seen_ep) >= 2:
+                            break
+                except Exception:
+                    pass
         else:
             wname = team_abbr(
                 getattr(getattr(series, 'winner', None), 'team_name', ''))

@@ -9960,6 +9960,9 @@ class HockeyManagerGUI(tk.Tk):
                             "home": _st.get("home", ""),
                             "away": _st.get("away", ""),
                             "involved": _st.get("involved", ()),
+                            # Clutch tag epithet (additive): headlines.py
+                            # colors the story for a tagged subject.
+                            "epithet": _st.get("epithet", ""),
                         })
                 except Exception:
                     pass

@@ -384,19 +384,37 @@ def _narrative_shutdown_headline(game_date, player="", team="",
     )
 
 
+def _epithet_line(epithet):
+    """One tag-colored line for a game-story email. Graceful: the caller
+    only passes a non-empty epithet."""
+    if epithet == "Mr. Game 7":
+        return ("The man they call \"Mr. Game 7\" delivers when it matters "
+                "most.")
+    return f"The {epithet} delivers when it matters most."
+
+
 def _game_story_headline(game_date, story_kind="", text="",
-                         home="", away="", **kw):
+                         home="", away="", epithet="", **kw):
     """A night worth remembering: hat trick, shutout, steal, blowout,
-    OT thriller. Delivered only for the user's games."""
+    OT thriller. Delivered only for the user's games.
+
+    epithet (additive): a clutch tag label ("Mr. Game 7" / "Playoff
+    Performer") for the story's subject player -- appended as a
+    tag-colored line. Empty (the common case) leaves the story exactly
+    as before."""
     from game_classes import EmailMessage
     _emoji = {"hat_trick": "🎩", "shutout": "🧱", "goalie_steal": "🥅",
               "blowout": "💥", "ot_thriller": "⚡"}.get(story_kind, "🏒")
     subject = f"{_emoji} {_label(story_kind)}: {away} @ {home}"
+    content = f"{text}\n\nSome nights are bigger than the score."
+    if epithet:
+        content = (f"{text}\n\n{_epithet_line(epithet)}\n\n"
+                   f"Some nights are bigger than the score.")
     return EmailMessage(
         sender="League News Desk",
         sender_type="Media",
         subject=subject,
-        content=f"{text}\n\nSome nights are bigger than the score.",
+        content=content,
         category="Game Story",
         priority=2,
     )

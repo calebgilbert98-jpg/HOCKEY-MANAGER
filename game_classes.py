@@ -522,6 +522,16 @@ class Player:
     suspension_games_remaining: int = 0
     suspension_reason: str = ""
     suspended_today: bool = False
+
+    # Playoff clutch reputation ("Mr. Game 7" / "Playoff Performer").
+    # Career counters -- never reset by League.end_of_season:
+    # playoff_stars counts every playoff 3-star selection (any rank),
+    # game7_stars the subset earned in a Game 7. clutch_tags holds the
+    # granted tag ids (see clutch.py). Old-save safe: read via getattr
+    # with these defaults.
+    playoff_stars: int = 0
+    game7_stars: int = 0
+    clutch_tags: list = field(default_factory=list)
     
     # Development attributes
     coachability: int = field(default_factory=lambda: random.randint(GameBalance.DEFAULT_MIN_ATTRIBUTE, GameBalance.DEFAULT_MAX_ATTRIBUTE))

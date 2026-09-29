@@ -956,10 +956,19 @@ def build_cup_recap(champ: Any, bracket: Any, league: Any) -> str:
     smythe = getattr(bracket, "conn_smythe_winner", None)
     smythe_name = (getattr(bracket, "conn_smythe_name", None)
                    or (_pn(smythe) if smythe is not None else ""))
+    # Clutch epithets (additive): a tagged Smythe winner or hero reads
+    # like it -- untagged players render exactly as before.
+    try:
+        from clutch import clutch_epithet as _cep_cr
+    except Exception:
+        def _cep_cr(_p):  # graceful fallback: no tag, no change
+            return ""
     smythe_bit = ""
     if smythe is not None and smythe_name:
         g, a, gp = _playoff_pts(smythe)
-        smythe_bit = (f" Conn Smythe winner {smythe_name} ({g}G-{a}A in "
+        _sep = _cep_cr(smythe)
+        _sep_bit = f", the man they call \"{_sep}\"," if _sep else ""
+        smythe_bit = (f" Conn Smythe winner {smythe_name}{_sep_bit} ({g}G-{a}A in "
                       f"{gp} playoff games) was voted playoff MVP.")
     elif smythe_name:
         smythe_bit = f" Conn Smythe winner {smythe_name} was voted playoff MVP."
@@ -1003,7 +1012,9 @@ def build_cup_recap(champ: Any, bracket: Any, league: Any) -> str:
     for h in heroes:
         g, a, gp = _playoff_pts(h)
         if g + a > 0:
-            hero_bits.append(f"{_pn(h)} ({g}G-{a}A, {gp} GP)")
+            _hep = _cep_cr(h)
+            _htag = f" \"{_hep}\"" if _hep else ""
+            hero_bits.append(f"{_pn(h)}{_htag} ({g}G-{a}A, {gp} GP)")
     hero_bit = (" Also starring: " + "; ".join(hero_bits) + "."
                 if hero_bits else "")
 

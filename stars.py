@@ -173,6 +173,21 @@ def _bump_star_counts(player: Any, rank: int) -> None:
         pass
 
 
+def _bump_playoff_clutch(player: Any, game7: bool = False) -> None:
+    """Career playoff clutch counters (see clutch.py): every playoff
+    3-star selection (any rank) counts toward playoff_stars; the Game-7
+    subset also counts toward game7_stars. Additive -- the season
+    game_stars counts above are untouched."""
+    try:
+        player.playoff_stars = int(getattr(player, "playoff_stars", 0)
+                                   or 0) + 1
+        if game7:
+            player.game7_stars = int(getattr(player, "game7_stars", 0)
+                                     or 0) + 1
+    except Exception:
+        pass
+
+
 # ----------------------------------------------------------------------
 # Season star counts (Item 8): the single shared read of player.game_stars.
 # ----------------------------------------------------------------------
@@ -250,10 +265,18 @@ def record_game_stars(game_result: Dict[str, Any],
                       away_team: Any = None,
                       preseason: bool = False,
                       game_date: Any = None,
-                      playoff: bool = False) -> List[Dict[str, Any]]:
+                      playoff: bool = False,
+                      game7: bool = False) -> List[Dict[str, Any]]:
     """Select the three stars, stamp them on the result, and record them
     onto the players. Idempotent per game: callers record each game once.
-    Preseason exhibitions name no stars."""
+    Preseason exhibitions name no stars.
+
+    game7=True (only meaningful with playoff=True): the game was a Game 7,
+    so each starred player's Game-7 clutch counter bumps too. Newly-earned
+    clutch tags are stamped on the result as
+    game_result["clutch_tags_granted"] (plain dicts, save-safe) so the
+    caller can announce them; the return value (the star list) is
+    unchanged."""
     if preseason:
         game_result["three_stars"] = []
         return []
@@ -270,6 +293,7 @@ def record_game_stars(game_result: Dict[str, Any],
     for team in (home_team, away_team):
         for p in getattr(team, "roster", None) or [] if team else []:
             by_pid.setdefault(getattr(p, "id", None), p)
+    granted: List[Dict[str, Any]] = []
     for star in stars:
         p = by_pid.get(star.get("player_id"))
         if p is None:
@@ -279,6 +303,22 @@ def record_game_stars(game_result: Dict[str, Any],
             _record_first_star_moment(p, star, game_result,
                                       home_team, away_team, game_date,
                                       playoff=playoff)
+        if playoff:
+            _bump_playoff_clutch(p, game7=game7)
+            try:
+                from clutch import (maybe_grant_clutch_tags,
+                                    tag_label as _tag_label)
+                for _tag in maybe_grant_clutch_tags(p):
+                    granted.append({
+                        "player_id": star.get("player_id"),
+                        "name": _full_name(p),
+                        "tag": _tag,
+                        "label": _tag_label(_tag),
+                    })
+            except Exception:
+                pass
+    if granted:
+        game_result["clutch_tags_granted"] = granted
     return stars
 
 

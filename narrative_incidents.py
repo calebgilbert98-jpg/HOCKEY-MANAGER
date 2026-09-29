@@ -228,6 +228,7 @@ def _detect_hat_tricks(sim: Any, idx: Dict[str, Any]) -> List[Dict[str, Any]]:
                     p = idx.get(str(pid))
                     found.append({
                         "player": getattr(p, "full_name", "Unknown"),
+                        "player_obj": p,  # clutch epithet resolution
                         "team": team_name,
                         "goals": goals,
                     })
@@ -257,6 +258,7 @@ def _detect_goalie_stories(sim: Any, home: Any, away: Any,
                 pname = getattr(p, "full_name", "Unknown")
                 if opp_score == 0:
                     found.append({"kind": "shutout", "player": pname,
+                                  "player_obj": p,  # clutch epithet
                                   "team": tname, "saves": saves})
                 elif saves >= _STEAL_SAVES:
                     # Steal: big save night AND his team won.
@@ -264,6 +266,7 @@ def _detect_goalie_stories(sim: Any, home: Any, away: Any,
                            or (team is away and away_score > home_score))
                     if won:
                         found.append({"kind": "steal", "player": pname,
+                                      "player_obj": p,  # clutch epithet
                                       "team": tname, "saves": saves})
     except Exception:
         pass
@@ -283,13 +286,28 @@ def record_stories(home: Any, away: Any, home_score: int, away_score: int,
     idx = _player_index(home, away)
 
     def _rec(kind: str, weight: int, text: str,
-             facts: Optional[Dict[str, Any]] = None) -> None:
+             facts: Optional[Dict[str, Any]] = None,
+             player: Any = None) -> None:
+        """Record a story to the ledger and queue its headline spec.
+
+        player (additive): the story's subject -- when he holds a clutch
+        tag, its epithet travels on the SPEC (not the ledger text, which
+        stays a clean fact record) so headlines.py can color the story.
+        """
         try:
             ledger.record(kind, teams=[hn, an], weight=weight,
                           facts=facts or {}, text=text)
-            stories.append({"kind": kind, "text": text,
-                            "home": hn, "away": an,
-                            "involved": (hn, an)})
+            _spec: Dict[str, Any] = {"kind": kind, "text": text,
+                                     "home": hn, "away": an,
+                                     "involved": (hn, an)}
+            try:
+                from clutch import clutch_epithet as _cep_st
+                _ep = _cep_st(player) if player is not None else ""
+                if _ep:
+                    _spec["epithet"] = _ep
+            except Exception:
+                pass
+            stories.append(_spec)
         except Exception:
             pass
 
@@ -301,7 +319,8 @@ def record_stories(home: Any, away: Any, home_score: int, away_score: int,
              f"{'win' if (ht['team'] == hn) == (home_score > away_score) else 'loss'} "
              f"over {an if ht['team'] == hn else hn}.",
              {"player": ht["player"], "goals": ht["goals"],
-              "score": f"{home_score}-{away_score}"})
+              "score": f"{home_score}-{away_score}"},
+             player=ht.get("player_obj"))
 
     # Goalie stories.
     for gs in _detect_goalie_stories(sim, home, away, home_score,
@@ -310,12 +329,14 @@ def record_stories(home: Any, away: Any, home_score: int, away_score: int,
             _rec("shutout", _SHUTOUT_WEIGHT,
                  f"{gs['player']} ({gs['team']}) stopped all {gs['saves']} "
                  f"shots in a {home_score}-{away_score} win.",
-                 {"player": gs["player"], "saves": gs["saves"]})
+                 {"player": gs["player"], "saves": gs["saves"]},
+                 player=gs.get("player_obj"))
         else:
             _rec("goalie_steal", _STEAL_WEIGHT,
                  f"{gs['player']} ({gs['team']}) made {gs['saves']} saves "
                  f"to steal a {home_score}-{away_score} win.",
-                 {"player": gs["player"], "saves": gs["saves"]})
+                 {"player": gs["player"], "saves": gs["saves"]},
+                 player=gs.get("player_obj"))
 
     # Statement blowout.
     margin = abs(home_score - away_score)
