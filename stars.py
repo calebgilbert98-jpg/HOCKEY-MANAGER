@@ -173,6 +173,36 @@ def _bump_star_counts(player: Any, rank: int) -> None:
         pass
 
 
+# ----------------------------------------------------------------------
+# Season star counts (Item 8): the single shared read of player.game_stars.
+# ----------------------------------------------------------------------
+# Named weights so award races, reputation and development stay consistent:
+# a 1st star counts fully, a 2nd star half, a 3rd star a quarter.
+STAR_FIRST_WEIGHT = 1.0
+STAR_SECOND_WEIGHT = 0.5
+STAR_THIRD_WEIGHT = 0.25
+
+
+def weighted_star_count(player: Any) -> float:
+    """Weighted season star count: 1st + 0.5*2nd + 0.25*3rd.
+
+    Reads the ``player.game_stars`` dict that _bump_star_counts maintains
+    (reset to zeros every season in League.end_of_season). Players without
+    one count zero. Additive consumers (award races, reputation,
+    development) all read through this helper so the weights live in one
+    place.
+    """
+    counts = getattr(player, "game_stars", None)
+    if not isinstance(counts, dict):
+        return 0.0
+    try:
+        return (STAR_FIRST_WEIGHT * (int(counts.get("first", 0) or 0))
+                + STAR_SECOND_WEIGHT * (int(counts.get("second", 0) or 0))
+                + STAR_THIRD_WEIGHT * (int(counts.get("third", 0) or 0)))
+    except Exception:
+        return 0.0
+
+
 def _record_first_star_moment(player: Any, star: Dict[str, Any],
                               game_result: Dict[str, Any],
                               home_team: Any, away_team: Any,

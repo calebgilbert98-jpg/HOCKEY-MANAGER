@@ -1708,6 +1708,20 @@ NHL League Office""",
                     changes = self._dev_engine.process_monthly_development(
                         player, coach=getattr(team, 'head_coach', None),
                         team=team)
+                    # Item 8: season star counts nudge development -- young
+                    # players starring break out, starring veterans resist
+                    # decline. Additive wrapper around the engine (its
+                    # internals are untouched); with no stars this is a
+                    # no-op. Merged before the empty-check so a star-only
+                    # month still flows into archetype refresh + news.
+                    try:
+                        from star_development import (
+                            apply_star_monthly_nudge as _star_nudge)
+                        _star_deltas = _star_nudge(player, changes)
+                        for _a, _c in _star_deltas.items():
+                            changes[_a] = changes.get(_a, 0) + _c
+                    except Exception:
+                        pass
                     if not changes:
                         continue
                     # Refresh archetype as attributes develop (e.g. prospect

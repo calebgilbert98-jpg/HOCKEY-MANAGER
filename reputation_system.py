@@ -30,6 +30,14 @@ VETERAN_AGE = 32            # age at which leadership weighs heaviest
 REPUTATION_MAX = 100
 CONTROVERSY_MAX = 100
 
+# Item 8: 3-star recognition in season-end reputation. Additive alongside the
+# existing terms (nothing retuned): each weighted season star
+# (stars.weighted_star_count: 1st = 1.0, 2nd = 0.5, 3rd = 0.25) banks a
+# modest slice of reputation, hard-capped so it never rivals a major award
+# (a Hart banks 12; 20 weighted stars bank at most 8).
+STAR_REP_PER_WEIGHTED_STAR = 0.4   # reputation points per weighted star
+STAR_REP_MAX = 8                   # hard cap on the star term
+
 # How much each controversy event type moves the needle (x severity 1-10)
 CONTROVERSY_WEIGHTS = {
     "outburst": 2.2,       # explosive outburst at coach / refs / media
@@ -236,6 +244,18 @@ def update_player_reputation(
         # 1.5x league average pace over a full season ~= star-level year
         perf = (ppg / max(0.01, league_avg_ppg)) * 45
         target += max(0, min(45, perf))
+
+    # -- 3-star recognition (Item 8) ---------------------------------------
+    # Players who star regularly bank modest extra standing, bounded well
+    # below a major award. Additive: no existing weight touched.
+    try:
+        from stars import weighted_star_count as _wsc
+        _wstars = _wsc(player)
+        if _wstars > 0:
+            target += min(STAR_REP_MAX,
+                          int(round(_wstars * STAR_REP_PER_WEIGHTED_STAR)))
+    except Exception:
+        pass
 
     # -- Awards ------------------------------------------------------------
     award_values = {

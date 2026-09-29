@@ -24,6 +24,34 @@ changes and no per-game cost.
 
 from typing import Any, Dict, List, Tuple
 
+# ----------------------------------------------------------------------
+# 3-star recognition (Item 8): season star counts feed award races.
+# ----------------------------------------------------------------------
+# Additive alongside the existing weights (nothing retuned): each player's
+# race score gets a small percentage bump per weighted star (read through
+# stars.weighted_star_count: 1st = 1.0, 2nd = 0.5, 3rd = 0.25). The
+# percentage form keeps the term scale-agnostic across races (a Hart score
+# ~140 and a Calder score ~70 get proportionally the same nudge).
+STAR_RACE_SCORE_PCT = 0.004   # +0.4% of race score per weighted star
+STAR_RACE_STAR_CAP = 20       # weighted stars beyond this add nothing
+                              # (max bonus = 0.004 * 20 = +8% of score)
+
+
+def _star_race_bonus(score: float, p: Any) -> float:
+    """Additive star-count bump for an award-race score.
+
+    Zero when the player has no season stars, so existing ordering is
+    unchanged unless stars are present.
+    """
+    try:
+        from stars import weighted_star_count as _wsc
+        w = min(_wsc(p), STAR_RACE_STAR_CAP)
+    except Exception:
+        w = 0.0
+    if w <= 0 or score <= 0:
+        return 0.0
+    return score * STAR_RACE_SCORE_PCT * w
+
 
 def _gp(p) -> int:
     return getattr(p, "games_played", 0) or 0
@@ -218,6 +246,7 @@ def hart_race(players: List[Any], team_pct: Dict[str, float],
         # lottery teams get discounted — mirrors real voting.
         team_factor = 0.75 + 0.5 * min(1.0, max(0.0, (pct - 0.400) / 0.250))
         score = (pts + 0.4 * goals) * team_factor
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": pts,
                     "goals": goals, "team_pct": pct})
     out.sort(key=lambda r: r["score"], reverse=True)
@@ -230,7 +259,9 @@ def art_ross_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
     for p in players:
         if _is_goalie(p) or _gp(p) < min_gp:
             continue
-        out.append({"player": p, "score": _pts(p), "points": _pts(p),
+        score = _pts(p)
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
+        out.append({"player": p, "score": score, "points": _pts(p),
                     "goals": getattr(p, "goals", 0) or 0,
                     "assists": getattr(p, "assists", 0) or 0})
     out.sort(key=lambda r: (r["score"], r["goals"]), reverse=True)
@@ -243,7 +274,9 @@ def rocket_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
     for p in players:
         if _is_goalie(p) or _gp(p) < min_gp:
             continue
-        out.append({"player": p, "score": getattr(p, "goals", 0) or 0,
+        score = getattr(p, "goals", 0) or 0
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
+        out.append({"player": p, "score": score,
                     "goals": getattr(p, "goals", 0) or 0,
                     "points": _pts(p)})
     out.sort(key=lambda r: (r["score"], r["points"]), reverse=True)
@@ -266,6 +299,7 @@ def norris_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
         hits = getattr(p, "hits", 0) or 0
         blocks = getattr(p, "blocked_shots", 0) or 0
         score = pts * 2.0 + defense * 0.15 + pm * 0.3 + (hits + blocks) * 0.02
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": pts,
                     "goals": getattr(p, "goals", 0) or 0,
                     "plus_minus": pm})
@@ -291,6 +325,7 @@ def selke_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
         pts = _pts(p)
         score = (defense * 1.2 + fo * 0.5 + takeaways * 0.4
                  + pm * 0.8 + pts * 0.25)
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": pts,
                     "plus_minus": pm, "takeaways": takeaways,
                     "defense": defense})
@@ -313,6 +348,7 @@ def byng_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
         if pts < 20:
             continue
         score = pts / (1.0 + pim / 12.0)
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "points": pts,
                     "pim": pim})
     out.sort(key=lambda r: r["score"], reverse=True)
@@ -336,12 +372,14 @@ def calder_race(players: List[Any], min_gp: int = 10,
             sv = _sv_pct(p)
             w = getattr(p, "wins", 0) or 0
             score = sv * 100 + w * 0.8
+            score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
             out.append({"player": p, "score": score, "points": None,
                         "sv_pct": sv, "wins": w, "goalie": True})
         else:
             pts = _pts(p)
             goals = getattr(p, "goals", 0) or 0
             score = pts + 0.3 * goals
+            score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
             out.append({"player": p, "score": score, "points": pts,
                         "goals": goals, "goalie": False})
     # Skaters and goalies compete on separate scales; skaters first by
@@ -384,6 +422,7 @@ def vezina_race(goalies: List[Any], min_gp: int = 15) -> List[Dict[str, Any]]:
         score = ((sv - 0.870) * 1000 * 2.0
                  + max(0.0, (3.50 - gaa)) * 12.0
                  + w * 0.7 + so * 1.5 + gsax * 0.8)
+        score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
         out.append({"player": p, "score": score, "sv_pct": sv, "gaa": gaa,
                     "wins": w, "shutouts": so, "gsax": gsax})
     out.sort(key=lambda r: r["score"], reverse=True)

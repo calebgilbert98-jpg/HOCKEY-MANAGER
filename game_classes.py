@@ -6486,6 +6486,16 @@ class League:
                 player.ahl_stats = PlayerStats()
             except Exception:
                 pass
+            # Fresh 3-star ledger for the new season. game_stars is a SEASON
+            # count (award races, season-end reputation and monthly
+            # development all read it), so it resets with the other season
+            # ledgers here -- before this it accumulated career-wide. The
+            # end-of-regular-season reputation update runs before this
+            # rollover, so this season's counts are already banked.
+            try:
+                player.game_stars = {"first": 0, "second": 0, "third": 0}
+            except Exception:
+                pass
             # Farm-confidence flags reset with the ledger: one buzz note
             # per prospect per season; the live buzz flag is recomputed
             # weekly anyway, but a new season starts everyone quiet.
