@@ -408,6 +408,83 @@ class FantasyDraftManager:
               
         return selected_player
 
+    # Real NHL roster limit.
+    NHL_ROSTER_MAX = 23
+
+    def assign_drafted_player(self, team: Team, player: Player) -> str:
+        """Roster assignment shared by every pick site (UI + headless).
+
+        Returns where the player landed: "roster", "ahl" or "prospects".
+        The NHL roster caps at 23 (real league rule): once full, further
+        picks go to the AHL, where their cap hit buries per the CBA.
+        Previously every 40+ pick landed on the NHL roster, producing
+        40-man rosters league-wide after a 40-round draft.
+        """
+        try:
+            r = player.overall_rating()
+        except Exception:
+            r = 50.0
+        ros = getattr(team, "roster", None)
+        if not isinstance(ros, list):
+            ros = team.roster = []
+        ahl = getattr(team, "ahl_roster", None)
+        if not isinstance(ahl, list):
+            ahl = team.ahl_roster = []
+        pro = getattr(team, "prospects", None)
+        if not isinstance(pro, list):
+            pro = team.prospects = []
+        if r >= 40 and len(ros) < self.NHL_ROSTER_MAX:
+            ros.append(player)
+            return "roster"
+        if r >= 35:
+            ahl.append(player)
+            return "ahl"
+        pro.append(player)
+        return "prospects"
+
+    def normalize_post_draft_rosters(self) -> None:
+        """Post-draft soundness pass (called by complete_draft and headless
+        flows): no NHL roster over 23, every club keeps >= 2 goalies so it
+        can dress a lineup. Excess skaters drop to the AHL; a short goalie
+        corps promotes the best AHL netminder(s), demoting the worst
+        skater to stay at 23."""
+        def _ovr(p):
+            try:
+                return p.overall_rating()
+            except Exception:
+                return 50.0
+
+        def _goalie(p):
+            try:
+                return p.primary_position == PlayerPosition.GOALIE
+            except Exception:
+                return False
+
+        for team in self.teams:
+            ros = [p for p in (getattr(team, "roster", None) or [])]
+            ahl = getattr(team, "ahl_roster", None)
+            if not isinstance(ahl, list):
+                ahl = team.ahl_roster = []
+            ros.sort(key=_ovr, reverse=True)
+            while len(ros) > self.NHL_ROSTER_MAX:
+                ahl.append(ros.pop())
+            have_g = sum(1 for p in ros if _goalie(p))
+            ahl_goalies = sorted([p for p in ahl if _goalie(p)],
+                                 key=_ovr, reverse=True)
+            while have_g < 2 and ahl_goalies:
+                g = ahl_goalies.pop(0)
+                ahl.remove(g)
+                if len(ros) >= self.NHL_ROSTER_MAX:
+                    skaters = sorted([p for p in ros if not _goalie(p)],
+                                     key=_ovr)
+                    if skaters:
+                        out = skaters[0]
+                        ros.remove(out)
+                        ahl.append(out)
+                ros.append(g)
+                have_g += 1
+            team.roster = ros
+
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
 
@@ -1274,14 +1351,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Make the pick
         success = self.draft_manager.make_pick(player)
         if success:
-            # Add to appropriate roster
-            if player.overall_rating() >= 40:
-                current_pick.team.roster.append(player)
-            elif player.overall_rating() >= 35:
-                current_pick.team.ahl_roster.append(player)
-            else:
-                current_pick.team.prospects.append(player)
-                
+            # Roster assignment (23-man NHL cap) lives on the manager so
+            # the UI and headless flows share one rule.
+            self.draft_manager.assign_drafted_player(current_pick.team, player)
+
             # Update display
             self.update_display()
             
@@ -1734,16 +1807,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             debug_print(f"DEBUG: Draft pick success = {success}")
             
             if success:
-                # Add to appropriate roster based on rating
-                if player.overall_rating() >= 40:
-                    current_pick.team.roster.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} roster")
-                elif player.overall_rating() >= 35:
-                    current_pick.team.ahl_roster.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} AHL roster")
-                else:
-                    current_pick.team.prospects.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} prospects")
+                # Roster assignment (23-man NHL cap) lives on the manager.
+                _dest = self.draft_manager.assign_drafted_player(
+                    current_pick.team, player)
+                debug_print(f"DEBUG: Added {player.full_name} to "
+                            f"{current_pick.team.team_name} ({_dest})")
                 
                 # CRITICAL: Immediate UI updates with forced refresh
                 debug_print("DEBUG: ===== STARTING COMPREHENSIVE UI UPDATE =====")
@@ -3070,14 +3138,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
-                    # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 40:
-                        current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 35:
-                        current_pick.team.ahl_roster.append(ai_pick)
-                    else:
-                        current_pick.team.prospects.append(ai_pick)
-                        
+                    # Roster assignment (23-man NHL cap) on the manager.
+                    self.draft_manager.assign_drafted_player(
+                        current_pick.team, ai_pick)
+
                     # CRITICAL: Force immediate draft board update
                     self.update_display()
                     
@@ -3193,14 +3257,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             success = self.draft_manager.make_pick(ai_pick)
             if success:
-                # Add to appropriate roster
-                if ai_pick.overall_rating() >= 40:
-                    current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 35:
-                    current_pick.team.ahl_roster.append(ai_pick)
-                else:
-                    current_pick.team.prospects.append(ai_pick)
-                    
+                # Roster assignment (23-man NHL cap) on the manager.
+                self.draft_manager.assign_drafted_player(
+                    current_pick.team, ai_pick)
+
                 picks_simmed += 1
                 
                 # CRITICAL: Force draft board update every few picks during simulation
@@ -3320,13 +3380,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             success = self.draft_manager.make_pick(ai_pick)
             if success:
-                # Add to appropriate roster based on rating
-                if ai_pick.overall_rating() >= 40:
-                    current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 35:
-                    current_pick.team.ahl_roster.append(ai_pick)
-                else:
-                    current_pick.team.prospects.append(ai_pick)
+                # Roster assignment (23-man NHL cap) on the manager.
+                self.draft_manager.assign_drafted_player(
+                    current_pick.team, ai_pick)
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
@@ -3454,14 +3510,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Make the pick
         success = self.draft_manager.make_pick(self.selected_player)
         if success:
-            # Add player to appropriate roster based on rating
-            if self.selected_player.overall_rating() >= 40:
-                current_pick.team.roster.append(self.selected_player)
-            elif self.selected_player.overall_rating() >= 35:
-                current_pick.team.ahl_roster.append(self.selected_player)
-            else:
-                current_pick.team.prospects.append(self.selected_player)
-                
+            # Roster assignment (23-man NHL cap) lives on the manager.
+            self.draft_manager.assign_drafted_player(
+                current_pick.team, self.selected_player)
+
             self.update_display()
             self.selected_player = None
             self.draft_button.configure(state='disabled')
@@ -3489,14 +3541,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
-                    # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 40:
-                        current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 35:
-                        current_pick.team.ahl_roster.append(ai_pick)
-                    else:
-                        current_pick.team.prospects.append(ai_pick)
-                        
+                    # Roster assignment (23-man NHL cap) on the manager.
+                    self.draft_manager.assign_drafted_player(
+                        current_pick.team, ai_pick)
+
                     self.update_display()
                     
                     # Continue if still not user's turn
@@ -3513,6 +3561,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Mark fantasy draft as completed in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
+
+        # Roster soundness: 40 rounds of picks must not leave 40-man NHL
+        # rosters. Trim to 23 (best 23 stay), guarantee >= 2 goalies per
+        # club, demote the rest to the AHL.
+        try:
+            self.draft_manager.normalize_post_draft_rosters()
+        except Exception:
+            pass
 
         # Backstop: no club skates with letters after the draft -- every
         # roster is letter-less until captains are set at preseason.
