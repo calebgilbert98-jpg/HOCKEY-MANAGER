@@ -1382,11 +1382,14 @@ class AdvancedGameSim:
         # himself) -- select the setup man by the ONE shared decision:
         # playmaking attributes x relationship closeness with the shooter
         # x line chemistry. Most real goals come off a pass; this keeps
-        # the primary rate (~0.85) unified with GameSim's reworked pass
-        # play, and the ledger keeps the pair.
+        # the primary rate unified with GameSim's reworked pass play, and
+        # the ledger keeps the pair.
+        # Parity retune 2026-09-28 (per Muck: half the assist-system
+        # intensity): 0.60 -> 0.45. Targets A/G ~1.30-1.35 with the 0.62
+        # secondary below -- between the old 1.06 and the 1.61 peak.
         if not assist_ids:
             _pool = [p for p in _skaters if p.id != shooter.id]
-            if _pool and random.random() < 0.60:
+            if _pool and random.random() < 0.45:
                 _passer = None
                 try:
                     from mesh_system import (playmaking_score as _pms2,
@@ -1418,10 +1421,13 @@ class AdvancedGameSim:
                         pass
 
         # Secondary assist: another on-ice teammate.
-        # Part B tuning: 0.78 targets assists/goal ~1.6 with the ~0.84
-        # primary rate. Selection is attribute-weighted (below), not a
-        # dice roll. Same decision GameSim makes.
-        if random.random() < 0.78:
+        # Parity retune 2026-09-28 (per Muck: half the assist-system
+        # intensity): 0.78 -> 0.62 -> 0.55 (step 3). With the 0.45 selected
+        # primary above, targets assists/goal ~1.30-1.35 -- between the old
+        # 1.06 and the 1.61 peak. Selection stays attribute-weighted (below),
+        # not a dice roll -- the hierarchy (attributes first) is unchanged,
+        # only the rate. Same decision GameSim makes.
+        if random.random() < 0.55:
             candidates = [p for p in _skaters
                           if p.id not in (shooter.id, *assist_ids)]
             if candidates:
@@ -1479,9 +1485,20 @@ class AdvancedGameSim:
 
         # Enhanced goalie attributes
         goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type) if goalie else 8
+        # Goaltending parity (mesh_system.effective_goalie_skill): compress
+        # the raw 1-100 composite toward the measured starter mean (92.6)
+        # before the differential -- a 98 goalie deciding games outright is
+        # a parity failure. Skaters decide games. The raw composite is
+        # untouched for UI/AI; this only affects the conversion formula.
+        try:
+            from mesh_system import effective_goalie_skill as _egs
+            goalie_skill = _egs(goalie_skill)
+        except Exception:
+            pass
         
         # NHL-realistic shooting percentage: ~9% base
-        # Each point of skill difference shifts scoring chance by ~0.8%
+        # Each point of skill difference shifts scoring chance ~0.3-0.4%
+        # (piecewise talent sensitivity -- see mesh_system).
         # Recalibrated (mesh_system): both skills resolve on the 1-100 scale
         # with goalies systematically ~15 points above shooters, so the raw
         # differential is recentered to restore the designed 9% for an
@@ -1663,15 +1680,14 @@ class AdvancedGameSim:
             pass
         shot_chance = max(0.04, min(0.16, shot_chance))
 
-        # Power-play finishing (divergence #1): GameSim's canonical 2.2x
-        # xG on the man advantage. PP volume here is structural (the PP
-        # team owns every event); the conversion edge was the missing half
-        # (only ~1.05x before). The tactics pp x (2.0-pk) system edge stacks
-        # separately via _systems_edge_for -- exactly as in GameSim, where
-        # _man_advantage_xg_factor and _team_tactics_xg_factor also stack.
+        # Power-play finishing (divergence #1): the man advantage converts
+        # better -- extra space, tired killers. Parity retune 2026-09-28
+        # (per Muck: closer to old scaling): 2.2x -> 1.6x. The old quick-sim
+        # had no PP conversion edge at all (1.0x); 1.6x keeps the mechanism
+        # GameSim shares without letting elite PP units run away.
         # (5v3's 3.0x has no quick-sim state to key off; accepted gap.)
         if getattr(self, "pp_team", None) == puck_team_name:
-            shot_chance *= 2.2
+            shot_chance *= 1.6
 
         # 6-on-5 volume lives on the event-type gate above (divergence #13:
         # 2.2x, same as GameSim) -- not here on conversion.

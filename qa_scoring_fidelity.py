@@ -104,7 +104,8 @@ def main():
     gpg = g / 40
     ag = a / g if g else 0
     check("GPG in 2.70-3.60 band (smoke)", 2.0 <= gpg <= 4.5, f"({gpg:.2f})")
-    check("A/G in 1.40-1.85 (smoke)", 1.40 <= ag <= 1.85, f"({ag:.2f})")
+    check("A/G in 1.20-1.50 (smoke, half-intensity retune 2026-09-28)",
+          1.20 <= ag <= 1.50, f"({ag:.2f})")
     
     print(f"\n=== {PASS} passed, {FAIL} failed ===", flush=True)
     sys.exit(1 if FAIL else 0)

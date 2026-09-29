@@ -63,7 +63,49 @@ _BREAKOUT_MORALE_BUMP = 8    # coach trust made tangible (morale floor lift)
 # adjustments), not -14.8. Re-measure if rosters or adjustments change.
 SKILL_DIFF_BASELINE = -26.7
 SHOT_BASE_CHANCE = 0.09
-SHOT_SKILL_SENSITIVITY = 0.008
+# Talent sensitivity: piecewise -- flat middle, gentle top (parity retune
+# 2026-09-28, per Muck: "flat league, fat tails"). The middle of the league
+# converts on a gentle slope (SENS_MID) so depth and systems contend; above
+# the mean differential a slightly steeper slope (SENS_TOP) preserves a hint
+# of superstar separation, and the 0.16 conversion clamp keeps genuine
+# 50-goal headroom -- the cap, not the slope, is the cream-rises mechanism.
+# Mean-preserving by construction: the baseline sits exactly on the measured
+# mean differential (n=834 shots), so the average shot converts at
+# SHOT_BASE_CHANCE either way.
+# (Old code was 0.008 linear on a miscalibrated -14.8 baseline: accidentally
+# flat/fat-tailed, but at 2.20 GPG -- below the band. This keeps that shape
+# at an in-band level. Step-5: 0.003/0.004 -- the step-3/4 passes (0.004 /
+# 0.006-0.008) still left the best teams at 78-80% and the Art Ross at
+# 114-137; the 0.16 clamp preserves genuine 50-goal headroom at the top.)
+SHOT_TALENT_SENS_MID = 0.003
+SHOT_TALENT_SENS_TOP = 0.004
+# Back-compat alias for single-sensitivity import sites.
+SHOT_SKILL_SENSITIVITY = SHOT_TALENT_SENS_MID
+
+
+def _talent_sens(centered_diff: float) -> float:
+    """Piecewise slope: gentle through the middle, old steepness at the top."""
+    return SHOT_TALENT_SENS_TOP if centered_diff >= 0 else SHOT_TALENT_SENS_MID
+
+
+# Goaltending parity (parity retune 2026-09-28, step 6). The starter goalie
+# ratings run 76.7-98.1 (mean 92.6, n=32) -- a 21-point gap deciding games
+# outright (Edmonton 85% on a 97 goalie). Compress the effective goalie
+# skill toward the MEASURED mean so the gap halves; the best goalies still
+# stand out, just not by 10 points of every skill differential. Mean-
+# preserving by construction (92.6 measured 2026-09-28; re-measure if
+# rosters change). Applied in the conversion formula only -- the raw
+# composite is untouched for UI/AI.
+GOALIE_PARITY_MEAN = 92.6
+GOALIE_PARITY_K = 0.5
+
+
+def effective_goalie_skill(goalie_skill: float) -> float:
+    """Parity-compressed goalie skill for the shot-conversion formula."""
+    try:
+        return GOALIE_PARITY_MEAN + (float(goalie_skill) - GOALIE_PARITY_MEAN) * GOALIE_PARITY_K
+    except Exception:
+        return GOALIE_PARITY_MEAN
 
 
 def _clamp01(x):
@@ -201,10 +243,24 @@ def mesh_chance_factor(shooter, linemates, team, is_playoff=False) -> float:
 
 def recalibrated_shot_chance(skill_diff: float) -> float:
     """The AdvancedGameSim base, recentered so the average shot resolves at
-    the designed 9%. Restores intent; changes no attribute and no sensitivity.
+    the designed 9%. Piecewise slope (flat middle, convex top) -- see the
+    sensitivity notes above. Restores intent; changes no attribute.
     """
-    return SHOT_BASE_CHANCE + ((skill_diff - SKILL_DIFF_BASELINE)
-                               * SHOT_SKILL_SENSITIVITY)
+    _d = skill_diff - SKILL_DIFF_BASELINE
+    return SHOT_BASE_CHANCE + _d * _talent_sens(_d)
+
+
+def shooter_finish_mult(shooter_skill: float, mean_skill: float = 65.3) -> float:
+    """Multiplicative finishing factor (GameSim fidelity): 1.0 at
+    league-average skill, piecewise slope (flat middle, convex top) -- the
+    same talent decision quick-sim's additive model makes above. Clamped
+    0.80-1.25. Never raises.
+    """
+    try:
+        _d = float(shooter_skill) - float(mean_skill)
+        return min(1.25, max(0.80, 1.0 + _d * _talent_sens(_d)))
+    except Exception:
+        return 1.0
 
 
 # ---------------------------------------------------------------------------

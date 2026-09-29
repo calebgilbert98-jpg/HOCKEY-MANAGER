@@ -53,13 +53,41 @@ A pre-existing scoring mechanic gives the shooter a bonus from the passer's pass
 - **GameSim** (50 games): A/G=1.61, GPG/team=2.76
 - All in their bands (GPG 2.70-3.60, A/G 1.55-1.70).
 
+## Parity Retune (2026-09-28, per Muck)
+
+Muck's direction: scale back toward the OLD code's shape (pre-scoring-work) but keep the GPG level fix and run the assist system at ~half intensity. Old code: A/G 1.06, Art Ross 56 pts, best team 74.4% (Carolina). New code peak: A/G 1.61, Art Ross 150 pts, best team 82.9% (Edmonton).
+
+### What changed
+1. **Talent curve — piecewise** (`mesh_system.py`): flat 0.008 → `SHOT_TALENT_SENS_MID=0.003` (middle of the league, depth/systems contend) / `SHOT_TALENT_SENS_TOP=0.004` (above the mean differential, a hint of superstar separation). Mean-preserving: the baseline sits on the measured mean differential, so the average shot still converts at 9%. The 0.16 conversion clamp (not the slope) is the 50-goal-scorer mechanism.
+2. **Assists — half intensity** (`quick_sim.py`): selected primary 0.60→0.45, secondary 0.78→0.55. Targets A/G 1.30–1.35 (old 1.06 → peak 1.61). Selection stays attribute-weighted (`assist_weight`); only the rate changed.
+3. **PP conversion** (`quick_sim.py`): 2.2x→1.6x post-clamp boost (old code had 1.0x).
+4. **Goaltending parity** (`mesh_system.effective_goalie_skill`, `quick_sim.py`): starter goalie ratings run 76.7–98.1 (mean 92.6, n=32). A 98 goalie was deciding games outright (Edmonton 85% on goaltending). The effective goalie skill is compressed toward the measured mean (K=0.5) before the skill differential — mean-preserving, so league GPG doesn't move. The raw composite is untouched for UI/AI. **Note:** GameSim (`simulation.py`) uses a separate multiplicative goalie model (0.70x anchor) and does NOT yet apply this compression — a known fidelity gap for a follow-up.
+5. **GameSim finishing** (`simulation.py`): now uses shared `shooter_finish_mult()` instead of an inline 0.008 formula — one decision, two fidelities.
+
+### Measured (A/B, 82-game seasons, seed 42, s2_deadline save)
+| | Old (3c4c73f) | Peak (b902d8b) | Retuned |
+|---|---|---|---|
+| GPG/team | 2.20 | 3.46 | 3.33 ✓ |
+| A/G | 1.06 | 1.61 | 1.31 ✓ |
+| Art Ross | 56 | 150 | 145 (Sbisa 53+92)* |
+| Top goals | 31 | 84 | 69 (Ylonen) ✓ |
+| Best team | 74.4% (CAR) | 82.9% (EDM) | 74.4% (ANA) ✓ |
+| Carolina | 1st | 18th (47.6%) | 8th (62.2%) ✓ |
+| 1st/10th gap | 1.47x | 1.60x | 1.86x* |
+
+*Sbisa (65-ovr grinder) has won the Art Ross in ALL code versions (56/150/145) — a save-data oddity, not a tuning artifact. Excluding him, the 2nd–10th gap is 1.51x (healthy 1.3–1.5x).
+
+### What NOT to touch (parity)
+- The 0.003/0.004 sensitivities and the 92.6 goalie mean — re-measure the goalie mean if rosters change significantly.
+- The assist probabilities (0.45/0.55) — tuned to the 1.30–1.35 A/G band.
+
 ### The baseline recalibration
 `SKILL_DIFF_BASELINE` (−14.8, set 2026-09-27 on generated talent) no longer matched live rosters: in-game adjusted differential averages −26.7 (starters + danger/shot-type adjustments). Recalibrated to −26.7 on 2026-09-28 (n=834 shots, s2_deadline save). Re-measure if rosters or goalie adjustments change.
 
 ## What NOT to touch
 - The `shot_skill_bonus` mechanic (pre-existing, caleb's code) — only the thread rate was recalibrated, not the bonus itself.
 - `BASE_SAVE_TUNE` (scoring_balance.py) — the explicit scoring knob. Currently 0.95. Tune in small steps if GPG drifts.
-- The assist probabilities (0.75/0.60/0.78) — tuned to the 1.55–1.70 A/G band. Retune only with 100+ game samples.
+- The assist probabilities (quick-sim 0.45/0.55; GameSim 0.75/0.78) — tuned to the 1.30–1.35 A/G band. Retune only with 100+ game samples.
 
 ## Validation
 - `qa_scoring_fidelity.py`: 9/9 (shared composites, attribute dominance, engine integration, ledger, smoke test).

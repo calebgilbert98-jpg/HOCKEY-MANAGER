@@ -4923,19 +4923,21 @@ class GameSim:
         # finishing -- the ONE shared shooter_skill_composite with the same
         # 0.30/0.25/0.20/0.15/0.10 weights quick-sim uses. Mean-preserving
         # around the measured league average (65.3, n=2220, 2026-09-28):
-        # an average shooter is 1.0x; each point moves xG 0.8% (the same
-        # talent sensitivity as quick-sim's skill-diff model). Elite
-        # (~70) finishes ~1.04x, depth (~62) ~0.97x -- additive on top of
-        # the volume edge snipers already get from shooter_choice_weight.
+        # an average shooter is 1.0x; the piecewise slope (flat middle,
+        # convex top) is the shared talent decision -- see mesh_system.
+        # Elite (~70) finishes a touch above, depth (~62) a touch below --
+        # additive on top of the volume edge snipers already get from
+        # shooter_choice_weight.
         try:
-            from mesh_system import shooter_skill_composite as _ssc2
+            from mesh_system import (shooter_skill_composite as _ssc2,
+                                     shooter_finish_mult as _sfm2)
             _sbase = {
                 ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
                 ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
                 ShotType.BACKHAND: getattr(shooter, "backhand", 10),
             }.get(shot_type, getattr(shooter, "wristshot", 10))
             _ss = _ssc2(shooter, _sbase)
-            _sf = min(1.25, max(0.80, 1.0 + (_ss - 65.3) * 0.008))
+            _sf = _sfm2(_ss)
             expected_goal = min(0.95, expected_goal * _sf)
         except Exception:
             pass
