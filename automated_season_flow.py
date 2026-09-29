@@ -49,6 +49,19 @@ class AutomationSettings:
     auto_skip_offseason: bool = False
     days_per_second: float = 1.0  # Speed of automation
 
+
+def _derived_trade_deadline_date(year, game_manager=None):
+    """Trade-deadline milestone date: derived from the schedule (40 days
+    before the last regular-season game); Mar 8 fallback. Never raises.
+    """
+    try:
+        from trade_deadline_manager import trade_deadline_date as _tdd
+        league = getattr(game_manager, "league", None)
+        return _tdd(league, deadline_year=year + 1)
+    except Exception:
+        return date(year + 1, 3, 8)
+
+
 class AutomatedSeasonFlow:
     """Manages automated season progression and milestone detection"""
     
@@ -104,7 +117,8 @@ class AutomatedSeasonFlow:
                 action=self._february_push
             ),
             SeasonMilestone(
-                date=date(year + 1, 3, 8),
+                date=_derived_trade_deadline_date(
+                    year, getattr(self, "game_manager", None)),
                 name="Trade Deadline", 
                 phase=SeasonPhase.TRADE_DEADLINE,
                 description="NHL Trade Deadline - final day for trades",

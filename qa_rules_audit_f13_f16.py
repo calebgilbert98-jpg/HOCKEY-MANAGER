@@ -3,6 +3,10 @@
 F13: project_pick_slots() weighting -- verifies the documented formula:
      lottery EV bump, 40% regression toward #16, real order clears.
 F14: March 8 deadline freeze gate -- verifies the freeze boundaries.
+     (The gate is now DERIVED: 40 days before the last regular-season
+     game, per the CBA. These checks exercise the Mar-8 FALLBACK path --
+     a league with no schedule -- which must keep the old boundaries.
+     Derivation itself is covered by qa_trade_deadline_derived.py.)
 F15: protected-pick fallback -- ownership, ordering, idempotency.
 F16: reacquire ban -- 365-day boundary + SPC-death clearing.
 

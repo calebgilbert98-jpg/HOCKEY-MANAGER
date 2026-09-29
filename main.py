@@ -4370,13 +4370,18 @@ class HockeyManagerGUI(tk.Tk):
             self.send_email_to_user(league_email)
         
         # 6. Trade deadline notifications (based on actual calendar)
-        if self.current_date.month == 3:  # March - trade deadline season
-            trade_deadline = date(self.current_date.year, 3, 8)
-            days_to_deadline = (trade_deadline - self.current_date).days
+        try:
+            from trade_deadline_manager import trade_deadline_date as _tdd
+            _dl = _tdd(getattr(self, "league", None),
+                       deadline_year=self.current_date.year)
+        except Exception:
+            _dl = date(self.current_date.year, 3, 8)
+        if _dl is not None:
+            days_to_deadline = (_dl - self.current_date).days
             if 0 <= days_to_deadline <= 7 and random.random() < 0.5:
                 deadline_email = EmailGenerator.create_league_announcement_email(
                     f"Trade Deadline Alert - {days_to_deadline} Days Remaining",
-                    f"The NHL trade deadline is in {days_to_deadline} days. All trades must be completed by 3:00 PM EST on March 8th.\n\n"
+                    f"The NHL trade deadline is in {days_to_deadline} days. All trades must be completed by 3:00 PM EST on {_dl.strftime('%B %-d')}.\n\n"
                     f"Current roster size: {len(self.user_team.roster)} players\n"
                     f"Salary cap space: ${self.user_team.cap_space:,}"
                 )
@@ -5962,7 +5967,7 @@ class HockeyManagerGUI(tk.Tk):
     # ------------------------------------------------------------------
 
     def is_trade_deadline_day(self):
-        """Game-date check: is today trade deadline day (March 8)?"""
+        """Game-date check: is today trade deadline day (derived)?"""
         try:
             from trade_deadline_manager import get_deadline_manager
             return get_deadline_manager(self.game_manager).is_deadline_day(
@@ -14750,7 +14755,7 @@ class HockeyManagerGUI(tk.Tk):
         """Open the Trade Deadline Center - only available on trade deadline day"""
         if not self.is_trade_deadline_day():
             messagebox.showinfo("Trade Deadline Center",
-                              "The Trade Deadline Center is only available on Trade Deadline Day (March 8th).\n\n"
+                              "The Trade Deadline Center is only available on Trade Deadline Day.\n\n"
                               "Check back when the deadline approaches!")
             return
             

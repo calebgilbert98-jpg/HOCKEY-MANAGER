@@ -3951,6 +3951,12 @@ class League:
         if template is not None and self._apply_schedule_template(template):
             print(f"⚡ Schedule loaded from template cache "
                   f"({len(self.schedule)} entries).")
+            # The template rebuilds entries but not derived dates: recompute
+            # the trade deadline from the restored schedule.
+            try:
+                self._derive_trade_deadline()
+            except Exception:
+                pass
             return
 
         random.seed(rotation_seed)  # For reproducible but varied schedules
@@ -4020,6 +4026,44 @@ class League:
         # Add NHL special events (All-Star, Trade Deadline, Draft, etc.)
         calendar_data = self._create_authentic_nhl_calendar(season_year)
         self._add_nhl_special_events(calendar_data['events'], season_year)
+        # Now that the real games exist, derive the trade deadline from
+        # the schedule (40 days before the last regular-season game) and
+        # repoint the deadline event entry to the derived day.
+        try:
+            self._derive_trade_deadline()
+        except Exception as _e:
+            print(f"⚠️ Trade deadline derivation skipped: {_e}")
+
+    def _derive_trade_deadline(self):
+        """Derive the trade deadline from the generated schedule.
+
+        Real NHL rule (CBA 13.12(j)): 3pm ET on the 40th day before the
+        final day of the regular season. Repoints the trade_deadline
+        NHL_EVENT entry so the calendar shows the real day. Falls back
+        to the Mar-8 placeholder when the schedule can't answer.
+        Additive; never raises.
+        """
+        try:
+            from trade_deadline_manager import trade_deadline_date
+            _dd = trade_deadline_date(self)
+        except Exception:
+            return
+        if _dd is None:
+            return
+        try:
+            self.trade_deadline_date = _dd
+        except Exception:
+            pass
+        try:
+            for _i, _e in enumerate(self.schedule):
+                if (isinstance(_e, tuple) and len(_e) == 3
+                        and _e[1] == 'NHL_EVENT'
+                        and isinstance(_e[2], dict)
+                        and _e[2].get('type') == 'trade_deadline'):
+                    _payload = dict(_e[2])
+                    self.schedule[_i] = (_dd, _e[1], _payload)
+        except Exception:
+            pass
 
     def _generate_preseason_schedule(self, nhl_teams, season_year,
                                      rotation_seed=None):
@@ -5113,7 +5157,9 @@ class League:
                 date(season_year + 1, 2, 10),
                 date(season_year + 1, 2, 24)
             ) if ((season_year + 1) % 4 == 2) else None,
-            'trade_deadline': date(season_year + 1, 3, 8),  # First Friday in March
+            'trade_deadline': date(season_year + 1, 3, 8),  # placeholder;
+            # replaced by _derive_trade_deadline() once the schedule exists
+            # (real rule: 40 days before the last regular-season game)
             'entry_draft': date(season_year + 1, 6, 27),   # Late June
             'free_agency': date(season_year + 1, 7, 1)     # July 1st
         }

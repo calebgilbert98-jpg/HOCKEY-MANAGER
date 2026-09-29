@@ -1131,10 +1131,11 @@ def player_trade_value(player) -> int:
 
 def _trade_freeze_active(date_str, league=None):
     """(frozen, reason). Real NHL rule: the trade freeze runs from the
-    deadline (March 8) until the season ends.
+    deadline -- 40 days before the final day of the regular season
+    (derived from the schedule; Mar 8 fallback) -- until the season ends.
 
-    - On or before March 8: trading is legal (deadline-day deals count).
-    - After March 8: frozen while the season that contained the deadline
+    - On or before the deadline: trading is legal (deadline-day deals count).
+    - After the deadline: frozen while the season that contained the deadline
       is still running. The season is over once league.season_year has
       rolled past the deadline's season (League.end_of_season increments
       it when the Cup is decided) -- so draft-floor and summer deals are
@@ -1151,13 +1152,22 @@ def _trade_freeze_active(date_str, league=None):
     except Exception:
         return False, ""
     # The deadline belongs to the season's second half: an Oct 2026 date
-    # faces the Mar 2027 deadline; a Feb 2027 date faces Mar 2027.
+    # faces the 2027 deadline; a Feb 2027 date faces the 2027 deadline.
     _dy = _gd.year + (1 if _gd.month >= 10 else 0)
     try:
-        from datetime import date as _date2
-        _deadline = _date2(_dy, 3, 8)
+        from trade_deadline_manager import trade_deadline_date as _tdd
+        _deadline = _tdd(league, deadline_year=_dy)
+        if _deadline.year != _dy:
+            # Stale schedule (previous season's): the derived date
+            # belongs to the wrong season, so fall back to the Mar-8
+            # constant for the season the game date actually faces.
+            raise ValueError("stale schedule")
     except Exception:
-        return False, ""
+        try:
+            from datetime import date as _date2
+            _deadline = _date2(_dy, 3, 8)
+        except Exception:
+            return False, ""
     if _gd <= _deadline:
         return False, ""
     if _gd.month in (7, 8, 9):

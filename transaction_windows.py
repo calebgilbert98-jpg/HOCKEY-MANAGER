@@ -8,7 +8,8 @@ an action is blocked. Dates follow the current NHL CBA:
   Buyouts ......... June 15 - June 30 (first window; the one the game models)
   UFA signings .... July 1 onward (no signings from the market in June)
   Offer sheets .... July 1 - December 1 (and never once arbitration is filed)
-  Trades .......... frozen after the deadline (Mar 8) until the Cup is
+  Trades .......... frozen after the deadline (40 days before the last
+                    regular-season game, per the CBA) until the Cup is
                     awarded, plus the holiday roster freeze (Dec 20-27)
   Extensions ...... final contract year only (years_remaining <= 1)
   Waivers ......... not during the June dead month

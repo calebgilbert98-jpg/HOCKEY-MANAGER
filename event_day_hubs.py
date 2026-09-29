@@ -1,7 +1,8 @@
 """
 Event Day Hubs - immersive standalone pages for the league's three tentpole days:
   * Draft Day Central   (June 23-25, rookie draft)
-  * Trade Deadline      (existing TradeDeadlineCenter, March 8)
+  * Trade Deadline      (existing TradeDeadlineCenter, derived date:
+                         40 days before the last regular-season game)
   * Free Agent Frenzy   (July 1, start of free agency)
 
 Each hub is a full-screen, broadcast-style page with a live wire feed,

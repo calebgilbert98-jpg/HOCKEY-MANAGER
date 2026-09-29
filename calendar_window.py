@@ -452,13 +452,20 @@ class CalendarView(ctk.CTkFrame):
         # - Thanksgiving: Nov 24 (season_year)
         # - Christmas: Dec 24-25 (season_year)
         # - All-Star: Feb 5-11 (season_year + 1)
-        # - Trade deadline: Mar 8 (season_year + 1)
+        # - Trade deadline: derived from the schedule (40 days before the
+        #   last regular-season game; Mar 8 fallback)
+        try:
+            from trade_deadline_manager import trade_deadline_date as _tdd
+            _dl = _tdd(getattr(self.app, "league", None),
+                       deadline_year=season_year + 1)
+        except Exception:
+            _dl = date(season_year + 1, 3, 8)
         return {
             'all_star_break': (
                 date(season_year + 1, 2, 5),
                 date(season_year + 1, 2, 11)
             ),
-            'trade_deadline': date(season_year + 1, 3, 8),
+            'trade_deadline': _dl,
             'christmas_break': (
                 date(season_year, 12, 24),
                 date(season_year, 12, 25)

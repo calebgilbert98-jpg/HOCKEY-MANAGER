@@ -1,6 +1,7 @@
 """
 Trade Deadline Center - Immersive Trade Deadline Day Experience
-Accessible only on March 8th (NHL Trade Deadline Day)
+Accessible only on trade deadline day (derived: 40 days before the last
+regular-season game, per the CBA; Mar 8 fallback)
 """
 
 import tkinter as tk
@@ -1814,7 +1815,7 @@ class DeadlineMarketBrowser(InGamePopup):
 
 
 def is_trade_deadline_day():
-    """Check if today is trade deadline day (March 8th for this season)"""
+    """Check if today is trade deadline day (derived from the schedule)"""
     # Use the deadline manager for consistent logic
     manager = get_deadline_manager()
     return manager.is_trade_deadline_day()

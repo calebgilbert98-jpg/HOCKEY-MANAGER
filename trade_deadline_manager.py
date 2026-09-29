@@ -4,14 +4,67 @@ Handles deadline detection, trade validation, and deadline-specific trading rule
 """
 
 import random
-from datetime import datetime, time, timedelta
+from datetime import datetime, date, time, timedelta
 from typing import (Dict, List, Tuple, Any)
+
+
+# The NHL CBA (Article 13.12(j)) sets the deadline at 3pm ET on the 40th
+# day immediately preceding the final day of the regular season. The
+# game derives it from the generated schedule: last regular-season game
+# date minus 40 days. At that point clubs are ~75% through their games,
+# which is why it also reads as a "completion %" rule.
+TRADE_DEADLINE_LEAD_DAYS = 40
+
+
+def trade_deadline_date(league=None, deadline_year=None):
+    """Return this season's trade deadline as a datetime.date.
+
+    Derived from the league schedule: 40 days before the final day of
+    the regular season (NHL CBA logic). Preseason exhibitions, playoff
+    games, and special-event entries never move it. Falls back to
+    March 8 of the deadline year when the schedule can't answer (no
+    league, QA stubs, saves from before the schedule existed).
+    """
+    try:
+        sched = getattr(league, "schedule", None) or []
+        last = None
+        for e in sched:
+            if not isinstance(e, dict):
+                continue
+            if e.get("league") != "NHL":
+                continue
+            if e.get("preseason") or e.get("playoff"):
+                continue
+            d = e.get("date")
+            if d is None:
+                continue
+            try:
+                dd = d.date() if isinstance(d, datetime) else d
+            except Exception:
+                continue
+            if last is None or dd > last:
+                last = dd
+        if last is not None:
+            return last - timedelta(days=TRADE_DEADLINE_LEAD_DAYS)
+    except Exception:
+        pass
+    try:
+        syr = int(getattr(league, "season_year", 0) or 0)
+    except Exception:
+        syr = 0
+    dy = deadline_year or (syr + 1 if syr else datetime.now().year)
+    try:
+        return date(dy, 3, 8)
+    except Exception:
+        return date(datetime.now().year, 3, 8)
 
 
 class TradeDeadlineManager:
     """Manages all trade deadline day logic and constraints"""
     
-    # NHL Trade Deadline Constants
+    # NHL Trade Deadline Constants. The date itself is DERIVED from the
+    # schedule (see trade_deadline_date); these month/day constants are
+    # only the fallback when no schedule can answer.
     DEADLINE_MONTH = 3
     DEADLINE_DAY = 8
     DEADLINE_HOUR = 15  # 3 PM ET
@@ -72,11 +125,33 @@ class TradeDeadlineManager:
         self._clock = {'date': None, 'minutes': self.CLOCK_START_MIN,
                        'expired': False}
         
+    def deadline_date(self):
+        """This season's trade deadline as a date.
+
+        Derived from the league schedule (40 days before the final day
+        of the regular season, per the CBA); falls back to March 8 when
+        the schedule can't answer. Never raises.
+        """
+        try:
+            league = getattr(self.game_manager, "league", None)
+        except Exception:
+            league = None
+        try:
+            return trade_deadline_date(league)
+        except Exception:
+            return date(self.DEADLINE_MONTH, self.DEADLINE_DAY)
+
     def is_trade_deadline_day(self, current_date=None) -> bool:
-        """Check if the current date is trade deadline day"""
+        """Check if the current date is trade deadline day (derived)."""
         check_date = current_date or datetime.now()
-        return (check_date.month == self.DEADLINE_MONTH and 
-                check_date.day == self.DEADLINE_DAY)
+        try:
+            dd = self.deadline_date()
+            cd = (check_date.date() if isinstance(check_date, datetime)
+                  else check_date)
+            return cd == dd
+        except Exception:
+            return (check_date.month == self.DEADLINE_MONTH and
+                    check_date.day == self.DEADLINE_DAY)
     
     def is_deadline_passed(self, current_datetime=None) -> bool:
         """Check if the trade deadline has passed (3 PM ET)"""
@@ -103,10 +178,16 @@ class TradeDeadlineManager:
     def is_deadline_day(self, game_date) -> bool:
         """Game-date check: is this game date trade deadline day?"""
         try:
-            return (game_date.month == self.DEADLINE_MONTH and
-                    game_date.day == self.DEADLINE_DAY)
+            dd = self.deadline_date()
+            gd = (game_date.date() if isinstance(game_date, datetime)
+                  else game_date)
+            return gd == dd
         except Exception:
-            return False
+            try:
+                return (game_date.month == self.DEADLINE_MONTH and
+                        game_date.day == self.DEADLINE_DAY)
+            except Exception:
+                return False
 
     # ------------------------------------------------------------------
     # Deadline-day game clock (30-minute increments, 9 AM -> 3 PM ET)
@@ -209,12 +290,17 @@ class TradeDeadlineManager:
             return {'expired': True, 'time_left': timedelta(0),
                     'formatted': "DEADLINE PASSED", 'urgency': 'expired'}
         now = datetime.now()
-        
+
+        dd = self.deadline_date()
+        today = now.date()
+        if today > dd:
+            # Next season has no schedule yet: fall back to the Mar-8
+            # constant for the countdown target.
+            dd = date(dd.year + 1, self.DEADLINE_MONTH, self.DEADLINE_DAY)
         if not self.is_trade_deadline_day(now):
             # Find next trade deadline
-            next_year = now.year if now.month <= self.DEADLINE_MONTH else now.year + 1
-            next_deadline = datetime(next_year, self.DEADLINE_MONTH, self.DEADLINE_DAY, 
-                                   self.DEADLINE_HOUR, self.DEADLINE_MINUTE)
+            next_deadline = datetime(dd.year, dd.month, dd.day,
+                                     self.DEADLINE_HOUR, self.DEADLINE_MINUTE)
         else:
             # Today is deadline day
             next_deadline = now.replace(hour=self.DEADLINE_HOUR, minute=self.DEADLINE_MINUTE, 
