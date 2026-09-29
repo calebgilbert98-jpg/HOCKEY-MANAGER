@@ -129,7 +129,8 @@ class ModernScoutingView(ctk.CTkFrame):
         if not hasattr(self.app, 'tree_maps'):
             self.app.tree_maps = {}
         
-        required_maps = ['players_tree', 'scouts_tree', 'assignments_tree', 'reports_tree', 'draft_tree']
+        required_maps = ['players_tree', 'scouts_tree', 'assignments_tree', 'reports_tree', 'draft_tree',
+                         'targets_tree']
         for map_name in required_maps:
             if map_name not in self.app.tree_maps:
                 self.app.tree_maps[map_name] = {}
@@ -149,6 +150,7 @@ class ModernScoutingView(ctk.CTkFrame):
         self._create_draft_tab()  # New dedicated draft tab
         self._create_assignments_tab()
         self._create_reports_tab()
+        self._create_targets_tab()  # Scouting shortlist (trade_market)
         
         # Professional status bar
         self._create_status_bar()
@@ -486,7 +488,350 @@ class ModernScoutingView(ctk.CTkFrame):
         # Pack widgets
         self.report_text.pack(side='left', fill='both', expand=True, padx=10, pady=10)
         report_scrollbar.pack(side='right', fill='y', pady=10)
-    
+
+    # ------------------------------------------------------------------
+    # Targets tab (scouting shortlist, backed by trade_market -- no
+    # parallel store; all reads/writes go through trade_market)
+    # ------------------------------------------------------------------
+    def _targets_user_team(self):
+        """User team: app.user_team first, game_manager fallback."""
+        try:
+            ut = getattr(self.app, 'user_team', None)
+            if ut is not None:
+                return ut
+        except Exception:
+            pass
+        try:
+            gm = getattr(self.app, 'game_manager', None)
+            return getattr(gm, 'user_team', None) if gm else None
+        except Exception:
+            return None
+
+    def _targets_league(self):
+        """League: app.league first, game_manager fallback."""
+        try:
+            lg = getattr(self.app, 'league', None)
+            if lg is not None:
+                return lg
+        except Exception:
+            pass
+        try:
+            gm = getattr(self.app, 'game_manager', None)
+            return getattr(gm, 'league', None) if gm else None
+        except Exception:
+            return None
+
+    def _targets_section(self, parent, title, pady, columns=None, widths=None):
+        """Build one targets section: full-width tree on top, button row
+        below. Returns (tree, button_frame)."""
+        frame = tk.LabelFrame(parent, text=title,
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
+                              relief="solid", bd=1)
+        frame.pack(fill='both', expand=True, padx=10, pady=pady)
+
+        list_wrap = tk.Frame(frame, bg=self.app.CONTENT_BG)
+        list_wrap.pack(fill='both', expand=True)
+
+        if columns is None:
+            columns = ['Player', 'Pos', 'Age', 'Ovr', 'Team',
+                       'Source', 'Note']
+        if widths is None:
+            widths = [170, 60, 50, 60, 150, 140, 420]
+        tree = ttk.Treeview(list_wrap, columns=columns, show='headings',
+                            height=14)
+        for col, width in zip(columns, widths):
+            tree.heading(col, text=col)
+            tree.column(col, width=width, minwidth=40)
+
+        scrollbar = ttk.Scrollbar(list_wrap, orient='vertical',
+                                  command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        btn_frame = tk.Frame(frame, bg=self.app.CONTENT_BG)
+        btn_frame.pack(fill='x', padx=10, pady=5)
+        return tree, btn_frame
+
+    def _create_targets_tab(self):
+        """Create the Targets tab: the ONE unified trade-targets surface.
+
+        Scout suggestions and user targets share this single list (backed
+        by ShortlistManager 'Trade Targets' via trade_market) -- there is
+        no second tab and no import step. Scout rows carry the scout's name
+        and confidence band; the truth behind a tip is never shown.
+        """
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
+        self.notebook.add(tab_frame, text="Targets")
+
+        self.targets_tree, t_btn = self._targets_section(
+            tab_frame, "Trade targets (unified)", pady=(10, 10))
+
+        add_btn = tk.Button(t_btn, text="Add target",
+                            bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
+                            command=self._targets_add)
+        add_btn.pack(side='left', padx=(0, 10))
+
+        remove_btn = tk.Button(t_btn, text="Remove",
+                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                               command=self._targets_remove)
+        remove_btn.pack(side='left', padx=(0, 10))
+
+        refresh_btn = tk.Button(t_btn, text="Refresh suggestions",
+                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                command=self._targets_refresh_suggestions)
+        refresh_btn.pack(side='left')
+
+    def _populate_targets(self):
+        """Populate the unified targets list from trade_market."""
+        tree = getattr(self, 'targets_tree', None)
+        if tree is None:
+            return
+        for item in tree.get_children():
+            tree.delete(item)
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            return
+        try:
+            entries = trade_market.get_unified_targets()
+        except Exception:
+            entries = []
+        maps = getattr(self.app, 'tree_maps', None) or {}
+        maps.setdefault('targets_tree', {}).clear()
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = maps
+        for e in entries or []:
+            pid = e.get('player_id')
+            notes = e.get('notes', '') or ''
+            player, team = None, None
+            try:
+                player, team = trade_market.resolve_player(league, pid)
+            except Exception:
+                pass
+            if player is None:
+                try:
+                    player, team = trade_market.resolve_player(
+                        league, int(pid))
+                except Exception:
+                    pass
+            if player is None:
+                player = self._find_nhl_player_by_name(
+                    league, e.get('player_name', ''))
+            if player is None:
+                continue  # left the NHL since being added
+            if team is None:
+                try:
+                    _p, team = trade_market.resolve_player(
+                        league, getattr(player, 'id', None))
+                except Exception:
+                    team = None
+            try:
+                pos = (player.primary_position.value
+                       if hasattr(player.primary_position, 'value')
+                       else str(player.primary_position))
+            except Exception:
+                pos = '?'
+            try:
+                ovr = f"{displayed_overall(player, self._user_team()):.0f}"
+            except Exception:
+                ovr = '?'
+            team_name = getattr(team, 'team_name', '—') if team else '—'
+            try:
+                kind, who = trade_market._target_source(notes)
+            except Exception:
+                kind, who = 'user', 'You'
+            source = f"Scout: {who}" if kind == 'scout' else who
+            # Display note: strip the machine prefixes, keep the meaning
+            # (incl. the scout's confidence band).
+            disp = notes
+            if kind == 'scout' and ':' in notes:
+                disp = notes.split(':', 1)[1].strip()
+            elif notes.startswith('[') and ']' in notes:
+                disp = notes.partition(']')[2].strip()
+            values = (
+                e.get('player_name') or getattr(player, 'full_name', '?'),
+                pos,
+                getattr(player, 'age', '?'),
+                ovr,
+                team_name,
+                source,
+                disp,
+            )
+            item = tree.insert('', 'end', values=values)
+            maps['targets_tree'][item] = player
+
+    def _targets_add(self):
+        """Add-target dialog: pick any NHL player into the shortlist."""
+        try:
+            import trade_market
+        except Exception:
+            messagebox.showerror("Targets", "Trade market module unavailable.")
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            messagebox.showwarning("No Data", "No league data available.")
+            return
+
+        dialog = InGamePopup(self)
+        dialog.title("Add Target")
+        dialog.geometry("720x520")
+        dialog.configure(background=self.app.BG_COLOR)
+
+        frame = ttk.Frame(dialog)
+        frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        ttk.Label(frame, text="Select a player to add to your targets:",
+                  style='Title.TLabel').pack(pady=(0, 8))
+
+        search_frame = ttk.Frame(frame)
+        search_frame.pack(fill='x', pady=(0, 6))
+        ttk.Label(search_frame, text="Search:").pack(side='left', padx=(0, 6))
+        search_var = tk.StringVar(master=dialog)
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)
+        search_entry.pack(side='left')
+
+        columns = ('Name', 'Pos', 'Age', 'Ovr', 'Team')
+        picker = ttk.Treeview(frame, columns=columns, show='headings', height=14)
+        for col, w in zip(columns, (200, 60, 50, 60, 180)):
+            picker.heading(col, text=col)
+            picker.column(col, width=w)
+        picker.pack(fill='both', expand=True)
+
+        # All NHL players across every roster.
+        all_rows = []
+        try:
+            for t in (getattr(league, 'teams', None) or []):
+                if getattr(t, 'league_name', '') != 'National Hockey League':
+                    continue
+                for p in (getattr(t, 'roster', None) or []):
+                    all_rows.append((p, t))
+        except Exception:
+            pass
+
+        rowmap = {}
+
+        def _refill(*_args):
+            q = search_var.get().lower()
+            for it in picker.get_children():
+                picker.delete(it)
+            rowmap.clear()
+            for p, t in all_rows:
+                try:
+                    name = p.full_name
+                except Exception:
+                    continue
+                if q and q not in name.lower():
+                    continue
+                try:
+                    pos = (p.primary_position.value
+                           if hasattr(p.primary_position, 'value')
+                           else str(p.primary_position))
+                except Exception:
+                    pos = '?'
+                try:
+                    ovr = p.overall_rating()
+                except Exception:
+                    ovr = '?'
+                iid = picker.insert('', 'end', values=(
+                    name, pos, getattr(p, 'age', '?'), ovr,
+                    getattr(t, 'team_name', '?')))
+                rowmap[iid] = p
+
+        search_var.trace_add('write', _refill)
+        _refill()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill='x', pady=(10, 0))
+
+        def add_selected():
+            added = 0
+            for iid in picker.selection():
+                player = rowmap.get(iid)
+                if player is None:
+                    continue
+                if trade_market.add_to_shortlist(user_team, player,
+                                                 added_by="user"):
+                    added += 1
+            self._populate_targets()
+            dialog.destroy()
+            if added:
+                messagebox.showinfo("Targets",
+                                    f"Added {added} player(s) to your targets.")
+
+        ttk.Button(btn_frame, text="Add Selected",
+                   command=add_selected).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel",
+                   command=dialog.destroy).pack(side='left', padx=5)
+
+    def _targets_remove(self):
+        """Remove the selected target(s) from the shortlist."""
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        if user_team is None:
+            return
+        selection = self.targets_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection",
+                                   "Please select a target to remove.")
+            return
+        for iid in selection:
+            player = self.app.tree_maps.get('targets_tree', {}).get(iid)
+            if player is None:
+                continue
+            trade_market.remove_from_shortlist(user_team, player.id)
+        self._populate_targets()
+
+    def _find_nhl_player_by_name(self, league, name):
+        """Name fallback for shortlist entries whose id doesn't resolve."""
+        if not name:
+            return None
+        want = name.strip().lower()
+        try:
+            for t in (getattr(league, 'teams', None) or []):
+                if getattr(t, 'league_name', '') != 'National Hockey League':
+                    continue
+                for p in (getattr(t, 'roster', None) or []):
+                    try:
+                        if p.full_name.strip().lower() == want:
+                            return p
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
+
+    def _targets_refresh_suggestions(self):
+        """Ask the user's scouts for new value tips (JPA-scaled inside
+        trade_market)."""
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            messagebox.showwarning("No Data", "No league data available.")
+            return
+        n = trade_market.refresh_scout_suggestions(self.app, league)
+        self._populate_targets()
+        if n:
+            messagebox.showinfo("Scout suggestions",
+                                f"{n} new suggestion(s) from your scouts.")
+        else:
+            messagebox.showinfo("Scout suggestions",
+                                "No new suggestions (your scouts found no new "
+                                "value, or you have no scouts on staff).")
+
     def _load_initial_data(self):
         """Initial data load after the interface is built."""
         self._populate_data()
@@ -498,6 +843,7 @@ class ModernScoutingView(ctk.CTkFrame):
             self._populate_scouts()
             self._populate_assignments()
             self._populate_reports()
+            self._populate_targets()
             self._update_status()
         except Exception as e:
             print(f"Error populating scouting data: {e}")

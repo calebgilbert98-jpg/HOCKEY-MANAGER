@@ -6055,6 +6055,15 @@ class HockeyManagerGUI(tk.Tk):
                 continue
             if self._try_ai_ai_deadline_deal(team, teams, te, tsl, mgr):
                 deals += 1
+        # Trade-market bidding rounds advance once per deadline tick
+        # (additive; the organic tick cap above is untouched).
+        try:
+            import trade_market
+            trade_market.process_deadline_tick(
+                self, getattr(getattr(self, 'game_manager', None), 'league', None)
+                or getattr(self, 'league', None), mgr)
+        except Exception as e:
+            print(f"Trade market tick error (non-fatal): {e}")
 
     def _try_ai_ai_deadline_deal(self, initiator, teams, te, tsl, mgr):
         """One AI-initiated deadline deal. Seller moves a veteran for a
@@ -6542,6 +6551,15 @@ class HockeyManagerGUI(tk.Tk):
             except Exception as e:
                 # Don't crash the game if AI fails
                 print(f"AI manager error (non-fatal): {e}")
+            # AI trade market (trade_market.py, additive): year-round
+            # listings, bidding rounds, request shopping, trade blocks,
+            # shortlist nudges. Never raises; cheap no-op when idle.
+            try:
+                import trade_market
+                trade_market.process_market(
+                    self, getattr(self, "league", None), self.current_date)
+            except Exception as e:
+                print(f"Trade market error (non-fatal): {e}")
             # AI signings write their own headlines (signings,
             # market-setters, contract fallout) -- flush them into the
             # news feed with today's date.
@@ -6700,6 +6718,13 @@ class HockeyManagerGUI(tk.Tk):
                     headlines.monthly_trade_request_check(self)
                 except Exception as e:
                     print(f"Trade-request check error (non-fatal): {e}")
+                # Cup-ambition stars on sellers agitate monthly (additive;
+                # the check above is untouched).
+                try:
+                    import trade_market
+                    trade_market.ambition_agitation_tick(self)
+                except Exception as e:
+                    print(f"Agitation tick error (non-fatal): {e}")
                 # Monthly NHL awards: Player of the Month / Rookie of the
                 # Month from month splits; banked, announced, baselines
                 # re-stamped.

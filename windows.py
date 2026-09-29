@@ -10897,6 +10897,21 @@ class TradeBlockWindow(InGamePopup):
         ttk.Button(controls_frame, text="Generate Interest", 
                   command=self.generate_trade_interest).pack(side='left', padx=5)
         
+        # League-wide visibility note: AI GMs read the same board.
+        try:
+            league = getattr(self.parent, 'league', None)
+            teams = [t for t in (getattr(league, 'teams', None) or [])
+                     if t is not getattr(self.parent, 'user_team', None)]
+            n_others = len(teams)
+        except Exception:
+            n_others = 31
+        visible_lbl = ttk.Label(
+            parent,
+            text=(f"Visible league-wide \u2014 all {n_others} other GMs can see "
+                  "these players and may shop for them."),
+            style='Muted.TLabel')
+        visible_lbl.pack(fill='x', padx=10, pady=(0, 4))
+        
         # Trade block players list
         block_frame = ttk.LabelFrame(parent, text="Players on Trade Block")
         block_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -10945,7 +10960,7 @@ class TradeBlockWindow(InGamePopup):
         other_frame = ttk.LabelFrame(parent, text="Available Players")
         other_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary', 'Interest')
+        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary', 'Availability')
         self.other_tree = ttk.Treeview(other_frame, columns=columns, show='headings', height=15)
         
         for col in columns:
@@ -10954,6 +10969,8 @@ class TradeBlockWindow(InGamePopup):
                 self.other_tree.column(col, width=120)
             elif col in ['Position', 'Age', 'Overall']:
                 self.other_tree.column(col, width=80)
+            elif col == 'Availability':
+                self.other_tree.column(col, width=280)
             else:
                 self.other_tree.column(col, width=100)
         make_tree_sortable(self.other_tree)
@@ -11008,6 +11025,15 @@ class TradeBlockWindow(InGamePopup):
         # Initialize trade block if it doesn't exist
         if not hasattr(self.parent.user_team, 'trade_block'):
             self.parent.user_team.trade_block = []
+        
+        # Regenerate the league-wide board (mirrors the user's manual block
+        # into league.trade_blocks; trade_market never raises).
+        try:
+            import trade_market
+            trade_market.refresh_trade_blocks(
+                self.parent, getattr(self.parent, 'league', None))
+        except Exception:
+            pass
         
         self.update_trade_block_display()
         self.update_interest_display()
@@ -11131,6 +11157,12 @@ class TradeBlockWindow(InGamePopup):
         for player in trade_block:
             salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
             years_left = getattr(player.contract, 'years_remaining', 0) if player.contract else 0
+            try:
+                pos = (player.primary_position.value
+                       if hasattr(player.primary_position, 'value')
+                       else str(player.primary_position))
+            except Exception:
+                pos = '?'
             
             # Calculate interest level
             interest_count = len(self.interested_teams.get(player, []))
@@ -11145,7 +11177,7 @@ class TradeBlockWindow(InGamePopup):
             
             self.block_tree.insert('', 'end', values=(
                 player.full_name,
-                str(player.primary_position),
+                pos,
                 player.age,
                 player.overall_rating(),
                 f"${salary:,}",
@@ -11191,31 +11223,68 @@ class TradeBlockWindow(InGamePopup):
                 if team != self.parent.user_team]
     
     def on_team_selected(self, event=None):
-        """Handle team selection."""
-        # Would populate with selected team's trade block
-        # For now, show placeholder
+        """Show the selected team's real trade block (trade_market data).
+
+        Replaces the old random.sample placeholder: reads
+        trade_market.get_trade_blocks(league), resolves each id, and shows
+        the truthful availability note. Unresolvable ids are skipped
+        gracefully; an empty block shows an empty-state message.
+        """
+        try:
+            import trade_market
+        except Exception:
+            trade_market = None
+        for item in self.other_tree.get_children():
+            self.other_tree.delete(item)
         selected_team = self.team_var.get()
-        if selected_team:
-            # Clear and show message
-            for item in self.other_tree.get_children():
-                self.other_tree.delete(item)
-            
-            # Find team and show some players as "available"
-            team = next((t for t in self.parent.league.teams if t.team_name == selected_team), None)
-            if team:
-                import random
-                available_players = random.sample(team.roster, min(5, len(team.roster)))
-                for player in available_players:
-                    salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
-                    self.other_tree.insert('', 'end', values=(
-                        team.team_name,
-                        player.full_name,
-                        str(player.primary_position),
-                        player.age,
-                        player.overall_rating(),
-                        f"${salary:,}",
-                        random.choice(['Available', 'Limited Interest', 'High Price'])
-                    ))
+        app = getattr(self, 'parent', None)
+        league = getattr(app, 'league', None) if app is not None else None
+        rows = 0
+        if trade_market is not None and league is not None and selected_team:
+            try:
+                blocks = trade_market.get_trade_blocks(league)
+            except Exception:
+                blocks = {}
+            for pid in (blocks.get(selected_team, []) or []):
+                try:
+                    player, team = trade_market.resolve_player(league, pid)
+                except Exception:
+                    player, team = None, None
+                if player is None or team is None:
+                    continue  # stale/unresolvable id -- skip gracefully
+                try:
+                    salary = getattr(getattr(player, 'contract', None),
+                                     'salary', 750000) or 750000
+                except Exception:
+                    salary = 750000
+                try:
+                    pos = (player.primary_position.value
+                           if hasattr(player.primary_position, 'value')
+                           else str(player.primary_position))
+                    ovr = player.overall_rating()
+                except Exception:
+                    pos, ovr = '?', '?'
+                try:
+                    note = trade_market.block_availability_note(app, league, pid)
+                except Exception:
+                    note = 'Available'
+                self.other_tree.insert('', 'end', values=(
+                    team.team_name,
+                    player.full_name,
+                    pos,
+                    getattr(player, 'age', '?'),
+                    ovr,
+                    f"${salary:,}",
+                    note,
+                ))
+                rows += 1
+        if rows:
+            set_tree_empty_state(self.other_tree)
+        else:
+            label = selected_team if selected_team else "No team"
+            set_tree_empty_state(
+                self.other_tree,
+                f"{label} has no players on the block")
     
     def refresh_other_blocks(self):
         """Refresh other teams' trade blocks."""
