@@ -23,43 +23,24 @@ from game_classes import PlayerPosition
 def roll_game_injury(team):
     """Roll a single in-game injury for a team (shared by detailed + batch sims).
 
-    Weighted by injury_proneness and age; skips goalies and already-injured
-    players. Returns the injured Player, or None if nobody was hurt.
+    Delegates to injury_data.roll_general_injury -- the one shared injury
+    decision (W4, icetime-ecosystem). Keeps the historical contract: exactly
+    one victim is hurt per call (callers gate the per-team rate with
+    injury_data.QUICK_ENGINE_GENERAL_RATE); returns the injured Player, or
+    None when nobody was hurt. Severity, body-part mix, and concussion odds
+    come from the grounded tables; goalies are eligible at a reduced weight.
     """
-    import random
-    candidates = []
-    weights = []
-    for p in getattr(team, 'roster', []):
-        if getattr(p, 'is_injured', False):
-            continue
-        pos = getattr(p, 'primary_position', None)
-        if pos and pos.name == 'GOALIE':
-            continue
-        proneness = getattr(p, 'injury_proneness', 10) or 10
-        age = getattr(p, 'age', 25) or 25
-        age_factor = max(0.5, min(2.0, (age - 20) / 10))
-        candidates.append(p)
-        weights.append(proneness * age_factor)
-    if not candidates:
+    try:
+        import injury_data as _inj
+    except Exception:
         return None
-    injured = random.choices(candidates, weights=weights, k=1)[0]
-    # Severity: Minor 1-3 games (60%), Moderate 4-10 (30%), Severe 11-25 (10%)
-    severity_roll = random.random()
-    if severity_roll < 0.6:
-        games_missed = random.randint(1, 3)
-        injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
-    elif severity_roll < 0.9:
-        games_missed = random.randint(4, 10)
-        injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
-    else:
-        games_missed = random.randint(11, 25)
-        injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
-    injured.is_injured = True
-    injured.injury_type = injury_type
-    injured.games_remaining_injured = games_missed
-    injured.last_injury = injury_type
-    injured.injured_today = True  # recovery countdown starts with the NEXT game
-    return injured
+    # No internal gate: callers apply the per-team rate. base_prob=1.0 makes
+    # the shared decision always pick a victim (random() < 1.0 always).
+    victim, spec = _inj.roll_general_injury(team, base_prob=1.0)
+    if victim is None:
+        return None
+    _inj.apply_injury(victim, spec, team)
+    return victim
 
 
 def best_lines(team):
@@ -1389,17 +1370,24 @@ class AdvancedGameSim:
 
     def _process_gameplay_injuries(self):
         """Process potential injuries from gameplay.
-        
-        NHL averages roughly 1 man-game lost to injury per 3-4 games.
-        Injury-prone players (high injury_proneness) are more likely to get hurt.
+
+        Grounded rate (W4, injury_data.QUICK_ENGINE_GENERAL_RATE): 0.31 per
+        team per game -- Rotowire 2024-25 (819 injuries / 32 teams / 82
+        games). The quick engines have no hit-injury path, so the general
+        roll carries the full load. Victim/severity via the shared decision.
         """
         import random
-        
-        # ~13% chance per team per game -> ~25% chance of at least one injury per game
+        try:
+            import injury_data as _inj
+            _rate = _inj.QUICK_ENGINE_GENERAL_RATE
+        except Exception:
+            _rate = 0.31
+
+        # One roll per team per game -> ~0.31 injuries per team-game.
         # Pick an injury victim from either team's healthy skaters
         victims = []
         for team in [self.home_team, self.away_team]:
-            if random.random() > 0.13:
+            if random.random() > _rate:
                 continue
             v = roll_game_injury(team)
             if v is not None:

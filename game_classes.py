@@ -6604,7 +6604,15 @@ class League:
             except Exception:
                 pass
             player.stats = PlayerStats()
-            # Fresh stint anchor for the new season, opened AFTER the wipe
+            # W4 (injury system): days_missed is the SEASON count -- the
+            # player card reads it as "Days Missed (Season)". It was seeded
+            # at generation and never reset; the recovery tick now
+            # increments it, so zero it with the other season ledgers.
+            # career_games_missed keeps accumulating (career ledger).
+            try:
+                player.days_missed = 0
+            except Exception:
+                pass            # Fresh stint anchor for the new season, opened AFTER the wipe
             # so the baseline is zeroed stats.
             try:
                 _new_team = None

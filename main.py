@@ -1685,35 +1685,103 @@ NHL League Office""",
 
     def _process_injury_recovery(self, teams_played=None):
         """Process injury recovery for all players.
-        
+
         Decrements games_remaining_injured once per GAME PLAYED (not per day):
         only players whose team played today count down, and players hurt in
         today's game start counting down with their next missed game.
+
+        W4 (icetime-ecosystem): no longer a pure countdown --
+          * rehab setbacks (injury_data.roll_setback): injuries can get worse
+            before they get better; medical-staff quality modifies the odds;
+          * days_missed / career_games_missed increment on every tick (they
+            were seeded at generation and never updated);
+          * recovered players start a re-aggravation window
+            (games_since_return) during which the general injury roll hits
+            them harder -- the mechanic behind the physio report's
+            "rushing him back risks re-injury" warning;
+          * concussion-protocol flag clears on return.
         """
+        try:
+            import injury_data as _inj
+        except Exception:
+            _inj = None
         for team in self.league.teams:
             if teams_played is not None and team.team_name not in teams_played:
                 continue
             for player in team.roster:
-                if getattr(player, 'is_injured', False):
-                    # Hurt today? Countdown starts with the next game they miss.
-                    if getattr(player, 'injured_today', False):
-                        player.injured_today = False
-                        continue
-                    remaining = getattr(player, 'games_remaining_injured', 0)
-                    if remaining > 0:
-                        player.games_remaining_injured = remaining - 1
-                        
-                        if player.games_remaining_injured <= 0:
-                            # Player is healed!
-                            player.is_injured = False
-                            player.injury_type = "None"
-                            player.games_remaining_injured = 0
-                            print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
-                            
-                            # Notify if it's the user's team
-                            if hasattr(self, 'user_team') and team == self.user_team:
-                                if hasattr(self, 'news_log'):
-                                    self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
+                if not getattr(player, 'is_injured', False):
+                    # Re-aggravation clock ticks for healthy recently-returned
+                    # players (one tick per team game, like recovery).
+                    try:
+                        gsr = getattr(player, 'games_since_return', None)
+                        if gsr is not None:
+                            player.games_since_return = gsr + 1
+                    except Exception:
+                        pass
+                    continue
+                # Hurt today? Countdown starts with the next game they miss.
+                if getattr(player, 'injured_today', False):
+                    player.injured_today = False
+                    continue
+                # Rehab setback? (staff-modified; additive -- the old code was
+                # a pure countdown)
+                if _inj is not None:
+                    try:
+                        _added = _inj.roll_setback(player, team)
+                    except Exception:
+                        _added = 0
+                    if _added:
+                        try:
+                            player.games_remaining_injured = (
+                                getattr(player, 'games_remaining_injured', 0)
+                                or 0) + _added
+                            if (hasattr(self, 'user_team')
+                                    and team == self.user_team
+                                    and hasattr(self, 'news_log')):
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': (
+                                        f"🏥 Setback: {player.first_name} "
+                                        f"{player.last_name} "
+                                        f"({player.injury_type}) -- out "
+                                        f"{_added} more games.")})
+                        except Exception:
+                            pass
+                remaining = getattr(player, 'games_remaining_injured', 0)
+                if remaining > 0:
+                    player.games_remaining_injured = remaining - 1
+                    # In-season stat honesty: every countdown tick is a game
+                    # missed. (These were seeded at generation, never updated.)
+                    try:
+                        player.days_missed = (
+                            getattr(player, 'days_missed', 0) or 0) + 1
+                        player.career_games_missed = (
+                            getattr(player, 'career_games_missed', 0) or 0) + 1
+                    except Exception:
+                        pass
+
+                    if player.games_remaining_injured <= 0:
+                        # Player is healed!
+                        player.is_injured = False
+                        player.injury_type = "None"
+                        player.games_remaining_injured = 0
+                        try:
+                            player.in_concussion_protocol = False
+                            # Re-aggravation window opens on return.
+                            player.games_since_return = 0
+                        except Exception:
+                            pass
+                        if _inj is not None:
+                            try:
+                                _inj.clear_injury_flag(team, player)
+                            except Exception:
+                                pass
+                        print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
+
+                        # Notify if it's the user's team
+                        if hasattr(self, 'user_team') and team == self.user_team:
+                            if hasattr(self, 'news_log'):
+                                self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
 
     def _process_suspension_service(self, teams_played=None):
         """Tick down DoPS suspensions once per GAME PLAYED (not per day).
@@ -12074,9 +12142,16 @@ class HockeyManagerGUI(tk.Tk):
         if not preseason:
             self._generate_player_stats(home_team, away_team, home_goals, away_goals)
 
-        # Gameplay injuries (same ~13%/team rate as the detailed sim)
+        # Gameplay injuries (grounded W4 rate: injury_data.QUICK_ENGINE_GENERAL_RATE
+        # = 0.31/team/game -- Rotowire 2024-25; same shared decision as the
+        # detailed sim, one decision two fidelities)
+        try:
+            import injury_data as _injury_data
+            _inj_rate = _injury_data.QUICK_ENGINE_GENERAL_RATE
+        except Exception:
+            _inj_rate = 0.31
         for team in (home_team, away_team):
-            if random.random() < 0.13:
+            if random.random() < _inj_rate:
                 hurt = roll_game_injury(team)
                 if hurt is not None and hasattr(self, 'notable_events'):
                     try:
@@ -15425,7 +15500,17 @@ class HockeyManagerGUI(tk.Tk):
             candidates = [p for p in (getattr(team, "roster", []) or [])
                           if not getattr(p, "is_injured", False)]
             if candidates:
-                victim = _r.choice(candidates)
+                # W3->W4 contract: the tired/worn player picks up the
+                # training knock, not a uniform draw. Defensive: falls back
+                # to the old uniform choice if condition_system is missing.
+                try:
+                    from condition_system import (
+                        fatigue_injury_risk_mult as _w3_risk)
+                    _weights = [max(0.2, float(_w3_risk(p)))
+                                for p in candidates]
+                    victim = _r.choices(candidates, weights=_weights, k=1)[0]
+                except Exception:
+                    victim = _r.choice(candidates)
                 victim.is_injured = True
                 victim.injury_type = "Training knock"
                 victim.games_remaining_injured = _r.randint(1, 4)

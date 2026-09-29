@@ -2381,9 +2381,50 @@ class GameSim:
         except Exception:
             pass
 
+        # -- Injury system (W4, additive): the general (non-hit) injury roll.
+        # Same shared decision the quick engines make; GameSim's rate covers
+        # the non-hit mechanism share (the hit path covers body checks).
+        try:
+            self._process_general_injuries()
+        except Exception:
+            pass
+
+        # W5-CUT-FOR-COMMIT-A: settle_receipts block restored in commit (b).
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
+
+    def _process_general_injuries(self):
+        """General (non-hit) in-game injuries for GameSim.
+
+        W4 (icetime-ecosystem): GameSim previously generated injuries ONLY
+        from hits; the quick engines roll general injuries (strains, pulls,
+        puck hits, incidental contact). This is the SAME shared decision
+        (injury_data.roll_general_injury -- one decision, two fidelities),
+        called here with GameSim's calibrated rate covering the non-hit
+        mechanism share (injury_data.GENERAL_INJURY_BASE_RATE); the hit path
+        covers body-check injuries. Runs once per team at the final whistle.
+        Never raises.
+        """
+        try:
+            import injury_data as _injg
+        except Exception:
+            return
+        for team in (self.home_team, self.away_team):
+            try:
+                victim, spec = _injg.roll_general_injury(
+                    team, base_prob=_injg.GENERAL_INJURY_BASE_RATE)
+                if victim is None:
+                    continue
+                _injg.apply_injury(victim, spec, team)
+                try:
+                    self._log_event(
+                        f"{victim.full_name} injured ({victim.injury_type}, "
+                        f"~{victim.games_remaining_injured} games)", "INJURY")
+                except Exception:
+                    pass
+            except Exception:
+                continue
 
     def _emit_telemetry(self):
         """Append this game's stats to the local beta-telemetry log.
@@ -8882,6 +8923,24 @@ class GameSim:
             ]
         except Exception:
             pass
+        # -- Injury-system calibration (W4, additive): the hit pipeline (W5)
+        # owns hit frequency and physics; the injury system owns the injury
+        # conversion rate. Measured 2026-09-29 (60-GameSim-game probe):
+        # unscaled weights produce ~0.57 injuries/team-game from hits alone
+        # at mean 2.29 games -- ~6x the hit path's mechanism share of the
+        # grounded total (~0.31/team-game across ALL mechanisms, Rotowire
+        # 2024-25; body checks the largest single category but a minority
+        # overall, Knapik Fig. 5 -> hit target ~0.09). Scale ONLY the
+        # INJURY_CAUSED weight; every other hit outcome is untouched.
+        try:
+            import injury_data as _injcal
+            _hscale = _injcal.HIT_INJURY_PROB_SCALE
+            results = [
+                (r, p * _hscale if r == HitResult.INJURY_CAUSED else p)
+                for r, p in results
+            ]
+        except Exception:
+            pass
         rand = random.random()
         cumulative = 0
         for result, prob in results:
@@ -9010,12 +9069,19 @@ class GameSim:
         try:
             dirty = hit_type in (HitType.CHARGING, HitType.BOARDING)
             big = impact == 2
+            # Base bands (W4 calibration): the general-injury path is
+            # grounded at mean ~9.3 games [R2]; hit injuries are the ~29%
+            # mechanism share and run milder, but the COMBINED stream must
+            # still average ~8 games [R1: 8.04]. Measured 2026-09-29: the
+            # old 1-4/2-6/4-10 bands gave a combined mean of ~4.8 --
+            # stars never missed real time. These bands + the circumstance
+            # bumps below land the combined mean at ~8.
             if dirty:
-                lo, hi = 4, 10
+                lo, hi = 5, 12
             elif big:
-                lo, hi = 2, 6
+                lo, hi = 3, 8
             else:
-                lo, hi = 1, 4
+                lo, hi = 2, 5
             games_missed = random.randint(lo, hi)
             # W3: the victim's injury_proneness scales severity -- fragile
             # players miss more time. (quick_sim's roll_game_injury already
@@ -9027,20 +9093,42 @@ class GameSim:
                 games_missed = max(1, int(round(games_missed * _w3_ipm(victim))))
             except Exception:
                 pass
-            if games_missed >= 8:
-                injury_type = random.choice(
-                    ['Separated shoulder', 'Concussion', 'Broken jaw'])
-            elif games_missed >= 4:
-                injury_type = random.choice(
-                    ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
-            else:
-                injury_type = random.choice(
-                    ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
-            victim.is_injured = True
-            victim.injury_type = injury_type
-            victim.games_remaining_injured = games_missed
-            victim.last_injury = injury_type
-            victim.injured_today = True
+            # W4 (icetime-ecosystem): circumstance-scaled severity. The hit
+            # pipeline (W5) is only READ here -- hit_type / impact / hitter &
+            # victim attributes / zone -- never written back into hit
+            # resolution. Dirty hits, enforcer-vs-small-star mismatches, and
+            # open-ice (neutral-zone, big-impact) collisions bump severity;
+            # concussion becomes a real protocol injury instead of flavor
+            # text; the type comes from the shared grounded tables. Medical
+            # staff scale the diagnosed absence via apply_injury().
+            try:
+                import injury_data as _injh
+                _ctx = _injh.hit_circumstance(hitter, victim, hit_type,
+                                              impact, sim=self)
+                _spec_games, injury_type, _conc = _injh.hit_injury_spec(
+                    games_missed, _ctx, victim=victim)
+                games_missed = _injh.apply_injury(
+                    victim,
+                    {"games": _spec_games, "type": injury_type,
+                     "concussion": _conc,
+                     "region": "HEAD" if _conc else "HIT"},
+                    target_team)
+            except Exception:
+                # Fallback: the pre-W4 behavior (duration-keyed flavor).
+                if games_missed >= 8:
+                    injury_type = random.choice(
+                        ['Separated shoulder', 'Concussion', 'Broken jaw'])
+                elif games_missed >= 4:
+                    injury_type = random.choice(
+                        ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
+                else:
+                    injury_type = random.choice(
+                        ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
+                victim.is_injured = True
+                victim.injury_type = injury_type
+                victim.games_remaining_injured = games_missed
+                victim.last_injury = injury_type
+                victim.injured_today = True
             try:
                 self._log_event(
                     f"{victim.full_name} injured ({injury_type}, "

@@ -849,6 +849,16 @@ class StaffManagementView(ctk.CTkFrame):
                 lines.append(
                     (f"Man Management is {mm}: reaching 13 unlocks prospect interviews once a "
                      "report reaches 3+ viewings.", 'info'))
+        elif staff.role in (StaffRole.TEAM_DOCTOR, StaffRole.PHYSIOTHERAPIST):
+            # W4 (icetime-ecosystem): medical staff now have a real sim
+            # effect -- see injury_data.medical_staff_quality /
+            # recovery_time_mult / roll_setback.
+            lines.append(
+                ("Team Doctor + Physiotherapist: their average overall rating "
+                 "shortens every injury recovery (up to ~20% faster at elite "
+                 "ratings, ~20% slower with a poor medical team) and roughly "
+                 "halves/doubles rehab-setback odds. The diagnosis sets each "
+                 "injury's recovery timeline.", 'ok'))
         else:
             key = self.get_key_skills_display(staff)
             if key:
