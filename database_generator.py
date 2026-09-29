@@ -741,12 +741,14 @@ class DatabaseGenerator:
             "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker"
         ]
 
-        # Minor-league staff: every club's AHL affiliate gets a head coach and
-        # two assistants. They count against the staff budget and can only be
-        # approached by other clubs in the offseason (real-world rule).
+        # Minor-league staff: every club's AHL affiliate gets a head coach,
+        # two assistants, and a GM running the farm. They count against the
+        # staff budget and can only be approached by other clubs in the
+        # offseason (real-world rule).
         ahl_positions = [
             (StaffRole.HEAD_COACH, 1),
             (StaffRole.ASSISTANT_COACH, 2),
+            (StaffRole.GENERAL_MANAGER, 1),
         ]
 
         for team in teams:

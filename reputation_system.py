@@ -2421,13 +2421,84 @@ def renounce_rivalry(league: Any, a: Any, b: Any,
 
 
 def _head_coach_of(team: Any) -> Optional[Any]:
+    # Assignment-aware: the NHL head coach is the one behind the NHL bench.
+    # Clubs carry a separate AHL head coach (assignment="ahl"); never confuse
+    # the two. Staff with no assignment are legacy data and count as NHL.
+    # When the only head coach left is the AHL one, the NHL chair is OPEN
+    # (None) -- the AHL coach is not an interim.
     try:
+        fallback = None
         for stf in getattr(team, "staff", []) or []:
             if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
-                return stf
+                asg = str(getattr(stf, "assignment", "") or "").lower()
+                if asg == "nhl":
+                    return stf
+                if asg != "ahl" and fallback is None:
+                    fallback = stf
+        return fallback
     except Exception:
         pass
     return None
+
+
+def _ahl_coach_of(team: Any) -> Optional[Any]:
+    """The club's AHL head coach (farm-team bench). None when absent."""
+    try:
+        for stf in getattr(team, "staff", []) or []:
+            if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                if str(getattr(stf, "assignment", "") or "").lower() == "ahl":
+                    return stf
+    except Exception:
+        pass
+    return None
+
+
+def _ahl_gm_of(team: Any) -> Optional[Any]:
+    """The club's AHL general manager. None when the chair is empty."""
+    try:
+        for stf in getattr(team, "staff", []) or []:
+            if "General Manager" in str(getattr(getattr(stf, "role", None), "value", "")):
+                if str(getattr(stf, "assignment", "") or "").lower() == "ahl":
+                    return stf
+    except Exception:
+        pass
+    return None
+
+
+def ensure_ahl_front_office(team: Any) -> bool:
+    """Old-save backfill: every club needs an AHL head coach and an AHL GM.
+
+    New games generate both; saves from before the AHL GM existed get one
+    here. Returns True when something was created.
+    """
+    try:
+        staff = getattr(team, "staff", None)
+        if staff is None:
+            return False
+        created = False
+        from game_classes import Staff, StaffRole
+        import random as _r
+        _first = ["Adam", "Brian", "Carl", "Dan", "Eric", "Glen", "Jack",
+                  "Ken", "Mark", "Paul", "Scott", "Tom"]
+        _last = ["Anderson", "Brown", "Clark", "Davis", "Harris", "Johnson",
+                 "Lewis", "Miller", "Smith", "Taylor", "Wilson", "Young"]
+        if _ahl_coach_of(team) is None:
+            staff.append(Staff(
+                first_name=_r.choice(_first), last_name=_r.choice(_last),
+                role=StaffRole.HEAD_COACH, age=_r.randint(30, 60),
+                experience=_r.randint(1, 15), assignment="ahl",
+                salary=_r.randint(150000, 400000)))
+            created = True
+        if _ahl_gm_of(team) is None:
+            staff.append(Staff(
+                first_name=_r.choice(_first), last_name=_r.choice(_last),
+                role=StaffRole.GENERAL_MANAGER, age=_r.randint(35, 65),
+                experience=_r.randint(5, 20), assignment="ahl",
+                salary=_r.randint(200000, 500000)))
+            created = True
+        return created
+    except Exception:
+        return False
 
 
 def declare_rivalry_for_gm(league: Any, team: Any, target_team: Any,

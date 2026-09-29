@@ -101,6 +101,14 @@ def ensure_dressing_room_fields(team: Any) -> Dict[str, Any]:
         team.dressing_room = dr
     except Exception:
         pass
+    # Every club needs its AHL front office (AHL head coach + AHL GM).
+    # Old saves predate the AHL GM; backfill it here so any team flow
+    # that touches the room also repairs the org chart.
+    try:
+        import reputation_system as _rs
+        _rs.ensure_ahl_front_office(team)
+    except Exception:
+        pass
     return dr
 
 
@@ -3958,9 +3966,10 @@ def ai_coach_evaluation(team, date_str="", league=None, app=None, rng=None):
                                              exclude_coach=coach)
             if hired is None:
                 # No interview candidate came through: if a senior staffer
-                # is still behind the bench (generation can double-list a
-                # head coach), the associate steps up as interim rather
-                # than leaving a phantom in the chair.
+                # is still attached to the NHL club (legacy data can leave
+                # one), the associate steps up as interim rather than
+                # leaving a phantom in the chair. The AHL head coach is a
+                # separate job and never fills in here.
                 succ = _room_head_coach(team)
                 if succ is not None and succ is not coach:
                     try:

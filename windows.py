@@ -12384,6 +12384,21 @@ class StaffContractView(ctk.CTkFrame):
         self._salary_entry.pack(anchor="w", pady=(0, 12))
         self._salary_entry.bind('<KeyRelease>', lambda _e: _paint())
 
+        # Which club the hire joins -- NHL roster or AHL affiliate. Poached
+        # AHL staffers default to the farm (lateral move); everyone else
+        # defaults to the NHL club.
+        self._body(body, text="Assign to:", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        _default_asg = "AHL" if (self.hire_source == "ahl_poach") else "NHL"
+        asg_seg = ctk.CTkSegmentedButton(
+            body, values=["NHL", "AHL"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        asg_seg.set(_default_asg)
+        asg_seg.pack(anchor="w", pady=(0, 12))
+        self._asg_seg = asg_seg
+
         offer_label = self._body(body, text="", size=12)
         offer_label.pack(anchor="w", pady=(0, 2))
         chance_label = self._body(body, text="", size=11)
@@ -12425,7 +12440,8 @@ class StaffContractView(ctk.CTkFrame):
                                                             padx=(10, 0))
         self._primary_button(btns, text="Make Offer",
                              command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'])).pack(side="right")
+                                 staff, offer_info['years'],
+                                 self._asg_seg.get().lower())).pack(side="right")
 
     def _staff_offer_accept_chance(self, staff, offer_salary):
         """Rough acceptance chance for a staff offer (display only)."""
@@ -12448,12 +12464,14 @@ class StaffContractView(ctk.CTkFrame):
             pass
         return max(0.05, min(0.98, base))
 
-    def _resolve_staff_offer(self, staff, years):
+    def _resolve_staff_offer(self, staff, years, assignment="nhl"):
         """Resolve a staff contract offer (original acceptance logic).
 
         The acceptance roll happens FIRST; the roster is only mutated
         on acceptance. (Signing before the roll hired staffers who had
         just declined the offer.)
+
+        assignment picks which club the hire joins: "nhl" or "ahl".
         """
         import random
         salary = self._parse_offer()
@@ -12481,7 +12499,8 @@ class StaffContractView(ctk.CTkFrame):
             # Only leave the source pool/club AFTER a successful signing --
             # if sign_free_agent_staff fails (e.g. a budget race), the
             # staffer must not be lost from their old club/pool.
-            if self.app.game_manager.sign_free_agent_staff(staff, salary, years):
+            if self.app.game_manager.sign_free_agent_staff(
+                    staff, salary, years, assignment):
                 league = getattr(self.app, 'league', None)
                 if self.hire_source == "overseas" and league is not None:
                     pool = getattr(league, "overseas_staff", None)

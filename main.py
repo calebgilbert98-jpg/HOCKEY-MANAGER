@@ -1265,7 +1265,7 @@ NHL League Office""",
         
         return ", ".join(breakdown_parts)
 
-    def sign_free_agent_staff(self, staff, salary, years):
+    def sign_free_agent_staff(self, staff, salary, years, assignment="nhl"):
         """Hire a free-agent staffer onto the user's team.
 
         (Previously missing -- the staff contract dialog called this and
@@ -1273,12 +1273,18 @@ NHL League Office""",
         refreshes the club's analytics department quality via
         refresh_analytics_quality(); hiring a pro scout gives the user a
         new eye with a blank track record to build.
+
+        assignment: "nhl" (default) or "ahl" -- which club the staffer
+        joins. Lets the user hire an AHL GM / AHL coach directly.
         """
         try:
             team = getattr(self, "user_team", None)
             league = getattr(self, "league", None)
             if team is None or staff is None:
                 return False
+            assignment = (str(assignment or "nhl").lower()
+                          if str(assignment or "").lower() in ("nhl", "ahl")
+                          else "nhl")
             # League-wide staff budget: the offer must fit the club's
             # remaining budget. Applies to every hiring path through here.
             try:
@@ -1297,9 +1303,9 @@ NHL League Office""",
                 pass
             if staff not in list(getattr(team, "staff", []) or []):
                 team.staff.append(staff)
-                # Hired onto the NHL club.
+                # Stamp which club the hire joins (NHL club or AHL affiliate).
                 try:
-                    staff.assignment = "nhl"
+                    staff.assignment = assignment
                 except Exception:
                     pass
             try:
@@ -7557,7 +7563,8 @@ class HockeyManagerGUI(tk.Tk):
         try:
             staffer.salary = salary
             staffer.contract_years = years
-            staffer.assignment = "nhl"
+            _asg = str(params.get("assignment", "nhl") or "nhl").lower()
+            staffer.assignment = _asg if _asg in ("nhl", "ahl") else "nhl"
         except Exception:
             pass
         # Join the new club first; only leave the old source after the

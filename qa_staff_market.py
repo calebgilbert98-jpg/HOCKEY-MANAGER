@@ -115,8 +115,10 @@ for t in teams:
            if (getattr(s, "assignment", "") or "") == "ahl"]
     nhl = [s for s in t.staff
            if (getattr(s, "assignment", "") or "") == "nhl"]
-    check(f"{t.team_name}: AHL staff generated (1+2)", len(ahl) == 3,
-          f"got {len(ahl)}")
+    check(f"{t.team_name}: AHL staff generated (1 HC + 2 AC + 1 GM)",
+          len(ahl) == 4, f"got {len(ahl)}")
+    check(f"{t.team_name}: AHL GM present",
+          sum(1 for s in ahl if "General Manager" in s.role.value) == 1)
     check(f"{t.team_name}: NHL staff intact", len(nhl) == 8,
           f"got {len(nhl)}")
     check(f"{t.team_name}: budget assigned at gen",

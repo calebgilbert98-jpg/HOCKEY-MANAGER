@@ -168,7 +168,7 @@ SUPPORTED_ACTIONS = {
     "trade_response",   # params: {team_id, offer_id, decision: accept|reject}
     "ntc_waiver_answer",# params: {team_id, player_id, approved: bool}
     # Staff / scouting / practice / room (Phase 2).
-    "hire_staff",       # params: {team_id, staff_id, role, salary, years}
+    "hire_staff",       # params: {team_id, staff_id, role, salary, years, assignment: nhl|ahl}
     "fire_staff",       # params: {team_id, staff_id}
     "assign_scout",     # params: {team_id, scout_id, assignment: {...}}
     "set_practice",     # params: {team_id, focus, intensity}
