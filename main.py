@@ -9658,6 +9658,15 @@ class HockeyManagerGUI(tk.Tk):
                     res.get("incidents"), res.get("incident_details"),
                     bool(res.get("brawl")), (home_score, away_score),
                     game_date, _ut, rivalries)
+                # Item 4 (additive): DoPS review for live borderline hits.
+                # Full-detail GameSim games record their hits on the sim
+                # engine (roll_incidents=False above), so the rolled path
+                # never fires on this branch -- each live hit gets the
+                # same suspension-or-fine decision exactly once. Quick-sim
+                # engines never stash hits, so this is a no-op there.
+                _ni.apply_live_dops_reviews(
+                    self, sim_engine, home_team, away_team,
+                    (home_score, away_score), game_date, _ut, rivalries)
             except Exception:
                 pass
             if deliver_headlines and res.get("stories"):

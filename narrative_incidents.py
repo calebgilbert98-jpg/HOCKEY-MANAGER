@@ -919,3 +919,55 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
     except Exception:
         pass
     return drama
+
+
+# ---------------------------------------------------------------------------
+# Item 4: DoPS review for full-detail GameSim games' live borderline hits
+# ---------------------------------------------------------------------------
+# The rolled path above only fires for quick-sim games (roll_incidents).
+# GameSim records its borderline hits live on the sim (controversy_system
+# stashes a d-dict per hit); this hook replays each through the SAME
+# shared aftermath -- the one suspension-or-fine decision plus its
+# existing consequences (headline, media fine ledger, room morale, press
+# stash). Rivalry heat is NOT re-applied: the live hit already logged its
+# wound via _rivalry_incident at hit time, exactly as the rolled path's
+# comment notes for _roll_incidents. The stash is consumed once per game
+# (cleared before iterating), so a repeated hook call cannot double-fire.
+# Never raises; never touches scoring, stats, or any tuning constant.
+
+
+def apply_live_dops_reviews(app: Any, sim_engine: Any, home_team: Any,
+                           away_team: Any, scores, game_date: Any,
+                           user_team: Any, rivalries: list) -> list:
+    """Run each live borderline hit through the DoPS decision. Returns the
+    drama dicts (with kind "controversial_hit" marked live=True)."""
+    drama = []
+    try:
+        hits = getattr(sim_engine, "_live_borderline_hits", None)
+        if not hits:
+            return drama
+        # Consume once: clear before iterating so re-entry is a no-op.
+        try:
+            sim_engine._live_borderline_hits = []
+        except Exception:
+            pass
+        for d in list(hits):
+            if not isinstance(d, dict) or d.get("kind") != "controversial_hit":
+                continue
+            try:
+                res = apply_incident_consequences(
+                    app, home_team, away_team,
+                    ["controversial_hit"], [dict(d)], False,
+                    (int(scores[0]), int(scores[1])),
+                    game_date, user_team, rivalries)
+                if isinstance(res, list):
+                    for _rd in res:
+                        if (isinstance(_rd, dict)
+                                and _rd.get("kind") == "controversial_hit"):
+                            _rd["live"] = True
+                    drama.extend(res)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return drama

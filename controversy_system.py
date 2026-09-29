@@ -579,6 +579,30 @@ def _uncalled_borderline_hit(sim: Any, hitting_team: Any,
     coach = _head_coach(sim, victim_team)
     leadership_response(sim, victim_team, coach, 0.45,
                         f"uncalled borderline hit on {tname}")
+    # DoPS record (additive): stash the dealt hitter/victim identity in the
+    # same d-dict shape the rolled path uses, so the post-game hook can run
+    # this live hit through _dops_suspension_review. The log line and the
+    # rivalry wound above are unchanged; nothing else reads this list and
+    # it is consumed exactly once by narrative_incidents.
+    try:
+        _hcon = float(getattr(hitter, "controversy",
+                              getattr(hitter, "base_controversy", 30)) or 30) \
+            if hitter is not None else 30.0
+    except Exception:
+        _hcon = 30.0
+    try:
+        _hits = getattr(sim, "_live_borderline_hits", None)
+        if not isinstance(_hits, list):
+            _hits = []
+            sim._live_borderline_hits = _hits
+        _hits.append({
+            "kind": "controversial_hit",
+            "hitter": hname, "hitter_team": htn,
+            "victim": tname, "victim_team": vtn,
+            "hitter_controversy": max(0.0, min(100.0, _hcon)),
+        })
+    except Exception:
+        pass
     return True
 
 
