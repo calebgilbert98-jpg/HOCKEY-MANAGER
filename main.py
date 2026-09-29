@@ -11785,6 +11785,36 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     _gfights = 0
 
+            # W3: post-game wear-and-tear -> persistent player condition.
+            # GameSim path only (it records real per-player TOI seconds; the
+            # lightweight path tracks no TOI). Rest days come from the actual
+            # schedule date gaps (back-to-backs included).
+            if full_sim is not None and not is_preseason:
+                try:
+                    from condition_system import apply_postgame_wear_for_game
+                    _toi = dict(getattr(full_sim, 'player_toi_seconds', None) or {})
+                    _gsec = float(getattr(full_sim, '_w3_game_seconds', 0.0) or 0.0)
+                    _gf = getattr(full_sim, 'goaltender_fatigue', None) or {}
+                    try:
+                        from game_classes import PlayerPosition as _W3_PP
+                        for _team in (home_team, away_team):
+                            for _p in getattr(_team, 'roster', []) or []:
+                                if getattr(_p, 'primary_position', None) == _W3_PP.GOALIE \
+                                        and _gf.get(getattr(_p, 'id', None), 100) < 100:
+                                    _toi[_p.id] = _gsec  # dressed goalie: whole game
+                    except Exception:
+                        pass
+                    _intensity = max(0.8, min(1.4, float(
+                        getattr(full_sim, 'physical_intensity', 1.0) or 1.0)))
+                    if went_to_ot:
+                        _intensity = min(1.5, _intensity + 0.1)
+                    apply_postgame_wear_for_game(
+                        home_team, away_team, game_date,
+                        getattr(self.league, 'schedule', None),
+                        toi_by_id=_toi, intensity=_intensity)
+                except Exception:
+                    pass
+
             # Store minimal game result
             game_result = {
                 'date': game_date,

@@ -1914,11 +1914,19 @@ class GameSim:
         )
         fatigue_factor = (100 - self.player_fatigue.get(player_id, 100)) / 100
         usage_intensity = current_stats['possession_time'] / max(1, self.clock)
+        # W3: the canonical fatigue->injury-risk multiplier (condition_system)
+        # now feeds the score, so the telemetry and the live injury decisions
+        # share one fatigue/risk decision. Fresh players -> 1.0 (unchanged).
+        try:
+            from condition_system import fatigue_injury_risk_mult as _w3_risk
+            fatigue_mult = _w3_risk(player)
+        except Exception:
+            fatigue_mult = 1.0
         
         # Calculate risk score
         base_risk = 0.05  # 5% baseline risk
         physical_risk = physical_load * 0.01
-        fatigue_risk = fatigue_factor * 0.15
+        fatigue_risk = fatigue_factor * 0.15 * fatigue_mult
         usage_risk = usage_intensity * 0.05
         
         total_risk = min(0.95, base_risk + physical_risk + fatigue_risk + usage_risk)
@@ -1938,6 +1946,7 @@ class GameSim:
             'factors': {
                 'physical_load': physical_load,
                 'fatigue': fatigue_factor,
+                'fatigue_mult': round(fatigue_mult, 3),
                 'usage': usage_intensity
             },
             'timestamp': self.clock
@@ -2187,6 +2196,11 @@ class GameSim:
             if p in (1, 2):
                 # Coaches who own the whiteboard adjust between periods.
                 self._ai_tactics_intermission()
+                # W3: intermission breather -- stamina-scaled energy recovery.
+                try:
+                    self._apply_intermission_recovery()
+                except Exception:
+                    pass
 
         if self.home_score == self.away_score:
             self._handle_overtime()
@@ -2827,6 +2841,7 @@ class GameSim:
         if not getattr(self, '_w3_fatigue_init', False):
             self._w3_fatigue_init = True
             self.player_toi_seconds = {}
+            self._w3_game_seconds = 0.0  # total sim seconds (goalie TOI)
             try:
                 from condition_system import reset_game_fatigue as _w3_reset
                 for _p in self.home_team.roster + self.away_team.roster:
@@ -2835,6 +2850,7 @@ class GameSim:
                 pass
         if getattr(self, 'player_toi_seconds', None) is None:
             self.player_toi_seconds = {}
+        self._w3_game_seconds = getattr(self, '_w3_game_seconds', 0.0) + time_elapsed
         try:
             from condition_system import (
                 fatigue_accumulation_mult as _w3_accum,
@@ -2883,6 +2899,39 @@ class GameSim:
                         self.player_toi_seconds.get(player.id, 0.0) + time_elapsed
                 except Exception:
                     pass
+
+    def _apply_intermission_recovery(self):
+        """W3: intermission breather -- stamina-scaled energy recovery.
+
+        GameSim previously had no intermission recovery at all (the only
+        restoration was the goalie-pull timeout +8). Every rostered player
+        recovers INTERMISSION_RECOVERY x fatigue_recovery_mult energy
+        (capped at 100); goalies recover through their own pool. Additive.
+        """
+        try:
+            from condition_system import (
+                INTERMISSION_RECOVERY as _W3_IR,
+                fatigue_recovery_mult as _w3_rec,
+                sync_game_energy as _w3_sync,
+            )
+        except Exception:
+            return
+        _gf = getattr(self, 'goaltender_fatigue', {}) or {}
+        for player in self.home_team.roster + self.away_team.roster:
+            try:
+                rec = _W3_IR * _w3_rec(player)
+                pid = player.id
+                if pid in _gf:
+                    new_energy = min(100.0, _gf[pid] + rec)
+                    _gf[pid] = new_energy
+                elif pid in self.player_fatigue:
+                    new_energy = min(100.0, self.player_fatigue[pid] + rec)
+                    self.player_fatigue[pid] = new_energy
+                else:
+                    continue
+                _w3_sync(player, new_energy)
+            except Exception:
+                continue
 
     def _should_change_lines(self):
         """Determine if lines should be changed based on shift state.
@@ -8838,6 +8887,28 @@ class GameSim:
         for result, prob in results:
             cumulative += prob
             if rand < cumulative:
+                # -- W3 condition/injury-proneness (additive): a tired, worn,
+                #    or injury-prone VICTIM gets hurt more often. The base
+                #    roll above has no victim-side terms -- and scaling the
+                #    trailing INJURY_CAUSED weight cannot move its cumulative
+                #    probability -- so the risk multiplier is applied as a
+                #    second-chance injury roll: P += (mult - 1) x base.
+                #    Fresh, average-proneness victims (mult == 1.0) see a
+                #    byte-identical roll. Hit/fight event generation above is
+                #    untouched; this is the multiplier W4/W5 consume.
+                if result != HitResult.INJURY_CAUSED:
+                    try:
+                        from condition_system import (
+                            fatigue_injury_risk_mult, injury_proneness_mult)
+                        _vm = (fatigue_injury_risk_mult(target_player)
+                               * injury_proneness_mult(target_player))
+                        if _vm > 1.0:
+                            _bp = next((p for r, p in results
+                                        if r == HitResult.INJURY_CAUSED), 0.05)
+                            if random.random() < (_vm - 1.0) * _bp:
+                                return HitResult.INJURY_CAUSED
+                    except Exception:
+                        pass
                 return result
         
         return HitResult.SUCCESSFUL
@@ -8946,6 +9017,16 @@ class GameSim:
             else:
                 lo, hi = 1, 4
             games_missed = random.randint(lo, hi)
+            # W3: the victim's injury_proneness scales severity -- fragile
+            # players miss more time. (quick_sim's roll_game_injury already
+            # weights by it; GameSim never consulted it.) The diagnosis bands
+            # below key off the scaled value, so prone players also get worse
+            # diagnoses. Hit dirtiness still sets the base band.
+            try:
+                from condition_system import injury_proneness_mult as _w3_ipm
+                games_missed = max(1, int(round(games_missed * _w3_ipm(victim))))
+            except Exception:
+                pass
             if games_missed >= 8:
                 injury_type = random.choice(
                     ['Separated shoulder', 'Concussion', 'Broken jaw'])
@@ -9581,6 +9662,10 @@ class GameSim:
     def _update_goaltender_fatigue(self, goaltender, shot_difficulty):
         """
         Stage 5: Update goaltender fatigue based on saves and shot difficulty.
+
+        W3: stamina/endurance/durability blend scales accumulation (same
+        shared decision as skaters -- fatigue_accumulation_mult, neutral at
+        resistance 70), and the canonical per-game pool stays in sync.
         """
         if goaltender.id in self.goaltender_fatigue:
             # Base fatigue loss per shot
@@ -9591,9 +9676,25 @@ class GameSim:
                 fatigue_loss += 0.3
             elif shot_difficulty == 'medium':
                 fatigue_loss += 0.1
+
+            # W3: high-stamina goalies wear down slower.
+            try:
+                from condition_system import (
+                    fatigue_accumulation_mult as _w3_accum,
+                    sync_game_energy as _w3_sync,
+                )
+                fatigue_loss *= _w3_accum(goaltender)
+            except Exception:
+                _w3_sync = None
             
-            self.goaltender_fatigue[goaltender.id] = max(0, 
+            new_energy = max(0,
                 self.goaltender_fatigue[goaltender.id] - fatigue_loss)
+            self.goaltender_fatigue[goaltender.id] = new_energy
+            if _w3_sync is not None:
+                try:
+                    _w3_sync(goaltender, new_energy)
+                except Exception:
+                    pass
 
     def _adjust_goaltender_positioning(self, goaltender, shot_location, situation):
         """

@@ -458,6 +458,13 @@ class Player:
     # Football Manager-style career fields (happiness, squad status, chats)
     happiness: int = 70  # 0-100, how happy the player is at the club
 
+    # W3 (condition_system): persistent season condition 0-100 (wear-and-tear
+    # across the schedule) and the transient per-game energy pool 0-100.
+    # Both additive; old saves without these keys use getattr-defaults (100.0)
+    # via condition_system, per the save/load convention.
+    condition: float = 100.0
+    game_energy: float = 100.0
+
     # Development arc: career trajectory variance (late bloomers / early peaks).
     # Pure individual variance, independent of grade and draft position --
     # nobody is locked into a pathway. The arc is one multiplicative factor
