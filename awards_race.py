@@ -204,7 +204,13 @@ def _sv_pct(p) -> float:
 def _gaa(p) -> float:
     ga = (_stat(p, "shots_against") or 0) - (_stat(p, "saves") or 0)
     mins = getattr(p, "minutes_played", 0) or 0
-    return (ga * 60 / mins) if mins > 0 else 99.0
+    if mins > 0:
+        return ga * 60 / mins
+    # minutes_played is never written in production, which used to make this
+    # return 99.0 for every goalie (dead Vezina GAA term). Fall back to
+    # goals-against per game, which keeps the term's 3.50 anchor valid.
+    gp = _gp(p)
+    return (ga / gp) if gp > 0 else 99.0
 
 
 def _team_points_pct(team) -> float:
