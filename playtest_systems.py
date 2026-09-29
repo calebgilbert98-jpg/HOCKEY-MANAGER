@@ -151,9 +151,12 @@ def monthly_systems(drv, month):
         except Exception:
             pass
     # --- Olympics: Feb of the Olympic year (2030 in a 2026-start league) ---
+    # NOTE: monthly_systems runs on month-boundary ticks, so no day-of-month
+    # condition here -- `day.day == 9` could never match and the tournament
+    # silently never fired. The _olympics_done flag keeps it once-per-season.
     try:
         import international as oi
-        if oi.is_olympic_year(day.year) and month == 2 and day.day == 9 \
+        if oi.is_olympic_year(day.year) and month == 2 \
                 and not getattr(drv, "_olympics_done", False):
             drv._olympics_done = True
             try:

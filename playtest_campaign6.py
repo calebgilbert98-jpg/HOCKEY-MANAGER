@@ -73,12 +73,21 @@ def _monthly_hooks_plus(self, month, ugp):
         self.story.bug(self.n, "systems monthly",
                        f"{e}\n{traceback.format_exc()[-300:]}", False,
                        "playtest_systems.py")
-    # derived-deadline trigger: first monthly tick on/after the derived day
+    # derived-deadline trigger: monthly ticks only land on month
+    # boundaries, so fire at the first tick of the deadline's month.
+    # Waiting for a tick on/after the deadline DAY itself lands on the
+    # April tick -- after the trade freeze has engaged -- and every
+    # deadline deal gets vetoed (0 trades in the 2026-09-29 campaigns).
     try:
         if not getattr(self, "_dl6_done", False):
             dl = _derived_dl(self.lg)
-            if dl is not None and self.day >= dl:
+            if dl is not None and self.day >= date(dl.year, dl.month, 1):
                 self._dl6_done = True
+                self.story.add(
+                    self.n, self.day, "deadline_trigger",
+                    ["trade_deadline_manager"],
+                    f"Deadline activity at monthly tick {self.day} "
+                    f"(derived deadline {dl.isoformat()})", "")
                 self._trade_deadline()
                 # freeze-gate probe: deadline day open, day after frozen
                 try:
@@ -115,7 +124,25 @@ def _tm_of(lg, p):
     return "?"
 
 
-def season_summary(lg, user, champ):
+def _snapshot_leaders(lg):
+    """Regular-season scoring leaders snapshot.
+
+    Must be taken BEFORE _playoffs(): distribute_stats() credits playoff
+    points into the same p.stats fields, so a post-playoffs read mixes
+    playoff scoring into the "regular-season" leaders.
+    """
+    skaters = [p for t in nhl_teams(lg) for p in t.roster
+               if p.primary_position.name != "GOALIE"]
+    leaders = sorted(((p.full_name, _tm_of(lg, p), p.stats.goals,
+                       p.stats.assists, p.stats.goals + p.stats.assists)
+                      for p in skaters if p.stats.games_played > 0),
+                     key=lambda r: r[4], reverse=True)
+    return (leaders[:10],
+            sorted(leaders, key=lambda r: r[2], reverse=True)[:5],
+            sorted(leaders, key=lambda r: r[3], reverse=True)[:5])
+
+
+def season_summary(lg, user, champ, rs_leaders=None):
     st = lg.standings[user.team_name]
     standings = sorted(
         ((t.team_name, lg.standings[t.team_name]["W"],
@@ -124,12 +151,16 @@ def season_summary(lg, user, champ):
         key=lambda r: r[4], reverse=True)
     skaters = [p for t in nhl_teams(lg) for p in t.roster
                if p.primary_position.name != "GOALIE"]
-    leaders = sorted(((p.full_name, _tm_of(lg, p), p.stats.goals,
-                       p.stats.assists, p.stats.goals + p.stats.assists)
-                      for p in skaters if p.stats.games_played > 0),
-                     key=lambda r: r[4], reverse=True)
-    goals5 = sorted(leaders, key=lambda r: r[2], reverse=True)[:5]
-    assists5 = sorted(leaders, key=lambda r: r[3], reverse=True)[:5]
+    if rs_leaders is not None:
+        leaders10, goals5, assists5 = rs_leaders
+    else:
+        leaders = sorted(((p.full_name, _tm_of(lg, p), p.stats.goals,
+                           p.stats.assists, p.stats.goals + p.stats.assists)
+                          for p in skaters if p.stats.games_played > 0),
+                         key=lambda r: r[4], reverse=True)
+        leaders10 = leaders[:10]
+        goals5 = sorted(leaders, key=lambda r: r[2], reverse=True)[:5]
+        assists5 = sorted(leaders, key=lambda r: r[3], reverse=True)[:5]
     tor = sorted(((p.full_name, p.stats.goals, p.stats.assists,
                    p.stats.goals + p.stats.assists)
                   for p in user.roster
@@ -180,7 +211,7 @@ def season_summary(lg, user, champ):
                             if r[0] == user.team_name),
         "champion": champ.team_name if champ is not None else None,
         "standings_top10": standings[:10],
-        "scoring_top10": leaders[:10],
+        "scoring_top10": leaders10,
         "goals_top5": goals5,
         "assists_top5": assists5,
         "norris": norris,
@@ -241,9 +272,12 @@ def play_season(tag, cdir, n, lg, user, strategies, story):
                       f"(40d before last RS game)", "")
         drv.regular_season()
         drv._awards()
+        # snapshot regular-season leaders BEFORE the playoffs: the harness
+        # credits playoff points into the same p.stats fields
+        rs_leaders = _snapshot_leaders(lg)
         champ = drv._playoffs()
         drv._champ = champ
-        summ = season_summary(lg, user, champ)
+        summ = season_summary(lg, user, champ, rs_leaders)
         summ["trades"] = drv.trades_made
         summ["strategy"] = strategy
         summ["year"] = lg.season_year

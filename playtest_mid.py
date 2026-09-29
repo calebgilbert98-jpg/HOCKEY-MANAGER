@@ -52,11 +52,11 @@ def _playoffs(self):
     qualified = [t.team_name for t in bracket.eastern_teams + bracket.western_teams]
     if user.team_name not in qualified:
         s.add(self.n, self.day, "playoffs", ["playoff_system"],
-              "Toronto misses the playoffs",
-              f"Finished outside the top 8 in the East.")
-        return None
-    s.add(self.n, self.day, "playoffs", ["playoff_system"],
-          "Toronto makes the playoffs", "")
+              f"{user.team_name} misses the playoffs",
+              "Finished outside the top 8. Simming the bracket anyway.")
+    else:
+        s.add(self.n, self.day, "playoffs", ["playoff_system"],
+              f"{user.team_name} makes the playoffs", "")
     champ = None
     rnd = "wild_card"
     try:

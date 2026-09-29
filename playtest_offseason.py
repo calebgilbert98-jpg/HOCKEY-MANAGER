@@ -16,6 +16,17 @@ def _offseason(self):
     # 0. coaching carousel FIRST: end_of_season() zeroes lg.standings, so
     # any points-based logic must run before the rollover.
     self._coaching_carousel()
+    # 0b. draft lottery BEFORE the wipe too: draft_lottery reads
+    # lg.standings points/wins, which end_of_season() zeroes. Running it
+    # after the wipe gave every team identical (zero) odds and a fixed
+    # draft order. The game's own flow lotteries before the rollover.
+    try:
+        lg.simulate_draft_lottery(self.year + 1)
+        s.add(self.n, date(self.year + 1, 5, 10), "lottery", ["draft_lottery"],
+              "Draft lottery held", "")
+    except Exception as e:
+        s.bug(self.n, "lottery", f"simulate_draft_lottery failed: {e}", False,
+              "game_classes.py:7558")
     # 1. development + aging + ELC slides + contract rollover
     try:
         lg.end_of_season()
@@ -42,14 +53,8 @@ def _offseason(self):
                   f"{retired} players retire league-wide", "")
     except Exception as e:
         s.bug(self.n, "retirements", f"{e}", False, "")
-    # 3. draft lottery
-    try:
-        lg.simulate_draft_lottery(self.year + 1)
-        s.add(self.n, date(self.year + 1, 5, 10), "lottery", ["draft_lottery"],
-              "Draft lottery held", "")
-    except Exception as e:
-        s.bug(self.n, "lottery", f"simulate_draft_lottery failed: {e}", False,
-              "game_classes.py:7558")
+    # 3. draft lottery -- moved to step 0b (before end_of_season zeroes
+    # lg.standings); see above.
     # 4. entry draft
     self._entry_draft()
     # 5. sign ELCs (user team + AI)
