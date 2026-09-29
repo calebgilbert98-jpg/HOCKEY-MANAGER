@@ -104,13 +104,14 @@ class TrainingCampWindow(InGamePopup):
             status = ""
         self._status.configure(text=status)
 
-        # Ratings table: Player | Age | Pos | OVR | S1..Sn | Avg | Note
+        # Ratings table: Player | Age | Pos | OVR | S1..Sn | Avg | Cond | Note
         cols = ["name", "age", "pos", "ovr"] + \
-            [f"S{i+1}" for i in range(n_games)] + ["avg", "note"]
+            [f"S{i+1}" for i in range(n_games)] + ["avg", "cond", "note"]
         self._ratings_tree["columns"] = cols
         headers = {"name": ("Player", 190), "age": ("Age", 45),
                    "pos": ("Pos", 60), "ovr": ("OVR", 50),
-                   "avg": ("Avg", 55), "note": ("Note", 130)}
+                   "avg": ("Avg", 55), "cond": ("Cond", 70),
+                   "note": ("Note", 130)}
         for c in cols:
             if c in headers:
                 label, w = headers[c]
@@ -132,6 +133,13 @@ class TrainingCampWindow(InGamePopup):
                     vals.append(f"{ratings[i]:.1f}" if i < len(ratings)
                                 else "--")
                 vals.append(f"{avg:.1f}")
+                # W6: canonical condition indicator (defensive -- never crashes)
+                try:
+                    import condition_ui as _cu
+                    _c = _cu.get_condition(p)
+                    vals.append(f"{_c} ({_cu.condition_label(_c)})")
+                except Exception:
+                    vals.append("--")
                 note = ""
                 if standout:
                     note = "Standout"
@@ -147,7 +155,7 @@ class TrainingCampWindow(InGamePopup):
         if not rows:
             self._ratings_tree.insert("", "end", values=(
                 "No camp data yet -- camp opens September 12.", "", "", "",
-                *[""] * (n_games + 2)))
+                *[""] * (n_games + 3)))
 
         # Scrimmage log
         self._scrims_tree.delete(*self._scrims_tree.get_children())
