@@ -1152,10 +1152,24 @@ def generate_draft_class(num_prospects: int = 224, quality: str = "Normal",
     # Scouting -- or loud farm production -- reveals them.
     # Goalies get fatter tails here (Task E): a pre-roll with higher bust AND
     # higher boom probability than the flat gem table skaters use.
+    #
+    # Ordering guard: create_prospect -> deal_generation_blend ->
+    # ensure_reputation_fields backfills true_potential_grade = displayed
+    # (an old-save backfill that also fires for fresh prospects). That
+    # truthy value trips seed_true_potential's idempotency guard, which
+    # would silently skip the whole gem table AND the draft_round stamp.
+    # Clear it here so truth is dealt exactly once, below.
     try:
         import prospect_development as _pd
         _per_round = 32
         _ladder = _grade_ladder()
+        for _i, _p in enumerate(prospects):
+            _p.true_potential_grade = ""
+            # Stamp the round unconditionally here: the goalie pre-roll below
+            # sets a true grade before seed_true_potential runs, which would
+            # otherwise leave pre-rolled goalies with draft_round == 0 via
+            # the idempotency guard.
+            _p.draft_round = _i // _per_round + 1
         for _i, _p in enumerate(prospects):
             if (_p.primary_position == PlayerPosition.GOALIE
                     and not getattr(_p, "true_potential_grade", "")):

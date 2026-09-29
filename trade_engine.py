@@ -99,15 +99,17 @@ def _season_year(league) -> int:
 
 
 def refresh_mntc_lists(league) -> int:
-    """July-1 resubmission: every M-NTC holder files a fresh no-trade
-    list, so last season's learned entries go stale. Returns the number
-    of players whose learned list was cleared.
+    """No-trade lists live and die with the contract: the learned entries
+    persist across seasons and only go stale when the player signs a new
+    deal (years_remaining jumps back up -- re-signing mutates the
+    existing Contract in rfa_system._sign_player). Returns the number of
+    players whose learned list was cleared.
 
-    The new season's membership then comes from the season-keyed
-    deterministic engine (_mntc_blocks), which already re-keys on
-    season_year -- so a team that was blocked last year can be open
-    this year and vice versa, like a real resubmitted list. Full
-    NTC/NMC players never use no_trade_list and are untouched.
+    A brand-new Contract object (fresh signings) starts with an empty
+    list anyway, so only the mutated-contract path needs handling. The
+    per-season membership variation still comes from the season-keyed
+    deterministic engine (_mntc_blocks); this is about the GM's learned
+    knowledge, which survives until the next negotiation.
     """
     refreshed = 0
     try:
@@ -121,9 +123,18 @@ def refresh_mntc_lists(league) -> int:
                 continue
             if int(getattr(c, "modified_ntc_teams", 0) or 0) <= 0:
                 continue
-            if getattr(c, "no_trade_list", None):
-                c.no_trade_list = []
-                refreshed += 1
+            term = int(getattr(c, "years_remaining", 0) or 0)
+            stamped = getattr(c, "ntc_list_term", None)
+            if stamped is None:
+                # First sighting: stamp the term, keep whatever is filed.
+                c.ntc_list_term = term
+                continue
+            if term > int(stamped):
+                # New deal signed: the old list died with the old contract.
+                if getattr(c, "no_trade_list", None):
+                    c.no_trade_list = []
+                    refreshed += 1
+            c.ntc_list_term = term
         except Exception:
             continue
     return refreshed

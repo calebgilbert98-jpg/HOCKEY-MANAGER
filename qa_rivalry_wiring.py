@@ -644,10 +644,15 @@ check("ai fa: ordinary signing registers without a market headline",
       and not any("sets the market" in s
                   for s in _mkt_mgr2._pending_news))
 
-# Waiver claims call the transfer hook on both paths.
+# Waiver claims call the transfer hook on both paths. Single-player
+# process_waivers delegates the claim to _execute_waiver_claim, which
+# owns the on_player_transfer call -- assert the delegation chain, not
+# a string inside one method body.
 _pw_src = _method_src("main.py", "process_waivers")
+_pw_exec_src = _method_src("main.py", "_execute_waiver_claim")
 check("claims: single-player process_waivers calls on_player_transfer",
-      "on_player_transfer" in _pw_src)
+      "_execute_waiver_claim" in _pw_src and "on_player_transfer" in _pw_exec_src,
+      "delegates" if "_execute_waiver_claim" in _pw_src else "no delegation")
 _mc_src = _method_src("main.py", "_mp_claim_waivers")
 check("claims: MP _mp_claim_waivers calls on_player_transfer",
       "on_player_transfer" in _mc_src)

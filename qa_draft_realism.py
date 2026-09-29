@@ -46,9 +46,9 @@ check("elig russia-is-euro",
       and not is_draft_eligible("2003-06-01", "Russia", 2027))
 
 # ---------------------------------------------------------------- B: class composition
+random.seed(SEED)
 classes = [generate_draft_class(num_prospects=224, quality="Normal")
            for _ in range(3)]
-random.seed(SEED)
 
 check("class 224", all(len(c) == 224 for c in classes))
 def ladder_idx(g):
@@ -207,7 +207,13 @@ def rigged_gem_team(q, seed):
     return lgx, target
 
 el_lifts, po_lifts, po_wins = [], [], 0
-for s in range(12):
+# 60 seeds, not 12: the designed elite miss rate is ~7.5% (15% missed
+# reads x ~50% noise-negative), so a 12-seed "sometimes misses" check
+# fails ~39% of the time on a CORRECT implementation. At 60 seeds the
+# expected miss count is ~4.5; band it to catch both "never misses"
+# (broken luck ceiling) and "misses constantly" (broken skill).
+N_LUCK = 60
+for s in range(N_LUCK):
     lgx, gem = rigged_gem_team(90, 1000 + s)
     boards_el = tb.build_team_boards(lgx)
     lgx2, gem2 = rigged_gem_team(30, 1000 + s)
@@ -218,12 +224,13 @@ for s in range(12):
     el_lifts.append(91 - el_r); po_lifts.append(91 - po_r)
     if po_r < el_r:
         po_wins += 1
+el_misses = sum(1 for l in el_lifts if l <= 0)
 check("elite lifts gems more on average",
       statistics.median(el_lifts) > statistics.median(po_lifts),
       f"elite med {statistics.median(el_lifts)} poor med {statistics.median(po_lifts)}")
-check("luck: poor scout sometimes wins", po_wins >= 1, f"{po_wins}/12")
+check("luck: poor scout sometimes wins", po_wins >= 1, f"{po_wins}/{N_LUCK}")
 check("luck: elite sometimes misses",
-      any(l <= 0 for l in el_lifts), f"min {min(el_lifts)}")
+      1 <= el_misses <= 15, f"{el_misses}/{N_LUCK} misses")
 
 # ---------------------------------------------------------------- F: AI goalie suppressor (6 seeded short drafts)
 import tkinter as tk
@@ -293,7 +300,7 @@ team = nhl[0]
 p1 = mk_unsigned(league, team, "OHL", "Canada", 2027, potential="A-", hype=80)
 check("rights stamped",
       p1.rights_team == team.team_name and p1.rights_type == "CHL"
-      and p1.rights_expiry_year == 2029 and p1.drafted_year == 2027)
+      and p1.rights_expiry_year == 2031 and p1.drafted_year == 2027)
 
 # ELC signing consumes rights AND drafted_year
 ok = league.sign_drafted_prospect(team, p1)
@@ -305,27 +312,30 @@ p2 = mk_unsigned(league, team, "WHL", "Canada", 2027)
 msg = league.invite_prospect_to_camp(team.team_name, p2)
 check("camp invite", p2.camp_invite and team.team_name in msg)
 
-# PRIMARY PATH: draft day June 2029 (season_year still 2028). The rollover
-# runs BEFORE the draft with reference_year=2029, so an expiring CHL
+# PRIMARY PATH: draft day June 2031 (season_year still 2030). The rollover
+# runs BEFORE the draft with reference_year=2031, so an expiring CHL
 # prospect who is still eligible re-enters the draft about to be held.
-p3 = mk_unsigned(league, team, "OHL", "Canada", 2027, potential="A-", hype=80)
+# New CBA (2026): 18-year-old CHL draftees hold 4-year rights, so a
+# Canadian ages out before expiry -- re-entry needs a European CHL
+# import (eligible through 22), the realistic modern case.
+p3 = mk_unsigned(league, team, "OHL", "Sweden", 2027, potential="A-", hype=80)
 p3.reputation = 75
-league.season_year = 2028
+league.season_year = 2030
 league.rights_news = []
-league._rollover_draft_rights(reference_year=2029)
+league._rollover_draft_rights(reference_year=2031)
 check("chl re-entry on draft day",
       p3.draft_reentry and p3 not in team.prospects
       and p3 in league.draft_reentries)
 
 # re-entry is consumable by the class generated minutes later in-game
-cls29 = generate_draft_class(num_prospects=224, quality="Normal",
-                             draft_year=2029, reentries=list(league.draft_reentries))
-check("reentry in 2029 class", any(p.id == p3.id for p in cls29))
+cls31 = generate_draft_class(num_prospects=224, quality="Normal",
+                             draft_year=2031, reentries=list(league.draft_reentries))
+check("reentry in 2031 class", any(p.id == p3.id for p in cls31))
 
 # double-run guard: the end_of_season backstop (same offseason, post-increment)
 # must not process the cycle again
 n_news = len(league.rights_news)
-league.season_year = 2029
+league.season_year = 2031
 league._rollover_draft_rights()
 check("no double rollover", len(league.rights_news) == n_news,
       f"{len(league.rights_news)} vs {n_news}")
@@ -336,8 +346,8 @@ check("no double rollover", len(league.rights_news) == n_news,
 league2, nhl2 = make_league(2027)
 league2.free_agents = []
 team2 = nhl2[0]
-p4 = mk_unsigned(league2, team2, "QMJHL", "Canada", 2027,
-                 birth_date="2007-09-20", potential="C+", hype=10)
+p4 = mk_unsigned(league2, team2, "QMJHL", "Canada", 2025,
+                 birth_date="2006-09-20", potential="C+", hype=10)
 p4.age = 21
 p6 = mk_unsigned(league2, team2, "NCAA", "USA", 2025, birth_date="2006-05-05")
 p6.age = 22
@@ -364,14 +374,15 @@ check("5yr -> retired", p7.team_name == "Retired"
       and any("retired" in n for n in league2.rights_news))
 
 # holdout warning fires on draft day the summer before CHL expiry
+# (new CBA: 4-year rights for an 18-year-old draftee -> expiry 2031)
 league3, nhl3 = make_league(2027)
 league3.free_agents = []
 team3 = nhl3[0]
 p5 = mk_unsigned(league3, team3, "OHL", "Canada", 2027, potential="A-", hype=80)
 p5.reputation = 75
-league3.season_year = 2028  # draft day June 2028: 1 unsigned year, expiry next summer
+league3.season_year = 2029  # draft day June 2030: 3 unsigned years, expiry next summer
 league3.rights_news = []
-league3._rollover_draft_rights(reference_year=2028)
+league3._rollover_draft_rights(reference_year=2030)
 warn = [n for n in league3.rights_news if "hold out" in n or "retirement" in n]
 check("high-rep expiry warning", any(p5.full_name in w for w in warn),
       f"{len(warn)} warnings")

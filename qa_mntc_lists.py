@@ -281,8 +281,8 @@ ok, why = te.will_waive_ntc(c, home_team, no_tax, lg8,
 check("reason cites the pull",
       "income tax" in why or "home" in why, why)
 
-# --- 9. July-1 resubmission: learned entries go stale -------------------------------
-print("9. season rollover clears learned M-NTC entries")
+# --- 9. Lists live and die with the contract -------------------------------------
+print("9. learned M-NTC entries survive rollover, clear only on a new deal")
 lg9 = make_league()
 a = mkplayer(30, pid=3001)          # M-NTC, learned entries on file
 a.contract.no_trade_list.extend(["Dallas Stars", "Tampa Bay Lightning"])
@@ -296,12 +296,46 @@ d.contract.no_trade_clause = True
 d.contract.no_trade_list.append("Dallas Stars")
 lg9.get_all_players = lambda: [a, b, c, d]
 n = te.refresh_mntc_lists(lg9)
-check("one list refreshed", n == 1, str(n))
-check("learned entries cleared", a.contract.no_trade_list == [])
+check("rollover without a new deal clears nothing", n == 0, str(n))
+check("learned entries survive the rollover",
+      a.contract.no_trade_list == ["Dallas Stars", "Tampa Bay Lightning"],
+      str(a.contract.no_trade_list))
 check("clean list untouched", b.contract.no_trade_list == [])
 check("non-clause player untouched",
       c.contract.no_trade_list == ["Dallas Stars"])
 check("full-NTC player untouched",
       d.contract.no_trade_list == ["Dallas Stars"])
+# Now the player re-signs: the contract is mutated, term jumps back up.
+a.contract.years_remaining = 5
+n = te.refresh_mntc_lists(lg9)
+check("new deal clears the old list", n == 1, str(n))
+check("list empty after new deal", a.contract.no_trade_list == [],
+      str(a.contract.no_trade_list))
+# A later rollover with no new deal keeps the (now empty) list stable.
+n = te.refresh_mntc_lists(lg9)
+check("second rollover clears nothing", n == 0, str(n))
+
+# --- 10. Save/load round-trip: the stamped term survives ---------------
+from save_load_system import GameSaveManager
+_s = GameSaveManager.__new__(GameSaveManager)
+e = mkplayer(30, pid=3005)
+e.contract.no_trade_list = ["Dallas Stars"]
+te.refresh_mntc_lists(SimpleNamespace(get_all_players=lambda: [e]))
+_data = _s._serialize_contract(e.contract)
+_e2 = _s._restore_contract(_data)
+check("term + list survive save/load",
+      getattr(_e2, "ntc_list_term", None) == e.contract.ntc_list_term
+      and _e2.no_trade_list == ["Dallas Stars"],
+      f"term={getattr(_e2, 'ntc_list_term', None)} list={_e2.no_trade_list}")
+# Old save without the stamp: restores cleanly, refresh stamps it fresh.
+_old = {k: v for k, v in _data.items() if k != "ntc_list_term"}
+_e3 = _s._restore_contract(_old)
+check("old save restores without a stamp",
+      getattr(_e3, "ntc_list_term", None) is None)
+te.refresh_mntc_lists(
+    SimpleNamespace(get_all_players=lambda: [SimpleNamespace(contract=_e3)]))
+check("refresh stamps an old-save contract",
+      _e3.ntc_list_term == _e3.years_remaining,
+      f"term={_e3.ntc_list_term}")
 
 print(f"\nALL {len(passed)} M-NTC LIST QA CHECKS PASSED")

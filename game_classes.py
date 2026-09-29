@@ -6725,10 +6725,9 @@ class League:
         except Exception:
             pass
 
-        # M-NTC lists are resubmitted every July 1 in real life: last
-        # year's learned entries go stale via trade_engine, and the new
-        # season's membership comes from the season-keyed deterministic
-        # list engine (_mntc_blocks).
+        # M-NTC lists live and die with the contract: learned entries
+        # persist across seasons and only clear when the player signs a
+        # new deal (trade_engine.refresh_mntc_lists).
         try:
             import trade_engine as _te_mntc
             _te_mntc.refresh_mntc_lists(self)
@@ -6878,8 +6877,12 @@ class League:
                 return False
             # Only the rights holder can sign; already-signed prospects
             # (rights cleared) are skipped. The contract check is explicit:
-            # a prospect who somehow holds both is never re-signed.
-            if getattr(player, "contract", None) is not None:
+            # a prospect who somehow holds both is never re-signed. Note
+            # every Player is born with a placeholder Contract
+            # (years_remaining == 0), so "has a contract" means a LIVE
+            # deal -- the placeholder is not a signing.
+            _c = getattr(player, "contract", None)
+            if _c is not None and int(getattr(_c, "years_remaining", 0) or 0) > 0:
                 return False
             rights_team = getattr(player, "rights_team", "") or ""
             if not rights_team or rights_team != getattr(team_obj, "team_name", ""):
@@ -7115,10 +7118,12 @@ class League:
         # year.
         drafted_year = int(getattr(player, "drafted_year", 0) or 0)
         if drafted_year == 0 and not getattr(player, "rights_team", ""):
-            # Signed prospects (have a contract) are never "unsigned rights"
+            # Signed prospects (hold a live deal) are never "unsigned rights"
             # assets -- the stamp is only for unsigned draftees the draft
-            # UI failed to stamp.
-            if getattr(player, "contract", None) is not None:
+            # UI failed to stamp. Every Player carries a placeholder
+            # Contract (years_remaining == 0); only a live deal counts.
+            _bc = getattr(player, "contract", None)
+            if _bc is not None and int(getattr(_bc, "years_remaining", 0) or 0) > 0:
                 return
             if int(getattr(player, "age", 99) or 99) <= 21:
                 self.stamp_draft_rights(player, team_name, base_year)

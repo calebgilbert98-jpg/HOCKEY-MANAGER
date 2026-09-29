@@ -127,7 +127,13 @@ def ensure_reputation_fields(entity: Any) -> None:
             entity.roster_churn = 0.2
     # Prospect-development fields (prospect_development.py). Old saves predate
     # them; hidden truth defaults to the displayed belief (no phantom gems in
-    # old saves -- they must earn it through production).
+    # old saves -- they must earn it through production). Falsy check (not
+    # hasattr): true_potential_grade is a dataclass field defaulting to "",
+    # so hasattr is always True even for old saves -- only a falsy read
+    # distinguishes "never dealt". Fresh prospects also read "" here; that
+    # is safe because generate_draft_class defensively clears
+    # true_potential_grade immediately before dealing truth via
+    # seed_true_potential (see the ordering guard there).
     if hasattr(entity, "primary_position") and not hasattr(entity, "role"):
         if not getattr(entity, "true_potential_grade", ""):
             entity.true_potential_grade = getattr(entity, "potential_grade", "C") or "C"

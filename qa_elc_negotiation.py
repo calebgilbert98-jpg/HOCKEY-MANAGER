@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import salary_cap_system as scs
-from game_classes import League, Player, PlayerPosition, Team
+from game_classes import League, Player, PlayerPosition, Team, Contract
 
 PASS = []
 FAIL = []
@@ -147,7 +147,9 @@ t2.prospects.append(p2)
 check("finalize refuses non-rights-holder",
       lg2.finalize_elc_signing(t2, p2, 900_000, 3) is False)
 p3 = prospect(seed=33)
-p3.contract = "signed"
+# Already-signed means holding a LIVE deal (a placeholder/expired contract
+# is not a signing -- every Player is born with one).
+p3.contract = Contract(salary=925_000, years_remaining=2, entry_level=True)
 t.prospects.append(p3)
 check("finalize refuses already-signed",
       lg.finalize_elc_signing(t, p3, 900_000, 3) is False)
