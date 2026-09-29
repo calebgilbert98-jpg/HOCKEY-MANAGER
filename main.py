@@ -12069,9 +12069,16 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         if went_to_ot:
             _ctx = _drama()
-            home_ot_chance = (0.55 + (home_star_effects['clutch_factor'] * 0.1)
-                              + _ctx.get("home_win_edge", 0.0))  # Star players help in OT
-            home_ot_chance = max(0.35, min(0.75, home_ot_chance))
+            # Chris 2026-09-29 tuning: dynamic factors decide OT, not a fixed
+            # home handout. Base is a coin flip; clutch counts as
+            # home-minus-away (both rooms' big-game players matter); the
+            # drama edge already nets home vs away morale/situations/crowd.
+            # Hard 60/40 cap either way.
+            clutch_edge = ((home_star_effects['clutch_factor']
+                            - away_star_effects['clutch_factor']) * 0.08)
+            home_ot_chance = (0.50 + clutch_edge
+                              + _ctx.get("home_win_edge", 0.0))
+            home_ot_chance = max(0.40, min(0.60, home_ot_chance))
             if random.random() < home_ot_chance:
                 home_goals += 1
             else:
