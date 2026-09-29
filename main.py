@@ -133,6 +133,10 @@ class GameManager:
         self.league.set_game_manager(self)  # Set reference for database access
         self.user_team = None
         self.startup_settings = None
+        # Item 7: set when the human club still needs its mandatory
+        # captaincy choice but no display exists to ask (headless new-game
+        # setup). The GUI raises the blocker on startup and clears it.
+        self._captaincy_choice_pending = False
 
         # New-game setup options (filled by apply_startup_settings)
         self.fog_of_war = True
@@ -684,10 +688,16 @@ NHL League Office""",
 
         # NHL Rule 6.1: every club opens with exactly one captain (never a
         # goaltender) and two alternates. Leadership is picked, not dealt.
+        # Item 7: the human GM names his own letters -- a mandatory,
+        # non-dismissible chooser replaces auto-repair for the user club.
+        # No display exists yet this early, so _require_captaincy_choice
+        # defers via _captaincy_choice_pending and the app raises the
+        # blocker on startup.
         for team in self.league.teams:
             if team.league_name == "National Hockey League":
                 try:
-                    self._ensure_captaincy(team)
+                    self._opening_night_captaincy_check(
+                        team, getattr(self, "user_team", None))
                 except Exception:
                     pass
 
@@ -1448,6 +1458,135 @@ NHL League Office""",
             pass
         return new_captain
 
+    # --- Item 7: mandatory captaincy user-choice blocker -------------------
+    @staticmethod
+    def _cap_letter_is_goalie(p) -> bool:
+        """NHL Rule 6.1 goalie check shared by the captaincy helpers."""
+        try:
+            from game_classes import PlayerPosition as _PP
+            return getattr(p, "primary_position", None) == _PP.GOALIE
+        except Exception:
+            return False
+
+    def _captaincy_needs_choice(self, team) -> bool:
+        """True when the club does not already wear exactly 1 C + 2 As.
+
+        Goalie-held letters count as invalid (NHL Rule 6.1). Display-free,
+        so headless QA can exercise the firing logic without a display.
+        """
+        roster = list(getattr(team, "roster", None) or [])
+        if not roster:
+            return False
+        caps = [p for p in roster if getattr(p, "captaincy", "") == "C"]
+        alts = [p for p in roster if getattr(p, "captaincy", "") == "A"]
+        if len(caps) != 1 or len(alts) != 2:
+            return True
+        if self._cap_letter_is_goalie(caps[0]):
+            return True
+        return any(self._cap_letter_is_goalie(p) for p in alts)
+
+    def _validate_captaincy_pick(self, team, captain_name,
+                                 alt1_name, alt2_name):
+        """Validate a 1C+2A pick. Returns an error string when the pick is
+        illegal, None when it is legal. Display-free, headless-QA safe."""
+        by_name = {}
+        for p in (getattr(team, "roster", None) or []):
+            by_name.setdefault(getattr(p, "full_name", ""), p)
+        c = (captain_name or "").strip()
+        a1 = (alt1_name or "").strip()
+        a2 = (alt2_name or "").strip()
+        if not c or c not in by_name:
+            return "Choose a captain (C) to continue."
+        if not a1 or a1 not in by_name or not a2 or a2 not in by_name:
+            return "Choose two alternate captains (A) to continue."
+        if c == a1 or c == a2:
+            return ("One player cannot wear both the C and an A \u2014 "
+                    "pick a different alternate.")
+        if a1 == a2:
+            return "Pick two different alternate captains."
+        if self._cap_letter_is_goalie(by_name[c]):
+            return ("NHL Rule 6.1: a goaltender cannot be captain \u2014 "
+                    "choose a skater for the C.")
+        if (self._cap_letter_is_goalie(by_name[a1])
+                or self._cap_letter_is_goalie(by_name[a2])):
+            return ("NHL Rule 6.1: a goaltender cannot wear a letter \u2014 "
+                    "choose skaters for the As.")
+        return None
+
+    def _persist_captaincy_pick(self, team, captain_name,
+                                alt1_name, alt2_name):
+        """Write a validated 1C+2A pick onto the roster's captaincy field,
+        the same by-name way the manual Set Captains tool does."""
+        c = (captain_name or "").strip()
+        a1 = (alt1_name or "").strip()
+        a2 = (alt2_name or "").strip()
+        roster = list(getattr(team, "roster", None) or [])
+        for p in roster:
+            p.captaincy = None
+        for p in roster:
+            name = getattr(p, "full_name", "")
+            if name == c:
+                p.captaincy = "C"
+            elif name == a1 or name == a2:
+                p.captaincy = "A"
+
+    def _opening_night_captaincy_check(self, team, user_team):
+        """One club's opening-night captaincy step. Returns the new
+        captain's name when auto-repair named one (for the news story),
+        else None. Human club without exactly 1 C + 2 As -> the mandatory
+        user-choice blocker; AI clubs keep the auto-repair path. Shared by
+        both _ensure_captaincy call sites so the firing logic is identical.
+        """
+        if team is user_team and self._captaincy_needs_choice(team):
+            self._require_captaincy_choice(team)
+            return None
+        return self._ensure_captaincy(team)
+
+    def _require_captaincy_choice(self, team) -> bool:
+        """Item 7: modal continuation blocker for the human club.
+
+        Raises the non-dismissible captain picker and blocks until the
+        user confirms exactly 1 C + 2 As. Returns True when a valid choice
+        was made and persisted. When no display/popup manager is available
+        (headless new-game setup), arms _captaincy_choice_pending instead
+        so the GUI raises the blocker on startup -- never crashes.
+        """
+        if not self._captaincy_needs_choice(team):
+            self._captaincy_choice_pending = False
+            return True
+        app = getattr(self, "app", None)
+        mgr = getattr(app, "popup_manager", None) if app is not None else None
+        if mgr is None:
+            self._captaincy_choice_pending = True
+            return False
+        try:
+            from windows import MandatoryCaptainsWindow
+            win = MandatoryCaptainsWindow(app, team=team)
+            win.grab_set()
+            win.wait_window()
+        except Exception:
+            self._captaincy_choice_pending = True
+            return False
+        ok = not self._captaincy_needs_choice(team)
+        self._captaincy_choice_pending = not ok
+        if ok:
+            try:
+                caps = [p for p in (getattr(team, "roster", None) or [])
+                        if getattr(p, "captaincy", "") == "C"]
+                if caps:
+                    _story = (
+                        f"\u00a9 {caps[0].full_name} has been named captain of "
+                        f"the {getattr(team, 'team_name', 'club')}.")
+                    # add_news lives on the GUI; the manager only holds it
+                    # via .app.
+                    _add = getattr(getattr(self, "app", None),
+                                   "add_news", None)
+                    if callable(_add):
+                        _add(_story)
+            except Exception:
+                pass
+        return ok
+
     def set_user_team(self, team_name):
         """Set the user's selected team"""
         # Find the team by name
@@ -1871,6 +2010,19 @@ class HockeyManagerGUI(tk.Tk):
             _register_popups(self)
         except Exception:
             self.popup_manager = None
+
+        # Item 7: a captaincy choice deferred from headless new-game setup
+        # (no display existed to ask) is raised here as a mandatory,
+        # non-dismissible blocker before the user can continue.
+        try:
+            _gm7 = self.game_manager
+            if (getattr(_gm7, "_captaincy_choice_pending", False)
+                    and getattr(_gm7, "user_team", None) is not None
+                    and _gm7._captaincy_needs_choice(_gm7.user_team)):
+                self.after_idle(
+                    lambda: _gm7._require_captaincy_choice(_gm7.user_team))
+        except Exception:
+            pass
         
         # Set application icon
         self._set_application_icon()
@@ -6113,10 +6265,21 @@ class HockeyManagerGUI(tk.Tk):
                         and getattr(self, '_captaincy_checked_year', None) != _sy):
                     self._captaincy_checked_year = _sy
                     _ut = getattr(self, 'user_team', None)
+                    # NOTE (Item 7): the captaincy helpers live on
+                    # GameManager, but this is a HockeyManagerGUI method --
+                    # the old self._ensure_captaincy call here was dead
+                    # (AttributeError, swallowed by the except below), so
+                    # the opening-night check never ran. Route via the
+                    # game manager to make both paths live.
+                    _gm = getattr(self, 'game_manager', None)
                     for _t in (getattr(getattr(self, 'league', None),
                                        'teams', None) or []):
                         try:
-                            _nc = self._ensure_captaincy(_t)
+                            if _gm is not None:
+                                _nc = _gm._opening_night_captaincy_check(
+                                    _t, _ut)
+                            else:
+                                _nc = None
                             if _nc and _t is _ut:
                                 self.add_news(
                                     f"© {_nc} has been named captain of the "

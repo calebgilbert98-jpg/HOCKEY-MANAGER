@@ -12625,6 +12625,142 @@ class SetCaptainsWindow(InGamePopup):
                 pass
         return InGamePopup.__getattr__(self, name)
 
+
+class MandatoryCaptainsView(SetCaptainsView):
+    """Item 7: mandatory, non-dismissible captain picker.
+
+    Built on the SetCaptainsView combobox flow. Confirm validates
+    (exactly 1 C + 2 As, no goalie letters, no double letters) and shows
+    a clear inline error instead of silently fixing; persistence goes
+    through GameManager._persist_captaincy_pick, the manual tool's
+    by-name flow. There is no cancel path -- the hosting window refuses
+    to close until a legal pick is confirmed.
+    """
+
+    def _create_widgets(self):
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ttk.Frame(self, style='Card.TFrame', padding=24, width=600)
+        card.grid(row=0, column=0, pady=24, sticky='n')
+        main_frame = ttk.Frame(card, style='Card.TFrame')
+        main_frame.pack(fill='both', expand=True)
+
+        team_name = getattr(getattr(self.app, 'user_team', None),
+                            'team_name', 'your team')
+        ttk.Label(
+            main_frame, text="Name your captains",
+            style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 14, 'bold')
+        ).pack(anchor='w', pady=(0, 4))
+        ttk.Label(
+            main_frame,
+            text=("NHL Rule 6.1 requires every club to dress exactly one "
+                  f"captain (C) and two alternates (A). Pick {team_name}'s "
+                  "letters to continue \u2014 a goaltender cannot wear a "
+                  "letter, and one player cannot hold two letters."),
+            style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 10),
+            wraplength=540, justify='left'
+        ).pack(anchor='w', pady=(0, 14))
+
+        players = [p.full_name for p in self.app.user_team.roster]
+
+        ttk.Label(main_frame, text="Captain (C):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.captain_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        ttk.Label(main_frame, text="Alternate Captain (A):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.alternate1_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        ttk.Label(main_frame, text="Alternate Captain (A):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.alternate2_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        self.error_var = tk.StringVar(master=self)
+        self.error_label = ttk.Label(
+            main_frame, textvariable=self.error_var, style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
+            foreground='#e5484d', wraplength=540, justify='left')
+        self.error_label.pack(anchor='w', pady=(2, 8))
+
+        ttk.Button(main_frame, text="Confirm Captains",
+                   command=self.save_captains).pack(pady=(6, 4))
+
+    def save_captains(self):
+        """Validate, then persist exactly like the manual tool. Invalid
+        picks are rejected with an inline message -- never silently
+        fixed, and the blocker stays open."""
+        gm = getattr(self.app, 'game_manager', None) or self.app
+        err = gm._validate_captaincy_pick(
+            self.app.user_team, self.captain_var.get(),
+            self.alternate1_var.get(), self.alternate2_var.get())
+        if err:
+            self.error_var.set(err)
+            try:
+                self.error_label.update_idletasks()
+            except Exception:
+                pass
+            return
+        gm._persist_captaincy_pick(
+            self.app.user_team, self.captain_var.get(),
+            self.alternate1_var.get(), self.alternate2_var.get())
+        try:
+            self.app.update_all_views()
+        except Exception:
+            pass
+        self.close_view()
+
+
+class MandatoryCaptainsWindow(InGamePopup):
+    """Item 7: modal, non-dismissible host for MandatoryCaptainsView.
+
+    The card cannot be closed -- not by its X button, not by Escape --
+    until a legal 1C+2A pick is confirmed. Callers block on wait_window().
+    """
+
+    def __init__(self, app, team=None, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("Name Your Captains")
+        # Non-dismissible: the popup manager ignores Escape / click-out
+        # for non-dismissible cards, and the title-bar X is refused below.
+        try:
+            self._dismissible = False
+        except Exception:
+            pass
+        self.protocol("WM_DELETE_WINDOW", self._refuse_close)
+        self._view = MandatoryCaptainsView(self, app=app)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+        try:
+            self.geometry("640x640")
+            self.fit_to_content(min_w=620, min_h=560)
+        except Exception:
+            pass
+
+    def _refuse_close(self):
+        """The blocker has no cancel path: nudge the user back to the form."""
+        try:
+            self._view.error_var.set(
+                "Pick exactly one captain (C) and two alternates (A) "
+                "to continue.")
+        except Exception:
+            pass
+
+
 # --- Drag-and-Drop Edit Lines Window ---
 class GMDashboardView(ctk.CTkFrame):
     """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
