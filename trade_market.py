@@ -56,7 +56,6 @@ MAX_OPEN_LISTINGS_LEAGUE_RAMP = 24
 BIDDING_WINDOW_BASELINE_DAYS = 7
 BIDDING_WINDOW_RAMP_DAYS = 4
 RUMOR_CAP_PER_DAY = 3
-MIN_BIDDERS_FOR_WAR_RUMOR = 3
 ESCALATION_BASE = 0.55             # x boldness x desperation
 ASK_DECAY_PER_DAY = 0.02           # final 5 days of ramp only
 RELIST_COOLDOWN_DAYS = 14
@@ -480,6 +479,45 @@ def list_piece(app, league, seller, player, source="seller_list", today=None,
         }
         market["listings"].append(listing)
         label = _player_label(player)
+        # Person-conscious brief: scout-voiced perception + contract notes,
+        # stamped once at listing (durable; round notes overwrite "note").
+        try:
+            brief = []
+            _pf, _pnote = perception_discount(app, league, player)
+            if _pnote:
+                brief.append(_pnote)
+            _wr, _wnote = contract_worth(player)
+            if _wnote:
+                brief.append(_wnote)
+            if brief:
+                listing["scout_brief"] = brief
+                listing["note"] = " | ".join(brief)
+        except Exception:
+            pass
+        # Cap-dump sweetener: a toxic contract moves with a pick attached;
+        # the ask is net-priced.
+        try:
+            listing["ask_points"] = _attach_cap_dump_sweetener(
+                app, league, seller, player, listing,
+                int(listing.get("ask_points", 0) or 0))
+            if listing.get("sweetener_note"):
+                listing["note"] = ((listing.get("note", "") + " | "
+                                    if listing.get("note") else "")
+                                   + listing["sweetener_note"])
+        except Exception:
+            pass
+        # Marquee attention: a star on the block pulls every team's eyes --
+        # longer window (more bidding rounds) + headline news, not a rumor.
+        try:
+            if is_marquee(listing, player):
+                listing["marquee"] = True
+                close = _parse(listing.get("bidding_close", ""))
+                if close is not None:
+                    listing["bidding_close"] = _iso(
+                        close + timedelta(days=MARQUEE_WINDOW_BONUS_DAYS))
+                _marquee_attention_news(app, sname, player)
+        except Exception:
+            pass
         if source == "trade_request":
             _news(app, f"RUMOR: {sname} is shopping {label} after his trade request.", rumor=True,
                   rumor_cap=params.get("rumor_cap"))
@@ -606,23 +644,7 @@ def _auto_list(app, league, market, today, ramp, params=None, heat=0.0):
 def _gm_boldness(app, team):
     """GMIdentity.aggression (0..1); 0.5 default. Never raises."""
     try:
-        from ai_gm_identity import gm_identity_from_staff
-        mgr = getattr(getattr(app, "game_manager", None), "ai_manager", None)
-        ident = None
-        if mgr is not None:
-            try:
-                ident = (mgr.gm_identities or {}).get(getattr(team, "team_name", ""))
-            except Exception:
-                ident = None
-        if ident is None:
-            try:
-                gm_staff = None
-                _tgm = getattr(mgr, "_team_gm", None)
-                if callable(_tgm):
-                    gm_staff = _tgm(team)
-                ident = gm_identity_from_staff(getattr(team, "team_name", ""), gm_staff)
-            except Exception:
-                ident = None
+        ident = _gm_identity(app, team)
         if ident is not None:
             return max(0.0, min(1.0, float(getattr(ident, "aggression", 0.5))))
     except Exception:
@@ -670,6 +692,20 @@ def _find_bidders(app, league, listing, today, ramp):
                 continue
             # Baseline cooldown: hot GMs sit out initiating, but may bid.
             # (Cooldown gates *initiating*; bidding stays open.)
+            # The PERSON: ambitions shape destinations. A cup-chaser won't
+            # go to a rebuilder willingly; a trade requester's preferred
+            # destination types are a hard filter outside the ramp (deadline
+            # pressure loosens it -- players expand their lists).
+            try:
+                _ok, _why = _destination_appeal(player, stance)
+                if not _ok:
+                    continue
+                if getattr(player, "transfer_requested", False) and not ramp:
+                    _pref = _preferred_destination_types(player)
+                    if _pref and stance not in _pref:
+                        continue
+            except Exception:
+                pass
             # Need-fit: positional need or best-player-available override.
             # Need-fit: team_needs() returns all groups weakest-first; the
             # three weakest are genuine needs (plus a star BPA override).
@@ -690,6 +726,38 @@ def _find_bidders(app, league, listing, today, ramp):
             need_fit = (pos in needs) or \
                 (pos == "D" and any(n in ("LD", "RD") for n in needs)) or \
                 (ovr >= 84)
+            # Marquee attention: contenders kick the tires on a star even
+            # without a glaring hole; bold bubble GMs opportunistically join
+            # the fray. Non-stars keep strict need-fit matching only.
+            try:
+                marquee = bool(listing.get("marquee")) or \
+                    is_marquee(listing, player)
+            except Exception:
+                marquee = False
+            if marquee and not need_fit:
+                try:
+                    if stance == "buyer":
+                        need_fit = True
+                    elif stance == "bubble" and \
+                            _gm_boldness(app, team) >= 0.65:
+                        need_fit = True
+                except Exception:
+                    pass
+            # Person-conscious tightening: a slumping name or a toxic
+            # contract only draws teams with a glaring hole (their #1
+            # need) -- unless he's marquee, which pulls eyes regardless.
+            try:
+                if not marquee and need_fit:
+                    _pf, _pn = perception_discount(app, league, player)
+                    _wr, _wn = contract_worth(player)
+                    if _pf < 0.85 or _wr < 0.65:
+                        _top_need = (needs or [None])[0]
+                        _pos_hit = (pos == _top_need) or \
+                            (pos == "D" and _top_need in ("LD", "RD"))
+                        if not _pos_hit:
+                            continue
+            except Exception:
+                pass
             if not need_fit:
                 continue
             # Bitter rivals don't deal.
@@ -699,17 +767,36 @@ def _find_bidders(app, league, listing, today, ramp):
             except Exception:
                 pass
             # Clause: piece must be movable to this bidder (or waivable).
+            # One conversation per destination: granted waivers are recorded
+            # on the listing (no double-rolls, no single-string collisions
+            # across bidders). For the user's own block the waiver is NEVER
+            # pre-rolled: the offer goes to the user and the conversation
+            # is real.
             try:
                 vetoes = te.trade_vetoes(seller, team, [player])
             except Exception:
                 vetoes = []
             if vetoes:
-                try:
-                    ok, _why = te.will_waive_ntc(player, seller, team)
-                except Exception:
-                    ok = False
-                if not ok:
-                    continue
+                _user_sale = (sname == user_name)
+                if _user_sale:
+                    pass
+                else:
+                    try:
+                        _waived = listing.setdefault("waived_for", [])
+                    except Exception:
+                        _waived = []
+                    if tname not in _waived:
+                        try:
+                            ok, _why = te.will_waive_ntc(player, seller, team,
+                                                         league=league)
+                        except Exception:
+                            ok = False
+                        if not ok:
+                            continue
+                        try:
+                            _waived.append(tname)
+                        except Exception:
+                            pass
             bidders.append(team)
         return bidders
     except Exception:
@@ -914,6 +1001,566 @@ def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
         return chosen
 
 
+# ---------------------------------------------------------------------------
+# Marquee attention (iteration 3, 2026-09-29): EHM-style trade block dynamics.
+# When a STAR hits the block or asks out, every team's eyes turn and a
+# bidding war can erupt. Most players never get this: they draw quiet,
+# targeted, need-fit interest only. trade_engine.py is NEVER touched --
+# this is all market-layer overlay.
+# ---------------------------------------------------------------------------
+MARQUEE_OVR = 86                # star bar for league-wide attention
+MARQUEE_REP = 85                # elite career reputation (0-100) also qualifies
+MARQUEE_REQUEST_OVR = 82       # a trade request from an 82+ pulls eyes too
+MARQUEE_WINDOW_BONUS_DAYS = 3  # marquee listings stay open longer (more rounds)
+MIN_BIDDERS_FOR_MARQUEE_WAR = 2  # war rumor bar is lower for stars
+
+
+def is_marquee(listing, player):
+    """True when a listing deserves league-wide attention: an 86+ OVR star,
+    an elite-reputation name, or an 82+ player who asked out. Never raises."""
+    try:
+        ovr = 0
+        try:
+            ovr = player.overall_rating()
+        except Exception:
+            pass
+        if ovr >= MARQUEE_OVR:
+            return True
+        try:
+            if float(getattr(player, "reputation", 0) or 0) >= MARQUEE_REP:
+                return True
+        except Exception:
+            pass
+        try:
+            req = bool(getattr(player, "transfer_requested", False))
+            src = (listing or {}).get("source", "")
+            if (req or src in ("trade_request", "agitator")) \
+                    and ovr >= MARQUEE_REQUEST_OVR:
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
+
+
+def _marquee_attention_news(app, sname, player):
+    """The league-eyes moment: a star on the block is headline news, not a
+    routine rumor. Never raises."""
+    try:
+        label = _player_label(player)
+        _news(app, f"BLOCKBUSTER WATCH: {label} is on the block -- "
+                   f"every GM in the league is calling {sname}.",
+              rumor=False)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Return vision (iteration 3): the seller scores offers against its *return
+# vision* -- what the franchise needs back -- instead of taking the highest
+# raw asset value. Shaped by (a) GM identity (aggression/patience), (b) team
+# stance + situation, (c) scout eye where available. Raw value breaks ties.
+# ---------------------------------------------------------------------------
+def _gm_identity(app, team):
+    """The team's GMIdentity or None. Never raises."""
+    try:
+        from ai_gm_identity import gm_identity_from_staff
+        mgr = getattr(getattr(app, "game_manager", None), "ai_manager", None)
+        ident = None
+        if mgr is not None:
+            try:
+                ident = (mgr.gm_identities or {}).get(
+                    getattr(team, "team_name", ""))
+            except Exception:
+                ident = None
+        if ident is None:
+            try:
+                gm_staff = None
+                _tgm = getattr(mgr, "_team_gm", None)
+                if callable(_tgm):
+                    gm_staff = _tgm(team)
+                ident = gm_identity_from_staff(
+                    getattr(team, "team_name", ""), gm_staff)
+            except Exception:
+                ident = None
+        return ident
+    except Exception:
+        return None
+
+
+def _seller_vision_weights(app, seller):
+    """Asset-class multipliers for this seller's return vision.
+
+    Stance sets the base (rebuilders want futures, contenders want
+    immediate help, bubble teams want need-fits); the GM's patience
+    tilts toward futures and aggression toward win-now pieces.
+    Never raises."""
+    try:
+        import trade_storylines as tsl
+        try:
+            stance = tsl.stance(app, getattr(seller, "team_name", ""))
+        except Exception:
+            stance = "neutral"
+        if stance == "seller":
+            w = {"pick": 1.6, "young": 1.4, "prime": 0.9, "veteran": 0.5,
+                 "need": 1.2}
+        elif stance == "buyer":
+            w = {"pick": 0.6, "young": 1.0, "prime": 1.2, "veteran": 1.1,
+                 "need": 1.3}
+        elif stance == "bubble":
+            w = {"pick": 0.9, "young": 1.1, "prime": 1.1, "veteran": 0.9,
+                 "need": 1.5}
+        else:
+            w = {"pick": 1.0, "young": 1.0, "prime": 1.0, "veteran": 1.0,
+                 "need": 1.1}
+        try:
+            ident = _gm_identity(app, seller)
+            patience = float(getattr(ident, "patience", 0.5)) \
+                if ident is not None else 0.5
+            aggression = float(getattr(ident, "aggression", 0.5)) \
+                if ident is not None else 0.5
+        except Exception:
+            patience, aggression = 0.5, 0.5
+        futures_mult = 0.7 + 0.6 * max(0.0, min(1.0, patience))
+        now_mult = 0.7 + 0.6 * max(0.0, min(1.0, aggression))
+        for k in ("pick", "young"):
+            w[k] = w[k] * futures_mult
+        for k in ("prime", "veteran"):
+            w[k] = w[k] * now_mult
+        return w
+    except Exception:
+        return {"pick": 1.0, "young": 1.0, "prime": 1.0, "veteran": 1.0,
+                "need": 1.0}
+
+
+def _classify_asset(asset):
+    """pick | young (<=23) | prime (24-28) | veteran (29+). Never raises."""
+    try:
+        from game_classes import DraftPick
+        if isinstance(asset, DraftPick):
+            return "pick"
+        age = getattr(asset, "age", 99)
+        if age <= 23:
+            return "young"
+        if age >= 29:
+            return "veteran"
+        return "prime"
+    except Exception:
+        return "prime"
+
+
+def _seller_scout_eye(seller):
+    """Best pro-scout JPA on the seller's staff (1-20), or None when no
+    scout info is available. A sharp staff trusts its read on young
+    pieces. Never raises."""
+    try:
+        from scouting import is_scout as _is_scout
+    except Exception:
+        _is_scout = None
+    try:
+        best = None
+        for s in (getattr(seller, "staff", None) or []):
+            try:
+                scout = False
+                if _is_scout is not None:
+                    try:
+                        scout = bool(_is_scout(s))
+                    except Exception:
+                        scout = False
+                if not scout:
+                    role = str(getattr(s, "role", "")).lower()
+                    scout = "scout" in role
+                if not scout:
+                    continue
+                raw = int(getattr(s, "judging_player_ability", 50) or 50)
+                raw = max(1, min(100, raw))
+                jpa = max(1, min(20, int(round(raw / 5.0))))
+                if best is None or jpa > best:
+                    best = jpa
+            except Exception:
+                continue
+        return best
+    except Exception:
+        return None
+
+
+def score_offer_for_seller(app, league, seller, player, bidder, assets,
+                           listing=None):
+    """Vision-scored offer value for the seller. Raw asset_value is the
+    base; the seller's return vision re-weights by asset class, GM
+    identity, stance/situation, need-fit, and scout eye on youth.
+    Falls back to raw value. Never raises."""
+    try:
+        import trade_engine as te
+        w = _seller_vision_weights(app, seller)
+        try:
+            needs = te.team_needs(seller) or []
+            need0 = needs[0] if needs else None
+        except Exception:
+            need0 = None
+        eye = _seller_scout_eye(seller)
+        total = 0.0
+        for a in assets or []:
+            try:
+                base = te.asset_value(a)
+            except Exception:
+                base = 0
+            cls = _classify_asset(a)
+            mult = w.get(cls, 1.0)
+            if cls == "young" and eye:
+                mult *= 0.9 + 0.2 * (eye / 20.0)
+            if cls != "pick" and need0 and _need_hit(need0, a):
+                mult *= w.get("need", 1.0)
+            # Person-conscious: a slumping or overpaid player coming back
+            # is worth less to the seller, whatever his raw value says.
+            try:
+                mult *= _asset_person_factor(app, league, a)
+            except Exception:
+                pass
+            total += base * mult
+        return total
+    except Exception:
+        pass
+    try:
+        import trade_engine as te
+        return sum(te.asset_value(a) for a in assets or [])
+    except Exception:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Situational risk-taking (iteration 3): desperate buyers overpay and gamble,
+# patient buyers stay disciplined and walk away at their number.
+# ---------------------------------------------------------------------------
+def _buyer_desperation(app, bidder):
+    """0..1 situational desperation. Bubble teams, losing streaks, hot-seat
+    GMs, and closing Cup windows push toward 1; comfortable patient buyers
+    sit near 0. Never raises."""
+    try:
+        import trade_storylines as tsl
+        d = 0.0
+        tname = getattr(bidder, "team_name", "")
+        try:
+            stance = tsl.stance(app, tname)
+        except Exception:
+            stance = "neutral"
+        if stance == "bubble":
+            d += 0.35
+        elif stance == "buyer":
+            d += 0.10
+        try:
+            sk = tsl._streak(app, tname)
+        except Exception:
+            sk = 0
+        if sk <= -4:
+            d += 0.35
+        elif sk <= -2:
+            d += 0.15
+        # Hot-seat GM: a low-reputation GM on a slide gambles to save his job.
+        # (reputation may be 0-1 or 0-100 depending on the identity source.)
+        try:
+            ident = _gm_identity(app, bidder)
+            rep = float(getattr(ident, "reputation", 0.5)) \
+                if ident is not None else 0.5
+            if rep > 1.0:
+                rep = rep / 100.0
+            if rep <= 0.35 and sk < 0:
+                d += 0.20
+        except Exception:
+            pass
+        # Closing Cup window: cup-ambition veterans 32+ on the roster.
+        try:
+            closing = False
+            for p in (getattr(bidder, "roster", None) or []):
+                try:
+                    if (getattr(p, "ambition", "") in ("cup", "stanley_cup")
+                            and getattr(p, "age", 0) >= 32):
+                        closing = True
+                        break
+                except Exception:
+                    continue
+            if closing and stance in ("buyer", "bubble"):
+                d += 0.20
+        except Exception:
+            pass
+        return max(0.0, min(1.0, d))
+    except Exception:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Person-conscious interest (iteration 4, 2026-09-29): the market weighs the
+# PERSON, not just the rating. Ambitions shape destinations, recent
+# production shapes perception (never raw math in the UI -- scout-voiced
+# notes only), and contract worth shapes demand. trade_engine.py is NEVER
+# touched -- this is all market-layer overlay, and the engine remains the
+# final clause/cap backstop on every execution.
+# ---------------------------------------------------------------------------
+PERCEPTION_WINDOW_GAMES = 20   # recent-production window
+PERCEPTION_MIN_GAMES = 5       # below this: not enough to judge -> neutral
+# Expected points/game by OVR (piecewise-linear anchors).
+_EXPECTED_PPG = ((60, 0.12), (70, 0.25), (80, 0.45), (85, 0.62),
+                 (90, 0.85), (95, 1.10))
+# Reputation floor: a big name is expected to produce like at least this OVR.
+_REP_FLOOR_OVR = 85
+_REP_FLOOR = 80
+
+_perception_cache = {}  # (id(league), player_id, date_iso) -> (factor, note)
+
+
+def _preferred_destination_types(player):
+    """Stance types a trade requester wants, derived from ambition.
+    [] = no strong preference. Never raises."""
+    try:
+        amb = str(getattr(player, "ambition", "") or "").strip().lower()
+        if amb in ("cup", "stanley_cup"):
+            return ["buyer"]
+        if amb == "ice_time":
+            return ["seller", "bubble"]
+    except Exception:
+        pass
+    return []
+
+
+def _destination_appeal(player, bidder_stance):
+    """Does this destination appeal to the PERSON? (True, '') or
+    (False, reason). A cup-chaser won't go to a rebuilder willingly.
+    Never raises."""
+    try:
+        amb = str(getattr(player, "ambition", "") or "").strip().lower()
+        if amb in ("cup", "stanley_cup") and bidder_stance == "seller":
+            return False, "cup-chaser won't go to a rebuilder"
+    except Exception:
+        pass
+    return True, ""
+
+
+def _recent_ppg(league, player, games=PERCEPTION_WINDOW_GAMES):
+    """Points/game over the player's last `games` team games, read from
+    league.game_results' per-player game_stats (most recent first).
+    Falls back to season pace. Returns (ppg, n) or (None, 0). Never raises."""
+    try:
+        pid = getattr(player, "id", None)
+        my_team = None
+        for t in (getattr(league, "teams", None) or []):
+            try:
+                if any(getattr(p, "id", None) == pid
+                       for p in (getattr(t, "roster", None) or [])):
+                    my_team = getattr(t, "team_name", "")
+                    break
+            except Exception:
+                continue
+        if pid is None:
+            return None, 0
+        pts, n, scanned = 0.0, 0, 0
+        results = getattr(league, "game_results", None) or []
+        for res in reversed(results):
+            if n >= games or scanned >= 400:
+                break
+            scanned += 1
+            try:
+                if not isinstance(res, dict):
+                    continue
+                if my_team:
+                    ht = getattr(res.get("home_team"), "team_name",
+                                 res.get("home_team"))
+                    at = getattr(res.get("away_team"), "team_name",
+                                 res.get("away_team"))
+                    if my_team not in (ht, at):
+                        continue
+                gs = res.get("game_stats") or {}
+                st = gs.get(pid)
+                if not isinstance(st, dict):
+                    continue
+                n += 1
+                pts += float(st.get("g", 0) or 0) + float(st.get("a", 0) or 0)
+            except Exception:
+                continue
+        if n >= PERCEPTION_MIN_GAMES:
+            return pts / n, n
+        # Fallback: season pace.
+        try:
+            st = getattr(player, "stats", None)
+            gp = int(getattr(st, "games_played", 0) or 0)
+            if gp >= PERCEPTION_MIN_GAMES:
+                return ((float(getattr(st, "goals", 0) or 0)
+                         + float(getattr(st, "assists", 0) or 0)) / gp), gp
+        except Exception:
+            pass
+        return None, 0
+    except Exception:
+        return None, 0
+
+
+def _expected_ppg(player):
+    """Points/game the league expects from this name: OVR-based, with a
+    reputation floor (a big name is expected to produce). Never raises."""
+    try:
+        ovr = 0
+        try:
+            ovr = player.overall_rating()
+        except Exception:
+            pass
+        try:
+            rep = float(getattr(player, "reputation", 0) or 0)
+            if rep >= _REP_FLOOR:
+                ovr = max(ovr, _REP_FLOOR_OVR)
+        except Exception:
+            pass
+        lo_o, lo_p = _EXPECTED_PPG[0]
+        if ovr <= lo_o:
+            return lo_p
+        for (o0, p0), (o1, p1) in zip(_EXPECTED_PPG, _EXPECTED_PPG[1:]):
+            if o0 <= ovr <= o1:
+                f = (ovr - o0) / max(1, (o1 - o0))
+                return p0 + f * (p1 - p0)
+        return _EXPECTED_PPG[-1][1]
+    except Exception:
+        return 0.45
+
+
+def perception_discount(app, league, player):
+    """Perception vs performance: compare recent production to what's
+    expected for the OVR/reputation. Returns (factor, scout_note):
+    factor < 1 = slumping (bid-shy), > 1 = producing above his name
+    (premium). The note is scout-voiced -- never raw math. Neutral
+    (1.0, '') when there's nothing to judge. Never raises."""
+    try:
+        today_s = _iso(_today(app))
+        key = (id(league), getattr(player, "id", None), today_s)
+        if key in _perception_cache:
+            return _perception_cache[key]
+        result = (1.0, "")
+        try:
+            ppg, n = _recent_ppg(league, player)
+            if ppg is not None:
+                exp = max(0.05, _expected_ppg(player))
+                ratio = ppg / exp
+                label = _player_label(player)
+                if ratio >= 1.25:
+                    result = (1.15,
+                              f"Scout's whisper on {label}: he's driving it "
+                              f"right now -- expect to pay full freight.")
+                elif ratio >= 1.05:
+                    result = (1.05, "")
+                elif ratio >= 0.85:
+                    result = (1.0, "")
+                elif ratio >= 0.65:
+                    result = (0.88,
+                              f"Scout's whisper on {label}: the production "
+                              f"hasn't matched the name lately -- buyer "
+                              f"beware.")
+                else:
+                    result = (0.75,
+                              f"Scout's whisper on {label}: he's producing "
+                              f"like a depth piece right now -- buyer "
+                              f"beware.")
+        except Exception:
+            pass
+        _perception_cache[key] = result
+        # Bound the cache; it's keyed by date so it refreshes daily.
+        if len(_perception_cache) > 2000:
+            _perception_cache.clear()
+        return result
+    except Exception:
+        return 1.0, ""
+
+
+def contract_worth(player):
+    """Is he worth the cap hit? Compares the hit to the 2026 market salary
+    for his quality (base_ask_dollars band midpoint). Returns
+    (ratio, scout_note): ratio < 1 = overpaid, > 1 = team-friendly.
+    Never raises; neutral (1.0, '') when unjudgeable."""
+    try:
+        c = getattr(player, "contract", None)
+        hit = float(getattr(c, "salary", 0) or 0)
+        if hit <= 0:
+            return 1.0, ""
+        try:
+            ovr = player.overall_rating()
+        except Exception:
+            ovr = 75
+        try:
+            age = int(getattr(player, "age", 27) or 27)
+        except Exception:
+            age = 27
+        try:
+            from salary_cap_system import base_ask_dollars
+            fair = float(base_ask_dollars(ovr, age))
+        except Exception:
+            return 1.0, ""
+        if fair <= 0:
+            return 1.0, ""
+        ratio = fair / hit
+        label = _player_label(player)
+        if ratio < 0.65:
+            return ratio, (f"Scout's whisper on {label}: that contract is "
+                           f"an anchor -- you'd need a sweetener to move it.")
+        if ratio < 0.85:
+            return ratio, (f"Scout's whisper on {label}: he's paid like "
+                           f"more than he is.")
+        return ratio, ""
+    except Exception:
+        return 1.0, ""
+
+
+def _asset_person_factor(app, league, asset):
+    """Per-asset person multiplier for return-vision scoring: slumping or
+    overpaid players are worth less to the seller receiving them.
+    Picks are untouched. Never raises."""
+    try:
+        from game_classes import DraftPick
+        if isinstance(asset, DraftPick):
+            return 1.0
+        pf, _note = perception_discount(app, league, asset)
+        wr, _wn = contract_worth(asset)
+        return max(0.5, min(1.2, pf)) * max(0.6, min(1.15, wr))
+    except Exception:
+        return 1.0
+
+
+def _attach_cap_dump_sweetener(app, league, seller, player, listing, ask):
+    """A toxic contract can't move on its own: the seller attaches a pick
+    as a sweetener and the ask drops by most of the pick's value (net
+    pricing). Returns the (possibly reduced) ask. Never raises."""
+    try:
+        import trade_engine as te
+        from game_classes import DraftPick
+        ratio, _note = contract_worth(player)
+        if ratio >= 0.70:
+            return ask
+        sname = getattr(seller, "team_name", "")
+        best, best_v = None, -1
+        try:
+            for _yr, picks in (getattr(seller, "draft_picks", None) or {}).items():
+                for pk in (picks or []):
+                    try:
+                        if (isinstance(pk, DraftPick)
+                                and getattr(pk, "current_team", "") == sname
+                                and getattr(pk, "round", 99) in (2, 3, 4)
+                                and pk.can_be_traded()):
+                            v = te.asset_value(pk)
+                            if v > best_v:
+                                best, best_v = pk, v
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        if best is None:
+            return ask
+        try:
+            listing["sweetener"] = _asset_ref(best)
+            listing["sweetener_note"] = (
+                f"{sname} attaches a {getattr(best, 'round', '?')}-round sweetener "
+                f"to move the contract")
+        except Exception:
+            pass
+        return max(0, int(ask - best_v * 0.8))
+    except Exception:
+        return ask
+
+
 def build_bid(app, league, bidder, player, seller, ask_points):
     """Build one opening offer sized to ask x eagerness. Returns a list of
     live asset objects (owned by bidder) or []. Never raises. Read-only
@@ -928,7 +1575,25 @@ def build_bid(app, league, bidder, player, seller, ask_points):
         except Exception:
             greed = 1.0
         eagerness = 1.0 / max(0.5, min(1.5, greed))
-        target = ask_points * eagerness
+        # Situational risk-taking: a desperate buyer sizes above ask
+        # (overpays for the fit); a patient buyer stays at its number.
+        try:
+            _desp = _buyer_desperation(app, bidder)
+        except Exception:
+            _desp = 0.0
+        # Person-conscious sizing: GMs bid shy on a slumping name and
+        # discount an overpaid contract; a hot hand commands a premium.
+        try:
+            _pf, _pnote = perception_discount(app, league, player)
+        except Exception:
+            _pf = 1.0
+        try:
+            _wr, _wnote = contract_worth(player)
+            _wf = max(0.6, min(1.15, _wr))
+        except Exception:
+            _wf = 1.0
+        target = ask_points * eagerness * (1.0 + 0.30 * _desp) * \
+            max(0.5, min(1.2, _pf)) * _wf
         # Candidate assets: own tradeable picks (round 1-4), prospects,
         # then roster depth. Never the untouchable core (top-3 by value).
         cands = []
@@ -1046,12 +1711,21 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
         if not bidders:
             listing["note"] = "no bidders this round"
             return False
-        # War rumor once the field is real.
-        if len(bidders) >= MIN_BIDDERS_FOR_WAR_RUMOR and listing.get("rounds", 0) == 0:
-            names = ", ".join(getattr(b, "team_name", "?") for b in bidders[:4])
-            _news(app, f"BIDDING WAR: {names} are in on {_player_label(player)} "
-                       f"({sname} listening).", rumor=True,
-                  rumor_cap=params.get("rumor_cap"))
+        # War rumor once the field is real -- marquee listings only.
+        # Ordinary players resolve quietly: no bidding-war narrative.
+        try:
+            marquee = bool(listing.get("marquee")) or \
+                is_marquee(listing, player)
+        except Exception:
+            marquee = False
+        if listing.get("rounds", 0) == 0:
+            if marquee and len(bidders) >= MIN_BIDDERS_FOR_MARQUEE_WAR:
+                names = ", ".join(getattr(b, "team_name", "?")
+                                  for b in bidders[:4])
+                _news(app, f"BIDDING WAR: {names} are all in on "
+                           f"{_player_label(player)} -- {sname} fielding "
+                           f"franchise-altering offers.", rumor=True,
+                      rumor_cap=params.get("rumor_cap"))
         try:
             seller_ctx = tsl.situational_context(app, seller)
         except Exception:
@@ -1079,16 +1753,29 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                 if user_sale:
                     user_bids.append((bidder, list(assets)))
                     continue
-                # Clause waiver stamp for the piece (mirrors deadline path).
+                # Clause waiver for the piece (mirrors deadline path). The
+                # waiver was settled at bidder-matching time and recorded
+                # on the listing -- honor it, don't re-roll. Only roll a
+                # fresh conversation when there's no record.
                 waived = False
                 try:
                     if te.trade_vetoes(seller, bidder, [player]):
-                        ok, _why = te.will_waive_ntc(player, seller, bidder)
-                        if ok and getattr(player, "contract", None) is not None:
-                            player.contract.ntc_waiver_for = bname
+                        _waived = listing.get("waived_for", []) or []
+                        if bname in _waived:
                             waived = True
                         else:
-                            continue
+                            ok, _why = te.will_waive_ntc(player, seller,
+                                                         bidder,
+                                                         league=league)
+                            if ok:
+                                waived = True
+                                try:
+                                    listing.setdefault(
+                                        "waived_for", []).append(bname)
+                                except Exception:
+                                    pass
+                            else:
+                                continue
                 except Exception:
                     pass
                 try:
@@ -1140,15 +1827,21 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
             listing["rounds"] = int(listing.get("rounds", 0) or 0) + 1
             listing["last_round_day"] = _iso(today)
             return False
-        # Winner: highest asset value among accepted; ties -> earliest bid.
+        # Winner: the seller's return vision re-ranks the offers -- a
+        # rebuilding seller takes the pick package over a richer veteran
+        # deal; a contender takes immediate help. Raw value breaks ties.
         if accepted:
-            def _bidval(t):
+            scored = []
+            for _b, _assets, _resp in accepted:
                 try:
-                    return sum(te.asset_value(a) for a in t[1])
+                    _raw = sum(te.asset_value(a) for a in _assets)
                 except Exception:
-                    return 0
-            accepted.sort(key=_bidval, reverse=True)
-            bidder, assets, _resp = accepted[0]
+                    _raw = 0
+                _vision = score_offer_for_seller(app, league, seller, player,
+                                                _b, _assets, listing)
+                scored.append((_vision, _raw, _b, _assets, _resp))
+            scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            _vision, _raw, bidder, assets, _resp = scored[0]
             if _execute_market_deal(app, league, listing, player, seller,
                                     bidder, assets, today):
                 return True
@@ -1157,8 +1850,24 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
         # No winner: keep counters alive for the next round; everyone else
         # may re-enter once with a sweetened offer (same escalation gate).
         # A headliner holdout keeps its note (don't overwrite with a count).
+        # Otherwise surface whose offer best fits the seller's vision.
         if counters and "holding out" not in listing.get("note", ""):
-            listing["note"] = f"{len(counters)} counter(s) in play"
+            try:
+                lead, lead_v = None, -1.0
+                for _b, _assets, _resp in counters:
+                    _v = score_offer_for_seller(app, league, seller, player,
+                                               _b, _assets, listing)
+                    if _v > lead_v:
+                        lead_v, lead = _v, _b
+                if lead is not None:
+                    listing["note"] = (
+                        f"{len(counters)} counter(s) in play -- leading: "
+                        f"{getattr(lead, 'team_name', '?')}'s package fits "
+                        f"the vision")
+                else:
+                    listing["note"] = f"{len(counters)} counter(s) in play"
+            except Exception:
+                listing["note"] = f"{len(counters)} counter(s) in play"
         # Loser consolation: bidders who neither accepted nor countered get
         # priority on the seller's next listing (one round).
         try:
@@ -1246,8 +1955,16 @@ def _escalate_bid(app, league, listing, bidder, player, seller, ask,
             greed = 1.0
         desperation = max(0.5, min(1.5, 1.0 / max(0.5, greed)))
         boldness = 0.5 + _gm_boldness(app, bidder)  # 0.5..1.5
+        # Situational risk-taking: a desperate buyer answers counters it
+        # would otherwise walk from; a patient buyer walks at its number.
+        try:
+            _risk = _buyer_desperation(app, bidder)
+        except Exception:
+            _risk = 0.0
         import random
-        if random.random() > ESCALATION_BASE * esc_mult * boldness * desperation:
+        gate = ESCALATION_BASE * esc_mult * boldness * desperation * \
+            (1.0 + 0.6 * _risk)
+        if random.random() > gate:
             return None  # GM walks from the counter
         base = build_bid(app, league, bidder, player, seller, ask)
         if not base:
@@ -1293,16 +2010,46 @@ def _execute_market_deal(app, league, listing, player, seller, bidder, assets, t
         import trade_engine as te
         sname = getattr(seller, "team_name", "")
         bname = getattr(bidder, "team_name", "")
-        # Re-stamp the waiver for the winner (cleared after each round).
+        # Clause red tape: the waiver was settled when the bidder entered
+        # (one conversation per destination, recorded on the listing). If
+        # the winner holds a recorded waiver, stamp it for this destination
+        # so the engine preflight sees genuine consent. If a veto stands
+        # with no recorded waiver, the deal is dead -- no silent re-roll,
+        # no bypass. The engine preflight is the final backstop.
         try:
-            if te.trade_vetoes(seller, bidder, [player]):
-                ok, _why = te.will_waive_ntc(player, seller, bidder)
-                if ok and getattr(player, "contract", None) is not None:
-                    player.contract.ntc_waiver_for = bname
+            vetoes = te.trade_vetoes(seller, bidder, [player])
+        except Exception:
+            vetoes = []
+        if vetoes:
+            _waived = listing.get("waived_for", []) or []
+            if bname in _waived:
+                try:
+                    if getattr(player, "contract", None) is not None:
+                        player.contract.ntc_waiver_for = bname
+                except Exception:
+                    pass
+            else:
+                try:
+                    _v = vetoes[0]
+                    _pname = getattr(_v.get("player"), "full_name", "?")
+                    listing["note"] = (
+                        f"{_pname} refused to waive his "
+                        f"{_v.get('detail', 'clause')} -- deal dead")
+                except Exception:
+                    pass
+                return False
+        # Cap-dump sweetener travels with the player to the buyer.
+        seller_assets = [player]
+        try:
+            _sw = listing.get("sweetener")
+            if _sw:
+                _live = _resolve_asset(league, seller, _sw)
+                if _live is not None:
+                    seller_assets.append(_live)
         except Exception:
             pass
         trade = te.execute_trade(
-            seller, bidder, [player], list(assets),
+            seller, bidder, seller_assets, list(assets),
             date_str=_iso(today), league=getattr(app, "league", None))
         _clear_waiver(player)
         summary = getattr(trade, "summary", "") or ""
@@ -1573,6 +2320,25 @@ def _deliver_user_offer(app, league, market, listing, bidder, assets, today):
             listing["user_offer"] = {"team": bname, "day": _iso(today),
                                      "assets": [_asset_ref(a) for a in assets]}
             listing["note"] = f"offer sent to you by {bname}"
+        except Exception:
+            pass
+        # Clause red tape: if the piece's clause bites this destination,
+        # flag pending player consent on the offer -- the negotiation must
+        # resolve it with the user, never silently.
+        try:
+            import trade_engine as _te
+            _seller_team = _team_by_name(league, listing.get("seller", ""))
+            _vetoes = _te.trade_vetoes(_seller_team, bidder, [player]) \
+                if _seller_team is not None else []
+            if _vetoes:
+                listing["user_offer"]["pending_consent"] = {
+                    "clause": _vetoes[0].get("clause", ""),
+                    "detail": _vetoes[0].get("detail", ""),
+                }
+                listing["note"] = (
+                    f"offer sent to you by {bname} -- needs "
+                    f"{_player_label(player)}'s consent "
+                    f"({_vetoes[0].get('clause', 'clause')})")
         except Exception:
             pass
         _news(app, f"RUMOR: {bname} has made an offer for "

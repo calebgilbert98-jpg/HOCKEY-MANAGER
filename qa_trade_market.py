@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import trade_market as tm
 import trade_engine as te
+import trade_storylines as tsl
 from game_classes import Player, Team, League, Contract, DraftPick, PlayerPosition
 
 PASS = []
@@ -773,6 +774,505 @@ def t_seller_eligible_bubble():
           tm._seller_eligible(app, team, "bubble", False) is False)
 
 
+# ---------------------------------------------------------------------------
+# Iteration 3 (2026-09-29): marquee attention, return vision, buyer risk.
+# ---------------------------------------------------------------------------
+EXTRA_OVR_ATTRS = ["aggressiveness", "anticipation", "balance", "bodycheck",
+                   "checking", "faceoff_wins", "pokecheck", "pressure_player",
+                   "shot_blocking"]
+
+
+def mk_exact(fn, ln, pos, age, ovr, salary, yrs=2, grade="C", morale=70):
+    """Deterministic-OvR fixture: pins every attribute overall_rating()
+    reads, so the rating is exact and seed-stable (LW weights sum 1.2)."""
+    p = mk_player(fn, ln, pos, age, ovr, salary, yrs, grade, morale)
+    for a in EXTRA_OVR_ATTRS:
+        if hasattr(p, a):
+            try:
+                setattr(p, a, ovr)
+            except Exception:
+                pass
+    return p
+
+
+def t_marquee_attention():
+    """A star on the block pulls league-wide eyes: headline news, an
+    extended window, an expanded bidder pool (even with no positional
+    need), a bidding-war rumor, and multiple rounds. The sub-84 marquee
+    (reputation + trade request) isolates the expansion from the 84+
+    BPA override."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    stories = []
+    app.add_news = stories.append
+    market = tm.get_market(league)
+    seller = league.teams[0]  # Seller0
+    # 90-OVR star (LW: 75 x 1.2 = 90): marquee by rating alone.
+    star = mk_exact("Star", "Player", PlayerPosition.LEFT_WING, 26, 75,
+                    9_000_000, yrs=3, grade="A")
+    seller.roster.append(star)
+    check("fixture star ovr 90", star.overall_rating() == 90,
+          f"ovr={star.overall_rating()}")
+    listing = tm.list_piece(app, league, seller, star, source="seller_list",
+                            today=app.current_date)
+    check("marquee star listed", listing is not None)
+    if not listing:
+        return
+    check("marquee flagged", listing.get("marquee") is True)
+    check("is_marquee(star)", tm.is_marquee(listing, star) is True)
+    check("marquee headline fired",
+          any("BLOCKBUSTER WATCH" in s for s in stories))
+    # Sub-84 marquee: 75 OVR (63 x 1.2) but rep 90 + a trade request.
+    agit = mk_exact("Big", "Name", PlayerPosition.LEFT_WING, 31, 63,
+                    5_000_000, yrs=2)
+    agit.reputation = 90
+    agit.transfer_requested = True
+    seller.roster.append(agit)
+    check("fixture agitator ovr 75", agit.overall_rating() == 75,
+          f"ovr={agit.overall_rating()}")
+    listing_b = tm.list_piece(app, league, seller, agit,
+                              source="trade_request",
+                              today=app.current_date)
+    check("request marquee flagged", listing_b.get("marquee") is True)
+    check("is_marquee(request)", tm.is_marquee(listing_b, agit) is True)
+    check("request headline fired",
+          sum(1 for s in stories if "BLOCKBUSTER WATCH" in s) == 2)
+    # Plain 75-OVR depth piece: not marquee (window baseline). Listed by
+    # the other seller so the per-team cap doesn't eat the comparison.
+    depth = mk_exact("Depth", "Guy", PlayerPosition.LEFT_WING, 28, 63,
+                     2_000_000, yrs=1)
+    seller2 = league.teams[1]  # Seller1
+    seller2.roster.append(depth)
+    listing_c = tm.list_piece(app, league, seller2, depth,
+                              source="seller_list", today=app.current_date)
+    check("plain depth listed", listing_c is not None)
+    if not listing_c:
+        return
+    check("non-marquee not flagged", not listing_c.get("marquee"))
+    check("is_marquee(depth) false",
+          tm.is_marquee(listing_c, depth) is False)
+    d_star = (date.fromisoformat(listing["bidding_close"])
+              - date.fromisoformat(listing["listed_day"])).days
+    d_plain = (date.fromisoformat(listing_c["bidding_close"])
+               - date.fromisoformat(listing_c["listed_day"])).days
+    check("marquee window extended +3d",
+          d_star - d_plain == tm.MARQUEE_WINDOW_BONUS_DAYS,
+          f"star={d_star}d plain={d_plain}d")
+    # Bidder pool: nobody needs a LW, but every buyer kicks the tires on
+    # the marquee name. The plain depth piece draws no one.
+    bnames = {"Buyer1", "Buyer2", "Buyer3"}
+    with patch.object(te, "team_needs", return_value=["G", "C", "RD"]):
+        got_b = {getattr(b, "team_name", "?") for b in
+                 tm._find_bidders(app, league, listing_b, app.current_date,
+                                  False)}
+        got_c = tm._find_bidders(app, league, listing_c, app.current_date,
+                                 False)
+    check("marquee expanded pool: all buyers bid", got_b == bnames,
+          f"got={sorted(got_b)}")
+    check("non-marquee: no need-fit bidders", len(got_c) == 0,
+          f"got={len(got_c)}")
+    # Rounds: war rumor on round 0, listing stays open across rounds,
+    # and the note surfaces whose package fits the seller's vision.
+    pkg = [mk_pick("Buyer1", 2027, 2)]
+    resp = SimpleNamespace(decision="counter", want_added=[], will_add=[])
+    ctx = [patch.object(te, "ai_consider_trade", return_value=resp),
+           patch.object(tm, "build_bid", return_value=list(pkg)),
+           patch("random.random", return_value=0.0),
+           patch.object(te, "team_needs", return_value=["G", "C", "RD"])]
+    # Rounds run on the next days (one round per listing per day; the rumor
+    # flood cap is per-day and reads the app's clock).
+    _d2 = app.current_date + timedelta(days=1)
+    app.current_date = _d2
+    with ctx[0], ctx[1], ctx[2], ctx[3]:
+        tm._evaluate_round(app, league, market, listing_b, _d2, False)
+    check("marquee war rumor fired",
+          any("BIDDING WAR" in s for s in stories))
+    check("round 1: still open", listing_b["status"] == "open"
+          and listing_b["rounds"] == 1,
+          f"status={listing_b['status']} rounds={listing_b['rounds']}")
+    check("vision-leader note",
+          "fits the vision" in listing_b.get("note", ""),
+          listing_b.get("note", ""))
+    app.current_date = _d2 + timedelta(days=1)
+    with ctx[0], ctx[1], ctx[2], ctx[3]:
+        tm._evaluate_round(app, league, market, listing_b, _d2 + timedelta(days=1),
+                           False)
+    check("round 2: multi-round war", listing_b["status"] == "open"
+          and listing_b["rounds"] == 2,
+          f"status={listing_b['status']} rounds={listing_b['rounds']}")
+
+
+def t_quiet_nonstar():
+    """A 75-OVR depth piece draws only need-fit interest: one bidder, no
+    war rumor, quiet resolution."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    stories = []
+    app.add_news = stories.append
+    market = tm.get_market(league)
+    seller = league.teams[0]
+    piece = mk_exact("Quiet", "Depth", PlayerPosition.LEFT_WING, 29, 63,
+                     1_500_000, yrs=1)
+    seller.roster.append(piece)
+    listing = tm.list_piece(app, league, seller, piece, source="seller_list",
+                            today=app.current_date)
+    check("depth listed", listing is not None)
+    if not listing:
+        return
+    check("not marquee", not listing.get("marquee")
+          and tm.is_marquee(listing, piece) is False)
+
+    def _needs(team):
+        return ["LW", "C", "G"] \
+            if getattr(team, "team_name", "") == "Buyer1" \
+            else ["G", "C", "RD"]
+    with patch.object(te, "team_needs", side_effect=_needs):
+        bidders = tm._find_bidders(app, league, listing, app.current_date,
+                                   False)
+    got = {getattr(b, "team_name", "?") for b in bidders}
+    check("only need-fit team bids", got == {"Buyer1"}, f"got={sorted(got)}")
+    resp = SimpleNamespace(decision="accept", want_added=[], will_add=[])
+    with patch.object(te, "ai_consider_trade", return_value=resp), \
+         patch.object(te, "team_needs", side_effect=_needs):
+        tm._evaluate_round(app, league, market, listing, app.current_date,
+                           False)
+    check("quiet resolution: traded", listing["status"] == "traded",
+          f"status={listing['status']}")
+    check("no war rumor for depth",
+          not any("BIDDING WAR" in s for s in stories))
+    check("piece moved", piece in league.teams[3].roster)
+
+
+def t_return_vision():
+    """The seller's return vision re-ranks offers: a rebuilding seller
+    takes the futures package over a richer veteran deal; a contender
+    takes immediate help. Raw asset value is only the tiebreak."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    rebuilder = league.teams[0]  # Seller0, stance seller
+    contender = league.teams[3]  # Buyer1, stance buyer
+    vet = mk_exact("Old", "Veteran", PlayerPosition.CENTER, 32, 75,
+                   7_000_000, yrs=2)
+    picks = [mk_pick("X", 2027, 2), mk_pick("X", 2027, 3)]
+    vet_raw = te.asset_value(vet)
+    picks_raw = sum(te.asset_value(p) for p in picks)
+    check("fixture: veteran raw > picks raw", vet_raw > picks_raw,
+          f"vet={vet_raw:.0f} picks={picks_raw:.0f}")
+    v_vet_reb = tm.score_offer_for_seller(app, league, rebuilder, vet,
+                                          contender, [vet])
+    v_picks_reb = tm.score_offer_for_seller(app, league, rebuilder, vet,
+                                            contender, picks)
+    check("rebuilder prefers futures", v_picks_reb > v_vet_reb,
+          f"picks={v_picks_reb:.0f} vet={v_vet_reb:.0f}")
+    v_vet_con = tm.score_offer_for_seller(app, league, contender, vet,
+                                          rebuilder, [vet])
+    v_picks_con = tm.score_offer_for_seller(app, league, contender, vet,
+                                            rebuilder, picks)
+    check("contender prefers immediate help", v_vet_con > v_picks_con,
+          f"vet={v_vet_con:.0f} picks={v_picks_con:.0f}")
+
+
+def t_buyer_risk():
+    """Situational risk: a desperate buyer overpays and answers counters
+    it would otherwise walk from; a patient buyer holds its number."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 1))
+    seller = league.teams[0]
+    buyer = league.teams[3]  # Buyer1
+    # Unit: the desperation scale itself.
+    with patch.object(tsl, "stance", return_value="bubble"), \
+         patch.object(tsl, "_streak", return_value=-5):
+        d = tm._buyer_desperation(app, buyer)
+    check("desperate: bubble + slide", d >= 0.6, f"d={d:.2f}")
+    with patch.object(tsl, "stance", return_value="buyer"), \
+         patch.object(tsl, "_streak", return_value=0):
+        p = tm._buyer_desperation(app, buyer)
+    check("patient: buyer + even keel", p <= 0.2, f"d={p:.2f}")
+    # build_bid: same ask, the desperate buyer sizes above it.
+    buyer.draft_picks = {
+        2027: [mk_pick("Buyer1", 2027, 2), mk_pick("Buyer1", 2027, 3),
+               mk_pick("Buyer1", 2027, 3)],
+    }
+    piece = mk_exact("Target", "Man", PlayerPosition.CENTER, 27, 70,
+                     4_000_000, yrs=2)
+    seller.roster.append(piece)
+    with patch.object(tm, "_buyer_desperation", return_value=1.0), \
+         patch.object(tsl, "situational_context",
+                      return_value={"greed_mult": 1.0}):
+        desp_assets = tm.build_bid(app, league, buyer, piece, seller, 350)
+    with patch.object(tm, "_buyer_desperation", return_value=0.0), \
+         patch.object(tsl, "situational_context",
+                      return_value={"greed_mult": 1.0}):
+        pat_assets = tm.build_bid(app, league, buyer, piece, seller, 350)
+    dv = sum(te.asset_value(a) for a in desp_assets)
+    pv = sum(te.asset_value(a) for a in pat_assets)
+    check("desperate outbids patient on same ask", dv > pv,
+          f"desperate={dv:.0f} patient={pv:.0f}")
+    # _escalate_bid: the desperate buyer answers the counter; the patient
+    # buyer walks at its number.
+    listing = {"bids": [], "rounds": 1}
+    with patch.object(tm, "_buyer_desperation", return_value=1.0), \
+         patch.object(tm, "_gm_boldness", return_value=0.9), \
+         patch.object(tsl, "situational_context",
+                      return_value={"greed_mult": 1.0}), \
+         patch("random.random", return_value=0.35), \
+         patch.object(tm, "build_bid", return_value=list(desp_assets)):
+        esc_desp = tm._escalate_bid(app, league, listing, buyer, piece,
+                                    seller, 350, esc_mult=1.0)
+    with patch.object(tm, "_buyer_desperation", return_value=0.0), \
+         patch.object(tm, "_gm_boldness", return_value=0.1), \
+         patch.object(tsl, "situational_context",
+                      return_value={"greed_mult": 1.0}), \
+         patch("random.random", return_value=0.35), \
+         patch.object(tm, "build_bid", return_value=list(pat_assets)):
+        esc_pat = tm._escalate_bid(app, league, listing, buyer, piece,
+                                   seller, 350, esc_mult=1.0)
+    check("desperate escalates", esc_desp is not None and len(esc_desp) > 0)
+    check("patient walks", esc_pat is None)
+
+
+def _mk_results(team, player, pts_list):
+    """Recent-form fixture: per-game points lists -> game_results entries
+    with per-player game_stats the market's perception reader consumes."""
+    out = []
+    for i, pts in enumerate(pts_list):
+        out.append({
+            "date": date(2026, 11, 1) + timedelta(days=i),
+            "home_team": SimpleNamespace(team_name=team.team_name),
+            "away_team": SimpleNamespace(team_name="Elsewhere"),
+            "game_stats": {player.id: {"g": pts, "a": 0}},
+        })
+    return out
+
+
+def t_player_conscious():
+    """The market weighs the person, not just the rating: recent
+    production shapes perception (scout-voiced, never raw math), contract
+    worth shapes demand, and ambitions shape destinations."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 10))
+    seller, seller1 = league.teams[0], league.teams[1]
+    # Two 81-OVR defensemen (attr 70): buyers need LD second behind RW.
+    # The slumper only draws teams with a glaring hole -- none here.
+    prod = mk_exact("Hot", "Hand", PlayerPosition.LEFT_DEFENSE, 26, 70,
+                    4_500_000, yrs=3)
+    slump = mk_exact("Cold", "Snap", PlayerPosition.LEFT_DEFENSE, 26, 70,
+                     4_500_000, yrs=3)
+    check("fixture 81 ovr pair",
+          prod.overall_rating() == 81 and slump.overall_rating() == 81)
+    seller.roster.extend([prod, slump])
+    for p in (prod, slump):  # respectable season totals isolate the window
+        p.stats.games_played = 40
+        p.stats.goals = 12
+        p.stats.assists = 18
+    league.game_results = (_mk_results(seller, prod, [2] * 12)
+                           + _mk_results(seller, slump, [0] * 12))
+    pf, pnote = tm.perception_discount(app, league, prod)
+    sf, snote = tm.perception_discount(app, league, slump)
+    check("producer earns a premium", pf > 1.0, f"f={pf}")
+    check("slumper is discounted", sf < 1.0, f"f={sf}")
+    check("buyer-beware note is scout-voiced",
+          "buyer beware" in snote and "=" not in snote and "%" not in snote,
+          snote)
+    check("premium note carries no formulas",
+          "full freight" in pnote and "=" not in pnote and "%" not in pnote,
+          pnote)
+    lp = tm.list_piece(app, league, seller, prod, source="seller_list",
+                       today=app.current_date)
+    ls = tm.list_piece(app, league, seller, slump, source="seller_list",
+                       today=app.current_date)
+    check("scout brief stamped on slumping listing",
+          bool(ls.get("scout_brief")), str(ls.get("scout_brief")))
+    bp = tm._find_bidders(app, league, lp, app.current_date, ramp=False)
+    bs = tm._find_bidders(app, league, ls, app.current_date, ramp=False)
+    check("producer draws bidders", len(bp) >= 2, f"n={len(bp)}")
+    check("slumping 81 draws fewer bidders", len(bs) < len(bp),
+          f"slump={len(bs)} prod={len(bp)}")
+    # Softer offers: same ask, the slumper's package prices lower.
+    random.seed(7)
+    bid_p = tm.build_bid(app, league, league.teams[3], prod, seller, 400)
+    random.seed(7)
+    bid_s = tm.build_bid(app, league, league.teams[3], slump, seller, 400)
+    vp = sum(te.asset_value(a) for a in (bid_p or []))
+    vs = sum(te.asset_value(a) for a in (bid_s or []))
+    check("slumper draws a softer offer", 0 < vs < vp, f"{vs:.0f} vs {vp:.0f}")
+    # Bad contract: 81-OVR at $12M against a ~$4.5M fair value.
+    anchor = mk_exact("Big", "Ticket", PlayerPosition.LEFT_DEFENSE, 28, 70,
+                      12_000_000, yrs=4)
+    seller1.roster.append(anchor)
+    wr, wnote = tm.contract_worth(anchor)
+    check("anchor contract recognized", wr < 0.65, f"wr={wr:.2f}")
+    check("anchor note is scout-voiced",
+          "sweetener" in wnote and "$" not in wnote, wnote)
+    la = tm.list_piece(app, league, seller1, anchor, source="seller_list",
+                       today=app.current_date)
+    check("sweetener attached to move the contract",
+          la is not None and la.get("sweetener") is not None)
+    if la is not None:
+        ba = tm._find_bidders(app, league, la, app.current_date, ramp=False)
+        check("toxic contract draws no bidders without a glaring hole",
+              len(ba) == 0, f"n={len(ba)}")
+    # Ambitions: a cup-chaser who asked out wants a buyer, not a bubble
+    # team -- until deadline pressure loosens his list.
+    chaser = mk_exact("Chase", "Cup", PlayerPosition.RIGHT_WING, 27, 70,
+                      4_500_000, yrs=2)
+    chaser.ambition = "cup"
+    chaser.transfer_requested = True
+    seller1.roster.append(chaser)
+    lc = tm.list_piece(app, league, seller1, chaser, source="trade_request",
+                       today=app.current_date)
+    check("cup-chaser listed", lc is not None)
+    check("cup-chaser won't go to a rebuilder (unit)",
+          tm._destination_appeal(chaser, "seller")[0] is False)
+    check("cup-chaser fine with a buyer (unit)",
+          tm._destination_appeal(chaser, "buyer")[0] is True)
+    check("ice-time wants opportunity (unit)",
+          tm._preferred_destination_types(
+              SimpleNamespace(ambition="ice_time")) == ["seller", "bubble"])
+    if lc is not None:
+        real_stance = tsl.stance
+
+        def fake_stance(a, tname):
+            return "bubble" if tname == "Buyer3" else real_stance(a, tname)
+
+        with patch.object(tsl, "stance", fake_stance):
+            calm_names = [t.team_name for t in tm._find_bidders(
+                app, league, lc, app.current_date, ramp=False)]
+            b_ramp = tm._find_bidders(app, league, lc, app.current_date,
+                                      ramp=True)
+        check("requester's list excludes the bubble team",
+              "Buyer3" not in calm_names, str(calm_names))
+        check("deadline pressure loosens the list",
+              "Buyer3" in [t.team_name for t in b_ramp],
+              str([t.team_name for t in b_ramp]))
+
+
+def t_clause_red_tape():
+    """Clauses are red tape on every market path: NMC blocks without
+    consent, M-NTC refusal lists bite, one conversation per destination,
+    user sales never pre-roll consent, and the engine stays the final
+    backstop."""
+    league = build_league()
+    app = build_app(league, date(2026, 12, 10))
+    seller0, seller1 = league.teams[0], league.teams[1]
+    buyer0, buyer1 = league.teams[2], league.teams[3]
+    # Engine truth: happy star on a contender refuses; miserable accepts.
+    star = mk_exact("Happy", "Star", PlayerPosition.LEFT_WING, 28, 76,
+                    9_000_000, morale=95)
+    star.happiness = 95
+    star.ambition = "cup"
+    star.contract.no_movement_clause = True
+    buyer0.roster.append(star)
+    ok, why = te.will_waive_ntc(star, buyer0, seller0, league=league)
+    check("happy star on contender rejects waiver", ok is False, why)
+    mis = mk_exact("Sad", "Sack", PlayerPosition.RIGHT_WING, 29, 70,
+                   5_000_000, morale=25)
+    mis.happiness = 20
+    mis.contract.no_movement_clause = True
+    seller1.roster.append(mis)
+    ok2, why2 = te.will_waive_ntc(mis, seller1, buyer0, league=league)
+    check("miserable player on seller accepts waiver", ok2 is True, why2)
+    # Market: the NMC veto blocks interest until consent is given.
+    listing = tm.list_piece(app, league, seller1, mis, source="seller_list",
+                            today=app.current_date)
+    check("NMC piece listed", listing is not None)
+    if listing is None:
+        return
+    bidders = tm._find_bidders(app, league, listing, app.current_date,
+                               ramp=False)
+    check("consent opens the market", len(bidders) >= 1,
+          f"n={len(bidders)}")
+    check("one waiver record per consenting destination",
+          sorted(listing.get("waived_for", []))
+          == sorted(t.team_name for t in bidders),
+          str(listing.get("waived_for")))
+    # One conversation per destination: re-matching rolls nothing new for
+    # destinations already on record (a destination that refused the first
+    # time may be asked again -- that's a new conversation, not a re-roll).
+    calls = []
+    real_waive = te.will_waive_ntc
+
+    def counting(p, f, t=None, **kw):
+        calls.append(getattr(t, "team_name", t))
+        return real_waive(p, f, t, **kw)
+
+    recorded = set(listing.get("waived_for", []) or [])
+    with patch.object(te, "will_waive_ntc", counting):
+        tm._find_bidders(app, league, listing, app.current_date, ramp=False)
+    check("no double-roll for recorded destinations",
+          not any(c in recorded for c in calls), str(calls))
+    # Execution gate: a vetoed destination with no waiver record dies here,
+    # before the engine -- and a recorded waiver stamps genuine consent.
+    random.seed(3)
+    assets = tm.build_bid(app, league, buyer1, mis, seller1,
+                          listing["ask_points"])
+    check("bid built for gated execution", bool(assets))
+    listing["waived_for"] = []
+    dead = tm._execute_market_deal(app, league, listing, mis, seller1,
+                                   buyer1, list(assets or []),
+                                   today=app.current_date)
+    check("vetoed deal dies at the market gate", dead is False)
+    check("piece stays put", mis in seller1.roster)
+    check("gate names the refusal",
+          "refused to waive" in listing.get("note", ""),
+          listing.get("note", ""))
+    listing["waived_for"] = [buyer1.team_name]
+    listing["status"] = "open"
+    moved = tm._execute_market_deal(app, league, listing, mis, seller1,
+                                    buyer1, list(assets or []),
+                                    today=app.current_date)
+    check("recorded waiver lets the deal through", moved is True)
+    check("waiver spent by the engine (one transaction)",
+          getattr(mis.contract, "ntc_waiver_for", "") == "")
+    # M-NTC: the refusal-list destination is rejected without consent.
+    lg = mk_exact("List", "Guy", PlayerPosition.RIGHT_WING, 28, 70,
+                  5_000_000, morale=85)
+    lg.happiness = 85
+    lg.contract.no_trade_clause = True
+    lg.contract.modified_ntc_teams = 10
+    lg.contract.no_trade_list = ["Buyer1"]
+    seller0.roster.append(lg)
+    check("refusal-list veto fires",
+          len(te.trade_vetoes(seller0, buyer1, [lg])) == 1)
+    ll = tm.list_piece(app, league, seller0, lg, source="seller_list",
+                       today=app.current_date)
+    if ll is not None:
+        bl = tm._find_bidders(app, league, ll, app.current_date, ramp=False)
+        check("refusal-list team excluded from bidders",
+              "Buyer1" not in [t.team_name for t in bl],
+              str([t.team_name for t in bl]))
+        check("no waiver recorded for the refusal team",
+              "Buyer1" not in (ll.get("waived_for") or []))
+    # User's own block: consent is never pre-rolled; the offer still goes
+    # out with a pending-consent flag for a real interaction.
+    league2 = build_league()
+    app2 = build_app(league2, date(2026, 12, 10))
+    user_team = app2.user_team
+    up = mk_exact("User", "Asset", PlayerPosition.RIGHT_WING, 27, 70,
+                  5_000_000)
+    up.happiness = 90
+    up.morale = 90
+    up.contract.no_movement_clause = True
+    user_team.roster.append(up)
+    user_team.trade_block = [up]
+    calls2 = []
+    with patch.object(te, "will_waive_ntc", counting), \
+         patch("trade_negotiation.incoming_offer",
+               side_effect=lambda *a, **k: calls2.append(1)):
+        tm.process_market(app2, league2, app2.current_date)
+    ul = [x for x in tm.get_market(league2)["listings"]
+          if x.get("player_id") == up.id]
+    check("user NMC block listed", len(ul) == 1)
+    if ul:
+        check("no silent waiver pre-roll for user sale",
+              not ul[0].get("waived_for"), str(ul[0].get("waived_for")))
+        check("offer still delivered to the user", len(calls2) >= 1)
+        check("pending-consent flagged for the interaction",
+              bool((ul[0].get("user_offer") or {}).get("pending_consent")),
+              str((ul[0].get("user_offer") or {}).get("pending_consent")))
+        check("piece not auto-traded", up in user_team.roster)
+
+
 def main():
     random.seed(20260929)
     tests = [
@@ -787,6 +1287,10 @@ def main():
         t_heat_monotone, t_heat_beats, t_stance_flip_block, t_injury_block,
         t_user_block_offer, t_headliner_package, t_headliner_exception,
         t_headliner_holdout, t_unified_shortlist,
+        # Iteration 3 (2026-09-29): marquee, return vision, buyer risk.
+        t_marquee_attention, t_quiet_nonstar, t_return_vision, t_buyer_risk,
+        # Iteration 4 (2026-09-29): person-conscious interest, clause tape.
+        t_player_conscious, t_clause_red_tape,
     ]
     for t in tests:
         print(f"\n--- {t.__name__} ---")
