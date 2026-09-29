@@ -296,6 +296,53 @@ def flatten_lineup(lineup):
     return lineup
 
 
+def resolve_game_lineup(team):
+    """The one shared lineup-resolution decision (one decision, two
+    fidelities). Previously a closure inside AdvancedGameSim.__init__;
+    GameSim resolves the same way, so both engines dress from the same
+    decision instead of two copies.
+
+    Precedence:
+      1. suspension scrub (mutates the stored team.lineup in place);
+      2. GM lines: user_controlled_lines() (line_control == 'gm' with a
+         stored user-set lineup -- the GM's set lines are the law);
+      3. the team's stored lineup (e.g. user team arranged in the editor);
+      4. best_lines(team) coach fallback -- the fix path for AI teams that
+         never get a lineup built in the season/batch-sim path;
+      5. defensive backfill: a stored lineup missing any of
+         ['Forwards', 'Defense', 'Goalies'] gets just those keys from
+         best_lines() (notably NOT PP/PK/flat keys -- same as before).
+    Pure contract: best_lines()/user_controlled_lines() are module-level
+    helpers already; the suspension scrub is lazy-imported, preserving the
+    no-module-level-cross-import convention.
+    """
+    # Suspended players can't dress: scrub them from a stored
+    # lineup before the sim reads it (fresh builds already filter
+    # via best_lines' _healthy).
+    try:
+        from narrative_incidents import _scrub_suspended_from_lineup
+        _scrub_suspended_from_lineup(team)
+    except Exception:
+        pass
+    # Item 5: the GM holds the pen -> his set lines are the law.
+    # user_controlled_lines() returns None unless the flag is 'gm'
+    # with stored user lines, so every other case keeps today's
+    # behavior byte-for-byte.
+    _gm_lines = user_controlled_lines(team)
+    lineup = (_gm_lines if _gm_lines is not None
+              else getattr(team, 'lineup', None))
+    if not lineup or not isinstance(lineup, dict):
+        return best_lines(team)
+    # Defensive: fill missing keys with best_lines
+    keys = ['Forwards', 'Defense', 'Goalies']
+    missing = [k for k in keys if k not in lineup]
+    if missing:
+        base = best_lines(team)
+        for k in missing:
+            lineup[k] = base[k]
+    return lineup
+
+
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
@@ -355,33 +402,11 @@ class AdvancedGameSim:
         from coordinate_simulation import CoordinateSimEngine
         self.coordinate_engine = CoordinateSimEngine()
 
-        # Defensive: always ensure lineup dict has required keys
+        # Defensive: always ensure lineup dict has required keys.
+        # Shared decision with GameSim (resolve_game_lineup): one decision,
+        # two fidelities -- the closure body now lives at module level.
         def ensure_lineup(team):
-            # Suspended players can't dress: scrub them from a stored
-            # lineup before the sim reads it (fresh builds already filter
-            # via best_lines' _healthy).
-            try:
-                from narrative_incidents import _scrub_suspended_from_lineup
-                _scrub_suspended_from_lineup(team)
-            except Exception:
-                pass
-            # Item 5: the GM holds the pen -> his set lines are the law.
-            # user_controlled_lines() returns None unless the flag is 'gm'
-            # with stored user lines, so every other case keeps today's
-            # behavior byte-for-byte.
-            _gm_lines = user_controlled_lines(team)
-            lineup = (_gm_lines if _gm_lines is not None
-                      else getattr(team, 'lineup', None))
-            if not lineup or not isinstance(lineup, dict):
-                return best_lines(team)
-            # Defensive: fill missing keys with best_lines
-            keys = ['Forwards', 'Defense', 'Goalies']
-            missing = [k for k in keys if k not in lineup]
-            if missing:
-                base = best_lines(team)
-                for k in missing:
-                    lineup[k] = base[k]
-            return lineup
+            return resolve_game_lineup(team)
 
         self.lineups = {
             home_team.team_name: ensure_lineup(home_team),

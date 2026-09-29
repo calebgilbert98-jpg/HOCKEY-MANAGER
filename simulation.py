@@ -16,6 +16,7 @@ from player_archetypes import (
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
 from player_traits import get_sim_bonus as _trait_bonus
+import physicality as _physicality  # W5: officiating, dirty hits, fighting, heat, statement goals
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -471,6 +472,23 @@ class GameSim:
             _scrub_suspended_from_lineup(away_team)
         except Exception:
             pass
+        # Part A (icetime-ecosystem): per-game lineup resolution -- the same
+        # shared decision AdvancedGameSim makes (resolve_game_lineup), so AI
+        # teams that never get a lineup built now dress real 4-line/3-pair
+        # lineups via the best_lines() coach fallback. GM/user-set lines keep
+        # precedence via user_controlled_lines(). Resolved per game (not
+        # stashed on the team object) so mid-season trades/call-ups can't
+        # leave stale players dressed. Lazy import honors the
+        # no-module-level-cross-import convention between
+        # simulation.py and quick_sim.py.
+        try:
+            from quick_sim import resolve_game_lineup
+            self.lineups = {
+                home_team.team_name: resolve_game_lineup(home_team),
+                away_team.team_name: resolve_game_lineup(away_team),
+            }
+        except Exception:
+            self.lineups = {}
         # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
         # team_name) for the analytics_hub / advanced_stats_analytics
         # line-combination views. Attached to the analytics game record
@@ -527,6 +545,18 @@ class GameSim:
         self._opening_brawl = None     # team_name if a premeditated opening-draw
                                        # brawl is scripted (see _evaluate_punishment_orders)
         self._retaliation_mod = 1.0
+        # --- W5 physicality state (additive; inert when unused) ---
+        # Per-game officiating crew accuracy (mostly high, never perfect);
+        # fight bench-spark windows keyed by team name; dirty-play watches
+        # for statement goals; the game's persistent fight log.
+        self._crew_accuracy = 0.0      # dealt by physicality.init_crew below
+        self._fight_spark = {}         # team_name -> {"until": elapsed, "mult": float}
+        self._dirty_watch = {}         # victim team_name -> {...} (statement goals)
+        self._fight_log = []           # per-game fight records (who/winner/when)
+        try:
+            _physicality.init_crew(self)
+        except Exception:
+            pass
         # --- Impact-tier engine (additive; inert when unused) ---
         # Coach instructions keyed by team name (e.g. "play_harder").
         # Derived automatically from coach makeup + game state when unset;
@@ -2175,7 +2205,7 @@ class GameSim:
         # Falls back to full roster only if lineup is empty (shouldn't happen
         # in normal app flow, but keeps standalone sims working).
         for team in (self.home_team, self.away_team):
-            lineup = getattr(team, 'lineup', None) or {}
+            lineup = self._game_lineup(team)
             dressed = []
             goalie_played_ids = set()
             # First, find which goalies actually played (from game_stats)
@@ -2783,7 +2813,36 @@ class GameSim:
     def _update_fatigue(self, time_elapsed):
         """
         Stage 2: Update player fatigue based on ice time and intensity.
+
+        W3: attribute-aware. The stamina/endurance/durability blend scales
+        accumulation (fatigue_accumulation_mult: neutral 1.0 at resistance
+        70 -- league-average behavior unchanged, only differentiation added),
+        mirroring quick_sim._calculate_fatigue_factor's resistance term
+        (one decision, two fidelities). Also accumulates per-game TOI seconds
+        (player_toi_seconds, for post-game wear) and keeps the canonical
+        per-game energy pool (condition_system.game_energy) in sync.
         """
+        # Per-game setup on the first tick (additive; __init__ is W1's):
+        # reset the canonical energy pool and start the TOI ledger.
+        if not getattr(self, '_w3_fatigue_init', False):
+            self._w3_fatigue_init = True
+            self.player_toi_seconds = {}
+            try:
+                from condition_system import reset_game_fatigue as _w3_reset
+                for _p in self.home_team.roster + self.away_team.roster:
+                    _w3_reset(_p)
+            except Exception:
+                pass
+        if getattr(self, 'player_toi_seconds', None) is None:
+            self.player_toi_seconds = {}
+        try:
+            from condition_system import (
+                fatigue_accumulation_mult as _w3_accum,
+                sync_game_energy as _w3_sync,
+            )
+        except Exception:
+            _w3_accum = None
+            _w3_sync = None
         for player in self.home_on_ice + self.away_on_ice:
             if player.id in self.player_fatigue:
                 # Base fatigue rate (higher for more intense situations)
@@ -2800,10 +2859,30 @@ class GameSim:
                 # Power play slightly increases fatigue
                 elif self._is_on_power_play(player):
                     fatigue_rate *= 1.2
+
+                # W3: stamina/endurance/durability blend scales accumulation.
+                if _w3_accum is not None:
+                    try:
+                        fatigue_rate *= _w3_accum(player)
+                    except Exception:
+                        pass
                 
                 # Apply fatigue
                 fatigue_loss = fatigue_rate * time_elapsed / 60  # Convert to per-minute rate
-                self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
+                new_energy = max(0, self.player_fatigue[player.id] - fatigue_loss)
+                self.player_fatigue[player.id] = new_energy
+                # Canonical per-game pool (W2/W4/W5 read this via condition_system)
+                if _w3_sync is not None:
+                    try:
+                        _w3_sync(player, new_energy)
+                    except Exception:
+                        pass
+                # TOI ledger for post-game wear (seconds on ice)
+                try:
+                    self.player_toi_seconds[player.id] = \
+                        self.player_toi_seconds.get(player.id, 0.0) + time_elapsed
+                except Exception:
+                    pass
 
     def _should_change_lines(self):
         """Determine if lines should be changed based on shift state.
@@ -7764,6 +7843,24 @@ class GameSim:
             goalie = self._selected_goalie(self.home_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
 
+    def _game_lineup(self, team):
+        """Per-game resolved lineup (Part A) -- the single authority every
+        GameSim read site dresses from. Mirrors
+        AdvancedGameSim.lineups: GM/user-set lines win via
+        user_controlled_lines(); the fallback is the coach's best_lines().
+        Never reads or writes team.lineup itself."""
+        try:
+            lu = self.lineups or {}
+            d = lu.get(team.team_name)
+            if d is None:
+                # Stable empty dict (not a fresh {} per call) so the
+                # _get_on_ice fast-path cache key stays stable even when
+                # resolution found no lineup for the team.
+                d = lu.setdefault(team.team_name, {})
+            return d
+        except Exception:
+            return {}
+
     def _selected_goalie(self, team):
         """The goalie selected in the lineup (G1), falling back to the best
         goalie on the roster. Single authority for who is in net."""
@@ -7776,7 +7873,7 @@ class GameSim:
         'Defense': [[L,R]xN]} while the sim reads flat keys; this keeps both
         working so user lines always reach the ice.
         """
-        lineup = getattr(team, 'lineup', None) or {}
+        lineup = self._game_lineup(team)
         player = lineup.get(flat_key)
         if player:
             return player
@@ -7819,7 +7916,7 @@ class GameSim:
                 getattr(self, '_frozen_line', 0),
                 getattr(self, '_frozen_d_pair', 0),
                 tuple(sorted(getattr(self, 'goalie_pulled', ()))),
-                id(getattr(team, 'lineup', None)),
+                id(self._game_lineup(team)),
             )
             _cache = self.__dict__.setdefault('_on_ice_cache', {})
             if len(_cache) > 1024:
@@ -7898,7 +7995,7 @@ class GameSim:
             elif len(penalized_skaters) > len(opp_mp_skaters):
                 special_unit = f"PK{(self.clock // 45) % 2 + 1}"
         if special_unit:
-            unit = (getattr(team, 'lineup', None) or {}).get(special_unit) or {}
+            unit = self._game_lineup(team).get(special_unit) or {}
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
                 # Clamp to exact manpower: never dress more skaters than the
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
@@ -8554,7 +8651,19 @@ class GameSim:
             near=self._ppos_get(puck_carrier) if puck_carrier else None)
         if potential_hitter is None:
             return None
-        hit_result = self._attempt_hit(potential_hitter, puck_carrier, HitType.BODY_CHECK)
+        # W5: the hit type is a decision now, not a constant. Body checks
+        # by default; the canonical dirty cases (enforcer hot-head vs
+        # small star at center ice with speed = charging; hot-head along
+        # the boards = boarding) fire where the context fits.
+        _hit_type = HitType.BODY_CHECK
+        try:
+            _chosen = _physicality.choose_hit_type(potential_hitter,
+                                                   puck_carrier, sim=self)
+            if _chosen is not None:
+                _hit_type = _chosen
+        except Exception:
+            pass
+        hit_result = self._attempt_hit(potential_hitter, puck_carrier, _hit_type)
         if hit_result == HitResult.TURNOVER_CAUSED:
             return self._resolve_turnover(puck_carrier, potential_hitter, TurnoverType.FORCED_ERROR)
         elif hit_result == HitResult.PENALTY_DRAWN:
