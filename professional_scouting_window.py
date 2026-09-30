@@ -1673,11 +1673,14 @@ Months Until Draft: 6
         # Assignment list
         assign_cols = ('Scout', 'Target', 'Type', 'Priority', 'Due Date', 'Status')
         self.assignments_tree = ttk.Treeview(left_frame, columns=assign_cols, show='headings', height=15)
-        
+
         for col in assign_cols:
             self.assignments_tree.heading(col, text=col)
             self.assignments_tree.column(col, width=100, minwidth=80)
-        
+
+        # Right-click a live assignment to cancel it
+        self.assignments_tree.bind("<Button-3>", self._on_assignment_right_click)
+
         # Populate with real game data
         self._populate_assignments()
         
@@ -2291,6 +2294,48 @@ Grade {grade} - Worth monitoring progress."""
                 f"Report filed for {getattr(player, 'full_name', '?')}: "
                 f"accuracy {getattr(report, 'accuracy', '?')} "
                 f"({getattr(report, 'viewings', 0)} viewings).")
+
+    def _on_assignment_right_click(self, event):
+        """Right-click menu on a live assignment: cancel it for real."""
+        row = self.assignments_tree.identify_row(event.y)
+        if not row:
+            return
+        self.assignments_tree.selection_set(row)
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Cancel Assignment",
+                         command=self._cancel_assignment)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _cancel_assignment(self):
+        """Cancel the selected REAL scouting assignment."""
+        selection = self.assignments_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an assignment to cancel.")
+            return
+
+        player = self.app.tree_maps.get('assignments_tree', {}).get(selection[0])
+        if player is None:
+            messagebox.showerror("Error", "Could not find the selected assignment.")
+            return
+
+        try:
+            from scouting_window_helpers import cancel_scout_assignment
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+            return
+
+        result = messagebox.askyesno(
+            "Cancel Assignment",
+            f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
+            "The scout is freed up; any report filed so far is kept.")
+        if result:
+            ok, msg = cancel_scout_assignment(self.app, player)
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Assignment Cancelled" if ok else "Scouting", msg)
+            self._populate_assignments()
 
     def _populate_assignments(self):
         """Populate the assignments tree from the REAL scouting_assignments.
