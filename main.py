@@ -14468,6 +14468,13 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.rivalry_review_news = []
         except Exception:
             pass
+        # Snapshot staff breakthrough headlines for the year-end recap
+        # (delivered below), which runs after these lists are drained.
+        try:
+            self._season_review_staff_news = list(
+                getattr(self.league, "staff_breakthrough_news", None) or [])
+        except Exception:
+            self._season_review_staff_news = []
         # Staff breakthrough headlines from end_of_season.
         try:
             _bn = list(getattr(self.league, "staff_breakthrough_news", None)

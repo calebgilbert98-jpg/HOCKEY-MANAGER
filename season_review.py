@@ -279,7 +279,7 @@ def _standout_lines(team):
         d = _expected_diff(p)
         if d is not None and d < -5:
             continue  # deep below pace: that's the tough-go list, not this one
-        name = getattr(p, "name", "Unknown")
+        name = _ff_tag(p, team, getattr(p, "name", "Unknown"))
         line = f"{name}: {_skater_line(p)}"
         if d is not None and d >= 8:
             line += f" ({d:+.0f} vs career pace -- career year)"
@@ -289,7 +289,7 @@ def _standout_lines(team):
     for p in sorted(goalies,
                     key=lambda p: float(getattr(p, "save_percentage", 0) or 0),
                     reverse=True)[:1]:
-        name = getattr(p, "name", "Unknown")
+        name = _ff_tag(p, team, getattr(p, "name", "Unknown"))
         out.append(f"{name}: {_num(getattr(p, 'wins', 0))}W, "
                    f"{getattr(p, 'save_percentage', 0)} SV%, "
                    f"{getattr(p, 'goals_against_avg', 0)} GAA")
@@ -416,6 +416,301 @@ def _prospect_lines(team):
         pass
     return lines
 
+
+# ----------------------------------------------------------------------
+# Year-end beats (2026-09-30): discipline, mandate, stars, leadership,
+# transactions, bench. Each returns text lines; empty = skip the section.
+# ----------------------------------------------------------------------
+
+def _discipline_lines(app, team, year):
+    """DoPS suspensions, repeat offenders, goalie runs, missed-call reviews."""
+    lines = []
+    ystr = str(year)
+    # A season spans two calendar years (Oct year -> Apr year+1).
+    season_years = {ystr}
+    try:
+        season_years.add(str(int(year) + 1))
+    except (TypeError, ValueError):
+        pass
+    roster = list(getattr(team, "roster", None) or [])
+    susp_by_player = {}
+    missed = []
+    for p in roster:
+        hist = getattr(p, "controversy_history", None) or []
+        for e in hist:
+            if not isinstance(e, dict):
+                continue
+            etype = str(e.get("type", "") or "").lower()
+            edate = str(e.get("date", "") or "")
+            if season_years and not any(y in edate for y in season_years):
+                continue
+            if etype == "suspension":
+                susp_by_player.setdefault(
+                    getattr(p, "name", "Unknown"), []).append(e)
+            elif "missed" in etype or "dops" in etype or "review" in etype:
+                desc = str(e.get("description", "") or "").strip()
+                if desc:
+                    missed.append((getattr(p, "name", "Unknown"), desc))
+    for name, evs in sorted(susp_by_player.items(),
+                            key=lambda kv: len(kv[1]), reverse=True):
+        n = len(evs)
+        desc = str(evs[0].get("description", "") or "").strip()
+        tag = f" -- repeat offender ({n}x)" if n >= 2 else ""
+        line = f"- {name}: suspended {n} time{'s' if n != 1 else ''}{tag}"
+        if desc:
+            line += f" ({desc[:80]})"
+        lines.append(line)
+    # Goalie runs from the narrative ledger.
+    try:
+        from narrative_ledger import get_ledger
+        led = get_ledger(app)
+        runs = [e for e in (getattr(led, "events", None) or [])
+                if e.get("season") == year
+                and team.team_name in (e.get("teams") or [])
+                and "goalie" in str(e.get("text", "") or "").lower()]
+        for e in runs[:3]:
+            txt = str(e.get("text", "") or "").strip()
+            if txt:
+                lines.append(f"- {txt[:110]}")
+    except Exception:
+        pass
+    for name, desc in missed[:3]:
+        lines.append(f"- DoPS review ({name}): {desc[:100]}")
+    return lines
+
+
+def _mandate_lines(app, team, board_facts):
+    """Preseason mandate, quarterly check-ins, final outcome, coach trust.
+
+    User's club only -- other clubs have no mandate on file.
+    """
+    if team is not getattr(app, "user_team", None):
+        return []
+    mandate = getattr(team, "season_mandate", None)
+    if not isinstance(mandate, dict):
+        return []
+    lines = []
+    exp = mandate.get("expectation")
+    if exp:
+        lines.append(f"- Preseason mandate: {exp}.")
+    for key, label in (("alignment", "Alignment"),
+                       ("identity", "Identity"),
+                       ("rookie_stance", "Rookie stance")):
+        val = mandate.get(key)
+        if val:
+            lines.append(f"- {label}: {val}.")
+    checkins = mandate.get("checkins") or []
+    for c in checkins:
+        if not isinstance(c, dict):
+            continue
+        q = c.get("quarter", "?")
+        notes = c.get("notes") or []
+        note = str(notes[0])[:90] if notes else ""
+        topics = c.get("topics") or []
+        topic = str(topics[0]) if topics else ""
+        detail = note or topic
+        lines.append(f"- Check-in Q{q}:{(' ' + detail) if detail else ''}")
+    # Final outcome vs the board's reckoning.
+    try:
+        bf_exp = (board_facts or {}).get("expectation")
+        if bf_exp:
+            lines.append(f"- Final board verdict: mandate was '{bf_exp}'.")
+    except Exception:
+        pass
+    try:
+        from coach_checkins import get_head_coach
+        coach = get_head_coach(team)
+        trust = getattr(coach, "gm_trust", None) if coach is not None else None
+        if trust is not None:
+            cname = getattr(coach, "name", None) or getattr(
+                coach, "full_name", "head coach")
+            lines.append(f"- GM trust in {cname}: {int(trust)}/100.")
+    except Exception:
+        pass
+    return lines
+
+
+def _stars_lines(app, team, year):
+    """Three-stars leaders, monthly awards, All-Star nods."""
+    lines = []
+    roster = list(getattr(team, "roster", None) or [])
+    try:
+        from stars import weighted_star_count
+    except Exception:
+        return []
+    ranked = []
+    for p in roster:
+        try:
+            w = float(weighted_star_count(p) or 0)
+        except Exception:
+            w = 0.0
+        if w > 0:
+            ranked.append((w, p))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    for w, p in ranked[:3]:
+        name = getattr(p, "name", "Unknown")
+        try:
+            gs = getattr(p, "game_stars", None) or {}
+            brk = (f"{_num(gs.get('first'))}x1st "
+                   f"{_num(gs.get('second'))}x2nd "
+                   f"{_num(gs.get('third'))}x3rd")
+        except Exception:
+            brk = ""
+        lines.append(f"- {name}: {w:.2f} weighted stars"
+                     + (f" ({brk})" if brk else ""))
+    # Monthly awards banked on career_accolades this season.
+    season_years = {str(year)}
+    try:
+        season_years.add(str(int(year) + 1))
+    except (TypeError, ValueError):
+        pass
+    for p in roster:
+        for acc in (getattr(p, "career_accolades", None) or []):
+            if not isinstance(acc, dict):
+                continue
+            key = str(acc.get("award", "") or "").lower()
+            if key not in ("player_of_month", "rookie_of_month"):
+                continue
+            if not any(y in str(acc.get("year", "") or "")
+                       for y in season_years):
+                continue
+            label = ("NHL Player of the Month"
+                     if key == "player_of_month"
+                     else "NHL Rookie of the Month")
+            lines.append(f"- {label}: {getattr(p, 'name', 'Unknown')} "
+                         f"({acc.get('year', '')})")
+    # All-Star selections from the league rosters.
+    try:
+        league = getattr(app, "league", None)
+        rosters = getattr(league, "all_star_rosters", None) or {}
+        sel = rosters.get(season_label(year)) or {}
+        if sel:
+            mine = {id(p) for p in roster}
+            names = {getattr(p, "name", "") for p in roster}
+            for _div, groups in sel.items():
+                if not isinstance(groups, dict):
+                    continue
+                for slot in ("captain", "skaters", "goalies"):
+                    ps = groups.get(slot)
+                    if ps is None:
+                        continue
+                    if not isinstance(ps, list):
+                        ps = [ps]
+                    for sp in ps:
+                        try:
+                            if (id(sp) in mine
+                                    or getattr(sp, "name", "") in names):
+                                tag = " (All-Star captain)" if slot == "captain" \
+                                    else " (All-Star)"
+                                lines.append(
+                                    f"- {getattr(sp, 'name', 'Unknown')}{tag}")
+                        except Exception:
+                            continue
+    except Exception:
+        pass
+    return lines
+
+
+def _ff_tag(p, team, name):
+    """Append the fan-favourite marker when it applies."""
+    try:
+        from reputation_system import is_fan_favourite
+        if is_fan_favourite(p, team):
+            return f"{name} (fan favourite)"
+    except Exception:
+        pass
+    return name
+
+
+def _leadership_lines(team):
+    """Current captain + alternates. Never claims the letter changed hands."""
+    lines = []
+    try:
+        roster = list(getattr(team, "roster", None) or [])
+        caps = [p for p in roster
+                if str(getattr(p, "captaincy", "") or "").upper() == "C"]
+        alts = [p for p in roster
+                if str(getattr(p, "captaincy", "") or "").upper() == "A"]
+        if caps:
+            p = caps[0]
+            name = getattr(p, "name", "Unknown")
+            yrs = _num(getattr(p, "captain_tenure_years", 0))
+            line = (f"Captain: {name} "
+                    f"({yrs} year{'s' if yrs != 1 else ''} wearing the C)")
+            if alts:
+                anames = ", ".join(getattr(a, "name", "?") for a in alts[:2])
+                line += f"; alternates: {anames}"
+            lines.append(line)
+        elif alts:
+            anames = ", ".join(getattr(a, "name", "?") for a in alts[:2])
+            lines.append(f"No captain named; alternates: {anames}.")
+    except Exception:
+        pass
+    return lines
+
+
+def _transaction_lines(app, team, year):
+    """Dated trade wire involving this club this season. Logs only."""
+    lines = []
+    ystr = str(year)
+    me = getattr(team, "team_name", "")
+    try:
+        gm = getattr(app, "game_manager", None)
+        trades = list(getattr(gm, "trade_history", None) or [])
+        mine = []
+        for t in trades:
+            try:
+                if me and me not in (getattr(t, "team_a", ""),
+                                     getattr(t, "team_b", "")):
+                    continue
+                tdate = str(getattr(t, "date", "") or "")
+                if ystr and ystr not in tdate:
+                    continue
+                mine.append(t)
+            except Exception:
+                continue
+        mine.sort(key=lambda t: str(getattr(t, "date", "") or ""),
+                  reverse=True)
+        for t in mine[:8]:
+            summ = str(getattr(t, "summary", "") or "").strip()
+            tdate = str(getattr(t, "date", "") or "")
+            if summ:
+                lines.append(f"- {tdate}: {summ}"[:160])
+    except Exception:
+        pass
+    # Deadline-day activity log (no summaries there -- keep it brief).
+    try:
+        dm = getattr(app, "trade_deadline_manager", None)
+        if dm is None:
+            from trade_deadline_manager import get_deadline_manager
+            dm = get_deadline_manager()
+        for e in (getattr(dm, "trade_activity_log", None) or []):
+            if not isinstance(e, dict):
+                continue
+            if me and me not in (e.get("teams_involved") or []):
+                continue
+            teams = " vs ".join(x for x in (e.get("teams_involved") or [])
+                                if x)
+            npc = _num(e.get("players_count"))
+            lines.append(f"- Deadline: {teams} ({npc} players moved)")
+            if len(lines) >= 8:
+                break
+    except Exception:
+        pass
+    return lines[:8]
+
+
+def _bench_lines(app):
+    """Staff breakthrough headlines. Prefers the pre-drain snapshot."""
+    try:
+        news = getattr(app, "_season_review_staff_news", None)
+        if not news:
+            league = getattr(app, "league", None)
+            news = getattr(league, "staff_breakthrough_news", None)
+        return [f"- {str(m)}"[:160] for m in (news or [])[:6]
+                if str(m or "").strip()]
+    except Exception:
+        return []
 
 # ----------------------------------------------------------------------
 # Four-corner season score: media / fans / owner / room
@@ -604,13 +899,25 @@ def build_review(app, team=None):
     header, meta = _header_lines(team, standings, predictions, year)
     sections.append(("THE YEAR IN ONE LINE", header))
 
+    leaders = _leadership_lines(team)
+    if leaders:
+        sections.append(("LEADERSHIP", leaders))
+
     story = _story_lines(app, team, year, board_facts)
     if story:
         sections.append(("STORY OF THE SEASON", story))
 
+    mandate = _mandate_lines(app, team, board_facts)
+    if mandate:
+        sections.append(("MANDATE REPORT", mandate))
+
     blood = _rivalry_lines(app, team, year)
     if blood:
         sections.append(("BAD BLOOD REPORT", blood))
+
+    discipline = _discipline_lines(app, team, year)
+    if discipline:
+        sections.append(("DISCIPLINE REPORT", discipline))
 
     out, tough = _standout_lines(team)
     if out:
@@ -626,9 +933,21 @@ def build_review(app, team=None):
     if awards:
         sections.append(("HARDWARE", [f"- {l}" for l in awards]))
 
+    stars = _stars_lines(app, team, year)
+    if stars:
+        sections.append(("STARS & NODS", stars))
+
     prospects = _prospect_lines(team)
     if prospects:
         sections.append(("PIPELINE REPORT (rights held, non-NHL)", [f"- {l}" for l in prospects]))
+
+    wire = _transaction_lines(app, team, year)
+    if wire:
+        sections.append(("TRANSACTION WIRE", wire))
+
+    bench = _bench_lines(app)
+    if bench:
+        sections.append(("BEHIND THE BENCH", bench))
 
     # Four-corner score.
     scores = []
