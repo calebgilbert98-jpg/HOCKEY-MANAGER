@@ -1868,3 +1868,235 @@ def represent_dialog(session_id, dialog_id, parent=None):
             resolver=resolver, resolver_args=rargs)
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# Pending-items registry (Gating T2-Phase 2).
+#
+# Unifies the ad-hoc day-advance gates. Each entry:
+#   {id, kind, title, detail, screen_id, focus, resolver, resolver_args}
+# Kinds:
+#   BLOCKS_ADVANCE -- the day cannot advance (fantasy draft, cap breach,
+#                     captaincy, coach meeting). ZERO Tier-2 dialog entries
+#                     may use this kind: dialogs never block the day, their
+#                     parent flows might.
+#   PAUSES_DAY     -- the day pauses and shifts to the item's screen (the
+#                     game-day bundle pattern; the draft-night phone call).
+#   RESUMABLE      -- listed, never blocking (half-built trade awaiting a
+#                     waiver answer, parked deposition). Surfaced via resume
+#                     chips; always one click away.
+#
+# get_continue_state() (main.py) is the registry's read path: it merges
+# BLOCKS_ADVANCE + PAUSES_DAY entries with the legacy hardcoded blockers.
+# Consumers (simulate_day, MP ready votes, refresh_next_day_button) are
+# unchanged.
+#
+# Registry entries for parked question cards are runtime-only. The durable
+# record is the session dialog entry (pending_sessions, JSON-safe); each
+# migrated site stashes its registry spec at
+# sess["dialogs"][did]["registry"] so rebuild_registry_from_sessions()
+# can re-register after a save/load. Session kinds that cannot resume
+# post-load (trade_propose, draft_call -- popup/view state doesn't survive)
+# are dropped by the save whitelist; scrub_abandoned_waiver_stamps() clears
+# their single-use stamps first so a dead proposal spends nothing.
+# ---------------------------------------------------------------------------
+
+#: Registry kinds. BLOCKS_ADVANCE takes no Tier-2 dialog entries (standing rule).
+BLOCKS_ADVANCE = "BLOCKS_ADVANCE"
+PAUSES_DAY = "PAUSES_DAY"
+RESUMABLE = "RESUMABLE"
+
+_REGISTRY_KINDS = (BLOCKS_ADVANCE, PAUSES_DAY, RESUMABLE)
+
+
+def cards_available(parent):
+    """True when a question card can actually render (not headless).
+
+    Migrated call sites use this to take the legacy blocking path in
+    headless/test environments, where ask_card would have no manager and
+    a defer-dismiss would never call back.
+    """
+    try:
+        return _resolve_manager(parent) is not None
+    except Exception:
+        return False
+
+
+def _pending_items_store(app):
+    try:
+        store = getattr(app, "pending_items", None)
+        if not isinstance(store, dict):
+            store = {}
+            app.pending_items = store
+        return store
+    except Exception:
+        return {}
+
+
+def register_pending_item(app, item_id, *, kind, title, detail,
+                         screen_id, focus=None, resolver=None,
+                         resolver_args=None):
+    """Register a pending item. Returns the entry dict (or None)."""
+    if kind not in _REGISTRY_KINDS:
+        raise ValueError(f"unknown pending-item kind: {kind!r}")
+    if kind == BLOCKS_ADVANCE and (resolver or "").startswith("dialog:"):
+        raise ValueError("Tier-2 dialogs may not BLOCKS_ADVANCE")
+    store = _pending_items_store(app)
+    try:
+        entry = {
+            "id": item_id, "kind": kind, "title": str(title),
+            "detail": str(detail), "screen_id": screen_id,
+            "focus": focus, "resolver": resolver,
+            "resolver_args": dict(resolver_args or {}),
+        }
+        store[item_id] = entry
+        return entry
+    except Exception:
+        return None
+
+
+def unregister_pending_item(app, item_id):
+    """Drop a pending item. Never raises."""
+    try:
+        store = _pending_items_store(app)
+        store.pop(item_id, None)
+    except Exception:
+        pass
+
+
+def get_pending_items(app, kinds=None):
+    """All pending items, optionally filtered to kinds (str or iterable)."""
+    try:
+        store = _pending_items_store(app)
+        items = list(store.values())
+    except Exception:
+        return []
+    if kinds is None:
+        return items
+    if isinstance(kinds, str):
+        kinds = (kinds,)
+    kinds = set(kinds)
+    return [it for it in items
+            if isinstance(it, dict) and it.get("kind") in kinds]
+
+
+def rebuild_registry_from_sessions(app):
+    """Re-register parked-question items after a save/load.
+
+    Scans pending_sessions for unanswered dialogs carrying a "registry"
+    spec (stashed by migrated sites) and re-registers them. Idempotent.
+    """
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for _sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            for _did, entry in list((sess.get("dialogs") or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("answer") is not None:
+                    continue
+                spec = entry.get("registry")
+                if not isinstance(spec, dict):
+                    continue
+                try:
+                    register_pending_item(
+                        app, spec.get("item_id") or f"{_sid}:{_did}",
+                        kind=spec.get("kind") or RESUMABLE,
+                        title=spec.get("title") or "Pending question",
+                        detail=spec.get("detail") or "",
+                        screen_id=spec.get("screen_id"),
+                        focus=spec.get("focus"),
+                        resolver=spec.get("resolver"),
+                        resolver_args=spec.get("resolver_args"))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+def _iter_stamped_player_ids(app):
+    """Player ids with single-use waiver stamps held by droppable sessions."""
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for _sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            if sess.get("kind") not in ("trade_propose", "draft_call"):
+                continue
+            for pid in (sess.get("stamped") or []):
+                yield str(pid)
+            for asset in (sess.get("waiver_assets") or []):
+                # draft_call stores asset ids for engine-stamped will_adds
+                yield str(asset if not isinstance(asset, dict)
+                          else asset.get("id", ""))
+    except Exception:
+        return
+
+
+def scrub_abandoned_waiver_stamps(app):
+    """Clear single-use ntc_waiver_for stamps held by sessions that will not
+    survive save/load (trade_propose, draft_call).
+
+    A dead proposal spends nothing: if the offer was never sent, its waivers
+    must not linger into the next session and suppress future asks.
+    Returns the number of stamps cleared.
+    """
+    cleared = 0
+    try:
+        ids = {pid for pid in _iter_stamped_player_ids(app) if pid}
+        if not ids:
+            return 0
+        league = getattr(app, "league", None)
+        teams = list(getattr(league, "teams", None) or [])
+        ut = getattr(app, "user_team", None)
+        if ut is not None and ut not in teams:
+            teams.append(ut)
+        for team in teams:
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if str(getattr(p, "id", "")) not in ids:
+                        continue
+                    contract = getattr(p, "contract", None)
+                    if contract is not None and getattr(
+                            contract, "ntc_waiver_for", ""):
+                        contract.ntc_waiver_for = ""
+                        cleared += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return cleared
+
+
+def represent_screen_questions(app, screen_id, parent=None):
+    """Re-present unanswered question cards parked for a screen.
+
+    Called when the user returns to a screen: any unanswered dialog whose
+    registry spec names this screen re-shows non-modally ("the question is
+    waiting where you left it"). Returns the number of cards re-presented.
+    """
+    count = 0
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            for did, entry in list((sess.get("dialogs") or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("answer") is not None:
+                    continue
+                spec = entry.get("registry") or {}
+                if not isinstance(spec, dict):
+                    continue
+                if spec.get("screen_id") != screen_id:
+                    continue
+                try:
+                    if represent_dialog(sid, did, parent=parent) is not None:
+                        count += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return count

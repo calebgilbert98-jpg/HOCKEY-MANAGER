@@ -221,6 +221,15 @@ class GameSaveManager:
         try:
             import json
             app = getattr(self, 'app', None)
+            # Gating T2-Phase 2: sessions that cannot resume post-load
+            # (trade_propose, draft_call) are dropped by the whitelist
+            # below -- scrub their single-use waiver stamps FIRST so a
+            # dead proposal spends nothing.
+            try:
+                from popup_system import scrub_abandoned_waiver_stamps
+                scrub_abandoned_waiver_stamps(app)
+            except Exception:
+                pass
             sessions = getattr(app, 'pending_sessions', None) or {}
             out = {}
             for sid, sess in sessions.items():

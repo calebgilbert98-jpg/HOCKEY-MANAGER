@@ -6210,6 +6210,45 @@ class HockeyManagerGUI(tk.Tk):
             pass
         if blockers:
             return ("Continue", blockers)
+        # Gating T2-Phase 2: the pending-items registry is the unified read
+        # path. BLOCKS_ADVANCE and PAUSES_DAY entries gate the day exactly
+        # like the hardcoded blockers above; RESUMABLE entries never block
+        # (they surface via resume chips). No Tier-2 dialog may register a
+        # BLOCKS_ADVANCE entry -- dialogs never block the day, their parent
+        # flows might.
+        try:
+            from popup_system import (get_pending_items as _gpi,
+                                      BLOCKS_ADVANCE as _BA,
+                                      PAUSES_DAY as _PD)
+            for _it in _gpi(self, kinds=(_BA, _PD)):
+                _iid = _it.get("id")
+                if any(b.get("id") == _iid for b in blockers):
+                    continue
+                _screen = _it.get("screen_id")
+
+                def _jump(_s=_screen):
+                    try:
+                        self.show_screen(_s)
+                    except Exception:
+                        pass
+                    # The question is waiting where it was left: re-present
+                    # any unanswered card parked for that screen.
+                    try:
+                        from popup_system import represent_screen_questions
+                        represent_screen_questions(self, _s, parent=self)
+                    except Exception:
+                        pass
+
+                blockers.append({
+                    "id": _iid,
+                    "title": _it.get("title", "Pending item"),
+                    "detail": _it.get("detail", ""),
+                    "action": ("Go to it", _jump),
+                })
+        except Exception:
+            pass
+        if blockers:
+            return ("Continue", blockers)
         # Trade deadline day: the day runs on a 30-minute game clock
         # (9:00 AM -> 3:00 PM ET). Each press advances the clock one
         # increment -- instant AI answers, league deals, countdown.
@@ -16301,6 +16340,14 @@ class HockeyManagerGUI(tk.Tk):
         self.open_windows[screen_id] = view
         if not getattr(self, '_suppress_history', False):
             self._push_screen_history(screen_id)
+        # Gating T2-Phase 2: returning to a screen re-presents any
+        # unanswered question parked for it ("the question is waiting
+        # where you left it").
+        try:
+            from popup_system import represent_screen_questions
+            represent_screen_questions(self, screen_id, parent=self)
+        except Exception:
+            pass
         try:
             view.focus_set()
         except Exception:
@@ -16349,6 +16396,36 @@ class HockeyManagerGUI(tk.Tk):
                 pass
             if not sessions and not talk_chips:
                 return
+            # Gating T2-Phase 2: parked gating questions (unanswered dialogs
+            # with a registry spec) get answer chips. The question is never
+            # more than one click away; clicking re-presents the card
+            # non-modally where it was parked.
+            question_chips = []
+            try:
+                from popup_system import represent_dialog as _rep
+                _psessions = getattr(self, "pending_sessions", None) or {}
+                for _sid, _sess in list(_psessions.items()):
+                    if not isinstance(_sess, dict):
+                        continue
+                    for _did, _entry in list(
+                            (_sess.get("dialogs") or {}).items()):
+                        if not isinstance(_entry, dict):
+                            continue
+                        if _entry.get("answer") is not None:
+                            continue
+                        _spec = _entry.get("registry")
+                        if not isinstance(_spec, dict):
+                            continue
+                        _icon = ("📞 " if _spec.get("kind") == "PAUSES_DAY"
+                                 else "❓ ")
+                        question_chips.append(
+                            (_icon + str(_spec.get("title")
+                                         or "Pending question"),
+                             _sid, _did))
+            except Exception:
+                pass
+            if not sessions and not talk_chips and not question_chips:
+                return
             chips = ctk.CTkFrame(navbar, fg_color="transparent")
             chips._session_chips = True
             chips.pack(side='right', padx=12)
@@ -16376,6 +16453,12 @@ class HockeyManagerGUI(tk.Tk):
                     chips, text=label, width=110, height=28,
                     command=lambda p=player, e=sess.get("is_extension", False):
                         self.open_contract_negotiation_window(p, is_extension=e)
+                ).pack(side='left', padx=3)
+            for _qlabel, _qsid, _qdid in question_chips:
+                secondary_button(
+                    chips, text=_qlabel, width=200, height=28,
+                    command=lambda s=_qsid, d=_qdid: _rep(
+                        s, d, parent=self)
                 ).pack(side='left', padx=3)
         except Exception:
             pass
