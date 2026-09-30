@@ -7045,6 +7045,24 @@ class HockeyManagerGUI(tk.Tk):
         return getattr(self, 'mp_client', None) is not None \
             and getattr(self, 'mp_host', None) is None
 
+    def _mp_client_block(self, what):
+        """Phase-1 honesty guard for MP clients.
+
+        Returns True when running as a multiplayer client: the caller must
+        abort WITHOUT mutating local state (the next STATE_SYNC would wipe
+        it silently). Shows a notice explaining client sync is coming.
+        Non-client modes return False (proceed normally).
+        """
+        if not self._mp_client_mode():
+            return False
+        try:
+            self._mp_toast(
+                f"Multiplayer: {what} isn't synced to the host yet — "
+                "client management support is coming in the next update.")
+        except Exception:
+            pass
+        return True
+
     def _on_continue_pressed(self):
         """Every Continue button / Space shortcut funnels through here."""
         if self._mp_host_mode():
@@ -7176,7 +7194,7 @@ class HockeyManagerGUI(tk.Tk):
                 "Advance the day even though not every manager is ready?\n\n"
                 "Unready managers' clubs will simply miss this day's decisions.")
         except Exception:
-            ok = True
+            ok = False  # fail CLOSED: never force-advance on a dialog error
         if not ok:
             return
         self._mp_toast("Host forced the advance.")
@@ -19020,6 +19038,8 @@ class CleanEditLinesView(ctk.CTkFrame):
     
     def save_lines_with_feedback(self):
         """Save the current lineup with user feedback"""
+        if self.app._mp_client_block("line changes"):
+            return
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()

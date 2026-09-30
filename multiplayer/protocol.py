@@ -175,6 +175,7 @@ SUPPORTED_ACTIONS = {
     "team_talk",        # params: {team_id, tone, situation, speaker?}
     "press_conference", # params: {team_id, stance, topic?}
     "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
+    "return_to_junior", # params: {team_id, player_id}
 }
 
 

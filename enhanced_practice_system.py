@@ -2179,6 +2179,8 @@ class PracticeCenterView(ctk.CTkFrame):
     
     def _start_practice_schedule(self):
         """Start a practice schedule for the selected player"""
+        if self.app._mp_client_block("practice plans"):
+            return
         if not self.selected_player:
             return
         

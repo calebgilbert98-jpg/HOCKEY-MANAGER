@@ -1752,6 +1752,8 @@ class RosterView(ctk.CTkFrame):
         loophole where a signed veteran could be stashed in the
         prospects list to dodge the cap.
         """
+        if self.app._mp_client_block("roster moves"):
+            return
         try:
             import game_classes as _gc
         except Exception:
@@ -4961,6 +4963,8 @@ class TradeWindow(InGamePopup):
     def propose_trade(self):
         """Send the offer. The AI GM answers in a few days via the inbox --
         this window can be closed freely in the meantime."""
+        if self.parent._mp_client_block("trade proposals"):
+            return
         import trade_negotiation as tn
         partner = self._partner_team()
         if partner is None:
@@ -5327,6 +5331,8 @@ class ScoutingView(ctk.CTkFrame):
                 self.scmod.get_scout_region(self._gm, self.selected_scout) or "")
 
     def _assign_region(self):
+        if self.app._mp_client_block("scout assignments"):
+            return
         if not self.selected_scout:
             messagebox.showwarning("No Scout", "Select a scout first.")
             return
@@ -11348,6 +11354,8 @@ class ContractNegotiationView(ctk.CTkFrame):
         self._refresh_history()
 
     def submit_offer(self):
+        if self.app._mp_client_block("free-agent signings"):
+            return
         if self.is_elc:
             self._submit_elc_offer()
             return
@@ -12601,6 +12609,8 @@ class WaiversView(ctk.CTkFrame):
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
+        if self.app._mp_client_block("waiver claims"):
+            return
         # Waiver window (the wire doesn't run in the June dead month).
         # One rulebook in transaction_windows.py.
         try:
@@ -13314,6 +13324,8 @@ class ExtensionNegotiationView(ctk.CTkFrame):
     
     def submit_offer(self):
         """Submit contract offer to the player."""
+        if self.app._mp_client_block("contract extensions"):
+            return
         try:
             # Parse salary with commas
             salary_str = self.salary_var.get().replace(',', '')
@@ -13420,6 +13432,8 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self._counter_panel = None
 
     def _accept_counter(self, counter_years, counter_salary, bonus):
+        if self.parent._mp_client_block("contract extensions"):
+            return
         self.player.contract.salary = counter_salary
         self.player.contract.years_remaining = counter_years
         self.player.contract.signing_bonus = bonus
@@ -13763,6 +13777,8 @@ class StaffContractView(ctk.CTkFrame):
 
         assignment picks which club the hire joins: "nhl" or "ahl".
         """
+        if self.app._mp_client_block("staff hiring"):
+            return
         import random
         salary = self._parse_offer()
         if salary is None:
@@ -13966,6 +13982,8 @@ class SetCaptainsView(ctk.CTkFrame):
                     self.alternate2_var.set(p.full_name)
 
     def save_captains(self):
+        if self.app._mp_client_block("captaincy changes"):
+            return
         team = self.app.user_team
         try:
             import captaincy_change as _cc
@@ -14372,6 +14390,8 @@ class MandatoryCaptainsView(SetCaptainsView):
         """Validate, then persist exactly like the manual tool. Invalid
         picks are rejected with an inline message -- never silently
         fixed, and the blocker stays open."""
+        if self.app._mp_client_block("captaincy changes"):
+            return
         self._confirm_current_pick()
 
 
@@ -15255,6 +15275,8 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                    command=self._render_detail).pack(side=tk.LEFT)
 
     def _confirm_buyout(self, p, total, annual, byears, rows):
+        if self.app._mp_client_block("buyouts"):
+            return
         # Buyout window (real NHL: June 15-30). One rulebook in
         # transaction_windows.py.
         try:
