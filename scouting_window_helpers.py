@@ -39,6 +39,96 @@ _MAX_ACTIVE_ASSIGNMENTS = 30
 # Live-state accessors
 # ----------------------------------------------------------------------
 
+def _session_store(app):
+    """app.pending_sessions dict, created if missing. Never raises."""
+    try:
+        store = getattr(app, "pending_sessions", None)
+    except Exception:
+        store = None
+    if not isinstance(store, dict):
+        try:
+            app.pending_sessions = store = {}
+        except Exception:
+            return {}
+    return store
+
+
+def _get_session(app, session_id, seed):
+    """Get-or-create a serializable Tier-B session. Never raises."""
+    store = _session_store(app)
+    sess = store.get(session_id)
+    if not isinstance(sess, dict):
+        sess = dict(seed or {})
+        sess["id"] = session_id
+        store[session_id] = sess
+    return sess
+
+
+def _write_session(app, session_id, **fields):
+    """Write-through: every meaningful interaction updates the session
+    immediately so navigation can never lose half-built input."""
+    try:
+        sess = _get_session(app, session_id, {})
+        if isinstance(sess, dict):
+            sess.update(fields)
+    except Exception:
+        pass
+
+
+def _all_scoutable_players(app):
+    """All real players searchable as scouting targets (league rosters +
+    prospects + free agents). Never raises."""
+    out, seen = [], set()
+    try:
+        lg = league_of(app)
+        teams = getattr(lg, "teams", None) or []
+        for team in teams:
+            for attr in ("roster", "ahl_roster", "prospects"):
+                for p in (getattr(team, attr, None) or []):
+                    pid = getattr(p, "id", None)
+                    if pid not in seen:
+                        seen.add(pid)
+                        out.append(p)
+        gm = getattr(app, "game_manager", None)
+        for p in (getattr(gm, "free_agents", None) or []):
+            pid = getattr(p, "id", None)
+            if pid not in seen:
+                seen.add(pid)
+                out.append(p)
+    except Exception:
+        pass
+    return out
+
+
+def _find_player_by_id(app, pid):
+    """Resolve a session-stored player id back to the live player object
+    (honest None when the world moved). Never raises."""
+    try:
+        want = str(pid or "")
+        if not want:
+            return None
+        for p in _all_scoutable_players(app):
+            if str(getattr(p, "id", "")) == want:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _find_scout_by_id(app, sid):
+    """Resolve a session-stored scout id. Never raises."""
+    try:
+        want = str(sid or "")
+        if not want:
+            return None
+        for s in scouts_of(app):
+            if str(getattr(s, "id", "")) == want:
+                return s
+    except Exception:
+        pass
+    return None
+
+
 def user_team_of(app):
     """The user's team, via app or game_manager fallback. Never raises."""
     try:
@@ -220,14 +310,150 @@ def estimate_completion_days(app, player, scout):
 
 
 # ----------------------------------------------------------------------
-# Real shortlist dialog (non-modal)
+# Add-to-shortlist screen (was: non-modal InGamePopup)
 # ----------------------------------------------------------------------
 
-def open_shortlist_dialog(parent, app, player, default_category="Trade Targets"):
-    """Non-modal "Add to Shortlist" dialog writing to the REAL ShortlistManager.
+class ShortlistAddView(tk.Frame):
+    """Full-screen "Add to Shortlist" form.
 
-    Same categories and priorities as the context-menu flow; dismissing the
-    dialog defers (adds nothing). Never raises.
+    Gating Phase 2: the dialog becomes a Tier-1 screen (screen id
+    "shortlist_add"). Same categories/priorities, same real
+    ShortlistManager write. Category/priority/notes write through to
+    app.pending_sessions on every change, so half-typed notes survive
+    navigation. Dismissing defers (adds nothing).
+    """
+
+    def __init__(self, parent, player=None,
+                 default_category="Trade Targets", app=None):
+        tk.Frame.__init__(self, parent, bg="#1E1E1E")
+        self.app = app
+        self.player = player
+        self._default_category = default_category
+        self._close_screen = None  # set by show_screen()
+        self._build()
+
+    def close_view(self):
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _session_id(self):
+        try:
+            pid = str(getattr(self.player, "id", "") or "")
+        except Exception:
+            pid = ""
+        return "shortlist_add:%s" % (pid or "unknown")
+
+    def _build(self):
+        try:
+            from shortlist_system import ShortlistManager
+        except Exception:
+            messagebox.showerror("Shortlist", "Shortlist system unavailable.")
+            return
+        mgr = shortlist_manager_of(self.app)
+        player = self.player
+        if mgr is None or player is None:
+            messagebox.showerror("Shortlist", "Shortlist manager not available.")
+            return
+
+        pri_labels = list(ShortlistManager.PRIORITY_LEVELS.values())
+        app = self.app
+        sid = self._session_id()
+        sess = _get_session(app, sid, {
+            "kind": "shortlist_add",
+            "player_id": str(getattr(player, "id", "") or ""),
+            "player_name": str(getattr(player, "full_name", "?") or "?"),
+            "category": (self._default_category
+                         if self._default_category in ShortlistManager.CATEGORIES
+                         else ShortlistManager.CATEGORIES[0]),
+            "priority": ShortlistManager.PRIORITY_LEVELS.get(2, pri_labels[0] if pri_labels else ""),
+            "notes": "",
+        })
+
+        bg = "#1E1E1E"
+        wrap = tk.Frame(self, bg=bg)
+        wrap.pack(fill="both", expand=True)
+        inner = tk.Frame(wrap, bg=bg, width=440)
+        inner.pack(pady=14)
+
+        tk.Label(inner,
+                 text=f"Add {getattr(player, 'full_name', '?')} to Shortlist",
+                 font=("Segoe UI", 13, "bold"),
+                 fg="white", bg=bg).pack(pady=(14, 6))
+
+        cat_frame = tk.LabelFrame(inner, text="Category", fg="white", bg=bg)
+        cat_frame.pack(fill="x", padx=20, pady=8)
+        category_var = tk.StringVar(value=str(sess.get("category") or ""))
+        category_combo = ttk.Combobox(cat_frame, textvariable=category_var,
+                                      values=ShortlistManager.CATEGORIES,
+                                      state="readonly")
+        category_combo.pack(fill="x", padx=10, pady=8)
+        category_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: _write_session(app, sid, category=category_var.get()))
+
+        pri_frame = tk.LabelFrame(inner, text="Priority", fg="white", bg=bg)
+        pri_frame.pack(fill="x", padx=20, pady=8)
+        priority_var = tk.StringVar(value=str(sess.get("priority") or ""))
+        priority_combo = ttk.Combobox(pri_frame, textvariable=priority_var,
+                                      values=list(ShortlistManager.PRIORITY_LEVELS.values()),
+                                      state="readonly")
+        priority_combo.pack(fill="x", padx=10, pady=8)
+        priority_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda _e: _write_session(app, sid, priority=priority_var.get()))
+
+        notes_frame = tk.LabelFrame(inner, text="Notes", fg="white", bg=bg)
+        notes_frame.pack(fill="both", expand=True, padx=20, pady=8)
+        notes_text = tk.Text(notes_frame, height=4, wrap="word",
+                             bg="#2A2A2A", fg="white")
+        notes_text.pack(fill="both", expand=True, padx=10, pady=8)
+        _saved_notes = str(sess.get("notes") or "")
+        if _saved_notes:
+            notes_text.insert("1.0", _saved_notes)
+
+        def _on_notes_key(_e=None):
+            _write_session(app, sid,
+                           notes=notes_text.get("1.0", "end-1c"))
+
+        notes_text.bind("<KeyRelease>", _on_notes_key)
+
+        btn_frame = tk.Frame(inner, bg=bg)
+        btn_frame.pack(fill="x", padx=20, pady=(4, 14))
+
+        def _add():
+            category = category_var.get()
+            priority = next((k for k, v in ShortlistManager.PRIORITY_LEVELS.items()
+                             if v == priority_var.get()), 2)
+            notes = notes_text.get("1.0", "end-1c")
+            pid = str(getattr(player, "id", "") or "")
+            ok = mgr.add_player(pid, getattr(player, "full_name", "?"),
+                                category, notes=notes, priority=priority)
+            if ok:
+                try:
+                    _session_store(app).pop(sid, None)
+                except Exception:
+                    pass
+                messagebox.showinfo("Added to Shortlist",
+                                    f"{getattr(player, 'full_name', '?')} added to {category}.")
+                self.close_view()
+            else:
+                messagebox.showwarning("Already on Shortlist",
+                                       f"{getattr(player, 'full_name', '?')} is already in {category}.")
+
+        ttk.Button(btn_frame, text="Add to Shortlist",
+                   command=_add).pack(side="left")
+        ttk.Button(btn_frame, text="Cancel",
+                   command=self.close_view).pack(side="right")
+
+
+def open_shortlist_dialog(parent, app, player, default_category="Trade Targets"):
+    """Add-to-shortlist entry point (kept name; now a screen jump).
+
+    Gating Phase 2: routes to ShortlistAddView (screen id
+    "shortlist_add"). Same validation as before. Never raises.
     """
     try:
         from shortlist_system import ShortlistManager
@@ -238,69 +464,15 @@ def open_shortlist_dialog(parent, app, player, default_category="Trade Targets")
     if mgr is None or player is None:
         messagebox.showerror("Shortlist", "Shortlist manager not available.")
         return
-
-    dialog = InGamePopup(parent)
-    dialog.title("Add to Shortlist")
-    dialog.geometry("440x420")
-    dialog.configure(bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    dialog.resizable(False, False)
-    # Eastside grammar: non-modal. No grab_set; closing defers.
-
-    tk.Label(dialog, text=f"Add {getattr(player, 'full_name', '?')} to Shortlist",
-             font=(getattr(parent, "FONT_FAMILY", "Segoe UI"), 13, "bold"),
-             fg=getattr(parent, "HEADER_COLOR", "white"),
-             bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(pady=(14, 6))
-
-    cat_frame = tk.LabelFrame(dialog, text="Category",
-                             fg=getattr(parent, "TEXT_COLOR", "white"),
-                             bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    cat_frame.pack(fill="x", padx=20, pady=8)
-    category_var = tk.StringVar(value=default_category
-                                if default_category in ShortlistManager.CATEGORIES
-                                else ShortlistManager.CATEGORIES[0])
-    ttk.Combobox(cat_frame, textvariable=category_var,
-                 values=ShortlistManager.CATEGORIES,
-                 state="readonly").pack(fill="x", padx=10, pady=8)
-
-    pri_frame = tk.LabelFrame(dialog, text="Priority",
-                              fg=getattr(parent, "TEXT_COLOR", "white"),
-                              bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    pri_frame.pack(fill="x", padx=20, pady=8)
-    pri_labels = list(ShortlistManager.PRIORITY_LEVELS.values())
-    priority_var = tk.StringVar(value=ShortlistManager.PRIORITY_LEVELS.get(2, pri_labels[0]))
-    ttk.Combobox(pri_frame, textvariable=priority_var,
-                 values=pri_labels, state="readonly").pack(fill="x", padx=10, pady=8)
-
-    notes_frame = tk.LabelFrame(dialog, text="Notes",
-                                fg=getattr(parent, "TEXT_COLOR", "white"),
-                                bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    notes_frame.pack(fill="both", expand=True, padx=20, pady=8)
-    notes_text = tk.Text(notes_frame, height=4, wrap="word",
-                         bg=getattr(parent, "CONTENT_BG", "#2A2A2A"),
-                         fg=getattr(parent, "TEXT_COLOR", "white"))
-    notes_text.pack(fill="both", expand=True, padx=10, pady=8)
-
-    btn_frame = tk.Frame(dialog, bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    btn_frame.pack(fill="x", padx=20, pady=(4, 14))
-
-    def _add():
-        category = category_var.get()
-        priority = next((k for k, v in ShortlistManager.PRIORITY_LEVELS.items()
-                         if v == priority_var.get()), 2)
-        notes = notes_text.get("1.0", "end-1c")
-        pid = str(getattr(player, "id", "") or "")
-        ok = mgr.add_player(pid, getattr(player, "full_name", "?"),
-                            category, notes=notes, priority=priority)
-        if ok:
-            messagebox.showinfo("Added to Shortlist",
-                                f"{getattr(player, 'full_name', '?')} added to {category}.")
-            dialog.destroy()
-        else:
-            messagebox.showwarning("Already on Shortlist",
-                                   f"{getattr(player, 'full_name', '?')} is already in {category}.")
-
-    ttk.Button(btn_frame, text="Add to Shortlist", command=_add).pack(side="left")
-    ttk.Button(btn_frame, text="Cancel", command=dialog.destroy).pack(side="right")
+    show = getattr(app, "show_screen", None)
+    if not callable(show):
+        messagebox.showwarning(
+            "Shortlist", "Adding to the shortlist needs the app screen host.")
+        return
+    show("shortlist_add",
+         f"Add to Shortlist — {getattr(player, 'full_name', '?')}",
+         ShortlistAddView, player, fresh=True,
+         default_category=default_category)
 
 
 # ----------------------------------------------------------------------
@@ -443,17 +615,273 @@ def show_prospect_report(parent, app, player):
 
 
 # ----------------------------------------------------------------------
-# Real assignment dialog (non-modal)
+# New-scouting-assignment screen (was: non-modal InGamePopup)
 # ----------------------------------------------------------------------
 
-def open_assignment_dialog(parent, app, player=None, preselected_scout=None,
-                           request_type="Player Scouting", request_priority="Normal",
-                           on_created=None):
-    """Non-modal dialog that creates a REAL scouting assignment.
+class ScoutingAssignmentView(tk.Frame):
+    """Full-screen "New Scouting Assignment" builder.
 
-    Scout picker over the real scouting staff; the target player is given or
-    chosen from a searchable list of real players. Shows the real estimated
-    completion derived from live state. Dismissing defers. Never raises.
+    Gating Phase 2: the dialog becomes a Tier-1 screen (screen id
+    "scouting_assignment"). Same scout picker, same searchable target
+    list, same real estimated completion, same
+    create_scout_assignment() write. Scout pick / search text / target
+    write through to app.pending_sessions on every interaction, so
+    navigating away never loses a half-built assignment. Dismissing
+    defers (creates nothing).
+    """
+
+    def __init__(self, parent, player=None, preselected_scout=None,
+                 request_type="Player Scouting", request_priority="Normal",
+                 on_created=None, app=None):
+        tk.Frame.__init__(self, parent, bg="#1E1E1E")
+        self.app = app
+        self._player_arg = player
+        self._preselected_scout = preselected_scout
+        self._on_created = on_created
+        self._close_screen = None  # set by show_screen()
+        self._scouts = list(scouts_of(app))
+        # Entry-point params are deterministic pane defaults: they seed
+        # the session on open; user input writes through afterwards.
+        # Seed the full key set on first creation only (_get_session
+        # applies the seed solely for a new session, so resumes keep
+        # their values instead of being clobbered by defaults).
+        sid = self._session_id(player)
+        _get_session(app, sid, {
+            "kind": "scouting_assignment",
+            "scout_id": "",
+            "search_text": "",
+            "target_player_id": (str(getattr(player, "id", "") or "")
+                                 if player is not None else ""),
+            "request_type": request_type,
+            "request_priority": request_priority,
+        })
+        self._request_type = request_type
+        self._request_priority = request_priority
+        self._build()
+
+    def close_view(self):
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    @staticmethod
+    def _session_id(player):
+        try:
+            pid = str(getattr(player, "id", "") or "")
+        except Exception:
+            pid = ""
+        return "scouting_assignment:%s" % (pid or "new")
+
+    def _build(self):
+        app = self.app
+        scouts = self._scouts
+        player = self._player_arg
+        sid = self._session_id(player)
+        sess = _get_session(app, sid, {
+            "kind": "scouting_assignment",
+            "scout_id": "",
+            "search_text": "",
+            "target_player_id": (str(getattr(player, "id", "") or "")
+                                 if player is not None else ""),
+            "request_type": self._request_type,
+            "request_priority": self._request_priority,
+        })
+
+        bg = "#1E1E1E"
+        wrap = tk.Frame(self, bg=bg)
+        wrap.pack(fill="both", expand=True)
+        inner = tk.Frame(wrap, bg=bg, width=560)
+        inner.pack(pady=10)
+
+        tk.Label(inner, text="New Scouting Assignment",
+                 font=("Segoe UI", 13, "bold"),
+                 fg="white", bg=bg).pack(pady=(14, 4))
+        tk.Label(inner,
+                 text=f"{self._request_type} · {self._request_priority} priority",
+                 font=("Segoe UI", 9), fg="white", bg=bg).pack(pady=(0, 8))
+
+        tk.Label(inner, text="Scout:", fg="white", bg=bg).pack(
+            anchor="w", padx=20)
+        scout_var = tk.StringVar()
+        scout_combo = ttk.Combobox(
+            inner, textvariable=scout_var, state="readonly",
+            values=[f"{getattr(s, 'full_name', '?')} "
+                    f"(JPA {getattr(s, 'judging_player_ability', '?')}/"
+                    f"JPP {getattr(s, 'judging_player_potential', '?')})"
+                    for s in scouts])
+        scout_combo.pack(fill="x", padx=20, pady=(2, 10))
+        # Restore the scout pick: session first, then the entry-point
+        # preselection, then the first scout.
+        default_idx = 0
+        _sess_scout = _find_scout_by_id(app, sess.get("scout_id"))
+        if _sess_scout is not None and _sess_scout in scouts:
+            default_idx = scouts.index(_sess_scout)
+        else:
+            try:
+                if self._preselected_scout in scouts:
+                    default_idx = scouts.index(self._preselected_scout)
+            except Exception:
+                default_idx = 0
+        scout_combo.current(default_idx)
+
+        def _on_scout_pick(_e=None):
+            try:
+                idx = scout_combo.current()
+                s = scouts[idx] if 0 <= idx < len(scouts) else None
+                _write_session(app, sid,
+                               scout_id=str(getattr(s, "id", "") or ""))
+            except Exception:
+                pass
+            _update_pace()
+
+        scout_combo.bind("<<ComboboxSelected>>", _on_scout_pick)
+
+        chosen = {"player": player}
+        tk.Label(inner, text="Target player:", fg="white", bg=bg).pack(
+            anchor="w", padx=20)
+        target_label = tk.Label(inner, text="",
+                                fg="#7fd4ff", bg=bg,
+                                font=("Segoe UI", 10, "bold"))
+        target_label.pack(anchor="w", padx=20, pady=(2, 6))
+
+        search_var = tk.StringVar()
+        if player is None:
+            tk.Label(inner, text="Search players:", fg="white",
+                     bg=bg).pack(anchor="w", padx=20)
+            search_entry = ttk.Entry(inner, textvariable=search_var, width=40)
+            search_entry.pack(fill="x", padx=20, pady=(2, 4))
+            results = tk.Listbox(inner, height=8)
+            results.pack(fill="both", expand=True, padx=20, pady=(0, 6))
+
+            _cache = {"players": None, "shown": []}
+
+            def _refresh_results(*_):
+                if _cache["players"] is None:
+                    _cache["players"] = _all_scoutable_players(app)
+                q = search_var.get().lower().strip()
+                results.delete(0, tk.END)
+                _cache["shown"] = []
+                for p in _cache["players"]:
+                    name = str(getattr(p, "full_name", "") or "")
+                    if q and q not in name.lower():
+                        continue
+                    if len(_cache["shown"]) >= 200:
+                        break
+                    _cache["shown"].append(p)
+                    results.insert(tk.END, name)
+
+            def _pick(_evt=None):
+                sel = results.curselection()
+                if not sel:
+                    return
+                shown = _cache.get("shown") or []
+                p = shown[sel[0]] if sel[0] < len(shown) else None
+                if p is not None:
+                    chosen["player"] = p
+                    target_label.config(
+                        text=getattr(p, "full_name", "?"))
+                    _write_session(
+                        app, sid,
+                        target_player_id=str(getattr(p, "id", "") or ""))
+                    _update_pace()
+
+            def _on_search_key(*_):
+                _write_session(app, sid, search_text=search_var.get())
+                _refresh_results()
+
+            search_var.trace_add("write", _on_search_key)
+            results.bind("<<ListboxSelect>>", _pick)
+            # Restore a half-built search + target from the session.
+            _saved_search = str(sess.get("search_text") or "")
+            if _saved_search:
+                search_var.set(_saved_search)
+            else:
+                _refresh_results()
+            _saved_target = _find_player_by_id(app, sess.get("target_player_id"))
+            if _saved_target is not None:
+                chosen["player"] = _saved_target
+                target_label.config(
+                    text=getattr(_saved_target, "full_name", "?"))
+
+        def _set_target():
+            p = chosen["player"]
+            target_label.config(
+                text=getattr(p, "full_name", "Select a target player above")
+                if p else "Select a target player above")
+
+        pace_label = tk.Label(inner, text="", fg="white", bg=bg,
+                              font=("Segoe UI", 9),
+                              wraplength=500, justify="left")
+        pace_label.pack(anchor="w", padx=20, pady=(4, 6))
+
+        def _update_pace(*_):
+            try:
+                scout = scouts[scout_combo.current()]
+            except Exception:
+                scout = None
+            p = chosen["player"]
+            if scout is None or p is None:
+                pace_label.config(text="")
+                return
+            days = estimate_completion_days(app, p, scout)
+            if days == 0:
+                pace_label.config(
+                    text="This player already has a complete report.")
+            elif days is None:
+                pace_label.config(text="Estimated completion: unknown.")
+            else:
+                pace_label.config(
+                    text=f"Estimated completion: ~{days} days at "
+                         f"{getattr(scout, 'full_name', 'this scout')}'s pace "
+                         "(report reaches 'A' accuracy, then the assignment closes).")
+
+        _set_target()
+        _update_pace()
+
+        btn_row = tk.Frame(inner, bg=bg)
+        btn_row.pack(fill="x", padx=20, pady=(8, 16))
+
+        def _create():
+            try:
+                scout = scouts[scout_combo.current()]
+            except Exception:
+                messagebox.showwarning("No Scout", "Please select a scout.")
+                return
+            p = chosen["player"]
+            if p is None:
+                messagebox.showwarning("No Player",
+                                       "Please select a target player.")
+                return
+            ok, msg = create_scout_assignment(app, p, scout)
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Scouting Assignment", msg)
+            if ok:
+                try:
+                    _session_store(app).pop(sid, None)
+                except Exception:
+                    pass
+                try:
+                    if callable(self._on_created):
+                        self._on_created()
+                except Exception:
+                    pass
+                self.close_view()
+
+        ttk.Button(btn_row, text="Create Assignment",
+                   command=_create).pack(side="left")
+        ttk.Button(btn_row, text="Cancel",
+                   command=self.close_view).pack(side="right")
+
+
+def open_assignment_dialog(parent, app, player=None, preselected_scout=None,
+                           request_type="Player Scouting",
+                           request_priority="Normal", on_created=None):
+    """New-scouting-assignment entry point (kept name; now a screen jump).
+
+    Gating Phase 2: routes to ScoutingAssignmentView (screen id
+    "scouting_assignment"). Same no-scouts guard as before. Never raises.
     """
     scouts = scouts_of(app)
     if not scouts:
@@ -462,170 +890,15 @@ def open_assignment_dialog(parent, app, player=None, preselected_scout=None,
             "You need scouts before you can create assignments.\n\n"
             "Hire scouts via Staff → Hire Staff (free-agent staff market).")
         return
+    show = getattr(app, "show_screen", None)
+    if not callable(show):
+        messagebox.showwarning(
+            "Scouting",
+            "Creating scouting assignments needs the app screen host.")
+        return
+    show("scouting_assignment", "New Scouting Assignment",
+         ScoutingAssignmentView, fresh=True, player=player,
+         preselected_scout=preselected_scout, request_type=request_type,
+         request_priority=request_priority, on_created=on_created)
 
-    dialog = InGamePopup(parent)
-    dialog.title("New Scouting Assignment")
-    dialog.geometry("520x560")
-    dialog.configure(bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    dialog.resizable(False, False)
-    # Eastside grammar: non-modal. No grab_set; closing defers.
 
-    tk.Label(dialog, text="New Scouting Assignment",
-             font=(getattr(parent, "FONT_FAMILY", "Segoe UI"), 13, "bold"),
-             fg=getattr(parent, "HEADER_COLOR", "white"),
-             bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(pady=(14, 4))
-    tk.Label(dialog, text=f"{request_type} · {request_priority} priority",
-             font=(getattr(parent, "FONT_FAMILY", "Segoe UI"), 9),
-             fg=getattr(parent, "TEXT_COLOR", "white"),
-             bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(pady=(0, 8))
-
-    tk.Label(dialog, text="Scout:",
-             fg=getattr(parent, "TEXT_COLOR", "white"),
-             bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(anchor="w", padx=20)
-    scout_var = tk.StringVar()
-    scout_combo = ttk.Combobox(
-        dialog, textvariable=scout_var, state="readonly",
-        values=[f"{getattr(s, 'full_name', '?')} "
-                f"(JPA {getattr(s, 'judging_player_ability', '?')}/"
-                f"JPP {getattr(s, 'judging_player_potential', '?')})"
-                for s in scouts])
-    scout_combo.pack(fill="x", padx=20, pady=(2, 10))
-    try:
-        default_idx = scouts.index(preselected_scout) if preselected_scout in scouts else 0
-    except Exception:
-        default_idx = 0
-    scout_combo.current(default_idx)
-
-    chosen = {"player": player}
-    tk.Label(dialog, text="Target player:",
-             fg=getattr(parent, "TEXT_COLOR", "white"),
-             bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(anchor="w", padx=20)
-    target_label = tk.Label(dialog, text="",
-                            fg=getattr(parent, "ACCENT_COLOR", "#7fd4ff"),
-                            bg=getattr(parent, "BG_COLOR", "#1E1E1E"),
-                            font=(getattr(parent, "FONT_FAMILY", "Segoe UI"), 10, "bold"))
-    target_label.pack(anchor="w", padx=20, pady=(2, 6))
-
-    search_var = tk.StringVar()
-    if player is None:
-        tk.Label(dialog, text="Search players:",
-                 fg=getattr(parent, "TEXT_COLOR", "white"),
-                 bg=getattr(parent, "BG_COLOR", "#1E1E1E")).pack(anchor="w", padx=20)
-        search_entry = ttk.Entry(dialog, textvariable=search_var, width=40)
-        search_entry.pack(fill="x", padx=20, pady=(2, 4))
-        results = tk.Listbox(dialog, height=8)
-        results.pack(fill="both", expand=True, padx=20, pady=(0, 6))
-
-        def _all_players():
-            out, seen = [], set()
-            lg = league_of(app)
-            teams = getattr(lg, "teams", None) or []
-            for team in teams:
-                for attr in ("roster", "ahl_roster", "prospects"):
-                    for p in (getattr(team, attr, None) or []):
-                        pid = getattr(p, "id", None)
-                        if pid not in seen:
-                            seen.add(pid)
-                            out.append(p)
-            gm = getattr(app, "game_manager", None)
-            for p in (getattr(gm, "free_agents", None) or []):
-                pid = getattr(p, "id", None)
-                if pid not in seen:
-                    seen.add(pid)
-                    out.append(p)
-            return out
-
-        _cache = {"players": None}
-
-        def _refresh_results(*_):
-            if _cache["players"] is None:
-                _cache["players"] = _all_players()
-            q = search_var.get().lower().strip()
-            results.delete(0, tk.END)
-            _cache["shown"] = []
-            for p in _cache["players"]:
-                name = str(getattr(p, "full_name", "") or "")
-                if q and q not in name.lower():
-                    continue
-                if len(_cache["shown"]) >= 200:
-                    break
-                _cache["shown"].append(p)
-                results.insert(tk.END, name)
-            _cache["shown"] = _cache["shown"]
-
-        def _pick(_evt=None):
-            sel = results.curselection()
-            if not sel:
-                return
-            p = (_cache.get("shown") or [])[sel[0]] if sel[0] < len(_cache.get("shown") or []) else None
-            if p is not None:
-                chosen["player"] = p
-                target_label.config(text=getattr(p, "full_name", "?"))
-                _update_pace()
-
-        search_var.trace_add("write", _refresh_results)
-        results.bind("<<ListboxSelect>>", _pick)
-        _refresh_results()
-
-    def _set_target():
-        p = chosen["player"]
-        target_label.config(text=getattr(p, "full_name", "Select a target player above") if p else
-                            "Select a target player above")
-
-    pace_label = tk.Label(dialog, text="",
-                          fg=getattr(parent, "TEXT_COLOR", "white"),
-                          bg=getattr(parent, "BG_COLOR", "#1E1E1E"),
-                          font=(getattr(parent, "FONT_FAMILY", "Segoe UI"), 9),
-                          wraplength=460, justify="left")
-    pace_label.pack(anchor="w", padx=20, pady=(4, 6))
-
-    def _update_pace(*_):
-        try:
-            scout = scouts[scout_combo.current()]
-        except Exception:
-            scout = None
-        p = chosen["player"]
-        if scout is None or p is None:
-            pace_label.config(text="")
-            return
-        days = estimate_completion_days(app, p, scout)
-        if days == 0:
-            pace_label.config(text="This player already has a complete report.")
-        elif days is None:
-            pace_label.config(text="Estimated completion: unknown.")
-        else:
-            pace_label.config(
-                text=f"Estimated completion: ~{days} days at "
-                     f"{getattr(scout, 'full_name', 'this scout')}'s pace "
-                     "(report reaches 'A' accuracy, then the assignment closes).")
-
-    scout_combo.bind("<<ComboboxSelected>>", _update_pace)
-    _set_target()
-    _update_pace()
-
-    btn_row = tk.Frame(dialog, bg=getattr(parent, "BG_COLOR", "#1E1E1E"))
-    btn_row.pack(fill="x", padx=20, pady=(8, 16))
-
-    def _create():
-        try:
-            scout = scouts[scout_combo.current()]
-        except Exception:
-            messagebox.showwarning("No Scout", "Please select a scout.")
-            return
-        p = chosen["player"]
-        if p is None:
-            messagebox.showwarning("No Player", "Please select a target player.")
-            return
-        ok, msg = create_scout_assignment(app, p, scout)
-        (messagebox.showinfo if ok else messagebox.showwarning)(
-            "Scouting Assignment", msg)
-        if ok:
-            try:
-                if callable(on_created):
-                    on_created()
-            except Exception:
-                pass
-            dialog.destroy()
-
-    ttk.Button(btn_row, text="Create Assignment", command=_create).pack(side="left")
-    ttk.Button(btn_row, text="Cancel", command=dialog.destroy).pack(side="right")

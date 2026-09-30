@@ -13692,7 +13692,7 @@ class StaffContractView(ctk.CTkFrame):
     """
 
     def __init__(self, parent, staff=None, app=None, hire_source="free_agent",
-                 from_team=None):
+                 from_team=None, renegotiate=False, on_done=None):
         super().__init__(parent, fg_color="transparent")
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
@@ -13714,8 +13714,122 @@ class StaffContractView(ctk.CTkFrame):
         self.staff = staff
         self.hire_source = hire_source or "free_agent"
         self.from_team = from_team
+        self.renegotiate = bool(renegotiate)
+        # Gating Phase 2: the old modal staff dialog returned a bool
+        # synchronously (grab_set + wait_window). The screen reports the
+        # outcome through on_done(accepted: bool) instead -- True on
+        # agreement, False on cancel/dismiss. Fires at most once.
+        self.on_done = on_done
+        self._done_fired = False
         self._close_screen = None  # set by show_screen()
         self._build()
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B session (serializable, write-through).
+    # ------------------------------------------------------------------
+    def _session_id(self):
+        try:
+            sid = str(getattr(self.staff, "id", "") or "")
+        except Exception:
+            sid = ""
+        kind = "renegotiate" if self.renegotiate else "contract"
+        return "staff_%s:%s" % (kind, sid or "unknown")
+
+    def _session(self):
+        """Get-or-create the serializable in-progress session for this
+        negotiation. Survives navigation and save/load (staff referenced
+        by id only)."""
+        app = self.app
+        try:
+            store = getattr(app, "pending_sessions", None)
+        except Exception:
+            store = None
+        if not isinstance(store, dict):
+            try:
+                app.pending_sessions = store = {}
+            except Exception:
+                return {}
+        sid = self._session_id()
+        sess = store.get(sid)
+        if not isinstance(sess, dict):
+            try:
+                staff_id = str(getattr(self.staff, "id", "") or "")
+            except Exception:
+                staff_id = ""
+            sess = {"id": sid,
+                    "kind": ("staff_renegotiation" if self.renegotiate
+                             else "staff_contract"),
+                    "staff_id": staff_id,
+                    "salary_text": "", "years": 2, "assignment": "nhl",
+                    "resolved": None}
+            store[sid] = sess
+        return sess
+
+    def _write_session(self, **fields):
+        """Write-through: every meaningful interaction updates the session
+        immediately so cache eviction can never lose work."""
+        try:
+            sess = self._session()
+            if isinstance(sess, dict):
+                sess.update(fields)
+        except Exception:
+            pass
+
+    def _close_session(self, resolved):
+        """Consume the session on agreement (resolution is terminal)."""
+        try:
+            app = self.app
+            store = getattr(app, "pending_sessions", None)
+            sess = self._session()
+            if isinstance(sess, dict):
+                sess["resolved"] = resolved
+            if resolved and isinstance(store, dict):
+                store.pop(self._session_id(), None)
+        except Exception:
+            pass
+
+    def _fire_done(self, accepted):
+        """Report the negotiation outcome to the entry-point caller."""
+        if self._done_fired:
+            return
+        self._done_fired = True
+        try:
+            fn = self.on_done
+            if callable(fn):
+                fn(bool(accepted))
+        except Exception:
+            pass
+
+    def _resolve_staff_from_session(self):
+        """Revalidate a staffer referenced by session id (honest
+        'no longer available' state when the world moved)."""
+        try:
+            sess = self._session()
+            want = str(sess.get("staff_id") or "")
+            if not want:
+                return None
+            app = self.app
+            gm = getattr(app, "game_manager", None)
+            pools = []
+            team = getattr(gm, "user_team", None) if gm else None
+            if team is not None:
+                pools.append(getattr(team, "staff", None) or [])
+            league = getattr(gm, "league", None) if gm else None
+            if league is not None:
+                pools.append(getattr(league, "free_agent_staff", None) or [])
+                pools.append(getattr(league, "overseas_staff", None) or [])
+            if self.from_team is not None:
+                pools.append(getattr(self.from_team, "staff", None) or [])
+            for pool in pools:
+                for s in pool:
+                    try:
+                        if str(getattr(s, "id", "")) == want:
+                            return s
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
 
     def close_view(self):
         """Close this screen (dashboard in screen mode)."""
@@ -13736,6 +13850,15 @@ class StaffContractView(ctk.CTkFrame):
             return None
 
     def _build(self):
+        # Gating Phase 2: the old StaffManagementView.open_contract_negotiation
+        # modal dialog is consolidated onto this screen. renegotiate=True
+        # renders its exact mechanics (demands + offer + accept/reject roll)
+        # for an existing staffer instead of the hire flow.
+        if self.renegotiate and self.staff is None:
+            self.staff = self._resolve_staff_from_session()
+        if self.renegotiate:
+            self._build_renegotiate()
+            return
         from game_classes import staff_market_ask
         ct = self._ct
         staff = self.staff
@@ -13806,24 +13929,53 @@ class StaffContractView(ctk.CTkFrame):
 
         offer_info = {'years': 2}
 
+        # Gating Phase 2: restore half-built offers from the session
+        # (write-through below keeps it current on every interaction).
+        _sess = self._session()
+        try:
+            _sess_years = int(_sess.get("years") or 2)
+        except Exception:
+            _sess_years = 2
+        if _sess_years not in (1, 2, 3, 4, 5):
+            _sess_years = 2
+        offer_info['years'] = _sess_years
+
         self._body(body, text="Contract length:", dim=True,
                    size=11).pack(anchor="w", pady=(0, 4))
         years_seg = ctk.CTkSegmentedButton(
             body, values=["1", "2", "3", "4", "5"],
             selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
             unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        years_seg.set("2")
+            command=lambda _v: _on_years())
+        years_seg.set(str(_sess_years))
         years_seg.pack(anchor="w", pady=(0, 10))
+
+        def _on_years():
+            try:
+                offer_info['years'] = int(years_seg.get())
+            except Exception:
+                pass
+            self._write_session(years=offer_info['years'])
+            _paint()
 
         # Free dollar entry -- tailored offers, not fixed steps.
         self._body(body, text="Salary offer ($ / year):", dim=True,
                    size=11).pack(anchor="w", pady=(0, 4))
         self._salary_entry = ctk.CTkEntry(
             body, width=220, fg_color=ct['BG'], border_color=ct['BORDER'])
-        self._salary_entry.insert(0, f"{ask:,}")
+        _sess_salary = str(_sess.get("salary_text") or "")
+        self._salary_entry.insert(0, _sess_salary if _sess_salary else f"{ask:,}")
         self._salary_entry.pack(anchor="w", pady=(0, 12))
-        self._salary_entry.bind('<KeyRelease>', lambda _e: _paint())
+
+        def _on_salary_key(_e=None):
+            try:
+                self._write_session(
+                    salary_text=self._salary_entry.get())
+            except Exception:
+                pass
+            _paint()
+
+        self._salary_entry.bind('<KeyRelease>', _on_salary_key)
 
         # Which club the hire joins -- NHL roster or AHL affiliate. Poached
         # AHL staffers default to the farm (lateral move); everyone else
@@ -13831,14 +13983,25 @@ class StaffContractView(ctk.CTkFrame):
         self._body(body, text="Assign to:", dim=True,
                    size=11).pack(anchor="w", pady=(0, 4))
         _default_asg = "AHL" if (self.hire_source == "ahl_poach") else "NHL"
+        _sess_asg = str(_sess.get("assignment") or "").upper()
+        if _sess_asg not in ("NHL", "AHL"):
+            _sess_asg = _default_asg
         asg_seg = ctk.CTkSegmentedButton(
             body, values=["NHL", "AHL"],
             selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
             unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        asg_seg.set(_default_asg)
+            command=lambda _v: _on_asg())
+        asg_seg.set(_sess_asg)
         asg_seg.pack(anchor="w", pady=(0, 12))
         self._asg_seg = asg_seg
+
+        def _on_asg():
+            try:
+                self._write_session(
+                    assignment=str(asg_seg.get()).lower())
+            except Exception:
+                pass
+            _paint()
 
         offer_label = self._body(body, text="", size=12)
         offer_label.pack(anchor="w", pady=(0, 2))
@@ -13877,12 +14040,161 @@ class StaffContractView(ctk.CTkFrame):
         btns = ctk.CTkFrame(body, fg_color="transparent")
         btns.pack(fill="x", pady=(4, 0))
         self._secondary_button(btns, text="Back",
-                               command=self.close_view).pack(side="right",
-                                                            padx=(10, 0))
+                               command=self._cancel_hire).pack(side="right",
+                                                              padx=(10, 0))
         self._primary_button(btns, text="Make Offer",
                              command=lambda: self._resolve_staff_offer(
                                  staff, offer_info['years'],
                                  self._asg_seg.get().lower())).pack(side="right")
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: renegotiation mode.
+    # ------------------------------------------------------------------
+    def _build_renegotiate(self):
+        """Renegotiate with an existing staffer (was: the modal
+        StaffManagementView.open_contract_negotiation dialog).
+
+        Same mechanics, non-modal: current demands + offer frame, Make
+        Offer rolls staff.negotiate_contract(). On agreement the new
+        terms land, the session is consumed and on_done(True) fires; on
+        rejection the result label updates and the offer stays editable.
+        """
+        import customtkinter as ctk
+        from popup_system import messagebox
+        ct = self._ct
+        staff = self.staff
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
+                            width=560)
+        card.pack(pady=18)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        if staff is None:
+            self._body(body,
+                       text=("That staffer is no longer available -- "
+                             "he may have left the club."),
+                       dim=True).pack(anchor="w", pady=12)
+            self._secondary_button(body, text="Back",
+                                   command=self._cancel_renegotiate).pack(
+                                       anchor="w", pady=(8, 0))
+            return
+
+        self._heading(body, text=f"Negotiating with {staff.full_name}",
+                      size=14).pack(anchor="w", pady=(0, 2))
+        try:
+            _role = staff.role.value
+        except Exception:
+            _role = getattr(staff, "role", "")
+        ctk.CTkLabel(body, text=str(_role), font=("Segoe UI", 11),
+                     text_color=ct['TEAL']).pack(anchor="w", pady=(0, 14))
+
+        # Current demands card.
+        demands = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        demands.pack(fill="x", pady=(0, 12))
+        self._body(demands, text="Current Demands", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(demands,
+                   text=f"Asking Salary: ${int(getattr(staff, 'salary', 0) or 0):,}",
+                   dim=True, size=11).pack(anchor="w", padx=12, pady=2)
+        self._body(demands,
+                   text=f"Contract Length: {getattr(staff, 'contract_years', '?')} years",
+                   dim=True, size=11).pack(anchor="w", padx=12, pady=(2, 10))
+
+        # Offer frame.
+        offer = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        offer.pack(fill="x", pady=(0, 12))
+        self._body(offer, text="Your Offer", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        grid = ctk.CTkFrame(offer, fg_color="transparent")
+        grid.pack(anchor="w", padx=12, pady=(2, 10))
+        ctk.CTkLabel(grid, text="Salary:", font=("Segoe UI", 10),
+                     text_color=ct['TEXT_DIM']).grid(
+                         row=0, column=0, padx=5, pady=5, sticky='w')
+        salary_entry = ctk.CTkEntry(
+            grid, width=150, fg_color=ct['BG'],
+            border_color=ct['BORDER'], text_color=ct['TEXT'])
+        ctk.CTkLabel(grid, text="Years:", font=("Segoe UI", 10),
+                     text_color=ct['TEXT_DIM']).grid(
+                         row=1, column=0, padx=5, pady=5, sticky='w')
+        years_entry = ctk.CTkEntry(
+            grid, width=150, fg_color=ct['BG'],
+            border_color=ct['BORDER'], text_color=ct['TEXT'])
+        salary_entry.grid(row=0, column=1, padx=5, pady=5)
+        years_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        # Restore half-typed offers from the session (write-through below).
+        _sess = self._session()
+        _sal = str(_sess.get("salary_text") or "")
+        _yrs = str(_sess.get("years") or "")
+        salary_entry.insert(0, _sal if _sal else str(
+            getattr(staff, "salary", "") or ""))
+        years_entry.insert(0, _yrs if _yrs else str(
+            getattr(staff, "contract_years", "") or ""))
+
+        def _on_key(_e=None):
+            self._write_session(salary_text=salary_entry.get(),
+                                years=years_entry.get())
+
+        salary_entry.bind('<KeyRelease>', _on_key)
+        years_entry.bind('<KeyRelease>', _on_key)
+
+        result_label = ctk.CTkLabel(body, text="", font=("Segoe UI", 10),
+                                    text_color=ct['TEXT_DIM'],
+                                    wraplength=440, justify="left")
+        result_label.pack(fill="x", pady=(0, 12))
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x")
+
+        def make_offer():
+            try:
+                offered_salary = int(salary_entry.get())
+                offered_years = int(years_entry.get())
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid Input",
+                    "Please enter valid numbers for salary and years.")
+                return
+            if offered_salary <= 0 or not 1 <= offered_years <= 5:
+                messagebox.showerror(
+                    "Invalid Input",
+                    "Salary must be positive and the term 1-5 years.")
+                return
+            self._write_session(salary_text=salary_entry.get(),
+                                years=years_entry.get())
+            if staff.negotiate_contract(offered_salary, offered_years):
+                result_label.configure(text="Offer Accepted!",
+                                       text_color=ct['GREEN'])
+                staff.salary = offered_salary
+                staff.contract_years = offered_years
+                self._close_session(True)
+                self._fire_done(True)
+                self.close_view()
+            else:
+                result_label.configure(
+                    text="Offer Rejected. Try adjusting your offer.",
+                    text_color=ct['RED'])
+
+        self._primary_button(btns, text="Make Offer", command=make_offer,
+                             width=130, height=36).pack(side="left", padx=5)
+        self._secondary_button(btns, text="Cancel",
+                               command=self._cancel_renegotiate,
+                               width=110, height=36).pack(side="right",
+                                                         padx=5)
+
+    def _cancel_renegotiate(self):
+        """Back out of a renegotiation (reports False, keeps session for
+        resume)."""
+        self._fire_done(False)
+        self.close_view()
+
+    def _cancel_hire(self):
+        """Back out of a hire negotiation (reports False, keeps session)."""
+        self._fire_done(False)
+        self.close_view()
 
     def _staff_offer_accept_chance(self, staff, offer_salary):
         """Rough acceptance chance for a staff offer (display only)."""
@@ -13965,6 +14277,8 @@ class StaffContractView(ctk.CTkFrame):
                     self.app.update_all_views()
                 except Exception:
                     pass
+                self._close_session(True)
+                self._fire_done(True)
                 self.close_view()
             else:
                 messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
