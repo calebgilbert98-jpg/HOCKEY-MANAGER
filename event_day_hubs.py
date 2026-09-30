@@ -78,6 +78,18 @@ class EventDayHubView(ctk.CTkFrame):
         self.configure(fg_color=self.BG)
         self._close_screen = None  # set by show_screen() or wrapper
 
+        # Gating Phase 2: thin Tier-B session for this read-mostly hub
+        # (no in-progress user input; the live data stays model-side).
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self.app, self._session_id())
+            if _sess is not None:
+                _sess.update(kind="event_hub",
+                             screen_id=self._session_id(),
+                             title=self.EVENT_TITLE)
+        except Exception:
+            pass
+
         self._ticker_text = ""
         self._ticker_x = 0
 
@@ -85,6 +97,10 @@ class EventDayHubView(ctk.CTkFrame):
         self._build_columns()   # subclass fills left/center/right
         self._build_ticker()
         self._animate_ticker()
+
+    def _session_id(self):
+        """Screen id for this hub (matches the show_screen registration)."""
+        return "draft_central" if isinstance(self, DraftDayCentral) else "fa_frenzy"
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""
@@ -914,7 +930,13 @@ def prompt_event_day(parent, game_manager, event):
         return
     try:
         if event == 'draft':
-            DraftDayCentralWindow(parent, game_manager)
+            # Gating Phase 2: the hub is a Tier-1 screen; route to it
+            # instead of the legacy popup wrapper.
+            show = getattr(parent, 'show_screen', None)
+            if callable(show):
+                show("draft_central", "Draft Day Central", DraftDayCentral,
+                     game_manager)
+            return
         elif event == 'deadline':
             from trade_deadline_center import TradeDeadlineCenter
             TradeDeadlineCenter(parent)
@@ -944,21 +966,6 @@ class EventDayHub(InGamePopup):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
 
-class DraftDayCentralWindow(EventDayHub):
-    """Popup wrapper for Draft Day Central."""
-    def __init__(self, parent, game_manager):
-        InGamePopup.__init__(self, parent)
-        self.title("Draft Day Central")
-        try:
-            self.state('zoomed')
-        except Exception:
-            self.geometry("1600x950")
-        self._view = DraftDayCentral(self, game_manager, app=parent)
-        self._view.pack(fill="both", expand=True)
-        self._view._close_screen = self.destroy
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-
-
 class FreeAgencyFrenzyWindow(EventDayHub):
     """Popup wrapper for Free Agency Frenzy."""
     def __init__(self, parent, game_manager):
@@ -974,6 +981,7 @@ class FreeAgencyFrenzyWindow(EventDayHub):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
 
-# Keep original names working as popup wrappers for existing callers
-DraftDayCentralPopup = DraftDayCentralWindow
+# Keep the original name working as a popup wrapper for existing callers
+# (Gating Phase 2: DraftDayCentralWindow/DraftDayCentralPopup were deleted --
+# the hub is screen-only now).
 FreeAgencyFrenzyPopup = FreeAgencyFrenzyWindow
