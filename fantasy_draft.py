@@ -1168,6 +1168,21 @@ class FantasyDraftView(tk.Frame):
             debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
 
+        # Gating Phase 2: resume a dropped auto-draft chain. Opening a
+        # Tier-1 screen (player browser / draft order) replaces this view,
+        # killing the after() chain; the in-flight flag lives on the
+        # league-owned draft manager so the rebuilt view picks it back up.
+        try:
+            _dm = self.draft_manager
+            if getattr(_dm, 'auto_draft_in_flight', False) and not _dm.is_draft_complete():
+                _cur = _dm.get_current_pick()
+                if _cur is not None and _cur.team != self.user_team:
+                    self.after(800, self.continue_auto_draft)
+                else:
+                    _dm.auto_draft_in_flight = False
+        except Exception:
+            pass
+
     def _warn_reentry_issues(self):
         """Surface re-entry audit issues once (main-interface path)."""
         try:
@@ -4277,38 +4292,56 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             # Continue with AI picks if enabled
             if self.auto_draft_enabled.get() or current_pick.team != self.user_team:
+                self.draft_manager.auto_draft_in_flight = True
                 self.after(1000, self.continue_auto_draft)
         else:
             messagebox.showerror("Draft Error", "Unable to complete the draft pick.")
             
     def continue_auto_draft(self):
-        """Continue with automated draft picks"""
-        if self.draft_manager.is_draft_complete():
+        """Continue with automated draft picks.
+
+        Gating Phase 2: in-flight state lives on the league-owned draft
+        manager (not the view). A screen-shift away (e.g. the player
+        browser) replaces this view and kills the after() chain; the
+        rebuilt view resumes it from the flag -- no silent stall.
+        """
+        dm = self.draft_manager
+        if dm.is_draft_complete():
+            dm.auto_draft_in_flight = False
             self.complete_draft()
             return
             
-        current_pick = self.draft_manager.get_current_pick()
+        current_pick = dm.get_current_pick()
         if current_pick and current_pick.team != self.user_team:
             # AI makes pick
-            available_players = self.draft_manager.get_available_players()
+            available_players = dm.get_available_players()
             if available_players:
                 # AI picks best available player with some randomness
                 top_players = available_players[:10]  # Top 10 available
                 ai_pick = random.choice(top_players[:3])  # Pick from top 3
                 
-                success = self.draft_manager.make_pick(ai_pick)
+                success = dm.make_pick(ai_pick)
                 if success:
                     # Roster assignment (23-man NHL cap) on the manager.
-                    self.draft_manager.assign_drafted_player(
+                    dm.assign_drafted_player(
                         current_pick.team, ai_pick)
 
                     self.update_display()
                     
                     # Continue if still not user's turn
-                    next_pick = self.draft_manager.get_current_pick()
+                    next_pick = dm.get_current_pick()
                     if next_pick and next_pick.team != self.user_team:
                         delay = 500 if self.draft_speed.get() == "Fast" else 1500 if self.draft_speed.get() == "Slow" else 1000
+                        dm.auto_draft_in_flight = True
                         self.after(delay, self.continue_auto_draft)
+                    else:
+                        dm.auto_draft_in_flight = False
+                else:
+                    dm.auto_draft_in_flight = False
+            else:
+                dm.auto_draft_in_flight = False
+        else:
+            dm.auto_draft_in_flight = False
                         
     def complete_draft(self):
         """Handle draft completion"""

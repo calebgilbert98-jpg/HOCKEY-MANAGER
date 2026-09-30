@@ -14247,6 +14247,25 @@ class StaffContractView(ctk.CTkFrame):
                 f"under a staff payroll budget -- trim the offer or move "
                 f"money by letting staff go.")
             return
+        # Gating Phase 2 (old-dialog parity): unique roles (GM, Head Coach)
+        # can't be double-hired. Blocks before the roll, same as before.
+        try:
+            from game_classes import Staff as _StaffCls
+            if _StaffCls.is_unique_role(getattr(staff, "role", None)):
+                _team = getattr(self.app.game_manager, "user_team", None)
+                _holders = [s for s in (getattr(_team, "staff", None) or [])
+                            if getattr(s, "role", None) == staff.role]
+                if _holders:
+                    _rv = getattr(staff.role, "value", str(staff.role))
+                    messagebox.showerror(
+                        "Role Conflict",
+                        f"Team already has a {_rv}: "
+                        f"{_holders[0].full_name}.\n"
+                        f"You must reassign or release the existing "
+                        f"{_rv} first.")
+                    return
+        except Exception:
+            pass
         # MP client: the host runs the acceptance roll against canonical
         # state -- a local roll would be snapshot noise.
         if _mp_route(self.app, "hire_staff",
@@ -14273,6 +14292,46 @@ class StaffContractView(ctk.CTkFrame):
                     self.from_team.staff.remove(staff)
                 messagebox.showinfo("Offer Accepted",
                                     f"{staff.full_name} has accepted your offer!")
+                # Gating Phase 2 (old-dialog parity): the assistant-coach
+                # hire hook and the new-head-coach whiteboard install ran
+                # in the dialog's hire path; they run here now.
+                try:
+                    import assistant_coaches as _ac
+                    _team2 = getattr(self.app.game_manager, "user_team",
+                                    None)
+                    if _team2 is not None:
+                        _ac.on_assistant_hired(_team2, staff, app=self.app)
+                except Exception:
+                    pass
+                try:
+                    _role = str(getattr(getattr(staff, "role", None),
+                                        "value", ""))
+                    if "Head Coach" in _role:
+                        import tactics as _tx
+                        _team3 = getattr(self.app.game_manager, "user_team",
+                                        None)
+                        if (_team3 is not None
+                                and _tx.get_tactics_control(_team3)
+                                == "coach"):
+                            installed = _tx.install_coach_systems(
+                                _team3, staff, reason="hired")
+                            if installed:
+                                _cname = (f"{getattr(staff, 'first_name', '')} "
+                                          f"{getattr(staff, 'last_name', '')}"
+                                          ).strip()
+                                _bits = ", ".join(
+                                    f"{c}: {k.replace('_', ' ')}"
+                                    for c, k in installed.items())
+                                try:
+                                    self.app.add_news(
+                                        f"{_cname} is installing his systems "
+                                        f"({len(installed)} changes: {_bits}). "
+                                        f"The room starts learning -- "
+                                        f"familiarity reset.")
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
                 try:
                     self.app.update_all_views()
                 except Exception:
