@@ -372,6 +372,34 @@ _SCHEME_OFF_WHEELHOUSE = 0.45  # denial outside his preferred zones — the
                                # from anywhere, but the shading lives where
                                # he lives.
 
+# Location vocabulary normalization (2026-09-30, (c) parity fix): GameSim
+# passes raw ShotLocation enum names ("high_slot", "left_circle", ...),
+# quick-sim passes grade-location strings ("slot", "netfront", ...).
+# The wheelhouse sets below use the GRADE vocabulary. Normalize once,
+# here, at the shared layer — both engines then shade the same spots,
+# and the denial bites identically watched vs quick. Mirrors
+# GameSim._GRADE_LOCATION_MAP (simulation.py); unknown strings pass
+# through unchanged (off-wheelhouse fraction, as before).
+_SCHEME_LOCATION_ALIASES = {
+    "crease": "crease",
+    "low_slot": "slot", "high_slot": "slot",
+    "left_circle": "slot", "right_circle": "slot",
+    "point": "point",
+    "left_wing": "perimeter", "right_wing": "perimeter",
+    "behind_net": "perimeter",
+    "slot": "slot", "netfront": "netfront", "perimeter": "perimeter",
+    "breakaway": "breakaway",
+}
+
+
+def _scheme_norm_location(location):
+    try:
+        _l = str(location or "").lower()
+    except Exception:
+        _l = ""
+    return _SCHEME_LOCATION_ALIASES.get(_l, _l)
+
+
 # Wheelhouse zones per role: where the scheme shades. Denial concentrates
 # here; everywhere else he sees a fraction of it.
 _SCHEME_WHEELHOUSE = {
@@ -458,7 +486,7 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
             _rname = getattr(_role, "value", "") or str(_role)
         except Exception:
             _rname = ""
-        _loc = str(location or "").lower()
+        _loc = _scheme_norm_location(location)
         _in_wheel = _loc in _SCHEME_WHEELHOUSE.get(_rname, set())
         _wheel = 1.0 if _in_wheel else _SCHEME_OFF_WHEELHOUSE
         # The battle: team commitment vs league baseline, through the

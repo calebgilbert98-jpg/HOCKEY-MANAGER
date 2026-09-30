@@ -4870,7 +4870,30 @@ class GameSim:
             type_weights[ShotType.REBOUND] *= 2
         elif location == ShotLocation.POINT:
             type_weights[ShotType.SLAP_SHOT] *= 2.5
-        
+
+        # Sniper one-timers at EV (2026-09-30, (c) winger spotlight, Muck):
+        # the one_timer attribute had no even-strength expression — the
+        # sniper's signature weapon didn't exist outside the PP. Attribute-
+        # driven weight for forwards: better one-timer tool = more
+        # one-timer looks (feeds find the shooter). Bounded and modest;
+        # the d_to_d_onetimer scenario resolves them. EV only — PP shot
+        # selection is the tuning crew's lane.
+        try:
+            _ev_ot = not self._is_on_power_play(shooter)
+        except Exception:
+            _ev_ot = True
+        if _ev_ot and shooter.primary_position not in (
+                PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                PlayerPosition.RIGHT_DEFENSE, PlayerPosition.GOALIE):
+            try:
+                _otv = float(getattr(shooter, "one_timer", 10))
+            except Exception:
+                _otv = 10.0
+            _otw = max(0.0, min(0.20, (_otv - 60.0) / 200.0))
+            if _otw > 0:
+                type_weights[ShotType.ONE_TIMER] = (
+                    type_weights.get(ShotType.ONE_TIMER, 0.0) + _otw)
+
         return self._weighted_random_choice(type_weights)
 
     def _calculate_shot_quality(self, location, distance, shot_type, attacking_team, shooter=None,
@@ -5857,6 +5880,12 @@ class GameSim:
         # breakaway scenario (skating/finishing/chance_creation vs
         # goalie_save) already contains finishing and goalie_save. Never
         # stack; one scenario per event.
+        # Winger spotlight (2026-09-30, (c) Muck): the net-front scramble
+        # and one-timer scenario battles get the same §6 rule-2 treatment
+        # on their shots — the sniper one-timer and the power-forward
+        # net-front are composite battles (every factor wired), not
+        # pasted-on bonuses. EV only: PP conversion is the tuning crew's
+        # lane; their calibration must not move under them.
         try:
             from attribute_composites import apply_amplifier as _ac_fin
             _is_break = False
@@ -5864,10 +5893,45 @@ class GameSim:
                 _is_break = (shot_type == ShotType.BREAKAWAY)
             except Exception:
                 pass
+            _ev_shot = True
+            try:
+                _ev_shot = not self._is_on_power_play(shooter)
+            except Exception:
+                pass
+            _is_netfront = (_ev_shot and not empty_net and shot_type in (
+                ShotType.TIP_IN, ShotType.DEFLECTION, ShotType.REBOUND))
+            _is_onetimer = (_ev_shot and not empty_net
+                            and shot_type == ShotType.ONE_TIMER)
             if _is_break:
                 from scenario_composites import apply_scenario as _asc_br
                 _fgp = _asc_br(1.0 - adjusted_save_prob, [shooter],
                                [goalie], "breakaway", sim=self,
+                               off_team=attacking_team,
+                               def_team=defending_team)
+            elif _is_netfront or _is_onetimer:
+                from scenario_composites import apply_scenario as _asc_sp
+                _scn = ("netfront_scramble"
+                        if _is_netfront else "d_to_d_onetimer")
+                _dside = [goalie] if goalie is not None else []
+                if _is_netfront:
+                    # Net-front is forward vs (defense + goalie) combined
+                    # (Muck 2026-09-28): the nearest defender battles too.
+                    try:
+                        self._ppos_ensure()
+                        _shp = self._ppos_get(shooter)
+                        _nd = min(
+                            (d for d in
+                             self._on_ice_skaters(defending_team)
+                             if d is not None),
+                            key=lambda d: self._ppos_dist(
+                                _shp, self._ppos_get(d)),
+                            default=None)
+                        if _nd is not None:
+                            _dside.append(_nd)
+                    except Exception:
+                        pass
+                _fgp = _asc_sp(1.0 - adjusted_save_prob, [shooter],
+                               _dside, _scn, sim=self,
                                off_team=attacking_team,
                                def_team=defending_team)
             else:
