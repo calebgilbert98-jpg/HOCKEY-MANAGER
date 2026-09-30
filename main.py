@@ -547,6 +547,10 @@ class GameManager:
         self.morale_system_enabled = settings.get('morale_system', True)
         self.player_personalities_enabled = settings.get('player_personalities', True)
         self.media_pressure_enabled = settings.get('media_pressure', True)
+        # Display-only toggle (new-save advanced setting): Composite Ratings
+        # visibility on the player card. The sim always uses composites;
+        # this never touches logic.
+        self.show_composite_ratings = settings.get('show_composite_ratings', True)
         
         # Media System Configuration
         media_engagement = settings.get('media_engagement', 'Standard')

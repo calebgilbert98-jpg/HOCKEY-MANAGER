@@ -15,6 +15,26 @@ from popup_system import InGamePopup
 from tkinter import ttk
 from modern_ui import (AppColors, AppFonts, AppCard, PillBadge)
 
+
+def composites_visible(parent_app):
+    """New-save advanced setting: Composite Ratings visibility on cards.
+
+    Visibility only -- the sim always computes and uses composites
+    (attribute_composites). Default True (current behavior) for old saves
+    and any context without the setting.
+    """
+    try:
+        ss = getattr(parent_app, "startup_settings", None)
+        if isinstance(ss, dict) and "show_composite_ratings" in ss:
+            return bool(ss["show_composite_ratings"])
+        gm = getattr(parent_app, "game_manager", None)
+        if gm is not None and hasattr(gm, "show_composite_ratings"):
+            return bool(gm.show_composite_ratings)
+    except Exception:
+        pass
+    return True
+
+
 # FM24-style attribute groups: (display label, Player field name)
 #
 # T1 truth-in-display (2026-09-29): every attribute shown here is read by a
@@ -614,38 +634,41 @@ class PlayerProfile(InGamePopup):
 
         # -- Attribute composite ratings (Track 2 shared module) -------------
         # What the engine actually uses: bounded per-event composites.
-        try:
-            import attribute_composites as _ac
-            _comp = _ac.get_composite_ratings(self.player)
-            _is_g = 'GOALIE' in str(
-                getattr(self.player, 'primary_position', '')).upper()
-            _comp_labels = [
-                ("chance_creation", "Chance Creation"),
-                ("finishing", "Finishing"),
-                ("skating", "Skating"),
-                ("defensive_play", "Defensive Play"),
-                ("physicality", "Physicality"),
-                ("faceoff", "Faceoffs"),
-                ("puck_retrieval", "Puck Retrieval"),
-                ("discipline", "Discipline"),
-                ("goalie_save", "Goaltending"),
-            ]
-            if _is_g:
-                _comp_labels = [("goalie_save", "Goaltending"),
-                                ("skating", "Skating"),
-                                ("puck_retrieval", "Puck Retrieval"),
-                                ("discipline", "Discipline")]
-            _comp_title = tk.Label(content, text="Composite Ratings",
-                                   font=AppFonts.H3,
-                                   fg=AppColors.TEXT_PRIMARY,
-                                   bg=card.card_bg)
-            _comp_title.pack(anchor="w", pady=(8, 4))
-            for _key, _label in _comp_labels:
-                if _key in _comp:
-                    self._create_attribute_bar(content, _label, _comp[_key],
-                                               card.card_bg, compact=True)
-        except Exception:
-            pass
+        # Gated on the new-save "Composite Ratings" visibility setting --
+        # visibility only, the sim always uses them.
+        if composites_visible(getattr(self, "parent_app", None)):
+            try:
+                import attribute_composites as _ac
+                _comp = _ac.get_composite_ratings(self.player)
+                _is_g = 'GOALIE' in str(
+                    getattr(self.player, 'primary_position', '')).upper()
+                _comp_labels = [
+                    ("chance_creation", "Chance Creation"),
+                    ("finishing", "Finishing"),
+                    ("skating", "Skating"),
+                    ("defensive_play", "Defensive Play"),
+                    ("physicality", "Physicality"),
+                    ("faceoff", "Faceoffs"),
+                    ("puck_retrieval", "Puck Retrieval"),
+                    ("discipline", "Discipline"),
+                    ("goalie_save", "Goaltending"),
+                ]
+                if _is_g:
+                    _comp_labels = [("goalie_save", "Goaltending"),
+                                    ("skating", "Skating"),
+                                    ("puck_retrieval", "Puck Retrieval"),
+                                    ("discipline", "Discipline")]
+                _comp_title = tk.Label(content, text="Composite Ratings",
+                                       font=AppFonts.H3,
+                                       fg=AppColors.TEXT_PRIMARY,
+                                       bg=card.card_bg)
+                _comp_title.pack(anchor="w", pady=(8, 4))
+                for _key, _label in _comp_labels:
+                    if _key in _comp:
+                        self._create_attribute_bar(content, _label, _comp[_key],
+                                                   card.card_bg, compact=True)
+            except Exception:
+                pass
         # -- end composite ratings ------------------------------------------
 
         # W6: one-row canonical Condition bar at the top of the Attributes
@@ -1278,21 +1301,25 @@ class PlayerProfile(InGamePopup):
                      bg=card.card_bg, wraplength=850,
                      justify="left").pack(anchor="w", pady=(0, 6))
 
-            # Perceived composites through the true blend formulas.
-            comps = _sp.perceived_composites(self.player, scout, report)
-            comp_lines = []
-            for key, val in comps.items():
-                label = _sp.composite_label(key)
-                if isinstance(val, tuple):
-                    comp_lines.append(f"{label} {val[0]:.0f}-{val[1]:.0f}")
-                else:
-                    comp_lines.append(f"{label} {val:.0f}")
-            if comp_lines:
-                tk.Label(content,
-                         text="Scout's ratings:  " + "   ".join(comp_lines),
-                         font=AppFonts.SMALL, fg=AppColors.TEXT_PRIMARY,
-                         bg=card.card_bg, wraplength=850,
-                         justify="left").pack(anchor="w", pady=(0, 6))
+            # Perceived composites through the true blend formulas. Gated on
+            # the Composite Ratings visibility setting like the Attributes
+            # tab section -- the scout's prose strengths/weaknesses below
+            # are unaffected.
+            if composites_visible(getattr(self, "parent_app", None)):
+                comps = _sp.perceived_composites(self.player, scout, report)
+                comp_lines = []
+                for key, val in comps.items():
+                    label = _sp.composite_label(key)
+                    if isinstance(val, tuple):
+                        comp_lines.append(f"{label} {val[0]:.0f}-{val[1]:.0f}")
+                    else:
+                        comp_lines.append(f"{label} {val:.0f}")
+                if comp_lines:
+                    tk.Label(content,
+                             text="Scout's ratings:  " + "   ".join(comp_lines),
+                             font=AppFonts.SMALL, fg=AppColors.TEXT_PRIMARY,
+                             bg=card.card_bg, wraplength=850,
+                             justify="left").pack(anchor="w", pady=(0, 6))
 
             strengths, weaknesses = _sp.perceived_strengths_weaknesses(
                 self.player, scout, report)

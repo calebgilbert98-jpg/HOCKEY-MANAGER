@@ -188,6 +188,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             'start_without_cap_penalties': tk.BooleanVar(master=self, value=False),
             'injuries': tk.BooleanVar(master=self, value=True),
             'morale_system': tk.BooleanVar(master=self, value=True),
+            'show_composite_ratings': tk.BooleanVar(master=self, value=True),
             'realistic_progression': tk.BooleanVar(master=self, value=True),
             'trade_difficulty': tk.StringVar(master=self, value="Realistic"),
             'cpu_gm_intelligence': tk.StringVar(master=self, value="High"),
@@ -1408,6 +1409,10 @@ This profile will influence player relationships, media interactions, and trade 
         self._create_advanced_checkbox_option(gameplay_grid, 2, 0, "Realistic Progression", 
                                             self.setup_options['realistic_progression'],
                                             "Players develop and decline based on realistic age curves and usage")
+
+        self._create_advanced_checkbox_option(gameplay_grid, 2, 1, "Composite Ratings",
+                                            self.setup_options['show_composite_ratings'],
+                                            "Show the engine's composite ratings (Chance Creation, Finishing, Skating...) on player cards. Visibility only -- the sim always uses them.")
         
         # Preset configurations
         presets_frame = SectionCard(scrollable_frame, text="  Configuration Presets  ",
@@ -2220,6 +2225,7 @@ This profile will influence player relationships, media interactions, and trade 
                 'start_without_cap_penalties': self.setup_options['start_without_cap_penalties'].get(),
                 'injuries': self.setup_options['injuries'].get(),
                 'morale_system': self.setup_options['morale_system'].get(),
+                'show_composite_ratings': self.setup_options['show_composite_ratings'].get(),
                 'realistic_progression': self.setup_options['realistic_progression'].get(),
                 'trade_difficulty': self.setup_options['trade_difficulty'].get(),
                 'cpu_gm_intelligence': self.setup_options['cpu_gm_intelligence'].get(),
