@@ -86,27 +86,30 @@ class PlayerContextMenu:
         self.parent = parent_window
 
     def _app(self):
-        """Walk up .parent chain to the app object (has user_team)."""
+        """Walk up .parent/.master chain to the app object (has user_team).
+        Views hold the app as .app, so check that too."""
         seen = set()
         obj = self.parent
-        for _ in range(6):
+        for _ in range(10):
             if obj is None or id(obj) in seen:
                 break
             seen.add(id(obj))
             if hasattr(obj, "user_team") and getattr(obj, "user_team") is not None:
                 return obj
-            obj = getattr(obj, "parent", None)
+            _app = getattr(obj, "app", None)
+            if _app is not None and hasattr(_app, "user_team"):
+                return _app
+            nxt = getattr(obj, "parent", None)
+            if nxt is None:
+                nxt = getattr(obj, "master", None)
+            obj = nxt
         return self.parent
         
-    def show_context_menu(self, event, player, additional_options=None):
-        """
-        Show context menu for a player
-        
-        Args:
-            event: The right-click event
-            player: The Player object
-            additional_options: List of tuples (label, command) for window-specific options
-        """
+    def show_context_menu(self, event, player, additional_options=None,
+                          quick_scout=False):
+        """Show context menu for a player. Draft screens pass quick_scout=True
+        so the Scout entry becomes an instant war-room take (the draft clock
+        is ticking -- no scouting-window detour)."""
         context_menu = tk.Menu(self.parent, tearoff=0)
         
         # Configure menu styling to match parent window
@@ -128,8 +131,10 @@ class PlayerContextMenu:
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="Scout Player",
-            command=lambda: self._scout_player(player)
+            label=("⚡ Quick Scout (war-room take)" if quick_scout
+                   else "Scout Player"),
+            command=lambda: (self._quick_scout_player(player) if quick_scout
+                             else self._scout_player(player))
         )
         
         context_menu.add_command(
@@ -290,6 +295,76 @@ class PlayerContextMenu:
             # Fallback to assignment dialog
             self._create_scout_assignment_dialog(player)
     
+    def _quick_scout_player(self, player):
+        """Instant war-room take for draft screens: the best available scout
+        files a rapid report (3 viewings through the normal report machinery,
+        so potential/strengths scale with scout skill) and a standing
+        assignment is added so it keeps improving. Never raises."""
+        app = self._app()
+        try:
+            team = getattr(app, "user_team", None)
+            reports = getattr(team, "scouting_reports", {}) if team else {}
+            pid = getattr(player, "id", None)
+            report = reports.get(pid) if pid is not None else None
+            if report is not None:
+                acc = getattr(report, "accuracy", "?") or "?"
+                pot = getattr(report, "scouted_potential", "?") or "?"
+                views = getattr(report, "viewings", 0) or 0
+                scout_name = getattr(getattr(report, "scout", None),
+                                     "full_name", "Your scout")
+                messagebox.showinfo(
+                    "Scout Report",
+                    f"{player.full_name}\n\n"
+                    f"{scout_name}'s take: {pot} potential\n"
+                    f"Accuracy {acc} · {views} viewing"
+                    f"{'s' if views != 1 else ''}")
+                return
+            # Best scout: amateur scouts first, then highest JPA+JPP.
+            from game_classes import StaffRole
+            import scouting as scmod
+            scouts = [s for s in (getattr(team, "staff", []) or [])
+                      if scmod.is_scout(s)]
+            if not scouts:
+                messagebox.showwarning(
+                    "No Scouts",
+                    "Hire a scout first — the war room has nobody "
+                    "to ask for a take.")
+                return
+            def _key(s):
+                role_bonus = (100 if getattr(s, "role", None)
+                              == StaffRole.AMATEUR_SCOUT else 0)
+                return (role_bonus
+                        + getattr(s, "judging_player_ability", 10)
+                        + getattr(s, "judging_player_potential", 10))
+            scout = max(scouts, key=_key)
+            from game_classes import ScoutingReport
+            report = ScoutingReport(player=player, scout=scout)
+            for _ in range(3):
+                report.update_report(player, scout)
+            note = ("War-room rapid take (3 viewings) — assign for a "
+                    "full report.")
+            report.notes = (note if not report.notes
+                            else report.notes + " " + note)
+            reports[pid] = report
+            assigns = getattr(app, "scouting_assignments", None)
+            if isinstance(assigns, dict) and player not in assigns \
+                    and len(assigns) < 30:
+                assigns[player] = scout
+            pot = getattr(report, "scouted_potential", "?") or "?"
+            acc = getattr(report, "accuracy", "?") or "?"
+            strengths = ", ".join(
+                str(s) for s in (getattr(report, "strengths", None) or [])
+                [:2]) or "—"
+            messagebox.showinfo(
+                "War-Room Take",
+                f"{scout.full_name} on {player.full_name}:\n\n"
+                f"Potential: {pot}  ·  Accuracy {acc} (rapid take)\n"
+                f"Strengths: {strengths}\n\n"
+                f"A standing assignment was added so the report "
+                f"keeps improving.")
+        except Exception:
+            pass
+
     def _create_scout_assignment_dialog(self, player):
         """Create a dialog for scout assignment"""
         dialog = InGamePopup(self.parent)

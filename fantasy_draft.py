@@ -1273,6 +1273,31 @@ class FantasyDraftView(tk.Frame):
         self._reentry_issues = []
         return False
 
+    def _draft_tree_context_menu(self, event, tree):
+        """Right-click a player on a fantasy draft list -> full player menu
+        with the instant war-room scouting take."""
+        try:
+            item_id = tree.identify_row(event.y)
+            if not item_id:
+                return
+            tree.selection_set(item_id)
+            # fantasy_draft keeps a flat item_id -> player map; sanity-check
+            # against the row text in case two trees reused an item id.
+            player = (getattr(self.app, 'tree_maps', {}) or {}).get(item_id)
+            if player is None:
+                return
+            try:
+                row_name = (tree.item(item_id, 'values') or [''])[0]
+                if row_name and getattr(player, 'full_name', '') != row_name:
+                    return
+            except Exception:
+                pass
+            from player_context_menu import PlayerContextMenu
+            PlayerContextMenu(self).show_context_menu(
+                event, player, quick_scout=True)
+        except Exception:
+            pass
+
     def initial_player_load(self):
         """Load players after UI initialization"""
         debug_print("DEBUG: Performing initial player load...")
@@ -1781,6 +1806,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Selection binding
         self.players_tree.bind('<<TreeviewSelect>>', self.on_player_select)
+        self.players_tree.bind('<Button-3>',
+                               lambda e: self._draft_tree_context_menu(
+                                   e, self.players_tree))
         
     def setup_draft_controls_panel(self, parent):
         """Setup draft order and control buttons"""
@@ -2247,6 +2275,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Bind events
         self.integrated_players_tree.bind('<Button-1>', self.integrated_on_player_select)
         self.integrated_players_tree.bind('<Double-1>', self.integrated_on_player_draft)
+        self.integrated_players_tree.bind('<Button-3>',
+                                          lambda e: self._draft_tree_context_menu(
+                                              e, self.integrated_players_tree))
         
         # Button frame (more prominent and always visible)
         button_frame = ttk.LabelFrame(main_frame, text="Draft Actions", style='TLabelframe')

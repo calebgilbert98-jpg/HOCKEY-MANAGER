@@ -16795,7 +16795,10 @@ class HockeyManagerGUI(tk.Tk):
 
         from player_context_menu import PlayerContextMenu
         PlayerContextMenu(self).show_context_menu(
-            event, player, additional_options=extras or None)
+            event, player, additional_options=extras or None,
+            # Draft screens: the clock is ticking, so scouting is the
+            # instant war-room take, not the scouting-window detour.
+            quick_scout=(context_type == 'draft'))
         
     def _handle_player_double_click(self, event, tree):
         """Handle double-clicking on a player in any tree view."""

@@ -5780,6 +5780,38 @@ class DraftView(ctk.CTkFrame):
             font=("Segoe UI", 10), state='disabled', wrap='word')
         self.scouting_report_box.pack(fill='both', expand=True,
                                       padx=8, pady=8)
+        # Live research strip: the next owned pick plus the department's
+        # takes on the top available prospects, with one-click quick
+        # scouting. Refreshed by _render_scouting_report.
+        _rs = tk.Frame(self._board_tab_frames["Scout Report"],
+                       bg=ct['CARD'])
+        _rs.pack(fill='x', padx=8, pady=(8, 0),
+                 before=self.scouting_report_box)
+        self._research_title = ctk.CTkLabel(
+            _rs, text="RESEARCH — NEXT PICK",
+            font=("Segoe UI", 10, 'bold'), text_color=ct['TEXT_DIM'])
+        self._research_title.pack(anchor='w', pady=(0, 2))
+        _rs_row = tk.Frame(_rs, bg=ct['CARD'])
+        _rs_row.pack(fill='x')
+        self._research_list = tk.Listbox(
+            _rs_row, height=6, activestyle='none', bg=ct['BG'],
+            fg=ct['TEXT'], selectbackground=ct['ROW_SELECTED'],
+            relief='flat', highlightthickness=1,
+            highlightbackground=ct['BORDER'])
+        self._research_list.pack(side='left', fill='x', expand=True)
+        self._research_list.bind(
+            '<Double-1>', lambda _e: self._research_quick_scout())
+        _rs_btns = tk.Frame(_rs_row, bg=ct['CARD'])
+        _rs_btns.pack(side='left', padx=(6, 0))
+        self._research_scout_btn = self._secondary_button(
+            _rs_btns, text="Quick scout",
+            command=self._research_quick_scout)
+        self._research_scout_btn.pack(pady=2)
+        self._research_open_btn = self._secondary_button(
+            _rs_btns, text="Scouting",
+            command=lambda: self.app.open_scouting_window())
+        self._research_open_btn.pack(pady=2)
+        self._research_players = []
         self._draft_board_tab("Available")
 
         # CENTER: war room
@@ -5868,6 +5900,10 @@ class DraftView(ctk.CTkFrame):
                                                   text="Trade This Pick",
                                                   command=self.trade_current_pick)
         self.trade_pick_button.pack(fill='x', pady=2)
+        self.research_button = self._secondary_button(btn_col,
+                                               text="Research This Pick",
+                                               command=self._open_draft_research)
+        self.research_button.pack(fill='x', pady=2)
         # Esc disarms a two-step pick confirmation.
         self.bind('<Escape>', lambda _e: self._disarm_draft_button())
 
@@ -5964,7 +6000,7 @@ class DraftView(ctk.CTkFrame):
         for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
-        self.app._bind_player_context_menu(tree, 'default', False)
+        self.app._bind_player_context_menu(tree, 'draft', False)
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
                                  command=tree.yview,
                                  style='Draft.Vertical.TScrollbar')
@@ -6012,7 +6048,7 @@ class DraftView(ctk.CTkFrame):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
         try:
-            self.app._bind_player_context_menu(tree, 'default', False)
+            self.app._bind_player_context_menu(tree, 'draft', False)
         except Exception:
             pass
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
@@ -6043,7 +6079,7 @@ class DraftView(ctk.CTkFrame):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
         try:
-            self.app._bind_player_context_menu(tree, 'default', False)
+            self.app._bind_player_context_menu(tree, 'draft', False)
         except Exception:
             pass
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
@@ -6066,6 +6102,13 @@ class DraftView(ctk.CTkFrame):
         if tree is None:
             return
         tree.delete(*tree.get_children())
+        # Canonical item_id -> prospect map: the universal right-click
+        # menu (main._show_player_context_menu) resolves rows through it.
+        try:
+            _tmap = self.app.tree_maps.setdefault(tree, {})
+            _tmap.clear()
+        except Exception:
+            _tmap = None
         reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
         for i, p in enumerate(self._board_sorted_available(), 1):
             report = reports.get(getattr(p, 'id', None))
@@ -6077,17 +6120,24 @@ class DraftView(ctk.CTkFrame):
                 pos = "?"
             grade = self._GRADE_BASE.get(
                 str(getattr(p, 'potential_grade', 'C')).strip(), 'C')
-            tree.insert('', 'end',
-                        iid=str(getattr(p, 'id', '')),
-                        values=(i, getattr(p, 'full_name', '?'), pos, pot,
-                                getattr(p, 'age', '?')),
-                        tags=(f"pot_{grade}",))
+            _iid = tree.insert('', 'end',
+                                 iid=str(getattr(p, 'id', '')),
+                                 values=(i, getattr(p, 'full_name', '?'),
+                                         pos, pot, getattr(p, 'age', '?')),
+                                 tags=(f"pot_{grade}",))
+            if _tmap is not None:
+                _tmap[_iid] = p
 
     def _refresh_mypicks_board(self):
         tree = getattr(self, 'mypicks_tree', None)
         if tree is None:
             return
         tree.delete(*tree.get_children())
+        try:
+            _tmap = self.app.tree_maps.setdefault(tree, {})
+            _tmap.clear()
+        except Exception:
+            _tmap = None
         try:
             uname = self.app.user_team.team_name
         except Exception:
@@ -6101,10 +6151,12 @@ class DraftView(ctk.CTkFrame):
                 pos = "?"
             grade = self._GRADE_BASE.get(
                 str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
-            tree.insert('', 'end', values=(
+            _iid = tree.insert('', 'end', values=(
                 overall, getattr(player, 'full_name', '?'), pos,
                 getattr(player, 'potential_grade', '?')),
                 tags=(f"pot_{grade}",))
+            if _tmap is not None:
+                _tmap[_iid] = player
 
     def _render_scouting_report(self):
         """Fill the Scout Report tab from the user's pre-draft joint report:
@@ -6167,6 +6219,84 @@ class DraftView(ctk.CTkFrame):
             box.delete('1.0', 'end')
             box.insert('1.0', "\n".join(lines))
             box.configure(state='disabled')
+        except Exception:
+            pass
+        self._refresh_draft_research()
+
+    # -- Mid-draft research: takes for the next owned pick ---------------
+    def _next_owned_pick(self):
+        """(overall, round) of the user's next not-yet-made pick, or None."""
+        try:
+            uteam = self.app.user_team
+            for i in range(self.current_pick + 1, len(self.draft_order)):
+                _round, team, dp = self.draft_order[i]
+                if team is uteam or team == uteam:
+                    return (int(getattr(dp, 'overall_pick', 0) or 0),
+                            int(_round or 0))
+        except Exception:
+            pass
+        return None
+
+    def _open_draft_research(self):
+        """Jump to the Scout Report tab with fresh research."""
+        try:
+            self._refresh_draft_research()
+            self._draft_board_tab("Scout Report")
+        except Exception:
+            pass
+
+    def _refresh_draft_research(self):
+        """Fill the research strip: next owned pick + top available
+        prospects with the department's report status. Never raises."""
+        try:
+            lst = getattr(self, '_research_list', None)
+            if lst is None or not lst.winfo_exists():
+                return
+            title = getattr(self, '_research_title', None)
+            nxt = self._next_owned_pick()
+            if title is not None and title.winfo_exists():
+                title.configure(
+                    text=("RESEARCH — YOUR NEXT PICK "
+                          f"(Rd {nxt[1]}, #{nxt[0]})" if nxt
+                          else "RESEARCH — NO PICKS LEFT"))
+            lst.delete(0, tk.END)
+            self._research_players = []
+            if not nxt:
+                lst.insert(tk.END, "(no picks remaining)")
+                return
+            reports = (getattr(self.app.user_team, 'scouting_reports', {})
+                       or {})
+            for p in self._available_prospects()[:8]:
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = "?"
+                rep = reports.get(getattr(p, 'id', None))
+                if rep is not None:
+                    acc = getattr(rep, 'accuracy', '?') or '?'
+                    pot = getattr(rep, 'scouted_potential', '') or ''
+                    take = f"your take: {pot} ({acc})".strip()
+                else:
+                    take = "unscouted"
+                lst.insert(tk.END,
+                           f"{getattr(p, 'full_name', '?')} ({pos}) · {take}")
+                self._research_players.append(p)
+        except Exception:
+            pass
+
+    def _research_quick_scout(self):
+        """Quick-scout the research list's selected prospect."""
+        try:
+            sel = self._research_list.curselection()
+            if not sel:
+                return
+            p = self._research_players[sel[0]]
+            from player_context_menu import PlayerContextMenu
+            PlayerContextMenu(self)._quick_scout_player(p)
+            self._refresh_draft_research()
+            _sel = getattr(self, 'selected_prospect', None)
+            if _sel is not None:
+                self._render_prospect_card(_sel)
         except Exception:
             pass
 
@@ -6287,13 +6417,18 @@ class DraftView(ctk.CTkFrame):
                 ctk.CTkLabel(card, text="", font=("Segoe UI", 2)).pack(pady=(0, 8))
         except Exception:
             pass
-        # Right-click opens the full player profile.
+        # Right-click opens the full player menu (profile, quick scout...).
         try:
+            from player_context_menu import PlayerContextMenu
             card.bind('<Button-3>',
-                      lambda _e, _p=p: self.app.open_player_profile(_p))
+                      lambda _e, _p=p: PlayerContextMenu(
+                          self).show_context_menu(
+                              _e, _p, quick_scout=True))
             for w in card.winfo_children():
                 w.bind('<Button-3>',
-                       lambda _e, _p=p: self.app.open_player_profile(_p))
+                       lambda _e, _p=p: PlayerContextMenu(
+                           self).show_context_menu(
+                               _e, _p, quick_scout=True))
         except Exception:
             pass
 
@@ -6699,9 +6834,34 @@ class DraftView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _ticker(self, line):
-        self.ticker.insert(0, line)
+        # The ticker is a non-wrapping Listbox: fold long lines (e.g. the
+        # draft-unavailable reason) into multiple rows so nothing is cut
+        # off mid-sentence.
+        for _ln in self._wrap_ticker_line(str(line)):
+            self.ticker.insert(0, _ln)
         if self.ticker.size() > 120:
             self.ticker.delete(120, tk.END)
+
+    def _wrap_ticker_line(self, line):
+        """Split a ticker line into rows that fit the listbox width."""
+        try:
+            import textwrap
+            from tkinter import font as _tkfont
+            _w = self.ticker.winfo_width()
+            if _w > 1:
+                _f = _tkfont.Font(font=self.ticker.cget("font"))
+                _avg = _f.measure("0123456789abcdefghijklmnopqrstuvwxyz") / 36
+                _chars = max(20, int(_w / _avg) - 2) if _avg > 0 else 42
+            else:
+                _chars = 42
+            _parts = textwrap.wrap(line, width=_chars,
+                                   break_long_words=False,
+                                   break_on_hyphens=False) or [line]
+        except Exception:
+            _parts = [line]
+        # insert(0, ...) puts each new row on top, so feed the parts in
+        # reverse to keep reading order.
+        return list(reversed(_parts))
 
     def _available_prospects(self):
         return sorted(self.app.league.draft_prospects,
@@ -6737,7 +6897,8 @@ class DraftView(ctk.CTkFrame):
         self.shortlist.selection_clear(0, tk.END)
         self.shortlist.selection_set(idx)
         player = self._shortlist_players[idx]
-        PlayerContextMenu(self.master).show_context_menu(event, player)
+        PlayerContextMenu(self).show_context_menu(
+            event, player, quick_scout=True)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
