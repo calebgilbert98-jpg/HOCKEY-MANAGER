@@ -6657,7 +6657,22 @@ class GameSim:
             if name in _physicality.DIRTY_INFRACTIONS:
                 _physicality.note_dirty_watch(self, player, team, name)
             if _physicality.is_missed_call(self, name):
-                _physicality.apply_missed_call(self, player, team, name)
+                # Resolve the victim from the live on-ice state so the
+                # post-game DoPS review reads a real player's injury/star
+                # state (never invented). Falls back to the team name.
+                _victim = None
+                try:
+                    _opp = (self.away_team if team is self.home_team
+                            else self.home_team)
+                    _cands = [p for p in self._get_on_ice(_opp)
+                              if getattr(p, "primary_position", None)
+                              is not PlayerPosition.GOALIE]
+                    if _cands:
+                        _victim = random.choice(_cands)
+                except Exception:
+                    _victim = None
+                _physicality.apply_missed_call(self, player, team, name,
+                                               victim=_victim)
                 return "missed"
         except Exception:
             pass

@@ -298,10 +298,17 @@ def _heat(sim: Any, amount: float, cap: float = 40.0) -> None:
 
 
 def apply_missed_call(sim: Any, player: Any, team: Any,
-                      infraction_name: str) -> Dict[str, Any]:
+                      infraction_name: str, victim: Any = None) -> Dict[str, Any]:
     """The crew whiffed a real dirty call: no whistle. Heat spikes, the
     rivalry record remembers the bad call, DoPS still gets its look at
-    the play (same stash shape the live path has always used)."""
+    the play (same stash shape the live path has always used).
+
+    victim is the on-ice skater who took the hit, resolved by the caller
+    from the live game state -- never invented here. When unknown the
+    stash falls back to the victim team name, and the DoPS review reads
+    the victim's real post-game injury/star state off the resolved
+    player exactly as the rolled path does.
+    """
     out: Dict[str, Any] = {"missed": True, "infraction": infraction_name}
     try:
         pname = getattr(player, "full_name", "A checker")
@@ -310,10 +317,12 @@ def apply_missed_call(sim: Any, player: Any, team: Any,
         victim_team = (getattr(sim, "away_team", None)
                        if team is home else home)
         vname = getattr(victim_team, "team_name", "") or "the opposition"
+        vpname = getattr(victim, "full_name", "") or ""
         _heat(sim, MISSED_CALL_HEAT)
         try:
             sim._log_event(
-                f"{pname} ({tname}) gets away with {infraction_name} -- "
+                f"{pname} ({tname}) gets away with {infraction_name} "
+                f"on {vpname or vname} -- "
                 f"NO CALL! The {vname} bench is livid.", "PENALTY")
         except Exception:
             pass
@@ -341,7 +350,7 @@ def apply_missed_call(sim: Any, player: Any, team: Any,
             hits.append({
                 "kind": "controversial_hit",
                 "hitter": pname, "hitter_team": tname,
-                "victim": vname, "victim_team": vname,
+                "victim": vpname or vname, "victim_team": vname,
                 "hitter_controversy": max(0.0, min(100.0, hcon)),
             })
         except Exception:

@@ -12501,8 +12501,14 @@ class HockeyManagerGUI(tk.Tk):
             'clutch_factor': 0.0
         }
         
-        # Get top players by position
-        sorted_roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
+        # Get top players by position -- only dressed players move the
+        # needle. Suspended or injured stars don't boost the team from
+        # the press box (same exclusion the strength calc uses).
+        available = [p for p in team.roster
+                     if not getattr(p, 'is_injured', False)
+                     and not (getattr(p, 'suspension_games_remaining', 0)
+                              or 0)]
+        sorted_roster = sorted(available, key=lambda p: p.overall_rating(), reverse=True)
         top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:3]
         top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:2]
         top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
@@ -12582,13 +12588,15 @@ class HockeyManagerGUI(tk.Tk):
 
         Starters play ~75-80% of games; the backup's chance grows the longer
         the starter's consecutive-starts streak runs (covers back-to-backs).
-        Injured goalies never dress.
+        Injured or suspended goalies never dress.
         """
         import random
         goalies = sorted(
             [p for p in team.roster
              if p.primary_position.name == 'GOALIE'
-             and not getattr(p, 'is_injured', False)],
+             and not getattr(p, 'is_injured', False)
+             and not (getattr(p, 'suspension_games_remaining', 0)
+                      or 0)],
             key=lambda p: p.overall_rating(), reverse=True)
         if not goalies:
             return None
@@ -12626,8 +12634,11 @@ class HockeyManagerGUI(tk.Tk):
         
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
             # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
-            # Injured players don't dress
-            healthy = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+            # Injured or suspended players don't dress
+            healthy = [p for p in team.roster
+                       if not getattr(p, 'is_injured', False)
+                       and not (getattr(p, 'suspension_games_remaining', 0)
+                                or 0)]
             forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
             defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
             dressed_skaters = forwards + defensemen  # 18 skaters
