@@ -13328,12 +13328,49 @@ class SetCaptainsView(ctk.CTkFrame):
             _cc is not None and old_c is not None
             and _cc.is_established_captain(old_c)
             and (new_c is None or new_c is not old_c))
-        dep_ctx = None
         if deposition:
-            _proceed, dep_ctx = self._run_deposition_flow(
-                team, old_c, new_c, _cc)
-            if not _proceed:
-                return  # backed down or cancelled: leave everything as is
+            # Gating T2-Phase 2: the deposition conversation is a chain of
+            # question cards, not blocking dialogs. Dismiss = safe default
+            # (back down / cancel): the letters are left exactly as is.
+            self._run_deposition_flow(
+                team, old_c, new_c, _cc,
+                lambda _proceed, _dep_ctx, _nc=new_c, _a1=alt1, _a2=alt2:
+                    self._save_captains_after_deposition(
+                        _proceed, _dep_ctx, _nc, _a1, _a2))
+            return
+        # MP client: letters land on the host's canonical roster.
+        _cap_params = {
+            "captain_id": (str(getattr(new_c, "id", ""))
+                           if new_c is not None else ""),
+            "alt_ids": [str(getattr(a, "id", ""))
+                        for a in (alt1, alt2) if a is not None]}
+
+        def _caps_sent():
+            messagebox.showinfo(
+                "Captains Sent",
+                "Your captaincy picks were sent to the host and apply "
+                "on the next sync.")
+            self.close_view()
+        if _mp_route(self.app, "set_captaincy", _cap_params,
+                     on_sent=_caps_sent):
+            return
+        self._apply_letters(team, new_c, alt1, alt2,
+                           skip_captain=False)
+        # A human just chose: never mistake these letters for auto-repair.
+        try:
+            self.app.user_team._captaincy_auto_assigned = False
+        except Exception:
+            pass
+        messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
+        self.app.update_all_views()
+        self.close_view()
+
+    def _save_captains_after_deposition(self, _proceed, dep_ctx, new_c,
+                                       alt1, alt2):
+        """Continuation after the deposition card chain resolves."""
+        if not _proceed:
+            return  # backed down or cancelled: leave everything as is
+        team = self.app.user_team
         # MP client: letters land on the host's canonical roster. The
         # deposition conversation happened here; its fallout applies on
         # the host via the deposition context.
@@ -13354,12 +13391,8 @@ class SetCaptainsView(ctk.CTkFrame):
         if _mp_route(self.app, "set_captaincy", _cap_params,
                      on_sent=_caps_sent):
             return
-        if deposition:
-            self._apply_letters(team, new_c, alt1, alt2,
-                               skip_captain=True)
-        else:
-            self._apply_letters(team, new_c, alt1, alt2,
-                               skip_captain=False)
+        self._apply_letters(team, new_c, alt1, alt2,
+                           skip_captain=True)
         # A human just chose: never mistake these letters for auto-repair.
         try:
             self.app.user_team._captaincy_auto_assigned = False
@@ -13395,7 +13428,264 @@ class SetCaptainsView(ctk.CTkFrame):
             except Exception:
                 pass
 
-    def _run_deposition_flow(self, team, old_c, new_c, _cc):
+    def _run_deposition_flow(self, team, old_c, new_c, _cc, on_done):
+        """The judgment call as a chain of question cards.
+
+        on_done(proceed, dep_ctx) fires when the chain resolves -- the
+        same (proceed, dep_ctx) contract as the old blocking version.
+        Dismiss = safe default (cancel / back down): the letters stay.
+        Headless fallback: the legacy blocking flow, talk-first stand-firm.
+        """
+        from popup_system import cards_available
+        if not cards_available(self):
+            _proceed, _dep_ctx = self._run_deposition_flow_sync(
+                team, old_c, new_c, _cc)
+            on_done(_proceed, _dep_ctx)
+            return
+        from popup_system import get_pending_session
+        _app = self.app
+        _old_id = str(getattr(old_c, "id", ""))
+        _sess_id = f"deposition:{_old_id}"
+        _sess = get_pending_session(_app, _sess_id)
+        _sess["kind"] = "deposition"
+        _sess["old_id"] = _old_id
+        _sess["new_id"] = (str(getattr(new_c, "id", ""))
+                           if new_c is not None else "")
+        try:
+            _info = _cc.assess_deposition(
+                old_c, new_c, team, getattr(_app, "league", None))
+        except Exception:
+            _info = {"acceptance": 0.5, "reasons": []}
+        _sess["acceptance"] = float(_info.get("acceptance", 0.5))
+        _sess["reasons"] = list(_info.get("reasons", []) or [])[:5]
+        _sess["old_name"] = getattr(old_c, "full_name", "the captain")
+        _sess["new_name"] = (getattr(new_c, "full_name", "no one")
+                             if new_c is not None else "no one")
+        self._present_deposition_card1(_sess_id, on_done)
+
+    def _deposition_screen_id(self):
+        try:
+            return (getattr(self.app, "_current_screen", None)
+                    or {}).get("id")
+        except Exception:
+            return None
+
+    def _drop_deposition_session(self, _sess_id):
+        try:
+            from popup_system import unregister_pending_item
+            _app = self.app
+            _sess = _app.pending_sessions.get(_sess_id)
+            if isinstance(_sess, dict):
+                for _did in list((_sess.get("dialogs") or {}).keys()):
+                    try:
+                        unregister_pending_item(
+                            _app, f"q:{_sess_id}:{_did}")
+                    except Exception:
+                        pass
+            _app.pending_sessions.pop(_sess_id, None)
+        except Exception:
+            pass
+
+    def _present_deposition_card1(self, _sess_id, on_done):
+        from popup_system import (ask_card, get_pending_session,
+                                  register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _did = "approach"
+        _item_id = f"q:{_sess_id}:{_did}"
+        _old_name = _sess.get("old_name", "the captain")
+        _new_name = _sess.get("new_name", "no one")
+        _reasons = _sess.get("reasons") or []
+        _msg = (f"Stripping the C from {_old_name} will have "
+                f"consequences.\n{_new_name} takes over -- unless "
+                f"{_old_name} is spoken to first and respects the call.")
+        if _reasons:
+            _msg += ("\n\nWhat you know:\n"
+                     + "\n".join(f"\u2022 {r}" for r in _reasons))
+        _title = "Changing the Captaincy"
+        _detail = (f"Decide how to handle stripping the C from "
+                   f"{_old_name}.")
+
+        def _on_pre(pre):
+            try:
+                unregister_pending_item(_app, _item_id)
+            except Exception:
+                pass
+            self._deposition_answer1(_sess_id, pre, on_done)
+
+        register_pending_item(
+            _app, _item_id, kind=RESUMABLE, title=_title,
+            detail=_detail, screen_id=self._deposition_screen_id())
+        ask_card(self, _title, _msg,
+                 [("Speak with him first", "speak", "primary"),
+                  ("Announce it cold", "cold", "secondary"),
+                  ("Cancel", "cancel", "secondary")],
+                 on_answer=_on_pre, default_on_dismiss="cancel",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="deposition_answer",
+                 resolver_args={"step": "approach"})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE,
+                "title": _title, "detail": _detail,
+                "screen_id": self._deposition_screen_id()}
+        except Exception:
+            pass
+
+    def _deposition_answer1(self, _sess_id, pre, on_done):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self.app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        if pre in ("cancel", None):
+            self._drop_deposition_session(_sess_id)
+            on_done(False, None)
+            return
+        _talked = (pre == "speak")
+        _acceptance = float(_sess.get("acceptance", 0.5))
+        _acceptance += 0.18 if _talked else -0.10
+        _acceptance = max(0.02, min(0.98, _acceptance))
+        _sess["talked"] = _talked
+        _sess["acceptance"] = _acceptance
+        try:
+            import captaincy_change as _cc
+            _tier = _cc.roll_tier(_acceptance)
+        except Exception:
+            _tier = "accept"
+        _sess["tier"] = _tier
+        if _tier in ("pushback", "extreme"):
+            self._present_deposition_card2(_sess_id, on_done)
+            return
+        self._deposition_finish(_sess_id, False, on_done)
+
+    def _present_deposition_card2(self, _sess_id, on_done):
+        from popup_system import (ask_card, get_pending_session,
+                                  register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _did = "pushback"
+        _item_id = f"q:{_sess_id}:{_did}"
+        _old_name = _sess.get("old_name", "the captain")
+        _new_name = _sess.get("new_name", "no one")
+        _tier = _sess.get("tier", "pushback")
+        _quotes = {
+            "pushback": ("\u201cAfter everything I've given this team? "
+                         "You're making a mistake.\u201d"),
+            "extreme": "\u201cWe're done here.\u201d He walks out.",
+        }
+        _msg = (f"{_old_name} is not accepting the change to "
+                f"{_new_name}:\n\n{_quotes.get(_tier, '')}\n\n"
+                "You have to make the call.")
+        _title = "He Pushed Back"
+        _detail = f"{_old_name} pushed back on losing the C."
+
+        def _on_call(call):
+            try:
+                unregister_pending_item(_app, _item_id)
+            except Exception:
+                pass
+            self._deposition_answer2(_sess_id, call, on_done)
+
+        register_pending_item(
+            _app, _item_id, kind=RESUMABLE, title=_title,
+            detail=_detail, screen_id=self._deposition_screen_id())
+        ask_card(self, _title, _msg,
+                 [("Stand firm", "firm", "primary"),
+                  ("Name him alternate (A)", "alternate", "secondary"),
+                  ("Back down", "backdown", "secondary")],
+                 on_answer=_on_call, default_on_dismiss="backdown",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="deposition_answer",
+                 resolver_args={"step": "pushback"})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE,
+                "title": _title, "detail": _detail,
+                "screen_id": self._deposition_screen_id()}
+        except Exception:
+            pass
+
+    def _deposition_answer2(self, _sess_id, call, on_done):
+        if call in ("backdown", None):
+            self._drop_deposition_session(_sess_id)
+            on_done(False, None)
+            return
+        self._deposition_finish(_sess_id, call == "alternate", on_done)
+
+    def _deposition_finish(self, _sess_id, compromise, on_done):
+        """Apply the deposition fallout, then fire the save continuation."""
+        from popup_system import get_pending_session
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _team = _app.user_team
+        _roster = getattr(_team, "roster", None) or []
+
+        def _find(_pid):
+            if not _pid:
+                return None
+            return next((p for p in _roster
+                         if str(getattr(p, "id", "")) == str(_pid)), None)
+
+        _old_c = _find(_sess.get("old_id"))
+        _new_c = _find(_sess.get("new_id"))
+        self._drop_deposition_session(_sess_id)
+        if _old_c is None:
+            # The old captain left the roster while parked: stop honestly.
+            on_done(False, None)
+            return
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            _cc = None
+        if _cc is None:
+            on_done(False, None)
+            return
+        try:
+            _date_str = _app.current_date.isoformat()
+        except Exception:
+            _date_str = ""
+        _talked = bool(_sess.get("talked", False))
+        _tier = _sess.get("tier", "accept")
+        # MP client: the fallout (morale, news, the letters) lands on the
+        # host's canonical state -- applying it to this snapshot would be
+        # wiped by the next sync.
+        if _mp_is_client(_app):
+            on_done(True, {
+                "old_captain_id": str(getattr(_old_c, "id", "")),
+                "tier": _tier, "talked": _talked,
+                "compromise": bool(compromise), "date_str": _date_str})
+            return
+        _report = _cc.apply_deposition(
+            _team, _old_c, _new_c, _tier, talked=_talked,
+            date_str=_date_str, compromise_alternate=bool(compromise))
+        for _line in (_report.get("news") or []):
+            try:
+                _app.add_news(_line)
+            except Exception:
+                pass
+        _detail = "\n".join(_report.get("lines", []))
+        if _detail:
+            try:
+                messagebox.showinfo("Captaincy Change", _detail)
+            except Exception:
+                pass
+        # Extreme fallout leaves a repair path in the Dressing Room
+        # ("Clear the air" row) -- nothing more to do here.
+        on_done(True, None)
+
+    def _run_deposition_flow_sync(self, team, old_c, new_c, _cc):
         """The judgment call. Returns (proceed, dep_ctx).
 
         The conversation (dialogs, pushback, the call) always happens
