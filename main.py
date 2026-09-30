@@ -16230,6 +16230,15 @@ class HockeyManagerGUI(tk.Tk):
         context = {"situation": situation,
                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
         dlg = TeamTalkDialog(self, self.user_team, "prematch", context)
+        # Flow-modal pause (same pattern as _ask_game_mode_dialog): the sim
+        # needs the talk result before it can proceed. The dialog is
+        # non-modal in code flow, so without this wait dlg.result was always
+        # read as None -- the morale boost never applied and player morale
+        # landed after the game instead of before it.
+        try:
+            dlg.wait_window()
+        except Exception:
+            pass
         if dlg.result:
             _opt, _reaction, boost = dlg.result
             return boost
