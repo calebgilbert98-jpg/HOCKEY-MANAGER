@@ -83,17 +83,14 @@ class ProfessionalScoutingView(ctk.CTkFrame):
             all_players = self._collect_all_players(league, game_manager)
             debug_print(f"DEBUG: Collected {len(all_players)} players")
             
-            # Get scouting staff - generate some if empty
+            # Real scouting staff only -- never fabricated. An empty staff
+            # shows honest empty states ("hire scouts") downstream.
             scouts = self._get_scouting_staff(user_team)
-            if not scouts and user_team:
-                scouts = self._generate_basic_scouts(user_team)
             
             # Get current draft class
             draft_class = self._get_draft_prospects(game_manager)
             
-            # If no players found, generate some sample data
-            if not all_players:
-                all_players = self._generate_sample_players()
+            # No sample players: an empty league shows honest empty states.
             
             return {
                 'players': all_players,
@@ -122,16 +119,13 @@ class ProfessionalScoutingView(ctk.CTkFrame):
         }
     
     def _generate_fallback_data(self) -> Dict[str, Any]:
-        """Generate minimal fallback data when no game manager exists"""
-        return {
-            'players': self._generate_sample_players(),
-            'scouts': self._generate_sample_scouts(),
-            'user_team': None,
-            'league': None,
-            'draft_class': [],
-            'assignments': {},
-            'reports': {}
-        }
+        """Honest empty data when no game manager exists.
+
+        The sample generators below are retained for reference only and are
+        never called in the live path -- fabricated players/scouts must not
+        appear as real data.
+        """
+        return self._empty_data_structure()
     
     def _generate_sample_players(self) -> List:
         """Generate sample players for testing/fallback"""
@@ -259,23 +253,8 @@ class ProfessionalScoutingView(ctk.CTkFrame):
                 if self._is_scouting_staff(staff):
                     scouts.append(staff)
         
-        # If no scouts found, create a basic scout for functionality
-        if not scouts:
-            from game_classes import Staff, StaffRole
-
-            # Create a basic scout (neutral 1-100 scouting attributes)
-            scout = Staff(
-                first_name="John",
-                last_name="Scout",
-                role=StaffRole.PROFESSIONAL_SCOUT,
-                age=40,
-                nationality="USA",
-                judging_player_ability=50,
-                judging_player_potential=50,
-                salary=50000,
-                contract_years=1,
-            )
-            scouts.append(scout)
+        # No fabrication: an empty staff list is honest and the UI
+        # guides the user to hire scouts through the real staff market.
         
         return scouts
     
@@ -564,11 +543,11 @@ class ProfessionalScoutingView(ctk.CTkFrame):
                                command=self._view_player_profile)
         profile_btn.pack(side='left', padx=(0, 8))
         
-        watchlist_btn = tk.Button(toolbar_frame, text="Add to Watchlist", 
+        shortlist_btn = tk.Button(toolbar_frame, text="Add to Shortlist", 
                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                 font=_sfont(self.app.FONT_FAMILY, 10),
-                                command=self._add_to_watchlist)
-        watchlist_btn.pack(side='left', padx=(0, 8))
+                                command=self._add_to_shortlist)
+        shortlist_btn.pack(side='left', padx=(0, 8))
         
         compare_btn = tk.Button(toolbar_frame, text="Compare Players", 
                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
@@ -1051,7 +1030,7 @@ class ProfessionalScoutingView(ctk.CTkFrame):
             event, player,
             additional_options=[
                 ("Assign Scout", self._assign_scout_to_player),
-                ("Add to Watchlist", self._add_to_watchlist),
+                ("Add to Shortlist", self._add_to_shortlist),
                 ("Compare", self._compare_players),
                 ("Advanced Analysis", self._advanced_analysis),
             ])
@@ -1077,72 +1056,94 @@ class ProfessionalScoutingView(ctk.CTkFrame):
         self._show_scout_assignment_dialog(player, scouts)
     
     def _show_scout_assignment_dialog(self, player, scouts):
-        """Show dialog for assigning scout to player"""
+        """Show dialog for assigning scout to player.
+
+        Non-modal (Eastside grammar -- no grab_set; dismissing defers).
+        Creates a REAL assignment in app.scouting_assignments and shows the
+        real estimated completion derived from live state.
+        """
         dialog = InGamePopup(self)
         dialog.title(f"Assign Scout - {player.full_name}")
-        dialog.geometry("400x300")
+        dialog.geometry("400x380")
         dialog.configure(bg=self.app.CONTENT_BG)
         dialog.resizable(False, False)
-        
-        # Center dialog
-        dialog.transient(self)
-        dialog.grab_set()
-        
+
         # Dialog content
         tk.Label(dialog, text=f"Assign Scout to Evaluate {player.full_name}",
                 font=_sfont(self.app.FONT_FAMILY, 12, 'bold'),
                 bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR).pack(pady=15)
-        
+
         # Scout selection
         tk.Label(dialog, text="Available Scouts:",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(pady=(10, 5))
-        
+
         scout_var = tk.StringVar()
         scout_listbox = tk.Listbox(dialog, height=6)
         scout_listbox.pack(pady=5, padx=20, fill='x')
-        
+
         for i, scout in enumerate(scouts):
             scout_name = scout.full_name
             scout_ability = getattr(scout, 'judging_player_ability', 'Unknown')
             scout_listbox.insert(tk.END, f"{scout_name} (Ability: {scout_ability})")
-        
-        # Priority selection
-        tk.Label(dialog, text="Assignment Priority:",
-                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(pady=(15, 5))
-        
-        priority_var = tk.StringVar(value="Normal")
-        priority_frame = tk.Frame(dialog, bg=self.app.CONTENT_BG)
-        priority_frame.pack(pady=5)
-        
-        for priority in ["Low", "Normal", "High", "Urgent"]:
-            tk.Radiobutton(priority_frame, text=priority, variable=priority_var, value=priority,
-                          bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
-                          selectcolor=self.app.ACCENT_COLOR).pack(side='left', padx=10)
-        
+
+        # Real estimated completion, derived from live state
+        pace_label = tk.Label(dialog, text="",
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=_sfont(self.app.FONT_FAMILY, 9),
+                              wraplength=340, justify='left')
+        pace_label.pack(pady=(5, 5), padx=20)
+
+        def _refresh_pace(*_args):
+            try:
+                from scouting_window_helpers import estimate_completion_days
+                sel = scout_listbox.curselection()
+                if not sel:
+                    pace_label.config(text="Select a scout to see the estimated completion.")
+                    return
+                days = estimate_completion_days(self.app, player, scouts[sel[0]])
+                if days == 0:
+                    pace_label.config(text="This player already has a complete report.")
+                elif days is None:
+                    pace_label.config(text="Estimated completion: unknown.")
+                else:
+                    pace_label.config(
+                        text=f"Estimated completion: ~{days} days at this scout's pace "
+                             "(report reaches 'A' accuracy, then the assignment closes).")
+            except Exception:
+                pace_label.config(text="")
+
+        scout_listbox.bind('<<ListboxSelect>>', _refresh_pace)
+        _refresh_pace()
+
         # Buttons
         btn_frame = tk.Frame(dialog, bg=self.app.CONTENT_BG)
         btn_frame.pack(pady=20)
-        
+
         def assign_scout():
             selection = scout_listbox.curselection()
             if not selection:
                 messagebox.showwarning("No Scout", "Please select a scout.")
                 return
-            
+
             scout = scouts[selection[0]]
-            priority = priority_var.get()
-            
-            # In full implementation, this would create actual assignment
-            messagebox.showinfo("Assignment Created", 
-                              f"Scout {scout.full_name} assigned to evaluate {player.full_name}\n"
-                              f"Priority: {priority}\n"
-                              f"Estimated completion: 7-14 days")
-            dialog.destroy()
-        
+
+            try:
+                from scouting_window_helpers import create_scout_assignment
+            except Exception as e:
+                messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+                return
+
+            ok, msg = create_scout_assignment(self.app, player, scout)
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Assignment Created" if ok else "Scouting", msg)
+            if ok:
+                self._populate_assignments()
+                dialog.destroy()
+
         tk.Button(btn_frame, text="Assign Scout", command=assign_scout,
                  bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(side='left', padx=(0, 10))
-        
+
         tk.Button(btn_frame, text="Cancel", command=dialog.destroy,
                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(side='left')
     
@@ -1200,55 +1201,208 @@ Last Scouted: {self._get_last_scouted(player)}
         
         messagebox.showinfo("Player Profile", info.strip())
     
-    def _add_to_watchlist(self):
-        """Add selected player to watchlist"""
+    def _add_to_shortlist(self):
+        """Add the selected player to the REAL ShortlistManager."""
         selection = self.players_tree.selection()
         if not selection:
-            messagebox.showwarning("No Selection", "Please select a player to add to watchlist.")
+            messagebox.showwarning("No Selection", "Please select a player to add to the shortlist.")
             return
-        
+
         player = self.app.tree_maps['players_tree'].get(selection[0])
-        if player:
-            messagebox.showinfo("Watchlist", f"{player.full_name} added to your watchlist!")
+        if not player:
+            messagebox.showerror("Error", "Could not find selected player.")
+            return
+
+        try:
+            from scouting_window_helpers import open_shortlist_dialog
+        except Exception as e:
+            messagebox.showerror("Shortlist", f"Shortlist helpers unavailable: {e}")
+            return
+        open_shortlist_dialog(self, self.app, player)
     
     def _compare_players(self):
-        """Compare selected players"""
+        """Compare players with the REAL comparison tool.
+
+        Routes to PlayerContextMenu's enhanced comparison window (the same
+        tool the "Compare with Another Player" context action opens): pick
+        a player here and choose the comparison target inside the tool.
+        Reused, not rebuilt.
+        """
         selection = self.players_tree.selection()
-        if len(selection) < 2:
-            messagebox.showwarning("Insufficient Selection", "Please select 2 or more players to compare.")
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a player to compare.")
             return
-        
-        messagebox.showinfo("Player Comparison", f"Comparing {len(selection)} players...\n\nDetailed comparison interface would open here.")
+
+        player = self.app.tree_maps['players_tree'].get(selection[0])
+        if not player:
+            messagebox.showerror("Error", "Could not find selected player.")
+            return
+
+        try:
+            from player_context_menu import PlayerContextMenu
+            PlayerContextMenu(self.app)._compare_players(player)
+        except Exception as e:
+            messagebox.showerror("Compare", f"Could not open the comparison tool:\n{e}")
     
     def _advanced_analysis(self):
-        """Show advanced player analysis"""
+        """Show advanced analysis built from REAL live state.
+
+        Analytics stays a puzzle: everything shown is scout-filtered --
+        the filed report's graded potential range, its accuracy-graded
+        attribute bands, strengths/weaknesses the scout actually listed,
+        comparables and projection. With no report, only the public
+        consensus range is shown. Never raw attributes.
+        """
         selection = self.players_tree.selection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select a player for analysis.")
             return
-        
+
         player = self.app.tree_maps['players_tree'].get(selection[0])
-        if player:
-            messagebox.showinfo("Advanced Analysis", f"Advanced statistical analysis for {player.full_name}\n\nWould show detailed breakdowns, trends, comparisons, etc.")
+        if not player:
+            messagebox.showerror("Error", "Could not find selected player.")
+            return
+
+        try:
+            from scouting_window_helpers import reports_of, report_display_lines
+            from scouting import consensus_range
+        except Exception as e:
+            messagebox.showerror("Analysis", f"Analysis helpers unavailable: {e}")
+            return
+
+        report = reports_of(self.app).get(getattr(player, "id", None))
+
+        win = InGamePopup(self)
+        win.title(f"Advanced Analysis — {getattr(player, 'full_name', '?')}")
+        win.geometry("560x560")
+        win.configure(bg=self.app.CONTENT_BG)
+        # Eastside grammar: non-modal. No grab_set; closing defers.
+
+        try:
+            pos = player.primary_position.value
+        except Exception:
+            pos = str(getattr(player, "primary_position", "?"))
+        tk.Label(win, text=f"{getattr(player, 'full_name', '?')}  ·  {pos}  ·  Age {getattr(player, 'age', '?')}",
+                 font=_sfont(self.app.FONT_FAMILY, 12, 'bold'),
+                 bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR,
+                 wraplength=520, justify='left').pack(anchor='w', padx=16, pady=(14, 6))
+
+        body = tk.Text(win, wrap='word', height=24,
+                       bg=self.app.BG_COLOR, fg=self.app.TEXT_COLOR,
+                       font=_sfont(self.app.FONT_FAMILY, 10))
+        body.pack(fill='both', expand=True, padx=16, pady=6)
+
+        def _hdr(text):
+            body.insert('end', f"{text}\n", "hdr")
+
+        body.tag_config("hdr", font=_sfont(self.app.FONT_FAMILY, 10, 'bold'))
+
+        if report is not None:
+            rows, pot = report_display_lines(player, report)
+            _hdr("SCOUT-FILTERED BREAKDOWN")
+            body.insert('end', f"Graded potential: {pot}\n")
+            body.insert('end', f"Report accuracy: {getattr(report, 'accuracy', '?')} "
+                               f"({getattr(report, 'viewings', 0)} viewings)\n")
+            body.insert('end', f"Reliability: {getattr(report, 'reliability', 0.0):.0%}\n\n")
+
+            # Accuracy-graded attribute bands the scout actually filed
+            scouted = getattr(report, "scouted_attributes", None) or {}
+            if scouted:
+                _hdr("ATTRIBUTE BANDS (as graded by the scout)")
+                for attr in sorted(scouted):
+                    label = attr.replace("_", " ").title()
+                    body.insert('end', f"• {label}: {scouted[attr]}\n")
+                body.insert('end', "\n")
+
+            for label, text in rows:
+                if label in ("Accuracy", "Viewings"):
+                    continue  # already shown above
+                _hdr(label.upper())
+                body.insert('end', f"{text}\n\n")
+
+            body.insert('end',
+                        "These are the scout's graded reads, not measurements. "
+                        "Higher accuracy narrows the bands.")
+        else:
+            crange = consensus_range(player)
+            _hdr("PUBLIC CONSENSUS (UN SCOUTED)")
+            body.insert('end', f"Potential range: {crange}\n\n")
+            body.insert('end',
+                        "No filed report exists for this player, so there is no "
+                        "advanced breakdown to show -- anything more would be guessing.\n\n"
+                        "Assign a scout to build a real evaluation; the breakdown "
+                        "above fills in as viewings accumulate and accuracy rises.")
+
+        body.configure(state='disabled')
+        tk.Button(win, text="Close", command=win.destroy,
+                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(pady=(0, 14))
     
     # Placeholder methods for other tabs - to be implemented
     def _create_staff_overview(self, parent):
-        """Create staff overview section"""
+        """Create staff overview section with REAL live numbers."""
         overview_frame = tk.LabelFrame(parent, text="Scouting Department Overview",
                                      bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                      font=_sfont(self.app.FONT_FAMILY, 11, 'bold'))
         overview_frame.pack(fill='x', padx=15, pady=10)
-        
-        info_text = f"""
-Staff Count: {len(self.game_data.get('scouts', []))}
-Active Assignments: 0
-Completed Reports: 0
-Budget Remaining: $50,000
-        """
-        
+
+        try:
+            from scouting_window_helpers import (
+                assignments_of, reports_of, scouts_of, user_team_of)
+            scouts = scouts_of(self.app)
+            assigns = assignments_of(self.app)
+            reports = reports_of(self.app)
+            completed = sum(1 for r in reports.values()
+                            if getattr(r, 'accuracy', '') == 'A')
+            team = user_team_of(self.app)
+            try:
+                budget_left = team.staff_budget_remaining()
+                budget_text = f"${budget_left:,}"
+            except Exception:
+                budget_text = "—"
+            info_text = (
+                f"Staff Count: {len(scouts)}\n"
+                f"Active Assignments: {len(assigns)}\n"
+                f"Completed Reports: {completed}\n"
+                f"Staff Budget Remaining: {budget_text}"
+            )
+        except Exception:
+            info_text = (
+                f"Staff Count: {len(self.game_data.get('scouts', []))}\n"
+                "Active Assignments: —\n"
+                "Completed Reports: —\n"
+                "Staff Budget Remaining: —"
+            )
+
         tk.Label(overview_frame, text=info_text.strip(),
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10), justify='left').pack(pady=10)
+
+        # Refresh the numbers whenever the tab is re-shown
+        def _refresh(_e=None):
+            try:
+                from scouting_window_helpers import (
+                    assignments_of as _a, reports_of as _r,
+                    scouts_of as _s, user_team_of as _u)
+                _scouts = _s(self.app)
+                _assigns = _a(self.app)
+                _reports = _r(self.app)
+                _completed = sum(1 for r in _reports.values()
+                                 if getattr(r, 'accuracy', '') == 'A')
+                _team = _u(self.app)
+                try:
+                    _budget = f"${_team.staff_budget_remaining():,}"
+                except Exception:
+                    _budget = "—"
+                for w in overview_frame.winfo_children():
+                    if isinstance(w, tk.Label):
+                        w.config(text=(
+                            f"Staff Count: {len(_scouts)}\n"
+                            f"Active Assignments: {len(_assigns)}\n"
+                            f"Completed Reports: {_completed}\n"
+                            f"Staff Budget Remaining: {_budget}"))
+            except Exception:
+                pass
+        parent.bind('<Visibility>', _refresh, add='+')
     
     def _create_staff_list(self, parent):
         """Create scouting staff list"""
@@ -1294,16 +1448,132 @@ Months Until Draft: 6
                 font=_sfont(self.app.FONT_FAMILY, 10), justify='left').pack(pady=10)
     
     def _create_draft_filters(self, parent):
-        """Create draft prospect filters"""
-        # Placeholder for draft filters
+        """Create draft prospect filters wired to the real draft class.
+
+        Position group, scouting status, and name search filter the real
+        prospects below. All display values are fog-of-war safe (graded
+        potential ranges, never raw attributes).
+        """
         filter_frame = tk.LabelFrame(parent, text="Draft Prospect Filters",
                                    bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                    font=_sfont(self.app.FONT_FAMILY, 11, 'bold'))
         filter_frame.pack(fill='x', padx=15, pady=(0, 10))
-        
-        tk.Label(filter_frame, text="Draft prospect filtering system would be implemented here.",
-                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
-                font=_sfont(self.app.FONT_FAMILY, 10)).pack(pady=20)
+
+        row = tk.Frame(filter_frame, bg=self.app.CONTENT_BG)
+        row.pack(fill='x', padx=10, pady=10)
+
+        tk.Label(row, text="Position:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR).pack(side='left')
+        self.draft_pos_filter = tk.StringVar(value="All")
+        pos_combo = ttk.Combobox(row, textvariable=self.draft_pos_filter,
+                                 values=["All", "Forwards", "Defensemen", "Goalies"],
+                                 state='readonly', width=12)
+        pos_combo.pack(side='left', padx=(5, 15))
+        pos_combo.bind('<<ComboboxSelected>>',
+                       lambda _e: self._populate_draft_prospects())
+
+        tk.Label(row, text="Scouting:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR).pack(side='left')
+        self.draft_scout_filter = tk.StringVar(value="All")
+        scout_combo = ttk.Combobox(row, textvariable=self.draft_scout_filter,
+                                   values=["All", "Scouted", "In Progress", "Not Scouted"],
+                                   state='readonly', width=12)
+        scout_combo.pack(side='left', padx=(5, 15))
+        scout_combo.bind('<<ComboboxSelected>>',
+                         lambda _e: self._populate_draft_prospects())
+
+        tk.Label(row, text="Search:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR).pack(side='left')
+        self.draft_search = tk.StringVar()
+        search_entry = tk.Entry(row, textvariable=self.draft_search, width=20)
+        search_entry.pack(side='left', padx=(5, 15))
+        search_entry.bind('<KeyRelease>',
+                          lambda _e: self._populate_draft_prospects())
+
+        tk.Button(row, text="Clear", command=self._clear_draft_filters,
+                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR).pack(side='left')
+
+    def _clear_draft_filters(self):
+        """Reset draft prospect filters to show everything."""
+        try:
+            self.draft_pos_filter.set("All")
+            self.draft_scout_filter.set("All")
+            self.draft_search.set("")
+        except Exception:
+            pass
+        self._populate_draft_prospects()
+
+    def _filtered_draft_prospects(self):
+        """Real draft class with the current filters applied.
+
+        Source order: league.draft_prospects (the engine's draft class),
+        then the game_data draft_class fallback. Sorted by draft_ranking.
+        """
+        try:
+            from scouting_window_helpers import league_of, assignments_of
+        except Exception:
+            league_of = assignments_of = None
+        prospects = []
+        try:
+            lg = league_of(self.app) if league_of else None
+            prospects = list(getattr(lg, 'draft_prospects', None) or [])
+        except Exception:
+            prospects = []
+        if not prospects:
+            prospects = list(self.game_data.get('draft_class', []) or [])
+        # Dedupe by id, keep ranking order
+        seen, uniq = set(), []
+        for p in prospects:
+            pid = getattr(p, 'id', None)
+            if pid not in seen:
+                seen.add(pid)
+                uniq.append(p)
+        uniq.sort(key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
+        prospects = uniq
+
+        # Position group filter
+        pos = getattr(self, 'draft_pos_filter', None)
+        pos_val = pos.get() if pos else "All"
+        if pos_val != "All":
+            try:
+                from game_classes import PlayerPosition
+                groups = {
+                    "Forwards": (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                                 PlayerPosition.RIGHT_WING, PlayerPosition.FORWARD),
+                    "Defensemen": (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE,
+                                   PlayerPosition.DEFENSE),
+                    "Goalies": (PlayerPosition.GOALIE,),
+                }
+                wanted = groups.get(pos_val, ())
+                prospects = [p for p in prospects
+                             if getattr(p, 'primary_position', None) in wanted]
+            except Exception:
+                pass
+
+        # Scouting status filter (real reports + real assignments)
+        scout_val = self.draft_scout_filter.get() if hasattr(self, 'draft_scout_filter') else "All"
+        if scout_val != "All":
+            try:
+                from scouting_window_helpers import reports_of, user_team_of
+                reports = reports_of(self.app)
+                assigns = assignments_of(self.app) if assignments_of else {}
+            except Exception:
+                reports, assigns = {}, {}
+            def _status(p):
+                pid = getattr(p, 'id', None)
+                if pid in reports:
+                    return "Scouted"
+                if p in assigns:
+                    return "In Progress"
+                return "Not Scouted"
+            prospects = [p for p in prospects if _status(p) == scout_val]
+
+        # Name search
+        q = self.draft_search.get().lower().strip() if hasattr(self, 'draft_search') else ""
+        if q:
+            prospects = [p for p in prospects
+                         if q in str(getattr(p, 'full_name', '') or '').lower()]
+        return prospects
     
     def _create_draft_rankings(self, parent):
         """Create draft prospect rankings"""
@@ -1313,15 +1583,15 @@ Months Until Draft: 6
         rankings_frame.pack(fill='both', expand=True, padx=15, pady=(0, 10))
         
         # Create treeview for draft prospects
-        draft_cols = ('Rank', 'Name', 'Position', 'Age', 'Overall', 'Potential', 'Grade')
+        draft_cols = ('Rank', 'Name', 'Position', 'Age', 'Potential', 'Status')
         self.draft_tree = ttk.Treeview(rankings_frame, columns=draft_cols, show='headings', height=15)
-        
+
         # Configure columns
         for col in draft_cols:
             self.draft_tree.heading(col, text=col)
-            
+
         # Set column widths
-        col_widths = {'Rank': 50, 'Name': 150, 'Position': 80, 'Age': 50, 'Overall': 70, 'Potential': 80, 'Grade': 60}
+        col_widths = {'Rank': 50, 'Name': 150, 'Position': 80, 'Age': 50, 'Potential': 100, 'Status': 110}
         for col, width in col_widths.items():
             self.draft_tree.column(col, width=width, minwidth=40)
         
@@ -1336,12 +1606,35 @@ Months Until Draft: 6
         self.draft_tree.bind('<Double-1>', self._on_prospect_double_click)
         
     def _on_prospect_double_click(self, event):
-        """Handle double-click on draft prospect"""
+        """Handle double-click on draft prospect: open the REAL report.
+
+        Routes through the draft war-room report machinery (the same
+        fog-of-war rendering ScoutingView uses): the filed ScoutingReport
+        if one exists, otherwise the public consensus range with honest
+        guidance to assign a scout.
+        """
         selection = self.draft_tree.selection()
-        if selection:
-            item = self.draft_tree.item(selection[0])
-            player_name = item['values'][1]
-            messagebox.showinfo("Prospect Details", f"Detailed prospect report for {player_name} would open here.")
+        if not selection:
+            return
+        player = self.app.tree_maps.get('draft_tree', {}).get(selection[0])
+        if player is None:
+            # Fallback: resolve by name from the real draft class
+            try:
+                name = self.draft_tree.item(selection[0])['values'][1]
+                for p in self._filtered_draft_prospects():
+                    if getattr(p, 'full_name', '') == name:
+                        player = p
+                        break
+            except Exception:
+                player = None
+        if player is None:
+            messagebox.showwarning("Prospect", "Could not find that prospect.")
+            return
+        try:
+            from scouting_window_helpers import show_prospect_report
+            show_prospect_report(self, self.app, player)
+        except Exception as e:
+            messagebox.showerror("Report", f"Could not open the prospect report:\n{e}")
     
     def _create_assignment_interface(self, parent):
         """Create assignment management interface"""
@@ -1380,11 +1673,14 @@ Months Until Draft: 6
         # Assignment list
         assign_cols = ('Scout', 'Target', 'Type', 'Priority', 'Due Date', 'Status')
         self.assignments_tree = ttk.Treeview(left_frame, columns=assign_cols, show='headings', height=15)
-        
+
         for col in assign_cols:
             self.assignments_tree.heading(col, text=col)
             self.assignments_tree.column(col, width=100, minwidth=80)
-        
+
+        # Right-click a live assignment to cancel it
+        self.assignments_tree.bind("<Button-3>", self._on_assignment_right_click)
+
         # Populate with real game data
         self._populate_assignments()
         
@@ -1398,46 +1694,146 @@ Months Until Draft: 6
         right_frame.configure(width=300)
         right_frame.pack_propagate(False)
         
-        # Assignment type options
+        # Scout picker (real scouting staff)
+        scout_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
+        scout_frame.pack(fill='x', padx=10, pady=10)
+
+        tk.Label(scout_frame, text="Scout:",
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+
+        self.assign_scout_var = tk.StringVar()
+        self.assign_scout_combo = ttk.Combobox(scout_frame,
+                                              textvariable=self.assign_scout_var,
+                                              state="readonly", width=25)
+        self.assign_scout_combo.pack(anchor='w', pady=5)
+        self._refresh_assign_scout_combo()
+
+        # Assignment type options (real variable -- Track B)
         type_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         type_frame.pack(fill='x', padx=10, pady=10)
-        
+
         tk.Label(type_frame, text="Assignment Type:",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
-        
+
+        self.assign_type_var = tk.StringVar(value="Player Scouting")
         assignment_types = ["Player Scouting", "Team Analysis", "League Overview", "Prospect Evaluation"]
         for atype in assignment_types:
-            tk.Radiobutton(type_frame, text=atype, value=atype,
+            tk.Radiobutton(type_frame, text=atype, variable=self.assign_type_var, value=atype,
                           bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                           selectcolor=self.app.CONTENT_BG,
                           font=_sfont(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=2)
-        
-        # Priority selection
+
+        # Priority selection (real variable)
         priority_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         priority_frame.pack(fill='x', padx=10, pady=10)
-        
+
         tk.Label(priority_frame, text="Priority Level:",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
-        
-        priority_combo = ttk.Combobox(priority_frame, values=["Low", "Medium", "High", "Critical"],
+
+        self.assign_priority_var = tk.StringVar(value="Medium")
+        priority_combo = ttk.Combobox(priority_frame, textvariable=self.assign_priority_var,
+                                     values=["Low", "Medium", "High", "Critical"],
                                      state="readonly", width=25)
         priority_combo.pack(anchor='w', pady=5)
-        priority_combo.set("Medium")
-        
-        # Deadline
+
+        # Desired-by note (free text; the engine closes the assignment when
+        # the report reaches 'A' accuracy)
         deadline_frame = tk.Frame(right_frame, bg=self.app.CONTENT_BG)
         deadline_frame.pack(fill='x', padx=10, pady=10)
-        
-        tk.Label(deadline_frame, text="Deadline:",
+
+        tk.Label(deadline_frame, text="Desired by (note):",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
-        
-        deadline_entry = tk.Entry(deadline_frame, width=25,
-                                 font=_sfont(self.app.FONT_FAMILY, 9))
+
+        self.assign_deadline_var = tk.StringVar()
+        deadline_entry = tk.Entry(deadline_frame, textvariable=self.assign_deadline_var,
+                                  width=25,
+                                  font=_sfont(self.app.FONT_FAMILY, 9))
         deadline_entry.pack(anchor='w', pady=5)
-        deadline_entry.insert(0, "2024-12-01")
+
+        # Target hint + create button
+        self.assign_target_hint = tk.Label(right_frame,
+                text="Target: select a player on the Players tab, or use + New Assignment to search.",
+                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                font=_sfont(self.app.FONT_FAMILY, 9), wraplength=260, justify='left')
+        self.assign_target_hint.pack(fill='x', padx=10, pady=(4, 4))
+
+        create_btn = tk.Button(right_frame, text="Create Assignment",
+                               bg=self.app.ACCENT_COLOR, fg='white',
+                               font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
+                               command=self._create_assignment_from_pane)
+        create_btn.pack(padx=10, pady=(4, 10), anchor='w')
+
+    def _refresh_assign_scout_combo(self):
+        """Fill the assignment composer scout picker with real scouts."""
+        try:
+            from scouting_window_helpers import scouts_of
+            scouts = scouts_of(self.app)
+        except Exception:
+            scouts = []
+        combo = getattr(self, 'assign_scout_combo', None)
+        if combo is None:
+            return
+        names = [getattr(s, 'full_name', '?') for s in scouts]
+        combo['values'] = names
+        if names and not self.assign_scout_var.get():
+            self.assign_scout_var.set(names[0])
+        self._assign_scout_list = scouts
+
+    def _create_assignment_from_pane(self):
+        """Create a REAL assignment from the right-pane composer.
+
+        Scout + type + priority come from the pane's real controls; the
+        target is the Players tab selection (or the search dialog if none).
+        """
+        try:
+            from scouting_window_helpers import (create_scout_assignment,
+                                                 open_assignment_dialog)
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+            return
+
+        scouts = getattr(self, '_assign_scout_list', None) or []
+        scout = None
+        try:
+            idx = list(self.assign_scout_combo['values']).index(self.assign_scout_var.get())
+            scout = scouts[idx]
+        except Exception:
+            scout = None
+        if scout is None:
+            messagebox.showwarning("No Scout", "Please select a scout.")
+            return
+
+        player = None
+        try:
+            sel = self.players_tree.selection()
+            if sel:
+                player = self.app.tree_maps['players_tree'].get(sel[0])
+        except Exception:
+            player = None
+
+        req_type = self.assign_type_var.get()
+        req_priority = self.assign_priority_var.get()
+        deadline = self.assign_deadline_var.get().strip()
+
+        if player is None:
+            # No target selected: open the search dialog with pane defaults
+            open_assignment_dialog(
+                self, self.app, preselected_scout=scout,
+                request_type=req_type, request_priority=req_priority,
+                on_created=self._populate_assignments)
+            return
+
+        ok, msg = create_scout_assignment(self.app, player, scout)
+        if deadline:
+            msg = f"{msg}\nDesired by: {deadline} (request note)"
+        (messagebox.showinfo if ok else messagebox.showwarning)(
+            "Scouting Assignment", f"[{req_type} \u00b7 {req_priority}]\n{msg}")
+        if ok:
+            self._populate_assignments()
     
     def _create_reports_interface(self, parent):
         """Create reports interface"""
@@ -1519,52 +1915,72 @@ Months Until Draft: 6
                 font=_sfont(self.app.FONT_FAMILY, 11, 'italic')).pack(expand=True)
         
     def _on_report_select(self, event):
-        """Handle report selection"""
+        """Handle report selection: render the REAL filed report.
+
+        Fog-of-war safe: only the graded information the scout actually
+        filed (accuracy, viewings, graded potential range, strengths /
+        weaknesses the report lists). Never raw attributes.
+        """
         selection = self.reports_tree.selection()
         if not selection:
             self._show_default_report_view()
             return
-        
-        item = self.reports_tree.item(selection[0])
-        values = item['values']
-        
+
+        entry = self.app.tree_maps.get('reports_tree', {}).get(selection[0])
+        if not entry:
+            self._show_default_report_view()
+            return
+        player, report = entry
+        if report is None:
+            self._show_default_report_view()
+            return
+
+        try:
+            from scouting_window_helpers import report_display_lines
+        except Exception:
+            self._show_default_report_view()
+            return
+        rows, pot = report_display_lines(player, report)
+
         # Clear previous content
         for widget in self.report_details_frame.winfo_children():
             widget.destroy()
-        
-        # Show report details
-        player_name = values[0]
-        scout_name = values[1]
-        report_date = values[2]
-        report_grade = values[4]
-        
+
+        player_name = getattr(player, 'full_name', '?')
+        scout_name = getattr(getattr(report, 'scout', None), 'full_name', '\u2014')
+        last = getattr(report, 'last_viewed', None)
+        try:
+            report_date = last.strftime("%Y-%m-%d") if last else "\u2014"
+        except Exception:
+            report_date = "\u2014"
+
         # Player info
         tk.Label(self.report_details_frame, text=f"Player: {player_name}",
                 bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 12, 'bold')).pack(anchor='w', pady=(0, 5))
-        
+
         tk.Label(self.report_details_frame, text=f"Scout: {scout_name}",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10)).pack(anchor='w')
-        
+
         tk.Label(self.report_details_frame, text=f"Date: {report_date}",
                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 10)).pack(anchor='w')
-        
-        tk.Label(self.report_details_frame, text=f"Grade: {report_grade}",
+
+        tk.Label(self.report_details_frame, text=f"Graded potential: {pot}",
                 bg=self.app.CONTENT_BG, fg=self.app.ACCENT_COLOR,
                 font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w', pady=(5, 10))
-        
-        # Report content
+
+        # Report content (fog-of-war safe)
         report_text = tk.Text(self.report_details_frame, height=12, width=35,
                              bg=self.app.BG_COLOR, fg=self.app.TEXT_COLOR,
                              font=_sfont(self.app.FONT_FAMILY, 9), wrap='word')
         report_text.pack(fill='both', expand=True)
-        
-        # Generate dynamic report content based on actual player data
-        report_content = self._generate_report_content(player_name, report_grade)
-        
-        report_text.insert('1.0', report_content)
+
+        for label, text in rows:
+            report_text.insert('end', f"{label.upper()}\n", "hdr")
+            report_text.insert('end', f"{text}\n\n")
+        report_text.tag_config("hdr", font=_sfont(self.app.FONT_FAMILY, 9, 'bold'))
         report_text.configure(state='disabled')
     
     def _generate_report_content(self, player_name, grade):
@@ -1712,63 +2128,83 @@ Grade {grade} - Worth monitoring progress."""
             print(f"Error in _populate_scouting_staff: {e}")
     
     def _populate_draft_prospects(self):
-        """Populate draft prospects data"""
+        """Populate draft prospects from the REAL draft class.
+
+        Fog-of-war display only: graded potential ranges from real reports
+        (or the public consensus range when unscouted) plus the real
+        scouting status. Never raw attributes. Rows map to real players in
+        app.tree_maps['draft_tree'] for double-click reports.
+        """
         try:
-            all_players = self.game_data.get('players', [])
-            
-            # Filter for draft-eligible players (typically ages 17-20)
-            draft_prospects = []
-            for player in all_players:
-                age = getattr(player, 'age', 25)
-                if 17 <= age <= 20:
-                    draft_prospects.append(player)
-            
-            # Sort by overall rating (descending)
-            draft_prospects.sort(key=lambda p: getattr(p, 'overall_rating', lambda: 50)(), reverse=True)
-            
-            # Clear existing data
             if hasattr(self, 'draft_tree'):
                 self.draft_tree.delete(*self.draft_tree.get_children())
-            
-            # Populate draft tree if it exists
-            if hasattr(self, 'draft_tree'):
-                for i, prospect in enumerate(draft_prospects[:100]):  # Top 100 prospects
-                    name = getattr(prospect, 'full_name', f"{prospect.first_name} {prospect.last_name}")
+        except Exception:
+            pass
+        try:
+            from scouting import (consensus_range, report_potential_display,
+                                  GRADE_ORDER, grade_color)
+            from scouting_window_helpers import reports_of, assignments_of
+            reports = reports_of(self.app)
+            assigns = assignments_of(self.app)
+        except Exception:
+            return
+
+        if 'draft_tree' not in self.app.tree_maps:
+            self.app.tree_maps['draft_tree'] = {}
+        tree_map = self.app.tree_maps['draft_tree']
+        tree_map.clear()
+
+        try:
+            prospects = self._filtered_draft_prospects()[:200]
+        except Exception as e:
+            print(f"Error filtering draft prospects: {e}")
+            return
+
+        if hasattr(self, 'draft_tree'):
+            for i, prospect in enumerate(prospects):
+                try:
+                    name = getattr(prospect, 'full_name',
+                                   f"{getattr(prospect, 'first_name', '?')} {getattr(prospect, 'last_name', '')}")
                     position = getattr(prospect, 'primary_position', 'Unknown')
-                    age = getattr(prospect, 'age', 'Unknown')
-                    overall = getattr(prospect, 'overall_rating', lambda: 'Unknown')()
-                    potential = getattr(prospect, 'potential', 'Unknown')
-                    
-                    # Convert position enum to string if needed
                     if hasattr(position, 'value'):
                         position = position.value
-                    
-                    # Grade prospects
-                    if isinstance(overall, (int, float)):
-                        if overall >= 39:
-                            grade = "A+"
-                        elif overall >= 37:
-                            grade = "A"
-                        elif overall >= 35:
-                            grade = "A-"
-                        elif overall >= 33:
-                            grade = "B+"
-                        elif overall >= 31:
-                            grade = "B"
-                        else:
-                            grade = "B-"
+                    age = getattr(prospect, 'age', 'Unknown')
+
+                    pid = getattr(prospect, 'id', None)
+                    report = reports.get(pid)
+                    if report:
+                        pot = report_potential_display(report, prospect)
+                        status = f"Scouted ({getattr(report, 'accuracy', '?')})"
+                        top_grade = pot.split("–")[-1].strip()
+                    elif prospect in assigns:
+                        pot = consensus_range(prospect)
+                        status = "In Progress"
+                        top_grade = pot.split("–")[-1].strip()
                     else:
-                        grade = "Ungraded"
-                    
-                    self.draft_tree.insert('', 'end', values=(
-                        i + 1, name, str(position), age, overall, potential, grade
-                    ))
-            
-            self._update_status(f"Loaded {len(draft_prospects)} draft prospects")
-            
-        except Exception as e:
-            self._update_status(f"Error loading draft prospects: {str(e)}")
-            print(f"Error in _populate_draft_prospects: {e}")
+                        pot = consensus_range(prospect)
+                        status = "—"
+                        top_grade = pot.split("–")[-1].strip()
+
+                    tags = ()
+                    if top_grade in GRADE_ORDER:
+                        tag = f"pot_{top_grade}"
+                        try:
+                            self.draft_tree.tag_configure(
+                                tag, foreground=grade_color(top_grade))
+                        except Exception:
+                            pass
+                        tags = (tag,)
+
+                    item = self.draft_tree.insert(
+                        '', 'end',
+                        values=(i + 1, name, str(position), age, pot, status),
+                        tags=tags)
+                    tree_map[item] = prospect
+                except Exception as e:
+                    print(f"Error adding prospect: {e}")
+                    continue
+
+        self._update_status(f"Loaded {len(prospects)} draft prospects")
     
     def update_views(self):
         """Update all views when game data changes"""
@@ -1776,139 +2212,224 @@ Grade {grade} - Worth monitoring progress."""
         self._load_initial_data()
     
     def _create_new_assignment(self):
-        """Create a new scouting assignment"""
-        messagebox.showinfo("New Assignment", "Assignment creation feature would open a detailed form here.")
-    
-    def _create_new_report(self):
-        """Create a new scouting report"""
-        messagebox.showinfo("New Report", "Report creation feature would open a detailed form here.")
-    
-    def _populate_assignments(self):
-        """Populate assignments with real game data"""
+        """Create a REAL scouting assignment (non-modal dialog).
+
+        Writes into app.scouting_assignments -- the same store the engine
+        processes daily. Shows the real estimated completion derived from
+        live state. Dismissing the dialog defers.
+        """
         try:
-            scouts = self.game_data.get('scouts', [])
-            players = self.game_data.get('players', [])
-            
-            # Clear existing assignments
-            self.assignments_tree.delete(*self.assignments_tree.get_children())
-            
-            if not scouts or not players:
+            from scouting_window_helpers import open_assignment_dialog
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+            return
+        req_type = getattr(self, 'assign_type_var', None)
+        req_pri = getattr(self, 'assign_priority_var', None)
+        open_assignment_dialog(
+            self, self.app,
+            request_type=req_type.get() if req_type else "Player Scouting",
+            request_priority=req_pri.get() if req_pri else "Medium",
+            on_created=self._populate_assignments)
+
+    def _create_new_report(self):
+        """File a new REAL scouting report via the war-room quick-scout flow.
+
+        Picks the best available scout and runs ONE rushed viewing through
+        the real ScoutingReport.update_report machinery for the selected
+        player, then shows the filed report. Scout-filtered only -- never
+        raw attributes.
+        """
+        selection = None
+        try:
+            selection = self.players_tree.selection()
+        except Exception:
+            selection = None
+        if not selection:
+            messagebox.showwarning("No Selection",
+                                   "Select a player on the Players tab first -- "
+                                   "the report is filed for that player.")
+            return
+        player = self.app.tree_maps.get('players_tree', {}).get(selection[0])
+        if player is None:
+            messagebox.showerror("Error", "Could not find selected player.")
+            return
+        try:
+            from scouting_window_helpers import scouts_of, reports_of
+            from game_classes import StaffRole, ScoutingReport
+            scouts = scouts_of(self.app)
+            if not scouts:
+                messagebox.showwarning(
+                    "No Scouts",
+                    "You need scouts before you can file reports.\n\n"
+                    "Hire scouts via Staff \u2192 Hire Staff (free-agent staff market).")
                 return
-            
-            # Create realistic assignments using actual players and scouts
-            assignments = []
-            import random
-            import datetime
-            
-            # Get some top players for scouting
-            top_players = sorted(players, key=lambda p: getattr(p, 'overall_rating', lambda: 50)(), reverse=True)[:20]
-            
-            # Create assignments for top prospects
-            assignment_types = ["Player", "Team", "League Overview"]
-            priorities = ["High", "Medium", "Low"]
-            statuses = ["Active", "Pending", "Complete"]
-            
-            for i in range(min(len(scouts), 8)):  # Create up to 8 assignments
-                if i < len(scouts) and i < len(top_players):
-                    scout = scouts[i % len(scouts)]
-                    player = top_players[i]
-                    
-                    scout_name = getattr(scout, 'full_name', f"{scout.first_name} {scout.last_name}")
-                    player_name = getattr(player, 'full_name', f"{player.first_name} {player.last_name}")
-                    
-                    # Create due date 2-4 weeks from now
-                    today = datetime.date.today()
-                    due_date = today + datetime.timedelta(days=random.randint(14, 28))
-                    
-                    assignment = (
-                        scout_name,
-                        player_name,
-                        random.choice(assignment_types),
-                        random.choice(priorities),
-                        due_date.strftime("%Y-%m-%d"),
-                        random.choice(statuses)
-                    )
-                    assignments.append(assignment)
-            
-            # Add assignments to tree
-            for assignment in assignments:
-                self.assignments_tree.insert('', 'end', values=assignment)
-                
+
+            def _key(s):
+                role_bonus = (100 if getattr(s, "role", None) == StaffRole.AMATEUR_SCOUT else 0)
+                return (role_bonus
+                        + getattr(s, "judging_player_ability", 10)
+                        + getattr(s, "judging_player_potential", 10))
+            scout = max(scouts, key=_key)
+
+            reports = reports_of(self.app)
+            pid = getattr(player, "id", None)
+            report = reports.get(pid)
+            if report is None:
+                report = ScoutingReport(player=player, scout=scout)
+                reports[pid] = report
+            # One rushed viewing through the real machinery
+            report.update_report(player, scout)
+            note = "Rushed single viewing filed from the Reports tab."
+            report.notes = (note if not report.notes else report.notes + " " + note)
+        except Exception as e:
+            messagebox.showerror("Report", f"Could not file the report:\n{e}")
+            return
+        self._populate_reports()
+        try:
+            from scouting_window_helpers import show_prospect_report
+            show_prospect_report(self, self.app, player)
+        except Exception:
+            messagebox.showinfo(
+                "Report Filed",
+                f"Report filed for {getattr(player, 'full_name', '?')}: "
+                f"accuracy {getattr(report, 'accuracy', '?')} "
+                f"({getattr(report, 'viewings', 0)} viewings).")
+
+    def _on_assignment_right_click(self, event):
+        """Right-click menu on a live assignment: cancel it for real."""
+        row = self.assignments_tree.identify_row(event.y)
+        if not row:
+            return
+        self.assignments_tree.selection_set(row)
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Cancel Assignment",
+                         command=self._cancel_assignment)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _cancel_assignment(self):
+        """Cancel the selected REAL scouting assignment."""
+        selection = self.assignments_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select an assignment to cancel.")
+            return
+
+        player = self.app.tree_maps.get('assignments_tree', {}).get(selection[0])
+        if player is None:
+            messagebox.showerror("Error", "Could not find the selected assignment.")
+            return
+
+        try:
+            from scouting_window_helpers import cancel_scout_assignment
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+            return
+
+        result = messagebox.askyesno(
+            "Cancel Assignment",
+            f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
+            "The scout is freed up; any report filed so far is kept.")
+        if result:
+            ok, msg = cancel_scout_assignment(self.app, player)
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Assignment Cancelled" if ok else "Scouting", msg)
+            self._populate_assignments()
+
+    def _populate_assignments(self):
+        """Populate the assignments tree from the REAL scouting_assignments.
+
+        Every row is a live {Player: Staff} assignment the engine processes
+        daily; progress/accuracy come from the real filed reports and the
+        completion estimate is derived from live state. Item -> player refs
+        are kept in app.tree_maps['assignments_tree'].
+        """
+        try:
+            self.assignments_tree.delete(*self.assignments_tree.get_children())
+        except Exception:
+            return
+        try:
+            from scouting_window_helpers import (
+                assignments_of, estimate_completion_days, reports_of)
         except Exception as e:
             print(f"Error populating assignments: {e}")
-    
-    def _populate_reports(self):
-        """Populate reports with real game data"""
+            return
         try:
-            scouts = self.game_data.get('scouts', [])
-            players = self.game_data.get('players', [])
-            
-            # Clear existing reports
+            assigns = assignments_of(self.app)
+            reports = reports_of(self.app)
+            if 'assignments_tree' not in self.app.tree_maps:
+                self.app.tree_maps['assignments_tree'] = {}
+            tree_map = self.app.tree_maps['assignments_tree']
+            tree_map.clear()
+            for player, scout in assigns.items():
+                report = reports.get(getattr(player, "id", None))
+                views = getattr(report, "viewings", 0) if report else 0
+                acc = getattr(report, "accuracy", "\u2014") if report else "\u2014"
+                days = estimate_completion_days(self.app, player, scout)
+                eta = "complete" if days == 0 else (f"~{days}d" if days else "\u2014")
+                item = self.assignments_tree.insert('', 'end', values=(
+                    getattr(scout, "full_name", "?"),
+                    getattr(player, "full_name", "?"),
+                    "Player Scouting",
+                    "Medium",
+                    eta,
+                    f"{views} viewings \u00b7 {acc}",
+                ))
+                tree_map[item] = player
+            # Keep the composer scout picker in sync
+            self._refresh_assign_scout_combo()
+        except Exception as e:
+            print(f"Error populating assignments: {e}")
+
+    def _populate_reports(self):
+        """Populate the reports tree from the REAL filed scouting_reports.
+
+        Every row is a real ScoutingReport the engine built up via
+        report.update_report; dates are the real last-viewed timestamps and
+        grades are the real accuracy grades. Selecting a row renders the
+        fog-of-war-safe report content.
+        """
+        try:
             self.reports_tree.delete(*self.reports_tree.get_children())
-            
-            if not scouts or not players:
-                return
-            
-            # Create realistic reports using actual players and scouts
-            reports = []
-            import random
-            import datetime
-            
-            # Get a variety of players for reports
-            all_players = players[:50] if len(players) > 50 else players
-            
-            # Create reports for various players
-            report_types = ["Player", "Team"]
-            grades = ["A+", "A", "A-", "B+", "B", "B-", "C+"]
-            statuses = ["Complete", "In Progress", "Draft"]
-            
-            for i in range(min(len(scouts) * 2, 15)):  # Create multiple reports per scout
-                if scouts and all_players:
-                    scout = random.choice(scouts)
-                    player = random.choice(all_players)
-                    
-                    scout_name = getattr(scout, 'full_name', f"{scout.first_name} {scout.last_name}")
-                    player_name = getattr(player, 'full_name', f"{player.first_name} {player.last_name}")
-                    
-                    # Create report date in the past 30 days
-                    today = datetime.date.today()
-                    report_date = today - datetime.timedelta(days=random.randint(1, 30))
-                    
-                    # Grade based on player's overall rating
-                    overall = getattr(player, 'overall_rating', lambda: random.randint(50, 85))()
-                    if isinstance(overall, (int, float)):
-                        if overall >= 39:
-                            grade = "A+"
-                        elif overall >= 37:
-                            grade = "A"
-                        elif overall >= 35:
-                            grade = "A-"
-                        elif overall >= 33:
-                            grade = "B+"
-                        elif overall >= 31:
-                            grade = "B"
-                        else:
-                            grade = "B-"
-                    else:
-                        grade = random.choice(grades)
-                    
-                    report = (
-                        player_name,
-                        scout_name,
-                        report_date.strftime("%Y-%m-%d"),
-                        random.choice(report_types),
-                        grade,
-                        random.choice(statuses)
-                    )
-                    reports.append(report)
-            
-            # Sort reports by date (newest first)
-            reports.sort(key=lambda x: x[2], reverse=True)
-            
-            # Add reports to tree
-            for report in reports:
-                self.reports_tree.insert('', 'end', values=report)
-                
+        except Exception:
+            return
+        try:
+            from scouting_window_helpers import reports_of
+        except Exception as e:
+            print(f"Error populating reports: {e}")
+            return
+        try:
+            reports = reports_of(self.app)
+            if 'reports_tree' not in self.app.tree_maps:
+                self.app.tree_maps['reports_tree'] = {}
+            tree_map = self.app.tree_maps['reports_tree']
+            tree_map.clear()
+
+            def _player_for(pid):
+                for p in (self.game_data.get('players', []) or []):
+                    if getattr(p, "id", None) == pid:
+                        return p
+                return None
+
+            rows = []
+            for pid, report in reports.items():
+                player = _player_for(pid)
+                name = getattr(player, "full_name", None) or f"Player {pid}"
+                scout_name = getattr(getattr(report, "scout", None), "full_name", "\u2014")
+                last = getattr(report, "last_viewed", None)
+                try:
+                    datestr = last.strftime("%Y-%m-%d") if last else "\u2014"
+                except Exception:
+                    datestr = "\u2014"
+                acc = getattr(report, "accuracy", "?")
+                status = "Complete" if acc == "A" else "In Progress"
+                rows.append((datestr, name, scout_name, acc, status, player, report))
+            rows.sort(key=lambda r: r[0], reverse=True)
+            for datestr, name, scout_name, acc, status, player, report in rows:
+                item = self.reports_tree.insert('', 'end', values=(
+                    name, scout_name, datestr, "Player", acc, status))
+                tree_map[item] = (player, report)
         except Exception as e:
             print(f"Error populating reports: {e}")
 
