@@ -1284,10 +1284,12 @@ class PlayerProfileView(ctk.CTkFrame):
         self._create_attribute_section(parent, "Passing & Playmaking", passing_attrs)
         
         # Skating & Movement
+        # T1 truth-in-display (2026-09-29): Acceleration was card-only
+        # decoration (no engine/AI/off-ice reader) -- removed. Speed +
+        # Agility carry the skating burst in the sims.
         skating_attrs = [
             ("Skating", "skating"),
             ("Speed", "speed"),
-            ("Acceleration", "acceleration"),
             ("Agility", "agility"),
             ("Balance", "balance"),
             ("Endurance", "endurance"),
@@ -1350,22 +1352,27 @@ class PlayerProfileView(ctk.CTkFrame):
         self._create_attribute_section(parent, "Tendencies", tendency_attrs)
 
         # Character & Consistency
+        # T1 truth-in-display (2026-09-29): Consistency and Important
+        # Matches were card-only decoration (no engine/AI/off-ice reader)
+        # -- removed. Coachability / Work Ethic / Adaptability are real
+        # consumers now (coach_practice attitude; deployment; development).
         character_attrs = [
             ("Confidence", "confidence"),
             ("Flair", "flair"),
             ("Morale", "morale"),
-            ("Consistency", "consistency"),
-            ("Important Matches", "important_matches"),
             ("Focus", "focus"),
             ("Pressure Player", "pressure_player"),
-            ("Offensive Awareness", "offensive_awareness")
+            ("Offensive Awareness", "offensive_awareness"),
+            ("Coachability", "coachability"),
+            ("Work Ethic", "work_ethic"),
+            ("Adaptability", "adaptability"),
         ]
         self._create_attribute_section(parent, "Character & Mentality", character_attrs)
-        
-        # Faceoffs: every skater takes draws; centers get the full read
+
+        # Faceoffs: every skater takes draws
         faceoff_attrs = [("Faceoffs", "faceoffs")]
-        if self.player.primary_position == PlayerPosition.CENTER:
-            faceoff_attrs.append(("Faceoff Wins", "faceoff_wins"))
+        # T1 truth-in-display (2026-09-29): Faceoff Wins was card-only
+        # decoration -- removed (Faceoffs carries the draw game).
         self._create_attribute_section(parent, "Faceoffs", faceoff_attrs)
 
         # Puck Dynasty ecosystem exclusives
@@ -1401,6 +1408,10 @@ class PlayerProfileView(ctk.CTkFrame):
         self._create_attribute_section(parent, "Movement & Mental", movement_attrs)
         
         # Physical & Character
+        # T1 truth-in-display (2026-09-29): Consistency and Important
+        # Matches removed (card-only decoration); Work Ethic and
+        # Adaptability added (real consumers: coach_practice attitude,
+        # deployment attitude, development speed).
         physical_attrs = [
             ("Strength", "strength"),
             ("Endurance", "endurance"),
@@ -1408,8 +1419,8 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Injury Proneness", "injury_proneness"),
             ("Determination", "determination"),
             ("Composure", "composure"),
-            ("Consistency", "consistency"),
-            ("Important Matches", "important_matches")
+            ("Work Ethic", "work_ethic"),
+            ("Adaptability", "adaptability"),
         ]
         self._create_attribute_section(parent, "Physical & Character", physical_attrs)
         
@@ -1774,8 +1785,6 @@ class PlayerProfileView(ctk.CTkFrame):
         # Sample performance indicators
         performance_notes = [
             ("Form", "Good"),
-            ("Consistency", f"{_to_100_scale(self.player.consistency)}"),
-            ("Big Game Player", f"{_to_100_scale(self.player.important_matches)}"),
             ("Injury History", "Clean" if self.player.injury_proneness < 50 else "Concerning"),
             ("Morale", f"{self.player.morale}/100"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
@@ -2402,7 +2411,6 @@ class PlayerProfileView(ctk.CTkFrame):
             ("Strength", getattr(self.player, 'strength', 10)),
             ("Speed", getattr(self.player, 'speed', 10)),
             ("Agility", getattr(self.player, 'agility', 10)),
-            ("Acceleration", getattr(self.player, 'acceleration', 10)),
             ("Balance", getattr(self.player, 'balance', 10)),
             ("Stamina", getattr(self.player, 'stamina', 10)),
             ("Durability", 100 - getattr(self.player, 'injury_proneness', 50)),
@@ -2575,7 +2583,7 @@ class PlayerProfileView(ctk.CTkFrame):
                 ("Rebound Control", self.player.rebound_control),
                 ("Puck Handling", self.player.puck_handling),
                 ("Composure", self.player.composure),
-                ("Consistency", getattr(self.player, 'consistency', 10)),
+                ("Glove Hand", getattr(self.player, 'glove_hand', 10)),
                 ("Anticipation", getattr(self.player, 'anticipation', 10)),
             ]
         else:

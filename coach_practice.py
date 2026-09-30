@@ -400,18 +400,27 @@ def practice_attitude(player: Any) -> Tuple[float, str, List[str]]:
     work_ethic = _num(player, "work_ethic", 70)       # 50-90
     morale = _num(player, "morale", 70)               # 1-100
     determination = _num(player, "determination", 70)  # 50-90
+    # T1 truth-in-display (2026-09-29): adaptability was card-only
+    # decoration. A player who absorbs new systems/drills quickly squeezes
+    # more out of practice -- a small additive nudge (+/-0.025 on the
+    # multiplier), inside the existing 0.6..1.3 clamp. The base formula is
+    # untouched.
+    adaptability = _num(player, "adaptability", 70)   # 50-90
     # Normalize each to 0..1 around its mid.
     cn = _clamp((coachability - 50) / 40, 0, 1)
     wn = _clamp((work_ethic - 50) / 40, 0, 1)
     mn = _clamp((morale - 1) / 99, 0, 1)
     dn = _clamp((determination - 50) / 40, 0, 1)
+    an = _clamp((adaptability - 50) / 40, 0, 1)
     score = 0.35 * cn + 0.30 * wn + 0.20 * mn + 0.15 * dn
-    mult = _clamp(0.6 + score * 0.7, 0.6, 1.3)
+    mult = _clamp(0.6 + score * 0.7 + 0.05 * (an - 0.5), 0.6, 1.3)
     drivers = []
     if coachability < 58:
         drivers.append("low coachability: tunes the coach out")
     elif coachability > 80:
         drivers.append("sponge: soaks up coaching")
+    if adaptability > 82 and mult > 1.0:
+        drivers.append("quick study: picks up new drills fast")
     if work_ethic < 58:
         drivers.append("coasts through reps")
     elif work_ethic > 80:

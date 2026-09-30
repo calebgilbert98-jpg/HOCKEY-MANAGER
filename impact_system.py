@@ -246,8 +246,13 @@ def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
     pt, pn, pb = _talent_tier_probs(overall)
 
     # Attribute engine: hitters hit.
+    # T1 truth-in-display (2026-09-29): bodycheck was card-only decoration.
+    # It now feeds the big-hit tier as a fourth voice in the blend -- the
+    # (-0.05, +0.09) band is unchanged, so no existing outcome can move
+    # further than it already could; only the input is more truthful.
     hit_attr = (_attr(hitter, "checking") + _attr(hitter, "aggressiveness")
-                + _attr(hitter, "determination")) / 3.0
+                + _attr(hitter, "determination")
+                + _attr(hitter, "bodycheck")) / 4.0
     pb += max(-0.05, min(0.09, (hit_attr - 70) / 350.0))
 
     arch = _archetype(hitter).lower()

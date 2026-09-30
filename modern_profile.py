@@ -16,28 +16,52 @@ from tkinter import ttk
 from modern_ui import (AppColors, AppFonts, AppCard, PillBadge)
 
 # FM24-style attribute groups: (display label, Player field name)
+#
+# T1 truth-in-display (2026-09-29): every attribute shown here is read by a
+# real system (engine sim, deployment, morale/dynamics, injuries, media...).
+# Removed as card-only decoration: Consistency, Big Games (important_matches),
+# Acceleration, Faceoff Wins (faceoff_wins). Wired instead of removed:
+# Bodycheck -> impact_system.classify_hit_impact, Adaptability ->
+# coach_practice.practice_attitude.
 SKATER_TECHNICAL = [
     ("Shooting", "shooting"),
     ("Shot Accuracy", "shooting_accuracy"),
     ("Shot Power", "shooting_power"),
+    ("Wrist Shot", "wristshot"),
+    ("Slap Shot", "slapshot"),
+    ("One Timer", "one_timer"),
+    ("Backhand", "backhand"),
+    ("Deflections", "deflections"),
     ("Passing", "passing"),
     ("Pass Accuracy", "passing_accuracy"),
+    ("Passing Creativity", "passing_creativity"),
     ("Puck Handling", "puck_handling"),
+    ("Stickhandling", "stickhandling"),
+    ("Deking", "deking"),
+    ("Off. Positioning", "offensive_positioning"),
     ("Faceoffs", "faceoffs"),
+    ("First Pass", "first_pass"),
+    ("Breakout Passes", "breakout_passes"),
+    ("Puck Protection", "puck_protection"),
+    ("Loose Puck", "loose_puck"),
     ("Pokecheck", "pokecheck"),
 ]
 SKATER_MENTAL = [
     ("Vision", "vision"),
-    ("Creativity", "creativity"),
+    ("Hockey IQ", "hockey_iq"),
     ("Anticipation", "anticipation"),
     ("Decisions", "decision_making"),
     ("Off. Awareness", "off_the_puck"),
+    ("Def. Awareness", "defensive_awareness"),
+    ("Creativity", "creativity"),
     ("Determination", "determination"),
+    ("Composure", "composure"),
+    ("Confidence", "confidence"),
+    ("Focus", "focus"),
+    ("Pressure Player", "pressure_player"),
     ("Teamwork", "teamwork"),
     ("Discipline", "discipline"),
     ("Flair", "flair"),
-    ("Consistency", "consistency"),
-    ("Big Games", "important_matches"),
     ("Work Ethic", "work_ethic"),
     ("Coachability", "coachability"),
     ("Adaptability", "adaptability"),
@@ -45,31 +69,44 @@ SKATER_MENTAL = [
 SKATER_PHYSICAL = [
     ("Skating", "skating"),
     ("Speed", "speed"),
-    ("Acceleration", "acceleration"),
     ("Agility", "agility"),
     ("Balance", "balance"),
     ("Strength", "strength"),
     ("Stamina", "stamina"),
+    ("Endurance", "endurance"),
+    ("Durability", "durability"),
+    ("Injury Proneness", "injury_proneness"),
     ("Aggression", "aggressiveness"),
     ("Checking", "checking"),
     ("Bodycheck", "bodycheck"),
+    ("Shot Blocking", "shot_blocking"),
+    ("Forechecking", "forechecking"),
+    ("Screening", "screen_shots"),
+    ("Work Rate", "work_rate"),
+    ("Shoot Tendency", "shoot_pass_tendency"),
+    ("Hitting Tendency", "hitting_tendency"),
 ]
 GOALIE_TECHNICAL = [
+    ("Goaltending", "goaltending"),
     ("Positioning", "positioning"),
     ("Reflexes", "reflexes"),
     ("Glove Hand", "glove_hand"),
+    ("Stick Side", "stick_side"),
     ("Rebound Ctrl", "rebound_control"),
+    ("Breakaway Skill", "breakaway_skill"),
     ("Puck Handling", "puck_handling"),
     ("Passing", "passing"),
 ]
 GOALIE_MENTAL = [
     ("Anticipation", "anticipation"),
     ("Decisions", "decision_making"),
+    ("Vision", "vision"),
+    ("Focus", "focus"),
     ("Determination", "determination"),
+    ("Composure", "composure"),
+    ("Confidence", "confidence"),
     ("Teamwork", "teamwork"),
     ("Discipline", "discipline"),
-    ("Consistency", "consistency"),
-    ("Big Games", "important_matches"),
     ("Work Ethic", "work_ethic"),
     ("Adaptability", "adaptability"),
 ]
@@ -80,6 +117,9 @@ GOALIE_PHYSICAL = [
     ("Balance", "balance"),
     ("Strength", "strength"),
     ("Stamina", "stamina"),
+    ("Endurance", "endurance"),
+    ("Durability", "durability"),
+    ("Injury Proneness", "injury_proneness"),
     ("Aggression", "aggressiveness"),
 ]
 
@@ -572,6 +612,13 @@ class PlayerProfile(InGamePopup):
                         bg=card.card_bg)
         title.pack(anchor="w", pady=(0, 16))
 
+        # -- TRACK-2 HOOK (attribute composite ratings) -------------------
+        # Track 2 will expose get_composite_ratings(player) from its own
+        # module. The composite-ratings UI section mounts HERE (above the
+        # FM24 groups). The coordinator wires it at merge; this card
+        # deliberately builds nothing composite-side itself.
+        # -- end TRACK-2 HOOK --------------------------------------------
+
         # W6: one-row canonical Condition bar at the top of the Attributes
         # card, color-coded on the shared condition scale.
         try:
@@ -611,6 +658,12 @@ class PlayerProfile(InGamePopup):
             gh.pack(anchor="w", pady=(0, 6))
             for label, field in attrs:
                 val = getattr(self.player, field, None)
+                if val is None and field in ("offensive_positioning",
+                                             "defensive_positioning"):
+                    # Old saves predate the positioning split: fall back to
+                    # the single positioning, same as the engine does
+                    # (mesh_system.offensive/defensive_positioning).
+                    val = getattr(self.player, "positioning", None)
                 if val is None:
                     continue
                 self._create_attribute_bar(col, label, val, card.card_bg,
