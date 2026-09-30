@@ -9621,6 +9621,12 @@ class HockeyManagerGUI(tk.Tk):
                                                        if hasattr(self, 'game_manager') else self)
             except Exception:
                 pass
+            try:
+                import scouting as _scouting_pro
+                _scouting_pro.process_pro_scouting(self.game_manager
+                                                   if hasattr(self, 'game_manager') else self)
+            except Exception:
+                pass
         
         # Process waivers - reduced frequency
         # Waiver clock: exactly 2 calendar days on the wire, as the UI

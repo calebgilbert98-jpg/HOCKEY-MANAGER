@@ -5157,7 +5157,7 @@ class ScoutingView(ctk.CTkFrame):
         reg_frame.pack(fill='x', pady=(0, 4))
         ttk.Label(reg_frame, text="Region:", style='Secondary.TLabel').pack(side='left')
         self.region_combo = ttk.Combobox(reg_frame, textvariable=self.region_var,
-                                        values=self.scmod.SCOUT_REGIONS,
+                                        values=self.scmod.ALL_SCOUT_REGIONS,
                                         state='readonly', width=16)
         self.region_combo.pack(side='left', padx=6)
         ttk.Button(reg_frame, text="Assign", command=self._assign_region,
@@ -5176,7 +5176,8 @@ class ScoutingView(ctk.CTkFrame):
         self.assign_tree.pack(fill='both', expand=True)
         ttk.Button(left, text="Remove Assignment", command=self._remove_assignment,
                    style='Secondary.TButton').pack(anchor='w', pady=(6, 0))
-        ttk.Label(left, text="Regional scouts file reports automatically every few days.",
+        ttk.Label(left, text="Regional scouts file reports automatically every few days.\n"
+                           "Pro scouts cover their beat (AHL, SHL, Liiga, KHL, NL) the same way.",
                   style='Secondary.TLabel', wraplength=260,
                   font=_sfont(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
 

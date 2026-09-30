@@ -1231,8 +1231,16 @@ class PlayerProfile(InGamePopup):
             pass
 
     def _create_scout_notes(self, parent):
-        """Scout Report: strengths/weaknesses read off the attribute groups,
-        plus the potential grade -- the written report behind the bars."""
+        """Scout Report tab: the SCOUT'S read -- never true attributes.
+
+        Shows the filing scout (the ScoutingReport's scout, else the head
+        scout), his graded record line, perceived strengths/weaknesses,
+        perceived composite ratings (ranges where accuracy is low), and
+        fog-of-war potential. The GM's true-value tabs (Overview,
+        Attributes) are untouched. With no scout on staff the report is
+        unavailable -- true values are NEVER shown as a fallback.
+        """
+        import scout_perception as _sp
         card = AppCard(parent)
         card.pack(fill="x", pady=(0, 16))
         content = card.get_content_frame()
@@ -1240,41 +1248,69 @@ class PlayerProfile(InGamePopup):
                  font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
                  bg=card.card_bg).pack(anchor="w", pady=(0, 12))
         try:
-            from game_classes import to_100_scale
-        except Exception:
-            def to_100_scale(v):
-                return v
-        try:
-            is_goalie = 'GOALIE' in str(self.player.primary_position).upper()
-        except Exception:
-            is_goalie = False
-        flat = (GOALIE_TECHNICAL + GOALIE_MENTAL + GOALIE_PHYSICAL
-                if is_goalie else
-                SKATER_TECHNICAL + SKATER_MENTAL + SKATER_PHYSICAL)
-        scored = []
-        for label, field in flat:
-            val = getattr(self.player, field, None)
-            if val is None:
-                continue
+            user_team = getattr(getattr(self, "parent_app", None),
+                                "user_team", None)
+            scout, report = _sp.resolve_tab_scout(user_team, self.player)
+            if scout is None:
+                tk.Label(content,
+                         text="No scout on staff -- report unavailable.\n"
+                              "Hire a scout to get a read on this player.",
+                         font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                         bg=card.card_bg, wraplength=850,
+                         justify="left").pack(anchor="w", pady=2)
+                return
             try:
-                scored.append((label, int(to_100_scale(val))))
+                import analytics_scouting as _as
+                record = _as.scout_record_line(scout)
             except Exception:
-                pass
-        try:
-            scored.sort(key=lambda t: t[1], reverse=True)
-            strengths = [f"{n} ({v})" for n, v in scored[:3]]
-            weak = sorted([t for t in scored if t[1] < 60],
-                          key=lambda t: t[1])
-            weaknesses = [f"{n} ({v})" for n, v in weak[:2]]
-            grade = (getattr(self.player, "potential_grade", None)
-                     or getattr(self.player, "potential", "?"))
-            lines = [f"Potential grade:  {grade}"]
+                record = "no graded calls yet"
+            sname = _sp.scout_display_name(scout)
+            acc = getattr(report, 'accuracy', 'F') if report else 'F'
+            views = getattr(report, 'viewings', 0) if report else 0
+            tk.Label(content,
+                     text=f"Filed by {sname}  --  {record}",
+                     font=AppFonts.BODY_BOLD, fg=AppColors.TEXT_PRIMARY,
+                     bg=card.card_bg, wraplength=850,
+                     justify="left").pack(anchor="w", pady=2)
+            tk.Label(content,
+                     text=f"Report accuracy {acc}  ({views} viewings)",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card.card_bg, wraplength=850,
+                     justify="left").pack(anchor="w", pady=(0, 6))
+
+            # Perceived composites through the true blend formulas.
+            comps = _sp.perceived_composites(self.player, scout, report)
+            comp_lines = []
+            for key, val in comps.items():
+                label = _sp.composite_label(key)
+                if isinstance(val, tuple):
+                    comp_lines.append(f"{label} {val[0]:.0f}-{val[1]:.0f}")
+                else:
+                    comp_lines.append(f"{label} {val:.0f}")
+            if comp_lines:
+                tk.Label(content,
+                         text="Scout's ratings:  " + "   ".join(comp_lines),
+                         font=AppFonts.SMALL, fg=AppColors.TEXT_PRIMARY,
+                         bg=card.card_bg, wraplength=850,
+                         justify="left").pack(anchor="w", pady=(0, 6))
+
+            strengths, weaknesses = _sp.perceived_strengths_weaknesses(
+                self.player, scout, report)
+            try:
+                import scouting as _sc
+                pot = _sc.report_potential_display(report, self.player)
+            except Exception:
+                pot = "?"
+            lines = [f"Potential read:  {pot}"]
             if strengths:
                 lines.append("Best assets:  " + ", ".join(strengths))
             if weaknesses:
                 lines.append("Needs work:  " + ", ".join(weaknesses))
             else:
-                lines.append("No glaring holes in his game.")
+                lines.append("No glaring holes in his game, per this scout.")
+            if report and getattr(report, 'notes', ''):
+                lines.append("")
+                lines.append(str(report.notes)[:600])
             for ln in lines:
                 tk.Label(content, text=ln, font=AppFonts.SMALL,
                          fg=AppColors.TEXT_SECONDARY, bg=card.card_bg,
