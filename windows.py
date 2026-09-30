@@ -4378,11 +4378,50 @@ def gm_trade_value_badges(ai_manager, team, app=None, level="NHL"):
     return _badge
 
 
+# -- Gating T2-Phase 2: stale guards for popup-local sessions ----------
+# trade_propose / draft_call / deposition sessions are popup view state:
+# they never survive save/load (save whitelist drops non-team_talk
+# sessions; single-use waiver stamps are scrubbed pre-save). If a parked
+# card is ever answered after its parent window is gone, the honest move
+# is to do nothing -- the save path has already dropped the session.
+def _stale_popup_answer(session_id, dialog_id, value, **kwargs):
+    return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _gating_reg_resolver
+    _gating_reg_resolver("trade_waiver_answer", _stale_popup_answer)
+    _gating_reg_resolver("draft_call_answer", _stale_popup_answer)
+    _gating_reg_resolver("deposition_answer", _stale_popup_answer)
+except Exception:
+    pass
+
+
 class TradeWindow(InGamePopup):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
     METER_W = 280
     METER_H = 22
+
+    def destroy(self):
+        # Gating T2-Phase 2: closing the window with an unsent proposal
+        # abandons it -- its single-use waiver stamps are cleared (a dead
+        # proposal spends nothing) and the parked questions are dropped.
+        try:
+            if not getattr(self, "_trade_propose_session", None):
+                pass
+            else:
+                from popup_system import (get_pending_session,
+                                          scrub_abandoned_waiver_stamps)
+                _app = getattr(self.parent, "app", self.parent)
+                _sess = get_pending_session(
+                    _app, self._trade_propose_session)
+                if isinstance(_sess, dict) and not _sess.get("sent"):
+                    scrub_abandoned_waiver_stamps(_app)
+                self._drop_propose_session()
+        except Exception:
+            pass
+        super().destroy()
 
     def __init__(self, parent, preset=None):
         from ctk_theme import (
