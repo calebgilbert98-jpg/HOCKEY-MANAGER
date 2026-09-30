@@ -22349,7 +22349,6 @@ class TradeBlockWindow(InGamePopup):
         nothing is fabricated. Fail-safe: any exception leaves the window
         functional and writes nothing.
         """
-        from tkinter import messagebox
         try:
             app = self.parent
             user_team = getattr(app, 'user_team', None)
@@ -22533,7 +22532,6 @@ class TradeBlockWindow(InGamePopup):
         open offer still needs an answer in the inbox). Never raises; the
         model is only written after the selected row resolves.
         """
-        from tkinter import messagebox
         try:
             selection = self.interest_tree.selection()
             if not selection:
@@ -22587,7 +22585,6 @@ class TradeBlockWindow(InGamePopup):
         on your side of the deal. Routes through the app's open_trade_window
         (main.py:15300); honest warning if anything is unresolvable.
         """
-        from tkinter import messagebox
         try:
             tree = getattr(self, 'interest_tree', None)
             selection = tree.selection() if tree is not None else []
@@ -22780,7 +22777,6 @@ class TradeBlockWindow(InGamePopup):
         read by the scouting/targets surfaces). Never fabricates an AI
         response. Never raises; failures report honestly.
         """
-        from tkinter import messagebox
         try:
             selection = self.other_tree.selection()
             if not selection:

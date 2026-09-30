@@ -1410,7 +1410,7 @@ class QuickTradeInterface(InGamePopup):
             if callable(opener):
                 opener()
             else:
-                from tkinter import messagebox
+                from popup_system import messagebox  # gating T2-Phase 0: in-game card, not OS-modal
                 messagebox.showinfo("Trade Center",
                                     "The full Trade Center is unavailable "
                                     "right now.")
@@ -1419,7 +1419,7 @@ class QuickTradeInterface(InGamePopup):
 
     def _send_proposal(self):
         """Send the proposal through the real negotiation machinery."""
-        from tkinter import messagebox
+        from popup_system import messagebox  # gating T2-Phase 0: in-game card, not OS-modal
         if self.app is None or self.user_team is None:
             messagebox.showwarning("No League",
                                    "No league loaded -- cannot send a proposal.")
