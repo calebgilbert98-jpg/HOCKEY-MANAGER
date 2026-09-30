@@ -73,16 +73,21 @@ def main():
     sim.home_on_ice = [p_lo, p_hi]
     sim.away_on_ice = []
     sim.current_zone = Zone.NEUTRAL_ZONE
-    for _ in range(20):  # 20 x 60s = 20 min TOI each
+    # NOTE (batch merge): caleb's retuned _update_fatigue drains per-second
+    # (0.55/s base; a 45s shift costs ~25 energy), far harsher than the
+    # gentle per-minute scale this probe was calibrated on. 20 min of
+    # continuous ice floors everyone at 0, hiding the differentiation.
+    # 3 min is enough to show the stamina spread without flooring.
+    for _ in range(3):  # 3 x 60s = 3 min TOI each
         sim._update_fatigue(60.0)
     e_lo = sim.player_fatigue[p_lo.id]
     e_hi = sim.player_fatigue[p_hi.id]
-    print(f"    energy after 20min: low-stam={e_lo:.1f} high-stam={e_hi:.1f}", flush=True)
+    print(f"    energy after 3min: low-stam={e_lo:.1f} high-stam={e_hi:.1f}", flush=True)
     check("low-stamina skater more drained", e_lo < e_hi - 3.0, f"({e_lo:.1f} vs {e_hi:.1f})")
     check("canonical pool synced",
           abs(cs.get_game_energy(p_lo) - e_lo) < 1e-9 and abs(cs.get_game_energy(p_hi) - e_hi) < 1e-9)
     check("TOI ledger accumulated",
-          abs(sim.player_toi_seconds.get(p_lo.id, 0) - 1200.0) < 1e-9,
+          abs(sim.player_toi_seconds.get(p_lo.id, 0) - 180.0) < 1e-9,
           f"({sim.player_toi_seconds.get(p_lo.id)})")
     check("fresh players not gassed", not cs.is_gassed(p_hi) or True)  # informational below
     # Drain one player hard -> is_gassed trips on the energy axis

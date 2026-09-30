@@ -715,15 +715,6 @@ class GameSim:
         self.home_on_ice = []
         self.away_on_ice = []
 
-        # Every team needs a real lineup for the shift engine to rotate.
-        # Generated/AI teams often arrive with an empty lineup dict, in
-        # which case _get_on_ice fell back to "best 5 by overall" every
-        # tick -- the same skaters played the whole game, fatigue hit
-        # zero, clears became impossible, and OZ possessions stretched
-        # without bound. Build best-available lines when none exist.
-        self._ensure_default_lineup(self.home_team)
-        self._ensure_default_lineup(self.away_team)
-
         # Empty-net state: team NAMES currently skating 6 with the goalie
         # pulled (Team objects are unhashable). Reset every game in run().
         self.goalie_pulled = set()
@@ -744,6 +735,10 @@ class GameSim:
         # Stage 2: Fatigue tracking
         self.player_fatigue = {}
         self.line_change_timer = 0
+        # TOI ledgers (reset per game in run(); initialized here so direct
+        # _update_fatigue calls outside run() don't AttributeError).
+        self.player_toi = {}
+        self.player_shifts = {}
         # Real shift engine: per-team shift state (see shift_engine.py).
         # Initialized lazily by shift_engine.get_shift_state; the dict just
         # needs to exist before the first _get_on_ice call.
@@ -2612,7 +2607,6 @@ class GameSim:
         """
         Stage 2 Enhancement: Simulates a single 20-minute period with zone-based gameplay.
         """
-        self._reset_shift_clocks()
         self._select_starting_lines()
         possession_team = self._resolve_faceoff(reason="period_start")
         self.possession_team = possession_team
@@ -2709,10 +2703,11 @@ class GameSim:
             # offensive-zone possession.
             self._maybe_pull_goalies()
 
-            # Phase 1 shift engine: each team's units change on their own
-            # stamina-gated shift clocks, before positions publish, so the
-            # emitted on-ice units always match the carrier's unit.
-            self._check_unit_changes()
+            # Refresh lines before publishing positions, so the emitted
+            # on-ice units always match the carrier's unit
+            if self._should_change_lines():
+                self._select_starting_lines()
+                self.line_change_timer = 0
 
             # Positional safety net: flush any un-emitted movement (throttled)
             try:
@@ -4678,20 +4673,6 @@ class GameSim:
             location_weights[ShotLocation.CREASE] *= 2.5
             location_weights[ShotLocation.LOW_SLOT] *= 1.3
 
-        # E1: on the power play, the PP formation overrides the ES shape.
-        if self._special_unit_active(attacking_team, 'PP'):
-            pp = getattr(attacking_team, "tactic_pp", "umbrella")
-            if pp == "umbrella":
-                location_weights[ShotLocation.POINT] *= 1.6
-                location_weights[ShotLocation.HIGH_SLOT] *= 1.3
-            elif pp == "funnel":
-                location_weights[ShotLocation.LOW_SLOT] *= 1.6
-                location_weights[ShotLocation.CREASE] *= 1.5
-            elif pp == "diamond":
-                location_weights[ShotLocation.HIGH_SLOT] *= 1.4
-                location_weights[ShotLocation.LEFT_CIRCLE] *= 1.3
-                location_weights[ShotLocation.RIGHT_CIRCLE] *= 1.3
-
         return self._weighted_random_choice(location_weights)
 
     def _calculate_shot_distance(self, location):
@@ -5639,15 +5620,6 @@ class GameSim:
             if 1 <= morale <= 10:
                 morale_edge = (morale - 5) * 0.006
                 adjusted_save_prob *= (1.0 - morale_edge)
-        except Exception:
-            pass
-        # E6: poise matters in clutch moments (late/close games, playoffs).
-        # High-poise shooters are less likely to be denied when it counts.
-        try:
-            if self._is_clutch_moment():
-                poise = getattr(shooter, 'poise', 50)
-                clutch_edge = (poise - 50) / 500.0  # +/-10%
-                adjusted_save_prob *= (1.0 - clutch_edge)
         except Exception:
             pass
 
