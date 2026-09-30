@@ -1153,67 +1153,271 @@ def incoming_offer_for_user(view):
             gets = list(gets) + _will_added
             _waiver_assets.extend(_will_added)
 
-        def _show_call():
+        # Gating T2-Phase 2: the call is a question card, not a blocking
+        # dialog. Dismiss = safe default (decline). The draft clock
+        # freezes while the call is parked (view._ddt_call_parked, checked
+        # in _sp_clock_tick and process_draft_pick).
+        from popup_system import (ask_card, cards_available,
+                                  get_pending_session, register_pending_item,
+                                  unregister_pending_item, PAUSES_DAY)
+        _app = view.app
+        _sess_id = f"draft_call:{overall}"
+        _sess = get_pending_session(_app, _sess_id)
+        _sess["kind"] = "draft_call"
+        _sess["caller"] = caller.team_name
+        _sess["overall"] = overall
+        # Two ledgers: objects for the same-process scrub, ids in the
+        # session for the save/load scrub (scrub_abandoned_waiver_stamps).
+        _waiver_objs = list(_waiver_assets)
+        _sess["waiver_assets"] = [str(getattr(_a, "id", ""))
+                                  for _a in _waiver_objs]
+
+        def _call_msg(_gives, _gets):
             _why = _call_why_lines(
                 te, caller, prosp, board,
                 _priority_name(_priority_of(caller, ai_manager)))
-            return _incoming_call_dialog(view, caller, list(gives),
-                                         list(gets), prosp, overall, _why)
-
-        # M3: the call as a real decision dialog -- identity, target, why,
-        # two-sided deal card with a value bar, Accept / Counter / Decline.
-        choice = _show_call()
-        while choice == 'counter':
-            _new = _user_counter_flow(view, caller, list(gives), list(gets),
-                                      overall)
-            if _new is None:
-                choice = 'decline'
-            else:
-                gives, gets, _new_waivers = _new
-                _waiver_assets.extend(_new_waivers)
-                choice = _show_call()
-        _team_names = {caller.team_name,
-                       view.app.user_team.team_name}
-        if choice != 'accept':
-            # Declined (or counter rejected): scrub single-use waivers the
-            # engine stamped while negotiating; pre-existing waivers for
-            # uninvolved teams are preserved.
-            _scrub_call_waivers(_waiver_assets, _team_names)
+            _lines = ["\U0001f4de  INCOMING CALL -- " + caller.team_name,
+                      _why.get('direction_short', ''),
+                      "",
+                      "WHY THEY'RE CALLING:"]
+            _lines += ["\u2022  " + _b for _b in _why.get('bullets', [])]
             try:
-                view._ticker(f"{caller.team_name} called about "
-                             f"#{overall} -- no deal.")
+                import scouting as _scmod
+            except Exception:
+                _scmod = None
+            try:
+                _tname = getattr(prosp, 'full_name', '?')
+                _tpos = _pos_of(prosp)
+                _tpot = _scmod.consensus_range(prosp) if _scmod else '?'
+            except Exception:
+                _tname, _tpos, _tpot = '?', '?', '?'
+            _lines += ["",
+                       f"THEIR TARGET: {_tname} ({_tpos}) -- "
+                       f"consensus potential: {_tpot}",
+                       "",
+                       "YOU SEND:"]
+            _lines += ["\u2022  " + te.asset_label(_a) for _a in _gets]
+            _lines += ["", "YOU RECEIVE:"]
+            _lines += ["\u2022  " + te.asset_label(_a) for _a in _gives]
+            try:
+                _v_in = sum(te.asset_value(_a) for _a in _gives)
+                _v_out = sum(te.asset_value(_a) for _a in _gets)
+                _share = (_v_in / (_v_in + _v_out)
+                          if (_v_in + _v_out) > 0 else 0.5)
+            except Exception:
+                _share = 0.5
+            _vlabel = ("Value favors you" if _share >= 0.55
+                       else "Value favors them" if _share <= 0.45
+                       else "Roughly fair value")
+            _lines += ["", _vlabel]
+            return "\n".join(str(_l) for _l in _lines)
+
+        def _screen_id():
+            try:
+                return (getattr(_app, "_current_screen", None)
+                        or {}).get("id")
+            except Exception:
+                return None
+
+        def _unpark_call(_did):
+            try:
+                unregister_pending_item(_app, f"q:{_sess_id}:{_did}")
             except Exception:
                 pass
-            return
-        # Accepted: run it through the engine like any other draft deal.
-        try:
-            done = te.execute_trade(caller, team_on_clock, list(gives),
-                                    list(gets), _date_str(view.app),
-                                    league=league)
-        except Exception:
-            _scrub_call_waivers(_waiver_assets, _team_names)
-            return
-        try:
-            if str(getattr(done, 'summary', '')).startswith('BLOCKED:'):
-                _scrub_call_waivers(_waiver_assets, _team_names)
+            try:
+                view._ddt_call_parked = False
+            except Exception:
+                pass
+
+        def _resolve_call(choice, _gives, _gets, _from_card):
+            _team_names = {caller.team_name,
+                           _app.user_team.team_name}
+            try:
+                if choice != 'accept':
+                    # Declined (or counter rejected): scrub single-use
+                    # waivers the engine stamped while negotiating;
+                    # pre-existing waivers for uninvolved teams stay.
+                    _scrub_call_waivers(_waiver_objs, _team_names)
+                    try:
+                        view._ticker(f"{caller.team_name} called about "
+                                     f"#{overall} -- no deal.")
+                    except Exception:
+                        pass
+                    return
+                # Accepted: run it through the engine like any draft deal.
+                try:
+                    done = te.execute_trade(
+                        caller, team_on_clock, list(_gives), list(_gets),
+                        _date_str(_app), league=league)
+                except Exception:
+                    done = None
+                try:
+                    _blocked = str(
+                        getattr(done, 'summary', '') or ''
+                    ).startswith('BLOCKED:')
+                except Exception:
+                    _blocked = True
+                if done is None or _blocked:
+                    _scrub_call_waivers(_waiver_objs, _team_names)
+                    return
+                # Same ownership propagation as _negotiate: the draft board
+                # reads get_draft_order(), which resolves owners by list
+                # membership.
+                _sync_pick_lists(caller, team_on_clock,
+                                 list(_gives), list(_gets))
+                _sync_view_order(view, league)
+                summary = (f"{_app.user_team.team_name} trades #{overall} "
+                           f"overall to {caller.team_name}.")
+                _record_deal(league, _app, summary)
+                try:
+                    view._ticker("TRADE: " + summary)
+                except Exception:
+                    pass
+            finally:
+                try:
+                    _app.pending_sessions.pop(_sess_id, None)
+                except Exception:
+                    pass
+                if _from_card:
+                    # The outer process_draft_pick returned early on the
+                    # parked flag: re-run it now that the call resolved.
+                    try:
+                        view.process_draft_pick()
+                    except Exception:
+                        pass
+
+        def _call_answer(choice, _gives, _gets, _from_card):
+            if choice == 'counter':
+                _present_counter_card(_gives, _gets, _from_card)
                 return
-        except Exception:
-            pass
-        # Same ownership propagation as _negotiate: the draft board reads
-        # get_draft_order(), which resolves owners by list membership.
-        _sync_pick_lists(caller, team_on_clock, list(gives), list(gets))
-        _sync_view_order(view, league)
-        summary = (f"{view.app.user_team.team_name} trades #{overall} "
-                   f"overall to {caller.team_name}.")
-        _record_deal(league, view.app, summary)
-        try:
-            view._ticker("TRADE: " + summary)
-        except Exception:
-            pass
-        # The pick changed hands: re-run the clock for the new owner.
-        try:
-            view.process_draft_pick()
-        except Exception:
-            pass
+            _resolve_call(choice, _gives, _gets, _from_card)
+
+        def _present_call_card(_gives, _gets, _from_card=True):
+            _did = "call"
+            _item_id = f"q:{_sess_id}:{_did}"
+            _title = (f"\U0001f4de Incoming call: {caller.team_name} "
+                      f"-- answer")
+            _detail = (f"{caller.team_name} is calling about your "
+                       f"#{overall} overall pick.")
+
+            def _on_choice(ans):
+                _unpark_call(_did)
+                _call_answer(ans, _gives, _gets, _from_card)
+
+            if not cards_available(view):
+                # Headless: the old dialog defaulted to decline. Not from
+                # a card, so the outer flow resumes on its own.
+                _unpark_call(_did)
+                _call_answer('decline', _gives, _gets, False)
+                return
+            view._ddt_call_parked = True
+            register_pending_item(
+                _app, _item_id, kind=PAUSES_DAY, title=_title,
+                detail=_detail, screen_id=_screen_id())
+            ask_card(view, "Incoming call", _call_msg(_gives, _gets),
+                     [("Accept", "accept", "primary"),
+                      ("Counter", "counter", "secondary"),
+                      ("Decline", "decline", "secondary")],
+                     on_answer=_on_choice, default_on_dismiss="decline",
+                     session_id=_sess_id, dialog_id=_did,
+                     resolver="draft_call_answer",
+                     resolver_args={"overall": overall,
+                                    "caller": caller.team_name})
+            try:
+                _sess["dialogs"][_did]["registry"] = {
+                    "item_id": _item_id, "kind": PAUSES_DAY,
+                    "title": _title, "detail": _detail,
+                    "screen_id": _screen_id()}
+            except Exception:
+                pass
+
+        def _present_counter_card(_gives, _gets, _from_card):
+            # Counter path: the user demands one more of the caller's
+            # later picks. One chained card; Never mind = decline.
+            _options = []
+            try:
+                _order = view.draft_order
+                for _idx in range(view.current_pick + 1, len(_order)):
+                    _r, _t, _dp = _order[_idx]
+                    if (_t == caller and _dp is not None
+                            and not any(_dp is _g for _g in _gives)
+                            and not any(_dp is _g for _g in _gets)):
+                        _options.append((_idx + 1, _r, _dp))
+            except Exception:
+                pass
+            _options = _options[:12]
+            _did = "counter"
+            _item_id = f"q:{_sess_id}:{_did}"
+            _title = (f"\U0001f4de Counter: {caller.team_name} -- answer")
+            _detail = (f"Demand one more pick from {caller.team_name} "
+                       f"for #{overall} overall.")
+
+            def _on_pick(idx):
+                _unpark_call(_did)
+                if idx is None:
+                    _resolve_call('decline', _gives, _gets, _from_card)
+                    return
+                try:
+                    _o, _r, _extra = _options[idx]
+                except Exception:
+                    _resolve_call('decline', _gives, _gets, _from_card)
+                    return
+                _new_gives = list(_gives) + [_extra]
+                try:
+                    _resp = te.ai_consider_trade(
+                        caller, list(_gets), list(_new_gives),
+                        user_team=_app.user_team)
+                except Exception:
+                    _resp = None
+                _decision = getattr(_resp, 'decision', 'reject')
+                if _decision == 'reject':
+                    _resolve_call('decline', _gives, _gets, _from_card)
+                    return
+                _new_gets = list(_gets)
+                if _decision == 'counter':
+                    # Fold the AI's answer once: assets it wants from the
+                    # user, and assets it will add from its own side
+                    # (waiver-stamped for the user's team).
+                    _new_gets = _new_gets + list(
+                        getattr(_resp, 'want_added', None) or [])
+                    _will = list(getattr(_resp, 'will_add', None) or [])
+                    _new_gives = _new_gives + _will
+                    _waiver_objs.extend(_will)
+                    _sess["waiver_assets"] = [
+                        str(getattr(_a, "id", "")) for _a in _waiver_objs]
+                _present_call_card(_new_gives, _new_gets,
+                                  _from_card=_from_card)
+
+            if not cards_available(view):
+                # Headless: never mind. Not from a card, so the outer
+                # flow resumes on its own.
+                _unpark_call(_did)
+                _resolve_call('decline', _gives, _gets, False)
+                return
+            view._ddt_call_parked = True
+            _buttons = [(f"#{_o} overall  (Round {_r})", _i, "secondary")
+                        for _i, (_o, _r, _dp) in enumerate(_options)]
+            _buttons.append(("Never mind", None, "secondary"))
+            register_pending_item(
+                _app, _item_id, kind=PAUSES_DAY, title=_title,
+                detail=_detail, screen_id=_screen_id())
+            ask_card(view, "Counter offer",
+                     f"Demand one more pick from {caller.team_name}:",
+                     _buttons, on_answer=_on_pick,
+                     default_on_dismiss=None,
+                     session_id=_sess_id, dialog_id=_did,
+                     resolver="draft_call_answer",
+                     resolver_args={"overall": overall,
+                                    "caller": caller.team_name,
+                                    "counter": True})
+            try:
+                _sess["dialogs"][_did]["registry"] = {
+                    "item_id": _item_id, "kind": PAUSES_DAY,
+                    "title": _title, "detail": _detail,
+                    "screen_id": _screen_id()}
+            except Exception:
+                pass
+
+        _present_call_card(list(gives), list(gets), _from_card=True)
     except Exception:
         pass
