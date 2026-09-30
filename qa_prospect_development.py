@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for the prospect development / farm production system.
 
 Deterministic scenarios (seeded RNG) + a multi-year prospect census:

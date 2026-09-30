@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Storyline-aware trade context (additive).
 
 Computes situational modifiers for the AI trade logic from live league

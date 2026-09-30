@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # season_flow_ui.py
 # UI Components for Automated Season Flow
 # Provides user interface for controlling season automation
@@ -499,9 +500,40 @@ class MilestoneNotificationView(ctk.CTkFrame):
                       command=self._open_relevant_window, style='TButton').pack(side='right', padx=(0, 10))
 
     def _open_relevant_window(self):
-        """Open the relevant window for this milestone"""
-        # This would open trade window for trade deadline, draft window for draft, etc.
-        pass
+        """Open the window relevant to this milestone's season phase.
+
+        Phase -> real app window mapping; the milestone card closes first
+        so the new surface opens cleanly. If the phase has no mapped
+        window (or opening fails), the user gets an honest message
+        instead of silence.
+        """
+        phase = getattr(self.milestone, 'phase', None)
+        opener = {
+            SeasonPhase.TRADE_DEADLINE: 'open_trade_deadline_center',
+            SeasonPhase.PLAYOFFS: 'open_playoffs_window',
+            SeasonPhase.PLAYOFF_PUSH: 'open_playoffs_window',
+            SeasonPhase.ENTRY_DRAFT: 'open_draft_day_central',
+            SeasonPhase.DRAFT_LOTTERY: 'open_draft_day_central',
+            SeasonPhase.FREE_AGENCY: 'open_free_agency_window',
+            SeasonPhase.PRE_SEASON: 'open_schedule_window',
+            SeasonPhase.REGULAR_SEASON: 'open_schedule_window',
+            SeasonPhase.OFF_SEASON: 'open_schedule_window',
+        }.get(phase)
+        if opener is None:
+            messagebox.showinfo(
+                "Milestone",
+                f"No related window is available for "
+                f"'{getattr(phase, 'value', phase)}'.",
+                parent=self)
+            return
+        try:
+            self.close_view()
+            getattr(self.app, opener)()
+        except Exception as e:
+            messagebox.showwarning(
+                "Milestone",
+                f"Could not open the related window: {e}",
+                parent=self)
 
 
 class MilestoneNotificationWindow(InGamePopup):

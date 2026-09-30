@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Assistant coaches: the Paul Coffey effect, generalized.
 
 Head coaches own the systems (tactics.py). Assistants bring more (or less)

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Trade Deadline Center - Immersive Trade Deadline Day Experience
 Accessible only on trade deadline day (derived: 40 days before the last
@@ -954,249 +955,731 @@ class TradeDeadlineCenter(InGamePopup):
 
 
 class QuickTradeInterface(InGamePopup):
-    """Quick trade proposal interface for deadline day"""
-    
+    """Quick trade proposal interface for deadline day.
+
+    Everything reads live league state: the partner list is every NHL
+    team except yours (sorted, scrollable -- not a hardcoded five), "Their
+    Offer" lists the selected partner's real trade block, "Your Offer"
+    lists your real tradeable picks and expiring contracts, the
+    evaluation runs the real trade engine, and SEND PROPOSAL submits
+    through the real negotiation machinery (trade_negotiation.send_offer)
+    -- the AI answers instantly on deadline day, and the confirmation
+    reflects the negotiation's real post-send status. Non-modal: closing
+    the card defers, never sends.
+    """
+
     def __init__(self, parent, deadline_manager):
         super().__init__(parent)
         self.parent = parent
         self.deadline_manager = deadline_manager
-        
+
         # Colors from parent
         self.BG_COLOR = parent.BG_COLOR
         self.PANEL_COLOR = parent.PANEL_COLOR
         self.TEXT_WHITE = parent.TEXT_WHITE
         self.DEADLINE_GOLD = parent.DEADLINE_GOLD
         self.URGENT_RED = parent.URGENT_RED
-        
+
+        self.app = self._resolve_app()
+        gm = getattr(self.app, 'game_manager', None) if self.app else None
+        self.league = getattr(gm, 'league', None)
+        self.user_team = getattr(self.app, 'user_team', None) \
+            if self.app else None
+
+        self.partner_team = None
+        self.user_assets = []      # real Player / DraftPick objects (yours)
+        self.partner_assets = []   # real Player objects (theirs)
+        self._your_pool = []       # [(label, asset)] you can offer
+        self._their_pool = []      # [(label, asset)] from partner's block
+        self._team_objs = {}
+
         self._setup_window()
         self._create_interface()
-        
+
+    # -- context ------------------------------------------------------
+    def _resolve_app(self):
+        """Walk up past popup cards to the main app.
+
+        Popup cards delegate missing attributes to the app root, so the
+        walk skips InGamePopup frames explicitly and stops at the first
+        real object exposing user_team + game_manager.
+        """
+        from popup_system import InGamePopup
+        node, seen = self, set()
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            if isinstance(node, InGamePopup):
+                node = node.__dict__.get('parent', None)
+                continue
+            if hasattr(node, 'user_team') and hasattr(node, 'game_manager'):
+                return node
+            return None
+        return None
+
+    def _nhl_partners(self):
+        """Every NHL team except the user's, sorted -- real league state."""
+        out = []
+        for t in (getattr(self.league, 'teams', None) or []):
+            try:
+                if t is None or t is self.user_team:
+                    continue
+                ln = str(getattr(t, 'league_name', '') or '')
+                if 'National Hockey League' in ln or 'NHL' in ln or not ln:
+                    out.append(t)
+            except Exception:
+                continue
+        return sorted(out, key=lambda t: str(getattr(t, 'team_name', '')))
+
+    @staticmethod
+    def _pos_code(p):
+        try:
+            pos = getattr(p, 'primary_position', None)
+            return getattr(pos, 'value', None) or getattr(pos, 'name', '?')
+        except Exception:
+            return '?'
+
+    @staticmethod
+    def _ovr(p):
+        try:
+            return int(p.overall_rating())
+        except Exception:
+            return 0
+
+    # -- window -------------------------------------------------------
     def _setup_window(self):
-        """Setup window properties"""
+        """Setup window properties (non-modal card)."""
         self.title("Quick Trade Proposal - Trade Deadline")
-        self.geometry("800x600")
+        self.geometry("900x680")
         self.configure(bg=self.BG_COLOR)
         self.resizable(False, False)
-        
-        # Center on parent
         self.transient(self.parent)
-        self.grab_set()
-        
+        # No grab_set: Eastside grammar -- the card is non-modal and
+        # dismissing it defers the proposal, never sends it.
+
     def _create_interface(self):
         """Create the quick trade interface"""
         # Header
-        header = tk.Frame(self, bg=self.URGENT_RED, height=60)
+        header = tk.Frame(self, bg=self.URGENT_RED, height=56)
         header.pack(fill='x')
         header.pack_propagate(False)
-        
-        time_info = self.deadline_manager.get_time_until_deadline()
-        tk.Label(header, text=f"QUICK TRADE - {time_info['formatted']} REMAINING",
-                bg=self.URGENT_RED, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 16, 'bold')).pack(expand=True)
-        
+        try:
+            remaining = self.deadline_manager.get_time_until_deadline().get(
+                'formatted', '')
+        except Exception:
+            remaining = ''
+        title = "QUICK TRADE" + (f" - {remaining} REMAINING" if remaining else "")
+        tk.Label(header, text=title, bg=self.URGENT_RED, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 14, 'bold')).pack(expand=True)
+
         # Main content
         content = tk.Frame(self, bg=self.PANEL_COLOR)
-        content.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        # Trading team selection
+        content.pack(fill='both', expand=True, padx=12, pady=12)
+
+        # Trading team selection (live league)
         self._create_team_selector(content)
-        
-        # Player selection areas
-        self._create_player_selector(content)
-        
-        # Trade evaluation
+
+        # Asset columns
+        self._create_asset_columns(content)
+
+        # Trade evaluation (real engine)
         self._create_trade_evaluation(content)
-        
+
         # Action buttons
         self._create_action_buttons(content)
-    
+
+        self._refresh_your_pool()
+        self._update_evaluation()
+
     def _create_team_selector(self, parent):
-        """Create team selection interface"""
+        """Create team selection interface (live league teams)."""
         teams_frame = tk.Frame(parent, bg=self.PANEL_COLOR)
-        teams_frame.pack(fill='x', pady=(0, 20))
-        
-        tk.Label(teams_frame, text="Select Trading Partner:",
-                bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 12, 'bold')).pack(anchor='w')
-        
-        # Quick team buttons (active teams on deadline day)
-        active_teams = ['TOR', 'BOS', 'NYR', 'TBL', 'FLA', 'COL', 'EDM', 'VGK', 'DAL', 'CAR']
-        buttons_frame = tk.Frame(teams_frame, bg=self.PANEL_COLOR)
-        buttons_frame.pack(fill='x', pady=10)
-        
-        for i, team in enumerate(active_teams[:5]):
-            btn = tk.Button(buttons_frame, text=team,
-                          bg=self.DEADLINE_GOLD, fg='black',
-                          font=('Segoe UI', 10, 'bold'),
-                          width=8, command=lambda t=team: self._select_team(t))
-            btn.pack(side='left', padx=5)
-            
-    def _create_player_selector(self, parent):
-        """Create player selection interface"""
-        players_frame = tk.Frame(parent, bg=self.PANEL_COLOR)
-        players_frame.pack(fill='both', expand=True, pady=(0, 20))
-        
-        # Your offer side
-        your_frame = tk.LabelFrame(players_frame, text="Your Offer", 
-                                  bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                                  font=('Segoe UI', 11, 'bold'))
-        your_frame.pack(side='left', fill='both', expand=True, padx=(0, 10))
-        
-        # Quick player buttons for common trade pieces
-        common_assets = ['1st Round Pick', '2nd Round Pick', 'Prospect', 'Rental Player', 'Cap Space']
-        for asset in common_assets:
-            btn = tk.Button(your_frame, text=f"+ {asset}",
-                          bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                          font=('Segoe UI', 9), relief='ridge')
-            btn.pack(fill='x', padx=5, pady=2)
-        
-        # Their offer side
-        their_frame = tk.LabelFrame(players_frame, text="Their Offer",
-                                   bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                                   font=('Segoe UI', 11, 'bold'))
-        their_frame.pack(side='right', fill='both', expand=True, padx=(10, 0))
-        
-        # Available players from selected team
-        available_players = ['Impact Forward', 'Veteran Defenseman', 'Backup Goalie', 'Depth Player']
-        for player in available_players:
-            btn = tk.Button(their_frame, text=f"+ {player}",
-                          bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                          font=('Segoe UI', 9), relief='ridge')
-            btn.pack(fill='x', padx=5, pady=2)
-    
+        teams_frame.pack(fill='x', pady=(0, 8))
+
+        tk.Label(teams_frame, text="Select Trading Partner (live league):",
+                 bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 11, 'bold')).pack(anchor='w')
+
+        list_frame = tk.Frame(teams_frame, bg=self.PANEL_COLOR)
+        list_frame.pack(fill='x', pady=6)
+        self._team_listbox = tk.Listbox(
+            list_frame, height=4, bg=self.BG_COLOR, fg=self.TEXT_WHITE,
+            selectbackground=self.DEADLINE_GOLD, selectforeground='black',
+            font=('Segoe UI', 10), exportselection=False)
+        scrollbar = tk.Scrollbar(list_frame, orient='vertical',
+                                 command=self._team_listbox.yview)
+        self._team_listbox.configure(yscrollcommand=scrollbar.set)
+        self._team_listbox.pack(side='left', fill='x', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        for t in self._nhl_partners():
+            name = str(getattr(t, 'team_name', ''))
+            if not name:
+                continue
+            self._team_objs[name] = t
+            self._team_listbox.insert('end', name)
+        if not self._team_objs:
+            self._team_listbox.insert('end', "(no league loaded)")
+        self._team_listbox.bind('<<ListboxSelect>>', self._on_team_select)
+
+    def _asset_column(self, parent, title, side):
+        """One offer column: available pool + add/remove + chosen assets."""
+        frame = tk.LabelFrame(parent, text=title, bg=self.PANEL_COLOR,
+                              fg=self.TEXT_WHITE, font=('Segoe UI', 10, 'bold'))
+        frame.pack(side=('left' if side == 'user' else 'right'),
+                   fill='both', expand=True, padx=(0, 6) if side == 'user'
+                   else (6, 0))
+
+        tk.Label(frame, text="Available:", bg=self.PANEL_COLOR,
+                 fg=self.TEXT_WHITE, font=('Segoe UI', 9)).pack(anchor='w',
+                 padx=6, pady=(4, 0))
+        pool_frame = tk.Frame(frame, bg=self.PANEL_COLOR)
+        pool_frame.pack(fill='both', expand=True, padx=6)
+        pool_lb = tk.Listbox(pool_frame, height=6, bg=self.BG_COLOR,
+                             fg=self.TEXT_WHITE,
+                             selectbackground=self.DEADLINE_GOLD,
+                             selectforeground='black',
+                             font=('Segoe UI', 9), exportselection=False)
+        pool_sb = tk.Scrollbar(pool_frame, orient='vertical',
+                               command=pool_lb.yview)
+        pool_lb.configure(yscrollcommand=pool_sb.set)
+        pool_lb.pack(side='left', fill='both', expand=True)
+        pool_sb.pack(side='right', fill='y')
+
+        btn_row = tk.Frame(frame, bg=self.PANEL_COLOR)
+        btn_row.pack(fill='x', padx=6, pady=4)
+        tk.Button(btn_row, text="Add \u25bc", bg=self.PANEL_COLOR,
+                  fg=self.TEXT_WHITE, font=('Segoe UI', 9, 'bold'),
+                  relief='ridge',
+                  command=lambda: self._add_asset(side)).pack(side='left')
+        tk.Button(btn_row, text="\u25b2 Remove", bg=self.PANEL_COLOR,
+                  fg=self.TEXT_WHITE, font=('Segoe UI', 9),
+                  relief='ridge',
+                  command=lambda: self._remove_asset(side)).pack(side='right')
+
+        tk.Label(frame, text="In proposal:", bg=self.PANEL_COLOR,
+                 fg=self.TEXT_WHITE, font=('Segoe UI', 9)).pack(anchor='w',
+                 padx=6)
+        offer_frame = tk.Frame(frame, bg=self.PANEL_COLOR)
+        offer_frame.pack(fill='x', padx=6, pady=(0, 6))
+        offer_lb = tk.Listbox(offer_frame, height=3, bg=self.BG_COLOR,
+                              fg=self.DEADLINE_GOLD, font=('Segoe UI', 9),
+                              exportselection=False)
+        offer_sb = tk.Scrollbar(offer_frame, orient='vertical',
+                                command=offer_lb.yview)
+        offer_lb.configure(yscrollcommand=offer_sb.set)
+        offer_lb.pack(side='left', fill='x', expand=True)
+        offer_sb.pack(side='right', fill='y')
+        return pool_lb, offer_lb
+
+    def _create_asset_columns(self, parent):
+        """Create the two asset columns."""
+        cols = tk.Frame(parent, bg=self.PANEL_COLOR)
+        cols.pack(fill='both', expand=True, pady=(0, 8))
+        self._your_pool_list, self._your_offer_list = self._asset_column(
+            cols, "Your Offer (your real picks & rentals)", 'user')
+        self._their_pool_list, self._their_offer_list = self._asset_column(
+            cols, "Their Offer (their real trade block)", 'partner')
+
     def _create_trade_evaluation(self, parent):
-        """Create trade evaluation display"""
-        eval_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='sunken', bd=2)
-        eval_frame.pack(fill='x', pady=(0, 20))
-        
-        tk.Label(eval_frame, text="Trade Evaluation",
-                bg=self.PANEL_COLOR, fg=self.DEADLINE_GOLD,
-                font=('Segoe UI', 12, 'bold')).pack(pady=10)
-        
-        # Quick evaluation metrics
-        metrics = [
-            ("Trade Fairness", "Needs More Assets", self.URGENT_RED),
-            ("Cap Impact", "Manageable", self.DEADLINE_GOLD),
-            ("Deadline Value", "High", '#10B981')
-        ]
-        
-        for metric, value, color in metrics:
-            metric_frame = tk.Frame(eval_frame, bg=self.PANEL_COLOR)
-            metric_frame.pack(fill='x', padx=20, pady=2)
-            
-            tk.Label(metric_frame, text=f"{metric}:", bg=self.PANEL_COLOR,
-                    fg=self.TEXT_WHITE, font=('Segoe UI', 10)).pack(side='left')
-            tk.Label(metric_frame, text=value, bg=self.PANEL_COLOR,
-                    fg=color, font=('Segoe UI', 10, 'bold')).pack(side='right')
-    
+        """Create trade evaluation display (real engine numbers)."""
+        eval_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='sunken',
+                              bd=2)
+        eval_frame.pack(fill='x', pady=(0, 8))
+
+        tk.Label(eval_frame, text="Trade Evaluation (live engine)",
+                 bg=self.PANEL_COLOR, fg=self.DEADLINE_GOLD,
+                 font=('Segoe UI', 11, 'bold')).pack(pady=(6, 2))
+        self._eval_label = tk.Label(eval_frame, text="Incomplete",
+                                    bg=self.PANEL_COLOR, fg='#9CA3AF',
+                                    font=('Segoe UI', 11, 'bold'))
+        self._eval_label.pack()
+        self._eval_detail = tk.Label(eval_frame, text="",
+                                     bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+                                     font=('Segoe UI', 9))
+        self._eval_detail.pack(pady=(0, 6))
+
     def _create_action_buttons(self, parent):
         """Create action buttons"""
         buttons_frame = tk.Frame(parent, bg=self.PANEL_COLOR)
         buttons_frame.pack(fill='x')
-        
-        # Send Proposal button
+
         send_btn = tk.Button(buttons_frame, text="SEND PROPOSAL",
-                            bg=self.URGENT_RED, fg=self.TEXT_WHITE,
-                            font=('Segoe UI', 12, 'bold'), padx=30, pady=10,
-                            command=self._send_proposal)
+                             bg=self.URGENT_RED, fg=self.TEXT_WHITE,
+                             font=('Segoe UI', 12, 'bold'), padx=24, pady=8,
+                             command=self._send_proposal)
         send_btn.pack(side='left', padx=(0, 10))
-        
-        # Cancel button
+
+        full_btn = tk.Button(buttons_frame, text="FULL TRADE CENTER",
+                             bg='#374151', fg=self.TEXT_WHITE,
+                             font=('Segoe UI', 10, 'bold'), padx=16, pady=8,
+                             command=self._open_full_trade_center)
+        full_btn.pack(side='left')
+
         cancel_btn = tk.Button(buttons_frame, text="CANCEL",
-                              bg='#6B7280', fg=self.TEXT_WHITE,
-                              font=('Segoe UI', 12, 'bold'), padx=30, pady=10,
-                              command=self.destroy)
+                               bg='#6B7280', fg=self.TEXT_WHITE,
+                               font=('Segoe UI', 12, 'bold'), padx=24, pady=8,
+                               command=self.destroy)
         cancel_btn.pack(side='right')
-        
-    def _select_team(self, team):
-        """Handle team selection"""
-        print(f"Selected team: {team}")
-        
+
+    # -- live data ----------------------------------------------------
+    def _refresh_your_pool(self):
+        """Your real offerable assets: tradeable picks + expiring contracts."""
+        import trade_engine as te
+        pool = []
+        if self.user_team is not None:
+            # Tradeable picks (same rule as the full Trade Center:
+            # still yours, not expired dead paper).
+            for yr in sorted(getattr(self.user_team, 'draft_picks', {}) or {}):
+                for pk in (self.user_team.draft_picks.get(yr) or []):
+                    try:
+                        if getattr(pk, 'current_team', '') != \
+                                self.user_team.team_name:
+                            continue
+                        if hasattr(pk, 'can_be_traded') and \
+                                not pk.can_be_traded():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        label = (f"{te.asset_label(pk)}  "
+                                 f"[{te.asset_value(pk):,}]")
+                    except Exception:
+                        label = "Draft pick"
+                    pool.append((label, pk))
+            # Expiring contracts ("rentals"), best value first.
+            rentals = []
+            for p in (getattr(self.user_team, 'roster', None) or []):
+                try:
+                    if getattr(getattr(p, 'contract', None),
+                               'years_remaining', 99) == 1:
+                        rentals.append(p)
+                except Exception:
+                    continue
+            try:
+                rentals.sort(key=lambda p: te.asset_value(p), reverse=True)
+            except Exception:
+                pass
+            for p in rentals[:12]:
+                try:
+                    val = te.asset_value(p)
+                except Exception:
+                    val = 0
+                pool.append((
+                    f"{getattr(p, 'full_name', '?')} "
+                    f"({self._pos_code(p)}, {self._ovr(p)})  [{val:,}]", p))
+        self._your_pool = pool
+        self._render_listbox(self._your_pool_list,
+                             [label for label, _ in pool],
+                             empty="(no tradeable picks or rentals)")
+
+    def _refresh_their_pool(self):
+        """The selected partner's real trade block (league.trade_blocks)."""
+        import trade_market as tmk
+        import trade_engine as te
+        pool = []
+        if self.partner_team is not None and self.league is not None:
+            try:
+                tmk.refresh_trade_blocks(self.app, self.league)
+            except Exception:
+                pass
+            try:
+                blocks = tmk.get_trade_blocks(self.league)
+            except Exception:
+                blocks = {}
+            tname = str(getattr(self.partner_team, 'team_name', ''))
+            for pid in (blocks.get(tname, None) or []):
+                try:
+                    player, _team = tmk.resolve_player(self.league, pid)
+                except Exception:
+                    player = None
+                if player is None:
+                    continue
+                try:
+                    val = te.asset_value(player)
+                except Exception:
+                    val = 0
+                pool.append((
+                    f"{getattr(player, 'full_name', '?')} "
+                    f"({self._pos_code(player)}, {self._ovr(player)})  "
+                    f"[{val:,}]", player))
+        self._their_pool = pool
+        self._render_listbox(self._their_pool_list,
+                             [label for label, _ in pool],
+                             empty="(nothing on their block)")
+
+    @staticmethod
+    def _render_listbox(lb, labels, empty=""):
+        lb.delete(0, 'end')
+        if labels:
+            for label in labels:
+                lb.insert('end', label)
+        elif empty:
+            lb.insert('end', empty)
+
+    def _asset_label(self, asset):
+        try:
+            import trade_engine as te
+            from game_classes import DraftPick
+            if isinstance(asset, DraftPick):
+                return te.asset_label(asset)
+        except Exception:
+            pass
+        try:
+            return (f"{getattr(asset, 'full_name', '?')} "
+                    f"({self._pos_code(asset)}, {self._ovr(asset)})")
+        except Exception:
+            return "?"
+
+    def _render_offer(self, side):
+        if side == 'user':
+            assets, lb = self.user_assets, self._your_offer_list
+        else:
+            assets, lb = self.partner_assets, self._their_offer_list
+        self._render_listbox(lb, [self._asset_label(a) for a in assets],
+                             empty="(empty)")
+
+    # -- interactions -------------------------------------------------
+    def _on_team_select(self, event=None):
+        """Handle team selection: load their real block into Their Offer."""
+        sel = self._team_listbox.curselection()
+        if not sel:
+            return
+        name = self._team_listbox.get(sel[0])
+        self.partner_team = self._team_objs.get(name)
+        # Their side resets: those assets belong to the old partner.
+        self.partner_assets = []
+        self._refresh_their_pool()
+        self._render_offer('partner')
+        self._update_evaluation()
+
+    def _add_asset(self, side):
+        if side == 'user':
+            pool, pool_lb, assets = (self._your_pool, self._your_pool_list,
+                                     self.user_assets)
+        else:
+            pool, pool_lb, assets = (self._their_pool, self._their_pool_list,
+                                     self.partner_assets)
+        sel = pool_lb.curselection()
+        if not sel or sel[0] >= len(pool):
+            return
+        _label, asset = pool[sel[0]]
+        if not any(a is asset for a in assets):
+            assets.append(asset)
+        self._render_offer(side)
+        self._update_evaluation()
+
+    def _remove_asset(self, side):
+        if side == 'user':
+            offer_lb, assets = self._your_offer_list, self.user_assets
+        else:
+            offer_lb, assets = self._their_offer_list, self.partner_assets
+        sel = offer_lb.curselection()
+        if not sel or sel[0] >= len(assets):
+            return
+        assets.pop(sel[0])
+        self._render_offer(side)
+        self._update_evaluation()
+
+    def _update_evaluation(self):
+        """Run the real trade engine over the current proposal."""
+        label, detail, color = "Incomplete", \
+            "Add at least one asset to each side.", '#9CA3AF'
+        try:
+            import trade_engine as te
+            ev = te.evaluate_trade(self.user_assets, self.partner_assets,
+                                   user_team=self.user_team,
+                                   partner_team=self.partner_team)
+            if self.user_assets and self.partner_assets:
+                label = ev.label
+                detail = (f"Your value: {ev.user_value:,}   |   "
+                          f"Their value: {ev.partner_value:,}")
+                color = {'Fair deal': '#10B981', 'You overpay': self.URGENT_RED,
+                         'They overpay': self.DEADLINE_GOLD}.get(
+                    label, self.TEXT_WHITE)
+            else:
+                detail = (f"Your value: {ev.user_value:,}   |   "
+                          f"Their value: {ev.partner_value:,}")
+        except Exception:
+            label, detail, color = "Unavailable", "", '#9CA3AF'
+        self._eval_label.config(text=label, fg=color)
+        self._eval_detail.config(text=detail)
+
+    def _open_full_trade_center(self):
+        """Route to the real full trade workbench."""
+        try:
+            opener = getattr(self.app, 'open_trade_window', None)
+            if callable(opener):
+                opener()
+            else:
+                from tkinter import messagebox
+                messagebox.showinfo("Trade Center",
+                                    "The full Trade Center is unavailable "
+                                    "right now.")
+        except Exception:
+            pass
+
     def _send_proposal(self):
-        """Send trade proposal"""
-        print("Trade proposal sent!")
+        """Send the proposal through the real negotiation machinery."""
+        from tkinter import messagebox
+        if self.app is None or self.user_team is None:
+            messagebox.showwarning("No League",
+                                   "No league loaded -- cannot send a proposal.")
+            return
+        if self.partner_team is None:
+            messagebox.showwarning("No Partner",
+                                   "Select a trading partner first.")
+            return
+        if not self.user_assets or not self.partner_assets:
+            messagebox.showwarning(
+                "Incomplete",
+                "Add at least one asset to each side of the deal first.")
+            return
+        # No-trade clauses block the deal before it leaves the building --
+        # say so honestly instead of sending a dead proposal.
+        try:
+            import trade_engine as te
+            vetoes = te.trade_vetoes(self.user_team, self.partner_team,
+                                     self.user_assets, league=self.league)
+        except Exception:
+            vetoes = []
+        if vetoes:
+            names = ", ".join(
+                str(getattr(v.get('player'), 'full_name', '?'))
+                for v in vetoes[:3])
+            messagebox.showwarning(
+                "No-trade protection",
+                f"{names} cannot be moved to "
+                f"{getattr(self.partner_team, 'team_name', 'them')} "
+                f"({vetoes[0].get('clause', 'clause')} protection).\n\n"
+                "Remove them from the offer, or ask for a waiver in the "
+                "full Trade Center.")
+            return
+        try:
+            import trade_negotiation as tn
+            neg = tn.send_offer(self.app, self.partner_team,
+                                list(self.user_assets),
+                                list(self.partner_assets))
+        except Exception as e:
+            messagebox.showwarning("Send failed",
+                                   f"Could not send the proposal: {e}")
+            return
+        # Confirmation reflects real post-send state: on deadline day the
+        # AI answers instantly, so read the negotiation's actual status.
+        pname = str(getattr(self.partner_team, 'team_name', 'them'))
+        try:
+            you = tn.asset_summary(neg.user_assets)
+            them = tn.asset_summary(neg.partner_assets)
+        except Exception:
+            you, them = "your assets", "their assets"
+        status = str(getattr(neg, 'status', 'awaiting_ai'))
+        if status == 'accepted':
+            title = "Deal accepted!"
+            body = (f"{pname} accepted your offer on the spot.\n\n"
+                    f"YOU SEND: {you}\nYOU GET: {them}")
+        elif status == 'declined':
+            title = "Offer declined"
+            body = (f"{pname} turned the offer down.\n\n"
+                    f"YOU OFFERED: {you}\nYOU ASKED FOR: {them}\n\n"
+                    "Their reply is in your inbox.")
+        elif status == 'awaiting_user':
+            title = "Counter-offer waiting"
+            body = (f"{pname} countered instantly -- answer it from your "
+                    f"inbox.\n\nYOUR OFFER: {you} for {them}")
+        else:
+            title = "Offer sent"
+            body = (f"Your offer is with {pname}'s front office.\n\n"
+                    f"YOU SEND: {you}\nYOU GET: {them}\n\n"
+                    "The reply will land in your inbox.")
+        messagebox.showinfo(title, body)
         self.destroy()
 
 
 class EmergencyTradeInterface(InGamePopup):
-    """Emergency trade interface for last-minute deadline deals"""
-    
+    """Emergency trade interface for last-minute deadline deals.
+
+    Only real one-click actions survive here:
+
+    - "Fire Sale": lists your expiring contracts on the trade block via
+      the real trade_market store (source 'user_block'), so AI GMs can
+      bid on them immediately.
+
+    The old "Accept Any Reasonable Offer" was cut: no auto-accept
+    machinery exists anywhere in the codebase. The old "Deadline
+    Extension Request" was cut: the deadline is CBA-derived and final --
+    no extension can be requested. Non-modal: no grab_set; closing the
+    card defers, nothing happens implicitly.
+    """
+
     def __init__(self, parent, deadline_manager):
         super().__init__(parent)
         self.parent = parent
         self.deadline_manager = deadline_manager
-        
+
         # Colors from parent
         self.BG_COLOR = parent.BG_COLOR
         self.PANEL_COLOR = parent.PANEL_COLOR
         self.TEXT_WHITE = parent.TEXT_WHITE
         self.DEADLINE_RED = parent.DEADLINE_RED
         self.URGENT_RED = parent.URGENT_RED
-        
+
+        self.app = self._resolve_app()
+        gm = getattr(self.app, 'game_manager', None) if self.app else None
+        self.league = getattr(gm, 'league', None)
+        self.user_team = getattr(self.app, 'user_team', None) \
+            if self.app else None
+
         self._setup_window()
         self._create_interface()
-        
+
+    def _resolve_app(self):
+        """Walk up past popup cards to the main app (user_team +
+        game_manager). Same contract as QuickTradeInterface."""
+        from popup_system import InGamePopup
+        node, seen = self, set()
+        while node is not None and id(node) not in seen:
+            seen.add(id(node))
+            if isinstance(node, InGamePopup):
+                node = node.__dict__.get('parent', None)
+                continue
+            if hasattr(node, 'user_team') and hasattr(node, 'game_manager'):
+                return node
+            return None
+        return None
+
     def _setup_window(self):
-        """Setup emergency window"""
+        """Setup emergency window (non-modal card)."""
         self.title("EMERGENCY TRADE - DEADLINE IMMINENT")
-        self.geometry("600x400")
+        self.geometry("600x470")
         self.configure(bg=self.DEADLINE_RED)
         self.resizable(False, False)
-        
-        # Center and make urgent
         self.transient(self.parent)
-        self.grab_set()
-        self.attributes('-topmost', True)
-        
+        # No grab_set, no topmost: a non-modal card per Eastside grammar.
+
     def _create_interface(self):
         """Create emergency interface"""
         # Flash warning
         warning_frame = tk.Frame(self, bg=self.URGENT_RED, height=80)
         warning_frame.pack(fill='x')
         warning_frame.pack_propagate(False)
-        
-        time_info = self.deadline_manager.get_time_until_deadline()
+
         tk.Label(warning_frame, text="EMERGENCY TRADE MODE",
-                bg=self.URGENT_RED, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 18, 'bold')).pack(expand=True)
-        
-        tk.Label(warning_frame, text=f"DEADLINE: {time_info['formatted']}",
-                bg=self.URGENT_RED, fg='yellow',
-                font=('Segoe UI', 12, 'bold')).pack()
-        
+                 bg=self.URGENT_RED, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 18, 'bold')).pack(expand=True)
+        try:
+            remaining = self.deadline_manager.get_time_until_deadline().get(
+                'formatted', '')
+        except Exception:
+            remaining = ''
+        tk.Label(warning_frame,
+                 text=f"DEADLINE: {remaining}" if remaining else "DEADLINE DAY",
+                 bg=self.URGENT_RED, fg='yellow',
+                 font=('Segoe UI', 12, 'bold')).pack()
+
         # Quick options
         content = tk.Frame(self, bg=self.PANEL_COLOR)
         content.pack(fill='both', expand=True, padx=20, pady=20)
-        
+
         tk.Label(content, text="Emergency Options:",
-                bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 14, 'bold')).pack(pady=(0, 20))
-        
-        # Emergency trade options
-        options = [
-            ("Accept Any Reasonable Offer", "Auto-accept trades within 10% of fair value"),
-            ("Fire Sale Mode", "Trade anyone not in core group"),
-            ("Deadline Extension Request", "Request 5-minute emergency extension")
-        ]
-        
-        for title, desc in options:
-            option_frame = tk.Frame(content, bg=self.PANEL_COLOR, relief='ridge', bd=2)
-            option_frame.pack(fill='x', pady=5)
-            
-            btn = tk.Button(option_frame, text=title,
-                          bg=self.URGENT_RED, fg=self.TEXT_WHITE,
-                          font=('Segoe UI', 11, 'bold'),
-                          command=lambda t=title: self._emergency_action(t))
-            btn.pack(fill='x', padx=5, pady=5)
-            
-            tk.Label(option_frame, text=desc,
-                    bg=self.PANEL_COLOR, fg='#9CA3AF',
-                    font=('Segoe UI', 9)).pack(padx=5, pady=(0, 5))
-        
-    def _emergency_action(self, action):
-        """Handle emergency action"""
-        print(f"Emergency action: {action}")
-        self.destroy()
+                 bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+                 font=('Segoe UI', 14, 'bold')).pack(pady=(0, 12))
+
+        self._emergency_option(
+            content,
+            "Fire Sale",
+            "List every expiring contract on your roster on the trade "
+            "block right now. Rival GMs can bid immediately.",
+            self._fire_sale)
+
+        # Status line: the real outcome of the last action.
+        self._status_label = tk.Label(
+            content, text="", bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
+            font=('Segoe UI', 10), wraplength=520, justify='left')
+        self._status_label.pack(fill='x', pady=(12, 0))
+
+        tk.Label(content,
+                 text="No extensions: the deadline cutoff is final.",
+                 bg=self.PANEL_COLOR, fg='#9CA3AF',
+                 font=('Segoe UI', 9, 'italic')).pack(pady=(10, 0))
+
+        tk.Button(content, text="CLOSE", bg='#6B7280', fg=self.TEXT_WHITE,
+                  font=('Segoe UI', 11, 'bold'), padx=24, pady=6,
+                  command=self.destroy).pack(pady=(12, 0))
+
+    def _emergency_option(self, parent, title, desc, command):
+        option_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='ridge',
+                                bd=2)
+        option_frame.pack(fill='x', pady=5)
+
+        btn = tk.Button(option_frame, text=title,
+                        bg=self.URGENT_RED, fg=self.TEXT_WHITE,
+                        font=('Segoe UI', 11, 'bold'), command=command)
+        btn.pack(fill='x', padx=5, pady=5)
+
+        tk.Label(option_frame, text=desc,
+                 bg=self.PANEL_COLOR, fg='#9CA3AF',
+                 font=('Segoe UI', 9), wraplength=520,
+                 justify='left').pack(padx=5, pady=(0, 5))
+
+    def _set_status(self, text):
+        self._status_label.config(text=text)
+
+    def _fire_sale(self):
+        """List your expiring contracts on the real trade block.
+
+        Adds each expiring-contract player to the app's trade block (the
+        store the Trade Block window reads) and mirrors them into the
+        real trade_market listings (source 'user_block') so AI GMs bid.
+        """
+        import trade_market as tmk
+        if self.app is None or self.user_team is None or \
+                self.league is None:
+            self._set_status("No league loaded -- nothing was listed.")
+            return
+        expiring = []
+        for p in (getattr(self.user_team, 'roster', None) or []):
+            try:
+                if getattr(getattr(p, 'contract', None),
+                           'years_remaining', 99) == 1:
+                    expiring.append(p)
+            except Exception:
+                continue
+        if not expiring:
+            self._set_status("No expiring contracts on your roster -- "
+                             "nothing to list.")
+            return
+        block = getattr(self.app, 'trade_block', None)
+        if block is None:
+            block = []
+            self.app.trade_block = block
+        listed, skipped = 0, 0
+        for p in expiring:
+            try:
+                pid = getattr(p, 'id', None)
+                if not any(getattr(e, 'id', None) == pid for e in block):
+                    block.append(p)
+                li = tmk.list_piece(self.app, self.league, self.user_team, p,
+                                    source="user_block")
+                if li is not None:
+                    listed += 1
+                else:
+                    skipped += 1
+            except Exception:
+                skipped += 1
+        try:
+            update_views = getattr(self.app, 'update_all_views', None)
+            if callable(update_views):
+                update_views()
+        except Exception:
+            pass
+        names = ", ".join(str(getattr(p, 'full_name', '?'))
+                          for p in expiring[:4])
+        if len(expiring) > 4:
+            names += f" (+{len(expiring) - 4} more)"
+        msg = (f"Fire sale: {listed} expiring contract(s) listed on the "
+               f"trade block: {names}.")
+        if skipped:
+            msg += f" ({skipped} already listed or on cooldown.)"
+        self._set_status(msg)
 
 
 class DeadlineMarketBrowser(InGamePopup):

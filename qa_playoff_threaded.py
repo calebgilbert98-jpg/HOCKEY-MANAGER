@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: threaded playoff Sim All (no more ~69s UI freeze) + sim_progress.run_threaded.
 
 Run under xvfb:  xvfb-run -a python3 qa_playoff_threaded.py

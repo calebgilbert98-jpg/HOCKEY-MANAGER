@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Xvfb smoke test for the popup->view conversions (task batch 2).
 
 Constructs every new view with a stub app, exercises close_view()

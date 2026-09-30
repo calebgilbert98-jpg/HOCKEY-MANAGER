@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: explicit ELC offer / sign-prospect negotiation flow.
 
 Covers: the signing-age term table, the ELC band, the prospect ask model

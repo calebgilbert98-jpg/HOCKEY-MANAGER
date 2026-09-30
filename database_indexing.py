@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Database indexing and lookup optimization for Hockey Manager
 Implements fast lookup tables and indexing for large datasets

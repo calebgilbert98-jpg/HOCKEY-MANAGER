@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Full SeriesDetailPopup demo: rich fake-but-real-path data, every insight
 section rendered, stitched full-height screenshot.
 

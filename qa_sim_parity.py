@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_sim_parity.py -- lightweight vs AdvancedGameSim distribution parity.
 
 Both engines simulate the SAME seeded team pairs (paired by matchup, not by

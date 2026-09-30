@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Beta telemetry for Puck Dynasty.
 
 Every simulated game appends one compact JSON record to

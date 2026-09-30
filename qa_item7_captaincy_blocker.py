@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Item 7 QA: mandatory captaincy user-choice blocker (headless).
 
 Tests the firing logic + validation + persistence without a display:

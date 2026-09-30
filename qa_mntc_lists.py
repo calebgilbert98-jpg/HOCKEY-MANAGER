@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: dynamic M-NTC team lists (hometown, taxes, situation, opportunity).
 
 Run:  python3 qa_mntc_lists.py   (no display needed)

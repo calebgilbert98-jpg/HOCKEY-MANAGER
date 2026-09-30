@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: captaincy forges leaders (tenure + results + impact -> leadership).
 
 Covers the Toews/Crosby arc mechanics in captaincy_growth.py:

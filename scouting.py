@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scouting systems for Puck Dynasty: fog of war, regional assignments, draft board.
 
 Pure logic, no GUI. Powers the Scouting Department window and the draft.
@@ -31,7 +32,6 @@ ALL_SCOUT_REGIONS = SCOUT_REGIONS + PRO_BEATS
 # HEAD_SCOUT manages the department (no auto beat); AMATEUR_SCOUT keeps
 # the existing user-assigned amateur flow (no default).
 _EURO_BEAT_CYCLE = ['SHL', 'Liiga', 'KHL', 'NL']
-
 
 def scout_roles():
     """All StaffRole values that count as scouts."""

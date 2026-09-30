@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: staff aging and development -- young coaches grow with experience,
 60+ non-icons regress, icons hold their craft, the oldest retire.
 

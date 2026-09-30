@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Impact-tier engine: every shot, hit and save resolves at one of three
 impact levels -- TIRED, NORMAL, BIG.
 

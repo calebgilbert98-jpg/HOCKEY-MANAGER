@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # modern_profile.py
 # modern player profile -- FM24-style.
 # Clean, modern, no white text boxes.

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: rivalry-review verdicts + staff breakthroughs reach the news feed.
 
 Covers:

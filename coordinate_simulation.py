@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 NHL Coordinate-Based Simulation Engine
 Integrates realistic ice coordinates with danger zone analytics

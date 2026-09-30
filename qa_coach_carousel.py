@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: the coach's leash -- AI GM monthly evaluation, reprieve negotiations,
 interview hiring, and user/AI parity (user gets a hot-seat flag, never an
 auto-firing). Run: python3 qa_coach_carousel.py

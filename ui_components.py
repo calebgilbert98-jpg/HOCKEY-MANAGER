@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # ui_components.py
 # Contains reusable UI elements, like the player profile window.
 

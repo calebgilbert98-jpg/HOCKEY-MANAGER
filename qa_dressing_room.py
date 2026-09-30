@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: dressing-room dynamics (module 03).
 
 Hierarchy, social groups, trade/press cascades, team talks, and the

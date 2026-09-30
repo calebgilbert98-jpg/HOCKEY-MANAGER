@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # game_classes.py
 # A refactored and improved version focusing on structure, scalability, and clarity.
 

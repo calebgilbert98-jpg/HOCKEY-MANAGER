@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: season_review.py -- the end-of-season inbox card.
 
 Builds a fake completed season (standings, ledger moments, bracket

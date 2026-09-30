@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: bracket zoom-to-fit + popup card bg + winner contrast.
 
 Builds a real 32-team league, plays the full tree to a live SCF, and

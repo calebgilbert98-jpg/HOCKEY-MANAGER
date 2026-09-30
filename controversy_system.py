@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Controversial plays, instigators, and the leadership response.
 
 Hotheads stir the pot, grinders run people, greasy players crash the

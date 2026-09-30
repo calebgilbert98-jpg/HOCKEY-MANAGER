@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: analytics hardening -- the 7 directives.
 
 Covers, per directive, what was already implemented vs newly added:

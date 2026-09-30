@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: captaincy growth is safe on fantasy-draft saves.
 
 Fantasy drafts redistribute players without stripping letters, so the

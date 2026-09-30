@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Comprehensive Save/Load System for Hockey Manager
 Handles saving and loading complete game states including players, teams, leagues, and progress
@@ -159,6 +160,12 @@ class GameSaveManager:
                     getattr(self.game_manager, 'pending_fantasy_draft', False)
                     or getattr(getattr(self.game_manager, 'game_manager', None),
                                'pending_fantasy_draft', False)),
+                # Parked Tier-B sessions (gating pattern): resumable flows
+                # such as the pre-match team talk. Whitelisted to
+                # plain-data team-talk sessions only -- anything holding
+                # live objects is dropped defensively so a save can never
+                # break the restore. Old saves lack the key -> no sessions.
+                'pending_sessions': self._serializable_team_talk_sessions(),
                 
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
@@ -224,6 +231,61 @@ class GameSaveManager:
         except Exception as e:
             print(f"Error creating save data: {e}")
             raise
+
+    def _serializable_team_talk_sessions(self):
+        """Extract pickle-safe parked team-talk sessions from the app.
+
+        Whitelisted to kind == "team_talk" and JSON-round-tripped: only
+        plain data (str/float/bool/dict) survives, so a session can never
+        smuggle a live widget or game object into the save.
+        """
+        try:
+            import json
+            app = getattr(self, 'app', None)
+            sessions = getattr(app, 'pending_sessions', None) or {}
+            out = {}
+            for sid, sess in sessions.items():
+                try:
+                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                        continue
+                    probe = json.loads(json.dumps(sess))
+                    out[sid] = probe
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return {}
+
+    def _restore_team_talk_sessions(self, saved):
+        """Restore parked team-talk sessions onto the app (Tier-B)."""
+        app = getattr(self, 'app', None)
+        if app is None or not isinstance(saved, dict):
+            return
+        try:
+            today = None
+            try:
+                cd = getattr(getattr(self, 'game_manager', None),
+                             'current_date', None)
+                if cd is not None:
+                    today = cd.isoformat() if hasattr(cd, 'isoformat') else str(cd)
+            except Exception:
+                today = None
+            sessions = getattr(app, 'pending_sessions', None)
+            if sessions is None:
+                sessions = {}
+                app.pending_sessions = sessions
+            for sid, sess in saved.items():
+                try:
+                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                        continue
+                    tt = sess.get('team_talk') or {}
+                    if today and tt.get('date') and tt.get('date') != today:
+                        continue  # stale: its game is gone
+                    sessions[sid] = sess
+                except Exception:
+                    continue
+        except Exception:
+            pass
     
     def _canonical_ledger(self):
         """Return the live narrative ledger, wherever it is attached.
@@ -1298,6 +1360,17 @@ class GameSaveManager:
                         _t.pending_fantasy_draft = _pfd
                     except Exception:
                         pass
+
+            # Parked team-talk sessions (gating): restore Tier-B state so
+            # a mid-talk save/load resumes honestly instead of losing the
+            # talk. Sessions for other dates are stale (their game is
+            # gone) and are dropped.
+            if 'pending_sessions' in save_data:
+                try:
+                    self._restore_team_talk_sessions(
+                        save_data.get('pending_sessions') or {})
+                except Exception as _tte:
+                    print(f"team-talk session restore failed (non-fatal): {_tte}")
 
             # Re-mirror restored training programs into the Development
             # Center's module registry so the window shows them.
@@ -2786,6 +2859,9 @@ class SaveLoadView(ctk.CTkFrame):
         slots_frame = ttk.LabelFrame(parent, text="Quick Save Slots", style='Card.TLabelframe')
         slots_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
+        # Kept so _refresh_quick_save_slots can rebuild the slot rows
+        # in place after a quick save, without rebuilding the whole tab.
+        self._quick_slots_frame = slots_frame
         self._create_quick_save_slots(slots_frame)
 
         # Quick save buttons
@@ -3427,10 +3503,26 @@ class SaveLoadView(ctk.CTkFrame):
         return slots
 
     def _refresh_quick_save_slots(self):
-        """Refresh the quick save slots display"""
-        # This would be called to update the quick save slots UI
-        # For now, we'll implement this when the tab is visible
-        pass
+        """Refresh the quick save slots display in place.
+
+        Rebuilds the slot rows inside the existing slots frame so the
+        Quick Save tab shows a just-written slot immediately, without
+        rebuilding the whole view.
+        """
+        frame = getattr(self, '_quick_slots_frame', None)
+        if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                return
+            for child in frame.winfo_children():
+                child.destroy()
+        except Exception:
+            return
+        try:
+            self._create_quick_save_slots(frame)
+        except Exception as e:
+            print(f"Error refreshing quick save slots: {e}")
 
     def _open_save_folder(self):
         """Open the saves folder in file explorer"""
@@ -3543,10 +3635,56 @@ class SaveLoadView(ctk.CTkFrame):
             self._show_banner(f"Failed to delete save file:\n{str(e)}", "error")
 
     def _sort_files(self, column):
-        """Sort files by column"""
-        # Implementation for sorting the file list
-        # This would sort the treeview by the selected column
-        pass
+        """Sort the Manage-Saves file list by the clicked column.
+
+        Clicking the same header again reverses the order. Size and
+        Last Modified sort numerically/chronologically; everything else
+        sorts case-insensitively as text.
+        """
+        if column == 'filepath':
+            return  # hidden bookkeeping column, nothing to sort
+        reverse = (getattr(self, '_sort_column', None) == column
+                   and not getattr(self, '_sort_reverse', False))
+        self._sort_column = column
+        self._sort_reverse = reverse
+
+        def _key(item):
+            raw = self.file_tree.set(item, column)
+            if column == 'size':
+                try:
+                    return float(str(raw).split()[0])
+                except (ValueError, IndexError):
+                    return 0.0
+            if column == 'modified':
+                for fmt in ("%m/%d %H:%M", "%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M"):
+                    try:
+                        from datetime import datetime
+                        return datetime.strptime(str(raw).strip(), fmt)
+                    except (ValueError, TypeError):
+                        continue
+                return str(raw)
+            return str(raw).lower()
+
+        items = list(self.file_tree.get_children(''))
+        try:
+            items.sort(key=_key, reverse=reverse)
+        except Exception:
+            return
+        for index, item in enumerate(items):
+            self.file_tree.move(item, '', index)
+        # Keep the header honest about the current direction.
+        for col_id in self.file_tree['columns']:
+            try:
+                base = {'filename': 'File Name', 'description': 'Description',
+                        'team': 'Team', 'date': 'Game Date', 'size': 'Size',
+                        'modified': 'Last Modified', 'category': 'Category',
+                        'type': 'Type'}.get(col_id, '')
+                arrow = ''
+                if col_id == column:
+                    arrow = ' \u25bc' if reverse else ' \u25b2'
+                self.file_tree.heading(col_id, text=f"{base}{arrow}")
+            except Exception:
+                continue
 
     def _create_file_context_menu(self):
         """Create context menu for file operations"""

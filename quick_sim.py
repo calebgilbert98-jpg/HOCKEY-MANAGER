@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """quick_sim.py -- the fast ("quick") simulation engine.
 
 Extracted verbatim from main.py (2026-09-28) to shrink the main.py god-file,
@@ -18,6 +19,7 @@ in BOTH engines (see docs/TACTICS_REWORK_GUIDE.md).
 import random
 
 from collections import deque
+_SCORE_NOISE_FLOOR = 0.601856  # floor under per-game scoring noise
 from game_classes import PlayerPosition
 
 def roll_game_injury(team):

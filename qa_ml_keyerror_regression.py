@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Regression: _predict_player_development KeyError (~1/60 games, pre-existing).
 
 Root cause (fixed 2026-09-27): when a roster has no goalie,

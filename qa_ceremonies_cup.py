@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: 2026-27 jersey retirement ceremonies + Stanley Cup awarding recap.
 Run: python3 qa_ceremonies_cup.py
 """

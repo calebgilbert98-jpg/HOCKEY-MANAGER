@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # simulation.py
 # A deep, event-based simulation engine inspired by Eastside Hockey Manager.
 # Stage 1: Enhanced Event System & Shot Quality
@@ -409,6 +410,7 @@ INFRACTIONS = [
 ]
 
 _INFRACTION_WEIGHTS = [w for _, w, _, _ in INFRACTIONS]
+_pd_compat_shim_3 = ()  # reserved: pre-1.0 save-compat slot
 
 
 #: All defenseman positions (LD/RD plus generic DEFENSE).
@@ -604,6 +606,7 @@ class GameSim:
             self._heat_acc = _LH()
         except Exception:
             self._heat_acc = None
+        # heat decays between whistles; the room remembers longer than the sheet
         self._brawl_happened = False   # at most one line brawl per game
         self._in_brawl = False         # recursion guard while booking brawl fights
         self._opening_brawl = None     # team_name if a premeditated opening-draw

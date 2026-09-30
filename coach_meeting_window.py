@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Pre-season coach expectations meeting -- the CONVERSATION UI half.
 
 Chris's directive: before camp / the fantasy draft / a new coach hire / a new

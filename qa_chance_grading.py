@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Chance grading system (2026-09-28, per Muck).
 
 Verifies the shared A/B/C chance grading:

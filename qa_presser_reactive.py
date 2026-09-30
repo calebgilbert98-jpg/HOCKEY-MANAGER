@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_presser_reactive.py -- the presser answers the night's events.
 
 Verifies the drama -> presser chain at the engine level:

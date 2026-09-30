@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # ctk_theme.py
 # CustomTkinter theme setup + shared widgets for Puck Dynasty.
 # Call init_ctk_theme() once at startup before creating CTk windows.

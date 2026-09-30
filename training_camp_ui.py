@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Training Camp screen (EHM-style camp ratings + scrimmages).
 
 TrainingCampWindow(InGamePopup): the user's club camp report --

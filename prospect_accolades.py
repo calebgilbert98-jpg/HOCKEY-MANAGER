@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Junior/college accolades + light reputation for prospects.
 
 The major-league reputation system (reputation_system.py: controversy,

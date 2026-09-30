@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: staff contract negotiation is a full-screen jump (not a popup),
 with a free dollar offer entry and a league-wide staff budget gate.
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: advanced analytics matter for prospects, rookies, and all players.
 
 Covers:

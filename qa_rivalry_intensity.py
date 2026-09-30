@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: rivalry intensity calibration re-check.
 
 Re-verifies the 2026-09-27/28 calibration points for the rivalry engine in

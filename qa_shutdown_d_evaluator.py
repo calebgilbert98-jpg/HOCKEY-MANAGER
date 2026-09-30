@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: shutdown-D evaluator -- elite defensive seasons move the ceiling.
 
 Covers:

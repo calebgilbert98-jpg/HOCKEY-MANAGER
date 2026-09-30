@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # visual_identity_system.py
 # Comprehensive visual identity and atmosphere system for Hockey Manager
 

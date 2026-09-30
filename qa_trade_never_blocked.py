@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Regression: no GM logic may ever RULE OUT a trade.
 
 Muck's rule: even if he hates you -- personal grudge, franchise blood feud,

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Client-side multiplayer connection for Puck Dynasty (Phase 1).
 
 Connects to a :class:`multiplayer.net_host.MultiplayerHost` over a

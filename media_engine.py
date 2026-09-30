@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # media_engine.py — the press as a living ecosystem.
 #
 # Real NHL markets behave differently. Toronto is a fishbowl, Montreal is a

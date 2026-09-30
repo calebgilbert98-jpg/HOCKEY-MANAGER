@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """team_clutch.py -- dynamic per-team clutch factor, shared by both sim engines.
 
 Chris 2026-09-29: clutch must be genuinely dynamic per team, driven by

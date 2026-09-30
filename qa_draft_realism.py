@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Entry-draft realism QA: eligibility, classes, goalies, boards,
 scouting/luck, generational flag, narratives, rights, Euro FAs,
 and the four perception-vs-truth quadrants.

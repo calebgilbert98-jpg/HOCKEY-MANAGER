@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: BUG-021 -- UFA lowball exploit closed.
 
 The old money curve ((ratio-0.65)/0.65) left full-market offers at

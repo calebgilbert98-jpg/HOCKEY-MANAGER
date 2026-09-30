@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Pre-season coach expectations meeting: MODEL + WIRING + AI (no UI).
 
 Chris's directive: before training camp / fantasy draft / a new coach hire /

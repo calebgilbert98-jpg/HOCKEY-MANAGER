@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: NHL preseason -- 96 exhibitions, zero regular-season footprint.
 
 Part 1: schedule structure (seeds 2026/2027/2028/2031)

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: player accolades (permanent trophy case).
 
 Covers: idempotent banking (no duplicates), grouping format

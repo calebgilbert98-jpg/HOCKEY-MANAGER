@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AHL organization -- one NHL HC + one AHL HC, AHL GM generated,
 assignment-aware coach lookup, hireable AHL GM/coach, old-save backfill.
 Run: python3 qa_ahl_staff.py

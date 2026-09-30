@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # branding.py
 # Shared helpers for loading Puck Dynasty brand graphics (logo, banners).
 #

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Puck Dynasty - Professional Game Launcher
 Entry point that loads the splash launcher with full background experience

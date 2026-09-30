@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: scout POV perception layer (refinement #3) + pro-scout beats (#4).
 
 Probes:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R5: Staff Management -- reassign dropdown lists all roles; morale is /100.
 
 (i)  The "New Role" dropdown in the reassign dialog must offer every

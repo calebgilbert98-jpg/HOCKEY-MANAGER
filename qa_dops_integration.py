@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: DoPS + officiating integration across every sim path.
 
 Covers the full chain the units don't: the per-game officiating crew deals

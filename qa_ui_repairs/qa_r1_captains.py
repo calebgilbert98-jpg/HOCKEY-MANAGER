@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """R1 QA: "Name Your Captains" dialog repairs.
 
 Covers:

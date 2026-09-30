@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: cap infrastructure -- modern numbers, central accounting, trade sheds,
 dead-cap seeding/clearing, save/load, old-save safety."""
 import sys, os

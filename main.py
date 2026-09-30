@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # main.py
 # The central application file, now with an enhanced visual design.
 
@@ -10,7 +11,7 @@ from ctk_theme import (init_ctk_theme, primary_button, secondary_button, heading
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
-from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, TradeBlockWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView)
+from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView, make_tree_sortable, set_tree_empty_state, _mp_is_client, _mp_route)
 from ui_widgets import PillButton
 # Quick-sim engine + shared lineup helpers (extracted from main.py 2026-09-28;
 # re-exported here so `from main import best_lines` etc. keeps working)
@@ -2652,8 +2653,9 @@ class HockeyManagerGUI(tk.Tk):
         claiming_team.add_player(player)
         player.team_name = claiming_team.team_name
 
-        # A pending user claim beaten by a higher-priority club, or
-        # fulfilled -- either way the pending flag is spent.
+        # Pending claims are spent when they resolve -- fulfilled or
+        # beaten by a higher-priority club. The legacy host flag keeps its
+        # behavior; client clubs track in player.mp_claim_teams.
         try:
             _user_pending = bool(getattr(player, "user_claim_pending", False))
         except Exception:
@@ -2678,6 +2680,23 @@ class HockeyManagerGUI(tk.Tk):
                     f"(waiver priority #{_rank}).")
             except Exception:
                 pass
+        try:
+            _mp_pending = list(getattr(player, "mp_claim_teams", None) or [])
+        except Exception:
+            _mp_pending = []
+        for _loser in _mp_pending:
+            if _loser == getattr(claiming_team, "team_name", ""):
+                continue
+            try:
+                self.add_news(
+                    f"{_loser}'s waiver claim for {player.full_name} was "
+                    f"beaten by {claiming_team.team_name} (priority order).")
+            except Exception:
+                pass
+        try:
+            player.mp_claim_teams = []
+        except Exception:
+            pass
 
         # Successful claim: the club drops to the bottom of the waiver
         # priority order (NHL rule -- priority spent).
@@ -2755,7 +2774,18 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     _is_user = bool(getattr(team, 'is_user_team', False))
                 if _is_user:
-                    if (getattr(player, "user_claim_pending", False)
+                    # Pending claims are per-team: the legacy host flag
+                    # belongs to the host's own club only, client claims
+                    # ride in player.mp_claim_teams.
+                    _mp_pending = (getattr(player, "mp_claim_teams", None)
+                                   or [])
+                    _is_host_club = (team is getattr(self, "user_team",
+                                                     None))
+                    _claimed = (
+                        team.team_name in _mp_pending
+                        or (getattr(player, "user_claim_pending", False)
+                            and _is_host_club))
+                    if (_claimed
                             and len(team.roster) < 23
                             and team.cap_space > player.contract.salary):
                         claiming_team = team
@@ -2809,6 +2839,23 @@ class HockeyManagerGUI(tk.Tk):
                             f"lapsed (roster or cap space changed).")
                     except Exception:
                         pass
+                try:
+                    _lapsed = list(getattr(player, "mp_claim_teams", None)
+                                   or [])
+                except Exception:
+                    _lapsed = []
+                for _loser in _lapsed:
+                    try:
+                        self.add_news(
+                            f"{_loser}'s waiver claim for "
+                            f"{player.full_name} lapsed (roster or cap "
+                            f"space changed before processing).")
+                    except Exception:
+                        pass
+                try:
+                    player.mp_claim_teams = []
+                except Exception:
+                    pass
                 
                 # Add to original team's AHL roster on clearance: waiving is
                 # always a demotion move (cap burial or AHL shuttle), for
@@ -3425,6 +3472,21 @@ class HockeyManagerGUI(tk.Tk):
             "Manager Hub": self.open_manager_hub
         })
         
+        # Systems dropdown (TRACK C): engine-state surfaces the sim already
+        # computes but never showed -- deployment, condition, discipline,
+        # rivalries, clutch, assistants, circumstance shifts, fan buzz.
+        self._create_dropdown_menu(left_menu_frame, "Systems",
+            tooltip="Systems: the engine's inner workings, made visible", menu_items={
+            "Ice-Time Deployment": self.open_trackc_deployment,
+            "Roster Condition": self.open_trackc_condition,
+            "Discipline List": self.open_trackc_discipline,
+            "Rivalry Dashboard": self.open_trackc_rivalry,
+            "Clutch Factors": self.open_trackc_clutch,
+            "Assistant Coaches": self.open_trackc_assistants,
+            "Circumstance Shifts": self.open_trackc_circumstance,
+            "Fan Buzz": self.open_trackc_fanbuzz
+        })
+        
         # Finances dropdown
         self._create_dropdown_menu(left_menu_frame, "Finances",
             tooltip="Finances: budgets, payroll, and contract extensions", menu_items={
@@ -3704,8 +3766,15 @@ class HockeyManagerGUI(tk.Tk):
                 x = dropdown_btn.winfo_rootx()
                 y = dropdown_btn.winfo_rooty() + dropdown_btn.winfo_height()
                 dropdown_menu.post(x, y)
-            except:
-                pass
+            except Exception as e:
+                # Honest failure: the menu couldn't be posted (usually a
+                # torn-down widget) -- say so instead of swallowing it.
+                try:
+                    messagebox.showwarning(
+                        "Navigation",
+                        "That menu couldn't be opened. Try again.")
+                except Exception:
+                    pass
 
         dropdown_btn.configure(command=show_dropdown)
 
@@ -4392,6 +4461,9 @@ class HockeyManagerGUI(tk.Tk):
                 self.current_focus_player = selected_player
                 self.update_enhanced_player_focus_panel()
                 selection_window.destroy()
+            else:
+                messagebox.showwarning("No Player Selected",
+                                       "Select a player first.")
         
         def cancel_selection():
             selection_window.destroy()
@@ -4829,6 +4901,68 @@ class HockeyManagerGUI(tk.Tk):
         
         return ratings
 
+    def _snapshot_game_toi_fatigue(self, sim_engine, home_team, away_team):
+        """Per-game TOI (seconds) + fatigue snapshots from the sim that ran
+        the game, for the game-results player-stats tab.
+
+        Integration read only: quick-sim stats ({team_name: {pid: {...}}}),
+        GameSim's player_toi_seconds / player_fatigue / goaltender_fatigue
+        ledgers (energy is 0-100 remaining, so fatigue = 100 - energy).
+        Missing data stays missing -- the tab renders 'N/A' for it.
+        """
+        toi, fatigue = {}, {}
+        sim = sim_engine
+        # Quick-sim / AdvancedGameSim per-player stats
+        try:
+            stats = getattr(sim, 'stats', None) or {}
+            for team in (home_team, away_team):
+                pmap = stats.get(getattr(team, 'team_name', None), {}) or {}
+                for pid, st in pmap.items():
+                    if not isinstance(st, dict):
+                        continue
+                    if st.get('toi'):
+                        toi[pid] = float(st.get('toi') or 0)
+                    if st.get('fatigue'):
+                        fatigue[pid] = float(st.get('fatigue') or 0)
+        except Exception:
+            pass
+        # GameSim ledgers
+        try:
+            for pid, sec in (getattr(sim, 'player_toi_seconds', None)
+                             or {}).items():
+                if sec:
+                    toi[pid] = float(sec)
+        except Exception:
+            pass
+        try:
+            _pf = getattr(sim, 'player_fatigue', None) or {}
+            _gf = getattr(sim, 'goaltender_fatigue', None) or {}
+            for pid, energy in list(_pf.items()) + list(_gf.items()):
+                fatigue[pid] = max(0.0, 100.0 - float(energy or 0))
+        except Exception:
+            pass
+        # Dressed goalies skate the whole game (mirrors the post-game wear
+        # read): only fill in when the ledger has no entry.
+        try:
+            _gsec = float(getattr(sim, '_w3_game_seconds', 0.0) or 0.0)
+            if _gsec > 0:
+                for team in (home_team, away_team):
+                    for p in getattr(team, 'roster', []) or []:
+                        if getattr(p, 'primary_position', None) is PlayerPosition.GOALIE:
+                            toi.setdefault(getattr(p, 'id', None), _gsec)
+        except Exception:
+            pass
+        return toi, fatigue
+
+    @staticmethod
+    def _format_toi(seconds):
+        """TOI seconds -> 'M:SS' for the player-stats tab."""
+        try:
+            total = int(round(float(seconds)))
+        except Exception:
+            return "N/A"
+        return f"{total // 60}:{total % 60:02d}"
+
     def _on_schedule_double_click(self, event):
         """Handle double-click on schedule item to view game results"""
         selection = self.schedule_tree.selection()
@@ -5206,10 +5340,16 @@ class HockeyManagerGUI(tk.Tk):
                 shots = sum(1 for event in game_result.get('events', [])
                            if hasattr(event.get('player'), 'id') and event.get('player').id == player.id and event.get('event') == 'Shot')
                 
-                # Get rating, TOI, and fatigue from player_ratings if available
+                # Get rating, TOI, and fatigue from the game result. TOI and
+                # fatigue come from the per-game snapshot taken when the
+                # result was recorded (NEW-A6); missing data stays 'N/A'.
                 rating = game_result.get('player_ratings', {}).get(selected_team_name, {}).get(player.id, 'N/A')
-                toi = "N/A"  # Would need TOI tracking
-                fatigue = "N/A"  # Would need fatigue tracking
+                _toi_map = game_result.get('player_toi', {}) or {}
+                _fat_map = game_result.get('player_fatigue', {}) or {}
+                _toi_sec = _toi_map.get(player.id)
+                toi = self._format_toi(_toi_sec) if _toi_sec is not None else "N/A"
+                _fat = _fat_map.get(player.id)
+                fatigue = str(int(round(_fat))) if _fat is not None else "N/A"
                 
                 player_data.append((
                     player.full_name,
@@ -5621,6 +5761,47 @@ class HockeyManagerGUI(tk.Tk):
         from performance_monitor import PerformanceMonitorView
         return self.show_screen("performance_monitor", "Performance Monitor",
                                 PerformanceMonitorView)
+
+    # TRACK C systems screens: read-only views over live engine state.
+    def open_trackc_deployment(self):
+        from trackc_deployment_view import TrackCDeploymentView
+        return self.show_screen("trackc_deployment", "Ice-Time Deployment",
+                                TrackCDeploymentView)
+
+    def open_trackc_condition(self):
+        from trackc_condition_view import TrackCConditionView
+        return self.show_screen("trackc_condition", "Roster Condition",
+                                TrackCConditionView)
+
+    def open_trackc_discipline(self):
+        from trackc_discipline_view import TrackCDisciplineView
+        return self.show_screen("trackc_discipline", "Discipline List",
+                                TrackCDisciplineView)
+
+    def open_trackc_rivalry(self):
+        from trackc_rivalry_view import TrackCRivalryView
+        return self.show_screen("trackc_rivalry", "Rivalry Dashboard",
+                                TrackCRivalryView)
+
+    def open_trackc_clutch(self):
+        from trackc_clutch_view import TrackCClutchView
+        return self.show_screen("trackc_clutch", "Clutch Factors",
+                                TrackCClutchView)
+
+    def open_trackc_assistants(self):
+        from trackc_assistant_view import TrackCAssistantView
+        return self.show_screen("trackc_assistants", "Assistant Coaches",
+                                TrackCAssistantView)
+
+    def open_trackc_circumstance(self):
+        from trackc_circumstance_view import TrackCCircumstanceView
+        return self.show_screen("trackc_circumstance", "Circumstance Shifts",
+                                TrackCCircumstanceView)
+
+    def open_trackc_fanbuzz(self):
+        from trackc_fanbuzz_view import TrackCFanBuzzView
+        return self.show_screen("trackc_fanbuzz", "Fan Buzz",
+                                TrackCFanBuzzView)
         
     # Enhanced panel update methods
 
@@ -6736,6 +6917,14 @@ class HockeyManagerGUI(tk.Tk):
                     [g for g in todays_games
                      if not (isinstance(g, dict) and g.get('preseason'))])
                 self._process_todays_games(todays_games)
+                if getattr(self, '_abort_day_sim', False):
+                    # Mid-team-talk save/load orphaned this day sim (the
+                    # pre-load frame's objects are dead). Bail before
+                    # post-day processing; the parked talk resumes from
+                    # its session on the next Continue. The finally below
+                    # still restores the Continue button.
+                    self._abort_day_sim = False
+                    return
             
             self._set_continue_feedback(True, "Updating injuries...")
             # Process injury recovery: countdown runs in GAMES MISSED, so only
@@ -7074,6 +7263,24 @@ class HockeyManagerGUI(tk.Tk):
         return getattr(self, 'mp_client', None) is not None \
             and getattr(self, 'mp_host', None) is None
 
+    def _mp_client_block(self, what):
+        """Phase-1 honesty guard for MP clients.
+
+        Returns True when running as a multiplayer client: the caller must
+        abort WITHOUT mutating local state (the next STATE_SYNC would wipe
+        it silently). Shows a notice explaining client sync is coming.
+        Non-client modes return False (proceed normally).
+        """
+        if not self._mp_client_mode():
+            return False
+        try:
+            self._mp_toast(
+                f"Multiplayer: {what} isn't synced to the host yet — "
+                "client management support is coming in the next update.")
+        except Exception:
+            pass
+        return True
+
     def _on_continue_pressed(self):
         """Every Continue button / Space shortcut funnels through here."""
         if self._mp_host_mode():
@@ -7205,7 +7412,7 @@ class HockeyManagerGUI(tk.Tk):
                 "Advance the day even though not every manager is ready?\n\n"
                 "Unready managers' clubs will simply miss this day's decisions.")
         except Exception:
-            ok = True
+            ok = False  # fail CLOSED: never force-advance on a dialog error
         if not ok:
             return
         self._mp_toast("Host forced the advance.")
@@ -7509,10 +7716,10 @@ class HockeyManagerGUI(tk.Tk):
         Returns (ok, detail). Runs on the main thread, called from the
         host's event poll after net_host validated ownership/shape.
 
-        Phase-1 scoping (deliberate):
-        * set_lines / set_tactics stay LOCAL -- lineup state lives in GUI
-          session state (self.lineup) and is not part of the serialized
-          save, so each manager sets their own lines on their own screen.
+        Phase-2 scoping:
+        * set_lines / set_tactics propagate: the host applies the client's
+          lineup/tactics to the canonical team objects (validated, flattened
+          like the SP editor) and they ride the next STATE_SYNC to the sim.
         * Roster/cap mutations (signings, trades, call-ups) are the
           Phase-1b game-logic surface: validated stubs below. Each real
           handler mutates the host's canonical objects and returns
@@ -7523,7 +7730,13 @@ class HockeyManagerGUI(tk.Tk):
         if team is None:
             return False, f"unknown team: {team_id}"
         if action in ("set_lines", "set_tactics"):
-            return False, "lines & tactics are managed locally in Phase 1"
+            handler = {"set_lines": self._mp_set_lines,
+                       "set_tactics": self._mp_set_tactics}[action]
+            try:
+                return handler(params, team, manager)
+            except Exception as e:
+                print(f"MP action {action} failed: {e}")
+                return False, f"{action} failed: {e}"
         if action in ("advise_coach", "unfeature_player", "team_event",
                       "set_line_control"):
             return self._apply_morale_action(action, params, team)
@@ -7559,10 +7772,13 @@ class HockeyManagerGUI(tk.Tk):
             "fire_staff": self._mp_fire_staff,
             "assign_scout": self._mp_assign_scout,
             "set_practice": self._mp_set_practice,
+            "practice_session": self._mp_practice_session,
             "team_talk": self._mp_team_talk,
             "press_conference": self._mp_press_conference,
             "propose_trade": self._mp_propose_trade,
             "draft_pick": self._mp_draft_pick,
+            "set_captaincy": self._mp_set_captaincy,
+            "set_trade_block": self._mp_set_trade_block,
         }.get(action)
         if handler is None:
             return False, f"unsupported action: {action}"
@@ -7573,6 +7789,316 @@ class HockeyManagerGUI(tk.Tk):
             return False, f"{action} failed: {e}"
 
     # -- Phase 2 management-action helpers (host side) --------------------
+
+    def _mp_set_lines(self, params, team, manager):
+        """Apply a client's lineup to the canonical team.lineup.
+
+        The client sends player IDs in the editor's nested shape; the host
+        resolves them against the canonical roster (ownership validated),
+        rejects dupes and non-goalies in net, then stores + flattens exactly
+        like the SP editor (flatten_lineup). The next STATE_SYNC carries it
+        to everyone and the sim dresses it via resolve_game_lineup.
+        """
+        lines = params.get("lines")
+        if not isinstance(lines, dict):
+            return False, "Missing lines payload."
+        try:
+            from quick_sim import flatten_lineup
+        except Exception:
+            return False, "Lineup machinery unavailable."
+        nested = {}
+        seen = set()
+        def _resolve(pid):
+            if pid in (None, "", "None"):
+                return None
+            p = self._mp_team_player(team, pid)
+            return p
+        # Forwards: 4 x 3 — skaters only.
+        fw = lines.get("Forwards") or []
+        out_fw = []
+        for li in range(4):
+            line = fw[li] if li < len(fw) else []
+            out_line = []
+            for si in range(3):
+                pid = line[si] if si < len(line) else None
+                p = _resolve(pid)
+                if p is None:
+                    out_line.append(None)
+                    continue
+                if self._mp_is_goalie(p):
+                    return False, (f"{p.full_name} is a goalie -- "
+                                   "skaters only on forward lines.")
+                key = str(getattr(p, "id", ""))
+                if key in seen:
+                    return False, (f"{p.full_name} is dressed twice -- "
+                                   "each player skates one slot.")
+                seen.add(key)
+                out_line.append(p)
+            out_fw.append(out_line)
+        nested["Forwards"] = out_fw
+        # Defense: 3 x 2 — skaters only.
+        df = lines.get("Defense") or []
+        out_df = []
+        for li in range(3):
+            pair = df[li] if li < len(df) else []
+            out_pair = []
+            for si in range(2):
+                pid = pair[si] if si < len(pair) else None
+                p = _resolve(pid)
+                if p is None:
+                    out_pair.append(None)
+                    continue
+                if self._mp_is_goalie(p):
+                    return False, (f"{p.full_name} is a goalie -- "
+                                   "skaters only on defense pairs.")
+                key = str(getattr(p, "id", ""))
+                if key in seen:
+                    return False, (f"{p.full_name} is dressed twice -- "
+                                   "each player skates one slot.")
+                seen.add(key)
+                out_pair.append(p)
+            out_df.append(out_pair)
+        nested["Defense"] = out_df
+        # Goalies: 2 — goalies only.
+        gl = lines.get("Goalies") or []
+        out_gl = []
+        for si in range(2):
+            pid = gl[si] if si < len(gl) else None
+            p = _resolve(pid)
+            if p is None:
+                out_gl.append(None)
+                continue
+            if not self._mp_is_goalie(p):
+                return False, (f"{p.full_name} isn't a goalie.")
+            key = str(getattr(p, "id", ""))
+            if key in seen:
+                return False, (f"{p.full_name} is dressed twice.")
+            seen.add(key)
+            out_gl.append(p)
+        nested["Goalies"] = out_gl
+        # Special teams ride along when supplied (same keys as the editor).
+        # Note: special-teamers are the same skaters dressed at even
+        # strength, so duplicate detection restarts here -- it only guards
+        # against one player holding two jobs on the SAME unit.
+        for key in ("PP1", "PP2", "PK1", "PK2"):
+            units = lines.get(key)
+            if not isinstance(units, dict):
+                continue
+            seen_st = set()
+            out_units = {}
+            for ukey, plist in units.items():
+                resolved = []
+                for pid in plist or []:
+                    p = _resolve(pid)
+                    if p is None:
+                        continue
+                    pkey = str(getattr(p, "id", ""))
+                    if pkey in seen_st:
+                        return False, (f"{p.full_name} has two jobs on "
+                                       f"{key} -- one player, one role.")
+                    seen_st.add(pkey)
+                    resolved.append(p)
+                out_units[ukey] = resolved
+            nested[key] = out_units
+        team.lineup = flatten_lineup(nested)
+        return True, "Lines saved."
+
+    @staticmethod
+    def _mp_is_goalie(player):
+        pos = getattr(player, "primary_position", "")
+        return getattr(pos, "value", pos) == "G"
+
+    def _mp_set_tactics(self, params, team, manager):
+        """Apply a client's tactics to the canonical team tactics state.
+
+        The whiteboard edits the seven zone modules (team.tactics dict);
+        line_matchups ride along. Every value is validated against the
+        tactics catalogs -- unknown modules/keys are rejected, never
+        defaulted. The next STATE_SYNC carries it to the sim.
+        """
+        tactics = params.get("tactics")
+        if not isinstance(tactics, dict):
+            return False, "Missing tactics payload."
+        try:
+            import tactics as tx
+        except Exception:
+            return False, "Tactics machinery unavailable."
+        changed = []
+        modules = tactics.get("modules")
+        if isinstance(modules, dict):
+            if not isinstance(getattr(team, "tactics", None), dict):
+                team.tactics = {}
+            for mod, key in modules.items():
+                mod = str(mod)
+                catalog = tx.CATALOGS.get(mod)
+                if catalog is None:
+                    return False, f"Unknown tactics module: {mod!r}."
+                key = str(key)
+                if key not in catalog:
+                    return False, f"Invalid {mod} system: {key!r}."
+                if team.tactics.get(mod) != key:
+                    # SP parity: install through the shared helper so the
+                    # room's learning-curve familiarity hit applies exactly
+                    # as it does on the single-player whiteboard (it also
+                    # busts the tactics cache).
+                    if tx.set_team_system(team, mod, key):
+                        changed.append(mod)
+                    else:
+                        return False, f"Couldn't install {mod} system."
+        if "line_matchups" in tactics:
+            lm = tactics["line_matchups"]
+            if not isinstance(lm, dict):
+                return False, "Invalid line_matchups."
+            cur = getattr(team, "line_matchups",
+                          {"F": [None] * 4, "D": [None] * 3})
+            if not isinstance(cur, dict):
+                cur = {"F": [None] * 4, "D": [None] * 3}
+            for side, want in (("F", 4), ("D", 3)):
+                vals = lm.get(side)
+                if vals is None:
+                    continue
+                if not isinstance(vals, list) or len(vals) != want:
+                    return False, f"Invalid line_matchups[{side}]."
+                clean = []
+                for v in vals:
+                    if v is None:
+                        clean.append(None)
+                        continue
+                    try:
+                        iv = int(v)
+                    except (TypeError, ValueError):
+                        return False, f"Invalid matchup value: {v!r}."
+                    if not 1 <= iv <= 4:
+                        return False, f"Invalid matchup value: {v!r}."
+                    clean.append(iv)
+                cur[side] = clean
+            team.line_matchups = cur
+            changed.append("line_matchups")
+        if not changed:
+            return False, "Nothing to change."
+        return True, "Tactics saved."
+
+    def _mp_set_captaincy(self, params, team, manager):
+        """Set the club's captain + alternates on canonical state.
+
+        Same 1C+2A rule the SP pickers enforce: two alternates from the
+        NHL roster, no goalie letters, no double letters. A deposition
+        context (established captain losing the C) runs the shared
+        captaincy_change judgment consequences on the host, exactly as
+        the SP manual tool does locally -- the conversation happened on
+        the client, the fallout lands here.
+        """
+        alt_ids = params.get("alt_ids") or []
+        if not isinstance(alt_ids, list):
+            return False, "Malformed alternates."
+        alts = [self._mp_team_player(team, pid) for pid in alt_ids]
+        if len(alts) != 2 or any(a is None for a in alts):
+            return False, "Pick exactly two alternates from your club."
+        cap = self._mp_team_player(team, params.get("captain_id", "") or "")
+        picked = ([cap] if cap is not None else []) + alts
+        if len({str(getattr(pl, "id", "")) for pl in picked}) != len(picked):
+            return False, "One player, one letter."
+        for pl in picked:
+            if self._mp_is_goalie(pl):
+                return False, (f"{pl.full_name} is a goalie -- goalies "
+                                "can't wear a letter (NHL Rule 6.1).")
+            if pl not in (getattr(team, "roster", None) or []):
+                return False, (f"{pl.full_name} isn't on the NHL roster.")
+        dep = params.get("deposition") or {}
+        # Validate EVERYTHING before touching a single letter: a rejected
+        # payload must leave the existing captaincy untouched.
+        old_c = None
+        dep_tier = str(dep.get("tier", "grumbles")) if isinstance(dep, dict) else "grumbles"
+        if isinstance(dep, dict) and dep.get("old_captain_id"):
+            old_c = self._mp_team_player(team, dep.get("old_captain_id", ""))
+            if old_c is None:
+                return False, "The deposed captain isn't on your club."
+            if dep_tier not in ("graceful", "grumbles", "furious"):
+                return False, "Unknown deposition tone."
+        roster = list(getattr(team, "roster", None) or [])
+        for pl in roster:
+            try:
+                pl.captaincy = None
+            except Exception:
+                pass
+        if old_c is not None:
+            try:
+                import captaincy_change as _cc
+                report = _cc.apply_deposition(
+                    team, old_c, cap, dep_tier,
+                    talked=bool(dep.get("talked", False)),
+                    date_str=str(dep.get("date_str", "") or ""),
+                    compromise_alternate=bool(dep.get("compromise",
+                                                      False)))
+                for line in (report.get("news") or []):
+                    try:
+                        self.add_news(line)
+                    except Exception:
+                        pass
+            except Exception as e:
+                # Restore the old letters rather than leaving the club
+                # letterless on a half-applied deposition.
+                try:
+                    old_c.captaincy = "C"
+                except Exception:
+                    pass
+                return False, f"Deposition fallout failed: {e}"
+            # The C was dealt by apply_deposition (or left vacant); the
+            # alternates are (re)written here.
+            for al in alts:
+                try:
+                    al.captaincy = "A"
+                except Exception:
+                    pass
+            try:
+                team._captaincy_auto_assigned = False
+            except Exception:
+                pass
+            return True, "Captaincy change applied."
+        if cap is None:
+            return False, "Choose a captain (C)."
+        try:
+            cap.captaincy = "C"
+            for al in alts:
+                al.captaincy = "A"
+        except Exception:
+            return False, "Couldn't write the letters."
+        try:
+            team._captaincy_auto_assigned = False
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{team.team_name} named {cap.full_name} captain "
+                f"({alts[0].full_name}, {alts[1].full_name} alternates).")
+        except Exception:
+            pass
+        return True, f"{cap.full_name} named captain."
+
+    def _mp_set_trade_block(self, params, team, manager):
+        """Set the club's trade block on the league-level registry
+        (trade_market.trade_blocks) -- the signal AI GMs read when
+        shopping for deals. Only NHL-roster players are accepted."""
+        ids = params.get("player_ids") or []
+        if not isinstance(ids, list):
+            return False, "Malformed trade block."
+        try:
+            import trade_market as _tm
+            blocks = _tm.get_trade_blocks(getattr(self, "league", None))
+        except Exception:
+            return False, "Trade market isn't available."
+        roster = list(getattr(team, "roster", None) or [])
+        valid = []
+        for pid in ids:
+            pl = self._mp_team_player(team, pid)
+            if pl is not None and pl in roster:
+                # Raw ids, exactly like refresh_trade_blocks stores them:
+                # the registry is indexed and resolved by int player.id.
+                valid.append(getattr(pl, "id", ""))
+        blocks[team.team_name] = valid
+        if valid:
+            return True, f"Trade block updated ({len(valid)} players)."
+        return True, "Trade block cleared."
 
     def _mp_team_player(self, team, player_id):
         """Find a player on a team's roster / AHL / prospects by id."""
@@ -8026,7 +8552,14 @@ class HockeyManagerGUI(tk.Tk):
         return True, f"{player.full_name} returned to junior."
 
     def _mp_claim_waivers(self, params, team, manager):
-        """Claim off waivers: mirrors WaiversView.claim_from_waivers()."""
+        """Claim off waivers: queue the claim exactly like the SP wire tab.
+
+        The claim is NOT granted instantly -- it is processed at noon in
+        waiver priority order by process_waivers(), so a higher-priority
+        club (human or AI) that also wants him gets him first. Pending
+        claims are tracked per team (mp_claim_teams) so every human GM's
+        claim is independent.
+        """
         pid = str(params.get("player_id", "") or "")
         player = None
         try:
@@ -8046,46 +8579,25 @@ class HockeyManagerGUI(tk.Tk):
                              "salary", 0) or 0)
         if salary > self._mp_cap_room(team):
             return False, "Not enough cap space to claim him."
-        original = self._mp_find_team(getattr(player, "team_name", ""))
-        if original is not None:
+        pending = getattr(player, "mp_claim_teams", None)
+        if not isinstance(pending, list):
+            pending = []
             try:
-                original.remove_player(player)
+                player.mp_claim_teams = pending
             except Exception:
                 pass
-        team.add_player(player)
-        # Rivalry lifecycle: a waiver claim is a transfer, same as the
-        # single-player path -- personal beefs follow the man.
+        if team.team_name in pending:
+            return False, (f"You already have a pending claim on "
+                           f"{player.full_name}.")
+        pending.append(team.team_name)
         try:
-            from reputation_system import on_player_transfer as _opt
-            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
-            if isinstance(_rivs, list):
-                _opt(_rivs, player, from_team=original, to_team=team)
+            self.add_news(
+                f"{team.team_name} submitted a waiver claim for "
+                f"{player.full_name}.")
         except Exception:
             pass
-        # Dressing room: the room reacts to WHO arrives, bounded.
-        try:
-            import dressing_room as _dr_arr
-            _dr_arr.cascade_on_arrival(
-                team, player, how="waiver claim",
-                date_str=str(getattr(self, "current_date", "")))
-        except Exception:
-            pass
-        try:
-            player.on_waivers = False
-            player.waiver_days = 0
-        except Exception:
-            pass
-        try:
-            if player in self.waiver_list:
-                self.waiver_list.remove(player)
-        except Exception:
-            pass
-        try:
-            self.add_news(f"{player.full_name} claimed off waivers by "
-                          f"{team.team_name}.")
-        except Exception:
-            pass
-        return True, f"Claimed {player.full_name} off waivers."
+        return True, (f"Claim submitted for {player.full_name} -- processed "
+                      f"at noon in waiver priority order.")
 
     def _mp_buyout_player(self, params, team, manager):
         """Buy out a contract: same cap-hit schedule the buyout view
@@ -8281,6 +8793,36 @@ class HockeyManagerGUI(tk.Tk):
                                 "staff budget.")
         except Exception:
             pass
+        # SP parity: the staffer can decline the offer. Same acceptance
+        # chance the staff view shows (offer vs market ask, club prestige,
+        # GM stature) -- the roll happens BEFORE any mutation, exactly as
+        # the SP view rolls before sign_free_agent_staff().
+        try:
+            import random as _r
+            from game_classes import staff_market_ask as _sask, \
+                to_100_scale as _t100
+            _askv = _sask(staffer)
+            _mult = salary / max(1, _askv)
+            _rating = _t100(staffer.overall_rating)
+            _prestige = getattr(team, 'prestige', 50)
+            _base = (0.45 + (_mult - 1.0) * 1.4 + (_prestige - 50) / 400
+                     - (_rating - 60) / 600)
+            try:
+                import reputation_system as _rs
+                _base += _rs.gm_staff_accept_delta(team)
+            except Exception:
+                pass
+            _chance = max(0.05, min(0.98, _base))
+            if _r.random() >= _chance:
+                return False, (
+                    f"{getattr(staffer, 'full_name', 'Staffer')} declined "
+                    f"your offer.")
+        except Exception:
+            pass
+        # Join the new club first; only leave the old source after the
+        # hire has landed, so a failure can't strand the staffer.
+        # Terms are stamped here -- after the acceptance roll, so a
+        # declined offer leaves the market pool untouched.
         try:
             staffer.salary = salary
             staffer.contract_years = years
@@ -8288,8 +8830,6 @@ class HockeyManagerGUI(tk.Tk):
             staffer.assignment = _asg if _asg in ("nhl", "ahl") else "nhl"
         except Exception:
             pass
-        # Join the new club first; only leave the old source after the
-        # hire has landed, so a failure can't strand the staffer.
         hired = False
         try:
             roster = getattr(team, "staff", None)
@@ -8385,6 +8925,53 @@ class HockeyManagerGUI(tk.Tk):
         return True, (f"{name} assigned to {region}."
                       if region else f"{name} recalled from assignment.")
 
+    def _mp_practice_session(self, params, team, manager):
+        """Run one practice session: the same engine call the SP practice
+        center makes -- can_practice gate, then execute_practice against
+        the canonical player (skill gain + fatigue land on real state)."""
+        try:
+            from enhanced_practice_system import (
+                PracticeEngine, PracticeType, PracticeIntensity)
+        except Exception:
+            return False, "Practice system isn't available."
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            ptype = PracticeType(str(params.get("practice_type", "")))
+        except Exception:
+            return False, "Unknown practice type."
+        try:
+            intensity = PracticeIntensity(str(params.get("intensity", "")))
+        except Exception:
+            return False, "Unknown intensity."
+        try:
+            duration = int(params.get("duration", 60))
+        except (TypeError, ValueError):
+            duration = 60
+        duration = max(15, min(180, duration))
+        try:
+            trainer_quality = int(params.get("trainer_quality", 12))
+        except (TypeError, ValueError):
+            trainer_quality = 12
+        engine = PracticeEngine()
+        try:
+            can, why = engine.can_practice(player, ptype, intensity)
+        except Exception:
+            can, why = True, ""
+        if not can:
+            return False, why or "He can't practice right now."
+        try:
+            session = engine.execute_practice(
+                player, ptype, intensity, duration, trainer_quality,
+                team=team)
+        except Exception as e:
+            return False, f"Session failed: {e}"
+        if not session:
+            return False, "Session failed."
+        return True, (f"Session complete: +{session.skill_gain:.2f} skill, "
+                      f"+{session.fatigue_cost}% fatigue.")
+
     def _mp_set_practice(self, params, team, manager):
         """Set training programs: writes the same game_manager.
         training_programs entries the practice window creates."""
@@ -8419,17 +9006,46 @@ class HockeyManagerGUI(tk.Tk):
                 return False, "No matching players on your club."
         else:
             players = list(getattr(team, "roster", []) or [])
-        try:
-            for p in players:
-                gm.training_programs[str(getattr(p, "id", ""))] = {
+        # SP parity: the Development Center stamps int keys
+        # (gm.training_programs[player.id]) and runs a first session
+        # immediately through the practice engine. String keys would
+        # never match the int-keyed lookup in _process_training_programs.
+        from enhanced_practice_system import (
+            PracticeEngine, FOCUS_TO_PRACTICE_TYPE,
+            INTENSITY_LABEL_TO_ENUM)
+        _engine = PracticeEngine()
+        _ptype = FOCUS_TO_PRACTICE_TYPE.get(focus)
+        _intensity = INTENSITY_LABEL_TO_ENUM.get(intensity)
+        _applied, _skipped = [], []
+        for pl in players:
+            try:
+                _can, _why = _engine.can_practice(pl, _ptype, _intensity)
+            except Exception:
+                _can, _why = True, ""
+            if not _can:
+                _skipped.append(getattr(pl, "full_name", "?"))
+                continue
+            try:
+                gm.training_programs[getattr(pl, "id", "")] = {
                     "focus": focus, "intensity": intensity,
                     "assigned": game_today,
                     "team": getattr(team, "team_name", ""),
+                    "player_name": getattr(pl, "full_name", ""),
                 }
-        except Exception as e:
-            return False, f"Practice update failed: {e}"
-        return True, (f"Practice set: {focus} / {intensity} "
-                      f"for {len(players)} players.")
+                # First session runs now, exactly like the SP assignment.
+                _engine.execute_practice(pl, _ptype, _intensity, 60, 12)
+                _applied.append(pl)
+            except Exception:
+                _skipped.append(getattr(pl, "full_name", "?"))
+        if not _applied:
+            return False, ("Nobody could train right now"
+                           + (f": {', '.join(_skipped[:3])}"
+                              if _skipped else "."))
+        _msg = (f"Practice set: {focus} / {intensity} "
+                f"for {len(_applied)} players.")
+        if _skipped:
+            _msg += f" ({len(_skipped)} skipped -- too fatigued.)"
+        return True, _msg
 
     # -- dressing-room actions (host side) --------------------------------
 
@@ -9826,6 +10442,8 @@ class HockeyManagerGUI(tk.Tk):
         user_team = getattr(self, 'user_team', None) or (getattr(gm, 'user_team', None) if gm else None)
         if gm is None or not user_team:
             return
+        league = (getattr(self, 'league', None)
+                  or (getattr(gm, 'league', None) if gm else None))
         if not hasattr(gm, 'training_programs') or gm.training_programs is None:
             gm.training_programs = {}
         game_today = getattr(self, 'current_date', None) or date.today()
@@ -9839,11 +10457,20 @@ class HockeyManagerGUI(tk.Tk):
                 gm.training_programs[pid] = adopted
 
         engine = PracticeEngine()
+        # Every club's programs run, not just the host's: a client GM's
+        # training assignment lives in the same registry. (AI clubs never
+        # write programs, so SP behavior is unchanged.)
         players = {}
-        for roster_list in (user_team.roster, user_team.ahl_roster,
-                            user_team.prospects):
-            for pl in roster_list:
-                players[pl.id] = pl
+        _teams_by_name = {}
+        for _t in (getattr(league, 'teams', None) or []):
+            try:
+                _teams_by_name[getattr(_t, 'team_name', '')] = _t
+                for roster_list in (_t.roster, _t.ahl_roster,
+                                    _t.prospects):
+                    for pl in roster_list or []:
+                        players[getattr(pl, 'id', None)] = (pl, _t)
+            except Exception:
+                continue
         expired = []
         for pid, prog in list(gm.training_programs.items()):
             assigned = prog.get('assigned')
@@ -9855,9 +10482,15 @@ class HockeyManagerGUI(tk.Tk):
             if assigned is None or (game_today - assigned).days >= 30:
                 expired.append(pid)
                 continue
-            player = players.get(pid)
-            if not player:
+            _hit = players.get(pid)
+            if not _hit:
                 continue
+            player, _pteam = _hit
+            # The drill is run by the player's own coaching staff, not
+            # the host's -- fall back to the host club only for legacy
+            # programs stamped without a team.
+            _coach_team = (_teams_by_name.get(prog.get('team'))
+                           or _pteam or user_team)
             ptype = FOCUS_TO_PRACTICE_TYPE.get(prog.get('focus'), PracticeType.SKATING)
             intensity = INTENSITY_LABEL_TO_ENUM.get(prog.get('intensity'))
             if intensity is None:
@@ -9869,7 +10502,7 @@ class HockeyManagerGUI(tk.Tk):
                     # (who teaches it, archetype affinity, attitude, fit,
                     # system) instead of a flat trainer number.
                     engine.execute_practice(player, ptype, intensity, 60, 12,
-                                            team=user_team)
+                                            team=_coach_team)
             except Exception:
                 continue
         for pid in expired:
@@ -10557,6 +11190,15 @@ class HockeyManagerGUI(tk.Tk):
                     talk_boost = 1.0  # no dressing-room speeches in September
                 else:
                     talk_boost = self._career_team_talk(opponent)
+                    if talk_boost is None:
+                        # Save/load landed mid-talk (epoch guard): the
+                        # pre-load day sim is stale. Abort this game --
+                        # simulate_day bails before post-day processing
+                        # touches orphaned objects. The parked talk
+                        # survives in its session and re-presents on the
+                        # next Continue.
+                        self._abort_day_sim = True
+                        return
                 # Adaptive Rivals: AI scouts the user (quick sim)
                 _qs_adapted = None
                 _qs_plan = []
@@ -10826,6 +11468,15 @@ class HockeyManagerGUI(tk.Tk):
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
+        # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
+        # the game (integration read; missing data stays missing).
+        try:
+            _toi, _fat = self._snapshot_game_toi_fatigue(
+                sim_engine, home_team, away_team)
+            game_result['player_toi'] = _toi
+            game_result['player_fatigue'] = _fat
+        except Exception:
+            pass
         
         self._record_game_result(game_result)
 
@@ -12136,6 +12787,14 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['events'] = getattr(full_sim, 'game_log', []) or []
                 game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
                 game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
+                # NEW-A6: same TOI/fatigue snapshot as the detailed path.
+                try:
+                    _toi, _fat = self._snapshot_game_toi_fatigue(
+                        full_sim, home_team, away_team)
+                    game_result['player_toi'] = _toi
+                    game_result['player_fatigue'] = _fat
+                except Exception:
+                    pass
             
             # Add to game results (keeps the date/matchup indexes in sync)
             self._record_game_result(game_result)
@@ -15604,17 +16263,51 @@ class HockeyManagerGUI(tk.Tk):
         return view
 
     def _navbar_session_chips(self, navbar, current_id):
-        """Resume chips for in-progress negotiations (jump away, jump back)."""
+        """Resume chips for in-progress work (jump away, jump back).
+
+        Covers contract negotiations (existing) and parked team talks
+        (gating: an unanswered pre-match talk parks instead of resolving
+        neutral -- the chip brings the exact session back).
+        """
         try:
             sessions = getattr(self, "negotiation_sessions", None) or {}
-            if not sessions:
+            # Parked team talks: unanswered sessions for the current screen
+            # set. Never chip the talk on its own screen (it's not parked
+            # there -- it's showing).
+            talk_chips = []
+            try:
+                if current_id != "team_talk":
+                    psessions = getattr(self, "pending_sessions", None) or {}
+                    for sid, sess in list(psessions.items()):
+                        if not isinstance(sess, dict):
+                            continue
+                        if sess.get("kind") != "team_talk":
+                            continue
+                        talk = (sess.get("dialogs") or {}).get("talk") or {}
+                        if talk.get("answered"):
+                            continue
+                        tt = sess.get("team_talk") or {}
+                        talk_chips.append(
+                            (sid, tt.get("opponent_name") or "opposition"))
+            except Exception:
+                pass
+            if not sessions and not talk_chips:
                 return
             chips = ctk.CTkFrame(navbar, fg_color="transparent")
             chips._session_chips = True
             chips.pack(side='right', padx=12)
-            ctk.CTkLabel(chips, text="Resume:",
-                         font=(FONT_FAMILY, 11), text_color=MUTED).pack(
-                             side='left', padx=(0, 6))
+            # NOTE: FONT_FAMILY/MUTED are not module globals (pre-existing
+            # latent NameError -- negotiation chips silently never rendered
+            # either). Use the instance font + theme muted color.
+            ctk.CTkLabel(
+                chips, text="Resume:",
+                font=(getattr(self, "FONT_FAMILY", "Helvetica"), 11),
+                text_color=TEXT_DIM).pack(side='left', padx=(0, 6))
+            for sid, opp_name in talk_chips:
+                secondary_button(
+                    chips, text="\U0001f5e3 Team Talk", width=118, height=28,
+                    command=lambda s=sid: self._resume_team_talk(s)
+                ).pack(side='left', padx=3)
             for key, sess in list(sessions.items()):
                 player = sess.get("player")
                 name = getattr(player, "full_name", "?").split()[-1]
@@ -16419,22 +17112,24 @@ class HockeyManagerGUI(tk.Tk):
         self.career.press_history.append(
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
 
-    def _career_team_talk(self, opponent) -> float:
-        """Show pre-match team talk. Returns sim boost multiplier.
+    def _career_team_talk(self, opponent):
+        """Show pre-match team talk. Returns sim boost multiplier, or None
+        when the world was reloaded under a waiting talk (the caller must
+        abort the stale day sim -- see _abort_day_sim).
 
-        Screen + callback/session flow (gating Phase 1): the talk is a
-        full-screen focus card (not a popup), the answer arrives via
-        on_done into a date-keyed Tier-B session, and a re-entrant day
-        pass reuses the parked answer instead of re-asking. The sim needs
-        the boost before it can proceed, so this fallback path pauses on
-        a variable while the screen is up -- but the session is the
-        source of truth, so the morale boost can never silently no-op
-        (the original bug) and the answer survives navigation.
+        Screen + callback/session flow (gating: park-on-navigation): the
+        talk is a full-screen focus card (not a popup); the answer arrives
+        via on_done into a date-keyed Tier-B session that carries the full
+        game context (opponent, situation) so a parked talk re-presents
+        exactly. Navigating away PARKS the session -- the waiter is NOT
+        released, the day sim stays paused on the talk, and a navbar
+        resume chip brings the exact session back. Dismiss = defer
+        ("not now"): an unanswered talk can never resolve as a silent
+        neutral. "Say nothing" remains the explicit, deliberate neutral.
         """
         if not self._career_prompts_allowed():
             return 1.0
         from popup_system import get_pending_session
-        from manager_hub_window import TeamTalkView
         my_strength = self._career_team_strength(self.user_team)
         opp_strength = self._career_team_strength(opponent)
         situation = "favorite" if my_strength > opp_strength + 5 else (
@@ -16445,12 +17140,39 @@ class HockeyManagerGUI(tk.Tk):
         context = {"situation": situation,
                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
         try:
-            _opp_key = getattr(opponent, "id", None) or getattr(
-                opponent, "team_name", "?")
+            _opp_id = getattr(opponent, "id", None)
+            _opp_key = _opp_id or getattr(opponent, "team_name", "?")
             _date = self.current_date.isoformat()
         except Exception:
-            _opp_key, _date = "?", "?"
+            _opp_id, _opp_key, _date = None, "?", "?"
         session_id = f"team_talk:{_date}:{_opp_key}"
+
+        # Tier-B session carries the full context from creation so a
+        # parked talk (navigation, save/load) re-presents exactly.
+        # Plain data only -- this session is save-serialized.
+        sess = get_pending_session(self, session_id)
+        if sess is not None:
+            try:
+                sess["kind"] = "team_talk"
+                tt = sess.get("team_talk")
+                if not isinstance(tt, dict):
+                    tt = {}
+                    sess["team_talk"] = tt
+                tt.update({
+                    "when": "prematch",
+                    "date": _date,
+                    "opponent_id": _opp_id,
+                    "opponent_name": context["opponent_name"],
+                    "situation": situation,
+                    "context": dict(context),
+                    "parked": bool(tt.get("parked", False)),
+                })
+            except Exception:
+                pass
+
+        # Stale sessions (other dates) can never be resumed -- their game
+        # is gone. Prune so the dict stays small and honest.
+        self._prune_team_talk_sessions(keep_date=_date)
 
         def _session_boost():
             try:
@@ -16464,43 +17186,267 @@ class HockeyManagerGUI(tk.Tk):
 
         prev_boost = _session_boost()
         if prev_boost is not None:
+            # Consume-once: a parked answer is single-use; the next talk
+            # (new date/opponent) starts clean.
+            self._consume_team_talk_session(session_id)
             return prev_boost
 
+        # Epoch guard: a save/load under a waiting talk orphans this
+        # frame's game objects. on_game_loaded bumps the epoch and wakes
+        # us; a mismatch here aborts instead of simming on dead state.
+        _epoch = getattr(self, "_team_talk_epoch", 0)
         wake = tk.BooleanVar(master=self, value=False)
-
-        def _on_done(result):
-            try:
-                boost = 1.0
-                if result:
-                    _opt, _reaction, boost = result
-                sess = get_pending_session(self, session_id)
-                if sess is not None:
-                    sess["dialogs"]["talk"] = {
-                        "answered": True,
-                        "boost": float(boost or 1.0),
-                    }
-            except Exception:
-                pass
-            try:
-                wake.set(True)
-            except Exception:
-                pass
-
+        self._active_team_talk = {
+            "session_id": session_id, "wake": wake, "epoch": _epoch,
+        }
         try:
-            view = self.show_screen("team_talk", "Pre-Match Team Talk",
-                                    TeamTalkView, self.user_team, "prematch",
-                                    context, on_done=_on_done)
-            # Navigating away without answering ("not now") must also
-            # release the waiter; the session simply stays unanswered.
-            try:
-                view.bind("<Destroy>", lambda _e: wake.set(True), add="+")
-            except Exception:
-                pass
+            _view = self._present_team_talk_screen(sess, wake, _epoch)
+            if _view is None:
+                # Screen could not present (genuine failure, not
+                # navigation): pre-existing fail-safe, not a silent park.
+                return 1.0
             self.wait_variable(wake)
         except Exception:
             pass
+        finally:
+            try:
+                if getattr(self, "_active_team_talk", None) is not None and \
+                        self._active_team_talk.get("wake") is wake:
+                    self._active_team_talk = None
+            except Exception:
+                pass
+        if getattr(self, "_team_talk_epoch", 0) != _epoch:
+            return None
         prev_boost = _session_boost()
-        return prev_boost if prev_boost is not None else 1.0
+        if prev_boost is not None:
+            self._consume_team_talk_session(session_id)
+            return prev_boost
+        # Unreachable in practice: the waiter is released only by an
+        # answer (navigation parks, never releases). Fail closed to the
+        # pre-existing neutral only if something truly unexpected broke
+        # the wait -- never silently mid-flow.
+        return 1.0
+
+    def _present_team_talk_screen(self, sess, wake, epoch):
+        """(Re-)present the team-talk screen for a Tier-B session.
+
+        `wake` is the day-sim waiter to release on answer, or None when
+        there is no live waiter (e.g. resumed after save/load -- the
+        answer then parks in the session and the next Continue applies
+        it pre-game, no re-ask). The view always rebuilds from the
+        session's stored context: returning resumes the exact session.
+        """
+        from manager_hub_window import TeamTalkView
+        session_id = (sess or {}).get("id") if isinstance(sess, dict) else None
+        tt = ((sess or {}).get("team_talk") or {}) if isinstance(sess, dict) else {}
+        context = dict(tt.get("context") or {})
+        if not context:
+            context = {"situation": tt.get("situation", "even"),
+                       "opponent_name": tt.get("opponent_name", "the opposition")}
+        try:
+            if self.user_team is not None:
+                _team = self.user_team
+            else:
+                _team = None
+        except Exception:
+            _team = None
+        # Revalidate the opponent against the live league (pattern:
+        # revalidation on re-present). Falls back to the stored name.
+        try:
+            _opp = self._resolve_team_talk_opponent(tt)
+            if _opp is not None:
+                context["opponent_name"] = getattr(
+                    _opp, "team_name",
+                    context.get("opponent_name", "the opposition"))
+        except Exception:
+            pass
+
+        def _on_done(result):
+            try:
+                # View contract: (option, reaction, boost) tuple, or None
+                # for "say nothing". Record the answer no matter what --
+                # a malformed result still counts as answered (dismiss is
+                # a separate path that never calls on_done).
+                boost = 1.0
+                if result:
+                    try:
+                        _opt, _reaction, boost = result
+                    except (TypeError, ValueError):
+                        try:
+                            boost = float(result)
+                        except (TypeError, ValueError):
+                            boost = 1.0
+                from popup_system import get_pending_session as _gps
+                s2 = _gps(self, session_id)
+                if s2 is not None:
+                    s2["dialogs"]["talk"] = {
+                        "answered": True,
+                        "boost": float(boost or 1.0),
+                    }
+                    t2 = s2.get("team_talk")
+                    if isinstance(t2, dict):
+                        t2["parked"] = False
+            except Exception:
+                pass
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+            if wake is not None:
+                try:
+                    # Don't wake a stale frame: if a load bumped the
+                    # epoch after we presented, the waiter is already
+                    # released and this answer belongs to the session.
+                    if getattr(self, "_team_talk_epoch", 0) == epoch:
+                        wake.set(True)
+                except Exception:
+                    pass
+
+        try:
+            view = self.show_screen("team_talk", "Pre-Match Team Talk",
+                                    TeamTalkView, _team,
+                                    "prematch", context,
+                                    on_done=_on_done, fresh=True)
+        except Exception:
+            return None
+        # Park-on-navigation: destroying the view WITHOUT an answer
+        # parks the session (context preserved) and surfaces the resume
+        # chip. The waiter is deliberately NOT released -- the day sim
+        # stays paused on the talk. Dismiss = defer, never an answer.
+        try:
+            view.bind(
+                "<Destroy>",
+                lambda e, v=view, s=session_id:
+                    self._on_team_talk_destroyed(e, v, s),
+                add="+")
+        except Exception:
+            pass
+        return view
+
+    def _on_team_talk_destroyed(self, event, view, session_id):
+        """Park a team talk whose screen was destroyed unanswered.
+
+        NOTE: customtkinter frames are canvas-based -- a <Destroy> binding
+        on a CTkFrame fires with the frame's *internal canvas* (a
+        descendant), not the frame itself. The guard therefore accepts the
+        view or any strict descendant of it.
+        """
+        try:
+            w = event.widget
+            try:
+                is_ours = (w is view) or str(w).startswith(str(view) + ".")
+            except Exception:
+                is_ours = False
+            if not is_ours:
+                return  # unrelated widget teardown, not our screen
+            # Read-only lookup: get_pending_session would RECREATE a
+            # consumed session -- a post-answer destroy must be a no-op.
+            sessions = getattr(self, "pending_sessions", None) or {}
+            sess = sessions.get(session_id)
+            if not isinstance(sess, dict):
+                return
+            talk = (sess.get("dialogs") or {}).get("talk") or {}
+            if talk.get("answered"):
+                return  # answered close: nothing to park
+            if sess.get("kind") != "team_talk":
+                return
+            tt = sess.get("team_talk")
+            if isinstance(tt, dict):
+                tt["parked"] = True
+            # The new screen's navbar picks up the resume chip via
+            # show_screen -> _navbar_session_chips; this is a no-op
+            # mid-teardown (no current screen yet) and a refresh otherwise.
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _resume_team_talk(self, session_id):
+        """Navbar resume chip: bring a parked team talk back.
+
+        With a live day sim waiting, the screen re-presents wired to its
+        waiter. After a save/load (no waiter), the answer parks in the
+        session and the next Continue applies it pre-game -- no re-ask.
+        """
+        try:
+            from popup_system import get_pending_session
+            sess = get_pending_session(self, session_id)
+            if sess is None or sess.get("kind") != "team_talk":
+                return
+            talk = ((sess.get("dialogs") or {}).get("talk")) or {}
+            if talk.get("answered"):
+                try:
+                    self.refresh_screen_navbar()
+                except Exception:
+                    pass
+                return
+            active = getattr(self, "_active_team_talk", None)
+            if (active and active.get("session_id") == session_id
+                    and active.get("wake") is not None):
+                self._present_team_talk_screen(
+                    sess, active["wake"],
+                    getattr(self, "_team_talk_epoch", 0))
+            else:
+                self._present_team_talk_screen(sess, None, 0)
+        except Exception:
+            pass
+
+    def _resolve_team_talk_opponent(self, tt):
+        """Re-link a parked team-talk opponent against the live league."""
+        try:
+            tt = tt or {}
+            oid = tt.get("opponent_id")
+            oname = tt.get("opponent_name")
+            teams = getattr(getattr(self, "league", None), "teams", None) or []
+            if oid is not None:
+                for t in teams:
+                    try:
+                        if getattr(t, "id", None) == oid:
+                            return t
+                    except Exception:
+                        continue
+            if oname:
+                for t in teams:
+                    try:
+                        if getattr(t, "team_name", None) == oname:
+                            return t
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
+
+    def _prune_team_talk_sessions(self, keep_date):
+        """Drop team-talk sessions that can never resume (other dates)."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            for sid in list(sessions.keys()):
+                try:
+                    sess = sessions.get(sid)
+                    if not isinstance(sess, dict) or sess.get("kind") != "team_talk":
+                        continue
+                    tt = sess.get("team_talk") or {}
+                    if tt.get("date") != keep_date:
+                        del sessions[sid]
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _consume_team_talk_session(self, session_id):
+        """Consume-once: remove a team-talk session after its answer applied."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            if session_id in sessions:
+                del sessions[session_id]
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
                                 went_ot: bool, sim_engine=None):
@@ -16608,6 +17554,23 @@ class HockeyManagerGUI(tk.Tk):
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
+        # Team-talk parking (gating): a save/load under a waiting talk
+        # orphans the pre-load waiter -- its game objects are dead. Bump
+        # the epoch so the stale _career_team_talk frame aborts instead
+        # of simming on them, and release its waiter so it wakes
+        # promptly. The parked talk survives in its Tier-B session (see
+        # save_load_system) and re-presents on the next Continue.
+        try:
+            self._team_talk_epoch = getattr(self, "_team_talk_epoch", 0) + 1
+            _active = getattr(self, "_active_team_talk", None)
+            self._active_team_talk = None
+            if _active and _active.get("wake") is not None:
+                try:
+                    _active["wake"].set(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Belt-and-braces: _restore_game_state rebuilds league teams as new
         # objects, so re-point the GUI mirrors seeded at boot. (load_game
         # already syncs these; this covers any path that restores state
@@ -16624,6 +17587,13 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         self._rebuild_news_log_from_stories()
+        # Re-surface the resume chip if a parked team talk survived the
+        # load (it shows on the next screen navbar; the Continue path
+        # re-presents the talk itself).
+        try:
+            self.refresh_screen_navbar()
+        except Exception:
+            pass
         print("Game loaded from save - autosave enabled")
         
     def on_game_saved(self):
@@ -17080,8 +18050,33 @@ class HockeyManagerGUI(tk.Tk):
         if not staff: return
 
         menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
-        menu.add_command(label="Offer Contract", command=lambda: messagebox.showinfo("WIP", "Staff contracts not yet implemented."))
+        menu.add_command(label="Offer Contract",
+                         command=lambda: self._offer_staff_contract(staff))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _offer_staff_contract(self, staff):
+        """Route the staff context-menu 'Offer Contract' to the real
+        contract-negotiation UI (StaffManagementView.open_contract_negotiation)
+        instead of a dead 'WIP' notice."""
+        try:
+            view = self.open_staff_management_window()
+            nego = getattr(view, "open_contract_negotiation", None)
+            if not callable(nego):
+                messagebox.showinfo(
+                    "Offer Contract",
+                    "The contract negotiation UI is unavailable right now.")
+                return
+            already = False
+            try:
+                already = staff in (getattr(self.user_team, "staff", None)
+                                    or [])
+            except Exception:
+                already = False
+            nego(staff, is_hiring=not already)
+        except Exception as e:
+            messagebox.showinfo(
+                "Offer Contract",
+                f"Could not open the negotiation UI: {e}")
 
     def open_player_profile(self, player):
         """
@@ -18042,6 +19037,29 @@ class HockeyManagerGUI(tk.Tk):
         })
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
+
+def _mp_lineup_to_ids(lineup):
+    """Serialize an editor nested lineup to player-ID payload for set_lines.
+
+    Player objects can't cross the wire; the host resolves IDs against the
+    canonical roster. None/empty slots stay None-shaped.
+    """
+    def _pid(p):
+        return None if p is None else str(getattr(p, "id", "") or "")
+    out = {}
+    for key in ("Forwards", "Defense"):
+        rows = lineup.get(key) if isinstance(lineup, dict) else None
+        out[key] = [[_pid(p) for p in (row or [])] for row in (rows or [])]
+    # Goalies is a flat [starter, backup] list, not rows.
+    _gl = lineup.get("Goalies") if isinstance(lineup, dict) else None
+    out["Goalies"] = [_pid(p) for p in (_gl or [])]
+    for key in ("PP1", "PP2", "PK1", "PK2"):
+        units = lineup.get(key) if isinstance(lineup, dict) else None
+        if isinstance(units, dict):
+            out[key] = {uk: [_pid(p) for p in (plist or [])]
+                        for uk, plist in units.items()}
+    return out
+
 
 class CleanEditLinesView(ctk.CTkFrame):
     """Clean, simple, and intuitive line editor with proper contrast and readability"""
@@ -19074,6 +20092,14 @@ class CleanEditLinesView(ctk.CTkFrame):
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
+            _mp_result = self._mp_send_lines()
+            if _mp_result:
+                if _mp_result is True:
+                    self.show_modern_notification(
+                        "Lines Sent",
+                        "Your lineup was sent to the host and applies on the "
+                        "next sync.", "info")
+                return
             self.app.user_team.lineup = flatten_lineup(self.lineup)
             
             # Show success notification
@@ -19082,6 +20108,44 @@ class CleanEditLinesView(ctk.CTkFrame):
         except Exception as e:
             # Show error notification
             self.show_modern_notification("❌ Save Failed", f"Error saving lineup: {str(e)}", "error")
+
+    def _mp_send_lines(self):
+        """Route line changes through the host in MP client mode.
+
+        Returns True when the lines were sent, "failed" when the send
+        failed (consumed: the caller must NOT mutate local state -- the
+        error is already shown), False when not an MP client.
+        """
+        try:
+            client = getattr(self.app, "mp_client", None)
+            if client is None:
+                return False
+            team = getattr(self.app, "user_team", None)
+            payload = {
+                "team_id": getattr(team, "team_name", "") if team else "",
+                "lines": _mp_lineup_to_ids(self.lineup),
+            }
+            try:
+                client.send_action("set_lines", payload)
+            except Exception as e:
+                try:
+                    self.show_modern_notification(
+                        "Not Sent",
+                        f"Couldn't reach the host ({e}). Nothing changed.",
+                        "error")
+                except Exception:
+                    pass
+                return "failed"
+            return True
+        except Exception as e:
+            try:
+                self.show_modern_notification(
+                    "Not Sent",
+                    f"Couldn't reach the host ({e}). Nothing changed.",
+                    "error")
+            except Exception:
+                pass
+            return "failed"
     
     def show_modern_notification(self, title, message, notification_type="info"):
         """Show a modern notification popup"""
@@ -20587,8 +21651,34 @@ class TradeBlockWindow(InGamePopup):
         self.summary_label = ttk.Label(self.summary_panel, text="", style='Summary.TLabel')
         self.summary_label.pack(anchor="w")
 
+        # --- Tabbed content: block management, live AI interest, other teams.
+        # The Trade Interest tab is adopted from the (now-deleted) windows.py
+        # TradeBlockWindow: a view over the real trade_market store --
+        # generate/decline interest and express interest all read/write
+        # league.trade_market, never fabricated data. ---
+        try:
+            self.style.configure('Block.TNotebook', background=parent.CONTENT_BG)
+            self.style.configure('Block.TNotebook.Tab',
+                                 font=(parent.FONT_FAMILY, 11, 'bold'),
+                                 padding=(12, 6))
+        except Exception:
+            pass
+        notebook = ttk.Notebook(self, style='Block.TNotebook')
+        notebook.pack(fill="both", expand=True, padx=18, pady=(8, 18))
+        block_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        interest_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        others_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        notebook.add(block_tab, text="Your Trade Block")
+        notebook.add(interest_tab, text="Trade Interest")
+        notebook.add(others_tab, text="Other Teams")
+        self._tb_notebook = notebook
+        # Maps interest-tree item ids -> (listing dict, team name, player
+        # name) for the real-store-backed Interest tab. The listing dicts
+        # live in league.trade_market; declines mutate them (the model).
+        self._interest_row_map = {}
+
         # --- Filter panel (pill rows, instant-apply) ---
-        filter_panel = ttk.Frame(self, style='Panel.TFrame', padding=8)
+        filter_panel = ttk.Frame(block_tab, style='Panel.TFrame', padding=8)
         filter_panel.pack(fill="x", padx=18, pady=(8, 0))
         self.filter_vars = {
             'pos': tk.StringVar(master=self, value="All"),
@@ -20632,7 +21722,7 @@ class TradeBlockWindow(InGamePopup):
         self._tb_paint_pills()
 
         # --- Panel frame ---
-        panel = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        panel = ttk.Frame(block_tab, style='Panel.TFrame', padding=12)
         panel.pack(fill="both", expand=True, padx=18, pady=18)
 
         # --- Treeview columns ---
@@ -20672,6 +21762,7 @@ class TradeBlockWindow(InGamePopup):
         ttk.Button(btn_frame, text="Shop Player", command=self.shop_selected_players).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Suggest Trade Value", command=self.suggest_trade_value).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Simulate Trade Offers", command=self.simulate_trade_offers).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Generate Interest", command=self.generate_trade_interest).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
 
         # --- Checkbox state ---
@@ -20680,6 +21771,11 @@ class TradeBlockWindow(InGamePopup):
         self.sort_reverse = False
 
         self._populate_tree()
+
+        # Ported tabs (real trade_market store): interest + other teams.
+        self.create_trade_interest(interest_tab)
+        self.create_other_trade_blocks(others_tab)
+        self.update_interest_display()
 
     def _tb_set_filter(self, var, value):
         """Set a trade-block pill filter and refresh instantly."""
@@ -20817,6 +21913,13 @@ class TradeBlockWindow(InGamePopup):
         for player in selected_players:
             if player in self.parent.trade_block:
                 self.parent.trade_block.remove(player)
+        # MP client: keep the host's league-level block in sync --
+        # send the list that was actually mutated.
+        if _mp_is_client(self.parent):
+            _mp_route(self.parent, "set_trade_block",
+                      {"player_ids":
+                       [str(getattr(p, "id", ""))
+                        for p in getattr(self.parent, "trade_block", [])]})
         self.selected_items.clear()
         self._populate_tree()
         self.parent.update_all_views()
@@ -21052,7 +22155,7 @@ class TradeBlockWindow(InGamePopup):
         return interested
 
     def _update_summary(self):
-        block = self.app.trade_block
+        block = self.parent.trade_block
         n_block = len(block)
         avg_ovr = int(sum(p.overall_rating() for p in block) / n_block) if n_block else 0
         cap_freed = sum(p.contract.salary for p in block if p.contract.years_remaining > 0)
@@ -21060,18 +22163,705 @@ class TradeBlockWindow(InGamePopup):
 
     def simulate_trade_offers(self):
         """Manually trigger trade offers for players on the trade block."""
-        if not self.app.trade_block:
+        if not self.parent.trade_block:
             messagebox.showinfo("No Players on Block", "Add players to the trade block first.")
             return
         
         # Call the parent's method to process trade block offers
-        self.app.process_trade_block_offers()
+        self.parent.process_trade_block_offers()
         
         # Update the view
         self._populate_tree()
 
     def update_views(self):
         self._populate_tree()
+
+    # ------------------------------------------------------------------
+    # Trade Interest tab: real-store backing (trade_market). Adopted from
+    # the deleted windows.py TradeBlockWindow (ccbac5f fix). The canonical
+    # store for AI interest in the user's block players is
+    # league.trade_market's "listings": open listings with source ==
+    # 'user_block' whose seller is the user's team. Per-team interest rows
+    # persist ON the listing (listing['ai_interest']); declines persist
+    # there too (status 'Declined' + listing['declined_teams']) so
+    # re-renders never resurrect them. All helpers are fail-safe: [] /
+    # None on any failure.
+    # ------------------------------------------------------------------
+    def create_trade_interest(self, parent):
+        """Create trade interest management (real trade_market store)."""
+        # Interest summary
+        summary_frame = ttk.LabelFrame(parent, text="Trade Interest Summary")
+        summary_frame.pack(fill='x', padx=10, pady=10)
+
+        self.interest_summary = tk.Text(summary_frame, height=6, wrap='word',
+                                        bg=self.parent.CONTENT_BG,
+                                        fg=self.parent.TEXT_COLOR,
+                                        insertbackground=self.parent.TEXT_COLOR)
+        self.interest_summary.pack(fill='x', padx=10, pady=10)
+
+        # Detailed interest
+        detail_frame = ttk.LabelFrame(parent, text="Detailed Interest")
+        detail_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        columns = ('Your Player', 'Interested Team', 'Their Interest',
+                   'Your Interest', 'Status')
+        self.interest_tree = ttk.Treeview(detail_frame, columns=columns,
+                                          show='headings', height=10)
+
+        for col in columns:
+            self.interest_tree.heading(col, text=col)
+            self.interest_tree.column(col, width=150)
+        make_tree_sortable(self.interest_tree)
+
+        # Buttons for interest management
+        interest_buttons = ttk.Frame(detail_frame)
+        interest_buttons.pack(fill='x', pady=5)
+
+        ttk.Button(interest_buttons, text="Negotiate Trade",
+                   command=self.start_trade_negotiation).pack(side='left',
+                                                              padx=5)
+        ttk.Button(interest_buttons, text="Decline Interest",
+                   command=self.decline_interest).pack(side='left', padx=5)
+
+        interest_scrollbar = ttk.Scrollbar(detail_frame, orient='vertical',
+                                           command=self.interest_tree.yview)
+        self.interest_tree.configure(yscrollcommand=interest_scrollbar.set)
+
+        self.interest_tree.pack(side='left', fill='both', expand=True)
+        interest_scrollbar.pack(side='right', fill='y')
+
+    def _tbw_market_ctx(self):
+        """(trade_market module, league, user_team) or (None, None, None)."""
+        try:
+            import trade_market as tm
+        except Exception:
+            return None, None, None
+        try:
+            app = self.parent
+            league = getattr(app, 'league', None)
+            user_team = getattr(app, 'user_team', None)
+            if league is None or user_team is None:
+                return None, None, None
+            if getattr(user_team, 'team_name', None) is None:
+                return None, None, None
+            return tm, league, user_team
+        except Exception:
+            return None, None, None
+
+    def _tbw_user_listings(self):
+        """Open user_block listings for the user's team from the real store."""
+        tm, league, user_team = self._tbw_market_ctx()
+        if tm is None:
+            return []
+        try:
+            market = tm.get_market(league)
+            uname = user_team.team_name
+            return [li for li in tm._active_listings(market, team_name=uname)
+                    if isinstance(li, dict) and li.get('source') == 'user_block']
+        except Exception:
+            return []
+
+    def _tbw_interest_rows(self):
+        """[(player, listing, row)] for non-declined AI interest, real store."""
+        tm, league, _ut = self._tbw_market_ctx()
+        rows = []
+        if tm is None:
+            return rows
+        try:
+            for li in self._tbw_user_listings():
+                try:
+                    player, _team = tm.resolve_player(league,
+                                                      li.get('player_id'))
+                except Exception:
+                    player = None
+                if player is None:
+                    continue
+                for r in (li.get('ai_interest') or []):
+                    if not isinstance(r, dict):
+                        continue
+                    if r.get('status') == 'Declined':
+                        continue
+                    rows.append((player, li, r))
+        except Exception:
+            pass
+        return rows
+
+    def _tbw_interest_level(self, tm, app, bidder):
+        """Genuine interest intensity from situational buyer risk (0..1)."""
+        try:
+            d = float(tm._buyer_desperation(app, bidder) or 0.0)
+        except Exception:
+            d = 0.0
+        if d >= 0.6:
+            return 'High'
+        if d >= 0.3:
+            return 'Medium'
+        return 'Low'
+
+    def _tbw_open_neg_count(self):
+        """Open negotiations involving a user block player (real store).
+
+        Counts genuinely open trade negotiations (trade_negotiation._store)
+        whose assets include a player currently on the block. None when the
+        store is unavailable.
+        """
+        try:
+            import trade_negotiation as tneg
+        except Exception:
+            return None
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            if user_team is None:
+                return None
+            pids = set()
+            for entry in (getattr(user_team, 'trade_block', None) or []):
+                try:
+                    pid = getattr(entry, 'id', None)
+                    if pid is not None:
+                        pids.add(pid)
+                except Exception:
+                    continue
+            for entry in (getattr(app, 'trade_block', None) or []):
+                try:
+                    pid = getattr(entry, 'id', None)
+                    if pid is not None:
+                        pids.add(pid)
+                except Exception:
+                    continue
+            if not pids:
+                return 0
+            n = 0
+            for neg in (tneg._store(app) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') in pids
+                           for a in assets):
+                        n += 1
+                except Exception:
+                    continue
+            return n
+        except Exception:
+            return None
+
+    def _tbw_in_talks(self, player, team_name):
+        """Is there an open negotiation with team_name involving player?"""
+        try:
+            import trade_negotiation as tneg
+            pid = getattr(player, 'id', None)
+            for neg in (tneg._store(self.parent) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    if getattr(neg, 'partner_team_name', '') != team_name:
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') == pid
+                           for a in assets):
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
+
+    def generate_trade_interest(self):
+        """Run the genuine AI interest computation for each block player.
+
+        Ensures every block player has a listing in the real trade_market
+        store (source 'user_block'), then runs trade_market._find_bidders --
+        buyer fit, destination appeal, situational buyer risk, person-conscious
+        interest, clause gating -- and persists the interested teams on the
+        listing itself. Teams the machinery rejects simply don't appear;
+        nothing is fabricated. Fail-safe: any exception leaves the window
+        functional and writes nothing.
+        """
+        from tkinter import messagebox
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            block = []
+            seen = set()
+            for src in (getattr(app, 'trade_block', None) or [],
+                        getattr(user_team, 'trade_block', None)
+                        if user_team is not None else []):
+                for p in (src or []):
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    if pid is None or pid in seen:
+                        continue
+                    seen.add(pid)
+                    block.append(p)
+            if not block:
+                messagebox.showinfo("No Players",
+                                    "Add players to your trade block first.")
+                return
+            import trade_market as tm
+            league = getattr(app, 'league', None)
+            if league is None:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "No interest data available (no league loaded).")
+                return
+            market = tm.get_market(league)
+            today = tm._today(app)
+            heat = tm.deadline_heat(app, league, today)
+            params = tm._heat_params(heat)
+            ramp = heat >= 0.5
+            # Mirror the manual block into real listings (no-op for players
+            # already listed; pulls listings for players removed from the
+            # block). This is the same sync the daily market driver uses.
+            tm._sync_user_block(app, league, market, today, params)
+            listings = self._tbw_user_listings()
+            day = tm._iso(today)
+            checked, new = 0, 0
+            for li in listings:
+                try:
+                    bidders = tm._find_bidders(app, league, li, today, ramp)
+                except Exception:
+                    bidders = []
+                checked += 1
+                try:
+                    declined = set(li.get('declined_teams') or [])
+                    rows = [r for r in (li.get('ai_interest') or [])
+                            if isinstance(r, dict)]
+                    by_team = {r.get('team'): r for r in rows}
+                    live = set()
+                    for team in bidders:
+                        tname = getattr(team, 'team_name', '') or ''
+                        if not tname or tname in declined:
+                            continue
+                        live.add(tname)
+                        level = self._tbw_interest_level(tm, app, team)
+                        row = by_team.get(tname)
+                        if row is None:
+                            row = {'team': tname, 'interest_level': level,
+                                   'status': 'Active', 'day': day}
+                            rows.append(row)
+                            new += 1
+                        else:
+                            row['interest_level'] = level
+                            row['day'] = day
+                            if row.get('status') != 'Declined':
+                                row['status'] = 'Active'
+                    # Teams no longer interested drop off; declined teams stay
+                    # declined so a re-check never resurrects them.
+                    li['ai_interest'] = [
+                        r for r in rows
+                        if r.get('team') in live
+                        or r.get('status') == 'Declined']
+                except Exception:
+                    continue
+            self._populate_tree()
+            self.update_interest_display()
+            if checked == 0:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    "Your block players could not be listed right now -- "
+                    "no interest data was changed.")
+            else:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    f"Checked {checked} listed player(s) against every rival GM.\n"
+                    f"{new} new expression(s) of interest recorded.")
+        except Exception:
+            try:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "Could not compute trade interest right now -- "
+                    "no data was changed.")
+            except Exception:
+                pass
+
+    def update_interest_display(self):
+        """Render the Interest tab as a VIEW over the real trade_market store.
+
+        Rows come from open user_block listings' persisted ai_interest
+        (declined teams filtered -- their decline lives in the model).
+        'Active Negotiations' counts genuinely open negotiations involving a
+        block player. Degrades to an honest empty state when the store is
+        unavailable. Never raises.
+        """
+        try:
+            # Clear current items
+            for item in self.interest_tree.get_children():
+                self.interest_tree.delete(item)
+            self._interest_row_map = {}
+
+            tm, league, user_team = self._tbw_market_ctx()
+            n_block = 0
+            try:
+                n_block = len(getattr(self.parent, 'trade_block', None) or [])
+            except Exception:
+                pass
+            if tm is None:
+                rows = []
+                neg_n = None
+            else:
+                rows = self._tbw_interest_rows()
+                neg_n = self._tbw_open_neg_count()
+
+            summary_text = f"Players on Trade Block: {n_block}\n"
+            summary_text += f"Total Interest Expressions: {len(rows)}\n"
+            if neg_n is None:
+                summary_text += "Active Negotiations: n/a\n"
+            else:
+                summary_text += f"Active Negotiations: {neg_n}\n"
+            if tm is None:
+                summary_text += "No interest data available.\n"
+
+            self.interest_summary.delete(1.0, tk.END)
+            self.interest_summary.insert(1.0, summary_text)
+
+            # Add detailed interest from the real store
+            for player, listing, row in rows:
+                team_name = row.get('team', '?')
+                your_interest = ("In talks"
+                                 if self._tbw_in_talks(player, team_name)
+                                 else "\u2014")
+                try:
+                    offer = listing.get('user_offer') or {}
+                except Exception:
+                    offer = {}
+                status = ("Offer sent" if offer.get('team') == team_name
+                          else row.get('status', 'Active'))
+                iid = self.interest_tree.insert('', 'end', values=(
+                    getattr(player, 'full_name', '?'),
+                    team_name,
+                    row.get('interest_level', 'Low'),
+                    your_interest,
+                    status,
+                ))
+                self._interest_row_map[iid] = (
+                    listing, team_name, getattr(player, 'full_name', '?'))
+            if tm is None:
+                set_tree_empty_state(self.interest_tree,
+                                     "No interest data available")
+            elif not rows:
+                set_tree_empty_state(
+                    self.interest_tree,
+                    "No AI GMs are showing interest -- use Generate Interest "
+                    "to check")
+            else:
+                set_tree_empty_state(self.interest_tree)
+        except Exception:
+            # Fail-safe: leave whatever rendered; the window stays usable.
+            pass
+
+    def decline_interest(self):
+        """Decline AI interest IN THE MODEL.
+
+        Marks the team's interest row 'Declined' on the real listing and
+        records the team in the listing's declined_teams, so future interest
+        checks never resurrect it. Re-render filters declined rows. Open
+        negotiations/offers are separate real state and are left alone (an
+        open offer still needs an answer in the inbox). Never raises; the
+        model is only written after the selected row resolves.
+        """
+        from tkinter import messagebox
+        try:
+            selection = self.interest_tree.selection()
+            if not selection:
+                messagebox.showwarning("No Selection",
+                                       "Please select an interest to decline.")
+                return
+            ref = (self._interest_row_map or {}).get(selection[0])
+            if ref is None:
+                # Stale selection (e.g. pre-refresh) -- just re-render.
+                self.update_interest_display()
+                return
+            listing, team_name, player_name = ref
+            try:
+                has_offer = False
+                try:
+                    offer = listing.get('user_offer') or {}
+                    has_offer = offer.get('team') == team_name
+                except Exception:
+                    pass
+                for r in (listing.get('ai_interest') or []):
+                    if isinstance(r, dict) and r.get('team') == team_name \
+                            and r.get('status') != 'Declined':
+                        r['status'] = 'Declined'
+                dteams = listing.setdefault('declined_teams', [])
+                if team_name not in dteams:
+                    try:
+                        dteams.append(team_name)
+                    except Exception:
+                        pass
+            except Exception:
+                messagebox.showwarning("Decline failed",
+                                       "Could not decline that interest -- "
+                                       "no data was changed.")
+                return
+            self.update_interest_display()
+            msg = (f"Declined {team_name}'s interest in {player_name}. "
+                   f"They won't reappear on future interest checks.")
+            if has_offer:
+                msg += ("\n\nNote: they already have an open offer on this "
+                        "player -- answer it from your inbox if you want to "
+                        "walk away from the table too.")
+            messagebox.showinfo("Interest Declined", msg)
+        except Exception:
+            pass
+
+    def start_trade_negotiation(self):
+        """Open the real Trade Center pre-set to this negotiation.
+
+        The selected row is (your block player, interested team): open the
+        Trade Center with that team as the partner and your player already
+        on your side of the deal. Routes through the app's open_trade_window
+        (main.py:15300); honest warning if anything is unresolvable.
+        """
+        from tkinter import messagebox
+        try:
+            tree = getattr(self, 'interest_tree', None)
+            selection = tree.selection() if tree is not None else []
+            if not selection:
+                messagebox.showwarning("No Selection",
+                                       "Please select an interest to negotiate.")
+                return
+            ref = (self._interest_row_map or {}).get(selection[0])
+            if ref is None:
+                messagebox.showwarning("Stale Selection",
+                                       "That row is out of date -- the view "
+                                       "has been refreshed.")
+                self.update_interest_display()
+                return
+            listing, team_name, _player_name = ref
+            league = getattr(self.parent, 'league', None)
+            partner = next(
+                (t for t in (getattr(league, 'teams', None) or [])
+                 if getattr(t, 'team_name', '') == team_name), None)
+            if partner is None:
+                messagebox.showwarning("Team unavailable",
+                                       f"Could not find {team_name} in the "
+                                       "league.")
+                return
+            player = None
+            try:
+                import trade_market as tmk
+                player, _t = tmk.resolve_player(league,
+                                                listing.get('player_id'))
+            except Exception:
+                player = None
+            opener = getattr(self.parent, 'open_trade_window', None)
+            if not callable(opener):
+                messagebox.showwarning("Negotiation unavailable",
+                                       "The Trade Center is unavailable "
+                                       "right now.")
+                return
+            opener(preset={"partner": partner,
+                           "user_assets": [player] if player else []})
+        except Exception as e:
+            try:
+                messagebox.showwarning("Negotiation unavailable",
+                                       f"Could not open the Trade Center: {e}")
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Other Teams tab: the league-wide board (trade_market data). Ported
+    # from the deleted windows.py TradeBlockWindow; reads
+    # trade_market.get_trade_blocks(league) and resolves each id -- no
+    # random.sample placeholders. Expressing interest writes the
+    # canonical user-side interest store (trade_market.add_target).
+    # ------------------------------------------------------------------
+    def create_other_trade_blocks(self, parent):
+        """Create view of other teams' trade blocks."""
+        # Team selection
+        select_frame = ttk.Frame(parent)
+        select_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(select_frame, text="Select Team:").pack(side='left', padx=5)
+        self.team_var = tk.StringVar(master=self)
+        self.team_combo = ttk.Combobox(select_frame, textvariable=self.team_var,
+                                       values=self.get_other_teams(), width=30)
+        self.team_combo.pack(side='left', padx=5)
+        self.team_combo.bind('<<ComboboxSelected>>', self.on_team_selected)
+
+        ttk.Button(select_frame, text="Refresh",
+                   command=self.refresh_other_blocks).pack(side='left',
+                                                           padx=10)
+        ttk.Button(select_frame, text="Express Interest",
+                   command=self.express_interest).pack(side='left', padx=5)
+
+        # Other teams' players
+        other_frame = ttk.LabelFrame(parent, text="Available Players")
+        other_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary',
+                   'Availability')
+        self.other_tree = ttk.Treeview(other_frame, columns=columns,
+                                       show='headings', height=15)
+
+        for col in columns:
+            self.other_tree.heading(col, text=col)
+            if col in ['Name', 'Team']:
+                self.other_tree.column(col, width=120)
+            elif col in ['Position', 'Age', 'Overall']:
+                self.other_tree.column(col, width=80)
+            elif col == 'Availability':
+                self.other_tree.column(col, width=280)
+            else:
+                self.other_tree.column(col, width=100)
+        make_tree_sortable(self.other_tree)
+
+        # Double-click to express interest
+        self.other_tree.bind('<Double-1>', self.express_interest)
+
+        other_scrollbar = ttk.Scrollbar(other_frame, orient='vertical',
+                                        command=self.other_tree.yview)
+        self.other_tree.configure(yscrollcommand=other_scrollbar.set)
+
+        self.other_tree.pack(side='left', fill='both', expand=True)
+        other_scrollbar.pack(side='right', fill='y')
+
+    def get_other_teams(self):
+        """Get list of other teams."""
+        return [team.team_name for team in self.parent.league.teams
+                if team != self.parent.user_team]
+
+    def on_team_selected(self, event=None):
+        """Show the selected team's real trade block (trade_market data).
+
+        Reads trade_market.get_trade_blocks(league), resolves each id, and
+        shows the truthful availability note. Unresolvable ids are skipped
+        gracefully; an empty block shows an empty-state message.
+        """
+        try:
+            import trade_market
+        except Exception:
+            trade_market = None
+        for item in self.other_tree.get_children():
+            self.other_tree.delete(item)
+        selected_team = self.team_var.get()
+        app = getattr(self, 'parent', None)
+        league = getattr(app, 'league', None) if app is not None else None
+        rows = 0
+        if trade_market is not None and league is not None and selected_team:
+            try:
+                blocks = trade_market.get_trade_blocks(league)
+            except Exception:
+                blocks = {}
+            for pid in (blocks.get(selected_team, []) or []):
+                try:
+                    player, team = trade_market.resolve_player(league, pid)
+                except Exception:
+                    player, team = None, None
+                if player is None or team is None:
+                    continue  # stale/unresolvable id -- skip gracefully
+                try:
+                    salary = getattr(getattr(player, 'contract', None),
+                                     'salary', 750000) or 750000
+                except Exception:
+                    salary = 750000
+                try:
+                    pos = (player.primary_position.value
+                           if hasattr(player.primary_position, 'value')
+                           else str(player.primary_position))
+                    ovr = player.overall_rating()
+                except Exception:
+                    pos, ovr = '?', '?'
+                try:
+                    note = trade_market.block_availability_note(app, league,
+                                                                pid)
+                except Exception:
+                    note = 'Available'
+                self.other_tree.insert('', 'end', values=(
+                    team.team_name,
+                    player.full_name,
+                    pos,
+                    getattr(player, 'age', '?'),
+                    ovr,
+                    f"${salary:,}",
+                    note,
+                ))
+                rows += 1
+        if rows:
+            set_tree_empty_state(self.other_tree)
+        else:
+            label = selected_team if selected_team else "No team"
+            set_tree_empty_state(
+                self.other_tree,
+                f"{label} has no players on the block")
+
+    def refresh_other_blocks(self):
+        """Refresh other teams' trade blocks."""
+        try:
+            import trade_market
+            trade_market.refresh_trade_blocks(self.parent,
+                                              getattr(self.parent, 'league',
+                                                      None))
+        except Exception:
+            pass
+        self.team_combo.configure(values=self.get_other_teams())
+        self.on_team_selected()
+
+    def express_interest(self, event=None):
+        """Record genuine interest in another team's block player.
+
+        Adds the player to your unified trade targets
+        (trade_market.add_target -- the canonical user-side interest store
+        read by the scouting/targets surfaces). Never fabricates an AI
+        response. Never raises; failures report honestly.
+        """
+        from tkinter import messagebox
+        try:
+            selection = self.other_tree.selection()
+            if not selection:
+                return
+            values = self.other_tree.item(selection[0])['values']
+            team_name, player_name = values[0], values[1]
+            player = None
+            try:
+                league = getattr(self.parent, 'league', None)
+                for team in (getattr(league, 'teams', None) or []):
+                    if getattr(team, 'team_name', '') != team_name:
+                        continue
+                    for p in (getattr(team, 'roster', None) or []):
+                        if getattr(p, 'full_name', '') == player_name:
+                            player = p
+                            break
+                    break
+            except Exception:
+                player = None
+            if player is None:
+                messagebox.showwarning(
+                    "Interest not recorded",
+                    f"Could not find {player_name} on {team_name}'s roster -- "
+                    "nothing was recorded.")
+                return
+            try:
+                import trade_market as tm
+                added = tm.add_target(
+                    player, source="user",
+                    note=f"Trade interest expressed ({team_name} block)")
+            except Exception:
+                added = False
+            if added:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"Interest in {player_name} ({team_name}) recorded -- "
+                    f"added to your trade targets.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+            else:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"{player_name} is already on your trade targets -- "
+                    f"interest already recorded.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+        except Exception:
+            try:
+                messagebox.showwarning("Interest not recorded",
+                                       "Could not record interest right now.")
+            except Exception:
+                pass
         
 class ContractExtensionsView(ctk.CTkFrame):
     """Window for handling contract extensions."""

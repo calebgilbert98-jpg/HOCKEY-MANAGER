@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: dressing-room arrival dynamics -- the room reacts to WHO walks in.
 
 Blue-chip pick vs bona fide vet vs regular: archetype detection,

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for legacy events (Winter Classic / Stadium Series).
 
 Covers: schedule stamping (no 83rd game), host rotation, presentation

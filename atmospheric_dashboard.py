@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # atmospheric_dashboard.py
 # Immersive, story-driven dashboard with visual hierarchy and team personality
 

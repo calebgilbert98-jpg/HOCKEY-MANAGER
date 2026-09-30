@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R4: Manager Hub -> Profile tab renders its full intended content.
 
 The tab previously showed only the bare reputation/career block; the manager

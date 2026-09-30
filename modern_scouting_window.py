@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Modern Scouting Management Window
 Professional scouting system with comprehensive features
@@ -402,7 +403,7 @@ class ModernScoutingView(ctk.CTkFrame):
         active_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Create treeview
-        columns = ['Scout', 'Player', 'Started', 'Progress', 'Est. Complete']
+        columns = ['Scout', 'Player', 'Viewings', 'Accuracy', 'Est. Completion']
         self.assignments_tree = ttk.Treeview(active_frame, columns=columns, show='headings', height=12)
         
         # Configure columns
@@ -1002,13 +1003,15 @@ class ModernScoutingView(ctk.CTkFrame):
             self.app.tree_maps['scouts_tree'] = {}
         
         # Add scouts to tree
+        try:
+            from scouting_window_helpers import assignments_of
+            _live_assigns = assignments_of(self.app)
+        except Exception:
+            _live_assigns = {}
         for scout in self.all_scouts:
             try:
-                # Count active assignments
-                active_tasks = 0
-                if hasattr(scout, 'id'):
-                    active_tasks = len([a for a in self.current_assignments.values() 
-                                      if a.get('scout_id') == scout.id])
+                # Count real active assignments for this scout
+                active_tasks = sum(1 for s in _live_assigns.values() if s is scout)
                 
                 item = self.scouts_tree.insert('', 'end', values=(
                     scout.full_name,
@@ -1027,35 +1030,103 @@ class ModernScoutingView(ctk.CTkFrame):
                 continue
     
     def _populate_assignments(self):
-        """Populate the assignments tree"""
+        """Populate the assignments tree from the REAL scouting_assignments.
+
+        Rows are the live {Player: Staff} assignments the engine processes
+        daily; progress/accuracy come from the real filed reports and the
+        completion estimate is derived from live state. Item -> player refs
+        are kept in app.tree_maps['assignments_tree'] for cancel.
+        """
         # Clear existing items
         for item in self.assignments_tree.get_children():
             self.assignments_tree.delete(item)
-        
-        # Add sample assignments (in real implementation, load from saved data)
-        if self.all_scouts:
-            sample_assignment = self.assignments_tree.insert('', 'end', values=(
-                self.all_scouts[0].full_name if self.all_scouts else "No Scout",
-                "Connor McDavid",
-                "2024-12-01",
-                "In Progress",
-                "2024-12-15"
-            ))
-    
+
+        try:
+            from scouting_window_helpers import (
+                assignments_of, estimate_completion_days, reports_of)
+        except Exception:
+            return
+        assigns = assignments_of(self.app)
+        reports = reports_of(self.app)
+        if 'assignments_tree' not in self.app.tree_maps:
+            self.app.tree_maps['assignments_tree'] = {}
+        tree_map = self.app.tree_maps['assignments_tree']
+        tree_map.clear()
+
+        for player, scout in assigns.items():
+            try:
+                report = reports.get(getattr(player, "id", None))
+                views = getattr(report, "viewings", 0) if report else 0
+                acc = getattr(report, "accuracy", "—") if report else "—"
+                days = estimate_completion_days(self.app, player, scout)
+                if days == 0:
+                    eta = "complete"
+                elif days is None:
+                    eta = "—"
+                else:
+                    eta = f"~{days}d"
+                item = self.assignments_tree.insert('', 'end', values=(
+                    getattr(scout, "full_name", "?"),
+                    getattr(player, "full_name", "?"),
+                    views,
+                    acc,
+                    eta,
+                ))
+                tree_map[item] = player
+            except Exception as e:
+                print(f"Error adding assignment: {e}")
+                continue
+
     def _populate_reports(self):
-        """Populate the reports tree"""
+        """Populate the reports tree from the REAL filed scouting_reports.
+
+        Every row is a real ScoutingReport the engine built up via
+        report.update_report; dates are the real last-viewed timestamps and
+        ratings are the real accuracy grades. Item -> (player, report) refs
+        are kept in app.tree_maps['reports_tree'] for the detail pane.
+        """
         # Clear existing items
         for item in self.reports_tree.get_children():
             self.reports_tree.delete(item)
-        
-        # Add sample reports (in real implementation, load from saved reports)
-        if self.all_scouts:
-            sample_report = self.reports_tree.insert('', 'end', values=(
-                "Sidney Crosby",
-                self.all_scouts[0].full_name if self.all_scouts else "Unknown Scout",
-                "2024-11-28",
-                "A+"
-            ))
+
+        try:
+            from scouting_window_helpers import reports_of
+        except Exception:
+            return
+        reports = reports_of(self.app)
+        if 'reports_tree' not in self.app.tree_maps:
+            self.app.tree_maps['reports_tree'] = {}
+        tree_map = self.app.tree_maps['reports_tree']
+        tree_map.clear()
+
+        def _player_for(pid):
+            for p in (self.all_players or []):
+                if getattr(p, "id", None) == pid:
+                    return p
+            return None
+
+        rows = []
+        for pid, report in reports.items():
+            try:
+                player = _player_for(pid)
+                name = getattr(player, "full_name", None) or f"Player {pid}"
+                scout_name = getattr(getattr(report, "scout", None),
+                                     "full_name", "—")
+                last = getattr(report, "last_viewed", None)
+                try:
+                    datestr = last.strftime("%Y-%m-%d") if last else "—"
+                except Exception:
+                    datestr = "—"
+                acc = getattr(report, "accuracy", "?")
+                rows.append((datestr, name, scout_name, acc, player, report))
+            except Exception as e:
+                print(f"Error adding report: {e}")
+                continue
+        rows.sort(key=lambda r: r[0], reverse=True)
+        for datestr, name, scout_name, acc, player, report in rows:
+            item = self.reports_tree.insert('', 'end', values=(
+                name, scout_name, datestr, acc))
+            tree_map[item] = (player, report)
     
     def _apply_player_filters(self):
         """Apply current filters to player list"""
@@ -1135,32 +1206,41 @@ class ModernScoutingView(ctk.CTkFrame):
         self._populate_players()
     
     def _scout_player(self, event=None):
-        """Scout selected player"""
+        """Scout selected player -- opens the real assignment dialog.
+
+        Writes a REAL scouting assignment into app.scouting_assignments
+        (the dict the engine processes daily). The dialog is non-modal and
+        shows the real estimated completion derived from live state.
+        Dismissing it defers -- nothing is created.
+        """
         selection = self.players_tree.selection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select a player to scout.")
             return
-        
+
         item = selection[0]
         player = self.app.tree_maps['players_tree'].get(item)
-        
+
         if not player:
             messagebox.showerror("Error", "Could not find selected player.")
             return
-        
-        # Check if we have scouts available
-        if not self.all_scouts:
-            messagebox.showwarning("No Scouts", "You need scouts before you can assign scouting tasks.")
+
+        try:
+            from scouting_window_helpers import (
+                open_assignment_dialog, scouts_of)
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
             return
-        
-        # Simple scouting assignment
-        result = messagebox.askyesno("Scout Player", 
-                                   f"Assign a scout to evaluate {player.full_name}?\n\n"
-                                   f"This will provide detailed information about the player's abilities.")
-        
-        if result:
-            messagebox.showinfo("Scout Assigned", f"Scout assigned to evaluate {player.full_name}!")
-            # In a full implementation, this would create an actual scouting assignment
+
+        if not scouts_of(self.app):
+            messagebox.showwarning(
+                "No Scouts",
+                "You need scouts before you can assign scouting tasks.\n\n"
+                "Hire scouts via Staff → Hire Staff (free-agent staff market).")
+            return
+
+        open_assignment_dialog(self, self.app, player=player,
+                               on_created=self._populate_assignments)
     
     def _view_player_profile(self):
         """View selected player's profile"""
@@ -1217,12 +1297,29 @@ Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team(
             event, player,
             additional_options=[
                 ("Scout Player", self._scout_player),
-                ("Add to Watchlist", self._add_to_watchlist),
+                ("Add to Shortlist", self._add_to_shortlist),
             ])
-    
-    def _add_to_watchlist(self):
-        """Add player to watchlist"""
-        messagebox.showinfo("Watchlist", "Add to watchlist functionality would be implemented here.")
+
+    def _add_to_shortlist(self):
+        """Add the selected player to the REAL ShortlistManager."""
+        selection = self.players_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "Please select a player to add to the shortlist.")
+            return
+
+        item = selection[0]
+        player = self.app.tree_maps['players_tree'].get(item)
+
+        if not player:
+            messagebox.showerror("Error", "Could not find selected player.")
+            return
+
+        try:
+            from scouting_window_helpers import open_shortlist_dialog
+        except Exception as e:
+            messagebox.showerror("Shortlist", f"Shortlist helpers unavailable: {e}")
+            return
+        open_shortlist_dialog(self, self.app, player)
     
     def _view_scout_details(self, event=None):
         """View scout details"""
@@ -1257,93 +1354,133 @@ Current Status: Available for assignments
         messagebox.showinfo("Scout Details", details.strip())
     
     def _hire_scout(self):
-        """Hire a new scout"""
-        messagebox.showinfo("Hire Scout", "Scout hiring functionality would be implemented here.\n\n"
-                          "This would open a dialog to:\n"
-                          "• Browse available scout candidates\n"
-                          "• View their skills and experience\n"
-                          "• Negotiate contracts\n"
-                          "• Add them to your scouting staff")
-    
+        """Hire a scout through the REAL staff hiring system.
+
+        Scout hiring runs through Staff → Hire Staff (the free-agent staff
+        market with real contract negotiation), so this routes there instead
+        of inventing a candidate.
+        """
+        try:
+            self.app.open_staff_management_window()
+        except Exception as e:
+            messagebox.showerror("Staff", f"Could not open Staff Management:\n{e}")
+
     def _edit_scout(self):
-        """Edit scout details"""
+        """Edit the selected scout through the REAL staff system.
+
+        Opens the staff details window (contract, role, release) for the
+        selected scout -- the same surface Staff Management uses.
+        """
         selection = self.scouts_tree.selection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select a scout to edit.")
             return
-        
-        messagebox.showinfo("Edit Scout", "Scout editing functionality would be implemented here.")
-    
+
+        item = selection[0]
+        scout = self.app.tree_maps['scouts_tree'].get(item)
+
+        if not scout:
+            messagebox.showerror("Error", "Could not find selected scout.")
+            return
+
+        try:
+            from staff_management_window import StaffManagementView
+            view = self.app.show_screen('staff_management', 'Staff',
+                                        StaffManagementView)
+            view.show_staff_details_window(scout, True)
+        except Exception as e:
+            messagebox.showerror("Staff", f"Could not open scout details:\n{e}")
+
     def _create_assignment(self):
-        """Create new scouting assignment"""
-        if not self.all_scouts:
-            messagebox.showwarning("No Scouts", "You need scouts before you can create assignments.")
+        """Create a REAL scouting assignment (non-modal dialog).
+
+        Writes into app.scouting_assignments -- the same store the engine
+        processes daily. Shows the real estimated completion derived from
+        live state. Dismissing the dialog defers.
+        """
+        try:
+            from scouting_window_helpers import (
+                open_assignment_dialog, scouts_of)
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
             return
-        
-        if not self.all_players:
-            messagebox.showwarning("No Players", "No players available for scouting assignments.")
+
+        if not scouts_of(self.app):
+            messagebox.showwarning(
+                "No Scouts",
+                "You need scouts before you can create assignments.\n\n"
+                "Hire scouts via Staff → Hire Staff (free-agent staff market).")
             return
-        
-        messagebox.showinfo("New Assignment", "Assignment creation dialog would be implemented here.\n\n"
-                          "This would allow you to:\n"
-                          "• Select a scout from your staff\n"
-                          "• Choose a player to scout\n"
-                          "• Set assignment priority\n"
-                          "• Define scouting focus areas")
+
+        open_assignment_dialog(self, self.app,
+                               on_created=self._populate_assignments)
     
     def _cancel_assignment(self):
-        """Cancel scouting assignment"""
+        """Cancel the selected REAL scouting assignment."""
         selection = self.assignments_tree.selection()
         if not selection:
             messagebox.showwarning("No Selection", "Please select an assignment to cancel.")
             return
-        
-        result = messagebox.askyesno("Cancel Assignment", "Are you sure you want to cancel this assignment?")
+
+        player = self.app.tree_maps.get('assignments_tree', {}).get(selection[0])
+        if player is None:
+            messagebox.showerror("Error", "Could not find the selected assignment.")
+            return
+
+        try:
+            from scouting_window_helpers import cancel_scout_assignment
+        except Exception as e:
+            messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
+            return
+
+        result = messagebox.askyesno(
+            "Cancel Assignment",
+            f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
+            "The scout is freed up; any report filed so far is kept.")
         if result:
-            messagebox.showinfo("Assignment Cancelled", "Scouting assignment has been cancelled.")
+            ok, msg = cancel_scout_assignment(self.app, player)
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Assignment Cancelled" if ok else "Scouting", msg)
+            self._populate_assignments()
     
     def _on_report_select(self, event):
-        """Handle report selection"""
+        """Handle report selection -- renders the REAL filed report.
+
+        Fog-of-war safe: only the graded information the scout actually
+        filed (accuracy, viewings, graded potential range, strengths /
+        weaknesses the report lists). Never raw attributes.
+        """
         selection = self.reports_tree.selection()
-        if not selection:
-            self.report_text.delete('1.0', tk.END)
-            return
-        
-        # Show sample report content
         self.report_text.delete('1.0', tk.END)
-        sample_report = """SCOUTING REPORT
-═══════════════
+        if not selection:
+            return
 
-Player: Connor McDavid
-Position: Center
-Age: 27
-Team: Edmonton Oilers
+        entry = self.app.tree_maps.get('reports_tree', {}).get(selection[0])
+        if not entry:
+            return
+        player, report = entry
+        if report is None:
+            return
 
-OVERALL ASSESSMENT: Elite (A+)
+        try:
+            from scouting_window_helpers import report_display_lines
+        except Exception:
+            return
+        rows, pot = report_display_lines(player, report)
 
-SKATING: Exceptional speed and acceleration. Elite edge work and balance. 
-Can change direction without losing momentum. One of the fastest players 
-in the league.
-
-OFFENSIVE SKILLS: Elite puck handling in tight spaces. Excellent vision 
-and passing ability. Accurate shot from multiple angles. Creates scoring 
-chances for teammates consistently.
-
-HOCKEY SENSE: Outstanding game reading ability. Anticipates play 
-development exceptionally well. Makes smart decisions under pressure.
-
-CHARACTER: Natural leader with strong work ethic. Handles pressure well. 
-Team-first mentality with championship experience.
-
-RECOMMENDATION: Immediate acquisition target if available. Franchise-
-altering talent that would significantly improve our team's championship 
-prospects.
-
-Scout: Mike Johnson
-Date: December 14, 2024
-Confidence: High
-"""
-        self.report_text.insert('1.0', sample_report)
+        try:
+            pos = player.primary_position.value
+        except Exception:
+            pos = str(getattr(player, "primary_position", "?"))
+        header = (f"SCOUTING REPORT\n{'═' * 15}\n\n"
+                  f"Player: {getattr(player, 'full_name', '?')}\n"
+                  f"Position: {pos}\n"
+                  f"Age: {getattr(player, 'age', '?')}\n"
+                  f"Team: {getattr(player, 'team_name', 'Free Agent')}\n\n"
+                  f"GRADED POTENTIAL: {pot}\n\n")
+        self.report_text.insert('1.0', header)
+        for label, text in rows:
+            self.report_text.insert(tk.END, f"{label.upper()}\n{text}\n\n")
     
     def update_views(self):
         """Update all views (called when game data changes)"""

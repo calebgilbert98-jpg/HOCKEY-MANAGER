@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """OT drama: live in-game levers for overtime drama, shared pure module.
 
 Chris's five factors -- game intensity, player/coach morale and situational

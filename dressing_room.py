@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Dressing-room dynamics (module 03): morale as a social system.
 
 Turns morale from a number into a social system that creates stories,
@@ -2096,8 +2097,17 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             res = _cc.clear_the_air(old, team, league)
             old._grudge_talk_stamp = today
             notify_card(self, "Clear the Air", "\n".join(res.get("lines", [])))
-        except Exception:
-            pass
+        except Exception as e:
+            # Honest failure: the conversation never happened, so say so
+            # instead of leaving the user guessing.
+            try:
+                from popup_system import notify_card
+                notify_card(self, "Clear the Air",
+                            "That conversation didn't happen -- something "
+                            f"went wrong ({e}). No grudges were cleared; "
+                            "you can try again.")
+            except Exception:
+                pass
         try:
             self.refresh()
         except Exception:
@@ -2107,22 +2117,129 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
         team = self._team()
         if team is None:
             return
+        new_c = None
+        if choice == "reassign":
+            want = self._reassign_var.get()
+            for p in _roster(team):
+                if _name(p) == want:
+                    new_c = p
+                    break
+            if new_c is None:
+                # No challenger chosen: require an explicit successor via a
+                # question card. Never silently auto-strip the C.
+                self._ask_successor_choice(team)
+                return
+        self._apply_crisis_resolution(team, choice, new_c)
+
+    def _successor_candidates(self, team):
+        """Named challengers first, else the highest-influence skaters."""
+        names = []
         try:
-            new_c = None
-            if choice == "reassign":
-                want = self._reassign_var.get()
-                for p in _roster(team):
-                    if _name(p) == want:
-                        new_c = p
-                        break
-            date_str = ""
+            detail = ensure_dressing_room_fields(team).get(
+                "captaincy_crisis_detail", {}) or {}
+            names = [n for n in (detail.get("challenger_names") or [])
+                     if n]
+        except Exception:
+            names = []
+        roster = [p for p in _roster(team)]
+        matched = [n for n in names
+                   if any(_name(p) == n for p in roster)]
+        if matched:
+            return matched[:4]
+        try:
+            cap = captain_of(team)
+        except Exception:
+            cap = None
+        ranked = sorted((p for p in roster if p is not cap),
+                        key=lambda p: influence_of(p), reverse=True)
+        return [_name(p) for p in ranked[:3]]
+
+    def _ask_successor_choice(self, team):
+        """Reassign demands a named successor -- ask, don't assume.
+
+        Non-modal question card (Eastside grammar): dismissing decides
+        nothing and the crisis banner stays up."""
+        try:
+            from popup_system import ask_card
+        except Exception:
+            return
+        cands = self._successor_candidates(team)
+        buttons = [(n, n, "primary") for n in cands]
+        buttons.append(("Not now", None, "secondary"))
+
+        def _on_answer(value):
+            if not value:
+                return  # deferred -- the crisis stays open
+            picked = None
+            for p in _roster(team):
+                if _name(p) == value:
+                    picked = p
+                    break
+            if picked is None:
+                return
+            self._apply_crisis_resolution(team, "reassign", picked)
+
+        try:
+            ask_card(self, "Name the Successor",
+                     "Reassigning the C needs a name -- who gets it?\n"
+                     "Closing this card decides nothing; the crisis stays "
+                     "open until you choose.",
+                     buttons, on_answer=_on_answer)
+        except Exception:
+            pass
+
+    def _crisis_receipt_text(self, team, lines):
+        """Render the just-persisted crisis receipt for the in-the-moment
+        card: outcome lines plus who gained/paid, from the stored receipt."""
+        try:
+            recs = ensure_dressing_room_fields(team).get(
+                "practice_receipts", []) or []
+            rec = recs[-1] if recs else {}
+        except Exception:
+            rec = {}
+        parts = list(lines or [])
+        gained = rec.get("gained") or []
+        paid = rec.get("paid") or []
+        if gained:
+            parts.append("")
+            parts.append("Steadier: " + ", ".join(
+                f"{g[0]} ({g[1]:+g})" for g in gained[:4]))
+        if paid:
+            parts.append("Cost: " + ", ".join(
+                f"{p[0]} ({p[1]:+g})" for p in paid[:4]))
+        for rel in (rec.get("relationships") or [])[:2]:
+            parts.append(rel)
+        text = "\n".join(parts).strip()
+        return text or "The room absorbs the decision."
+
+    def _apply_crisis_resolution(self, team, choice, new_c):
+        date_str = ""
+        try:
+            date_str = self.app.current_date.isoformat()
+        except Exception:
+            pass
+        try:
+            lines = resolve_captaincy_crisis(team, choice, new_captain=new_c,
+                                            date_str=date_str)
+        except Exception:
+            # Honest failure: keep the crisis open, say so.
             try:
-                date_str = self.app.current_date.isoformat()
+                from popup_system import notify_card
+                notify_card(self, "Captaincy Crisis",
+                            "That decision didn't go through -- the crisis "
+                            "is still open. Try again.")
             except Exception:
                 pass
-            resolve_captaincy_crisis(team, choice, new_captain=new_c,
-                                    date_str=date_str)
+            return
+        try:
             ensure_dressing_room_fields(team)["captaincy_crisis"] = False
+        except Exception:
+            pass
+        # Show the persisted receipt in the moment (non-modal).
+        try:
+            from popup_system import notify_card
+            notify_card(self, "Captaincy Crisis Resolved",
+                        self._crisis_receipt_text(team, lines))
         except Exception:
             pass
         self.refresh()

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Universal Player Context Menu System
 Provides consistent right-click player interactions across all windows
@@ -979,11 +980,88 @@ class PlayerContextMenu:
                          selectcolor=getattr(self.parent, 'ACCENT_COLOR', '#D13438')).pack(anchor='w')
         
         def assign_training():
-            if focus_var.get():
-                messagebox.showinfo("Training Assigned", 
-                                  f"{player.full_name} assigned to {intensity_var.get().lower()} {focus_var.get().lower()} training!\n\n"
-                                  f"Training will continue for 2 weeks.")
-                dialog.destroy()
+            # Real assignment: mirror the Development Center's _assign_training
+            # -- write to the shared training registry (ACTIVE_TRAINING_PROGRAMS
+            # + the persistent game-manager mirror), gated by can_practice, and
+            # run a real first session through the practice engine.
+            if not focus_var.get():
+                messagebox.showwarning("No Focus Selected",
+                                       "Select a training focus first.")
+                return
+            try:
+                from enhanced_practice_system import (
+                    PracticeEngine, PracticeType, PracticeIntensity,
+                    ACTIVE_TRAINING_PROGRAMS)
+            except Exception:
+                messagebox.showwarning(
+                    "Training Unavailable",
+                    "The training system isn't available right now.")
+                return
+            focus_label = focus_var.get()
+            intensity_label = intensity_var.get()
+            focus_map = {
+                "Skating": PracticeType.SKATING,
+                "Shooting": PracticeType.SHOOTING,
+                "Passing": PracticeType.PASSING,
+                "Defense": PracticeType.DEFENSE,
+                "Physical Conditioning": PracticeType.CONDITIONING,
+                "Hockey IQ": PracticeType.HOCKEY_IQ,
+            }
+            intensity_map = {
+                "Light": PracticeIntensity.LIGHT,
+                "Medium": PracticeIntensity.MODERATE,
+                "Heavy": PracticeIntensity.INTENSE,
+            }
+            practice_type = focus_map.get(focus_label)
+            intensity = intensity_map.get(intensity_label,
+                                          PracticeIntensity.MODERATE)
+            if practice_type is None:
+                messagebox.showwarning("Unknown Focus",
+                                       f"No training program for '{focus_label}'.")
+                return
+            engine = PracticeEngine()
+            can, reason = engine.can_practice(player, practice_type,
+                                              intensity)
+            if not can:
+                messagebox.showwarning("Cannot Train Right Now", reason)
+                return
+            # Record the program (shared registry; survives window close),
+            # stamped with the game date and mirrored into the persistent
+            # game-manager dict so it survives saves/restarts.
+            app = self._app()
+            from datetime import date as _date
+            game_date = getattr(app, 'current_date', None) or _date.today()
+            prog = {
+                'focus': focus_label,
+                'intensity': intensity_label,
+                'assigned': game_date,
+                'player_name': player.full_name,
+            }
+            try:
+                ACTIVE_TRAINING_PROGRAMS[player.id] = prog
+                gm = getattr(app, 'game_manager', None)
+                if gm is not None:
+                    if not getattr(gm, 'training_programs', None):
+                        gm.training_programs = {}
+                    gm.training_programs[player.id] = prog
+            except Exception:
+                pass
+            # Run the first session for real through the practice engine.
+            try:
+                session = engine.execute_practice(player, practice_type,
+                                                  intensity, 60, 12)
+                result_text = (f"{player.full_name} assigned to "
+                               f"{intensity_label.lower()} {focus_label.lower()} "
+                               f"training.\n\nFirst session complete: "
+                               f"+{session.skill_gain:.2f} skill, "
+                               f"+{session.fatigue_cost}% fatigue.")
+            except Exception:
+                result_text = (f"{player.full_name} assigned to "
+                               f"{intensity_label.lower()} {focus_label.lower()} "
+                               f"training.\n\nThe program is recorded; the "
+                               f"first session will run at the next practice.")
+            messagebox.showinfo("Training Assigned", result_text)
+            dialog.destroy()
         
         # Buttons
         button_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -993,17 +1071,64 @@ class PlayerContextMenu:
         ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
     
     def _view_development_history(self, player):
-        """Show player development history"""
-        messagebox.showinfo(
-            "Development History",
-            f"Development History - {player.full_name}\n\n"
-            f"Current Stage: Developing\n"
-            f"Recent Activities:\n"
-            f"• Completed skating training program\n"
-            f"• Overall rating progress tracked\n"
-            f"• Regular practice participation\n\n"
-            f"Next Steps: Continue current development path"
-        )
+        """Show player development history -- built only from real stores.
+
+        Sources: the shared training registry (current program) and the
+        practice engine's per-player session history. Anything without a
+        real record is omitted, never invented."""
+        lines = [f"Development History - {player.full_name}", ""]
+        app = self._app()
+        prog = None
+        try:
+            from enhanced_practice_system import (
+                PracticeEngine, ACTIVE_TRAINING_PROGRAMS)
+            gm = getattr(app, 'game_manager', None)
+            if gm is not None and getattr(gm, 'training_programs', None):
+                prog = gm.training_programs.get(player.id)
+            if prog is None:
+                prog = ACTIVE_TRAINING_PROGRAMS.get(player.id)
+        except Exception:
+            prog = None
+            PracticeEngine = None
+        if prog:
+            lines.append(
+                f"Current program: {prog.get('focus', '?')} -- "
+                f"{prog.get('intensity', '?')} intensity "
+                f"(assigned {prog.get('assigned', 'unknown date')})")
+        else:
+            lines.append("Current program: none assigned")
+        lines.append("")
+        history = None
+        try:
+            if PracticeEngine is not None:
+                history = PracticeEngine().get_player_history(player.id)
+        except Exception:
+            history = None
+        sessions = (history.recent_sessions[-5:]
+                    if history and history.recent_sessions else [])
+        if sessions:
+            lines.append("Recent sessions:")
+            for s in reversed(sessions):
+                try:
+                    ptype = (s.practice_type.value.replace('_', ' ').title()
+                             if hasattr(s.practice_type, 'value')
+                             else str(s.practice_type))
+                except Exception:
+                    ptype = "practice"
+                try:
+                    when = s.date_completed.isoformat()
+                except Exception:
+                    when = "?"
+                lines.append(
+                    f"  - {when}: {ptype} "
+                    f"(+{getattr(s, 'skill_gain', 0):.2f} skill, "
+                    f"+{getattr(s, 'fatigue_cost', 0)}% fatigue)")
+            lines.append("")
+            lines.append(f"Total recorded sessions: "
+                         f"{getattr(history, 'total_sessions', 0)}")
+        else:
+            lines.append("No recorded practice sessions yet.")
+        messagebox.showinfo("Development History", "\n".join(lines))
     
     def _view_contract_details(self, player):
         """Open the player profile screen with the contract tab selected."""
@@ -1018,47 +1143,76 @@ class PlayerContextMenu:
                 return
             raise RuntimeError("profile screen did not return a view")
         except (ImportError, Exception) as e:
-            # Fallback to message box if profile window unavailable
-            if hasattr(player, 'contract') and player.contract:
-                salary = f"${getattr(player.contract, 'salary', 750000):,}"
-                years = getattr(player.contract, 'years_remaining', 1)
-                contract_type = getattr(player.contract, 'contract_type', 'Standard')
+            # Fallback to message box if profile window unavailable --
+            # real fields only; no contract on file is stated honestly,
+            # never fabricated.
+            contract = getattr(player, 'contract', None)
+            if contract:
+                salary = f"${getattr(contract, 'salary', 0):,}"
+                years = getattr(contract, 'years_remaining', 0)
+                clauses = []
+                if getattr(contract, 'no_movement_clause', False):
+                    clauses.append("no-movement clause")
+                elif getattr(contract, 'no_trade_clause', False):
+                    clauses.append("no-trade clause")
+                prot = f"\nTrade Protection: {', '.join(clauses)}" if clauses else ""
+                status = "Active"
             else:
-                salary = "$750,000"
-                years = 1
-                contract_type = "Entry Level"
-                
+                salary = "No contract on file"
+                years = 0
+                prot = ""
+                status = "Unsigned"
             messagebox.showinfo(
                 "Contract Details",
                 f"Contract Information - {player.full_name}\n\n"
                 f"Salary: {salary}\n"
-                f"Contract Length: {years} year(s) remaining\n"
-                f"Contract Type: {contract_type}\n"
-                f"Status: Active"
+                f"Contract Length: {years} year(s) remaining{prot}\n"
+                f"Status: {status}"
             )
     
     def _move_between_rosters(self, player):
-        """Move player between different rosters"""
-        current_roster = "Unknown"
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            if player in self.parent.user_team.roster:
-                current_roster = "NHL Roster"
-            elif player in self.parent.user_team.ahl_roster:
-                current_roster = "AHL Roster"
-            elif player in self.parent.user_team.prospects:
-                current_roster = "Prospects"
-        
-        messagebox.showinfo(
-            "Roster Management",
-            f"Roster Management - {player.full_name}\n\n"
-            f"Current Roster: {current_roster}\n\n"
-            f"Available Actions:\n"
-            f"• Move to NHL Roster\n"
-            f"• Move to AHL Roster\n"
-            f"• Move to Prospects\n\n"
-            f"This functionality will be implemented in roster management."
-        )
-    
+        """Move player between rosters via the real transaction machinery.
+
+        NHL -> AHL goes through app.send_to_ahl (waivers/NMC rules);
+        AHL -> NHL through app.call_up_to_nhl (paper-transaction rule);
+        an unsigned rights-held prospect goes to the real ELC signing flow.
+        No invented roster logic -- anything without a real path says so."""
+        app = self._app()
+        team = getattr(app, 'user_team', None) if app is not None else None
+        if team is None:
+            messagebox.showwarning("Roster Management",
+                                   "No team loaded -- can't move anyone.")
+            return
+        in_nhl = player in (getattr(team, 'roster', []) or [])
+        in_ahl = player in (getattr(team, 'ahl_roster', []) or [])
+        in_prospects = player in (getattr(team, 'prospects', []) or [])
+        if in_nhl:
+            if hasattr(app, 'send_to_ahl'):
+                app.send_to_ahl(player)
+            else:
+                messagebox.showwarning(
+                    "Roster Management",
+                    "Demotion isn't available from here right now.")
+        elif in_ahl:
+            if hasattr(app, 'call_up_to_nhl'):
+                app.call_up_to_nhl(player)
+            else:
+                messagebox.showwarning(
+                    "Roster Management",
+                    "Call-up isn't available from here right now.")
+        elif in_prospects:
+            if hasattr(app, 'open_contract_negotiation_window'):
+                app.open_contract_negotiation_window(player, is_elc=True)
+            else:
+                messagebox.showwarning(
+                    "Roster Management",
+                    "ELC signing isn't available from here right now.")
+        else:
+            messagebox.showinfo(
+                "Roster Management",
+                f"{player.full_name} isn't on your NHL roster, AHL roster, "
+                f"or prospect list -- there's nothing to move.")
+
     def _analyze_trade_value(self, player):
         """R3(b): show the trade-value reasoning breakdown for a player.
 
@@ -1134,31 +1288,40 @@ class PlayerContextMenu:
                   padx=18, pady=6).pack(pady=(4, 16))
 
     def _propose_trade(self, player):
-        """Open the Trade Center with this player pre-loaded on the table."""
+        """Open the Trade Center with this player pre-loaded on the table.
+
+        The fake 'proposal sent' fallback dialog is gone: if the real trade
+        window can't be reached, say so honestly instead of inventing a
+        sent proposal."""
+        app = None
+        if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'open_trade_window'):
+            app = self.parent.parent
+        elif hasattr(self.parent, 'open_trade_window'):
+            app = self.parent
+        if app is None or not hasattr(app, 'open_trade_window'):
+            messagebox.showwarning(
+                "Trade Center Unavailable",
+                "The Trade Center can't be opened from here right now -- "
+                "no proposal was created.")
+            return
         try:
-            app = None
-            if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'open_trade_window'):
-                app = self.parent.parent
-            elif hasattr(self.parent, 'open_trade_window'):
-                app = self.parent
-            if app is not None and hasattr(app, 'open_trade_window'):
-                user_team = getattr(app, 'user_team', None)
-                rosters = []
-                if user_team is not None:
-                    rosters = (list(getattr(user_team, 'roster', []) or []) +
-                               list(getattr(user_team, 'ahl_roster', []) or []) +
-                               list(getattr(user_team, 'prospects', []) or []))
-                own = player in rosters
-                preset = {"partner": self._trade_partner_for(app, player, own),
-                          "user_assets": [player] if own else [],
-                          "partner_assets": [] if own else [player],
-                          "mode": "new"}
-                app.open_trade_window(preset=preset)
-            else:
-                self._create_trade_proposal_dialog(player)
-        except Exception:
-            # Fallback to trade proposal dialog
-            self._create_trade_proposal_dialog(player)
+            user_team = getattr(app, 'user_team', None)
+            rosters = []
+            if user_team is not None:
+                rosters = (list(getattr(user_team, 'roster', []) or []) +
+                           list(getattr(user_team, 'ahl_roster', []) or []) +
+                           list(getattr(user_team, 'prospects', []) or []))
+            own = player in rosters
+            preset = {"partner": self._trade_partner_for(app, player, own),
+                      "user_assets": [player] if own else [],
+                      "partner_assets": [] if own else [player],
+                      "mode": "new"}
+            app.open_trade_window(preset=preset)
+        except Exception as e:
+            messagebox.showwarning(
+                "Trade Center Unavailable",
+                f"Couldn't open the Trade Center ({e}) -- "
+                "no proposal was created.")
 
     @staticmethod
     def _trade_partner_for(app, player, own):
@@ -1177,92 +1340,6 @@ class PlayerContextMenu:
             return teams[0] if teams else None
         except Exception:
             return None
-    
-    def _create_trade_proposal_dialog(self, player):
-        """Create a trade proposal dialog"""
-        dialog = InGamePopup(self.parent)
-        dialog.title(f"Trade Proposal - {player.full_name}")
-        dialog.geometry("500x400")
-        dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        
-        # Header
-        header = tk.Label(dialog, text=f"Propose Trade for {player.full_name}", 
-                         font=('Segoe UI', 14, 'bold'))
-        header.configure(fg=getattr(self.parent, 'HEADER_COLOR', 'white'),
-                        bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        header.pack(pady=20)
-        
-        # Player info
-        info_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        info_frame.pack(fill='x', padx=20, pady=10)
-        
-        info_text = f"Position: {player.primary_position.value}\n"
-        info_text += f"Overall: {player.overall_rating()}\n"
-        info_text += f"Age: {player.age}\n"
-        
-        if hasattr(player, 'contract') and player.contract:
-            salary = getattr(player.contract, 'salary', 750000)
-            info_text += f"Salary: ${salary:,}"
-        
-        info_label = tk.Label(info_frame, text=info_text, justify='left',
-                             fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                             bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        info_label.pack(anchor='w')
-        
-        # Team selection
-        team_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        team_frame.pack(fill='x', padx=20, pady=10)
-        
-        tk.Label(team_frame, text="Select Team to Trade With:", 
-                fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E')).pack(anchor='w')
-        
-        # Get available teams
-        available_teams = []
-        if (hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'league') and
-            hasattr(self.parent.parent.league, 'teams')):
-            user_team = getattr(self.parent.parent, 'user_team', None)
-            available_teams = [team for team in self.parent.parent.league.teams 
-                             if team != user_team][:10]  # Limit to first 10 for demo
-        
-        if not available_teams:
-            # Create some example teams
-            available_teams = ["Montreal Canadiens", "Toronto Maple Leafs", "Boston Bruins",
-                             "New York Rangers", "Chicago Blackhawks"]
-        
-        from tkinter import ttk
-        team_var = tk.StringVar()
-        team_combo = ttk.Combobox(team_frame, textvariable=team_var,
-                                values=[team.team_name if hasattr(team, 'team_name') else str(team) 
-                                       for team in available_teams],
-                                state='readonly')
-        team_combo.pack(fill='x', pady=5)
-        
-        # Trade message
-        message_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        message_frame.pack(fill='both', expand=True, padx=20, pady=10)
-        
-        tk.Label(message_frame, text="Trade Proposal Message:", 
-                fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E')).pack(anchor='w')
-        
-        message_text = tk.Text(message_frame, height=4, width=50)
-        message_text.insert('1.0', f"We are interested in acquiring {player.full_name}. What would you want in return?")
-        message_text.pack(fill='both', expand=True, pady=5)
-        
-        # Buttons
-        button_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        button_frame.pack(fill='x', padx=20, pady=10)
-        
-        def send_proposal():
-            if team_var.get():
-                messagebox.showinfo("Trade Proposal Sent", 
-                                  f"Trade proposal for {player.full_name} sent to {team_var.get()}!\n\n"
-                                  f"You will receive a response within 24-48 hours.")
-                dialog.destroy()
-        
-        ttk.Button(button_frame, text="Send Proposal", command=send_proposal).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="Cancel", command=dialog.destroy).pack(side='left', padx=5)
     
     def _create_enhanced_comparison_window(self, player):
         """Create enhanced comparison window with better styling and functionality"""

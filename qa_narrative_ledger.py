@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: narrative ledger — Wave 3 rivalries + narrative foundation.
 
 Covers: record/query indexes, callback cooldowns, pruning/archive caps,

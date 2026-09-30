@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """NHL schedule rules: the fundamental enforcer for realistic scheduling.
 
 This module is the single source of truth for what a realistic NHL

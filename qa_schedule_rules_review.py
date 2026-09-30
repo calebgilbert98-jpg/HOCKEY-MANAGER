@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: nhl_schedule_rules review — repairs preserve the slate.
 
 Proves on crafted dirty schedules through the REAL enforcer:

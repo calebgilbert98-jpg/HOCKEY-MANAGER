@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Balance validation: full 1,312-game season through the real GameSim.
 
 Checks structural invariants (from validate_season.py) PLUS NHL stat

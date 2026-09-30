@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Player archetypes for Puck Dynasty: the single source of truth.
 
 An archetype (Sniper, Grinder, Shutdown Defenseman...) describes *how* a player

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Last-change line matching: a live tactical lever, not a pregame checkbox.
 
 The shift engine already honors home-team matchup prefs at stoppages

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Shared UI widgets for Puck Dynasty's dark, modern look.
 
 PillButton is a canvas-drawn, fully-rounded pill button (tk.Button can't do

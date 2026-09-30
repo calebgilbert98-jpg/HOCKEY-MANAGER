@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: board patience model (Muck's retune).
 
 Boards judge trends, not games. Monthly reviews are the channel; per-game

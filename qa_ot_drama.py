@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_ot_drama.py -- QA for the OT drama rebuild (ot_drama.py live levers).
 
 Muck's approved rebuild (2026-09-30): NO synthetic post-regulation

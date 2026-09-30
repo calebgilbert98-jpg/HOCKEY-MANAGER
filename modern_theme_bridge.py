@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # modern_theme_bridge.py
 # Applies the modern Puck Dynasty dark theme to every legacy window.
 #

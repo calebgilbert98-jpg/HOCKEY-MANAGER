@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for the analytics wave-1 stack (information asymmetry).
 
 Covers: ledger filing + grading, scout records, department lens

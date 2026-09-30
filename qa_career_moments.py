@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: per-player career game log ("Signature Games").
 
 Covers: moment detection thresholds (hat trick / 4+ pts / shutout /

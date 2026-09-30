@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: multiplayer NMC consent is host-authoritative (no client trust).
 
 Run:  xvfb-run -a python3 qa_mp_nmc_consent.py

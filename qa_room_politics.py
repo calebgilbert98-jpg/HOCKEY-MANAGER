@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: room politics -- practice planner, captaincy crises, coaching carousel.
 
 Even-playing-field checks: AI and user run the same functions; only the

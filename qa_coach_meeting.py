@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA walkthrough of the pre-season coach expectations meeting UI.
 
 Run: xvfb-run -a -s "-screen 0 1680x1050x24" python3 qa_coach_meeting.py

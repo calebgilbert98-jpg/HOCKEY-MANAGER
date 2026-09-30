@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 NHL Records System for Hockey Manager
 Tracks all-time NHL records and compares current players against historical achievements

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Conn Smythe (real-life criteria) + coach season records + Jack Adams
 + reputation fine-tune (awards -> rep, Adams -> staff rep, playoff rounds,
 team_perception track-record cushion).

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # database_generator.py
 # Comprehensive database generation system inspired by Eastside Hockey Manager
 # Supports multiple database sizes for different levels of realism and detail

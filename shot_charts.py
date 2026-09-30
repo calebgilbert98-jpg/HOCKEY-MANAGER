@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Persistent shot charts: capture, store, and query shot locations.
 
 At game end, the visualizer exports {game_id, date, home, away, shots}.

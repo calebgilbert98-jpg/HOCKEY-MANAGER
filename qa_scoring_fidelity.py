@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Scoring fidelity (Part A divergences + Part B assist rework).
 
 Verifies the 15 Part-A divergence fixes and the Part-B assist rework:

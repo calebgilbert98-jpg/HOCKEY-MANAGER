@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Memory optimization system for Hockey Manager
 Implements memory pools, object recycling, and memory monitoring for large datasets

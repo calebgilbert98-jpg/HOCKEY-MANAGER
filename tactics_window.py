@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # tactics_window.py
 # FM24-style Team Tactics screen for Puck Dynasty's NHL systems layer:
 # all seven zone modules with descriptions + expected tradeoffs,
@@ -53,6 +54,9 @@ class TacticsView(ctk.CTkFrame):
         self._pending = {}          # category -> new system key
         self._key_of_name = {}      # per-category display name -> key
         self._response_text = ""
+        # MP client mode: the whiteboard stays fully interactive, but
+        # nothing applies locally -- picks stage as pending and the
+        # Apply button routes them to the host via set_tactics.
         self._mp_locked = getattr(self.app, "mp_client", None) is not None
         self._section = "whiteboard"  # or "intel"
         self._footer_hidden = False
@@ -165,6 +169,9 @@ class TacticsView(ctk.CTkFrame):
                                                     command=self._on_takeover)
         self._btn_handback = self._secondary_button(btnrow, text="Hand Back to Coach",
                                                      command=self._on_handback)
+        self._btn_mp_apply = self._primary_button(btnrow, text="Apply Tactics",
+                                                  command=self._on_mp_apply)
+        self._btn_mp_apply.pack_forget()
         self._btn_save_pref = self._secondary_button(btnrow, text="Save as Preferred",
                                                      command=self._on_save_pref)
         self._btn_load_pref = self._secondary_button(btnrow, text="Load Preferred",
@@ -302,9 +309,21 @@ class TacticsView(ctk.CTkFrame):
         else:
             self._btn_handback.pack_forget()
         if self._mp_locked:
-            self._pending_label.configure(
-                text="Multiplayer client: tactics are set by the host.",
-                text_color=ct['TEXT_DIM'])
+            # Client mode: the coach-relationship buttons can't run their
+            # discussion machinery across the wire, so the GM's picks go
+            # straight to the host as the enforced systems.
+            self._btn_mp_apply.pack(side='left', padx=6)
+            if n:
+                self._pending_label.configure(
+                    text=(f"{n} change{'s' if n > 1 else ''} pending -- "
+                          "Apply Tactics sends them to the host."),
+                    text_color=ct['GOLD'])
+            else:
+                self._pending_label.configure(
+                    text="Multiplayer: pick systems, then Apply Tactics.",
+                    text_color=ct['TEXT_DIM'])
+        else:
+            self._btn_mp_apply.pack_forget()
         self._response_label.configure(text=self._response_text or "")
 
     # ------------------------------------------------------------------
@@ -505,9 +524,10 @@ class TacticsView(ctk.CTkFrame):
             if key in catalog and current.get(cat) != key:
                 self._pending[cat] = key
                 n += 1
+        tail = ("apply it with Apply Tactics." if self._mp_locked
+                else "suggest it to the coach or enforce it.")
         self._response_text = (f"{meta.get('name', preset_key)} staged "
-                               f"({n} modules) -- suggest it to the coach or "
-                               f"enforce it." if n else
+                               f"({n} modules) -- {tail}" if n else
                                f"{meta.get('name', preset_key)} already installed.")
         self.refresh()
 
@@ -524,6 +544,9 @@ class TacticsView(ctk.CTkFrame):
             current = None
         if key == current:
             self._pending.pop(cat, None)
+        elif self._mp_locked:
+            # Client: stage it -- the host applies on Apply Tactics.
+            self._pending[cat] = key
         elif tx.get_tactics_control(team) == "gm":
             # The GM owns the whiteboard: changes apply immediately.
             tx.set_team_system(team, cat, key)
@@ -533,6 +556,35 @@ class TacticsView(ctk.CTkFrame):
             # Coach owns it: stage the change until suggest/enforce/takeover.
             self._pending[cat] = key
         self.refresh()
+
+    def _on_mp_apply(self):
+        """MP client: send pending module picks to the host (set_tactics)."""
+        team = self._team()
+        if team is None or not self._pending:
+            return
+        try:
+            client = getattr(self.app, "mp_client", None)
+            if client is None:
+                return
+            payload = {
+                "team_id": getattr(team, "team_name", ""),
+                "tactics": {"modules": dict(self._pending)},
+            }
+            try:
+                client.send_action("set_tactics", payload)
+            except Exception as e:
+                self._response_text = (f"Couldn't reach the host ({e}) -- "
+                                       "nothing changed, try again.")
+                return
+            self._pending.clear()
+            self._response_text = ("Sent to the host -- your systems apply "
+                                   "on the next sync.")
+        except Exception as e:
+            self._response_text = f"Could not send tactics: {e}"
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _on_suggest(self):
         team = self._team()

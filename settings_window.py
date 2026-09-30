@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # settings_window.py
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
@@ -492,10 +493,14 @@ class SettingsView(ctk.CTkFrame):
     def _create_interface_tab(self, content):
         """User interface preferences."""
         theme = self._section(content, "Visual Theme")
-        self.theme_var = tk.StringVar()
-        self._row(theme, "Theme:", self.theme_var,
-                  ['Dark (Current)', 'Light (Coming Soon)',
-                   'High Contrast (Coming Soon)'], width=24)
+        # Only dark is actually implemented (ctk_theme forces dark mode;
+        # nothing reads the stored 'theme' value). The dropdown offered
+        # Light / High Contrast "(Coming Soon)" options that did nothing,
+        # so it is replaced with an honest static label.
+        self.theme_var = tk.StringVar(value='Dark (Current)')
+        tk.Label(theme, text="Dark \u2014 the only available theme",
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL).pack(anchor="w", pady=4)
         self.font_size_var = tk.StringVar()
         self._row(theme, "Font size:", self.font_size_var,
                   ['Compact', 'Small', 'Default', 'Large', 'Extra Large'],
@@ -518,12 +523,10 @@ class SettingsView(ctk.CTkFrame):
 
     def _create_simulation_tab(self, content):
         """Game simulation preferences."""
-        speed = self._section(content, "Simulation Speed")
-        self.sim_speed_var = tk.StringVar()
-        self._row(speed, "Game simulation speed:", self.sim_speed_var,
-                  ['Very Fast', 'Fast (Current)', 'Normal', 'Detailed'],
-                  width=16)
-
+        # NOTE: the old "Game simulation speed" dropdown was removed --
+        # the value was saved but never read anywhere, so the control was
+        # a dead end. The stored value is preserved untouched in case a
+        # future consumer needs it.
         auto = self._section(content, "Auto-Continue")
         self.auto_continue_var = tk.BooleanVar()
         self._check(auto, "Auto-continue through non-game days",
@@ -668,8 +671,6 @@ class SettingsView(ctk.CTkFrame):
         # Simulation
         simulation = self.settings.get('simulation', {})
 
-        self.sim_speed_var.set(
-            simulation.get('simulation_speed', 'Fast (Current)'))
         self.auto_continue_var.set(
             simulation.get('auto_continue_non_game_days', False))
         self.show_daily_results_var.set(
@@ -725,7 +726,11 @@ class SettingsView(ctk.CTkFrame):
 
         # Simulation
         self.settings.setdefault('simulation', {}).update({
-            'simulation_speed': self.sim_speed_var.get(),
+            # Preserved as stored: no UI control edits it anymore (it was
+            # a dead control -- saved but never read). Keeping the value
+            # harmless rather than deleting it.
+            'simulation_speed': self.settings.get('simulation', {}).get(
+                'simulation_speed', 'Fast (Current)'),
             'auto_continue_non_game_days': self.auto_continue_var.get(),
             'always_show_daily_results':
                 self.show_daily_results_var.get(),
@@ -764,14 +769,17 @@ class SettingsView(ctk.CTkFrame):
         self._dirty = True
 
     def _reset_to_defaults(self):
-        """Reset all settings to defaults"""
+        """Reset all settings to factory defaults"""
         result = messagebox.askyesno(
             "Reset Settings",
             "Are you sure you want to reset all settings to defaults?\n\n"
             "This cannot be undone.",
             parent=self)
         if result:
-            self.settings = self._load_settings()
+            # Factory defaults, not last-saved: this is what "Reset to
+            # Defaults" promises. default_settings() is the single
+            # source of truth used by get_settings() for fresh installs.
+            self.settings = default_settings()
             self._load_current_values()
             self._mark_changed()
 

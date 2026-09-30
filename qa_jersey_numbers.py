@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: jersey-number system -- favorites, legality, arrival assignment,
 preseason finalization, real retired-number seeding.
 Run: python3 qa_jersey_numbers.py

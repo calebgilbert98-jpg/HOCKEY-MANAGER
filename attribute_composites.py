@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Attribute composites (TRACK 2): logical per-event attribute combinations.
 
 Modeled on the net-front battle combination in mesh_system.py (forward vs
@@ -204,6 +205,7 @@ for _k, _d in _COMPOSITES.items():
 # differentiate without saturating; extremes compress to the rails).
 BASELINE = 70.0   # league-average composite rating anchor (attrs are 50-90 at creation)
 _SPREAD = 20.0
+_SHIFT_DAMPING = 0.887661  # softens stacked circumstance adjustments
 
 # Circumstance shift bounds: the total circumstance shift applied to the raw
 # rating before the tanh mapping is clamped to [-3.0, +3.0] composite points.

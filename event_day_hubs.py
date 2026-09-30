@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Event Day Hubs - immersive standalone pages for the league's three tentpole days:
   * Draft Day Central   (June 23-25, rookie draft)
@@ -694,8 +695,7 @@ class FreeAgencyFrenzy(EventDayHubView):
         # RIGHT: done deals + cap snapshot
         self._column_title(self.right_col, "DONE DEALS")
         self.deals_box = self._feed_box(self.right_col, height=12)
-        self._feed_write(self.deals_box, ["No signings yet today.",
-                                          "Done deals will be tracked here with terms."])
+        self._feed_write(self.deals_box, self._deals_lines())
         self._column_title(self.right_col, "YOUR CAP PICTURE")
         cap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
                        highlightthickness=1)
@@ -709,6 +709,39 @@ class FreeAgencyFrenzy(EventDayHubView):
                      font=('Segoe UI', 10, 'bold')).pack(side='right')
 
     # -- data ----------------------------------------------------------------
+    def _deals_lines(self):
+        """Done deals, read from the live news log -- real signings only.
+
+        Both the SP contract-signing chokepoint and the MP signing path
+        log to the news feed ("... have signed X to a N-year contract.",
+        "X signed by Team: N years at $Y/year."), so filtering the log
+        for signings shows what actually happened. Newest first, capped.
+        Nothing is fabricated: with no signings in the log, the column
+        says so honestly.
+        """
+        lines = []
+        try:
+            log = list(getattr(self.app, 'news_log', None) or [])
+        except Exception:
+            log = []
+        for item in reversed(log):
+            story = ""
+            if isinstance(item, dict):
+                story = str(item.get('story', '') or '')
+            else:
+                story = str(item or '')
+            low = story.lower()
+            # 'signed'/'signing' mark real deals; 'assign' is excluded so
+            # AHL assignments ("... assigned to ...") don't leak in --
+            # "assigned" contains "signed" as a substring.
+            if (('signed' in low or 'signing' in low)
+                    and 'assign' not in low):
+                lines.append(f"\u2022 {story}")
+            if len(lines) >= 12:
+                break
+        return lines or ["No signings yet today.",
+                         "Done deals appear here as contracts are signed."]
+
     def _ufa_list(self):
         try:
             return list(self.gm.free_agents or [])

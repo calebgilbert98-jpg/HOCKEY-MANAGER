@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Captaincy forges leaders: leadership is built from tenure, results, impact.
 
 Three mechanisms, all additive (the development engine is never touched):

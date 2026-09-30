@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: awards races + rookie leaders."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

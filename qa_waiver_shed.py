@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: waiver wire temporary cap shed -- over-cap clubs can waive to comply.
 
 Covers: immediate full relief on placement; Next-Day blocker clearing;

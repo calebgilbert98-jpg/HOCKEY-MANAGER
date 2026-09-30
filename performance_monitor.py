@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Performance monitoring window for Hockey Manager
 Shows real-time performance statistics and optimization reports

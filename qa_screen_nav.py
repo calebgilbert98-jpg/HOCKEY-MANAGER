@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Behavioral QA for the full-screen navigation manager in main.py.
 
 Calls the real HockeyManagerGUI.show_screen / _teardown_screen /

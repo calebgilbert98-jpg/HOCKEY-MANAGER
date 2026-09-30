@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for the analytics scouting layer: truth + scout perception.
 
 Verifies:

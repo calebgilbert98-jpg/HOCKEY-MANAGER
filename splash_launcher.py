@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Puck Dynasty - Simple Splash Launcher
 Reliable splash screen that shows background and launches enhanced launcher

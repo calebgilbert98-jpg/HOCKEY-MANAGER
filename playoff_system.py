@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 NHL Playoff System Implementation
 Complete Stanley Cup playoff bracket generation and management

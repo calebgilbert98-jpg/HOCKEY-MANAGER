@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for playtest bug fixes: P-4 (draft need-boost decay) and P-5 (name_safety
 star-surname filter)."""
 import os, sys, random

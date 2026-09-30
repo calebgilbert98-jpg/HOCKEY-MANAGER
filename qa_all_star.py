@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for All-Star roster selection (true to real criteria).
 
 Covers: 4 division teams; fan-vote captain per division; 9 skaters

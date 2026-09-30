@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Full-season scoring validation for Part A + Part B.
 
 Runs 1,312 AdvancedGameSim games (82 per team) and reports Muck's metrics:

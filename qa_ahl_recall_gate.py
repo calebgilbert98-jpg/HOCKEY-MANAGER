@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: new-CBA AHL recall gate (paper-transaction rule).
 
 A player assigned to the AHL must play at least one AHL game before he

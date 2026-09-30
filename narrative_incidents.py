@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Post-game narrative incidents + game stories (shared decision module).
 
 One decision, two fidelities: GameSim models fights and brawls live while

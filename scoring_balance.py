@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scoring-balance tuning knobs shared by both sim engines.
 
 One decision, two fidelities: GameSim (simulation.py) and AdvancedGameSim

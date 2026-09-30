@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """EHM-style training camp.
 
 Runs every September 12-30, right before the early-October roster cuts

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # dashboard_home.py
 # Puck Dynasty home dashboard.
 # Dense, information-rich GM dashboard: team header, stat strip, standings
@@ -7,7 +8,7 @@
 # refresh that preserves dropdown selections.
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from datetime import datetime
 
 import customtkinter as ctk
@@ -1189,12 +1190,22 @@ class HomeDashboard:
             try:
                 from iconic_games import toggle_star
                 state = toggle_star(self.user_team, entry_id)
-                if state is not None:
-                    btn.config(text="★" if state else "☆",
-                               fg=AppColors.ACCENT if state
-                               else AppColors.TEXT_TERTIARY)
-            except Exception:
-                pass
+            except Exception as e:
+                # Honest failure: the old code swallowed this, leaving the
+                # star visually unchanged with no explanation.
+                messagebox.showwarning(
+                    "Iconic Games",
+                    f"Couldn't update the star: {e}")
+                return
+            if state is None:
+                messagebox.showwarning(
+                    "Iconic Games",
+                    "That memory couldn't be found -- it may have faded "
+                    "at the last season rollover.")
+                return
+            btn.config(text="★" if state else "☆",
+                       fg=AppColors.ACCENT if state
+                       else AppColors.TEXT_TERTIARY)
 
         def _star_button(parent_row, entry_id, starred):
             btn = tk.Button(

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_fantasy.py -- headless fantasy draft for the playtest campaign.
 
 run_fantasy_draft(seed) -> dict with league, teams, user_team, gm (a

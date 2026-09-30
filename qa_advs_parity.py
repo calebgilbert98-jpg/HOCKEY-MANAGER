@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AdvancedGameSim parity -- goalie pull/6-on-5, last-change matching,
 shift-fatigue. Headless. Run: python3 qa_advs_parity.py"""
 import sys, random

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: playoff hype cohesion — intensity, rivals, atmosphere.
 
 Verifies, on a fake 32-team league through the REAL bracket code paths:
