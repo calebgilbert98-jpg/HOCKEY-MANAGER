@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: offer sheets (BUG-020) -- the user-facing flow and its engine chain.
 
 Covers: is_rfa identification; compensation bands; own-pick availability;

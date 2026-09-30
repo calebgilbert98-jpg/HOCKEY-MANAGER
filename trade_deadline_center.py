@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Trade Deadline Center - Immersive Trade Deadline Day Experience
 Accessible only on trade deadline day (derived: 40 days before the last

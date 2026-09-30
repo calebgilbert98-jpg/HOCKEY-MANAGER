@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Enhanced Staff Management Window for Hockey Manager
 Provides comprehensive staff hiring, firing, and management with EHM-style depth.

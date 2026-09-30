@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 
 # playtest_mid.py -- all-star, playoffs, awards (monkey-patched onto SeasonDriver)
 import random, traceback

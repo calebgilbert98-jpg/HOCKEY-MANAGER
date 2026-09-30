@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Real-time trade negotiation.
 
 FM24/EHM-style dealing: offers are *sent*, not resolved instantly. The AI

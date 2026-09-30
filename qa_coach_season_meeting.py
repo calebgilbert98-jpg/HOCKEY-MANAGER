@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: pre-season coach expectations meeting -- MODEL + WIRING + AI half.
 
 Covers the shared contract (mandate model, arm/pending API, normalizer),

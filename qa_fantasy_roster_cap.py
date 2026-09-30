@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_fantasy_roster_cap.py -- fantasy draft roster soundness (bugfix QA).
 
 Bug: every 40+ pick landed on the NHL roster, so a 40-round fantasy draft

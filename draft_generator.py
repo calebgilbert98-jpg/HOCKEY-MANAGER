@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # draft_generator.py
 # Creates a new class of draft-eligible players with realistic archetypes and tiered potential.
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless QA: playoff/RS split, AHL no-bleed, AHL screen, Conn Smythe.
 
 Run with DISPLAY=:99. GUI parts build the real views against a fake app.

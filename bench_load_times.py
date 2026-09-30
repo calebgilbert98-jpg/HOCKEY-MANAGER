@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Load-time profiler: save size, save/load round-trip timing, and the
 per-game overhead of the postgame pipeline (incl. iconic-game detection).
 

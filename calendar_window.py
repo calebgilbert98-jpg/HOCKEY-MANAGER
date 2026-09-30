@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # calendar_window.py
 # Season Calendar for Puck Dynasty.
 # CustomTkinter rebuild: CTkToplevel with a month grid of colored day cells

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for playtest fixes: P-1 (conference_finals alias), P-2 (Caleb's
 final_table_snapshot), and P-5 (name_safety star-surname filter)."""
 import os, sys, random

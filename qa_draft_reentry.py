@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """BUG-2 QA: draft re-entry + save/load mid-draft (entry + fantasy).
 
 Run under xvfb (the UI sections need the real DraftView):

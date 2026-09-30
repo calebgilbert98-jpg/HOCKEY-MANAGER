@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # tactics_window.py
 # FM24-style Team Tactics screen for Puck Dynasty's NHL systems layer:
 # all seven zone modules with descriptions + expected tradeoffs,

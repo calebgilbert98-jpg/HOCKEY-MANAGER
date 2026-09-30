@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: FM24-style young social groups.
 
 Affinity composes nationality, hometown, pre-existing relationships,

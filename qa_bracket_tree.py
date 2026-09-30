@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless QA: playoff bracket tree (projection, tree, per-game status,
 series detail, save/load round-trip).
 

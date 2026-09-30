@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: date-driven playoff progression — the Next Day path.
 
 Verifies the second playoff path (bracket controls keep working; the

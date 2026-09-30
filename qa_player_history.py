@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: player season history with mid-season splits.
 
   1. Mid-season trade produces two stints (OTT + BOS).

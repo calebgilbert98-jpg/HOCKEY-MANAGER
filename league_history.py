@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """League Memory: persistent archive of seasons, awards, leaders, Hall of Fame.
 
 Records every season's champion, award winners, and standings; tracks career

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless UI smoke: Tactics screen League Intel section."""
 import sys
 from types import SimpleNamespace

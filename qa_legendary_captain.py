@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: legendary captain status -> fan opinion -> team icon -> legacy.
 
 A completed Toews/Crosby/Yzerman arc (5+ years wearing the C, 88+

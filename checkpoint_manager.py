@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Crash-safe checkpoint system for Puck Dynasty.
 
 The problem it solves: a crash mid fantasy-draft (or mid-season) used

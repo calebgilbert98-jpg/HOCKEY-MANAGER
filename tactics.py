@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Coaching tactics foundation — true NHL systems, EHM-style depth.
 

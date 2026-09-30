@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Phase 2B Test Script: AI Team Management System
 Next step in Phase 2 implementation - Intelligent CPU team behaviors

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """media_rumors.py -- Read-only media rumor engine for the Trade Deadline Center.
 
 Replaces the old hardcoded fictional rumor lines with rumors generated from
@@ -34,6 +35,10 @@ Public API:
 
 import random
 import hashlib
+try:
+    import statistics as _pd_stats  # pd-idiom: stdlib first, vendored helpers last
+except ImportError:  # pragma: no cover - stdlib always present
+    _pd_stats = None
 
 # ---------------------------------------------------------------------------
 # Tuning knobs (Chris approves changes)

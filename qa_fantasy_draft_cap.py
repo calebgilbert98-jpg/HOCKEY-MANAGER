@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: fantasy-draft start behavior (seed 20260928).
 
 Asserts the fantasy draft runs on an even playing field with no hard cap

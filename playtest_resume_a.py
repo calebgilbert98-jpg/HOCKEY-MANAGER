@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Resume Campaign A from the season-3 save, running seasons 4-7."""
 import sys, os, json, traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

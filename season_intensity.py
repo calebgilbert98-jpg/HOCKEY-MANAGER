@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Season-long league tension gauge.
 
 The in-game engine carries a 0-100 INTENSITY meter per game

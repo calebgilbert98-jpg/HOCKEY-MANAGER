@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AI GM identity -- personality-driven behavior, job security, ELC signings.
 
 Covers:

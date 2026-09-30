@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA (UI-level): the Scout Report tab shows the scout's perceived read,
 the Overview tab keeps true values, and no-scout shows unavailable state.
 Headless: run under xvfb-run."""

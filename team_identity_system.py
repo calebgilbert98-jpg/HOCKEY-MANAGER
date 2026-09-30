@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # team_identity_system.py
 # Team visual identity system with authentic NHL colors and styling
 

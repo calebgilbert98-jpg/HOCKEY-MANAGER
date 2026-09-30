@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Narrative ledger — one normalized event record for rivalries + history.
 
 Wave 3 design ("a rivalry should be a memory, not a multiplier"):

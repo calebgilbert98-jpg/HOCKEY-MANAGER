@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Readable momentum: crowd energy + territorial pressure + recent chances.
 
 The player can READ it -- the visualizer shows a meter with labeled drivers

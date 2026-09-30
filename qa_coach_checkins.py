@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: quarterly coach check-ins -- MODEL + WIRING + AI half.
 
 Covers: contract (quarters, arm/pending/expiry), triggers at 20/40/60,

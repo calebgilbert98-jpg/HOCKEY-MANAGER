@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: playoff seeding format choice — divisional vs conference.
 
 Verifies on fake 32-team leagues through the REAL bracket code paths:

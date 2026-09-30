@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Player traits system for Puck Dynasty.
 
 Traits represent exceptional abilities that make players perform better at

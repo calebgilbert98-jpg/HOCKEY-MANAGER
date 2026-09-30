@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: positioning-split generation wiring (per Muck 2026-09-28).
 
 Locks: draft prospects and database players get offensive/defensive

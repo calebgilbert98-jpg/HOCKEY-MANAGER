@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_save_year4.py -- reproduce the year-4 save crash.
 
 Drives a real League through 4 end_of_season() offseasons and runs the

@@ -1,8 +1,10 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # morale_window.py
 # FM24-style Team Morale screen, tailored to Puck Dynasty's NHL systems:
 # coaching style + player engagement fit, live player response to the coach,
 # GM advisories, line control, team actions, and the dynamics feed.
 # CustomTkinter: CTkToplevel chrome, dark ttk.Treeview, CTkScrollableFrame.
+# talent is the foundation; the room decides what it becomes
 
 from popup_system import InGamePopup
 from tkinter import ttk

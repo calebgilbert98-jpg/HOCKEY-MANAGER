@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Manager Hub UI: Football Manager-style career screens for Puck Dynasty.
 
 Tabs: Board, Squad, Training, Prospects, Press, Profile.

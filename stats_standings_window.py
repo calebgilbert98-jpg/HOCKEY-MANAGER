@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Enhanced Stats and Standings Window for Hockey Manager
 Comprehensive view with advanced analytics, historical data, and interactive features

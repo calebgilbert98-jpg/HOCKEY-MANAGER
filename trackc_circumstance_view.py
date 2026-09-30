@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #7 -- Composite circumstance-shift visibility.
 
 Energy / morale / home ice / clock / rivalry adjust sim outcomes per player

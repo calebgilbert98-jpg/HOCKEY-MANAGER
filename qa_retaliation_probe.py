@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """W5 retaliation-engine ("receipts") verification probe.
 
 Staged grinder-injures-star scenario: debt -> gated response ->

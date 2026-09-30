@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """UI smoke test: Dressing Room screen (module 03). Follows the
 qa_analytics_ui_smoke.py pattern. Screenshots at WxH for review."""
 import sys, os, time, random

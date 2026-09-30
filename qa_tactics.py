@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Deterministic QA for the NHL coaching tactics layer (tactics.py).
 
 Zone-based architecture: forecheck / neutral zone / D-zone coverage /

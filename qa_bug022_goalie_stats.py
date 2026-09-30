@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: BUG-022 -- goalie SA/SV/GA recording on every sim path.
 
 Root causes fixed:

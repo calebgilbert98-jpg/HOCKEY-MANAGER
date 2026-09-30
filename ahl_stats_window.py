@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """AHL Stats screen -- the minors' own home, completely separate from NHL numbers.
 
 Muck's rule: AHL stats must never bleed into the NHL league-stats screen,

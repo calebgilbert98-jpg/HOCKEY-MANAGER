@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Item 7 follow-up QA: the user ALWAYS picks their club's captains.
 
 Covers the bypass where new-game setup auto-repairs every club before the

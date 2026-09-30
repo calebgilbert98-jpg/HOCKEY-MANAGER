@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Per-team draft boards + pre-draft joint scouting reports.
 
 There is ONE public media consensus board (``prospect.draft_ranking``,

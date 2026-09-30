@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Goalie-pull / 6-on-5 decision logic (additive, no core-sim changes).
 
 The pull decision already existed in simulation.py; this module owns the

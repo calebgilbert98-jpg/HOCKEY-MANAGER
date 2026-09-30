@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #1 -- Ice-Time Deployment visibility.
 
 The missing layer between "the coach exists" and "who skates how much".

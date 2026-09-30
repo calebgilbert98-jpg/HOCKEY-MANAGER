@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: iconic games -- detection, recording, starring, pruning, save/load.
 
 The nights the franchise remembers (5-goal games, 7-point nights,

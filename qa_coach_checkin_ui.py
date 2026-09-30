@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: quarterly coach check-in -- UI walkthrough under Xvfb.
 
 Drives CheckinView through a full conversation (messy-room run + healthy

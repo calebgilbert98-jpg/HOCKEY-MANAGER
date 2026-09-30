@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #3b -- Mid-season discipline list.
 
 A suspended player is silently unavailable in the lineup builder. This screen

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # playtest_season.py -- SeasonDriver: preseason, regular season, trade deadline
 import random, traceback
 from datetime import date

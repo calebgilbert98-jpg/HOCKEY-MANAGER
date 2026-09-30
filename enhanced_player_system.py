@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Enhanced Player System with EHM-Level Depth
 Phase 1: Deep Player Psychology & Hidden Attributes

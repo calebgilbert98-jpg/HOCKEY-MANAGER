@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Item 6 -- RFA offer sheets complete top to bottom.
 
 Exercises all four combos end to end:

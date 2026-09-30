@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: player cards end-to-end with REAL generated players.
 
 Covers every card-open path:

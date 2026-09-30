@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Runtime QA: full 224-pick entry draft through the REAL DraftView.
 
 Run under xvfb (never headless -- this validates the real UI):

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: staff market rules -- budgets, asks, approach rules, pools, save/load.
 
 Run: python3 qa_staff_market.py

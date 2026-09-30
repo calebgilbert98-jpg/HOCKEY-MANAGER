@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Coaching-aware individual practice: who teaches, who learns, and how the
 system shapes it.
 

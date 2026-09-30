@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_trade_market.py — QA for the AI trade market (trade_market.py).
 
 Asserts DYNAMIC properties (no fixed trade-volume counts), per Chris's

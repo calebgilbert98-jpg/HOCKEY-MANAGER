@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Professional Player Development Window - Complete Redesign
 Modern, polished interface with enhanced functionality and visual design

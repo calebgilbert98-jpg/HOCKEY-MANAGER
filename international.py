@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """International windows (additive, spectacle wave).
 
 Two lightweight, instantly-resolved tournaments:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AI contract-extension executor.
 
 Item 5: extension decisions were proposals only. The executor must run

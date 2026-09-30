@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Comprehensive Fantasy Draft System for Hockey Manager
 This module provides an interactive fantasy draft experience with team selection,

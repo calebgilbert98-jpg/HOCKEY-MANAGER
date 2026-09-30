@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Trade Deadline Manager - Core Backend Logic for Trade Deadline Day
 Handles deadline detection, trade validation, and deadline-specific trading rules

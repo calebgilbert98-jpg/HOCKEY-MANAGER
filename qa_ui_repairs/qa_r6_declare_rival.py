@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R6: "Declare Rival" context actions register through the rivalry system.
 
 Right-click a player card (player_context_menu) or a staff row

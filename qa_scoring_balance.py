@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for scoring_balance.py: shared OT/SV% tuning decisions.
 
 - tie_late_factor math (tied/3rd/under-10:00 -> 0.80, everything else 1.0,

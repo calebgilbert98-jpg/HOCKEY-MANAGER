@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Advanced Player Development System
 Handles age-based progression, training, potential tracking, and skill development

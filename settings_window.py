@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # settings_window.py
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 

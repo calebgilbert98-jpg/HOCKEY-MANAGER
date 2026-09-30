@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Enhanced Practice-Based Player Development System
 Gradual skill improvement through focused training sessions

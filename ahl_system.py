@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """AHL (minors) stat ledger -- lightweight, deliberately not a league sim.
 
 The AHL has no simulated games, standings, or schedules in Puck Dynasty --

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # media_center_window.py
 # Media Center UI for the optional Media & Press Conference System
 # CustomTkinter rebuild: CTkToplevel chrome, styled dark treeviews for

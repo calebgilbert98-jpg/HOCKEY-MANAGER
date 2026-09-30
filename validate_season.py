@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless full-season validation harness.
 
 Drives the REAL league schedule through the REAL GameSim engine (full-detail

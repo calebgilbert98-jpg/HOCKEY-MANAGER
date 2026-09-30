@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: season -> playoffs transition is seamless.
 
 Verifies PlayoffView auto-generates the real bracket when the regular

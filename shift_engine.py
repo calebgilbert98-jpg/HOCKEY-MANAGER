@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Real shift engine for Puck Dynasty.
 
 Replaces the clock-math line rotation (`(clock // 45) % 4 + 1`) with actual

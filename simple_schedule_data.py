@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Simplified Schedule Data Structures for Phase 3
 ==============================================

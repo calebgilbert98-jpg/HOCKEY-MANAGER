@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """R3 QA: Trade Center data binding.
 
 Covers the reported failure (NameError on CTkPlayerList aborting

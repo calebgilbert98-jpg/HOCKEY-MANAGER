@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: coaching-aware individual practice (coach_practice.py + engine wiring).
 
 Run:  python3 qa_coach_practice.py   (no display needed)

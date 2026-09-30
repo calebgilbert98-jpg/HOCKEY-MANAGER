@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Undrafted European free agents ("the Panarin pipeline").
 
 Real phenomenon: every summer a thin trickle of undrafted Europeans aged

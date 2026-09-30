@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Comprehensive Save/Load System for Hockey Manager
 Handles saving and loading complete game states including players, teams, leagues, and progress

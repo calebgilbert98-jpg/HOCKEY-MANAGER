@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Professional Scouting Management System
 Clean, comprehensive scouting interface with dedicated draft analysis

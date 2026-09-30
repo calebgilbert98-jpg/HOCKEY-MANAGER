@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: the June 15-30 buyout window (buyout_window.py).
 
 - AI teams: cap-strapped + dead weight -> bought out; comfortable teams,

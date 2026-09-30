@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #8 -- In-season fan-favourite surface.
 
 The engine marks is_fan_favourite, but the only surface is a year-end recap

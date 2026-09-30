@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: rules-audit regression suite (F1/F2/F12-F16).
 
 Covers the draft/prospect-rights, contract, trade, retention, protected

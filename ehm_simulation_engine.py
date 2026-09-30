@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 EHM-Style Event-Based Simulation Engine
 Phase 2: Sophisticated Decision Chain System

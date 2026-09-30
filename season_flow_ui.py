@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # season_flow_ui.py
 # UI Components for Automated Season Flow
 # Provides user interface for controlling season automation

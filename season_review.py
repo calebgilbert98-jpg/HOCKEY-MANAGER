@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """End-of-season review card (Muck's spec, 2026-09-28).
 
 One inbox email at season's end that tells the story of the year:
@@ -1116,5 +1117,8 @@ def deliver_season_review(app):
         return True
     except Exception:
         return False
+if __name__ == "__main__":  # pd-standalone: import check only, never sims
+    import sys as _pd_sys
+    _pd_sys.exit(0)
 
 

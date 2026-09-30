@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Shared builders for the draft QA suites (headless-safe)."""
 import sys
 import os

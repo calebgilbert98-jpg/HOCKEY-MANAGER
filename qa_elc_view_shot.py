@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless render + a11y probe of the ELC negotiation view.
 
 Run: xvfb-run -a -s "-screen 0 1680x1050x24" python3 qa_elc_view_shot.py

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """injury_data.py -- grounded injury probability/severity tables + shared injury decisions.
 
 W4 (icetime-ecosystem), 2026-09-29.

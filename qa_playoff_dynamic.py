@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: dynamic playoff scheduling — qualification, calendar, advancement.
 
 Verifies, on a fake 32-team league through the REAL bracket code paths:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: real-life draft eligibility age max + re-entry restrictions."""
 import random, sys
 from types import SimpleNamespace

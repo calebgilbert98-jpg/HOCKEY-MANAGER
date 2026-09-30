@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Draft Story Engine: prospect storylines and draft-day drama.
 
 When the draft class is generated, top prospects get storylines:

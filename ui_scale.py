@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """UI scale: 5 text-size tiers + live font registry + windowed auto-fit.
 
 Central choke point for type scale across the app.

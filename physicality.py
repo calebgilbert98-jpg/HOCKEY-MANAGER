@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Physicality engine (W5): officiating accuracy, dirty-hit revival,
 personality-scaled fighting, fight game effects, heat decay, statement goals.
 

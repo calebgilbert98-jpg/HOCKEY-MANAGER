@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Quarterly coach check-in -- the CONVERSATION UI half.
 
 The GM sits down with his head coach after games ~20/40/60 for a

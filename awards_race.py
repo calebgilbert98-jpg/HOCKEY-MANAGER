@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """NHL award races for Puck Dynasty.
 
 Ranks candidates for each major NHL award using the criterion that

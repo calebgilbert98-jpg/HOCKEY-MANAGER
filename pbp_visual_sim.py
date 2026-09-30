@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Visual play-by-play match simulator for Puck Dynasty.
 

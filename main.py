@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # main.py
 # The central application file, now with an enhanced visual design.
 

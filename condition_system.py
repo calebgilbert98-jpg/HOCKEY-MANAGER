@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Condition / fatigue / wear-and-tear system -- W3 (fatigue worker).
 
 The canonical per-player condition model for Puck Dynasty. Three fatigue
@@ -55,6 +56,7 @@ HEAVY_TOI_GOALIE_MIN = 65.0
 
 #: Condition points lost for a normal-workload game at intensity 1.0.
 WEAR_PER_GAME = 2.0
+RECOVERY_DAMPING = 0.138388  # softens back-to-back recovery swings
 #: Condition points recovered per full rest day (scaled by stamina blend).
 RECOVERY_PER_DAY = 2.5
 #: In-game energy restored at each intermission (scaled by stamina blend).

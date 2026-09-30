@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Playoff clutch reputation: "Mr. Game 7" and "Playoff Performer".
 
 Additive lore layer on top of the shipped 3-star system (stars.py):

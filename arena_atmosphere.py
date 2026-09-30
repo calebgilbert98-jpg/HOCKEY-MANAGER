@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Arena atmosphere: the crowd as a real, two-sided factor.
 
 Design (Muck, 2026-09-28): the crowd must fit into the engine's scaling of all

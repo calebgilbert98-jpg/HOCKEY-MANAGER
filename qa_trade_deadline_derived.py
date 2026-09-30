@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: trade deadline derived from the schedule (audit only -- no tuning changed).
 
 Real NHL rule (CBA 13.12(j)): the deadline falls on the 40th day before

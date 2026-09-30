@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Procedural crowd/arena sounds for the Puck Dynasty visual simulator.
 
 Everything here is best-effort and silent-safe: if no audio backend is

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Player accolades: the permanent trophy case.
 
 Every award win and Stanley Cup is banked onto the player as a plain dict

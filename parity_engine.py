@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Parity engine: competitive compression with cross-game team momentum.
 
 The problem: raw talent/tactics multipliers compound over 82 games into

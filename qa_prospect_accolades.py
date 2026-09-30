@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: prospect accolades + light reputation (prospect_accolades.py).
 
 Covers:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Draft night systems for Puck Dynasty: ticker, pick valuation, draft grades.
 
 Pure logic, no GUI. Powers the Entry Draft war room.

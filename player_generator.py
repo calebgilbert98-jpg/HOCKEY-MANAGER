@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # player_generator.py
 # Comprehensive Player Generation System for Hockey Manager
 # Handles both rookie/prospect generation and main player database creation

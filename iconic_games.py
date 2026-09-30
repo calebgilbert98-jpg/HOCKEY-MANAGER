@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Iconic games: the nights a franchise remembers.
 
 Detection runs once per finished game inside

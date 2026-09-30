@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Restricted free agency, offer sheets, and salary arbitration — real NHL standard.
 
 Real-life rules this module encodes (current CBA):

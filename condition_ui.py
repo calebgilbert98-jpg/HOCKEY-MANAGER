@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Condition display helpers -- W6 (condition visibility on UI screens).
 
 The canonical per-player condition (0-100) is owned by W3's

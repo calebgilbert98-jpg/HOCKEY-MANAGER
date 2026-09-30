@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Smoke: FM24-style player/staff cards, contract popup fit, inbox routing."""
 import sys, types
 sys.path.insert(0, ".")

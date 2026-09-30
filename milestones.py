@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Milestone watches: 500th goal, 1000th game, 300th win.
 
 A milestone should arrive with ceremony, not as a box score footnote. This

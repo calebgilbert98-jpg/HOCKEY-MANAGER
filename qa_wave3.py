@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for Wave 3 remainder: crowd scaling, milestones, grudge week,
 immortality (retirement/HOF/numbers/era/ceremonies). Headless."""
 import random

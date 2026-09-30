@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Football Manager-style career systems for Puck Dynasty.
 
 Pure logic module (no tkinter) so it can be unit-tested headless.

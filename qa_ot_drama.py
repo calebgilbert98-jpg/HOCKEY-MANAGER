@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_ot_drama.py -- QA for the OT drama build (ot_drama.py + engine hooks).
 
 Covers design doc section 7, items 1-4:

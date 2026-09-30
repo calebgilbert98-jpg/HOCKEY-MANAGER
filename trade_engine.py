@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Trade engine for Puck Dynasty: valuation, AI negotiation, and execution.
 
 Pure logic, no GUI. Powers the Trade Center window and draft-day trades.

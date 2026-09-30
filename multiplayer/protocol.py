@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Wire protocol for Puck Dynasty multiplayer (Phase 1).
 
 Framing: every message on the wire is::

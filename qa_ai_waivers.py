@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AI waiver management (BUG-019).
 
 Covers: cap-casualty waivers for over-cap AI clubs; NMC blocking

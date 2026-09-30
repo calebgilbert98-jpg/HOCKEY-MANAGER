@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: playoff clutch reputation ("Mr. Game 7" / "Playoff Performer").
 
 Covers:

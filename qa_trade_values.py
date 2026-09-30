@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: EHM-style GM value tags on the trade screen.
 
 Run: DISPLAY=:99 python3 qa_trade_values.py   (widget test needs a display)

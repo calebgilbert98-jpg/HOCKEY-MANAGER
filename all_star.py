@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """NHL All-Star Game: roster selection true to the real criteria.
 
 The real format (3v3 era):

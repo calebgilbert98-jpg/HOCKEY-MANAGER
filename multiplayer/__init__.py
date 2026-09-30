@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Puck Dynasty multiplayer package (Phase 1).
 
 Authoritative-host model over TCP, designed for virtual-LAN play

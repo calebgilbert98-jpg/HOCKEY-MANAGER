@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scout POV perception layer (Puck Dynasty refinement #3).
 
 The GM's card view stays TRUE everywhere (Overview/Attributes tabs, trade

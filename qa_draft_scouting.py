@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: mid-draft scouting — right-click quick scout + research strip.
 
 Run headless logic tests:

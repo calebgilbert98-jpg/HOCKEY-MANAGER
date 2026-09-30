@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: draft-day trading (draft_day_trades.py) -- the entry draft runs like a
 trade deadline, while fantasy drafts never trade.
 

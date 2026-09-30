@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_systems.py -- exercise Puck Dynasty's immersive systems headlessly.
 
 Called from the campaign runner at the right season points. Every probe is

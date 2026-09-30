@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Possession model: one decision for what happens to the puck after a shot.
 
 Thesis: single-game shot totals must vary like real hockey (team std ~6,

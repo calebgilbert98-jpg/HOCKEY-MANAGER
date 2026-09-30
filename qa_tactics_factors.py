@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Deterministic QA for the tactics factor expansion (2026-09-28).
 
 Covers: the four new event factors (pressure / discipline / blocks /

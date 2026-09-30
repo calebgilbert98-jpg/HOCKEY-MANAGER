@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Three stars of the game + NHL monthly awards.
 
 Three stars

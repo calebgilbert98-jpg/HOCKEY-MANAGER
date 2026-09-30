@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Puck Dynasty - Enhanced Professional Game Launcher
 Comprehensive launcher with full NHL teams, advanced game setup, and background integration

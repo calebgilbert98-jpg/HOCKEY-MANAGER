@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless integration test for Phase 1 multiplayer + checkpoints.
 
 Run:  python3 test_multiplayer_phase1.py

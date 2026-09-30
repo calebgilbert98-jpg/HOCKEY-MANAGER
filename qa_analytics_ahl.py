@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: analytics matter for signed minor-leaguers (AHL), light edition.
 
 Covers:

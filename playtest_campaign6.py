@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_campaign6.py -- 6-season playtest campaigns (2026-09-29 round).
 
 Usage: PLAYTEST_USER_TEAM="Washington Capitals" python3 playtest_campaign6.py A

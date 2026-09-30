@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Legacy events: the Winter Classic and Stadium Series (additive).
 
 One scheduling pass per season -- schedule_outdoor_games(league), called

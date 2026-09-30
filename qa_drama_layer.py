@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: drama layer integration + mandatory captaincy.
 
 Covers the drama-layer work (quick + advanced sim engines share one

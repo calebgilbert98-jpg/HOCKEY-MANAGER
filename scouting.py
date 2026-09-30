@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scouting systems for Puck Dynasty: fog of war, regional assignments, draft board.
 
 Pure logic, no GUI. Powers the Scouting Department window and the draft.

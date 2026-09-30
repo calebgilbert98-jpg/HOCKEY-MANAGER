@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """The June 15-30 buyout window (real NHL timing).
 
 Called once per offseason from HockeyManagerGUI._start_offseason, BEFORE

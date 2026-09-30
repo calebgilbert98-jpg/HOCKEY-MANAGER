@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Adaptive Rivals: AI teams scout the user and make a hockey answer.
 
 Each AI team plays its own philosophical identity (zone modules installed
