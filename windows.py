@@ -5827,6 +5827,9 @@ class DraftView(ctk.CTkFrame):
         self._draft_rng = random.Random()
         self._sp_clock_id = None
         self._sp_clock_left = 0
+        # Gating T2-Phase 2: set while a draft-night call card is parked.
+        # The SP clock freezes (without a grab) until the call resolves.
+        self._ddt_call_parked = False
 
         ct = self._ct
 
@@ -7234,6 +7237,14 @@ class DraftView(ctk.CTkFrame):
                 return
         except Exception:
             pass
+        # Gating T2-Phase 2: a parked draft-night call freezes the clock
+        # without a grab -- the call card is non-modal.
+        try:
+            if getattr(self, '_ddt_call_parked', False):
+                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+                return
+        except Exception:
+            pass
         if self._sp_clock_left <= 0:
             try:
                 self._ticker(f"{_team.team_name} ran out the clock -- "
@@ -7347,6 +7358,11 @@ class DraftView(ctk.CTkFrame):
                         self.trade_pick_button.configure(state=state)
             except Exception:
                 pass
+            # Gating T2-Phase 2: the call card owns the clock now. The
+            # answer continuation re-runs process_draft_pick when the call
+            # resolves -- don't start the clock under a parked call.
+            if getattr(self, '_ddt_call_parked', False):
+                return
 
         # Your next pick info is handled inside _refresh_clock_ui.
 
