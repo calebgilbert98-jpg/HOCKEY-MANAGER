@@ -3,16 +3,10 @@
 # Handles both rookie/prospect generation and main player database creation
 
 import random
-import math
 import itertools
-from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional
 from game_classes import Player, PlayerPosition, GameBalance
-from draft_generator import (
-    FIRST_NAMES, LAST_NAMES, BIRTHPLACES, COUNTRY_DISTRIBUTION, 
-    get_random_nationality, get_random_name, get_random_birthplace,
-    get_random_position, ARCHETYPES, get_archetype_for_position
-)
+from draft_generator import (get_random_nationality, get_random_name, get_random_birthplace, get_random_position, get_archetype_for_position)
 
 # --- Enhanced Player Generation Constants ---
 
@@ -38,16 +32,41 @@ AGE_DISTRIBUTIONS = {
     "OLDTIMER": {"min_age": 33, "max_age": 42, "peak_age": 36}
 }
 
-# Contract value ranges based on skill tier and age
+# Contract value ranges based on skill tier and age.
+# Caleb's original tier structure, rescaled to the 2026-27 economy after
+# the biggest spending summer in NHL history. Cap trend: $88M (2024-25) ->
+# $95.5M (2025-26) -> $104M (2026-27) -> $113.5M (2027-28), ~9%/yr, and the
+# 2026 summer reset the top of the market: Celebrini 5x$94M ($18.8M AAV,
+# richest ever), Kaprizov 8x$136M ($17M), Draisaitl $14M, Eichel 8x$108M
+# ($13.5M), Matthews $13.25M, K. Connor 8x$96M ($12M). Agents negotiate in
+# cap percentage now: 15% of the $104M cap is $15.6M, so the superstar
+# gate runs $14M-$19M with record deals pushing past it.
+# NOTE: ENTRY_LEVEL is overridden dynamically inside determine_contract_info
+# (new-CBA floor = signing-season league minimum, ceiling = the 9.3(a) max
+# annual compensation for the signing season, term 3/2/1 by signing age).
+# The static row below is a legacy fallback.
 CONTRACT_VALUES = {
-    "ENTRY_LEVEL": {"min": 750000, "max": 925000, "years": [3]},
-    "BRIDGE": {"min": 1000000, "max": 4000000, "years": [2, 3]},
-    "STANDARD": {"min": 2000000, "max": 8000000, "years": [3, 4, 5, 6]},
-    "PREMIUM": {"min": 6000000, "max": 12000000, "years": [5, 6, 7, 8]},
-    "SUPERSTAR": {"min": 9000000, "max": 15000000, "years": [6, 7, 8]},
-    "VETERAN": {"min": 750000, "max": 3000000, "years": [1, 2]},
-    "AHL": {"min": 70000, "max": 150000, "years": [1, 2]}
+    "ENTRY_LEVEL": {"min": 850000, "max": 1025000, "years": [3]},
+    "BRIDGE": {"min": 1200000, "max": 5000000, "years": [2, 3]},
+    "STANDARD": {"min": 1000000, "max": 6500000, "years": [3, 4, 5, 6]},
+    "PREMIUM": {"min": 9000000, "max": 13500000, "years": [5, 6, 7, 8]},
+    "SUPERSTAR": {"min": 14000000, "max": 19000000, "years": [6, 7, 8]},
+    "VETERAN": {"min": 775000, "max": 3750000, "years": [1, 2]},
+    "AHL": {"min": 85000, "max": 200000, "years": [1, 2]}
 }
+
+# Above-market inflation: the share of premium/superstar deals that get
+# pushed past the gate by a bidding war, and how far past it they go.
+# Summer 2026 proved the ceiling is aspirational: Kaprizov's $17M (16.35%
+# of the cap) and Celebrini's $18.8M reset what a franchise player costs.
+ABOVE_MARKET_SHARE = 0.22
+ABOVE_MARKET_BUMP = (1.05, 1.12)
+# Superstars get a wider war range: the record deals (Makar $20.4M,
+# Celebrini $18.8M, Carlsson $18M, Kaprizov $17M) all came from bidding
+# wars pushing 10-25% past the top of the gate.
+ABOVE_MARKET_BUMP_STAR = (1.08, 1.28)
+# Just under the CBA max (20% of the $104M cap = $20.8M).
+ABOVE_MARKET_CEILING = 20500000
 
 # Teams for different leagues
 NHL_TEAMS = [
@@ -246,50 +265,144 @@ class PlayerGenerator:
                     new_value = min(GameBalance.MAX_ATTRIBUTE, current_value + boost_amount)
                     setattr(player, attr, new_value)
     
-    def determine_contract_info(self, player: Player, skill_tier: str) -> Tuple[int, int]:
-        """Determine appropriate contract salary and length for a player."""
+    def determine_contract_info(self, player: Player, skill_tier: str,
+                                season_year=None) -> Tuple[int, int, bool, int]:
+        """Determine appropriate contract salary and length for a player.
+
+        season_year: the signing season for CBA money (league minimum /
+        ELC max). When None the current season is used. Callers that know
+        the league season (e.g. ELC auto-sign) should pass it -- the new
+        CBA minimum escalates by season, so a default-year floor can come
+        in under the signing season's floor and fail validation.
+
+        Returns (nhl_salary, years, two_way, ahl_salary). Category logic is
+        Caleb's original: ELC / bridge for the kids, superstar/premium by
+        overall, veteran deals for the 33+ crowd, AHL money for minor
+        leaguers, standard for everyone else.
+        """
         overall = player.overall_rating()
         age = player.age
-        
-        # Determine contract category (overall on 1-100 scale)
-        if age <= 22 and overall < 75:
+
+        # Determine contract category (overall on the native 100-point scale).
+        # Caleb's tier structure, with star thresholds calibrated to the
+        # generated curve (median 78) and the 2026 summer market: 95+ is a
+        # franchise player (the Kaprizov/Celebrini/McDavid tier -- 22 in
+        # the league), 90+ a first-line star (the Draisaitl/Matthews/
+        # MacKinnon/Eichel tier). Kids sign entry-level deals regardless
+        # of rating -- a 21-year-old stud is still on his ELC in real life.
+        # The gate is the real 3/2/1 signing-age table (CBA 9.1(b)):
+        # 24-and-under first-SPC signers are Group 1; 25+ is not
+        # ELC-eligible at all (the new CBA removed the old European
+        # 25-27 exception).
+        try:
+            from salary_cap_system import elc_years_for_age as _elc_yrs
+            _entry_years = _elc_yrs(age)
+        except Exception:
+            _entry_years = 3 if age <= 21 else (2 if age <= 23 else 0)
+        if _entry_years > 0:
             contract_type = "ENTRY_LEVEL"
+        elif overall >= 95:
+            contract_type = "SUPERSTAR"
+        elif overall >= 90:
+            contract_type = "PREMIUM"
         elif age <= 25 and overall < 80:
             contract_type = "BRIDGE"
-        elif overall >= 88:
-            contract_type = "SUPERSTAR"
-        elif overall >= 82:
-            contract_type = "PREMIUM"
-        elif age >= 33:
+        elif age >= 33 and overall < 84:
             contract_type = "VETERAN"
         elif "AHL" in skill_tier:
             contract_type = "AHL"
         else:
             contract_type = "STANDARD"
-        
+
         contract_info = CONTRACT_VALUES[contract_type]
-        
-        # Calculate salary based on overall rating (1-100 scale: 60-92 -> 0.0-1.0)
-        salary_range = contract_info["max"] - contract_info["min"]
-        salary_factor = (overall - 60) / 32  # Normalize to 0-1 range
+
+        if contract_type == "ENTRY_LEVEL":
+            # New CBA (2026): the ELC band is dynamic. The floor is the
+            # signing-season league minimum ($850k in 2026-27, rising to
+            # $1M by 2029-30). The ceiling is the 9.3(a) max annual
+            # compensation for the signing season (league minimum +
+            # $175k: $1.025M in 2026-27). Term follows the real
+            # signing-age table: 3 years at 18-21, 2 at 22-23, 1 at 24
+            # (only ages that reach this gate are <= 24).
+            try:
+                from salary_cap_system import league_minimum_salary as _lms
+                from salary_cap_system import elc_max_salary as _elcmax
+                _elc_years = [max(1, int(_entry_years))]
+                _elc_floor = int(_lms(season_year))
+                _elc_ceil = int(_elcmax(_elc_years[0], season_year))
+                contract_info = {
+                    "min": _elc_floor,
+                    "max": max(_elc_floor, _elc_ceil),
+                    "years": _elc_years,
+                }
+            except Exception:
+                pass
+
+        # Calculate salary based on overall rating. Star tiers normalize
+        # within their own overall band so franchise players spread across
+        # the gate instead of all pinning at the max.
+        if contract_type == "SUPERSTAR":
+            salary_factor = (overall - 94) / 6
+        elif contract_type == "PREMIUM":
+            salary_factor = (overall - 89) / 6
+        else:
+            salary_factor = (overall - 62) / 28  # Normalize to 0-1 range
         salary_factor = max(0, min(1, salary_factor))
-        
+
+        salary_range = contract_info["max"] - contract_info["min"]
         base_salary = contract_info["min"] + (salary_range * salary_factor)
-        
+
         # Add some randomness
         variation = random.uniform(0.85, 1.15)
         final_salary = int(base_salary * variation)
-        
+
+        # Above-market inflation: bidding wars push a share of star deals
+        # past the gate, the way real mega-deals inflate the whole market.
+        if contract_type in ("PREMIUM", "SUPERSTAR") and random.random() < ABOVE_MARKET_SHARE:
+            bump_range = (ABOVE_MARKET_BUMP_STAR if contract_type == "SUPERSTAR"
+                          else ABOVE_MARKET_BUMP)
+            bump = random.uniform(*bump_range)
+            final_salary = int(final_salary * bump)
+
         # Ensure within bounds
-        final_salary = max(contract_info["min"], min(contract_info["max"], final_salary))
-        
+        ceiling = ABOVE_MARKET_CEILING if contract_type in ("PREMIUM", "SUPERSTAR") else contract_info["max"]
+        final_salary = max(contract_info["min"], min(ceiling, final_salary))
+
         # Round to nearest 25k
         final_salary = round(final_salary / 25000) * 25000
-        
+
         # Contract length
         contract_length = random.choice(contract_info["years"])
-        
-        return final_salary, contract_length
+
+        # Two-way structure: kids and minor-leaguers sign two-way deals.
+        # Everyone else is one-way.
+        two_way = contract_type in ("ENTRY_LEVEL", "BRIDGE", "AHL")
+        ahl_salary = 0
+        if two_way:
+            ahl_info = CONTRACT_VALUES["AHL"]
+            ahl_range = ahl_info["max"] - ahl_info["min"]
+            ahl_factor = max(0, min(1, (overall - 55) / 30))
+            ahl_salary = round((ahl_info["min"] + ahl_range * ahl_factor) / 5000) * 5000
+            if contract_type == "AHL":
+                # Career minor-leaguer: the tier money IS the minor-league
+                # pay; the NHL salary is league minimum for call-up
+                # accounting.
+                ahl_salary = final_salary
+                try:
+                    from salary_cap_system import league_minimum_salary as _lms2
+                    final_salary = int(_lms2())
+                except Exception:
+                    final_salary = 775000
+            elif contract_type == "ENTRY_LEVEL":
+                # New CBA: ELC two-way minors pay caps at the 9.4 limit
+                # for the prospect's draft year ($87.5k for 2026/27).
+                try:
+                    from salary_cap_system import elc_minor_salary_max as _emx
+                    ahl_salary = min(ahl_salary, _emx())
+                except Exception:
+                    ahl_salary = min(ahl_salary, 87500)
+
+        return final_salary, contract_length, two_way, ahl_salary
     
     def create_player(self, 
                      skill_tier: str = "NHL_DEPTH",
@@ -371,18 +484,68 @@ class PlayerGenerator:
             player.traits = infer_traits(player)
         except Exception:
             player.traits = []
+
+        # Goalie personality: temperament + the rare generational fast-track.
+        # Goalies develop differently than skaters (see
+        # player_development_system), but a small chance of a generational
+        # prospect can jump into an NHL role by fate.
+        try:
+            if player.primary_position == PlayerPosition.GOALIE:
+                from goalie_personality import assign_goalie_temperament
+                assign_goalie_temperament(player)
+                # The fate roll: a small chance for an elite-potential goalie
+                # prospect to be generational -- the Price/Fleury fast-track
+                # that jumps into an NHL role instead of the slow goalie curve.
+                _pot = str(getattr(player, "potential_grade",
+                                   getattr(player, "true_potential_grade", "")) or "")
+                _tier = _pot[:2].strip() if len(_pot) >= 2 else _pot[:1]
+                if _tier in ("A+", "A", "A-"):
+                    _fate_roll = 0.08
+                elif _tier in ("B+", "B", "B-"):
+                    _fate_roll = 0.03
+                else:
+                    _fate_roll = 0.0
+                if _fate_roll and random.random() < _fate_roll:
+                    player.generational_goalie = True
+        except Exception:
+            pass
         
         # Set contract info if not free agent
         if team_name != "Free Agent":
-            salary, contract_length = self.determine_contract_info(player, skill_tier)
+            salary, contract_length, two_way, ahl_salary = self.determine_contract_info(player, skill_tier)
             player.contract.salary = salary
             player.contract.years_remaining = contract_length
+            player.contract.two_way = two_way
+            player.contract.ahl_salary = ahl_salary
         
         # Set some additional properties
         player.shooting_tendency = random.randint(30, 70)
         player.hitting_tendency = random.randint(30, 70)
-        player.nhl_games_played = random.randint(0, min(age * 40, 1000)) if age > 18 else 0
-        
+        # Career NHL games: age-plausible service time, not a dice roll.
+        # A 20-year-old cannot have 800 NHL games. Young players start
+        # near zero and accrue real games (see _credit_nhl_games_played);
+        # veterans arrive with a believable history. Drives waiver
+        # exemption (same table as database_generator's post-pass).
+        if age <= 20:
+            player.nhl_games_played = 0
+        elif age <= 22:
+            player.nhl_games_played = random.randint(0, (age - 20) * 60)
+        else:
+            _seasons = age - 21
+            _per = random.randint(40, 78)
+            if random.random() < 0.25:
+                _per = random.randint(5, 30)  # fringe / late-bloomer
+            player.nhl_games_played = min(1400, _seasons * _per)
+
+        # Deal a locked personality blend: identity is forever, volatility
+        # is scenario. The blend gives every generated batch a real mix of
+        # drama, temper, and difficulty instead of one flat type.
+        try:
+            import reputation_system as _rs
+            _rs.deal_generation_blend(player)
+        except Exception:
+            pass
+
         return player
     
     def generate_rookie_class(self, size: int = 224) -> List[Player]:
@@ -578,22 +741,8 @@ class PlayerGenerator:
         return database
 
 # Convenience functions for easy access
-def generate_rookies(size: int = 224) -> List[Player]:
-    """Generate a rookie class."""
-    generator = PlayerGenerator()
-    return generator.generate_rookie_class(size)
 
-def generate_nhl_database(size: int = 800) -> List[Player]:
-    """Generate NHL players database."""
-    generator = PlayerGenerator()
-    return generator.generate_nhl_players(size)
 
-def generate_single_player(skill_level: str = "NHL_DEPTH", 
-                          age_category: str = "PRIME",
-                          position: Optional[PlayerPosition] = None) -> Player:
-    """Generate a single player with specified parameters."""
-    generator = PlayerGenerator()
-    return generator.create_player(skill_level, age_category, position)
 
 def generate_complete_database() -> Dict[str, List[Player]]:
     """Generate a complete player database."""

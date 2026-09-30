@@ -1,29 +1,31 @@
 """Manager Hub UI: Football Manager-style career screens for Puck Dynasty.
 
-Tabs: Board, Squad, Training, Youth, Press, Profile.
+Tabs: Board, Squad, Training, Prospects, Press, Profile.
 Dialogs: TeamTalkDialog, PressConferenceDialog, OppositionReportDialog.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from datetime import date
-from typing import List, Optional
+from typing import List
+
+import customtkinter as ctk
 
 import manager_career as mc
 from player_context_menu import PlayerContextMenu
 
 
-class ManagerHubWindow(tk.Toplevel):
+class ManagerHubView(ctk.CTkFrame):
     """FM-style manager hub with tabbed career screens."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.career = parent.career
-        self.title("Manager Hub")
-        self.geometry("950x680")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ManagerHubWindow wrapper
+        self.career = self.app.career
         try:
-            self.configure(background=parent.BG_COLOR)
+            self.configure(fg_color=self.app.BG_COLOR)
         except Exception:
             pass
 
@@ -34,11 +36,19 @@ class ManagerHubWindow(tk.Toplevel):
         self._build_board_tab(notebook)
         self._build_squad_tab(notebook)
         self._build_training_tab(notebook)
-        self._build_youth_tab(notebook)
+        self._build_prospects_tab(notebook)
         self._build_press_tab(notebook)
         self._build_profile_tab(notebook)
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
     def _build_board_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=15)
         notebook.add(frame, text="  Board  ")
@@ -86,6 +96,33 @@ class ManagerHubWindow(tk.Toplevel):
                                       font=("Helvetica", 10))
         self.review_label.pack(anchor="w")
 
+        self.patience_label = ttk.Label(frame, text="", wraplength=600,
+                                        font=("Helvetica", 10, "italic"))
+        self.patience_label.pack(anchor="w", pady=(5, 2))
+
+        def _request_patience():
+            board = self.career.board
+            today = ""
+            try:
+                today = self.app.current_date.isoformat()
+            except Exception:
+                pass
+            granted, headline, body = board.request_patience(today)
+            # Granted: the room settles knowing the manager is safe.
+            if granted:
+                try:
+                    team = self.app.user_team
+                    for p in (getattr(team, "roster", []) or []):
+                        m = getattr(p, "morale", 70) or 70
+                        p.morale = min(100, m + 2)
+                except Exception:
+                    pass
+            messagebox.showinfo(headline, body)
+            self._refresh_board()
+
+        ttk.Button(frame, text="Request a meeting with the owner",
+                   command=_request_patience).pack(anchor="w", pady=5)
+
         ttk.Label(frame, text="Expectation progress:",
                   font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(10, 2))
         self.progress_label = ttk.Label(frame, text="", wraplength=620,
@@ -109,6 +146,11 @@ class ManagerHubWindow(tk.Toplevel):
             text=f"{board.season_wins}W - {board.season_losses}L - {board.season_otl}OTL")
         self.review_label.config(
             text=board.last_review or "No reviews yet this season.")
+        try:
+            today = self.app.current_date.isoformat()
+        except Exception:
+            today = ""
+        self.patience_label.config(text=board.patience_status(today))
         self.progress_label.config(text=self._expectation_progress_text())
 
     # Rough full-season point targets per expectation. These are estimates
@@ -160,7 +202,7 @@ class ManagerHubWindow(tk.Toplevel):
     def _playoff_cutoff_pace(self):
         """Approximate 82-game pace of the 16th-place team, or None."""
         try:
-            gm = getattr(self.parent, "game_manager", None)
+            gm = getattr(self.app, "game_manager", None)
             if gm is None:
                 return None
             league = getattr(gm, "league", None)
@@ -228,13 +270,13 @@ class ManagerHubWindow(tk.Toplevel):
             messagebox.showinfo("Squad", "Select a player first.")
             return None
         pid = int(self.squad_tree.item(sel[0], "values")[0].split("|")[0])
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.id == pid:
                 return p
         return None
 
     def _player_by_id(self, pid):
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.id == pid:
                 return p
         return None
@@ -252,12 +294,12 @@ class ManagerHubWindow(tk.Toplevel):
         player = self._player_by_id(pid)
         if not player:
             return
-        PlayerContextMenu(self.parent).show_context_menu(event, player)
+        PlayerContextMenu(self.app).show_context_menu(event, player)
 
     def _refresh_squad(self):
         for i in self.squad_tree.get_children():
             self.squad_tree.delete(i)
-        for p in sorted(self.parent.user_team.roster,
+        for p in sorted(self.app.user_team.roster,
                         key=lambda x: (x.last_name, x.first_name)):
             try:
                 pos = p.primary_position.name if hasattr(p.primary_position, "name") else str(p.primary_position)
@@ -292,7 +334,7 @@ class ManagerHubWindow(tk.Toplevel):
         p = self._selected_player()
         if not p:
             return
-        team = self.parent.user_team
+        team = self.app.user_team
         if letter == "C":
             for mate in team.roster:
                 if getattr(mate, "captaincy", None) == "C":
@@ -373,35 +415,51 @@ class ManagerHubWindow(tk.Toplevel):
         self.training_effects.config(text="\n".join("• " + l for l in lines))
 
     # ------------------------------------------------------------------
-    def _build_youth_tab(self, notebook):
+    def _build_prospects_tab(self, notebook):
         frame = ttk.Frame(notebook, padding=15)
-        notebook.add(frame, text="  Youth  ")
-        ttk.Label(frame, text="Academy Intake",
+        notebook.add(frame, text="  Prospects  ")
+        ttk.Label(frame, text="Prospect Pool",
                   font=("Helvetica", 14, "bold")).pack(anchor="w")
         ttk.Label(frame, wraplength=600, justify="left",
-                  text="Each July, your academy graduates a new class of prospects. "
-                       "Top prospects can be signed straight to your roster.",
+                  text="Unsigned players your club has drafted and holds the rights to. "
+                       "They develop in juniors, college, or the minors — sign the best "
+                       "ones to your roster when they're ready.",
                   font=("Helvetica", 10)).pack(anchor="w", pady=5)
-        self.youth_list = tk.Text(frame, height=18, width=80, wrap="word",
-                                  font=("Helvetica", 10))
-        self.youth_list.pack(fill="both", expand=True, pady=5)
-        self._refresh_youth()
+        self.prospect_list = tk.Text(frame, height=18, width=80, wrap="word",
+                                     font=("Helvetica", 10))
+        self.prospect_list.pack(fill="both", expand=True, pady=5)
+        self._refresh_prospects()
 
-    def _refresh_youth(self):
-        self.youth_list.delete("1.0", "end")
-        history = self.career.youth_history
-        if not history:
-            self.youth_list.insert("end", "No intakes yet. The next academy class graduates in July.")
-            return
-        for intake in reversed(history):
-            self.youth_list.insert("end",
-                f"=== {intake.get('year')} intake ({len(intake.get('prospects', []))} prospects) ===\n")
-            for pr in intake.get("prospects", []):
-                self.youth_list.insert(
-                    "end",
-                    f"• {pr['first_name']} {pr['last_name']}, {pr['age']} — {pr['position']} "
-                    f"(OVR {pr['overall']}, POT {pr['potential']}) — {pr['scout_note']}\n")
-            self.youth_list.insert("end", "\n")
+    def _refresh_prospects(self):
+        """List the user club's drafted (unsigned) prospects, best first."""
+        box = self.prospect_list
+        box.config(state="normal")
+        box.delete("1.0", "end")
+        prospects = list(getattr(self.app.user_team, "prospects", []) or [])
+        if not prospects:
+            box.insert("end", "No unsigned prospects yet. Build your pipeline "
+                              "at the NHL Entry Draft each June.")
+        else:
+            def _ovr(p):
+                try:
+                    return int(p.overall_rating())
+                except Exception:
+                    return 0
+            for p in sorted(prospects, key=_ovr, reverse=True):
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = getattr(p, "position", "?")
+                grade = getattr(p, "potential_grade", "?") or "?"
+                age = getattr(p, "age", "?")
+                try:
+                    name = p.full_name
+                except Exception:
+                    name = "Unknown"
+                box.insert("end",
+                           f"• {name}, {age} — {pos} "
+                           f"(OVR {_ovr(p)}, POT {grade})\n")
+        box.config(state="disabled")
 
     # ------------------------------------------------------------------
     def _build_press_tab(self, notebook):
@@ -446,39 +504,71 @@ class ManagerHubWindow(tk.Toplevel):
 
 
 # ---------------------------------------------------------------------------
-# Dialogs
-# ---------------------------------------------------------------------------
 
-class TeamTalkDialog(tk.Toplevel):
-    """Modal team talk picker. Result: (option_dict_or_None, reaction_text, boost)."""
-
-    def __init__(self, parent, team, when: str, context: dict):
+class ManagerHubWindow(InGamePopup):
+    """Popup wrapper around ManagerHubView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
-        self.parent_gui = parent
+        self.title("Manager Hub")
+        self._view = ManagerHubView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+# Dialogs (embedded focus-card screens + thin popup wrappers)
+# ---------------------------------------------------------------------------
+class TeamTalkView(ctk.CTkFrame):
+    """Team talk picker as an embedded full-screen focus card.
+
+    Result (option_dict_or_None, reaction_text, boost) is delivered via the
+    on_done callback; the view then closes itself. Replaces the blocking
+    wait_window() flow of the old TeamTalkDialog.
+    """
+
+    def __init__(self, parent, team, when: str, context: dict,
+                 app=None, on_done=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TeamTalkDialog wrapper
         self.team = team
         self.when = when
         self.context = context
         self.result = None
-        self.title("Team Talk")
-        self.geometry("560x420")
-        self.transient(parent)
-        self.grab_set()
+        self.on_done = on_done
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
+
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=560)
+        card.grid(row=0, column=0, padx=24, pady=24)
 
         titles = {"prematch": "Pre-Match Team Talk",
                   "intermission": "Intermission Team Talk",
                   "postmatch": "Full-Time Team Talk"}
-        ttk.Label(self, text=titles.get(when, "Team Talk"),
-                  font=("Helvetica", 14, "bold")).pack(pady=10)
+        ttk.Label(card, text=titles.get(when, "Team Talk"),
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 6))
         ctx_desc = {
             "prematch": f"Next up: {context.get('opponent_name', 'the opposition')}.",
             "intermission": f"Score: {context.get('score_line', '')}.",
             "postmatch": f"Final: {context.get('score_line', '')}.",
         }
-        ttk.Label(self, text=ctx_desc.get(when, ""),
+        ttk.Label(card, text=ctx_desc.get(when, ""),
                   font=("Helvetica", 11)).pack(pady=4)
 
         self.options = mc.get_team_talk_options(when, context)
-        list_frame = ttk.Frame(self)
+        list_frame = ttk.Frame(card)
         list_frame.pack(fill="both", expand=True, padx=15, pady=5)
         for opt in self.options:
             fit_note = {"good": " ✓ looks ideal", "risky": " ⚠ risky"}.get(opt["fit"], "")
@@ -490,47 +580,100 @@ class TeamTalkDialog(tk.Toplevel):
                       font=("Helvetica", 9, "italic"),
                       wraplength=480).pack(anchor="w", padx=10)
 
-        ttk.Button(self, text="Say nothing",
-                   command=self.destroy).pack(pady=10)
-        self.wait_window(self)
+        ttk.Button(card, text="Say nothing",
+                   command=self._say_nothing).pack(pady=(6, 16))
 
     def _choose(self, option):
         reaction, boost = mc.apply_team_talk(self.team, option, self.context)
         messagebox.showinfo("Dressing Room", reaction, parent=self)
         self.result = (option, reaction, boost)
-        self.destroy()
+        self._finish()
+
+    def _say_nothing(self):
+        self.result = None
+        self._finish()
+
+    def _finish(self):
+        cb = getattr(self, "on_done", None)
+        if callable(cb):
+            try:
+                cb(self.result)
+            except Exception:
+                pass
+        self.close_view()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
 
-class PressConferenceDialog(tk.Toplevel):
-    """Modal press conference. Result: list of chosen answer dicts."""
-
-    def __init__(self, parent, questions: List[dict], title: str = "Press Conference"):
+class TeamTalkDialog(InGamePopup):
+    """Popup wrapper around TeamTalkView (backward compatibility)."""
+    def __init__(self, parent, team, when: str, context: dict, on_done=None):
         super().__init__(parent)
+        self._view = TeamTalkView(self, team, when, context, app=parent,
+                                 on_done=on_done)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class PressConferenceView(ctk.CTkFrame):
+    """Press conference as an embedded full-screen focus card.
+
+    Result (list of chosen answer dicts) is delivered via the on_done
+    callback; the view then closes itself. Replaces the blocking
+    wait_window() flow of the old PressConferenceDialog.
+    """
+
+    def __init__(self, parent, questions: List[dict],
+                 title: str = "Press Conference", app=None, on_done=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PressConferenceDialog wrapper
         self.questions = questions
         self.chosen = []
-        self.title(title)
-        self.geometry("620x520")
-        self.transient(parent)
-        self.grab_set()
+        self.on_done = on_done
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
 
-        ttk.Label(self, text=title,
-                  font=("Helvetica", 14, "bold")).pack(pady=10)
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=600)
+        card.grid(row=0, column=0, padx=24, pady=24)
+
+        ttk.Label(card, text=title,
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 6))
         self.q_index = 0
-        self.q_label = ttk.Label(self, text="", wraplength=560,
+        self.q_label = ttk.Label(card, text="", wraplength=540,
                                  font=("Helvetica", 11, "bold"))
         self.q_label.pack(pady=8)
-        self.j_label = ttk.Label(self, text="", font=("Helvetica", 10, "italic"))
+        self.j_label = ttk.Label(card, text="", font=("Helvetica", 10, "italic"))
         self.j_label.pack()
-        self.btn_frame = ttk.Frame(self)
-        self.btn_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        self.btn_frame = ttk.Frame(card)
+        self.btn_frame.pack(fill="both", expand=True, padx=20, pady=(10, 16))
         self._show_question()
-        self.wait_window(self)
 
     def _show_question(self):
         for w in self.btn_frame.winfo_children():
             w.destroy()
         if self.q_index >= len(self.questions):
-            self.destroy()
+            self._finish()
             return
         q = self.questions[self.q_index]
         self.j_label.config(text=f"— {q['journalist']}")
@@ -545,18 +688,72 @@ class PressConferenceDialog(tk.Toplevel):
         self.q_index += 1
         self._show_question()
 
+    def _finish(self):
+        cb = getattr(self, "on_done", None)
+        if callable(cb):
+            try:
+                cb(self.chosen)
+            except Exception:
+                pass
+        self.close_view()
 
-class OppositionReportDialog(tk.Toplevel):
-    """Read-only pre-match scout report."""
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
-    def __init__(self, parent, report: dict):
+
+class PressConferenceDialog(InGamePopup):
+    """Popup wrapper around PressConferenceView (backward compatibility)."""
+    def __init__(self, parent, questions: List[dict],
+                 title: str = "Press Conference", on_done=None):
         super().__init__(parent)
-        self.title(f"Scout Report: {report.get('team')}")
-        self.geometry("600x520")
-        text = tk.Text(self, wrap="word", font=("Helvetica", 10), padx=12, pady=12)
-        text.pack(fill="both", expand=True)
-        text.insert("end", f"SCOUT REPORT: {report.get('team')}\n", "h")
-        text.insert("end", f"Record: {report.get('record')}   Danger level: {report.get('danger_level')}\n\n")
+        self._view = PressConferenceView(self, questions, title, app=parent,
+                                         on_done=on_done)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class OppositionReportView(ctk.CTkFrame):
+    """Read-only pre-match scout report as an embedded focus card."""
+
+    def __init__(self, parent, report: dict, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the OppositionReportDialog wrapper
+        try:
+            self.configure(fg_color=self.app.BG_COLOR)
+        except Exception:
+            pass
+
+        # Focus card: full-screen view, content in a centered card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ctk.CTkFrame(self, fg_color="#1c1c21", corner_radius=12,
+                            width=580)
+        card.grid(row=0, column=0, padx=24, pady=24)
+
+        ttk.Label(card, text=f"SCOUT REPORT: {report.get('team')}",
+                  font=("Helvetica", 14, "bold")).pack(pady=(16, 4))
+        ttk.Label(card,
+                  text=f"Record: {report.get('record')}   "
+                       f"Danger level: {report.get('danger_level')}",
+                  font=("Helvetica", 11)).pack(pady=(0, 8))
+
+        text = tk.Text(card, wrap="word", font=("Helvetica", 10),
+                       padx=12, pady=12, height=18, width=64)
+        text.pack(fill="both", expand=True, padx=16)
         text.insert("end", "STRENGTHS\n", "h")
         for s in report.get("strengths", []):
             text.insert("end", f"• {s}\n")
@@ -571,4 +768,30 @@ class OppositionReportDialog(tk.Toplevel):
             text.insert("end", f"• {a}\n")
         text.tag_configure("h", font=("Helvetica", 11, "bold"))
         text.config(state="disabled")
-        ttk.Button(self, text="Close", command=self.destroy).pack(pady=8)
+        ttk.Button(card, text="Close",
+                   command=self.close_view).pack(pady=14)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class OppositionReportDialog(InGamePopup):
+    """Popup wrapper around OppositionReportView (backward compatibility)."""
+    def __init__(self, parent, report: dict):
+        super().__init__(parent)
+        self._view = OppositionReportView(self, report, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

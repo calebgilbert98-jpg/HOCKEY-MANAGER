@@ -12,22 +12,50 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from modern_ui import (
-    AppColors, AppFonts, AppCard, StatCard,
-    PlayerRow, PillBadge, apply_app_theme,
-)
+from modern_ui import (AppColors, AppFonts, AppCard, StatCard, PillBadge)
 
-from ctk_theme import (
-    init_ctk_theme, TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
-    TEXT, TEXT_DIM, TEXT_FAINT,
-)
+from ctk_theme import (init_ctk_theme, TEAL, TEAL_HOVER, BG, CARD, BORDER, TEXT)
 
 try:
     from manager_career import morale_label
 except Exception:
     def morale_label(m):  # fallback if career module is unavailable
-        return {9: "Superb", 8: "Superb", 7: "Good", 6: "Good",
-                5: "Okay", 4: "Okay", 3: "Poor", 2: "Poor"}.get(int(m), "Abysmal")
+        m = int(m)
+        if m >= 85:
+            return "Superb"
+        if m >= 65:
+            return "Good"
+        if m >= 45:
+            return "Okay"
+        if m >= 25:
+            return "Poor"
+        return "Abysmal"
+
+
+def _ctk_font(font):
+    """Coerce *font* into something customtkinter accepts.
+
+    AppFonts.* are live ``tkinter.font.Font`` objects (ui_scale) which
+    customtkinter rejects with "Wrong font type" -- and worse, the
+    half-constructed widget left behind breaks root teardown at exit.
+    Tuples and CTkFont pass through untouched.
+    """
+    try:
+        import tkinter.font as _tkfont
+        if isinstance(font, _tkfont.Font):
+            family = font.cget("family")
+            size = int(font.cget("size"))
+            weight = font.cget("weight")
+            slant = font.cget("slant")
+            spec = [family, size]
+            if weight and weight != "normal":
+                spec.append(weight)
+            if slant and slant not in ("roman", ""):
+                spec.append(slant)
+            return tuple(spec)
+    except Exception:
+        pass
+    return font
 
 
 class AppDropdown(ctk.CTkComboBox):
@@ -106,7 +134,7 @@ class CtkAppButton(ctk.CTkButton):
             hover_color=hover_color,
             text_color=text_color,
             corner_radius=8,
-            font=font or ("Segoe UI", 12, "bold"),
+            font=_ctk_font(font) or ("Segoe UI", 12, "bold"),
             cursor="hand2",
             **kwargs
         )
@@ -120,11 +148,6 @@ class CtkAppButton(ctk.CTkButton):
         self.configure(state="normal" if enabled else "disabled")
 
 
-def _safe(fn, default=None):
-    try:
-        return fn()
-    except Exception:
-        return default
 
 
 class HomeDashboard:
@@ -216,6 +239,7 @@ class HomeDashboard:
             ("Morale", "morale"),
             ("Prospects", "prospects"),
             ("Milestones", "milestones"),
+            ("Iconic Games", "iconic"),
             ("Inbox", "inbox"),
         ]
         for label, key in sections:
@@ -229,7 +253,7 @@ class HomeDashboard:
                 height=28,
                 border_width=1,
                 border_color=BORDER,
-                font=AppFonts.SMALL_BOLD,
+                font=_ctk_font(AppFonts.SMALL_BOLD),
                 cursor="hand2",
             )
             pill.pack(side="left", padx=4)
@@ -313,12 +337,25 @@ class HomeDashboard:
         return lbl
 
     def _open_player_profile(self, player):
-        """Open the full player profile window for a player object."""
+        """Open the player profile as a full screen in the main instance."""
+        # Canonical path first: the card is a screen, not a popup.
+        try:
+            app = self.parent
+            for _ in range(4):
+                if hasattr(app, "open_player_profile"):
+                    break
+                app = getattr(app, "parent", app)
+            if hasattr(app, "open_player_profile"):
+                app.open_player_profile(player)
+                return
+        except Exception as e:
+            print(f"Could not open player profile: {e}")
+        # Last resort: the legacy popup card.
         try:
             from ui_components import PlayerProfileWindow
             PlayerProfileWindow(self.parent, player)
-        except Exception as e:
-            print(f"Could not open player profile: {e}")
+        except Exception:
+            pass
 
     def _open_team_info(self, team):
         """Open team info: roster window for the user's team, standings for others."""
@@ -475,7 +512,11 @@ class HomeDashboard:
     def _team_name_of(obj):
         if obj is None:
             return ""
-        return getattr(obj, "team_name", str(obj))
+        # NOTE: getattr's default is evaluated eagerly -- str(obj) on a Team
+        # reprs the entire roster (millions of dataclass repr calls across a
+        # full schedule scan). Only stringify as a last resort.
+        name = getattr(obj, "team_name", None)
+        return name if name is not None else str(obj)
 
     def _streak_text(self):
         form = self._recent_form(10)
@@ -711,10 +752,17 @@ class HomeDashboard:
 
     def _cap_space_text(self):
         try:
+            import salary_cap_system as scs
+            space = scs.cap_breakdown(self.user_team).get("space", 0)
+            return f"${space / 1e6:.1f}M"
+        except Exception:
+            pass
+        try:
+            # Fallback: contract salaries (players don't carry a .salary attr).
             cap = getattr(self.user_team, "salary_cap", 0)
-            payroll = sum(getattr(p, "salary", 0) or 0 for p in self.user_team.roster)
-            space = (cap - payroll) / 1e6
-            return f"${space:.1f}M"
+            payroll = sum((getattr(getattr(p, "contract", None), "salary", 0) or 0)
+                          for p in self.user_team.roster)
+            return f"${(cap - payroll) / 1e6:.1f}M"
         except Exception:
             return "-"
 
@@ -744,6 +792,7 @@ class HomeDashboard:
         self._create_morale_card(right)
         self._create_prospects_card(right)
         self._create_milestones_card(right)
+        self._create_iconic_games_card(right)
         self._create_inbox_card(right)
         self._create_quick_actions_card(right)
 
@@ -960,13 +1009,15 @@ class HomeDashboard:
                      bg=bg).pack(anchor="w")
             return
 
-        mor = [getattr(p, "morale", 7) or 7 for p in roster]
+        mor = [getattr(p, "morale", 70) or 70 for p in roster]
         avg = sum(mor) / len(mor)
         label = morale_label(int(round(avg)))
+        # morale is stored 0-100 (morale_label bands are 0-100); display as-is.
+        avg100 = max(0.0, min(100.0, avg))
 
         head = tk.Frame(content, bg=bg)
         head.pack(fill="x")
-        tk.Label(head, text=f"{avg:.1f} / 10", font=AppFonts.H2,
+        tk.Label(head, text=f"{avg100:.0f}/100", font=AppFonts.H2,
                  fg=AppColors.TEXT_PRIMARY, bg=bg).pack(side="left")
         tk.Label(head, text=label, font=AppFonts.SMALL_BOLD,
                  fg=AppColors.TEXT_SECONDARY, bg=bg).pack(
@@ -1082,6 +1133,78 @@ class HomeDashboard:
                                       command=lambda p=pl: self._open_player_profile(p)).pack(side="left")
             tk.Label(row, text=text, font=AppFonts.SMALL,
                      fg=AppColors.TEXT_SECONDARY, bg=bg).pack(side="right")
+
+    # ---------------- Iconic games ----------------
+    def _create_iconic_games_card(self, parent):
+        """The franchise's remembered nights. Starred entries persist
+        across seasons; unstarred ones fade at the next rollover."""
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        self._section_anchors["iconic"] = card
+        content = card.get_content_frame()
+        bg = content.cget("bg")
+        self._card_title_row(content, "Iconic Games")
+
+        entries = [e for e in
+                   (getattr(self.user_team, "iconic_games", None) or [])
+                   if isinstance(e, dict)]
+        # Starred memories first, then newest.
+        entries.sort(key=lambda e: (not bool(e.get("starred")),
+                                    e.get("date", "")),
+                     reverse=False)
+        if not entries:
+            tk.Label(content,
+                     text="No unforgettable nights yet. Give the fans "
+                          "something to remember.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg, wraplength=320, justify="left").pack(anchor="w")
+            return
+
+        def _toggle(entry_id, btn):
+            try:
+                from iconic_games import toggle_star
+                state = toggle_star(self.user_team, entry_id)
+                if state is not None:
+                    btn.config(text="★" if state else "☆",
+                               fg=AppColors.ACCENT if state
+                               else AppColors.TEXT_TERTIARY)
+            except Exception:
+                pass
+
+        def _star_button(parent_row, entry_id, starred):
+            btn = tk.Button(
+                parent_row, text="★" if starred else "☆",
+                font=AppFonts.SMALL_BOLD,
+                fg=AppColors.ACCENT if starred else AppColors.TEXT_TERTIARY,
+                bg=bg, activebackground=bg, relief="flat", bd=0,
+                cursor="hand2")
+            # Default-arg binding: the button references itself without
+            # a forward reference.
+            btn.config(command=lambda eid=entry_id,
+                       b=btn: _toggle(eid, b))
+            return btn
+
+        for e in entries[:6]:
+            row = tk.Frame(content, bg=bg)
+            row.pack(fill="x", pady=3)
+            _star_button(row, e.get("id"), bool(e.get("starred"))).pack(
+                side="left", padx=(0, 6))
+            text_col = tk.Frame(row, bg=bg)
+            text_col.pack(side="left", fill="x", expand=True)
+            tk.Label(text_col, text=e.get("headline", "Unforgettable night"),
+                     font=AppFonts.SMALL_BOLD, fg=AppColors.TEXT_PRIMARY,
+                     bg=bg, wraplength=300, justify="left",
+                     anchor="w").pack(anchor="w", fill="x")
+            meta = f"{e.get('date', '')} · {e.get('score', '')}"
+            if e.get("playoff"):
+                meta += " · playoffs"
+            tk.Label(text_col, text=meta.strip(" ·"),
+                     font=AppFonts.CAPTION, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg, anchor="w").pack(anchor="w", fill="x")
+        if len(entries) > 6:
+            tk.Label(content, text=f"+ {len(entries) - 6} more in the rafters",
+                     font=AppFonts.CAPTION, fg=AppColors.TEXT_TERTIARY,
+                     bg=bg).pack(anchor="w", pady=(4, 0))
 
     # ---------------- Inbox ----------------
     def _create_inbox_card(self, parent):

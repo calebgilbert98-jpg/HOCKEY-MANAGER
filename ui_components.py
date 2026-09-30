@@ -2,8 +2,10 @@
 # Contains reusable UI elements, like the player profile window.
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
-from game_classes import PlayerPosition, to_100_scale
+import customtkinter as ctk
+from game_classes import PlayerPosition
 
 def _to_20_scale(value, default=10):
     """Convert a 50-point-scale attribute to the 1-20 display scale."""
@@ -25,34 +27,23 @@ def _to_100_scale(value):
         return 50
 
 
-class PlayerProfileWindow(tk.Toplevel):
-    """A comprehensive player profile window similar to Eastside Hockey Manager."""
-    def __init__(self, parent, player, is_scouted=False, report=None):
-        super().__init__(parent)
-        self.parent = parent
+class PlayerProfileView(ctk.CTkFrame):
+    """A comprehensive player profile view similar to Eastside Hockey Manager.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy PlayerProfileWindow popup card.
+    """
+    def __init__(self, parent, player, is_scouted=False, report=None, app=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color=self.app.BG_COLOR)
+        # Set by show_screen() (dashboard) or the PlayerProfileWindow wrapper (card).
+        self._close_screen = None
         self.player = player
         self.is_scouted = is_scouted
         self.report = report
-        
-        self.title(f"Profile: {player.full_name}")
-        self.configure(background=parent.BG_COLOR)
-        self.resizable(True, True)
-        # Fill the screen: maximized window for a true FM-style player hub
-        try:
-            self.state('zoomed')  # Windows / Linux maximize
-        except Exception:
-            pass
-        try:
-            # Fallback: size to 95% of screen if zoomed isn't supported (macOS)
-            self.update_idletasks()
-            sw = self.winfo_screenwidth()
-            sh = self.winfo_screenheight()
-            if self.winfo_width() < sw * 0.9:
-                self.geometry(f"{int(sw * 0.95)}x{int(sh * 0.92)}+{int(sw * 0.025)}+{int(sh * 0.04)}")
-        except Exception:
-            self.geometry("1400x1000")
 
-        self.style = parent.style
+        self.style = self.app.style
         self._setup_local_styles()
         
         # Create notebook for tabs with zero padding to maximize space
@@ -62,42 +53,51 @@ class PlayerProfileWindow(tk.Toplevel):
         # Create tabs
         self._create_overview_tab()
         self._create_attributes_tab()
+        self._create_personality_tab()
         self._create_stats_tab()
         self._create_contract_tab()
         self._create_development_tab()
 
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_local_styles(self):
         """Adds styles specific to this window."""
-        self.style.configure('PlayerTab.TFrame', background=self.parent.CONTENT_BG)
-        self.style.configure('PlayerPanel.TFrame', background=self.parent.CONTENT_BG, borderwidth=0)
+        self.style.configure('PlayerTab.TFrame', background=self.app.CONTENT_BG)
+        self.style.configure('PlayerPanel.TFrame', background=self.app.CONTENT_BG, borderwidth=0)
         
         self.style.configure('PlayerHeader.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 24, 'bold'))  # Increased from 16 to 24
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 24, 'bold'))  # Increased from 16 to 24
         
         self.style.configure('PlayerSubheader.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 13, 'bold'))
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 13, 'bold'))
         
         self.style.configure('PlayerInfo.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.TEXT_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 14))  # Increased from 10 to 14
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.TEXT_COLOR, 
+                           font=(self.app.FONT_FAMILY, 14))  # Increased from 10 to 14
         
         self.style.configure('PlayerValue.TLabel', 
-                           background=self.parent.CONTENT_BG, 
-                           foreground=self.parent.HEADER_COLOR, 
-                           font=(self.parent.FONT_FAMILY, 14, 'bold'))  # Increased from 10 to 14
+                           background=self.app.CONTENT_BG, 
+                           foreground=self.app.HEADER_COLOR, 
+                           font=(self.app.FONT_FAMILY, 14, 'bold'))  # Increased from 10 to 14
         
         # Attribute rating styles - increased font sizes for better readability
-        self.style.configure('Excellent.TLabel', background="#4CAF50", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('VeryGood.TLabel', background="#8BC34A", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Good.TLabel', background="#CDDC39", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Average.TLabel', background="#FFC107", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('BelowAverage.TLabel', background="#FF9800", foreground='black', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
-        self.style.configure('Poor.TLabel', background="#F44336", foreground='white', font=(self.parent.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Excellent.TLabel', background="#4CAF50", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('VeryGood.TLabel', background="#8BC34A", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Good.TLabel', background="#CDDC39", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Average.TLabel', background="#FFC107", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('BelowAverage.TLabel', background="#FF9800", foreground='black', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
+        self.style.configure('Poor.TLabel', background="#F44336", foreground='white', font=(self.app.FONT_FAMILY, 13, 'bold'))  # Increased from 9 to 13
 
     def _get_attribute_style_and_text(self, value):
         """Returns a style name and descriptive text based on the attribute value (native 1-100)."""
@@ -141,7 +141,7 @@ class PlayerProfileWindow(tk.Toplevel):
         self.notebook.add(tab_frame, text='Overview')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -182,42 +182,44 @@ class PlayerProfileWindow(tk.Toplevel):
         left_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         left_column.grid(row=1, column=0, sticky='nsew', padx=(0, 1))
         left_column.grid_columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(5):
             left_column.grid_rowconfigure(i, weight=1)
         
         center_column = ttk.Frame(main_container, style='PlayerTab.TFrame') 
         center_column.grid(row=1, column=1, sticky='nsew', padx=(1, 1))
         center_column.grid_columnconfigure(0, weight=1)
-        for i in range(4):
+        for i in range(3):
             center_column.grid_rowconfigure(i, weight=1)
             
         right_column = ttk.Frame(main_container, style='PlayerTab.TFrame')
         right_column.grid(row=1, column=2, sticky='nsew', padx=(1, 0))
         right_column.grid_columnconfigure(0, weight=1)
-        for i in range(6):  # Increased from 4 to 6 for additional content
+        for i in range(7):  # Increased for additional content
             right_column.grid_rowconfigure(i, weight=1)
         
-        # Left column content - Personal & Physical
-        self._create_enhanced_basic_info(left_column, 0)
-        self._create_physical_attributes(left_column, 1)
-        self._create_injury_history(left_column, 2)
-        self._create_career_progression(left_column, 3)
+        # Left column content - Health, career & room
+        # (Personal details moved to the Personality tab.)
+        self._create_injury_history(left_column, 0)
+        self._create_career_progression(left_column, 1)
+        self._create_accolades(left_column, 2)
+        self._create_career_moments(left_column, 4)
+        self._create_team_chemistry(left_column, 3)
         
-        # Center column content - Performance & Skills
+        # Center column content - Player Attributes (all attributes bucketed together)
         self._create_enhanced_key_attributes(center_column, 0)
-        self._create_performance_metrics(center_column, 1)
+        self._create_physical_attributes(center_column, 1)
         self._create_skill_development(center_column, 2)
-        self._create_team_chemistry(center_column, 3)
         
-        # Right column content - Contract & Management (Enhanced)
-        self._create_enhanced_contract_info(right_column, 0)
-        self._create_market_value_info(right_column, 1)
-        self._create_scouting_report(right_column, 2)
-        self._create_coaching_notes(right_column, 3)
+        # Right column content - Contract, Performance & Management
+        self._create_performance_metrics(right_column, 0)
+        self._create_enhanced_contract_info(right_column, 1)
+        self._create_market_value_info(right_column, 2)
+        self._create_scouting_report(right_column, 3)
+        self._create_coaching_notes(right_column, 4)
         
         # Add additional right column content to better utilize space
-        self._create_simple_comparison(right_column, 4)
-        self._create_league_standing(right_column, 5)
+        self._create_simple_comparison(right_column, 5)
+        self._create_league_standing(right_column, 6)
 
     def _create_enhanced_player_header(self, parent):
         """Creates an enhanced player header with comprehensive information."""
@@ -239,14 +241,14 @@ class PlayerProfileWindow(tk.Toplevel):
         if face_img is not None:
             self._face_img = face_img  # keep a reference
             photo_label = tk.Label(photo_frame, image=face_img,
-                                   bg=self.parent.CONTENT_BG,
+                                   bg=self.app.CONTENT_BG,
                                    highlightthickness=2,
-                                   highlightbackground=self.parent.ACCENT_COLOR)
+                                   highlightbackground=self.app.ACCENT_COLOR)
             photo_label.pack()
         else:
-            photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.parent.ACCENT_COLOR)
+            photo_canvas = tk.Canvas(photo_frame, width=120, height=150, bg=self.app.TITLE_BAR_COLOR, highlightthickness=2, highlightcolor=self.app.ACCENT_COLOR)
             photo_canvas.pack()
-            photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'), justify='center')
+            photo_canvas.create_text(60, 75, text="PLAYER\nPHOTO", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 14, 'bold'), justify='center')
         
         # Main player information
         info_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -274,7 +276,7 @@ class PlayerProfileWindow(tk.Toplevel):
             arch = get_archetype(self.player)
             if arch and not str(arch).startswith("Depth") and "Backup" not in str(arch):
                 Pill(name_frame, text=str(arch),
-                     bg=self.parent.ACCENT_COLOR).pack(side='right', padx=(10, 0))
+                     bg=self.app.ACCENT_COLOR).pack(side='right', padx=(10, 0))
         except Exception:
             pass
         
@@ -308,11 +310,11 @@ class PlayerProfileWindow(tk.Toplevel):
         overall = self.player.overall_rating()
         
         # Create visual rating bar
-        rating_canvas = tk.Canvas(rating_frame, width=90, height=130, bg=self.parent.BG_COLOR, highlightthickness=1, highlightbackground=self.parent.TEXT_COLOR)
+        rating_canvas = tk.Canvas(rating_frame, width=90, height=130, bg=self.app.BG_COLOR, highlightthickness=1, highlightbackground=self.app.TEXT_COLOR)
         rating_canvas.pack(pady=(5, 0))
         
         # Draw rating bar background
-        rating_canvas.create_rectangle(25, 15, 65, 115, fill=self.parent.CONTENT_BG, outline=self.parent.TEXT_COLOR, width=2)
+        rating_canvas.create_rectangle(25, 15, 65, 115, fill=self.app.CONTENT_BG, outline=self.app.TEXT_COLOR, width=2)
         
         # Draw rating bar fill (1-100 display scale)
         overall_100 = _to_100_scale(overall)
@@ -322,9 +324,9 @@ class PlayerProfileWindow(tk.Toplevel):
             rating_canvas.create_rectangle(27, 115-bar_height, 63, 113, fill=bar_color, outline="")
         
         # Draw scale markings and text
-        rating_canvas.create_text(45, 10, text="100", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 120, text="0", fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 14, 'bold'))
+        rating_canvas.create_text(45, 10, text="100", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
+        rating_canvas.create_text(45, 120, text="0", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
+        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.app.HEADER_COLOR, font=(self.app.FONT_FAMILY, 14, 'bold'))
         
         # Contract status indicator
         contract_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
@@ -355,7 +357,7 @@ class PlayerProfileWindow(tk.Toplevel):
                 
             status_canvas = tk.Canvas(contract_frame, width=80, height=20, bg=status_color, highlightthickness=1)
             status_canvas.pack(pady=(5, 0))
-            status_canvas.create_text(40, 10, text=status_text, fill='black', font=(self.parent.FONT_FAMILY, 8, 'bold'))
+            status_canvas.create_text(40, 10, text=status_text, fill='black', font=(self.app.FONT_FAMILY, 8, 'bold'))
         else:
             ttk.Label(contract_frame, text="No Contract", style='PlayerInfo.TLabel').pack(pady=(5, 0))
     
@@ -411,7 +413,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Weight:", "200 lbs"),     # Placeholder
             ("Potential:", self.player.potential_grade),
             ("NHL Games:", str(self.player.nhl_games_played)),
-            ("Morale:", f"{self.player.morale}/20"),
+            ("Morale:", f"{self.player.morale}/100"),
             ("Waiver Status:", "Exempt" if self.player.nhl_games_played < 160 else "Required")
         ]
         
@@ -661,7 +663,7 @@ class PlayerProfileWindow(tk.Toplevel):
         self.notebook.add(tab_frame, text='Attributes')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -725,20 +727,32 @@ class PlayerProfileWindow(tk.Toplevel):
         bar_w = max(3, int(w * value / 100))
         canvas.create_rectangle(0, 5, bar_w, h - 5, fill=color, outline="")
 
-    def _create_traits_banner(self, parent):
-        """Display player traits as pills at the top of the attributes tab."""
+    def _create_traits_banner(self, parent, kind="talent"):
+        """Display player traits as pills.
+
+        kind='talent': on-ice traits (offense/defense/physical/skating/
+        goalie) -- shown on the Attributes tab.
+        kind='personality': mental traits (e.g. Clutch) -- shown on the
+        Personality tab alongside personal details and allies.
+        """
         try:
             from player_traits import get_player_traits
             traits = get_player_traits(self.player)
         except Exception:
             traits = []
+        if kind == "talent":
+            traits = [t for t in traits if getattr(t, "category", "") != "mental"]
+            title = "Talent Traits"
+        else:
+            traits = [t for t in traits if getattr(t, "category", "") == "mental"]
+            title = "Personality Traits"
         if not traits:
             return
 
         banner = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
         banner.pack(fill='x', padx=8, pady=(8, 4))
 
-        ttk.Label(banner, text="Traits", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 6))
+        ttk.Label(banner, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 6))
 
         pills_frame = ttk.Frame(banner, style='PlayerTab.TFrame')
         pills_frame.pack(fill='x')
@@ -747,7 +761,7 @@ class PlayerProfileWindow(tk.Toplevel):
             pill = tk.Label(
                 pills_frame, text=f" {trait.name} ",
                 bg="#1e3a5f", fg="#8ec2ff",
-                font=(self.parent.FONT_FAMILY, 11, "bold"),
+                font=(self.app.FONT_FAMILY, 11, "bold"),
                 padx=10, pady=3, cursor="hand2",
             )
             pill.pack(side="left", padx=(0, 8), pady=2)
@@ -768,9 +782,9 @@ class PlayerProfileWindow(tk.Toplevel):
             frame = tk.Frame(tooltip, bg="#1a1d24", padx=10, pady=8)
             frame.pack()
             tk.Label(frame, text=title, bg="#1a1d24", fg="#8ec2ff",
-                     font=(self.parent.FONT_FAMILY, 11, "bold")).pack(anchor="w")
+                     font=(self.app.FONT_FAMILY, 11, "bold")).pack(anchor="w")
             tk.Label(frame, text=description, bg="#1a1d24", fg="#c0c5ce",
-                     font=(self.parent.FONT_FAMILY, 10), wraplength=280,
+                     font=(self.app.FONT_FAMILY, 10), wraplength=280,
                      justify="left").pack(anchor="w", pady=(4, 0))
 
         def hide(event):
@@ -781,6 +795,289 @@ class PlayerProfileWindow(tk.Toplevel):
 
         widget.bind("<Enter>", show)
         widget.bind("<Leave>", hide)
+
+    def _new_scrollable_tab(self, title):
+        """Creates a scrollable notebook tab; returns the scrollable frame."""
+        tab_frame = ttk.Frame(self.notebook, style='PlayerTab.TFrame')
+        self.notebook.add(tab_frame, text=title)
+
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        def _configure_scroll_region(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(window_id, width=event.width)
+
+        window_id = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.bind("<Configure>", _configure_scroll_region)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        return scrollable_frame
+
+    def _get_league(self):
+        """Best-effort league accessor for the card's social-circle lookups."""
+        lg = getattr(self.app, 'league', None)
+        if lg is None:
+            gm = getattr(self.app, 'game_manager', None)
+            lg = getattr(gm, 'league', None) if gm is not None else None
+        return lg
+
+    def _get_player_team(self, league):
+        if league is None:
+            return None
+        tname = getattr(self.player, 'team_name', '')
+        for t in getattr(league, 'teams', []) or []:
+            if getattr(t, 'team_name', '') == tname:
+                return t
+        return None
+
+    def _create_personality_tab(self):
+        """Personality, personal details, and the player's social circle."""
+        is_goalie = self.player.primary_position == PlayerPosition.GOALIE
+        scrollable_frame = self._new_scrollable_tab('Personality')
+
+        # Personality traits (mental-category pills, e.g. Clutch)
+        self._create_traits_banner(scrollable_frame, kind="personality")
+
+        # Personal details live here now, beside personality
+        self._create_personal_details_section(scrollable_frame)
+
+        # Reputation / standing (moved off the Attributes tab)
+        self._create_personality_sections(scrollable_frame, is_goalie=is_goalie)
+
+        # Social circle: family, friends, favourite teammate/staff, rivals
+        self._create_close_allies_section(scrollable_frame)
+
+    def _personal_details_items(self):
+        """Personal-detail rows shared by the Personality tab."""
+        return [
+            ("Full Name:", self.player.full_name),
+            ("Date of Birth:", f"{getattr(self.player, 'birth_date', 'Unknown')}"),
+            ("Birthplace:", f"{getattr(self.player, 'birthplace', 'Canada')}"),
+            ("Nationality:", f"{getattr(self.player, 'nationality', 'Canadian')}"),
+            ("Height:", f"{getattr(self.player, 'height', '6ft 0in')}"),
+            ("Weight:", f"{getattr(self.player, 'weight', '180')} lbs"),
+            ("Shoots/Catches:", f"{getattr(self.player, 'handedness', 'Right')}"),
+            ("Draft Year:", f"{getattr(self.player, 'draft_year', 'Undrafted')}"),
+            ("Draft Position:", f"{getattr(self.player, 'draft_position', 'N/A')}"),
+            ("Years Pro:", f"{max(0, self.player.age - 18)} years"),
+        ]
+
+    def _create_personal_details_section(self, parent):
+        section = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section, text="Personal Details", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        grid = ttk.Frame(section, style='PlayerTab.TFrame')
+        grid.pack(fill='x')
+        for c in range(4):
+            grid.grid_columnconfigure(c, weight=1 if c % 2 else 0)
+
+        items = self._personal_details_items()
+        try:
+            import reputation_system as rs
+            items.append(("Social Group:", rs.player_social_group(self.player)))
+        except Exception:
+            pass
+
+        for i, (label, value) in enumerate(items):
+            r, c = divmod(i, 2)
+            ttk.Label(grid, text=label, style='PlayerInfo.TLabel').grid(
+                row=r, column=c * 2, sticky='w', padx=(0, 10), pady=3)
+            ttk.Label(grid, text=str(value), style='PlayerValue.TLabel').grid(
+                row=r, column=c * 2 + 1, sticky='w', padx=(0, 18), pady=3)
+
+    @staticmethod
+    def _bond_label(score):
+        if score >= 70:
+            return "Close friend"
+        if score >= 50:
+            return "Good friend"
+        return "Friend"
+
+    @staticmethod
+    def _rival_label(score):
+        if score <= -70:
+            return "Bitter rival"
+        if score <= -50:
+            return "Rival"
+        return "Frosty"
+
+    @staticmethod
+    def _fit_label(fit):
+        if fit >= 0.5:
+            return "Tight bond"
+        if fit >= 0.2:
+            return "Good rapport"
+        if fit >= -0.2:
+            return "Professional"
+        return "Friction"
+
+    def _favourite_staff(self, team):
+        """Coach on the player's team with the best player-coach fit."""
+        if team is None:
+            return None
+        try:
+            import reputation_system as rs
+            from game_classes import StaffRole
+            coaching_roles = {
+                StaffRole.HEAD_COACH, StaffRole.ASSISTANT_COACH,
+                StaffRole.ASSOCIATE_COACH, StaffRole.GOALIE_COACH,
+                StaffRole.POWER_PLAY_COACH, StaffRole.PENALTY_KILL_COACH,
+                StaffRole.SKILLS_COACH,
+            }
+            best, best_fit = None, -2.0
+            for s in getattr(team, 'staff', []) or []:
+                if getattr(s, 'role', None) not in coaching_roles:
+                    continue
+                try:
+                    fit = rs.coach_player_fit(s, self.player)
+                except Exception:
+                    continue
+                if fit > best_fit:
+                    best, best_fit = s, fit
+            if best is None:
+                return None
+            return {"staff": best, "fit": best_fit}
+        except Exception:
+            return None
+
+    def _allies_data(self):
+        """Gather family, friends, favourite teammate/staff, and rivals."""
+        data = {"family": [], "friends": [], "teammate": None,
+                "staff": None, "rivals": []}
+        try:
+            import reputation_system as rs
+        except Exception:
+            return data
+
+        league = self._get_league()
+        team = self._get_player_team(league)
+        roster = list(getattr(team, 'roster', []) or []) if team else []
+        all_players = []
+        if league is not None:
+            for t in getattr(league, 'teams', []) or []:
+                all_players.extend(getattr(t, 'roster', []) or [])
+            # Family links can point at free agents or draft prospects
+            # (generation links across rosters + free agents + prospects);
+            # resolve them too.
+            all_players.extend(getattr(league, 'free_agents', []) or [])
+            all_players.extend(getattr(league, 'draft_prospects', []) or [])
+        by_id = {p.id: p for p in all_players}
+
+        family_ids = set(getattr(self.player, 'family_ids', []) or [])
+        for fid in family_ids:
+            fp = by_id.get(fid)
+            if fp is not None:
+                data["family"].append(fp)
+
+        try:
+            friends = rs.get_friends(self.player, all_players, n=5)
+            data["friends"] = [f for f in friends
+                               if f["player"].id not in family_ids][:3]
+        except Exception:
+            pass
+
+        try:
+            tm = rs.get_friends(self.player, roster, n=1)
+            data["teammate"] = tm[0] if tm else None
+        except Exception:
+            pass
+
+        data["staff"] = self._favourite_staff(team)
+
+        try:
+            data["rivals"] = rs.get_rivals(self.player, roster, league, n=3)
+        except Exception:
+            pass
+        return data
+
+    def _create_close_allies_section(self, parent):
+        """Family, best friends, favourite teammate/staff, and rivals."""
+        data = self._allies_data()
+
+        section = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section, text="Close Allies", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 4))
+
+        def _subsection(title):
+            ttk.Label(section, text=title, style='PlayerInfo.TLabel',
+                      font=(self.app.FONT_FAMILY, 12, 'bold')).pack(anchor='w', pady=(8, 2))
+
+        def _row(name, detail, descriptor):
+            row = ttk.Frame(section, style='PlayerTab.TFrame')
+            row.pack(fill='x', pady=2)
+            ttk.Label(row, text=name, style='PlayerValue.TLabel', width=26).pack(side='left')
+            ttk.Label(row, text=detail, style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
+            if descriptor:
+                ttk.Label(row, text=f"\u2022 {descriptor}",
+                          style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
+
+        def _empty(text):
+            ttk.Label(section, text=text, style='PlayerInfo.TLabel').pack(anchor='w', pady=2)
+
+        # Family
+        _subsection("Family")
+        if data["family"]:
+            for fp in data["family"]:
+                pos = getattr(getattr(fp, 'primary_position', ''), 'value', '')
+                _row(fp.full_name,
+                     f"{getattr(fp, 'team_name', '')} {('\u2022 ' + pos) if pos else ''}".strip(),
+                     "Family")
+        else:
+            _empty("No family in the league.")
+
+        # Best friends in the league
+        _subsection("Best Friends in the League")
+        if data["friends"]:
+            for f in data["friends"]:
+                p, s = f["player"], f["score"]
+                _row(p.full_name, getattr(p, 'team_name', ''),
+                     self._bond_label(s))
+        else:
+            _empty("No close friendships yet \u2014 bonds form as the season unfolds.")
+
+        # Favourite teammate
+        _subsection("Favourite Teammate")
+        if data["teammate"]:
+            p, s = data["teammate"]["player"], data["teammate"]["score"]
+            pos = getattr(getattr(p, 'primary_position', ''), 'value', '')
+            _row(p.full_name, pos, self._bond_label(s))
+        else:
+            _empty("No standout bond on the roster yet.")
+
+        # Favourite staff
+        _subsection("Favourite Staff")
+        if data["staff"]:
+            s, fit = data["staff"]["staff"], data["staff"]["fit"]
+            role = getattr(getattr(s, 'role', ''), 'value', '')
+            _row(s.full_name, role, self._fit_label(fit))
+        else:
+            _empty("No coaching staff found.")
+
+        # Rivals
+        _subsection("Rivals")
+        if data["rivals"]:
+            for r in data["rivals"]:
+                _row(r.get("name", "?"), r.get("origin", ""),
+                     self._rival_label(r.get("score", 0)))
+        else:
+            _empty("No bad blood on record.")
 
     def _create_attribute_section(self, parent, title, attributes, row_start=0):
         """Creates a clean section of attributes with progress bars.
@@ -814,21 +1111,145 @@ class PlayerProfileWindow(tk.Toplevel):
             # Attribute name
             ttk.Label(row, text=attr_name, style='PlayerInfo.TLabel', width=18).pack(side='left')
 
-            # Value on 1-100 display scale
+            # Value on the native 1-100 display scale
             raw = getattr(self.player, attr_key, 10)
-            if attr_key == 'morale':
-                disp = max(1, min(100, int(round(float(raw) * 10))))
-            else:
-                disp = _to_100_scale(raw)
+            if raw is None and attr_key in ("offensive_positioning",
+                                           "defensive_positioning"):
+                # Old saves predate the positioning split: fall back to the
+                # single positioning, same as the engine does
+                # (mesh_system.offensive/defensive_positioning).
+                raw = getattr(self.player, "positioning", 10)
+            disp = _to_100_scale(raw)
 
             # Bar
-            bar = tk.Canvas(row, height=16, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar = tk.Canvas(row, height=16, bg=self.app.CONTENT_BG, highlightthickness=0)
             # Numeric value (pack right first so bar doesn't squeeze it out)
             ttk.Label(row, text=str(disp), style='PlayerValue.TLabel', width=4).pack(side='right', padx=(6, 0))
             bar.pack(side='left', fill='x', expand=True, padx=(6, 0))
             bar.bind('<Configure>', lambda e, c=bar, v=disp: self._draw_attr_bar(c, v))
             # Draw immediately too (in case Configure already fired)
             bar.after(10, lambda c=bar, v=disp: self._draw_attr_bar(c, v))
+
+    def _create_text_attribute_section(self, parent, title, items):
+        """A section of label/value rows for non-numeric attributes
+        (development arc, squad status, form readouts). Same two-column
+        rhythm as the bar sections."""
+        section_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        section_frame.pack(fill='x', padx=8, pady=4)
+
+        ttk.Label(section_frame, text=title, style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        cols_frame = ttk.Frame(section_frame, style='PlayerTab.TFrame')
+        cols_frame.pack(fill='x')
+        cols_frame.grid_columnconfigure(0, weight=1)
+        cols_frame.grid_columnconfigure(1, weight=1)
+
+        left_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        left_col.grid(row=0, column=0, sticky='nsew', padx=(0, 12))
+        right_col = ttk.Frame(cols_frame, style='PlayerTab.TFrame')
+        right_col.grid(row=0, column=1, sticky='nsew', padx=(12, 0))
+
+        for i, (label, value) in enumerate(items):
+            col = left_col if i % 2 == 0 else right_col
+            row = ttk.Frame(col, style='PlayerTab.TFrame')
+            row.pack(fill='x', pady=3)
+            ttk.Label(row, text=label, style='PlayerInfo.TLabel', width=18).pack(side='left')
+            ttk.Label(row, text=str(value), style='PlayerValue.TLabel').pack(side='left', padx=(6, 0))
+
+    def _ecosystem_development_rows(self):
+        """Text rows for the Development section (ecosystem-exclusive)."""
+        arc = getattr(self.player, "development_arc", "standard") or "standard"
+        arc_disp = arc.replace("_", " ").title()
+        grade = getattr(self.player, "potential_grade", "?") or "?"
+        return [("Development Arc", arc_disp), ("Potential Grade", grade)]
+
+    def _ecosystem_reputation_rows(self, is_goalie=False):
+        """Text rows for the Reputation & Personality section."""
+        rows = [("Squad Status", getattr(self.player, "squad_status", "Rotation") or "Rotation")]
+        # Ambition: what drives his contract decisions (cup/money/ice/...).
+        try:
+            import player_decision as _pd
+            _pd.ensure_decision_fields(self.player)
+            _amb = getattr(self.player, "ambition", "") or ""
+            _labels = {"cup": "Stanley Cup", "money": "Money",
+                       "ice_time": "Ice Time", "stability": "Stability",
+                       "home": "Hometown"}
+            if _amb in _labels:
+                rows.append(("Ambition", _labels[_amb]))
+        except Exception:
+            pass
+        if is_goalie:
+            temp = getattr(self.player, "goalie_temperament", "") or ""
+            if temp:
+                rows.append(("Temperament", temp.title()))
+        return rows
+
+    def _ecosystem_form_rows(self):
+        """Text rows for the Form & Chemistry section (ecosystem-exclusive)."""
+        try:
+            mf = float(getattr(self.player, "mesh_form", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            mf = 0.0
+        if mf >= 0.33:
+            form_disp = f"Hot (+{mf:.2f})"
+        elif mf >= 0.10:
+            form_disp = f"Warming (+{mf:.2f})"
+        elif mf <= -0.33:
+            form_disp = f"Cold ({mf:.2f})"
+        elif mf <= -0.10:
+            form_disp = f"Cooling ({mf:.2f})"
+        else:
+            form_disp = f"Neutral ({mf:+.2f})"
+        streak = getattr(self.player, "mesh_streak", 0) or 0
+        line_chem = getattr(self.player, "line_chemistry", 10) or 10
+        team_chem = getattr(self.player, "team_chemistry", 10) or 10
+        return [
+            ("Mesh Form", form_disp),
+            ("Mesh Streak", f"{streak} games"),
+            ("Line Chemistry", f"{line_chem}/20"),
+            ("Team Chemistry", f"{team_chem}/20"),
+        ]
+
+    def _create_ecosystem_attribute_sections(self, parent, is_goalie=False):
+        """Puck Dynasty-exclusive attribute sections, appended after the
+        EHM-style groups on the Attributes tab.
+
+        Personality-flavored sections (reputation, standing) live on the
+        Personality tab instead -- see _create_personality_sections.
+        """
+        # Development: coachability drives the assistant-coach dev bumps,
+        # the arc shapes each career's trajectory, the grade is the scout's read.
+        self._create_attribute_section(parent, "Development", [
+            ("Coachability", "coachability"),
+            ("Work Ethic", "work_ethic"),
+            ("Adaptability", "adaptability"),
+        ])
+        self._create_text_attribute_section(
+            parent, "Development Path", self._ecosystem_development_rows())
+
+        # Form & Chemistry: the perfect-mesh form tracker and chemistry reads.
+        self._create_text_attribute_section(
+            parent, "Form & Chemistry", self._ecosystem_form_rows())
+
+    def _create_personality_sections(self, parent, is_goalie=False):
+        """Reputation/personality sections shared by the Personality tab."""
+        # Loyalty + ambition (player_decision.py) seed lazily so old saves
+        # show real values, not blanks.
+        try:
+            import player_decision as _pd
+            _pd.ensure_decision_fields(self.player)
+        except Exception:
+            pass
+        # Reputation & Personality: the reputation ratchet, visible
+        # controversy (hotheads cost less in trades), happiness at the club.
+        self._create_attribute_section(parent, "Reputation & Personality", [
+            ("Reputation", "reputation"),
+            ("Controversy", "controversy"),
+            ("Happiness", "happiness"),
+            ("Loyalty", "loyalty"),
+        ])
+        self._create_text_attribute_section(
+            parent, "Standing", self._ecosystem_reputation_rows(is_goalie))
 
     def _create_skater_attributes(self, parent):
         """Creates attribute sections for skaters (non-goalies)."""
@@ -842,7 +1263,10 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Shooting Power", "shooting_power"),
             ("One Timer", "one_timer"),
             ("Backhand", "backhand"),
-            ("Deflections", "deflections")
+            ("Deflections", "deflections"),
+            # Positioning split (2026-09-28, per Muck): getting open,
+            # net-front spot wins, shot quality.
+            ("Offensive Positioning", "offensive_positioning"),
         ]
         self._create_attribute_section(parent, "Shooting & Scoring", technical_attrs)
         
@@ -868,17 +1292,26 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Balance", "balance"),
             ("Endurance", "endurance"),
             ("Stamina", "stamina"),
-            ("Deking", "deking")
         ]
-        self._create_attribute_section(parent, "Skating & Puck Skills", skating_attrs)
-        
-        # Add stickhandling and puck protection to skating section
+        self._create_attribute_section(parent, "Skating", skating_attrs)
+
+        # Puck Skills (previously defined but never displayed)
         puck_skills = [
             ("Stickhandling", "stickhandling"),
+            ("Deking", "deking"),
             ("Puck Protection", "puck_protection"),
             ("Off the Puck", "off_the_puck"),
-            ("Loose Puck", "loose_puck")
+            ("Loose Puck", "loose_puck"),
         ]
+        self._create_attribute_section(parent, "Puck Skills", puck_skills)
+
+        # Transition & Forecheck
+        transition_attrs = [
+            ("First Pass", "first_pass"),
+            ("Breakout Passes", "breakout_passes"),
+            ("Forechecking", "forechecking"),
+        ]
+        self._create_attribute_section(parent, "Transition & Forecheck", transition_attrs)
         
         # Defensive Attributes
         defensive_attrs = [
@@ -889,7 +1322,10 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Defensive Awareness", "defensive_awareness"),
             ("Aggressiveness", "aggressiveness"),
             ("Discipline", "discipline"),
-            ("Screen Shots", "screen_shots")
+            ("Screen Shots", "screen_shots"),
+            # Positioning split (2026-09-28, per Muck): gap control,
+            # box-outs, blocks, takeaways.
+            ("Defensive Positioning", "defensive_positioning")
         ]
         self._create_attribute_section(parent, "Defensive Skills", defensive_attrs)
         
@@ -906,6 +1342,13 @@ class PlayerProfileWindow(tk.Toplevel):
         ]
         self._create_attribute_section(parent, "Physical & Mental", physical_mental_attrs)
         
+        # Tendencies: 0-100, higher shoots/hits more
+        tendency_attrs = [
+            ("Shoot Tendency", "shoot_pass_tendency"),
+            ("Hitting Tendency", "hitting_tendency"),
+        ]
+        self._create_attribute_section(parent, "Tendencies", tendency_attrs)
+
         # Character & Consistency
         character_attrs = [
             ("Confidence", "confidence"),
@@ -919,13 +1362,14 @@ class PlayerProfileWindow(tk.Toplevel):
         ]
         self._create_attribute_section(parent, "Character & Mentality", character_attrs)
         
-        # Specialized Skills for centers
+        # Faceoffs: every skater takes draws; centers get the full read
+        faceoff_attrs = [("Faceoffs", "faceoffs")]
         if self.player.primary_position == PlayerPosition.CENTER:
-            specialized_attrs = [
-                ("Faceoffs", "faceoffs"),
-                ("Faceoff Wins", "faceoff_wins")
-            ]
-            self._create_attribute_section(parent, "Specialized Skills", specialized_attrs)
+            faceoff_attrs.append(("Faceoff Wins", "faceoff_wins"))
+        self._create_attribute_section(parent, "Faceoffs", faceoff_attrs)
+
+        # Puck Dynasty ecosystem exclusives
+        self._create_ecosystem_attribute_sections(parent, is_goalie=False)
 
     def _create_goalie_attributes(self, parent):
         """Creates attribute sections for goalies."""
@@ -978,13 +1422,16 @@ class PlayerProfileWindow(tk.Toplevel):
         ]
         self._create_attribute_section(parent, "Mental & Leadership", mental_attrs)
 
+        # Puck Dynasty ecosystem exclusives (incl. goalie temperament)
+        self._create_ecosystem_attribute_sections(parent, is_goalie=True)
+
     def _create_stats_tab(self):
         """Creates detailed statistics tab with career history and projections."""
         tab_frame = ttk.Frame(self.notebook, style='PlayerTab.TFrame')
         self.notebook.add(tab_frame, text='Statistics')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1120,7 +1567,7 @@ class PlayerProfileWindow(tk.Toplevel):
             }
         
         # Create the treeview
-        career_tree = self.parent._create_treeview(table_frame, columns)  # Remove fixed height
+        career_tree = self.app._create_treeview(table_frame, columns)  # Remove fixed height
         career_tree.pack(fill='x', pady=(0, 5))
         
         # Add sample career data (in a real game, this would come from saved statistics)
@@ -1142,53 +1589,176 @@ class PlayerProfileWindow(tk.Toplevel):
                 ))
 
     def _create_advanced_stats(self, parent):
-        """Creates advanced statistics section."""
-        advanced_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        """Per-player advanced analytics on the Statistics tab.
+
+        Mirrors the legacy card's deep dive: the same department-lens
+        metrics, the same honest ±CI labeling, the same as-of line.
+        The numbers YOUR club sees come through YOUR analytics
+        department -- modeled metrics carry the department's noise and
+        confidence intervals, observed box-score facts are exact.
+        """
+        import advanced_metrics as am
+        p = self.player
+        try:
+            is_goalie = "GOALIE" in str(p.primary_position).upper()
+        except Exception:
+            is_goalie = False
+
+        lens = None
+        try:
+            team = getattr(self.app, "user_team", None)
+            date_str = str(getattr(self.app, "current_date", "") or "")
+            if team is not None:
+                if is_goalie:
+                    lens = am.display_goalie_metrics(p, team, date_str)
+                else:
+                    lens = am.display_skater_metrics(p, team, date_str)
+        except Exception:
+            lens = None
+
+        def _val(field, fallback):
+            if lens is not None and field in lens.values:
+                return lens.values[field]
+            return fallback
+
+        def _with_ci(field, text, pct100=False):
+            if lens is not None and field in lens.ci:
+                ci = lens.ci[field]
+                if text.rstrip().endswith("%"):
+                    if pct100:
+                        return f"{text} ±{ci:.1f} pts"
+                    return f"{text} ±{ci * 100:.1f} pts"
+                return f"{text} ±{ci:.1f}"
+            return text
+
+        def _glossary_tip(event, text):
+            try:
+                tip = tk.Toplevel()
+                tip.wm_overrideredirect(True)
+                tip.geometry(f"+{event.x_root + 10}+{event.y_root + 10}")
+                tk.Label(tip, text=text, wraplength=280, justify="left",
+                         background="#ffffe0", relief="solid",
+                         borderwidth=1).pack()
+                event.widget.bind("<Leave>", lambda _e: tip.destroy(),
+                                  add="+")
+                tip.after(4000, tip.destroy)
+            except Exception:
+                pass
+
+        advanced_frame = ttk.Frame(parent, style='PlayerPanel.TFrame',
+                                   padding=10)
         advanced_frame.pack(fill='x', padx=5, pady=3)
-        
-        ttk.Label(advanced_frame, text="Advanced Statistics", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 5))
-        
-        # Advanced stats grid - 4 columns
-        advanced_grid = ttk.Frame(advanced_frame, style='PlayerTab.TFrame')
-        advanced_grid.pack(fill='x')
-        
-        if self.player.primary_position == PlayerPosition.GOALIE:
-            advanced_stats = [
-                ("High Danger SV%", "0.000"),
-                ("Medium Danger SV%", "0.000"),
-                ("Low Danger SV%", "0.000"),
-                ("Even Strength SV%", "0.000"),
-                ("Power Play SV%", "0.000"),
-                ("Short Handed SV%", "0.000"),
-                ("Goals Saved Above Avg", "0.0"),
-                ("Quality Start %", "0.0%")
-            ]
-        else:
-            advanced_stats = [
-                ("Corsi For %", "50.0%"),
-                ("Fenwick For %", "50.0%"),
-                ("PDO", "100.0"),
-                ("OZ Start %", "50.0%"),
-                ("TOI/Game", "0:00"),
-                ("Shots/Game", "0.0"),
-                ("Hits/Game", "0.0"),
-                ("Blocks/Game", "0.0")
-            ]
-        
-        # Display in 4-column layout
-        for i, (label, value) in enumerate(advanced_stats):
-            row = i // 4
-            col_base = (i % 4) * 2
-            
-            advanced_grid.grid_columnconfigure(col_base, weight=0)
-            advanced_grid.grid_columnconfigure(col_base+1, weight=1)
-            
-            ttk.Label(advanced_grid, text=f"{label}:", style='PlayerInfo.TLabel').grid(
-                row=row, column=col_base, sticky='w', padx=(2, 1), pady=1
-            )
-            ttk.Label(advanced_grid, text=value, style='PlayerValue.TLabel').grid(
-                row=row, column=col_base+1, sticky='w', padx=(1, 8), pady=1
-            )
+
+        ttk.Label(advanced_frame, text="Advanced Analytics",
+                  style='PlayerSubheader.TLabel').pack(anchor='w',
+                                                       pady=(0, 2))
+        if lens is not None:
+            lag = lens.lag_days
+            ttk.Label(
+                advanced_frame,
+                text=(f"{lens.tier}  •  models as of {lens.as_of} "
+                      f"(rebuilt every {lag} day{'s' if lag != 1 else ''})"),
+                style='PlayerInfo.TLabel').pack(anchor='w', pady=(0, 2))
+        ttk.Label(
+            advanced_frame,
+            text=("Estimates, not tracking data: modeled metrics show your "
+                  "department's confidence interval (±); observed box-score "
+                  "facts are exact. Hover ⓘ on any metric for what it is "
+                  "(and isn't)."),
+            style='PlayerInfo.TLabel',
+            wraplength=900).pack(anchor='w', pady=(0, 8))
+
+        def _section(title, rows):
+            ttk.Label(advanced_frame, text=title,
+                      style='PlayerSubheader.TLabel').pack(anchor='w',
+                                                           pady=(8, 4))
+            for label, value, tip in rows:
+                row = ttk.Frame(advanced_frame, style='PlayerTab.TFrame')
+                row.pack(fill='x', pady=1)
+                ttk.Label(row, text=label, style='PlayerInfo.TLabel',
+                          width=28).pack(side='left')
+                ttk.Label(row, text=value,
+                          style='PlayerValue.TLabel').pack(side='left')
+                if tip:
+                    dot = ttk.Label(row, text="ⓘ",
+                                    style='PlayerInfo.TLabel',
+                                    cursor="hand2")
+                    dot.pack(side='left', padx=6)
+                    dot.bind("<Enter>",
+                             lambda e, t=tip: _glossary_tip(e, t))
+
+        try:
+            if is_goalie:
+                m = am.goalie_advanced(p)
+                _section("Goaltending — Above Expected", [
+                    ("GSAx",
+                     _with_ci("gsax", f"{_val('gsax', m.gsax):+.1f}"),
+                     am.GLOSSARY.get("GSAx")),
+                    ("GSAA", f"{_val('gsaa', m.gsaa):+.1f}",
+                     am.GLOSSARY.get("GSAA")),
+                    ("High-danger SV%",
+                     _with_ci("hdsv_pct",
+                              f"{_val('hdsv_pct', m.hdsv_pct):.3f}"),
+                     am.GLOSSARY.get("HDSV%")),
+                    ("Quality-start %",
+                     _with_ci("qs_pct",
+                              f"{_val('qs_pct', m.qs_pct):.1%}"),
+                     am.GLOSSARY.get("QS%")),
+                ])
+                _section("Workload", [
+                    ("Save %", f"{_val('sv_pct', m.sv_pct):.3f}", None),
+                    ("GAA", f"{_val('gaa', m.gaa):.2f}", None),
+                    ("Shots against / 60",
+                     f"{_val('sa_per60', m.sa_per60):.1f}", None),
+                ])
+            else:
+                m = am.skater_advanced(p)
+                _section("Offense — Finishing & Creation", [
+                    ("Shooting %",
+                     f"{_val('sh_pct', m.sh_pct):.1f}%",
+                     am.GLOSSARY.get("SH%")),
+                    ("Individual xG",
+                     _with_ci("ixg", f"{_val('ixg', m.ixg):.1f}"),
+                     am.GLOSSARY.get("ixG")),
+                    ("Goals / 60",
+                     f"{_val('g_per60', m.g_per60):.2f}", None),
+                    ("Points / 60",
+                     f"{_val('p_per60', m.p_per60):.2f}",
+                     am.GLOSSARY.get("P/60")),
+                    ("Game Score",
+                     f"{_val('game_score', m.game_score):.1f}",
+                     am.GLOSSARY.get("Game Score")),
+                ])
+                _section("Possession — Driving Play", [
+                    ("Corsi %",
+                     _with_ci("cf_pct",
+                              f"{_val('cf_pct', m.cf_pct):.1f}%", True),
+                     am.GLOSSARY.get("CF%")),
+                    ("Fenwick %",
+                     _with_ci("ff_pct",
+                              f"{_val('ff_pct', m.ff_pct):.1f}%", True),
+                     am.GLOSSARY.get("FF%")),
+                    ("Expected-goal share",
+                     _with_ci("xgf_pct",
+                              f"{_val('xgf_pct', m.xgf_pct):.1f}%", True),
+                     am.GLOSSARY.get("xGF%")),
+                    ("Offensive-zone starts",
+                     _with_ci("oz_pct",
+                              f"{_val('oz_pct', m.oz_pct):.1f}%", True),
+                     am.GLOSSARY.get("OZ%")),
+                ])
+                _section("Defense & Luck", [
+                    ("PDO",
+                     _with_ci("pdo", f"{_val('pdo', m.pdo):.3f}"),
+                     am.GLOSSARY.get("PDO")),
+                    ("Hits", str(int(_val("hits", m.hits))), None),
+                    ("Blocked shots", str(int(_val("blocks", m.blocks))),
+                     None),
+                ])
+        except Exception as e:
+            ttk.Label(advanced_frame,
+                      text=f"Analytics unavailable ({e})",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
 
     def _create_performance_trends(self, parent):
         """Creates performance trends and notes section."""
@@ -1207,7 +1777,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Consistency", f"{_to_100_scale(self.player.consistency)}"),
             ("Big Game Player", f"{_to_100_scale(self.player.important_matches)}"),
             ("Injury History", "Clean" if self.player.injury_proneness < 50 else "Concerning"),
-            ("Morale", f"{self.player.morale}/20"),
+            ("Morale", f"{self.player.morale}/100"),
             ("Development", "Improving" if self.player.age < 25 else "Stable"),
             ("Work Rate", f"{_to_100_scale(self.player.work_rate)}"),
             ("Leadership", f"{_to_100_scale(self.player.leadership)}")
@@ -1232,9 +1802,9 @@ class PlayerProfileWindow(tk.Toplevel):
         notes_label.pack(anchor='w', pady=(10, 2))
         
         notes_text = tk.Text(trends_frame, width=80,  # Remove fixed height
-                           bg=self.parent.TITLE_BAR_COLOR, 
-                           fg=self.parent.TEXT_COLOR,
-                           font=(self.parent.FONT_FAMILY, 13),  # Increased from 9 to 13
+                           bg=self.app.TITLE_BAR_COLOR, 
+                           fg=self.app.TEXT_COLOR,
+                           font=(self.app.FONT_FAMILY, 13),  # Increased from 9 to 13
                            wrap='word')
         notes_text.pack(fill='x', pady=(0, 5))
         
@@ -1256,7 +1826,7 @@ class PlayerProfileWindow(tk.Toplevel):
         self.notebook.add(tab_frame, text='Contract')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1341,7 +1911,7 @@ class PlayerProfileWindow(tk.Toplevel):
             'status': ('Status', 60)
         }
         
-        breakdown_tree = self.parent._create_treeview(contract_frame, breakdown_columns)  # Remove fixed height
+        breakdown_tree = self.app._create_treeview(contract_frame, breakdown_columns)  # Remove fixed height
         breakdown_tree.pack(fill='x', pady=(0, 5))
         
         # Populate breakdown data
@@ -1377,7 +1947,7 @@ class PlayerProfileWindow(tk.Toplevel):
             'type': ('Type', 60)
         }
         
-        history_tree = self.parent._create_treeview(history_frame, history_columns)  # Remove fixed height
+        history_tree = self.app._create_treeview(history_frame, history_columns)  # Remove fixed height
         history_tree.pack(fill='x')
         
         # Sample contract history (in a real game, this would be tracked)
@@ -1534,7 +2104,7 @@ class PlayerProfileWindow(tk.Toplevel):
         self.notebook.add(tab_frame, text='Development')
         
         # Main container with scrollable content
-        canvas = tk.Canvas(tab_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(tab_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(tab_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='PlayerTab.TFrame')
         
@@ -1699,7 +2269,7 @@ class PlayerProfileWindow(tk.Toplevel):
             'notes': ('Notes', 150)
         }
         
-        history_tree = self.parent._create_treeview(history_frame, history_columns)  # Remove fixed height
+        history_tree = self.app._create_treeview(history_frame, history_columns)  # Remove fixed height
         history_tree.pack(fill='x')
         
         # Sample development history (in a real game, this would be tracked)
@@ -1779,7 +2349,7 @@ class PlayerProfileWindow(tk.Toplevel):
             'timeline': ('Timeline', 80)
         }
         
-        training_tree = self.parent._create_treeview(training_frame, training_columns)  # Remove fixed height
+        training_tree = self.app._create_treeview(training_frame, training_columns)  # Remove fixed height
         training_tree.pack(fill='x')
         
         # Populate training recommendations
@@ -1793,9 +2363,9 @@ class PlayerProfileWindow(tk.Toplevel):
         tips_label.pack(anchor='w', pady=(15, 5))
         
         tips_text = tk.Text(training_frame, width=80,  # Remove fixed height
-                          bg=self.parent.TITLE_BAR_COLOR,
-                          fg=self.parent.TEXT_COLOR,
-                          font=(self.parent.FONT_FAMILY, 13),  # Increased from 9 to 13
+                          bg=self.app.TITLE_BAR_COLOR,
+                          fg=self.app.TEXT_COLOR,
+                          font=(self.app.FONT_FAMILY, 13),  # Increased from 9 to 13
                           wrap='word')
         tips_text.pack(fill='x', pady=(0, 5))
         
@@ -1810,41 +2380,9 @@ class PlayerProfileWindow(tk.Toplevel):
         tips_text.insert('1.0', tips)
         tips_text.config(state='disabled')
 
-    # Enhanced content methods for the new three-column layout
-    def _create_enhanced_basic_info(self, parent, row=0):
-        """Creates enhanced basic player information section."""
-        info_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
-        info_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
-        
-        ttk.Label(info_frame, text="Personal Information", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
-        
-        # Create grid for organized information display
-        info_grid = ttk.Frame(info_frame, style='PlayerTab.TFrame')
-        info_grid.pack(fill='both', expand=True)
-        info_grid.grid_columnconfigure(0, weight=0)
-        info_grid.grid_columnconfigure(1, weight=1)
-        
-        # Personal details with better spacing
-        personal_info = [
-            ("Full Name:", self.player.full_name),
-            ("Date of Birth:", f"{getattr(self.player, 'birth_date', 'Unknown')}"),
-            ("Birthplace:", f"{getattr(self.player, 'birthplace', 'Canada')}"),
-            ("Nationality:", f"{getattr(self.player, 'nationality', 'Canadian')}"),
-            ("Height:", f"{getattr(self.player, 'height', '6ft 0in')}"),
-            ("Weight:", f"{getattr(self.player, 'weight', '180')} lbs"),
-            ("Shoots/Catches:", f"{getattr(self.player, 'handedness', 'Right')}"),
-            ("Draft Year:", f"{getattr(self.player, 'draft_year', 'Undrafted')}"),
-            ("Draft Position:", f"{getattr(self.player, 'draft_position', 'N/A')}"),
-            ("Years Pro:", f"{max(0, self.player.age - 18)} years"),
-        ]
-        
-        for i, (label, value) in enumerate(personal_info):
-            ttk.Label(info_grid, text=label, style='PlayerInfo.TLabel', anchor='w').grid(
-                row=i, column=0, sticky='w', padx=(0, 10), pady=3
-            )
-            ttk.Label(info_grid, text=str(value), style='PlayerInfo.TLabel', anchor='w').grid(
-                row=i, column=1, sticky='w', pady=3
-            )
+    # NOTE: _create_enhanced_basic_info was removed -- personal details now
+    # live on the Personality tab via _personal_details_items() /
+    # _create_personal_details_section().
 
     def _create_physical_attributes(self, parent, row=1):
         """Creates physical attributes section."""
@@ -1867,7 +2405,7 @@ class PlayerProfileWindow(tk.Toplevel):
             ("Acceleration", getattr(self.player, 'acceleration', 10)),
             ("Balance", getattr(self.player, 'balance', 10)),
             ("Stamina", getattr(self.player, 'stamina', 10)),
-            ("Durability", 20 - getattr(self.player, 'injury_proneness', 10)),
+            ("Durability", 100 - getattr(self.player, 'injury_proneness', 50)),
         ]
         
         for i, (label, value) in enumerate(physical_attrs):
@@ -1879,14 +2417,14 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_frame = ttk.Frame(phys_grid, style='PlayerTab.TFrame')
             bar_frame.grid(row=i, column=1, sticky='ew', padx=(0, 10), pady=3)
             
-            bar_canvas = tk.Canvas(bar_frame, width=120, height=16, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar_canvas = tk.Canvas(bar_frame, width=120, height=16, bg=self.app.CONTENT_BG, highlightthickness=0)
             bar_canvas.pack(fill='x')
             
             # Draw attribute bar
             bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 3, 5+bar_width, 13, fill=bar_color, outline=bar_color)
-            bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.parent.TEXT_COLOR, width=1)
+            bar_canvas.create_rectangle(3, 1, 117, 15, outline=self.app.TEXT_COLOR, width=1)
             
             ttk.Label(phys_grid, text=str(_to_100_scale(value)), style='PlayerInfo.TLabel', anchor='center', width=8).grid(
                 row=i, column=2, padx=(5, 0), pady=3
@@ -1907,9 +2445,9 @@ class PlayerProfileWindow(tk.Toplevel):
         # Health information
         injury_prone = getattr(self.player, 'injury_proneness', 50)
         durability = 100 - injury_prone
-
+        
         health_info = [
-            ("Injury Proneness:", f"{injury_prone}/100 ({'Low' if injury_prone <= 25 else 'Medium' if injury_prone <= 50 else 'High'})"),
+            ("Injury Proneness:", f"{injury_prone}/100 ({'Low' if injury_prone <= 25 else 'Medium' if injury_prone <= 55 else 'High'})"),
             ("Current Health:", "100%" if not getattr(self.player, 'is_injured', False) else "Injured"),
             ("Days Missed (Season):", f"{getattr(self.player, 'days_missed', 0)} days"),
             ("Career Games Missed:", f"{getattr(self.player, 'career_games_missed', 0)} games"),
@@ -1953,6 +2491,73 @@ class PlayerProfileWindow(tk.Toplevel):
             ttk.Label(career_grid, text=str(value), style='PlayerInfo.TLabel').grid(
                 row=i, column=1, sticky='w', pady=3
             )
+
+    def _create_accolades(self, parent, row=2):
+        """Permanent trophy case: grouped, de-duplicated award wins.
+
+        Format (Muck's spec):
+            Hart Trophy Winner: 2021, 2025
+            Stanley Cup Winner: 2021-22, 2022-23
+        """
+        acc_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        acc_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
+
+        ttk.Label(acc_frame, text="🏆 Accolades",
+                  style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        try:
+            import accolades as _acc
+            grouped = _acc.group_accolades(self.player)
+        except Exception:
+            grouped = []
+        if not grouped:
+            ttk.Label(acc_frame, text="No awards yet.",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
+            return
+        for label, years in grouped:
+            ttk.Label(acc_frame, text=f"{label} Winner: {', '.join(years)}",
+                      style='PlayerValue.TLabel').pack(anchor='w')
+
+    def _create_career_moments(self, parent, row=4):
+        """Signature single-game performances (hat tricks, shutouts,
+        40-save nights...). The game log that keeps a kid's huge night
+        from being forgotten when he's the next man up or a trade chip."""
+        moments_frame = ttk.Frame(parent, style='PlayerPanel.TFrame', padding=10)
+        moments_frame.grid(row=row, column=0, sticky='nsew', pady=(0, 5))
+
+        ttk.Label(moments_frame, text="Signature Games",
+                  style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
+
+        moments = getattr(self.player, 'career_moments', None) or []
+
+        # Repeat 1st-star nights collapse into one tally+dates row
+        # (stars.signature_game_rows); everything else renders one row per
+        # moment, newest first.
+        try:
+            from stars import signature_game_rows
+            rows = signature_game_rows(moments)
+        except Exception:
+            rows = []
+        if not rows:
+            ttk.Label(moments_frame, text="No signature games yet.",
+                      style='PlayerInfo.TLabel').pack(anchor='w')
+            return
+        shown = rows[:6]
+        for r in shown:
+            ttk.Label(moments_frame, text=r["line1"],
+                      style='PlayerValue.TLabel').pack(anchor='w')
+            if r["detail"]:
+                ttk.Label(moments_frame, text=f"    {r['detail']}",
+                          style='PlayerInfo.TLabel').pack(anchor='w')
+        consumed = sum(r["consumed"] for r in shown)
+        total = sum(r["consumed"] for r in rows)
+        if consumed < total:
+            remaining = total - consumed
+            ttk.Label(
+                moments_frame,
+                text=f"+ {remaining} more signature "
+                     f"{'game' if remaining == 1 else 'games'} on record.",
+                style='PlayerInfo.TLabel').pack(anchor='w', pady=(4, 0))
 
     def _create_enhanced_key_attributes(self, parent, row=0):
         """Creates enhanced key attributes section with visual bars."""
@@ -2000,14 +2605,14 @@ class PlayerProfileWindow(tk.Toplevel):
             bar_frame = ttk.Frame(attr_grid, style='PlayerTab.TFrame')
             bar_frame.grid(row=i, column=1, sticky='ew', padx=(0, 10), pady=3)
             
-            bar_canvas = tk.Canvas(bar_frame, width=120, height=20, bg=self.parent.CONTENT_BG, highlightthickness=0)
+            bar_canvas = tk.Canvas(bar_frame, width=120, height=20, bg=self.app.CONTENT_BG, highlightthickness=0)
             bar_canvas.pack(fill='x')
             
             # Draw enhanced attribute bar with gradient effect
             bar_width = int((min(value, 100) / 100) * 110)
             bar_color = self._get_rating_color(value)
             bar_canvas.create_rectangle(5, 4, 5+bar_width, 16, fill=bar_color, outline=bar_color)
-            bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.parent.TEXT_COLOR, width=1)
+            bar_canvas.create_rectangle(3, 2, 117, 18, outline=self.app.TEXT_COLOR, width=1)
             
             # Add value text
             style, text = self._get_attribute_style_and_text(value)
@@ -2194,8 +2799,8 @@ class PlayerProfileWindow(tk.Toplevel):
         ttk.Label(scout_frame, text="Scouting Report", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
         
         # Scouting report text area
-        report_text = tk.Text(scout_frame, height=8, width=30, bg=self.parent.CONTENT_BG, 
-                             fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 11),
+        report_text = tk.Text(scout_frame, height=8, width=30, bg=self.app.CONTENT_BG, 
+                             fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 11),
                              wrap='word', relief='sunken', borderwidth=1)
         report_text.pack(fill='both', expand=True)
         
@@ -2212,8 +2817,8 @@ class PlayerProfileWindow(tk.Toplevel):
         ttk.Label(notes_frame, text="Coaching Notes", style='PlayerSubheader.TLabel').pack(anchor='w', pady=(0, 8))
         
         # Coaching notes text area
-        notes_text = tk.Text(notes_frame, height=8, width=30, bg=self.parent.CONTENT_BG,
-                            fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 11),
+        notes_text = tk.Text(notes_frame, height=8, width=30, bg=self.app.CONTENT_BG,
+                            fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 11),
                             wrap='word', relief='sunken', borderwidth=1)
         notes_text.pack(fill='both', expand=True)
         
@@ -2568,8 +3173,8 @@ class PlayerProfileWindow(tk.Toplevel):
         ttk.Label(radar_frame, text="Performance Profile:", style='PlayerInfo.TLabel').pack(anchor='w')
         
         # Create a simple text-based radar chart
-        radar_canvas = tk.Canvas(radar_frame, width=250, height=120, bg=self.parent.CONTENT_BG, 
-                                highlightthickness=1, highlightcolor=self.parent.TEXT_COLOR)
+        radar_canvas = tk.Canvas(radar_frame, width=250, height=120, bg=self.app.CONTENT_BG, 
+                                highlightthickness=1, highlightcolor=self.app.TEXT_COLOR)
         radar_canvas.pack(pady=(5, 0))
         
         self._draw_performance_profile(radar_canvas)
@@ -2642,7 +3247,7 @@ class PlayerProfileWindow(tk.Toplevel):
 
     def _calculate_consistency_index(self):
         """Calculate consistency based on determination and discipline."""
-        consistency = (self.player.determination + self.player.discipline +
+        consistency = (self.player.determination + self.player.discipline + 
                       getattr(self.player, 'composure', 50)) / 3
         return min(10.0, max(1.0, consistency / 10.0))
 
@@ -2719,7 +3324,7 @@ class PlayerProfileWindow(tk.Toplevel):
             
             # Background bar
             canvas.create_rectangle(60, y, 60 + max_width, y + bar_height, 
-                                  fill=self.parent.TITLE_BAR_COLOR, outline=self.parent.TEXT_COLOR)
+                                  fill=self.app.TITLE_BAR_COLOR, outline=self.app.TEXT_COLOR)
             
             # Value bar
             bar_width = int((value / 20.0) * max_width)
@@ -2729,13 +3334,13 @@ class PlayerProfileWindow(tk.Toplevel):
             
             # Label and value
             canvas.create_text(55, y + bar_height/2, text=name, anchor='e', 
-                             fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9))
+                             fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
             canvas.create_text(65 + max_width, y + bar_height/2, text=str(value), anchor='w',
-                             fill=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 9, 'bold'))
+                             fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9, 'bold'))
                              
     def _create_simple_comparison(self, parent, row=4):
         """Creates a simple player comparison section."""
-        comp_frame = self.parent._create_panel(parent, "League Comparison", row, 0)
+        comp_frame = self.app._create_panel(parent, "League Comparison", row, 0)
         
         # Create a structured layout for the comparison
         comp_grid = ttk.Frame(comp_frame, style='PlayerTab.TFrame')
@@ -2808,7 +3413,7 @@ class PlayerProfileWindow(tk.Toplevel):
             
     def _create_league_standing(self, parent, row=5):
         """Creates a league standing and team context section."""
-        standing_frame = self.parent._create_panel(parent, "Team & League Context", row, 0)
+        standing_frame = self.app._create_panel(parent, "Team & League Context", row, 0)
         
         # Create a structured layout for the team context
         context_grid = ttk.Frame(standing_frame, style='PlayerTab.TFrame')
@@ -2867,3 +3472,39 @@ class PlayerProfileWindow(tk.Toplevel):
             potential = "Unknown"
         ttk.Label(context_grid, text="Potential:", style='PlayerInfo.TLabel').grid(row=row_idx, column=0, sticky='w', padx=(0, 10), pady=2)
         ttk.Label(context_grid, text=potential, style='PlayerValue.TLabel').grid(row=row_idx, column=1, sticky='w', pady=2)
+
+
+class PlayerProfileWindow(InGamePopup):
+    """Popup wrapper around PlayerProfileView (backward compatibility).
+
+    New code should embed PlayerProfileView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('player_profile',
+    f"Profile: {player.full_name}", PlayerProfileView, player)``
+    instead of opening this card.
+    """
+
+    def __init__(self, parent, player, is_scouted=False, report=None):
+        super().__init__(parent)
+        self.title(f"Profile: {player.full_name}")
+        # The profile view needs room: without an explicit size the card
+        # opens at the default 560x420 popup size and the content renders
+        # cramped/clipped. Match the modern card's footprint.
+        try:
+            self.geometry("980x760")
+        except Exception:
+            pass
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = PlayerProfileView(self, player, is_scouted, report,
+                                       app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

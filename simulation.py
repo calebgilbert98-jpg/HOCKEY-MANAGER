@@ -19,7 +19,7 @@ from player_archetypes import (
     get_archetype, complementarity, matchup_multiplier, get_tendency,
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
-from player_traits import get_sim_bonus as _trait_bonus, has_trait as _has_trait
+from player_traits import get_sim_bonus as _trait_bonus
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -267,12 +267,6 @@ class PressureLevel(Enum):
     HIGH = "high"                    # 61-80%
     INTENSE = "intense"              # 81-100%
 
-class ChemistryType(Enum):
-    EXCELLENT = "excellent"
-    GOOD = "good"
-    NEUTRAL = "neutral"
-    POOR = "poor"
-    TERRIBLE = "terrible"
 
 class LineRole(Enum):
     PRIMARY_SCORER = "primary_scorer"
@@ -287,22 +281,7 @@ class LineRole(Enum):
     PENALTY_KILLER = "penalty_killer"
     POWER_PLAY_SPECIALIST = "power_play_specialist"
 
-class CoachingStyle(Enum):
-    AGGRESSIVE = "aggressive"
-    DEFENSIVE = "defensive"
-    BALANCED = "balanced"
-    OFFENSIVE = "offensive"
-    PHYSICAL = "physical"
-    SPEED_GAME = "speed_game"
-    POSSESSION = "possession"
 
-class LineChemistry(Enum):
-    DOMINANT = "dominant"        # 95-100% chemistry
-    EXCELLENT = "excellent"     # 85-94% chemistry
-    GOOD = "good"              # 70-84% chemistry
-    AVERAGE = "average"        # 55-69% chemistry
-    POOR = "poor"             # 40-54% chemistry
-    DYSFUNCTIONAL = "dysfunctional"  # Below 40% chemistry
 
 class TacticalSystem(Enum):
     # Offensive Systems
@@ -333,15 +312,6 @@ class AnalyticsModel(Enum):
     MOMENTUM_TRACKING = "momentum_tracking"
     CLUTCH_FACTOR = "clutch_factor"
 
-class PredictionType(Enum):
-    SHOT_OUTCOME = "shot_outcome"
-    SCORING_CHANCE = "scoring_chance"
-    TURNOVER_RISK = "turnover_risk"
-    PENALTY_LIKELIHOOD = "penalty_likelihood"
-    LINE_CHANGE_OPTIMAL = "line_change_optimal"
-    GOALIE_PULL_TIMING = "goalie_pull_timing"
-    FORMATION_COUNTER = "formation_counter"
-    MOMENTUM_SHIFT = "momentum_shift"
 
 class PerformanceMetric(Enum):
     GOALS_ABOVE_EXPECTED = "goals_above_expected"
@@ -363,12 +333,6 @@ class TrendDirection(Enum):
     BREAKOUT_CANDIDATE = "breakout_candidate"
     REGRESSION_CANDIDATE = "regression_candidate"
 
-class AnalyticsLevel(Enum):
-    BASIC = "basic"           # Traditional stats
-    INTERMEDIATE = "intermediate"  # Shot attempts, zone time
-    ADVANCED = "advanced"     # Expected goals, WAR
-    ELITE = "elite"          # Machine learning models
-    PROPRIETARY = "proprietary"  # Custom algorithms
 
 
 # ---------------------------------------------------------------------------
@@ -405,10 +369,21 @@ DEFENSEMEN_POSITIONS = (PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENS
                         PlayerPosition.DEFENSE)
 
 
-def _draw_infraction():
-    """Draw a (name, minutes, detail) infraction with NHL-realistic lengths."""
+def _draw_infraction(fight_mult: float = 1.0, scrum_mult: float = 1.0,
+                     play_mult: float = 1.0):
+    """Draw a (name, minutes, detail) infraction with NHL-realistic lengths.
+
+    fight_mult scales the Fighting weight (tension meter, coach orders);
+    scrum_mult scales post-whistle minors (Roughing, Unsportsmanlike) -- the
+    playoffs swallow the whistle on retaliation; play_mult scales every other
+    infraction (early-series desperation bump, fading late). All default to
+    1.0, which reproduces the original draw exactly."""
     names = [n for n, _, _, _ in INFRACTIONS]
-    name = random.choices(names, weights=_INFRACTION_WEIGHTS, k=1)[0]
+    weights = [w * (fight_mult if n == "Fighting"
+                    else scrum_mult if n in ("Roughing", "Unsportsmanlike conduct")
+                    else play_mult)
+               for n, w, _, _ in INFRACTIONS]
+    name = random.choices(names, weights=weights, k=1)[0]
     base = next(b for n, _, b, _ in INFRACTIONS if n == name)
     upgrade = next(u for n, _, _, u in INFRACTIONS if n == name)
     minutes = base
@@ -420,15 +395,15 @@ def _draw_infraction():
     return name, minutes, detail
 
 # ---------------------------------------------------------------------------
-# Scoring level (user setting): Low = current tuning (~5.5 gpg),
-# Medium = NHL baseline (~6.0 gpg), High = arcade (~7+ gpg).
-# Applied as a multiplier on per-shot goal probability.
+# Scoring level (user setting): Low = current tuning, Medium = NHL baseline,
+# High = arcade. Applied as a multiplier on per-shot goal probability.
+#
+# Recalibrated after the tactics rework (team-by-team shot volume), which
+# re-anchored scoring to the 2.70-3.60 GPG design band: a 128-game GameSim
+# sample measured 29.3 SOG/team and 3.36 GPG at multiplier 1.00
+# (docs/TACTICS_REWORK_GUIDE.md). The old paired-batch figures
+# (1.00 -> 4.92 gpg etc.) predated that rework and are obsolete.
 # ---------------------------------------------------------------------------
-
-# Calibrated multipliers (goal probability scale). Paired 50-game batches
-# (identical random streams): 1.00 -> 4.92 gpg, 1.09 -> 5.58 (+13%),
-# 1.30 -> 6.72 (+37%). Against the real-league ~5.5 gpg baseline that is
-# ~5.5 / ~6.2 / ~7.5 gpg: NHL baseline and 7+ arcade.
 _SCORING_MULTIPLIERS = {
     "low": 1.00,
     "medium": 1.09,
@@ -484,7 +459,9 @@ class GameSim:
     Stage 4: Physical play mechanics, defensive systems, and turnover tracking.
     Stage 5: Advanced goaltending mechanics, save types, and positioning systems.
     """
-    def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False):
+    def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
+                 rivalries=None, series_game: int = 1, crowd_hype: float = 0.0,
+                 atmosphere=None):
         self.home_team = home_team
         self.away_team = away_team
         # F3 dressing-room dynamics: each team gets a people-sim.
@@ -494,14 +471,138 @@ class GameSim:
         else:
             self.home_room = self.away_room = None
         self.is_playoff = is_playoff
+        # Suspended players can't dress: scrub them from both dressed
+        # lineups (best-available skater takes the slot). The quick and
+        # lightweight paths filter at selection time; the detailed sim
+        # reads team.lineup directly, so the lineup itself is cleaned.
+        try:
+            from narrative_incidents import _scrub_suspended_from_lineup
+            _scrub_suspended_from_lineup(home_team)
+            _scrub_suspended_from_lineup(away_team)
+        except Exception:
+            pass
+        # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
+        # team_name) for the analytics_hub / advanced_stats_analytics
+        # line-combination views. Attached to the analytics game record
+        # at game end.
+        self.assist_pairs = deque(maxlen=4000)
+        self.rivalries = rivalries if rivalries is not None else []
+        # Installed NHL systems: every team skates an identity.
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+            # New voice behind either bench? He installs his systems
+            # (AI teams get customized tactics too).
+            _tx.maybe_install_coach_systems(home_team)
+            _tx.maybe_install_coach_systems(away_team)
+        except Exception:
+            pass
+        self.series_game = series_game
+        # --- Crowd (arena_atmosphere; additive) --------------------------------
+        # The building is a two-sided factor: loud raises everyone's pulse
+        # (via the tension channel below), and the mood moves finishing
+        # through the impact-tier ctx. Live: goals swing it in _handle_goal.
+        self._crowd_energy = 50.0
+        self._crowd_mood = 30.0        # home perspective
+        # Crowd finishing edge (divergence #9): the same crowd_effects
+        # decision quick-sim applies on shot_chance -- clamped [0.97, 1.03],
+        # a factor, never the game. Applied on xG in _resolve_shot_on_goal.
+        self._crowd_home_mult = 1.0
+        self._crowd_away_mult = 1.0
+        # Readable momentum (momentum.py): rolling event log; read-only for
+        # the visualizer, risk-only for AI decisions. Never touches conversion.
+        self._momentum_events = []
+        # Matchup chance attribution: (home_line, away_line) -> chances/goals.
+        self._matchup_chances = {}
+        try:
+            if isinstance(atmosphere, dict):
+                self._crowd_energy = float(atmosphere.get("energy", 50.0))
+                self._crowd_mood = float(atmosphere.get("mood", 30.0))
+            from arena_atmosphere import crowd_effects as _ce, roster_avg_age as _raa
+            _hm, _am = _ce(self._crowd_energy, self._crowd_mood,
+                           away_avg_age=_raa(self.away_team))
+            self._crowd_home_mult = _hm
+            self._crowd_away_mult = _am
+        except Exception:
+            pass
+        # --- Tension / punishment / brawl state (additive; inert when unused) ---
+        # Base tension comes from the same breakdown the visualizer's meter
+        # uses, so the engine and the meter agree on how heated this game is.
+        # Crowd hype feeds it: an electric barn raises everyone's pulse.
+        self._tension_base = 10.0
+        self._live_heat = 0.0          # in-game: fights +6, majors +4, brawls +10
+        self._brawl_happened = False   # at most one line brawl per game
+        self._in_brawl = False         # recursion guard while booking brawl fights
+        self._opening_brawl = None     # team_name if a premeditated opening-draw
+                                       # brawl is scripted (see _evaluate_punishment_orders)
+        self._retaliation_mod = 1.0
+        # --- Impact-tier engine (additive; inert when unused) ---
+        # Coach instructions keyed by team name (e.g. "play_harder").
+        # Derived automatically from coach makeup + game state when unset;
+        # the game-day bundle / team talk can set one explicitly.
+        self._coach_instructions = {}
+        self._punishment_orders = {}   # team_name -> order_punishment() dict
+        self._home_coach = None
+        self._away_coach = None
+        self._tactics_tweaks = set()  # team names that already adjusted tonight
+        try:
+            from reputation_system import game_tension_breakdown
+            bd = game_tension_breakdown(home_team, away_team,
+                                        rivalries=self.rivalries,
+                                        is_playoff=is_playoff,
+                                        series_game=series_game,
+                                        crowd_hype=crowd_hype)
+            self._tension_base = float(bd.get("tension", 10.0))
+        except Exception:
+            pass
+        try:
+            self._home_coach = self._find_head_coach(home_team)
+            self._away_coach = self._find_head_coach(away_team)
+        except Exception:
+            pass
+        # --- Situations factor: computed after log fields exist (it may log
+        # its pre-game story line). Set in _init_situations().
         self.home_score = 0
         self.away_score = 0
         self.period = 1
         self.clock = 1200  # 20 minutes in seconds
         self._period_length = 1200  # for event_log elapsed timestamps
+        # Log/listener fields must exist before pre-game punishment orders,
+        # which announce themselves via _log_event/_emit_pbp.
         self.game_log = []
         self.notable_events = []
         self.event_log = []  # Structured event dicts (GOAL_ADVANCED, SAVE_ADVANCED, ...)
+        self.pbp_listeners = []
+        # Parity engine: per-game multiplier cache (computed once, lazily).
+        # Set in _parity_factor(); None until the first shot of the game.
+        self._parity_mult = None
+        # Headline specs for the lore system (drained by the caller after the
+        # game via headlines.drain_sim_headlines). Brawls are rare enough
+        # that one list-append per game is the entire overhead.
+        self.pending_headlines = []
+        # Pre-game punishment orders need score/period fields set first.
+        self._init_situations()
+        self._evaluate_punishment_orders()
+        # Hostile homecomings: first game back in the old barn after a
+        # perceived betrayal. The building is rowdy -- crowd energy and mood
+        # carry it (the designed channel: mood moves finishing), and the
+        # tension breakdown above already added the driver. One night only.
+        try:
+            import reputation_system as _rs_hc
+            for _hit in _rs_hc.consume_homecomings(
+                    self.rivalries, self.home_team, self.away_team):
+                _pname = getattr(_hit["player"], "full_name",
+                                 "The returnee").strip() or "The returnee"
+                _barn = getattr(self.home_team, "team_name", "the old barn")
+                self._log_event(
+                    f"Pregame -- {_pname} returns to {_barn} for the first "
+                    f"time since the betrayal. Expect a hostile reception.",
+                    "SITUATION")
+                self._crowd_energy = min(100.0, self._crowd_energy + 15.0)
+                self._crowd_mood = min(100.0, self._crowd_mood + 10.0)
+        except Exception:
+            pass
 
         # Recent shooters: keeps one sniper from monopolizing every shot.
         # After you shoot, the puck moves on -- someone else shoots next.
@@ -509,7 +610,7 @@ class GameSim:
 
         # Play-by-play visualizer hooks (additive; zero overhead when unused).
         # Listeners are callables receiving one event dict each.
-        self.pbp_listeners = []
+        # (pbp_listeners is initialized earlier, before pre-game orders.)
         # Live-PBP tick buffer: while a tick runs, _emit_pbp stashes events
         # here instead of dispatching immediately. At tick end
         # _spread_tick_timestamps stamps each buffered event with its own
@@ -575,34 +676,11 @@ class GameSim:
         
         # Stage 2: Fatigue tracking
         self.player_fatigue = {}
-
-        # Phase 1 shift engine (EHM-style per-unit shifts): each team's
-        # forward lines, D pairs, and special-teams units run their own
-        # shift clocks instead of sharing one global clock grid.
-        # _shift[team_name] = {'F': {'line': int, 'start': float},
-        #                      'D': {'pair': int, 'start': float},
-        #                      'PP': {'unit': int, 'start': float},
-        #                      'PK': {'unit': int, 'start': float}}
-        # 'start' is in cumulative game seconds (self._game_elapsed).
-        self._shift = {}
-        self._game_elapsed = 0.0
-        self.shift_log = []       # completed-shift records (TOI accounting)
-        self.player_toi = {}      # player_id -> seconds on ice this game
-        # EHM Work Rate: shift-to-shift consistency. Rolled once per game:
-        # high-work-rate players are steady, low-work-rate stars drift in
-        # and out. Applied as a small multiplier on decision quality.
-        self._game_effort = {}
-        for _tm in (home_team, away_team):
-            for _p in _tm.roster:
-                _wr = getattr(_p, 'work_rate', 50)
-                if _wr >= 80:
-                    _lo, _hi = 0.95, 1.05   # metronome
-                elif _wr >= 60:
-                    _lo, _hi = 0.85, 1.10   # normal variance
-                else:
-                    _lo, _hi = 0.70, 1.20   # streaky: invisible or dominant
-                self._game_effort[_p.id] = random.uniform(_lo, _hi)
-        self.player_shifts = {}   # player_id -> shifts taken this game
+        self.line_change_timer = 0
+        # Real shift engine: per-team shift state (see shift_engine.py).
+        # Initialized lazily by shift_engine.get_shift_state; the dict just
+        # needs to exist before the first _get_on_ice call.
+        self._shift_states = {}
         
         # Stage 3: Special situations and faceoffs
         self.current_situation = SpecialSituation.EVEN_STRENGTH
@@ -619,6 +697,11 @@ class GameSim:
         # Stage 5: Goaltending systems
         self.goaltender_fatigue = {}  # Track goalie fatigue
         self.goaltender_positioning = {}  # Track goalie positioning
+        # Goalie personality: per-goalie, per-game state (bounce-back clock,
+        # tilt, unorthodox swing) + remaining puck-handling turnovers.
+        # See goalie_personality.py.
+        self.goalie_personality_state = {}
+        self.goalie_turnovers_left = {}
         self.expected_goals = {}  # team_name -> xG; track expected goals for GSAx calculation
         self.save_quality_tracking = {}  # Track save difficulty and quality
         
@@ -634,6 +717,8 @@ class GameSim:
         
         # Stage 7: Micro-events and game flow
         self.momentum = GameMomentum.NEUTRAL  # Current game momentum
+        self.shot_log = []  # Module 04: per-shot analytics records
+        self.zone_entry_log = []  # Module 04: per-entry records
         self.game_flow = GameFlow.NORMAL  # Current pace of play
         self.pressure_level = PressureLevel.MODERATE  # Current pressure level
         self.situational_context = SituationalContext.GAME_OPENING
@@ -711,6 +796,9 @@ class GameSim:
             # Physical play (Stage 4)
             'hits': 0,
             'hits_taken': 0,
+            # Chance grades (2026-09-28, per Muck): xG backbone
+            'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+            'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
             'takeaways': 0,
             'giveaways': 0,
             'blocked_shots_by': 0,  # Shots blocked by this player
@@ -820,6 +908,14 @@ class GameSim:
             if player.primary_position == PlayerPosition.GOALIE:
                 self.goaltender_fatigue[player.id] = 100  # Start at 100% energy
                 self.goaltender_positioning[player.id] = GoaltenderPosition.IN_NET
+                # Goalie personality: fresh per-game state + puck-handling
+                # turnover budget (bad puck-handlers gift high-danger chances).
+                try:
+                    import goalie_personality as _gp0
+                    self.goalie_personality_state[player.id] = _gp0.new_game_state()
+                    self.goalie_turnovers_left[player.id] = _gp0.roll_turnovers(player)
+                except Exception:
+                    pass
                 self.save_quality_tracking[player.id] = {
                     'total_expected_goals_against': 0.0,
                     'actual_goals_against': 0,
@@ -864,6 +960,9 @@ class GameSim:
                 # Stage 4 stats
                 'hits': 0,
                 'hits_against': 0,
+                # Chance grades (2026-09-28, per Muck): xG backbone
+                'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+                'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
                 'takeaways': 0,
                 'giveaways': 0,
                 'turnovers_forced': 0,
@@ -990,6 +1089,9 @@ class GameSim:
                 # Stage 4 stats
                 'hits': 0,
                 'hits_against': 0,
+                # Chance grades (2026-09-28, per Muck): xG backbone
+                'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+                'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
                 'takeaways': 0,
                 'giveaways': 0,
                 'turnovers_forced': 0,
@@ -1950,6 +2052,10 @@ class GameSim:
         active_players = self.home_on_ice + self.away_on_ice
         
         for player in active_players:
+            # Degenerate rosters (no dressed goalie -> throwaway "Default Goalie"
+            # not present in either roster) must degrade, never crash the sim.
+            if player.id not in self.game_stats:
+                continue
             # Update development predictions
             self._predict_player_development(player)
             
@@ -2031,6 +2137,20 @@ class GameSim:
         self._emit_pbp("game_start",
                        home_team=self.home_team.team_name,
                        away_team=self.away_team.team_name)
+        # Premeditated line brawl: both teams knew this was coming before
+        # the puck dropped. Two seconds in, gloves everywhere.
+        if getattr(self, "_opening_brawl", None):
+            try:
+                self._run_brawl("the opening faceoff")
+            except Exception:
+                pass
+
+        # Dressing-room talks (module 03): pre-game words move the
+        # first-period momentum needle.
+        try:
+            self._apply_dressing_room_pregame()
+        except Exception:
+            pass
 
         for p in range(1, 4):
             self.period = p
@@ -2038,6 +2158,15 @@ class GameSim:
             self._period_length = 1200
             self._emit_pbp("period_start", period=p)
             if p == 3:
+                # Intermission talks (module 03): second-break words move
+                # the third-period momentum needle.
+                try:
+                    self._apply_dressing_room_intermission()
+                except Exception:
+                    pass
+                # The Maurice spot develops mid-game: a coach getting run out
+                # of the building may send his guys out now.
+                self._reevaluate_punishment_orders()
                 # a perfect goalie through 40:00 is a broadcast storyline
                 try:
                     if self.away_score == 0:
@@ -2055,6 +2184,9 @@ class GameSim:
             self._simulate_period()
             self._log_event(f"End of Period {self.period}. Score: {self.home_score}-{self.away_score}", "PERIOD_END")
             self._emit_pbp("period_end", period=p)
+            if p in (1, 2):
+                # Coaches who own the whiteboard adjust between periods.
+                self._ai_tactics_intermission()
 
         if self.home_score == self.away_score:
             self._handle_overtime()
@@ -2128,6 +2260,34 @@ class GameSim:
             except Exception:
                 pass
 
+        # Defensive record: the shared attribute-driven roll, so a watched
+        # game produces the same statistical distribution as every other
+        # sim path (shutdown defensemen need a season trail for the
+        # potential evaluator, not just points).
+        try:
+            from game_classes import roll_defensive_game_stats as _rdg
+            _seen_ids = set()
+            for stats in self.game_stats.values():
+                player = stats.get('player')
+                if player is None:
+                    continue
+                try:
+                    _pid = getattr(player, 'id', None)
+                    if _pid in _seen_ids:
+                        continue
+                    _seen_ids.add(_pid)
+                    if getattr(getattr(player, 'primary_position', None),
+                               'value', '') == 'G':
+                        continue
+                    _h, _t, _b = _rdg(player)
+                    player.stats.hits += _h
+                    player.stats.takeaways += _t
+                    player.stats.blocked_shots += _b
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         # Flush per-game goalie stats into season stats so saves / shots
         # against / goals against accumulate on every GameSim path.
         for stats in self.game_stats.values():
@@ -2178,7 +2338,35 @@ class GameSim:
         self._emit_pbp("game_end", winner=winner.team_name,
                        home_score=self.home_score, away_score=self.away_score)
 
-        self._sync_final_team_stats()
+        # -- Perfect mesh: feed finished-game lines into the form tracker
+        # (moments -> streaks -> breakouts). Additive; touches no stat flow.
+        try:
+            from mesh_system import record_performance as _rec
+            _is_po = bool(getattr(self, "is_playoff", False))
+            for _stats in self.game_stats.values():
+                _pl = _stats.get('player')
+                if _pl is None:
+                    continue
+                _note = _rec(_pl, _stats.get('g', 0), _stats.get('a', 0),
+                             is_playoff=_is_po)
+                if _note:
+                    self.notable_events.append({'player': _pl, 'event': _note})
+        except Exception:
+            pass
+
+        # -- Parity engine: feed the finished result into cross-game team
+        # form (streaks carried across games) and the season table that
+        # drives target-on-back / trap-game compression. Additive; never
+        # touches stat flow.
+        try:
+            import parity_engine as _pe2
+            _pe2.record_result(
+                self.home_team, self.away_team,
+                self.home_score > self.away_score,
+                went_ot=self.period > 3)
+        except Exception:
+            pass
+
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
@@ -2219,7 +2407,63 @@ class GameSim:
             log_game(self)
         except Exception:
             pass
+        # Module 04: persist per-game analytics records (never raises).
+        try:
+            self._persist_analytics()
+        except Exception:
+            pass
     
+    def _apply_dressing_room_pregame(self):
+        """Module 03: pre-game talks move the first-period momentum needle.
+
+        Additive and safe: impact_system.nudge_momentum caps the swing.
+        """
+        try:
+            import dressing_room as _dr
+            _dr.apply_pregame_talks(self)
+            _dr.apply_practice_edge(self)
+        except Exception:
+            pass
+
+    def _apply_dressing_room_intermission(self):
+        """Module 03: intermission talks move the third-period needle."""
+        try:
+            import dressing_room as _dr
+            _dr.apply_intermission_talk(self)
+        except Exception:
+            pass
+
+    def _ai_tactics_intermission(self):
+        """Between periods, a coach in control may tweak his systems.
+
+        Personality-gated (adaptability, style, score state), once per team
+        per game. Changes apply mid-game with a soft familiarity hit and
+        are announced on the broadcast feed.
+        """
+        try:
+            import tactics as _tx
+            pairs = ((self.home_team, self.home_score - self.away_score),
+                     (self.away_team, self.away_score - self.home_score))
+            for team, diff in pairs:
+                tname = getattr(team, "team_name", "")
+                if tname in self._tactics_tweaks:
+                    continue
+                tw = _tx.ai_intermission_adjustment(team, diff)
+                if not tw:
+                    continue
+                self._tactics_tweaks.add(tname)
+                _tx.set_team_system(team, tw["category"], tw["new_key"],
+                                    mid_game=True)
+                line = tw.get("line", "")
+                if line:
+                    self._log_event(line, "TACTICS")
+                    try:
+                        self._emit_pbp("tactics_change", team=tname, text=line)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def simulate_game(self):
         """Compatibility wrapper for playoff_system.py.
         
@@ -2252,18 +2496,11 @@ class GameSim:
 
         while self.clock > 0:
             time_elapsed = random.randint(8, 20)  # Slightly faster pace
-            # Never tick past 0:00: clamp the final tick so no event
-            # resolves with negative time on the clock.
-            time_elapsed = min(time_elapsed, self.clock)
             tick_start_clock = self.clock
             self.clock -= time_elapsed
             self._game_elapsed += time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
-            _pt = self.possession_team
-            if _pt is not None:
-                _ptn = _pt.team_name
-                self._team_poss_time[_ptn] = self._team_poss_time.get(_ptn, 0.0) + time_elapsed
             # Tick-local log indices: used below to spread this tick's
             # elapsed game time across the events logged during the tick,
             # so sequential plays get distinct chronological timestamps.
@@ -2286,6 +2523,13 @@ class GameSim:
                         "GOAL",
                     )
                     break
+            # -- Controversy engine (additive): uncalled incidents and
+            #    pot-stirring. Internally gated to ~1 roll each per period.
+            try:
+                from controversy_system import period_controversy_tick
+                period_controversy_tick(self)
+            except Exception:
+                pass
             
             # Update fatigue and check for line changes
             self._update_fatigue(time_elapsed)
@@ -2364,7 +2608,7 @@ class GameSim:
             return self._resolve_loose_puck_battle()
 
         attacking_team = self.possession_team
-        defending_team = self.away_team if attacking_team == self.home_team else self.home_team
+        defending_team = self.away_team if attacking_team is self.home_team else self.home_team
 
         # Background obstruction penalties: hooking/holding/interference away
         # from the puck happen all game in real hockey, not just on hits.
@@ -2426,6 +2670,12 @@ class GameSim:
         # Decide on zone entry attempt
         entry_type = self._determine_zone_entry_type(puck_carrier, defending_skaters, fatigue_factor)
         
+        try:
+            from momentum import observe as _mom_observe3
+            if entry_type in (ZoneEntryType.CONTROLLED_CARRY, ZoneEntryType.PASS_IN):
+                _mom_observe3(self, "oz_entry", attacking_team)
+        except Exception:
+            pass
         if entry_type == ZoneEntryType.CONTROLLED_CARRY:
             return self._attempt_controlled_entry(puck_carrier, attacking_team, defending_team)
         elif entry_type == ZoneEntryType.DUMP_IN:
@@ -2630,441 +2880,63 @@ class GameSim:
                 self.game_stats[player.id]['time_on_ice'] = \
                     self.game_stats[player.id].get('time_on_ice', 0) + time_elapsed
 
-        # Bench recovery (G3): benched skaters regain energy; goalies exempt.
-        for team in (self.home_team, self.away_team):
-            for p in team.roster:
-                if p.id in on_ice_ids:
-                    continue
-                if p.primary_position == PlayerPosition.GOALIE:
-                    continue
-                cur = self.player_fatigue.get(p.id, 100)
-                if cur < 100:
-                    self.player_fatigue[p.id] = min(100, cur + 0.45 * time_elapsed)
+    def _should_change_lines(self):
+        """Determine if lines should be changed based on shift state.
 
-    # ------------------------------------------------------------------
-    # Phase 1 shift engine: per-unit shift clocks, stamina-gated changes,
-    # bench recovery, and shift/TOI accounting.
-    # ------------------------------------------------------------------
-    def _flatten_nested_lineup(self, team, lineup):
-        """Flatten a nested-only lineup into flat keys. Returns True if a
-        usable nested lineup was found and flattened (preserving the user's
-        choices); False if there is nothing to flatten.
+        Real shift engine (shift_engine.py): evaluates on-the-fly change
+        conditions per team (shift age, puck safety, staggered F/D). If any
+        unit changes, returns True so the caller refreshes on-ice units.
         """
-        found = False
-        # Forwards: [['LW','C','RW'], ...] -> F1_LW..F4_RW
-        fw = lineup.get('Forwards')
-        if isinstance(fw, (list, tuple)) and fw:
-            for i, line in enumerate(fw[:4]):
-                if not isinstance(line, (list, tuple)):
-                    continue
-                for key, p in zip(('LW', 'C', 'RW'), line):
-                    if p is not None:
-                        lineup[f"F{i + 1}_{key}"] = p
-                        found = True
-        # Defense: [[L, R], ...] -> D1_L..D3_R
-        dp = lineup.get('Defense')
-        if isinstance(dp, (list, tuple)) and dp:
-            for i, pair in enumerate(dp[:3]):
-                if not isinstance(pair, (list, tuple)):
-                    continue
-                if len(pair) > 0 and pair[0] is not None:
-                    lineup[f"D{i + 1}_L"] = pair[0]
-                    found = True
-                if len(pair) > 1 and pair[1] is not None:
-                    lineup[f"D{i + 1}_R"] = pair[1]
-                    found = True
-        # Goalies: [G1, G2] -> G1, G2
-        gl = lineup.get('Goalies') or lineup.get('Goaltenders')
-        if isinstance(gl, (list, tuple)) and gl:
-            for i, g in enumerate(gl[:2]):
-                if g is not None:
-                    lineup[f"G{i + 1}"] = g
-                    found = True
-        return found
+        self.line_change_timer += 1
+        try:
+            from shift_engine import (
+                get_shift_state, should_change_on_fly, change_lines,
+                emit_line_change_event,
+            )
+            changed = False
+            for team in (self.home_team, self.away_team):
+                st = get_shift_state(self, team)
+                change_f, change_d = should_change_on_fly(self, team, st)
+                # Hard cap: no shift beyond 60s without a whistle. Force
+                # the change even if the puck isn't safe (tired legs).
+                clock = getattr(self, "clock", 0)
+                if st.f_age(clock) >= 50:
+                    change_f = True
+                if st.d_age(clock) >= 50:
+                    change_d = True
+                if change_f or change_d:
+                    info = change_lines(self, team, st,
+                                        change_f=change_f, change_d=change_d,
+                                        reason="on_the_fly")
+                    emit_line_change_event(self, team, info)
+                    changed = True
+            # Legacy safety net: if the shift engine didn't change anything
+            # for a long time (e.g. disabled), force a rotation.
+            if not changed and self.line_change_timer > 90:
+                return True
+            return changed
+        except Exception:
+            pass
 
-    def _ensure_default_lineup(self, team):
-        """Dress best-available lines when a team arrives with no lineup.
-
-        Writes the flat keys GameSim._get_on_ice reads (F1_LW..F4_RW,
-        D1_L..D3_R, G1..G2) plus nested PP1/PP2/PK1/PK2 units. Never
-        overwrites an existing user/editor lineup.
-        """
-        lineup = getattr(team, 'lineup', None)
-        if lineup is None:
-            lineup = {}
-            team.lineup = lineup
-        if any(k in lineup for k in ("F1_C", "D1_L", "G1")):
-            return  # a real lineup is already dressed
-        # Nested-only editor/user lineup: flatten it into the flat keys
-        # instead of overwriting the user's choices.
-        if self._flatten_nested_lineup(team, lineup):
-            return
-        roster = list(getattr(team, 'roster', []) or [])
-
-        def by_pos(*pos_names):
-            names = {p.name if hasattr(p, 'name') else str(p) for p in pos_names}
-            ps = [p for p in roster
-                  if getattr(getattr(p, 'primary_position', None), 'name', '') in names]
-            return sorted(ps, key=lambda p: p.overall_rating(), reverse=True)
-
-        # Forwards: prefer natural position, fill with best available.
-        lw = by_pos('LEFT_WING'); c = by_pos('CENTER'); rw = by_pos('RIGHT_WING')
-        fw_pool = by_pos('LEFT_WING', 'CENTER', 'RIGHT_WING')
-        used = set()
-        lines = []
-        for i in range(4):
-            line = []
-            for pool in (lw, c, rw):
-                pick = next((p for p in pool if id(p) not in used), None)
-                if pick is None:
-                    pick = next((p for p in fw_pool if id(p) not in used), None)
-                if pick is not None:
-                    used.add(id(pick))
-                line.append(pick)
-            lines.append(line)
-        for i, line in enumerate(lines):
-            for key, p in zip(('LW', 'C', 'RW'), line):
-                if p is not None:
-                    lineup[f"F{i + 1}_{key}"] = p
-        lineup['Forwards'] = lines
-
-        # Defense pairs: best with best.
-        dmen = by_pos('LEFT_DEFENSE', 'RIGHT_DEFENSE')
-        pairs = []
-        for i in range(3):
-            pair = [dmen[i * 2] if i * 2 < len(dmen) else None,
-                    dmen[i * 2 + 1] if i * 2 + 1 < len(dmen) else None]
-            pairs.append(pair)
-            if pair[0] is not None:
-                lineup[f"D{i + 1}_L"] = pair[0]
-            if pair[1] is not None:
-                lineup[f"D{i + 1}_R"] = pair[1]
-        lineup['Defense'] = pairs
-
-        # Goalies.
-        goalies = by_pos('GOALIE', 'GOALTENDER')
-        if not goalies:
-            goalies = [p for p in roster if 'GOAL' in
-                       getattr(getattr(p, 'primary_position', None), 'name', '')]
-            goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
-        for i, g in enumerate(goalies[:2]):
-            lineup[f"G{i + 1}"] = g
-        lineup['Goalies'] = goalies[:2]
-
-        # Special teams: PP1 = best offensive, PK1 = best defensive.
-        off_fw = sorted(fw_pool, key=lambda p: p.overall_rating(), reverse=True)
-        def_fw = sorted(fw_pool,
-                        key=lambda p: (p.defensive_awareness + p.shot_blocking
-                                       + p.checking),
-                        reverse=True)
-        off_d = sorted(dmen, key=lambda p: p.overall_rating(), reverse=True)
-        def_d = sorted(dmen,
-                       key=lambda p: (p.defensive_awareness + p.shot_blocking
-                                      + p.checking),
-                       reverse=True)
-        lineup['PP1'] = {'Forwards': off_fw[:3], 'Defense': off_d[:2]}
-        lineup['PP2'] = {'Forwards': off_fw[3:6], 'Defense': off_d[2:4]}
-        lineup['PK1'] = {'Forwards': def_fw[:2], 'Defense': def_d[:2]}
-        lineup['PK2'] = {'Forwards': def_fw[2:4], 'Defense': def_d[2:4]}
-
-    def _ensure_shift_state(self, team):
-        """Lazily create per-unit shift clocks for a team."""
-        st = self._shift.get(team.team_name)
-        if st is None:
-            st = {
-                'F':  {'line': 1, 'start': 0.0},
-                'D':  {'pair': 1, 'start': 0.0},
-                'PP': {'unit': 1, 'start': 0.0},
-                'PK': {'unit': 1, 'start': 0.0},
-            }
-            self._shift[team.team_name] = st
-        return st
-
-    def _reset_shift_clocks(self):
-        """Fresh units at period start + intermission recovery."""
-        for team in (self.home_team, self.away_team):
-            st = self._ensure_shift_state(team)
-            for group in ('F', 'D', 'PP', 'PK'):
-                key = 'line' if group == 'F' else ('pair' if group == 'D'
-                                                   else 'unit')
-                st[group][key] = 1
-                st[group]['start'] = self._game_elapsed
-        # Intermission: everyone regains 40% of missing energy.
-        for team in (self.home_team, self.away_team):
-            for p in team.roster:
-                cur = self.player_fatigue.get(p.id, 100)
-                self.player_fatigue[p.id] = min(100, cur + (100 - cur) * 0.4)
-
-    def _shift_target(self, group):
-        """Target shift length in seconds (EHM guide: 20-40s ES, ~60s PP)."""
-        return {'F': 38.0, 'D': 50.0, 'PP': 60.0, 'PK': 30.0}[group]
-
-    def _shift_unit_players(self, team, group):
-        """Skaters currently assigned to a unit group."""
-        st = self._ensure_shift_state(team)[group]
-        players = []
-        if group == 'F':
-            for pos in ('LW', 'C', 'RW'):
-                p = self._lineup_player(team, f"F{st['line']}_{pos}")
-                if p:
-                    players.append(p)
-        elif group == 'D':
-            for pos in ('L', 'R'):
-                p = self._lineup_player(team, f"D{st['pair']}_{pos}")
-                if p:
-                    players.append(p)
-        else:  # PP / PK
-            unit = ((getattr(team, 'lineup', None) or {})
-                    .get(f"{group}{st['unit']}") or {})
-            for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
-                if p:
-                    players.append(p)
-        return players
-
-    def _special_unit_active(self, team, group):
-        """Is this team's PP (or PK) unit currently on the ice?"""
-        pen = (self.home_penalties if team == self.home_team
-               else self.away_penalties)
-        opp = self.away_team if team == self.home_team else self.home_team
-        opp_pen = (self.home_penalties if opp == self.home_team
-                   else self.away_penalties)
-        my_loss = sum(1 for p in pen if p.get('manpower_loss', True))
-        opp_loss = sum(1 for p in opp_pen if p.get('manpower_loss', True))
-        if group == 'PP':
-            return opp_loss > my_loss
-        return my_loss > opp_loss
-
-    def _unit_should_change(self, team, group):
-        """Stamina-gated change decision for one unit (EHM coach logic)."""
-        st = self._ensure_shift_state(team)[group]
-        # Even-strength units don't skate during special teams: park their
-        # clocks so the shift log never records phantom shifts.
-        if group in ('F', 'D'):
-            if (self._special_unit_active(team, 'PP')
-                    or self._special_unit_active(team, 'PK')):
-                st['start'] = self._game_elapsed
-                return False
-        # Special-teams clocks only run while the unit is active; park the
-        # clock otherwise so the next PP/PK starts fresh.
-        if group in ('PP', 'PK'):
-            if not self._special_unit_active(team, group):
-                st['start'] = self._game_elapsed
-                return False
-        shift_len = self._game_elapsed - st['start']
-        target = self._shift_target(group)
-        players = self._shift_unit_players(team, group)
-        avg_energy = (sum(self.player_fatigue.get(p.id, 100) for p in players)
-                      / len(players)) if players else 100.0
-        # The power play is about rhythm, not freshness: coaches ride a
-        # humming PP unit deeper into tired legs than an ES unit.
-        gassed_at = 55.0 if group == 'PP' else 62.0
-        overdue = shift_len > target * 1.6
-        # Gassed trigger only fires once the unit has actually worked this
-        # shift -- units that step on already tired (shared PP/PK personnel)
-        # still get a real shift; the clock target governs them.
-        gassed = avg_energy < gassed_at and shift_len >= target * 0.5
-        at_target = shift_len >= target
-        if not (overdue or gassed or at_target):
-            return False
-        # Don't pull a unit mid-attack unless it's overdue or gassed --
-        # changing during your own pressure kills the rhythm (EHM PP logic).
-        if not overdue and not gassed:
-            if (self.possession_team == team
-                    and self.current_zone == Zone.OFFENSIVE_ZONE
-                    and self.possession_time < 12):
-                return False
-        st['_pending_reason'] = ('overdue' if overdue
-                                 else 'gassed' if gassed else 'target')
-        return True
-
-    def _effective_usage_mode(self, team):
-        """Forward usage mode: user setting, with AI overrides for game state.
-
-        EHM-style: coaches shorten the bench when chasing late, roll four
-        lines when protecting a lead or in a blowout.
-        """
-        base = getattr(team, 'tactic_forward_usage', 'Normal') or 'Normal'
-        # AI override: only when the user left it on Normal (explicit user
-        # choices are respected).
-        if base != 'Normal':
-            return base
-        goal_diff = (self.home_score - self.away_score
-                     if team == self.home_team
-                     else self.away_score - self.home_score)
-        late = self.period >= 3 and self.clock < 600  # last 10 min of 3rd
-        if late and goal_diff <= -2:
-            return 'Just Two'   # chasing: ride the horses
-        if late and goal_diff == -1:
-            return 'Overload'   # one-goal chase: top 9
-        return 'Normal'
-
-    def _choose_next_unit(self, team, group, old_idx):
-        """Phase 2 conditional deployment: pick the next unit, not just rotate.
-
-        Returns (new_idx, choice_reason). Considers usage mode, score state,
-        period/time, and (for home F) last-change matching against the
-        opponent's current line.
-        """
-        slots = {'F': 4, 'D': 3, 'PP': 2, 'PK': 2}[group]
-        key = 'line' if group == 'F' else ('pair' if group == 'D'
-                                           else 'unit')
-        # Special teams: simple rotation (no conditional deployment).
-        if group in ('PP', 'PK'):
-            return old_idx % slots + 1, 'rotation'
-
-        goal_diff = (self.home_score - self.away_score
-                     if team == self.home_team
-                     else self.away_score - self.home_score)
-        late_3rd = self.period == 3 and self.clock < 300  # last 5 min
-        end_of_period = self.clock < 60  # last minute
-
-        if group == 'F':
-            mode = self._effective_usage_mode(team)
-            # Candidate pool by usage mode.
-            if mode == 'Just Two':
-                pool = [1, 2]
-            elif mode in ('Overload', 'Just Three'):
-                pool = [1, 2, 3]
-            else:
-                pool = [1, 2, 3, 4]
-            reason = f'usage:{mode}'
-
-            # Score-state: trailing late -> top lines; leading late -> trust
-            # the checking lines in our own end, but still attack on OZ draws.
-            if late_3rd:
-                if goal_diff <= -1:
-                    pool = [i for i in pool if i <= 2] or pool
-                    reason = 'chase:shorten'
-                elif goal_diff >= 2:
-                    # Protect: prefer 3rd/4th lines for DZ starts.
-                    if self.current_zone == Zone.DEFENSIVE_ZONE \
-                            and self.possession_team != team:
-                        pool = [i for i in pool if i >= 3] or pool
-                        reason = 'protect:checking'
-            # End of period: fresh legs for the last push / safe close.
-            if end_of_period and self.period < 4:
-                if goal_diff <= 0:
-                    pool = [1, 2]
-                    reason = 'endperiod:push'
-                else:
-                    pool = [3, 4] if 'Normal' == mode else pool
-                    reason = 'endperiod:close'
-
-            # Home last-change: see the away unit, then counter it.
-            # (Away changes first in _check_unit_changes, so the away line
-            # recorded in _shift is the fresh choice.)
-            opp = self.away_team if team == self.home_team else self.home_team
-            scheme = getattr(team, 'tactic_matching_scheme', 'Standard')
-            if (team == self.home_team and scheme in ('Shutdown', 'Power')
-                    and self.period < 4):
-                try:
-                    opp_line = self._shift.get(opp.team_name, {}).get(
-                        'F', {}).get('line', 1)
-                    if opp_line == 1:  # opp top line is out
-                        if scheme == 'Shutdown':
-                            # Best defensive line (3rd) vs their 1st.
-                            if 3 in pool:
-                                return 3, 'match:shutdown'
-                        else:  # Power vs Power
-                            if 1 in pool:
-                                return 1, 'match:power'
-                except Exception:
-                    pass
-
-            # Avoid an immediate repeat unless the pool forces it.
-            choices = [i for i in pool if i != old_idx] or pool
-            # Prefer the least-recently-used line (simple LRU).
-            st = self._ensure_shift_state(team)
-            last_used = st.get('_line_last', {})
-            choices.sort(key=lambda i: last_used.get(i, 0.0))
-            pick = choices[0]
-            last_used[pick] = self._game_elapsed
-            st['_line_last'] = last_used
-            return pick, reason
-
-        # Defense pairs: rotate 1-3; shorten to top-4 D when protecting late.
-        pool = [1, 2, 3]
-        reason = 'rotation'
-        if late_3rd and goal_diff >= 2:
-            pool = [1, 2]
-            reason = 'protect:top4'
-        # LRU like the forwards: avoid the 1<->2 bounce that would
-        # permanently bench the 3rd pair.
-        st = self._ensure_shift_state(team)
-        d_last = st.get('_pair_last', {})
-        choices = [i for i in pool if i != old_idx] or pool
-        choices.sort(key=lambda i: d_last.get(i, 0.0))
-        pick = choices[0]
-        d_last[pick] = self._game_elapsed
-        st['_pair_last'] = d_last
-        return pick, reason
-
-    def _change_unit(self, team, group, log_shift=True):
-        """Rotate one unit off, log the completed shift, dress the next."""
-        tn = team.team_name
-        st = self._ensure_shift_state(team)[group]
-        key = 'line' if group == 'F' else ('pair' if group == 'D'
-                                           else 'unit')
-        old_idx = st[key]
-        shift_len = self._game_elapsed - st['start']
-        # Sub-5s clock artifacts (parked clocks, post-whistle churn) are not
-        # real shifts -- keep them out of the TOI accounting.
-        if log_shift and shift_len >= 5.0:
-            self.shift_log.append({
-                'team': tn, 'group': group, 'index': old_idx,
-                'start': st['start'], 'end': self._game_elapsed,
-                'duration': shift_len, 'period': self.period,
-                'reason': st.pop('_pending_reason', 'target'),
-                'choice': st.pop('_last_choice_reason', 'rotation'),
-            })
-        else:
-            st.pop('_pending_reason', None)
-        # Phase 2: conditional deployment (score, period, usage, matching).
-        new_idx, choice_reason = self._choose_next_unit(team, group, old_idx)
-        st[key] = new_idx
-        st['_last_choice_reason'] = choice_reason
-        st['start'] = self._game_elapsed
-        for p in self._shift_unit_players(team, group):
-            self.player_shifts[p.id] = self.player_shifts.get(p.id, 0) + 1
-        # Refresh on-ice for both teams; possession handoff handled inside.
-        self._select_starting_lines()
-        label = {'F': 'forward line', 'D': 'defense pair',
-                 'PP': 'power-play unit', 'PK': 'penalty-kill unit'}[group]
-        self._log_event(f"{tn} line change: {label} {st[key]} on",
-                        "LINE_CHANGE")
-
-    def _check_unit_changes(self):
-        """Per-team, per-unit shift decisions each tick."""
-        # Last-change order: away chooses first, home reacts (EHM's
-        # home-ice edge -- the home coach sees the away unit before picking).
-        for team in (self.away_team, self.home_team):
-            # Icing freeze: the offending team's tired skaters stay out.
-            if getattr(self, '_no_line_change_team', None) is team:
-                continue
-            st = self._ensure_shift_state(team)
-            # Coming out of special teams, real teams put fresh ES units
-            # over the boards -- don't resume a parked, half-remembered shift.
-            spec_now = (self._special_unit_active(team, 'PP')
-                        or self._special_unit_active(team, 'PK'))
-            if st.get('_spec_prev', False) and not spec_now:
-                for group in ('F', 'D'):
-                    self._change_unit(team, group, log_shift=False)
-            st['_spec_prev'] = spec_now
-            for group in ('F', 'D', 'PP', 'PK'):
-                try:
-                    if self._unit_should_change(team, group):
-                        self._change_unit(team, group)
-                except Exception:
-                    continue
-
-    def get_shift_report(self):
-        """Per-game TOI summary: {team_name: {'F': {line: toi}, 'D': ...}}."""
-        report = {}
-        for rec in self.shift_log:
-            team = report.setdefault(rec['team'], {})
-            grp = team.setdefault(rec['group'], {})
-            grp[rec['index']] = grp.get(rec['index'], 0.0) + rec['duration']
-        return report
+        # Fallback: legacy timer-based rotation (shift engine unavailable).
+        phase = (self.clock // 45, self.clock // 60)
+        if phase != getattr(self, "_line_phase", None):
+            self._line_phase = phase
+            return True
+        if self.line_change_timer > random.randint(45, 60):
+            return True
+        try:
+            on_ice = (getattr(self, "home_on_ice", []) or []) + \
+                     (getattr(self, "away_on_ice", []) or [])
+            if on_ice:
+                avg_fatigue = sum(
+                    self.player_fatigue.get(p.id, 100) for p in on_ice
+                ) / len(on_ice)
+                if avg_fatigue < 70:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _successful_zone_entry(self, player, team, entry_type):
         """Handle a successful zone entry."""
@@ -3084,6 +2956,9 @@ class GameSim:
             self.team_stats[team.team_name]['controlled_entries'] += 1
             self._log_event(f"{player.full_name} carries the puck into the zone", "ZONE_ENTRY")
         
+        # Module 04: log the entry for the Analytics Hub.
+        self._analytics_record_entry(player, team, entry_type)
+
         return "ZONE_ENTRY"
 
     def _turnover_possession(self, new_team):
@@ -3130,7 +3005,7 @@ class GameSim:
         """Recompute current_zone from the puck and who's attacking."""
         self._ppos_ensure()
         px = self.puck_pos[0]
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         if (adir == 1 and px >= 125.0) or (adir == -1 and px <= 75.0):
             self.current_zone = Zone.OFFENSIVE_ZONE
         elif (adir == 1 and px <= 75.0) or (adir == -1 and px >= 125.0):
@@ -3142,7 +3017,7 @@ class GameSim:
 
     def _maybe_icing(self, clearing_team, clearer):
         """NHL icing: no icing while shorthanded; tired/pressured clears get iced."""
-        pens = self.home_penalties if clearing_team == self.home_team else self.away_penalties
+        pens = self.home_penalties if clearing_team is self.home_team else self.away_penalties
         if any(p for p in pens if p.get('manpower_loss', True)):
             return False  # shorthanded (manpower loss): no icing
         fatigue = self.player_fatigue.get(getattr(clearer, 'id', None), 100) / 100
@@ -3160,10 +3035,15 @@ class GameSim:
         self._emit_pbp("icing", player=icer, team=offending_team.team_name)
         # Freeze current lines BEFORE the faceoff clears the flag; the faceoff
         # itself is the whistle, then the freeze applies until the next whistle.
-        # (Phase 1 shift engine: freeze reads the per-unit shift clocks.)
-        _st = self._ensure_shift_state(offending_team)
-        self._frozen_line = _st['F']['line']
-        self._frozen_d_pair = _st['D']['pair']
+        # (Shift engine: freeze the state-chosen units, not clock math.)
+        try:
+            from shift_engine import get_shift_state as _gss
+            _fsst = _gss(self, offending_team)
+            self._frozen_line = _fsst.f_line
+            self._frozen_d_pair = _fsst.d_pair
+        except Exception:
+            self._frozen_line = (self.clock // 45) % 4 + 1
+            self._frozen_d_pair = (self.clock // 60) % 3 + 1
         self._forced_faceoff_team = offending_team
         # Freeze starts at the icing whistle: the offending team's tired
         # skaters take the draw and can't change until the next stoppage.
@@ -3222,7 +3102,7 @@ class GameSim:
             self.game_stats[clearer.id]['zone_exits'] += 1
             self._log_event(f"{clearer.full_name} clears the zone", "ZONE_CLEAR")
             # outlet pass to start the breakout
-            other = self.away_team if clearing_team == self.home_team else self.home_team
+            other = self.away_team if clearing_team is self.home_team else self.home_team
             self.puck_pos = self._ppos_get(clearer)[:]
             self._shape_positions(clearing_team, self.puck_pos)
             self._attempt_pass(clearer, clearing_team, other, kind="breakout")
@@ -3290,7 +3170,7 @@ class GameSim:
         """Keep the cycle alive: work the puck laterally (D-to-D, low to
         high) instead of standing still. A real pass event, so the
         visualizer shows the puck moving and a defender can jump it."""
-        defending_team = (self.away_team if attacking_team == self.home_team
+        defending_team = (self.away_team if attacking_team is self.home_team
                           else self.home_team)
         skaters = [p for p in self._get_on_ice(attacking_team)
                    if p.primary_position != PlayerPosition.GOALIE]
@@ -3530,7 +3410,7 @@ class GameSim:
         self._emit_skate()
         # Battles are scrums: the losing side throws a hit at the winner
         if loser is not None:
-            lteam = self.away_team if wteam == self.home_team else self.home_team
+            lteam = self.away_team if wteam is self.home_team else self.home_team
             self._maybe_throw_hit(lteam, wteam, winner, 0.35)
         return "PUCK_RECOVERY"
 
@@ -3541,27 +3421,29 @@ class GameSim:
     # forechecks, battles. The UI tweens dots to these spots.
     # ------------------------------------------------------------------
     def _ppos_ensure(self):
-        if not hasattr(self, "player_positions"):
-            self.player_positions = {}   # player.id -> [x, y]
-            self.puck_pos = [100.0, 42.5]
-            self._last_skate_sent = {}
-        if not hasattr(self, "player_jobs"):
-            # player.id -> job code describing the skater's current tactical
-            # intent (e.g. "f1_pressure", "slot", "point", "carrier"). This
-            # is the sim-to-renderer contract: the visualizer is a VIEW of
-            # the sim, so the sim must say what everyone is TRYING to do,
-            # not just where they are.
-            self.player_jobs = {}
-        if not hasattr(self, "team_phases"):
-            # team_name -> phase code (e.g. "oz_attack", "dz_coverage",
-            # "forecheck", "breakout", "pp_setup"). One plan per team per
-            # possession phase; every skater's job serves the plan.
-            self.team_phases = {}
-        if not hasattr(self, "_lost_coverage_ids"):
-            # player.id set: give-and-go cutters whose checker lost them
-            # (backdoor). The next pass read treats them as open;
-            # consumed on that read, cleared on turnovers.
-            self._lost_coverage_ids = set()
+        # Fast path: these are created once and never deleted (the only
+        # assignments are below), so a single dict-membership test replaces
+        # four hasattr() calls on this ~100k-call-per-game hot path.
+        if "_ppos_ready" in self.__dict__:
+            return
+        self.player_positions = {}   # player.id -> [x, y]
+        self.puck_pos = [100.0, 42.5]
+        self._last_skate_sent = {}
+        # player.id -> job code describing the skater's current tactical
+        # intent (e.g. "f1_pressure", "slot", "point", "carrier"). This
+        # is the sim-to-renderer contract: the visualizer is a VIEW of
+        # the sim, so the sim must say what everyone is TRYING to do,
+        # not just where they are.
+        self.player_jobs = {}
+        # team_name -> phase code (e.g. "oz_attack", "dz_coverage",
+        # "forecheck", "breakout", "pp_setup"). One plan per team per
+        # possession phase; every skater's job serves the plan.
+        self.team_phases = {}
+        # player.id set: give-and-go cutters whose checker lost them
+        # (backdoor). The next pass read treats them as open;
+        # consumed on that read, cleared on turnovers.
+        self._lost_coverage_ids = set()
+        self.__dict__["_ppos_ready"] = True
 
     def _set_job(self, p, job):
         """Tag a skater's current tactical job for the visualizer."""
@@ -3636,14 +3518,14 @@ class GameSim:
         if puck is None:
             puck = self.puck_pos
         px, py = puck
-        defending_team = (self.away_team if attacking_team == self.home_team
+        defending_team = (self.away_team if attacking_team is self.home_team
                           else self.home_team)
         carrier = getattr(self, "possession_player", None)
         carrier_id = getattr(carrier, "id", None)
 
         for team in (attacking_team, defending_team):
             is_att = (team == attacking_team)
-            adir = 1 if team == self.home_team else -1  # direction team attacks
+            adir = 1 if team is self.home_team else -1  # direction team attacks
             att_net = 189.0 if adir == 1 else 11.0     # net this team attacks
             def_net = 11.0 if adir == 1 else 189.0     # net this team defends
             # where is the puck relative to this team?
@@ -3894,7 +3776,7 @@ class GameSim:
         """
         self._ppos_ensure()
         px, py = self.puck_pos
-        adir = 1 if defending_team == self.home_team else -1
+        adir = 1 if defending_team is self.home_team else -1
         def_net = 11.0 if adir == 1 else 189.0
         skaters = self._on_ice_skaters(defending_team)
         if not skaters:
@@ -4038,7 +3920,7 @@ class GameSim:
         """
         self._ppos_ensure()
         px, py = self.puck_pos
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         att_net = 189.0 if adir == 1 else 11.0
         carrier = getattr(self, "possession_player", None)
         carrier_id = getattr(carrier, "id", None)
@@ -4172,7 +4054,7 @@ class GameSim:
         back to the old zone-based heuristic when not provided.
         """
         self._ppos_ensure()
-        wdir = 1 if winner == self.home_team else -1   # direction winner attacks
+        wdir = 1 if winner is self.home_team else -1   # direction winner attacks
         wnet = 189.0 if wdir == 1 else 11.0
         if dot is not None:
             dx, dy = dot
@@ -4183,7 +4065,7 @@ class GameSim:
             # offensive-zone draw ~20 ft outside the attacked net, else own end
             nx = wnet - 20 * wdir if zone == FaceoffZone.OFFENSIVE_ZONE else (11.0 if wdir == 1 else 189.0) + 20 * wdir
             dx, dy = nx, random.choice((20.5, 64.5))
-        loser = self.away_team if winner == self.home_team else self.home_team
+        loser = self.away_team if winner is self.home_team else self.home_team
         for team in (winner, loser):
             won = (team == winner)
             tdir = wdir if won else -wdir
@@ -4197,14 +4079,14 @@ class GameSim:
                 self._ppos_place(p, dx + (0 if won else 6 * tdir), dy + s, jitter=1.0)
             for p, s in zip(ds, (30, 55)):
                 # D hold back toward their own end
-                own = 11.0 if team == self.home_team else 189.0
+                own = 11.0 if team is self.home_team else 189.0
                 bx = dx + (24 if (own < dx) else -24)
                 self._ppos_place(p, bx, s, jitter=1.5)
             for p in centers[1:] + wings[2:] + ds[2:]:
                 self._ppos_place(p, dx + 18 * tdir, 42.5)
             g = self._on_ice_goalie(team)
             if g is not None:
-                own = 11.0 if team == self.home_team else 189.0
+                own = 11.0 if team is self.home_team else 189.0
                 self._ppos_place(g, own, 42.5, jitter=0.5)
         self.puck_pos = self._clamp_boards(dx, dy)
         self._emit_skate(force=True)
@@ -4234,7 +4116,7 @@ class GameSim:
         if not mates:
             return None
         defenders = self._on_ice_skaters(defending_team)
-        adir = 1 if attacking_team == self.home_team else -1
+        adir = 1 if attacking_team is self.home_team else -1
         att_net = 189.0 if adir == 1 else 11.0
         px, py = self._ppos_get(passer)
 
@@ -4392,10 +4274,10 @@ class GameSim:
     def _is_on_penalty_kill(self, player):
         """Check if player is on penalty kill."""
         team = self.home_team if player in self.home_on_ice else self.away_team
-        opposing_team = self.away_team if team == self.home_team else self.home_team
+        opposing_team = self.away_team if team is self.home_team else self.home_team
         
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opposing_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opposing_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         
         return len(team_penalties) > len(opposing_penalties)  # shorthanded = own box fuller
 
@@ -4403,10 +4285,45 @@ class GameSim:
         """Check if player is on power play."""
         team = self.home_team if player in self.home_on_ice else self.away_team
         
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opposing_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opposing_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         
-        return len(opposing_penalties) > len(team_penalties)  # man advantage = their box fuller
+        return len(team_penalties) > len(opposing_penalties)
+        """Determines and resolves the next gameplay event."""
+        attacking_skaters = [p for p in self._get_on_ice(attacking_team) if p.primary_position != PlayerPosition.GOALIE]
+        defending_skaters = [p for p in self._get_on_ice(defending_team) if p.primary_position != PlayerPosition.GOALIE]
+
+        if not attacking_skaters or not defending_skaters:
+            return "Turnover", self._resolve_faceoff(reason="stoppage")
+
+        attacker = random.choice(attacking_skaters)
+        # the 1v1 battle is against the nearest checker, not a random
+        # defender across the ice
+        defender, _ = self._nearest_defender(attacker, defending_skaters)
+        if defender is None:
+            defender = random.choice(defending_skaters)
+
+        attacker_roll = attacker.skating + attacker.deking + attacker.offensive_awareness + random.randint(-10, 10)
+        defender_roll = defender.checking + defender.strength + defender.defensive_awareness + random.randint(-10, 10)
+
+        if attacker_roll > defender_roll:
+            self._resolve_scoring_chance(attacker, attacking_team, defending_team)
+            return "Scoring Chance", attacking_team 
+        else:
+            # Installed systems: undisciplined teams foul more when they
+            # lose the 1v1 battle.
+            try:
+                import tactics as _txd
+                _disc = _txd.resolve_team_tactics(
+                    defending_team).get("discipline", 1.0)
+            except Exception:
+                _disc = 1.0
+            if random.random() < (defender.hitting_tendency / 1000.0) * max(0.5, min(1.5, 2.0 - _disc)) and (100 - defender.discipline) / 5 > random.randint(1, 20):
+                self._resolve_penalty(defender, defending_team)
+                return "Penalty", attacking_team 
+            
+            self._log_event(f"{defender.full_name} breaks up the play.", "TURNOVER")
+            return "Turnover", defending_team
 
     def _resolve_scoring_chance(self, shooter, attacking_team, defending_team):
         """
@@ -4417,7 +4334,7 @@ class GameSim:
         # shooter caught outside the offensive zone makes a hockey play --
         # moves the puck -- instead of firing a prayer from distance.
         _px, _py = self._ppos_get(shooter)
-        _in_zone = (_px >= 124.0) if attacking_team == self.home_team \
+        _in_zone = (_px >= 124.0) if attacking_team is self.home_team \
             else (_px <= 76.0)
         if not _in_zone:
             self._attempt_pass(shooter, attacking_team, defending_team,
@@ -4439,11 +4356,24 @@ class GameSim:
         
         # Calculate distance from goal (affects shot quality)
         distance = self._calculate_shot_distance(shot_location)
-        
+
+        # Chance grading (2026-09-28, per Muck): grade at creation time via
+        # the shared layer. Blocked attempts are chances too -- grade them
+        # here with location info (shot type not yet known).
+        chance_grade = self._roll_chance_grade(
+            shot_location, None, shooter, attacking_team, defending_team)
+
         # Check for blocked shot first
         blocking_outcome = self._check_shot_blocking(shooter, defending_team, shot_location)
         if blocking_outcome['blocked']:
             self._handle_blocked_shot(shooter, blocking_outcome['blocker'], attacking_team, defending_team)
+            # Module 04: blocked attempts still count as shot attempts.
+            self._analytics_record_shot(shooter, attacking_team,
+                                        defending_team, shot_location,
+                                        distance, None, 0.0,
+                                        grade=chance_grade)
+            self._analytics_tag_shot("blocked")
+            self._record_chance_grade(shooter, chance_grade, False)
             return
         
         # Determine shot type based on player attributes and situation
@@ -4473,15 +4403,22 @@ class GameSim:
         shot_quality, quality_factor = self._calculate_shot_quality(
             shot_location, distance, shot_type, attacking_team, shooter,
             pressure_dist=pressure_dist, pressurer=pressurer)
-        
+
+        # Re-grade with full info (shot type + pressure now known) -- the
+        # shared A/B/C decision both engines use.
+        chance_grade = self._roll_chance_grade(
+            shot_location, shot_type, shooter, attacking_team,
+            defending_team, pressurer=pressurer,
+            pressure_dist=pressure_dist)
+
         # Check if shot misses the net
         if self._check_shot_miss(shooter, shot_quality, distance):
             self._handle_missed_shot(shooter, attacking_team, shot_location, shot_type)
+            self._record_chance_grade(shooter, chance_grade, False)
             return
-        
+
         # Shot is on goal - resolve against goalie
-        self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance,
-                                   quality_factor=quality_factor)
+        self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance, grade=chance_grade)
 
     def _determine_shot_location(self, shooter, attacking_team):
         """Determine where the shot is taken from based on player position and game flow."""
@@ -4585,6 +4522,15 @@ class GameSim:
         
         # Apply defensive pressure modifier (Stage 4)
         base_block_chance *= self.defensive_pressure
+
+        # Installed systems: passive-box teams sell out to block, swarm
+        # teams chase and block less.
+        try:
+            import tactics as _txb
+            base_block_chance *= _txb.resolve_team_tactics(
+                defending_team).get("blocks", 1.0)
+        except Exception:
+            pass
         
         # Choose the blocker by weighted draw: attributes x archetype block
         # tendency, so defensive D/grinders block most but not exclusively.
@@ -4755,6 +4701,160 @@ class GameSim:
         else:
             return "low", factor
 
+    # -- Chance grading (2026-09-28, per Muck) ---------------------------
+    # Shared-layer grade roll (mesh_system.roll_chance_grade): grades the
+    # chance A/B/C at creation time. Same decision as quick-sim; this
+    # engine's fidelity maps the grade onto its high/medium/low xG
+    # quality strings. Never raises -- falls back to "B".
+    _GRADE_LOCATION_MAP = {
+        ShotLocation.CREASE: "crease",
+        ShotLocation.LOW_SLOT: "slot",
+        ShotLocation.HIGH_SLOT: "slot",
+        ShotLocation.LEFT_CIRCLE: "slot",
+        ShotLocation.RIGHT_CIRCLE: "slot",
+        ShotLocation.POINT: "point",
+        ShotLocation.LEFT_WING: "perimeter",
+        ShotLocation.RIGHT_WING: "perimeter",
+        ShotLocation.BEHIND_NET: "perimeter",
+    }
+
+    def _roll_chance_grade(self, shot_location, shot_type, shooter,
+                          attacking_team, defending_team,
+                          pressurer=None, pressure_dist=30.0):
+        """Roll the shared A/B/C chance grade for one shot attempt."""
+        _grade = "B"
+        try:
+            from mesh_system import roll_chance_grade as _rcg
+            # -- location ------------------------------------------------
+            if shot_type == ShotType.BREAKAWAY:
+                _loc = "breakaway"
+            elif shot_type in (ShotType.TIP_IN, ShotType.DEFLECTION):
+                _loc = "netfront"
+            elif shot_type == ShotType.WRAPAROUND:
+                _loc = "crease"
+            else:
+                _loc = self._GRADE_LOCATION_MAP.get(shot_location, "slot")
+            # -- contest from defender distance (ft) --------------------
+            try:
+                _pd = float(pressure_dist if pressure_dist is not None
+                            else 30.0)
+            except Exception:
+                _pd = 30.0
+            _contest = max(0.0, min(1.0, 1.0 - _pd / 50.0))
+            # Parity 2026-09-28: the old /20 scale parked typical shots
+            # (mean pressure ~23ft) at ~0.17 contest -- nearly "clean" --
+            # while quick-sim's attribute-based contest averages ~0.68.
+            # Same 0-1 meaning both engines: 50ft is open ice, 0ft is
+            # smothered; typical NHL pressure (~23ft) reads ~0.55.
+            # -- defending D pair ----------------------------------------
+            try:
+                _onice_d = self._on_ice_skaters(defending_team)
+            except Exception:
+                try:
+                    _onice_d = self._get_on_ice(defending_team)
+                except Exception:
+                    _onice_d = []
+            _defenders = [p for p in (_onice_d or [])
+                          if getattr(p, "primary_position", None)
+                          in DEFENSEMEN_POSITIONS]
+            # -- goalie ---------------------------------------------------
+            try:
+                _goalie = self._selected_goalie(defending_team)
+            except Exception:
+                _goalie = None
+            # -- D fatigue: shift clock when available --------------------
+            _d_fatigue = 50.0
+            try:
+                _sc = float(getattr(self, "shift_clock", 0) or 0)
+                if _sc > 0:
+                    _d_fatigue = max(0.0, min(100.0, 40.0 + _sc * 1.5))
+            except Exception:
+                pass
+            # -- team defensive weakness ----------------------------------
+            _team_d_weak = 1.0
+            try:
+                _ga = float(getattr(defending_team, "goals_against", 0) or 0)
+                _gp = float(getattr(defending_team, "games_played", 0) or 0)
+                if _gp > 5 and _ga > 0:
+                    _team_d_weak = max(0.85, min(1.30, (_ga / _gp) / 3.0))
+            except Exception:
+                pass
+            # -- gametime --------------------------------------------------
+            _rivalry_heat = 0.0
+            try:
+                import reputation_system as _rs2
+                _rh = _rs2.get_rivalry_heat(self.rivalries or [],
+                                             attacking_team, defending_team)
+                _rivalry_heat = float(_rh.get("heat", 0) or 0)
+            except Exception:
+                pass
+            try:
+                _morale = float(getattr(shooter, "morale", 70) or 70)
+            except Exception:
+                _morale = 70.0
+            try:
+                _sdiff = abs(float(getattr(self, "home_score", 0) or 0)
+                             - float(getattr(self, "away_score", 0) or 0))
+                _per = int(getattr(self, "period", 1) or 1)
+                _clk = float(getattr(self, "clock", 1200) or 1200)
+                _clutch = (_per >= 4) or (_per == 3 and _sdiff <= 1
+                                          and _clk < 300)
+            except Exception:
+                _clutch = False
+            try:
+                _is_home = attacking_team is self.home_team
+                _cm = (self._crowd_home_mult if _is_home
+                       else self._crowd_away_mult)
+                _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
+            except Exception:
+                _crowd_edge = 0.0
+            _grade = _rcg(
+                _loc, _contest, shooter,
+                defenders=_defenders, goalie=_goalie,
+                situation={
+                    "quick_release": shot_type == ShotType.ONE_TIMER,
+                    "screened_goalie": False,
+                    "won_spot": False,
+                    "rebound": shot_type == ShotType.REBOUND,
+                    "tip": shot_type in (ShotType.TIP_IN,
+                                         ShotType.DEFLECTION),
+                },
+                game_ctx={
+                    "rivalry_heat": _rivalry_heat,
+                    "morale": _morale,
+                    "clutch": _clutch,
+                    "crowd_edge": _crowd_edge,
+                    "is_playoff": bool(getattr(self, "is_playoff", False)),
+                    "d_fatigue": _d_fatigue,
+                    "team_d_weakness": _team_d_weak,
+                })
+        except Exception:
+            pass
+        return _grade
+
+    def _record_chance_grade(self, shooter, grade, scored):
+        """Per-player chance-grade analytics: grade_a/b/c_shots and
+        grade_a/b/c_goals in game_stats -- the xG backbone for the
+        analytics stack (same flat shape as quick-sim's stats dicts).
+        Never raises."""
+        try:
+            _g = str(grade or "B").upper()
+            if _g not in ("A", "B", "C"):
+                _g = "B"
+            _pid = getattr(shooter, "id", None)
+            if _pid is None:
+                return
+            if _pid not in self.game_stats:
+                return
+            _st = self.game_stats[_pid]
+            _sk = f'grade_{_g.lower()}_shots'
+            _st[_sk] = _st.get(_sk, 0) + 1
+            if scored:
+                _gk = f'grade_{_g.lower()}_goals'
+                _st[_gk] = _st.get(_gk, 0) + 1
+        except Exception:
+            pass
+
     def _check_shot_miss(self, shooter, quality, distance):
         """Check if shot misses the net entirely."""
         accuracy = (shooter.shooting_accuracy + shooter.composure) / 2
@@ -4770,10 +4870,12 @@ class GameSim:
         
         miss_chance = base_miss + distance_penalty
         miss_chance *= quality_modifier
-        # Attributes are 1-100: elite accuracy (~95) rarely misses, weak (~55)
-        # sprays it. (100 - accuracy) / 100 scales the base chance.
-        miss_chance *= (100 - accuracy) / 100  # Better accuracy = lower miss chance
-        
+        # Accuracy is on the 1-100 scale: rescale the original 1-20 intent
+        # (factor = 1 - accuracy_20/20) so better shooters miss less.
+        # At 75 accuracy the factor is 0.25; floored so elites still
+        # rarely (not never) miss. League-wide miss rate lands ~10%.
+        miss_chance *= max(0.05, 1.0 - accuracy / 100.0)
+
         return random.random() < miss_chance
 
     def _weighted_random_choice(self, weights_dict):
@@ -4825,17 +4927,20 @@ class GameSim:
                 if tendency_key == "shoot" else ()
             weights = []
             for p in pool:
-                w = max(0.05, get_tendency(p, tendency_key))
-                if freq_key:
-                    w *= _trait_bonus(p, freq_key)
+                # ONE decision (divergence #14): the shared shooter-choice
+                # weight -- archetype shoot tendency x shot_frequency_mult,
+                # flattened. Both engines use this; only the recency
+                # penalty below is GameSim-side texture.
                 if tendency_key == "shoot":
-                    # flatten: a sniper should lead, not own, the shot chart
-                    w = w ** 0.5
-                if tendency_key == "hit":
-                    # E6: aggression (1-100) directly scales hit selection
-                    w *= (0.5 + getattr(p, 'aggression', 50) / 100.0)
-                if recent and getattr(p, "id", None) in recent:
-                    w *= 0.35  # you just shot; the puck moves on
+                    from player_archetypes import shooter_choice_weight as _scw
+                    w = _scw(p)
+                else:
+                    w = max(0.05, get_tendency(p, tendency_key))
+                    if freq_key:
+                        w *= _trait_bonus(p, freq_key)
+                if tendency_key == "shoot":
+                    if recent and getattr(p, "id", None) in recent:
+                        w *= 0.35  # you just shot; the puck moves on
                 weights.append(w)
             pick = random.choices(pool, weights=weights, k=1)[0]
             if tendency_key == "shoot" and recent is not None:
@@ -4877,14 +4982,19 @@ class GameSim:
                        attacking_team=attacking_team.team_name,
                        defending_team=defending_team.team_name,
                        shooter_pos=(round(_bsx, 1), round(_bsy, 1)))
-        # Loose puck off the block -- both teams scramble for it
-        if random.random() < 0.55:
+        # Blocked shot sprays the puck -- possession model decides: usually
+        # loose at the block spot or gathered by the defense, sometimes the
+        # shooter keeps it, never a silent retain by default.
+        try:
+            import possession_model as _pmb
+            _bout = _pmb.after_shot("block")
+        except Exception:
+            _bout = "loose"
+        if _bout in ("loose", "defense"):
             self._ppos_ensure()
             bx, by = self._ppos_get(blocker)
             self.puck_pos = self._clamp_boards(bx, by)
-            self.possession_team = None
-            self.possession_player = None
-            self.possession_time = 0
+        self._apply_shot_outcome(_bout, attacking_team, defending_team)
 
     def _handle_missed_shot(self, shooter, attacking_team, location, shot_type):
         """Handle a missed shot event."""
@@ -4909,51 +5019,25 @@ class GameSim:
                        shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
                        location=location.value if hasattr(location, "value") else str(location),
                        shooter_pos=(round(_msx, 1), round(_msy, 1)))
-        # Missed shot rims around -- loose puck battle behind the net
-        if random.random() < 0.40:
+        # Missed shot rims around -- possession model decides: usually
+        # retrieved or loose behind the net, sometimes out of play.
+        try:
+            import possession_model as _pmm
+            _mout = _pmm.after_shot("miss")
+        except Exception:
+            _mout = "retain"
+        _defending = (self.away_team if attacking_team is self.home_team
+                      else self.home_team)
+        if _mout in ("loose", "defense"):
             self._ppos_ensure()
-            nx = 189.0 if attacking_team == self.home_team else 11.0
+            nx = 189.0 if attacking_team is self.home_team else 11.0
             self.puck_pos = self._clamp_boards(nx + random.uniform(-8, 8),
-                                                 42.5 + random.uniform(-14, 14))
-            self.possession_team = None
-            self.possession_player = None
-            self.possession_time = 0
+                                               42.5 + random.uniform(-14, 14))
+        self._apply_shot_outcome(_mout, attacking_team, _defending)
 
-    def _apply_archetype_matchup(self, quality, attacking_team, defending_team):
-        """
-        Archetype matchup effects on shot quality.
-
-        Compares the on-ice attacking skaters' archetypes against the
-        defending skaters' archetypes (e.g. Defensive Defenseman vs Sniper)
-        and returns (quality_bucket, multiplier). The multiplier (0.85-1.15)
-        scales expected goals directly; the bucket is nudged for display and
-        miss-chance purposes.
-        """
-        mult = 1.0
-        try:
-            att = [p for p in self._get_on_ice(attacking_team)
-                   if p.primary_position != PlayerPosition.GOALIE]
-            dfn = [p for p in self._get_on_ice(defending_team)
-                   if p.primary_position != PlayerPosition.GOALIE]
-            if not att or not dfn:
-                return quality, mult
-            mult = matchup_multiplier([get_archetype(p) for p in att],
-                                      [get_archetype(p) for p in dfn])
-        except Exception:
-            return quality, 1.0
-        # Nudge the danger bucket so the matchup is visible in stats/PBP.
-        try:
-            score = {"high": 0.85, "medium": 0.55, "low": 0.30}.get(quality, 0.55)
-            adj = score * mult
-            if adj >= 0.72:
-                quality = "high"
-            elif adj >= 0.42:
-                quality = "medium"
-            else:
-                quality = "low"
-        except Exception:
-            pass
-        return quality, mult
+    # (Parity 2026-09-28: _apply_archetype_matchup removed -- it was dead
+    # code multiplying the quality STRING by a float, and archetype
+    # matchup already lives in the shared chance-grade roll.)
 
     # ShotLocation -> rink coords (for a team attacking in +x; mirrored
     # for the other way). The shooter skates to his spot before shooting,
@@ -4973,83 +5057,227 @@ class GameSim:
     def _shot_spot_coords(self, location, attacking_team):
         key = location.value if hasattr(location, "value") else str(location)
         x, y = self._SHOT_SPOTS.get(key, (160, 42.5))
-        if attacking_team != self.home_team:
+        if attacking_team is not self.home_team:
             x = 200.0 - x
         return x, y
 
-    def _is_clutch_moment(self):
-        """E6: late and close, or overtime/playoffs."""
-        try:
-            late = getattr(self, 'period', 1) >= 3 and getattr(self, 'clock', 0) <= 300
-            close_game = abs(self.home_score - self.away_score) <= 1
-            ot = getattr(self, 'period', 1) > 3
-            return (late and close_game) or ot
-        except Exception:
-            return False
+    def _award_assists(self, shooter, attacking_team, passer=None):
+        """Part B: build the assist list for a goal via the ONE shared decision.
 
-    def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance,
-                              quality_factor=1.0):
+        Primary: the pass-branch passer when given; otherwise the setup
+        man is SELECTED by playmaking x relationship-with-scorer x line
+        chemistry (rebound/scramble goals still come off a teammate's
+        work -- the brief's passer selection, attributes 70-80% of the
+        weight). Secondary: rolled at the tuned rate, selection is
+        attribute-weighted via the shared assist_weight, not a dice roll.
+        Every awarded pair is ledgered for line-combination analytics.
+        Returns the list of assisting player objects.
+        """
+        from mesh_system import (playmaking_score as _pms,
+                                 relationship_mult as _relm,
+                                 mesh_chance_factor as _mcf,
+                                 assist_weight as _aw,
+                                 record_assist_pair as _rap)
+        assists = []
+        _iso = bool(getattr(self, "is_playoff", False))
+        _on_ice = [p for p in self._get_on_ice(attacking_team)
+                   if p.primary_position != PlayerPosition.GOALIE]
+        _team_name = getattr(attacking_team, "team_name", "")
+
+        # Primary: given passer, else select the setup man.
+        _primary = passer
+        if _primary is None:
+            _pool = [p for p in _on_ice if p != shooter]
+            if _pool and random.random() < 0.75:
+                try:
+                    _pw = []
+                    for _pp in _pool:
+                        _w = _pms(_pp) * _relm(_pp, shooter)
+                        try:
+                            _w *= _mcf(_pp, [shooter], attacking_team,
+                                        is_playoff=_iso)
+                        except Exception:
+                            pass
+                        _pw.append(max(1.0, _w))
+                    _primary = random.choices(_pool, weights=_pw, k=1)[0]
+                except Exception:
+                    _primary = None
+        if _primary is not None:
+            assists.append(_primary)
+            try:
+                _rap(self.assist_pairs, _primary, shooter, _team_name)
+            except Exception:
+                pass
+
+        # Secondary: tuned rate, attribute-weighted selection.
+        # Part B tuning: base 0.78 targets assists/goal ~1.6 with the
+        # reworked primary rate (~0.8) across the main and rebound paths.
+        secondary_chance = 0.78
+        for p in _on_ice:
+            if p != shooter and p != _primary:
+                secondary_chance *= _trait_bonus(p, "assist_chance_mult")
+                break  # Only apply once (highest bonus)
+        if random.random() < min(0.92, secondary_chance):
+            _cands = [p for p in _on_ice
+                      if p != shooter and p != _primary]
+            if _cands:
+                _sw = [max(0.05, _aw(p, shooter, attacking_team,
+                                      is_playoff=_iso)
+                            * _trait_bonus(p, "assist_chance_mult"))
+                       for p in _cands]
+                assists.append(random.choices(_cands, weights=_sw, k=1)[0])
+        return assists
+
+    def _resolve_shot_on_goal(self, shooter, attacking_team, defending_team, shot_type, location, quality, distance, grade="B"):
         """
         Stage 5: Enhanced shot resolution with advanced goaltending excellence.
         """
+        # Chance grade (2026-09-28, per Muck): the shared A/B/C grade IS the
+        # danger categorization -- one decision, two fidelities. Map onto
+        # this engine's high/medium/low xG quality strings.
+        try:
+            _g = str(grade or "B").upper()
+            if _g in ("A", "B", "C"):
+                quality = {"A": "high", "B": "medium", "C": "low"}[_g]
+        except Exception:
+            pass
+        grade = str(grade or "B").upper()
+        if grade not in ("A", "B", "C"):
+            grade = "B"
         goalie = self._selected_goalie(defending_team)
         # Empty net: the defending goalie is on the bench. There is no one
         # to beat -- the shot is either in or the shooter flubs the gimme.
         # No save can or will be credited to the pulled goalie.
         empty_net = defending_team.team_name in getattr(self, "goalie_pulled", set())
         
-        # Handle passing play possibility
+        # Handle passing play possibility -- Part B rework.
+        # The SETUP MAN is chosen first: weighted by playmaking attributes
+        # (passing, vision, offensive awareness) x relationship closeness
+        # with the puck carrier x line chemistry -- playmakers run the
+        # narrative, and linemates are preferred. The thread probability
+        # is kept low (~0.15-0.20) because the scoring pass bonus below
+        # (passer.passing x 0.3) doubles goal probability when it fires;
+        # the primary assist RATE is handled separately by
+        # _award_assists' setup-man selection (not tied to this roll).
         passer = None
-        # Archetype tendency: snipers shoot first, playmakers look pass first.
-        # shoot_pass_tendency is SHOOT tendency (high = shooter), so the pass
-        # branch scales with (100 - tendency) and inversely with shoot_bias.
-        shoot_bias = get_tendency(shooter, "shoot_bias")
-        pass_bias = 1.0 / shoot_bias if shoot_bias else 1.0
-        pass_chance = min(100.0, (100 - shooter.shoot_pass_tendency) * pass_bias)
-        if random.random() * 100 < pass_chance \
-                and shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
-            teammates = [p for p in self._get_on_ice(attacking_team) if p != shooter and p.primary_position != PlayerPosition.GOALIE]
-            if teammates and random.random() < 0.3:  # 30% chance of pass play
-                passer = shooter
-                shooter = random.choice(teammates)
-                # The one-timer man arrives at the same spot and takes it;
-                # place him so his position is honest too.
-                _sx, _sy = self._shot_spot_coords(location, attacking_team)
-                self._ppos_place(shooter, _sx, _sy, jitter=2.0)
-                self.possession_player = shooter
-                self.possession_team = attacking_team
-                self.puck_pos = self._clamp_boards(_sx, _sy)
-                self._emit_skate()
-                self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
-                # The one-timer man takes it, not the original shooter:
-                # re-evaluate danger for the actual shooter. Same spot, so
-                # re-find the nearest defender for pressure.
+        if shot_type not in [ShotType.REBOUND, ShotType.TIP_IN]:
+            _setup_pool = [p for p in self._get_on_ice(attacking_team)
+                           if p is not shooter
+                           and p.primary_position != PlayerPosition.GOALIE]
+            if _setup_pool:
+                _passer, _thread = None, 0.0
                 try:
-                    _defs = self._on_ice_skaters(defending_team)
-                    _pr = min(_defs,
-                              key=lambda d: self._ppos_dist((_sx, _sy),
-                                                            self._ppos_get(d)),
-                              default=None)
-                    _pd = (self._ppos_dist((_sx, _sy), self._ppos_get(_pr))
-                           if _pr is not None else 30.0)
-                    quality, quality_factor = self._calculate_shot_quality(
-                        location, distance, shot_type, attacking_team, shooter,
-                        pressure_dist=_pd, pressurer=_pr)
+                    from mesh_system import (playmaking_score as _pms,
+                                             relationship_mult as _relm3,
+                                             mesh_chance_factor as _mcf2)
+                    _iso2 = bool(getattr(self, "is_playoff", False))
+                    _sw = []
+                    for _sp in _setup_pool:
+                        _w = _pms(_sp) * _relm3(shooter, _sp)
+                        try:
+                            _w *= _mcf2(_sp, [shooter], attacking_team,
+                                        is_playoff=_iso2)
+                        except Exception:
+                            pass
+                        _sw.append(max(1.0, _w))
+                    _passer = random.choices(_setup_pool, weights=_sw, k=1)[0]
+                    # Thread rate targets ~0.15 (the old calibrated pass-branch
+                    # rate): the scoring pass bonus (passer.passing x 0.3
+                    # below) DOUBLES goal probability when it fires, so this
+                    # must stay low. The primary assist rate is handled
+                    # separately by _award_assists' setup-man selection.
+                    _thread = (0.08 + 0.14 * (_pms(_passer) / 100.0))
+                    try:
+                        _thread *= _mcf2(_passer, [shooter], attacking_team,
+                                         is_playoff=_iso2)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
+                if _passer is not None and random.random() < _thread:
+                    passer = _passer
+                    # The setup man finds the FINISHER -- weight the
+                    # receiver by finishing (the shared
+                    # shooter_choice_weight) x relationship closeness
+                    # with the passer. Snipers get the one-timer, not
+                    # grinders. (Give-and-go allowed: the original
+                    # carrier can be the receiver.)
+                    _rcv_pool = [p for p in self._get_on_ice(attacking_team)
+                                 if p is not passer
+                                 and p.primary_position != PlayerPosition.GOALIE]
+                    try:
+                        from player_archetypes import shooter_choice_weight as _scw4
+                        _rw = [max(0.05, _scw4(_tm) * _relm3(passer, _tm))
+                               for _tm in _rcv_pool]
+                        shooter = random.choices(_rcv_pool, weights=_rw, k=1)[0]
+                    except Exception:
+                        shooter = random.choice(_rcv_pool)
+                    # The one-timer man arrives at the same spot and takes it;
+                    # place him so his position is honest too.
+                    _sx, _sy = self._shot_spot_coords(location, attacking_team)
+                    self._ppos_place(shooter, _sx, _sy, jitter=2.0)
+                    self.possession_player = shooter
+                    self.possession_team = attacking_team
+                    self.puck_pos = self._clamp_boards(_sx, _sy)
+                    self._emit_skate()
+                    self._log_event(f"Pass from {passer.full_name} to {shooter.full_name}...", "PASS")
         
-        # Calculate expected goal value (xG).
-        # Archetype matchup effects: shutdown defenders smother snipers,
-        # power forwards feast on soft defensive pairs, etc.
-        quality, matchup_mult = self._apply_archetype_matchup(
-            quality, attacking_team, defending_team)
-        expected_goal = self._calculate_expected_goal_value(
-            location, shot_type, distance, factor=quality_factor)
-        expected_goal = min(0.95, expected_goal * matchup_mult)
+        # Calculate expected goal value (xG)
+        # (Parity 2026-09-28: the old _apply_archetype_matchup call was
+        # dead code -- it multiplied the "high"/"medium"/"low" STRING by a
+        # float, which always raised and fell back to unchanged quality.
+        # Archetype matchup already lives in the shared chance-grade roll
+        # (mesh_system._chance_matchup_tilt), so there is no second
+        # matchup layer -- one decision, two fidelities.)
+
+        # Goalie personality: a puck-handling turnover behind the net turns
+        # this rush into a high-danger chance against the offending goalie.
+        # (Upgrades the GRADE to A -- the shared hard gate says a rebound
+        # is grade A -- BEFORE xG is computed so the chance is real.)
+        try:
+            if self.goalie_turnovers_left.get(goalie.id, 0) > 0:
+                self.goalie_turnovers_left[goalie.id] -= 1
+                quality = "high"
+                grade = "A"
+                shot_type = ShotType.REBOUND
+        except Exception:
+            pass
+
+        expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance, grade=grade)
+
+        # Shooter talent (divergence #2): the shooter's attributes move
+        # finishing -- the ONE shared shooter_skill_composite with the same
+        # 0.30/0.25/0.20/0.15/0.10 weights quick-sim uses. Mean-preserving
+        # around the measured league average (65.3, n=2220, 2026-09-28):
+        # an average shooter is 1.0x; the piecewise slope (flat middle,
+        # convex top) is the shared talent decision -- see mesh_system.
+        # Elite (~70) finishes a touch above, depth (~62) a touch below --
+        # additive on top of the volume edge snipers already get from
+        # shooter_choice_weight.
+        try:
+            from mesh_system import (shooter_skill_composite as _ssc2,
+                                     shooter_finish_mult as _sfm2)
+            _sbase = {
+                ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
+                ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
+                ShotType.BACKHAND: getattr(shooter, "backhand", 10),
+            }.get(shot_type, getattr(shooter, "wristshot", 10))
+            _ss = _ssc2(shooter, _sbase)
+            _sf = _sfm2(_ss)
+            expected_goal = min(0.95, expected_goal * _sf)
+        except Exception:
+            pass
 
         # Team tactics shape finishing: systems and special-teams approach
         # move xG up/down for both sides.
         expected_goal = min(0.95, expected_goal * self._team_tactics_xg_factor(
+            attacking_team, defending_team))
+
+        # Parity engine: cross-game form + the corrective layer (coach
+        # adjustments on skids, new-coach bounce, veteran pride,
+        # target-on-back, trap-game flatness). Same shared decision both
+        # engines call; this engine applies it on shot quality.
+        expected_goal = min(0.95, expected_goal * self._parity_factor(
             attacking_team, defending_team))
 
         # Man-advantage finishing: extra space and tired penalty killers mean
@@ -5057,9 +5285,70 @@ class GameSim:
         expected_goal = min(0.95, expected_goal * self._man_advantage_xg_factor(
             attacking_team, defending_team))
 
+        # Situations channel: the room, the bench, and the kids move
+        # finishing a few percent either way. Own channel, like the
+        # controversy momentum channel -- not part of any capped budget.
+        expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
+            attacking_team))
+
+        # Tie-game late tightening (additive): protecting the point is real
+        # hockey -- tied in the 3rd under 10:00 left, both teams trade
+        # chances for structure. Same shared decision both engines call
+        # (scoring_balance.tie_late_factor); this engine applies it on the
+        # xG gate. Manufactures regulation ties toward the NHL's ~23% OT
+        # rate. Own channel, never overrides the math above.
+        try:
+            import scoring_balance as _sbal
+            _tlf = _sbal.tie_late_factor(
+                getattr(self, 'period', 1), getattr(self, 'clock', 1200),
+                getattr(self, 'home_score', 0), getattr(self, 'away_score', 0))
+            if _tlf != 1.0:
+                expected_goal = min(0.95, expected_goal * _tlf)
+        except Exception:
+            pass
+
+        # -- Perfect mesh (additive): situational alignment -- chemistry,
+        # system fit, morale, form -- pays a super-additive kicker with an
+        # underdog tilt, plus playoff elevators in April. Own channel next to
+        # the tactics/situation factors above; never overrides them.
+        try:
+            from mesh_system import mesh_factor as _mesh_factor
+            _mates = [pl for pl in self._get_on_ice(attacking_team)
+                      if pl is not shooter
+                      and pl.primary_position != PlayerPosition.GOALIE]
+            _mf = _mesh_factor(shooter, _mates, attacking_team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _mf != 1.0:
+                expected_goal = min(0.95, expected_goal * _mf)
+        except Exception:
+            pass
+
+        # Crowd finishing edge (divergence #9): the building's mood moves
+        # finishing +/-3% -- the same crowd_effects decision quick-sim
+        # applies on shot_chance. Own channel, never overrides the above.
+        try:
+            _cm = (self._crowd_home_mult
+                   if attacking_team is self.home_team
+                   else self._crowd_away_mult)
+            if _cm != 1.0:
+                expected_goal = min(0.95, expected_goal * _cm)
+        except Exception:
+            pass
+
         # Update expected goals tracking
         self.expected_goals[attacking_team.team_name] = \
             self.expected_goals.get(attacking_team.team_name, 0.0) + expected_goal
+
+        # -- Impact tier (additive): tired / normal / big shot, classified
+        # from personnel, fatigue, game state and coaching. Used for the
+        # pbp payload here and the goal-probability scaling below.
+        shot_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _ictx = _imp.build_context(self, shooter, attacking_team)
+            shot_impact = _imp.classify_shot_impact(shooter, _ictx)
+        except Exception:
+            shot_impact = 1
 
         # Positional honesty: the shooter was already placed at his shot
         # location when the chance developed; report the authoritative spot.
@@ -5073,10 +5362,11 @@ class GameSim:
                        location=location.value if hasattr(location, "value") else str(location),
                        quality=self._pbp_num(quality),
                        distance=self._pbp_num(distance),
+                       impact={0: "tired", 1: "normal", 2: "big"}[shot_impact],
                        shooter_pos=(round(sx, 1), round(sy, 1)))
         # Positional: the shot heads for the net
         self._ppos_ensure()
-        self.puck_pos = [189.0 if attacking_team == self.home_team else 11.0, 42.5]
+        self.puck_pos = [189.0 if attacking_team is self.home_team else 11.0, 42.5]
         
         # Determine goaltender positioning and style (skipped: no goalie in net)
         if not empty_net:
@@ -5084,17 +5374,12 @@ class GameSim:
         goalie_style = (self._determine_goaltender_style(goalie)
                         if not empty_net else None)
         goalie_position = self.goaltender_positioning.get(goalie.id, GoaltenderPosition.IN_NET)
-
-        # Calculate save probability with advanced goaltending model.
-        # Empty net: ~97% -- the only question is whether the shooter
-        # flubs the gimme (off the post / wide).
-        if empty_net:
-            save_probability = 0.03
-        else:
-            save_probability = self._calculate_save_probability(
-                goalie, location, shot_type, quality, distance, expected_goal,
-                shooter=shooter,
-            )
+        
+        # Calculate save probability with advanced goaltending model
+        save_probability = self._calculate_save_probability(
+            goalie, location, shot_type, quality, distance, expected_goal,
+            defending_team=defending_team,
+        )
         
         # Add passing bonus to shot skill
         shot_skill_bonus = 0
@@ -5106,6 +5391,13 @@ class GameSim:
         
         # Update shot statistics regardless of outcome
         self._update_shot_stats(shooter, attacking_team, defending_team, quality, distance, shot_type)
+        # Module 04: log the shot for the Analytics Hub (outcome tagged below).
+        self._analytics_record_shot(shooter, attacking_team, defending_team,
+                                    location, distance, shot_type,
+                                    expected_goal, grade=grade)
+        # Chance-grade analytics (2026-09-28, per Muck): per-player
+        # grade_a/b/c_shots -- the xG backbone, same shape as quick-sim.
+        self._record_chance_grade(shooter, grade, False)
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
@@ -5133,68 +5425,108 @@ class GameSim:
         if mult != 1.0:
             goal_prob = (1.0 - adjusted_save_prob) * mult
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+
+        # Superstar tune 2026-09-28 (shared decisions, one decision two
+        # fidelities): D point-shot conversion discount + sniper archetype
+        # finishing tilt -- the same multipliers quick-sim applies.
+        try:
+            from mesh_system import (defense_point_shot_discount as _dpsd,
+                                     archetype_finish_tilt as _aft)
+            _tilt = _dpsd(shooter) * _aft(shooter)
+            if _tilt != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _tilt
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # Defensive contest 2026-09-28 (shared decision, one decision two
+        # fidelities): on-ice defenders contest via blocks/gap/angles/sticks.
+        try:
+            from mesh_system import defensive_contest_mult as _dcm
+            from game_classes import PlayerPosition as _PP
+            _dskaters = [p for p in self._get_on_ice(defending_team)
+                         if getattr(p, "primary_position", None) in
+                         (_PP.DEFENSE, _PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE)]
+            _contest = _dcm(_dskaters)
+            if _contest != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _contest
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # -- Impact scaling (additive): apply the classified tier on top
+        # of the existing math, exactly like the scoring-level preference
+        # above. Big shots beat goalies cleaner; tired ones are easier.
+        try:
+            _seff = _imp.shot_effects(shot_impact)
+            _sm = _seff["save_prob_mult"]
+            if _sm != 1.0:
+                _gp = (1.0 - adjusted_save_prob) / _sm
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, _gp))
+        except Exception:
+            pass
         
         # Resolve the shot
         if random.random() > adjusted_save_prob:
             # Goal scored
-            goal_type = self._determine_goal_type(shot_type, location, save_type)
-            
-            # Record the goal (empty-net: charged to the pulled goalie's
-            # GAA per NHL rule, but no shot recorded against him)
-            self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality,
-                                          empty_net=empty_net)
-            
-            # Handle assists
-            assists = []
-            if passer:
-                assists.append(passer)
-            # Trait: Playmakers earn more secondary assists
-            secondary_chance = 0.4
-            # Boost if any on-ice teammate is a playmaker (they're more likely to get the secondary)
-            for p in self._get_on_ice(attacking_team):
-                if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE:
-                    secondary_chance *= _trait_bonus(p, "assist_chance_mult")
-                    break  # Only apply once (highest bonus)
-            if random.random() < min(0.8, secondary_chance):  # Secondary assist chance
-                second_assist_candidates = [p for p in self._get_on_ice(attacking_team) 
-                                          if p not in [shooter, passer] and p.primary_position != PlayerPosition.GOALIE]
-                if second_assist_candidates:
-                    # Weight by playmaker trait for secondary assist selection
-                    weights = [_trait_bonus(p, "assist_chance_mult") for p in second_assist_candidates]
-                    assists.append(random.choices(second_assist_candidates, weights=weights, k=1)[0])
-            
-            self._handle_goal(attacking_team, shooter, assists, shot_type, location,
-                              empty_net=empty_net)
-            
-            # Log advanced goal details
-            defending_team = (self.away_team if attacking_team == self.home_team
-                              else self.home_team)
-            if defending_team.team_name in getattr(self, "goalie_pulled", set()):
-                _goal_strength = 'EN'
-            elif self._is_team_on_power_play(attacking_team):
-                _goal_strength = 'PP'
-            elif self._is_team_on_penalty_kill(attacking_team):
-                _goal_strength = 'SH'
+            # -- Controversy review (additive): a borderline crease play can
+            #    be challenged by the defending coach BEFORE the goal hits
+            #    the scoresheet, so a disallowed goal never needs stat surgery.
+            _cz_verdict = "goal"
+            try:
+                from controversy_system import review_goal_scoring_play
+                _cz_verdict = review_goal_scoring_play(
+                    self, attacking_team, defending_team, shooter,
+                    location, shot_type)
+            except Exception:
+                _cz_verdict = "goal"
+            if _cz_verdict == "disallowed":
+                # Waved off after review: no stats, restart with a faceoff.
+                self._analytics_tag_shot("disallowed")
+                self._resolve_faceoff(reason="disallowed goal",
+                                       offending_team=attacking_team)
             else:
-                _goal_strength = 'EV'
-            _elapsed = max(0.0, self._period_length - self.clock)
-            self.event_log.append({
-                'timestamp': _elapsed,
-                'duration': 1.0,
-                'type': 'GOAL_ADVANCED',
-                'details': {
-                    'scorer_id': shooter.id,
-                    'assist_ids': [p.id for p in assists],
-                    'goaltender_id': goalie.id,
-                    'goal_type': goal_type.value,
-                    'expected_goal': round(expected_goal, 3),
-                    'save_probability': round(adjusted_save_prob, 3),
-                    'shot_quality': quality,
-                    'period': self.period,
-                    'strength': _goal_strength,
-                    'time_str': f"{int(_elapsed // 60)}:{int(_elapsed % 60):02d}",
-                }
-            })
+                goal_type = self._determine_goal_type(shot_type, location, save_type)
+            
+                # Record the goal
+                self._record_goaltender_stats(goalie, 'goal', save_type, expected_goal, quality)
+                self._analytics_tag_shot("goal")
+                self._record_chance_grade(shooter, grade, True)
+            
+                # Handle assists -- Part B: the ONE shared decision.
+                assists = self._award_assists(shooter, attacking_team, passer)
+            
+                self._handle_goal(attacking_team, shooter, assists, shot_type, location)
+            
+                # Log advanced goal details
+                defending_team = (self.away_team if attacking_team is self.home_team
+                                  else self.home_team)
+                if defending_team.team_name in getattr(self, "goalie_pulled", set()):
+                    _goal_strength = 'EN'
+                elif self._is_team_on_power_play(attacking_team):
+                    _goal_strength = 'PP'
+                elif self._is_team_on_penalty_kill(attacking_team):
+                    _goal_strength = 'SH'
+                else:
+                    _goal_strength = 'EV'
+                _elapsed = max(0.0, self._period_length - self.clock)
+                self.event_log.append({
+                    'timestamp': _elapsed,
+                    'duration': 1.0,
+                    'type': 'GOAL_ADVANCED',
+                    'details': {
+                        'scorer_id': shooter.id,
+                        'assist_ids': [p.id for p in assists],
+                        'goaltender_id': goalie.id,
+                        'goal_type': goal_type.value,
+                        'expected_goal': round(expected_goal, 3),
+                        'save_probability': round(adjusted_save_prob, 3),
+                        'shot_quality': quality,
+                        'period': self.period,
+                        'strength': _goal_strength,
+                        'time_str': f"{int(_elapsed // 60)}:{int(_elapsed % 60):02d}",
+                    }
+                })
         else:
             if empty_net:
                 # Flubbed the gimme: off the post or wide of the empty net.
@@ -5207,9 +5539,31 @@ class GameSim:
             # Save made
             shot_power = random.randint(1, 10)  # Shot power factor
             rebound_control = self._determine_rebound_control(goalie, save_type, shot_type, shot_power)
+
+            # Goalie personality: temperament shapes rebound control --
+            # athletic scramblers kick out more second chances, technicians
+            # swallow pucks. Shifts the outcome one rung up/down the ladder.
+            try:
+                import goalie_personality as _gp3
+                _rshift = _gp3.rebound_shift(goalie)
+                if _rshift > 0 and random.random() < _rshift:
+                    _up = {ReboundControl.ABSORBED: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.CONTROLLED: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.DEFLECTED_AWAY: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.KICKED_OUT: ReboundControl.WEAK_REBOUND,
+                           ReboundControl.WEAK_REBOUND: ReboundControl.DANGEROUS_REBOUND}
+                    rebound_control = _up.get(rebound_control, rebound_control)
+                elif _rshift < 0 and random.random() < -_rshift:
+                    _down = {ReboundControl.DANGEROUS_REBOUND: ReboundControl.WEAK_REBOUND,
+                             ReboundControl.WEAK_REBOUND: ReboundControl.CONTROLLED,
+                             ReboundControl.KICKED_OUT: ReboundControl.CONTROLLED}
+                    rebound_control = _down.get(rebound_control, rebound_control)
+            except Exception:
+                pass
             
             # Record the save
             self._record_goaltender_stats(goalie, 'save', save_type, expected_goal, quality)
+            self._analytics_tag_shot("save")
             
             # Handle rebound outcome
             if rebound_control in [ReboundControl.WEAK_REBOUND, ReboundControl.DANGEROUS_REBOUND]:
@@ -5218,7 +5572,8 @@ class GameSim:
             else:
                 # Regular save
                 self._handle_save(goalie, shooter, shot_type, quality,
-                                  defending_team=defending_team)
+                                  defending_team=defending_team,
+                                  shot_impact=shot_impact, distance=distance)
             
             # Update goaltender fatigue
             self._update_goaltender_fatigue(goalie, quality)
@@ -5240,32 +5595,20 @@ class GameSim:
             })
 
     def _calculate_shooter_skill(self, shooter, shot_type, quality, distance):
-        """Calculate the shooter's skill for this specific shot."""
-        base_skill = (
-            shooter.shooting_accuracy * 0.3 +
-            shooter.shooting_power * 0.2 +
-            shooter.composure * 0.15 +
-            shooter.offensive_awareness * 0.15 +
-            shooter.hockey_iq * 0.1 +
-            shooter.flair * 0.1
-        )
-        
-        # Shot type modifiers
-        type_bonus = {
-            ShotType.WRIST_SHOT: shooter.shooting_accuracy * 0.1,
-            ShotType.SLAP_SHOT: shooter.shooting_power * 0.15,
-            ShotType.SNAP_SHOT: (shooter.shooting_accuracy + shooter.shooting_power) * 0.05,
-            ShotType.TIP_IN: shooter.anticipation * 0.2,
-            ShotType.REBOUND: shooter.anticipation * 0.15,
-            ShotType.DEFLECTION: shooter.anticipation * 0.1,
-            ShotType.BACKHAND: shooter.deking * 0.1,
-            ShotType.WRAPAROUND: shooter.deking * 0.15
-        }.get(shot_type, 0)
-        
-        # Quality bonus
-        quality_bonus = {"high": 5, "medium": 2, "low": 0}[quality]
-        
-        return base_skill + type_bonus + quality_bonus
+        """Calculate the shooter's skill for this specific shot.
+
+        Revived (divergence #2): delegates to the ONE shared
+        shooter_skill_composite -- the same 0.30/0.25/0.20/0.15/0.10
+        weights both engines use. Kept as a method so any external
+        callers keep working.
+        """
+        from mesh_system import shooter_skill_composite as _ssc3
+        _sbase = {
+            ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
+            ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
+            ShotType.BACKHAND: getattr(shooter, "backhand", 10),
+        }.get(shot_type, getattr(shooter, "wristshot", 10))
+        return _ssc3(shooter, _sbase)
 
     def _calculate_goalie_skill(self, goalie, shot_type, location, quality):
         """Calculate goalie's skill for stopping this specific shot (legacy method for compatibility)."""
@@ -5319,9 +5662,9 @@ class GameSim:
             ShotType.WRAPAROUND: 0.7
         }.get(shot_type, 1.0)
         
-        # Goalie rebound control (attributes are 1-100): elite (~95) swallows
-        # pucks, weak (~55) kicks out rebounds.
-        rebound_control_factor = (100 - goalie.rebound_control) / 100
+        # Goalie rebound control (1-100 scale: avg ~69 -> factor 0.31;
+        # the old (20 - rc)/20 assumed a 1-20 scale and went negative here)
+        rebound_control_factor = max(0.05, (100 - goalie.rebound_control) / 100)
         
         rebound_chance = base_rebound_chance * type_modifier * rebound_control_factor
         
@@ -5364,52 +5707,61 @@ class GameSim:
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
                                         'high', 8.0, ShotType.REBOUND)
                 self._record_goaltender_stats(goalie, 'goal', SaveType.PAD_SAVE, 0.22, 'high')
-                self._handle_goal(attacking_team, best_attacker, [], ShotType.REBOUND, ShotLocation.CREASE)
+                # Part B: rebound goals earn assists too -- the setup man is
+                # selected by the shared decision (no pass branch ran here).
+                _reb_assists = self._award_assists(best_attacker, attacking_team)
+                self._handle_goal(attacking_team, best_attacker, _reb_assists, ShotType.REBOUND, ShotLocation.CREASE)
                 return True
             else:
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
                                         'high', 8.0, ShotType.REBOUND)
                 self._record_goaltender_stats(goalie, 'save', SaveType.PAD_SAVE, 0.22, 'high')
-                # A normal save: the goalie may freeze it for a faceoff;
-                # otherwise the defending team regroups with the puck.
-                self._handle_save(goalie, best_attacker, ShotType.REBOUND, 'high',
-                                  defending_team=defending_team)
-                if self.possession_team is None:
-                    self.possession_team = defending_team
-                    self.possession_player = best_defender
+                self._log_event(f"Rebound chance by {best_attacker.full_name}, saved by {goalie.full_name}!", "SAVE")
+                # Possession model: the rebound save breaks up like any save.
+                try:
+                    import possession_model as _pmr
+                    _rout = _pmr.after_shot("save", quality=0.55)
+                except Exception:
+                    _rout = "retain"
+                self._apply_shot_outcome(_rout, attacking_team,
+                                         defending_team, goalie=goalie)
         else:
-            # Defender wins the net-front battle: he gains possession and
-            # the danger is cleared.
-            self.possession_team = defending_team
-            self.possession_player = best_defender
-            self._log_event(f"Rebound cleared by {best_defender.full_name}.",
-                            "REBOUND")
-
+            # Defender wins the scramble: the siege is broken honestly --
+            # the puck is cleared or goes loose, never silently retained.
+            # (This was the second stickiness leak: the old code just
+            # returned, leaving the attack in the O-zone.)
+            try:
+                import possession_model as _pmr2
+                _dout = _pmr2.after_shot("save", quality=0.55)
+                if _dout == _pmr2.RETAIN:
+                    _dout = _pmr2.DEFENSE  # won the battle: usually comes away with it
+            except Exception:
+                _dout = "defense"
+            self._apply_shot_outcome(
+                _dout, attacking_team, defending_team,
+                goalie=self._selected_goalie(defending_team))
+        
         return False
 
-    def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None):
-        """Handle a save event."""
-        self._log_event(f"Shot by {shooter.full_name}, saved by {goalie.full_name}!", "SAVE")
-        self._emit_pbp("save",
-                       goalie=goalie,
-                       shooter=shooter,
-                       defending_team=getattr(goalie, "team_name", None),
-                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type))
-        # NHL: on a controlled save the goalie often covers the puck for a
-        # whistle -- faceoff at the nearest end-zone dot in his own end.
-        # More likely on dangerous looks / under sustained pressure.
-        # (Kept modest: each whistle breaks up the attack's sustained
-        # pressure, so too many freezes would drag scoring below target.)
+    def _apply_shot_outcome(self, outcome, attacking_team, defending_team,
+                            goalie=None):
+        """Apply the possession model's post-shot decision (shared decision).
+
+        FREEZE  -> whistle, faceoff (the old goalie-freeze path).
+        DEFENSE -> defending team gains clean possession; their breakout
+                   comes next tick (the siege is broken, honestly).
+        LOOSE   -> puck loose; the battle resolves next tick.
+        RETAIN  -> nothing: the attack keeps the O-zone (the old default).
+        """
         try:
-            # quality is a danger bucket ("high"/"medium"/"low"); map it to
-            # a number so dangerous looks freeze more often.
-            q = {"high": 0.9, "medium": 0.6, "low": 0.3}.get(quality, 0.4)
-            q = float(q)
-        except (TypeError, ValueError):
-            q = 0.4
-        if defending_team is not None and random.random() < 0.06 + 0.08 * q:
-            self._log_event(f"{goalie.full_name} covers the puck for a faceoff.",
-                            "STOPPAGE")
+            import possession_model as _pm
+        except Exception:
+            return  # fail safe: retain, exactly the old behavior
+        if outcome == _pm.FREEZE and defending_team is not None:
+            self._log_event(
+                f"{goalie.full_name} covers the puck for a faceoff."
+                if goalie is not None else "Puck covered for a faceoff.",
+                "STOPPAGE")
             self._emit_pbp("goalie_freeze", goalie=goalie,
                            team=defending_team.team_name,
                            home_score=self.home_score,
@@ -5417,6 +5769,86 @@ class GameSim:
             self._forced_faceoff_team = None
             self.possession_team = self._resolve_faceoff(reason="stoppage")
             self.current_situation = self._get_current_situation()
+        elif outcome == _pm.DEFENSE and defending_team is not None:
+            self.possession_team = defending_team
+            self.possession_player = None
+            self.possession_time = 0
+            self._log_event(f"{defending_team.team_name} clears the rebound.",
+                            "CLEAR")
+        elif outcome == _pm.LOOSE:
+            self.possession_team = None
+            self.possession_player = None
+            self.possession_time = 0
+            self._log_event("Puck is loose after the shot.", "LOOSE_PUCK")
+        # RETAIN: intentional no-op -- the attack keeps buzzing.
+
+    def _handle_save(self, goalie, shooter, shot_type, quality, defending_team=None,
+                     shot_impact=1, distance=None):
+        """Handle a save event."""
+        # -- Impact tier (additive): classify the save. A robbery on a
+        # grade-A look can steal momentum; a tired wobbler just gets
+        # stopped. Never changes whether the puck was stopped.
+        save_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _sctx = _imp.build_context(self, goalie, defending_team)
+            save_impact = _imp.classify_save_impact(
+                goalie, shooter, quality, distance if distance is not None else 25.0, _sctx)
+            _seff = _imp.save_effects(save_impact)
+            if _seff["heat"]:
+                self._live_heat = min(40.0, self._live_heat + _seff["heat"])
+            _story = _imp.story_worthy(save_impact, goalie, _sctx)
+            if save_impact == 2 and _story and defending_team is not None \
+                    and _seff["momentum"]:
+                # Momentum only moves at story moments -- a big save by a
+                # star, at a key moment, or by a goalie having a special
+                # night. Routine big stops stay quiet so the moment keeps
+                # its meaning (mirrors the hit path's story gating).
+                _imp.nudge_momentum(self, defending_team, _seff["momentum"])
+                try:
+                    from momentum import observe as _mom_observe6
+                    _mom_observe6(self, "big_save", defending_team)
+                except Exception:
+                    pass
+            _freeze_mult = _seff["freeze_mult"]
+        except Exception:
+            _story = False
+            _freeze_mult = 1.0
+        self._log_event(f"Shot by {shooter.full_name}, saved by {goalie.full_name}!", "SAVE")
+        self._emit_pbp("save",
+                       goalie=goalie,
+                       shooter=shooter,
+                       defending_team=getattr(goalie, "team_name", None),
+                       shot_type=shot_type.value if hasattr(shot_type, "value") else str(shot_type),
+                       impact={0: "tired", 1: "normal", 2: "big"}[save_impact],
+                       story=_story)
+        # Possession model (shared decision): a save breaks the attack up
+        # like real hockey -- covers, clearances and loose pucks -- instead
+        # of the old ~91% silent retain that chained saves into marathon
+        # sieges (single-game SOG std ~13 vs real ~6). The OZ per-tick shot
+        # rate is tuned against these tables so the ~29 SOG mean holds:
+        # more, shorter possessions, same total volume. Goalie-personality
+        # channels (freeze_mult, rebound_shift) stay live inside the model.
+        try:
+            q = float(quality)
+        except (TypeError, ValueError):
+            q = 0.4
+        _outcome = "retain"
+        try:
+            import possession_model as _pm2
+            import goalie_personality as _gp4
+            try:
+                _rshift = _gp4.rebound_shift(goalie)
+            except Exception:
+                _rshift = 0.0
+            _outcome = _pm2.after_shot("save", quality=q,
+                                       freeze_mult=_freeze_mult,
+                                       rebound_shift=_rshift)
+        except Exception:
+            pass
+        _attacking = self._get_player_team(shooter)
+        self._apply_shot_outcome(_outcome, _attacking, defending_team,
+                                 goalie=goalie)
 
 
     def _resolve_faceoff(self, reason=None, offending_team=None):
@@ -5461,7 +5893,54 @@ class GameSim:
             self.faceoff_zone = random.choice([FaceoffZone.OFFENSIVE_ZONE, FaceoffZone.DEFENSIVE_ZONE])
         else:
             self.faceoff_zone = FaceoffZone.NEUTRAL_ZONE
-        
+
+        # Real shift engine: line changes at the stoppage, before the draw.
+        # Away team declares first (rolls rotation); home team matches with
+        # last change (if the coach's tactic_line_matching is Aggressive).
+        # Icing-frozen team cannot change.
+        try:
+            from shift_engine import (
+                get_shift_state, stoppage_change, emit_line_change_event,
+            )
+            _fz = self.faceoff_zone
+            # Zone from each team's perspective for the stoppage logic
+            def _zone_for(team):
+                is_home = team is self.home_team
+                if _fz == FaceoffZone.OFFENSIVE_ZONE:
+                    # Offensive zone faceoff: need to know WHOSE zone.
+                    # Use the winner-relative logic below; for now, use
+                    # current_zone as an approximation.
+                    return "offensive" if (
+                        (is_home and self.current_zone == Zone.OFFENSIVE_ZONE) or
+                        (not is_home and self.current_zone == Zone.DEFENSIVE_ZONE)
+                    ) else "defensive"
+                elif _fz == FaceoffZone.DEFENSIVE_ZONE:
+                    return "defensive" if (
+                        (is_home and self.current_zone == Zone.DEFENSIVE_ZONE) or
+                        (not is_home and self.current_zone == Zone.OFFENSIVE_ZONE)
+                    ) else "offensive"
+                return "neutral"
+            _frozen = getattr(self, "_no_line_change_team", None)
+            # Away declares first
+            _ast = get_shift_state(self, self.away_team)
+            _ainfo = stoppage_change(
+                self, self.away_team, _ast, is_home=False,
+                zone=_zone_for(self.away_team),
+                icing_frozen=_frozen is self.away_team)
+            emit_line_change_event(self, self.away_team, _ainfo)
+            # Home matches (if Aggressive matching; otherwise rolls)
+            _hst = get_shift_state(self, self.home_team)
+            _do_match = (getattr(self.home_team, "tactic_line_matching",
+                                 "Standard") == "Aggressive")
+            _hinfo = stoppage_change(
+                self, self.home_team, _hst, is_home=True,
+                away_line=_ast.f_line if _do_match else None,
+                zone=_zone_for(self.home_team),
+                icing_frozen=_frozen is self.home_team)
+            emit_line_change_event(self, self.home_team, _hinfo)
+        except Exception:
+            pass
+
         # Get centers for faceoff
         home_centers = [p for p in self._get_on_ice(self.home_team) if p.primary_position == PlayerPosition.CENTER]
         away_centers = [p for p in self._get_on_ice(self.away_team) if p.primary_position == PlayerPosition.CENTER]
@@ -5503,7 +5982,7 @@ class GameSim:
         else:
             outcome = FaceoffOutcome.BATTLE
             winner = random.choice([self.home_team, self.away_team])
-            winner_player = home_player if winner == self.home_team else away_player
+            winner_player = home_player if winner is self.home_team else away_player
         
         if forced_team is not None:
             # Winner-relative: draw is in the forced team's defensive zone
@@ -5535,8 +6014,15 @@ class GameSim:
                        faceoff_y=round(fy, 1))
         self._faceoff_formation(winner, self.faceoff_zone, dot=(fx, fy))
 
-        # A trailing coach keeps the extra attacker out for an
-        # offensive-zone draw (the goalie never came back at the whistle).
+        # A trailing coach may burn his timeout to set up the 6-on-5, then
+        # keeps the goalie out for an offensive-zone draw (or a neutral-zone
+        # draw for aggressive coaches).
+        try:
+            from goalie_pull import maybe_timeout_before_draw as _to_draw
+            _to_draw(self, self.home_team, fx)
+            _to_draw(self, self.away_team, fx)
+        except Exception:
+            pass
         self._maybe_pull_goalie_for_draw(fx)
 
         # Rule 81.2: the icing no-change restriction ends once the ensuing
@@ -5579,7 +6065,7 @@ class GameSim:
         strong_left = py < 42.5
 
         def ez_dot(team):
-            dots = (self._FACEOFF_DOTS_EZ_HOME if team == self.home_team
+            dots = (self._FACEOFF_DOTS_EZ_HOME if team is self.home_team
                     else self._FACEOFF_DOTS_EZ_AWAY)
             return dots[0] if strong_left else dots[1]
 
@@ -5603,7 +6089,14 @@ class GameSim:
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
         """Calculate faceoff skill with zone and situation modifiers."""
         base_skill = player.faceoffs * 1.0
-        
+
+        # A fresh timeout steadies the draw unit: one-shot bonus.
+        try:
+            from goalie_pull import timeout_faceoff_boost as _to_boost
+            base_skill += _to_boost(self, team)
+        except Exception:
+            pass
+
         # Fatigue affects faceoff performance
         fatigue_factor = 0.5 + 0.5 * (self.player_fatigue.get(player.id, 100) / 100)
         base_skill *= fatigue_factor
@@ -5658,7 +6151,7 @@ class GameSim:
                     self.game_stats[player.id]['zone_starts_offensive'] += 1
             
             # Losing team starts in defensive zone
-            losing_team = self.away_team if winning_team == self.home_team else self.home_team
+            losing_team = self.away_team if winning_team is self.home_team else self.home_team
             for player in self._get_on_ice(losing_team):
                 if player.id in self.game_stats:
                     self.game_stats[player.id]['zone_starts_defensive'] += 1
@@ -5671,7 +6164,7 @@ class GameSim:
                     self.game_stats[player.id]['zone_starts_defensive'] += 1
             
             # Losing team starts in offensive zone
-            losing_team = self.away_team if winning_team == self.home_team else self.home_team
+            losing_team = self.away_team if winning_team is self.home_team else self.home_team
             for player in self._get_on_ice(losing_team):
                 if player.id in self.game_stats:
                     self.game_stats[player.id]['zone_starts_offensive'] += 1
@@ -5685,7 +6178,7 @@ class GameSim:
         Excludes coincidental minors/majors (offsetting) and misconducts,
         which keep a player in the box without changing manpower.
         """
-        plist = self.home_penalties if team == self.home_team else self.away_penalties
+        plist = self.home_penalties if team is self.home_team else self.away_penalties
         return [p for p in plist if p.get('manpower_loss', True)]
 
     def _get_current_situation(self):
@@ -5699,46 +6192,56 @@ class GameSim:
         home_penalty_count = len(self._manpower_penalties(self.home_team))
         away_penalty_count = len(self._manpower_penalties(self.away_team))
 
-        base = 4 if (self.period == 4 and not self.is_playoff) else 6
-        home_skaters = max(3, base - home_penalty_count)
-        away_skaters = max(3, base - away_penalty_count)
+        # Regular-season overtime is 3v3: base manpower is 4 (3 skaters +
+        # goalie), not 6. Without this the OT period read EVEN_STRENGTH and
+        # the intended 3v3 1.25x open-ice volume boost never fired.
+        # Playoff OT is 5v5 sudden death -- base stays 6.
+        _ot_3v3 = (getattr(self, "_ot_sudden_death", False)
+                   and not getattr(self, "is_playoff", False))
+        _base = 4 if _ot_3v3 else 6
 
-        # Rule 84.2: an OT penalty expiry leaves 4v4 until the next whistle.
-        if (self.period == 4 and not self.is_playoff
-                and getattr(self, '_ot_4v4_until_whistle', False)
-                and home_skaters == away_skaters == 4):
-            return SpecialSituation.FOUR_ON_FOUR
+        home_skaters = _base - home_penalty_count
+        away_skaters = _base - away_penalty_count
+
+        # Ensure minimum of 3 skaters per team
+        home_skaters = max(3, home_skaters)
+        away_skaters = max(3, away_skaters)
 
         if home_skaters == away_skaters:
-            if home_skaters == 6:
-                return SpecialSituation.EVEN_STRENGTH
-            elif home_skaters == 5:
+            if home_skaters == _base:
+                return (SpecialSituation.THREE_ON_THREE if _ot_3v3
+                        else SpecialSituation.EVEN_STRENGTH)
+            elif home_skaters == _base - 1:
                 return SpecialSituation.FOUR_ON_FOUR
-            elif home_skaters == 4:
+            elif home_skaters == _base - 2:
                 return SpecialSituation.THREE_ON_THREE
             else:
                 return SpecialSituation.EVEN_STRENGTH  # Fallback
         elif home_skaters > away_skaters:
-            if home_skaters == 6 and away_skaters == 5:
+            if home_skaters == _base and away_skaters == _base - 1:
                 return SpecialSituation.POWER_PLAY  # Home team power play
-            elif home_skaters == 6 and away_skaters == 4:
-                return SpecialSituation.SIX_ON_FIVE
-            elif home_skaters == 5 and away_skaters == 4:
+            elif home_skaters == _base and away_skaters == _base - 2:
+                # 5v3 (two minor penalties): a power play, not 6v5. The old
+                # SIX_ON_FIVE label starved the 5v3 xG branch (3.0x) because
+                # _man_advantage_xg_factor only fires on POWER_PLAY.
                 return SpecialSituation.POWER_PLAY
-            elif home_skaters == 5 and away_skaters == 3:
+            elif home_skaters == _base - 1 and away_skaters == _base - 2:
+                return SpecialSituation.POWER_PLAY
+            elif home_skaters == _base - 1 and away_skaters == _base - 3:
                 return SpecialSituation.FOUR_ON_THREE
             elif home_skaters == 4 and away_skaters == 3:
                 return SpecialSituation.FOUR_ON_THREE  # OT 4v3
             else:
                 return SpecialSituation.POWER_PLAY
         else:  # away_skaters > home_skaters
-            if away_skaters == 6 and home_skaters == 5:
+            if away_skaters == _base and home_skaters == _base - 1:
                 return SpecialSituation.PENALTY_KILL  # Home team penalty kill
-            elif away_skaters == 6 and home_skaters == 4:
-                return SpecialSituation.FIVE_ON_SIX
-            elif away_skaters == 5 and home_skaters == 4:
+            elif away_skaters == _base and home_skaters == _base - 2:
+                # 3v5 (two minors against): a penalty kill. See note above.
                 return SpecialSituation.PENALTY_KILL
-            elif away_skaters == 5 and home_skaters == 3:
+            elif away_skaters == _base - 1 and home_skaters == _base - 2:
+                return SpecialSituation.PENALTY_KILL
+            elif away_skaters == _base - 1 and home_skaters == _base - 3:
                 return SpecialSituation.THREE_ON_FOUR
             elif away_skaters == 4 and home_skaters == 3:
                 return SpecialSituation.THREE_ON_FOUR  # OT 3v4
@@ -5748,7 +6251,24 @@ class GameSim:
     def _select_formation(self, team, situation):
         """
         Stage 3: Select appropriate formation based on situation.
+
+        The team's installed PP/PK system (tactics.py) -- a coaching
+        decision, not a dice roll. Falls back to the old random pick
+        when no system is installed.
         """
+        try:
+            import tactics as _tx
+            tk = _tx.team_tactics(team)
+            if situation == SpecialSituation.POWER_PLAY:
+                key = tk.get("pp", "umbrella")
+                if key in _tx.POWERPLAY_SYSTEMS:
+                    return ("pp", key)
+            elif situation == SpecialSituation.PENALTY_KILL:
+                key = tk.get("pk", "diamond")
+                if key in _tx.PENALTY_KILL_SYSTEMS:
+                    return ("pk", key)
+        except Exception:
+            pass
         if situation == SpecialSituation.POWER_PLAY:
             formations = list(PowerPlayFormation)
             return random.choice(formations)
@@ -5765,8 +6285,15 @@ class GameSim:
         modifier = 1.0
         
         if situation == SpecialSituation.POWER_PLAY:
-            modifier = 1.6  # PP generates more volume, but not 2x the chances
-            if formation == PowerPlayFormation.UMBRELLA:
+            modifier = 2.0  # ~2x: real power plays generate far more shot volume
+            if isinstance(formation, tuple) and formation[0] == "pp":
+                try:
+                    import tactics as _tx
+                    modifier *= _tx.POWERPLAY_SYSTEMS[formation[1]].get(
+                        "pp_shots", 1.0)
+                except Exception:
+                    pass
+            elif formation == PowerPlayFormation.UMBRELLA:
                 modifier += 0.1  # Extra 10% for umbrella formation
             elif formation == PowerPlayFormation.OVERLOAD:
                 modifier += 0.05  # Extra 5% for overload
@@ -5776,7 +6303,17 @@ class GameSim:
             modifier = 2.6  # 4v3: maximum space
         elif situation == SpecialSituation.PENALTY_KILL:
             modifier = 0.6  # 40% reduction for penalty kill
-            if formation == PenaltyKillFormation.DIAMOND:
+            if isinstance(formation, tuple) and formation[0] == "pk":
+                # The shorthanded team's own system: an aggressive kill
+                # hunts shorthanded rushes, a passive box just survives.
+                try:
+                    import tactics as _tx
+                    _sh = _tx.PENALTY_KILL_SYSTEMS[formation[1]].get(
+                        "sh_threat", 1.0)
+                    modifier *= 0.7 + 0.3 * _sh
+                except Exception:
+                    pass
+            elif formation == PenaltyKillFormation.DIAMOND:
                 modifier += 0.1  # Better defense with diamond
             elif formation == PenaltyKillFormation.BOX:
                 modifier += 0.05  # Slight improvement with box
@@ -5799,10 +6336,8 @@ class GameSim:
         perspective.
         """
         situation = self._get_current_situation()
-        if team == self.home_team:
-            return situation in (SpecialSituation.POWER_PLAY,
-                                 SpecialSituation.SIX_ON_FIVE,
-                                 SpecialSituation.FOUR_ON_THREE)
+        if team is self.home_team:
+            return situation == SpecialSituation.POWER_PLAY
         else:
             # Away team is on the PP when the home team is killing one.
             return situation in (SpecialSituation.PENALTY_KILL,
@@ -5816,10 +6351,8 @@ class GameSim:
         (THREE_ON_FOUR).
         """
         situation = self._get_current_situation()
-        if team == self.home_team:
-            return situation in (SpecialSituation.PENALTY_KILL,
-                                 SpecialSituation.FIVE_ON_SIX,
-                                 SpecialSituation.THREE_ON_FOUR)
+        if team is self.home_team:
+            return situation == SpecialSituation.PENALTY_KILL
         else:
             # Away team is killing when the home team has the advantage.
             return situation in (SpecialSituation.POWER_PLAY,
@@ -5891,7 +6424,10 @@ class GameSim:
         call (handled in _resolve_faceoff).
         """
         if infraction is None:
-            name, penalty_length, detail = _draw_infraction()
+            name, penalty_length, detail = _draw_infraction(
+                fight_mult=self._fight_weight_mult(),
+                scrum_mult=self._scrum_weight_mult(),
+                play_mult=self._play_weight_mult())
         else:
             name, penalty_length, detail = infraction
 
@@ -5902,8 +6438,8 @@ class GameSim:
             self._delayed_penalty = {"player": player, "team": team,
                                      "infraction": (name, penalty_length, detail),
                                      "ticks": 0}
-            opposing = self.away_team if team == self.home_team else self.home_team
-            self._pull_goalie(opposing, delayed=True)  # 6th attacker during the delay
+            opposing = self.away_team if team is self.home_team else self.home_team
+            self._pull_goalie(opposing)  # 6th attacker during the delay
             self._log_event(
                 f"Delayed penalty coming up on {player.full_name} "
                 f"({team.team_name}, {name}) -- play continues!", "PENALTY")
@@ -5927,12 +6463,357 @@ class GameSim:
                                                      offending_team=team)
         self.current_situation = self._get_current_situation()
 
+    # ------------------------------------------------------------------
+    # Tension / punishment / brawl hooks (reputation_system logic, engine
+    # mechanics). All guarded: if reputation_system is unavailable the sim
+    # behaves exactly as before.
+    # ------------------------------------------------------------------
+    def _find_head_coach(self, team):
+        try:
+            from game_classes import StaffRole
+            found = team.get_staff_by_role(StaffRole.HEAD_COACH)
+            return found[0] if found else None
+        except Exception:
+            return None
+
+    # -- Coach instructions (impact-tier engine; additive) --
+    def set_coach_instruction(self, team_name, instruction):
+        """Set a coach instruction for a team (e.g. "play_harder").
+
+        Consumed by the impact-tier classifiers. Pass None to clear.
+        """
+        try:
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if instruction:
+                self._coach_instructions[team_name] = instruction
+            else:
+                self._coach_instructions.pop(team_name, None)
+        except Exception:
+            pass
+
+    def get_coach_instruction(self, team):
+        try:
+            return self._coach_instructions.get(
+                getattr(team, "team_name", None))
+        except Exception:
+            return None
+
+    def _live_tension(self):
+        return min(100.0, self._tension_base + self._live_heat)
+
+    def _game_state_for(self, team):
+        sd = self.home_score - self.away_score
+        if team is not self.home_team:
+            sd = -sd
+        return {"score_diff": sd, "period": getattr(self, "period", 1),
+                "is_playoff": self.is_playoff, "tension": self._live_tension()}
+
+    def _evaluate_punishment_orders(self):
+        """Pre-game: does either coach send his guys out? Score is 0-0, so
+        only real bad blood can trigger it this early."""
+        try:
+            from reputation_system import order_punishment, respond_to_punishment
+        except Exception:
+            return
+        self._punishment_orders = {}
+        self._retaliation_mod = 1.0
+        for team, coach, opp_coach in (
+                (self.home_team, self._home_coach, self._away_coach),
+                (self.away_team, self._away_coach, self._home_coach)):
+            if coach is None:
+                continue
+            try:
+                res = order_punishment(coach, team, self._game_state_for(team),
+                                       rivalries=self.rivalries)
+            except Exception:
+                continue
+            self._punishment_orders[team.team_name] = res
+            if res.get("ordered"):
+                self._log_event(res.get("story", ""), "COACH")
+                self._emit_pbp("coach_order", team=team.team_name,
+                               coach=getattr(coach, "full_name", "Coach"),
+                               story=res.get("story", ""))
+                self._note_retaliation(opp_coach)
+                # The rarest script in hockey: a premeditated line brawl off
+                # the opening draw, answering a fresh violent incident
+                # (NYR-NJD, Apr 3 2024: five simultaneous fights two seconds
+                # in, after Rempe's suspendable elbow the last meeting).
+                # ~1 in 5 NHL seasons: keep the roll tiny.
+                try:
+                    from reputation_system import fresh_violent_incident
+                    opp_team = (self.away_team if team is self.home_team
+                                else self.home_team)
+                    if (self._opening_brawl is None
+                            and fresh_violent_incident(self.rivalries, team,
+                                                       opp_team)
+                            and random.random() < 0.04):
+                        self._opening_brawl = team.team_name
+                except Exception:
+                    pass
+
+    def _reevaluate_punishment_orders(self):
+        """Start of the 3rd: the Maurice spot develops mid-game. Only newly
+        ordered coaches get announced."""
+        try:
+            from reputation_system import order_punishment
+        except Exception:
+            return
+        for team, coach, opp_coach in (
+                (self.home_team, self._home_coach, self._away_coach),
+                (self.away_team, self._away_coach, self._home_coach)):
+            if coach is None or self._punishment_orders.get(team.team_name, {}).get("ordered"):
+                continue
+            try:
+                res = order_punishment(coach, team, self._game_state_for(team),
+                                       rivalries=self.rivalries)
+            except Exception:
+                continue
+            self._punishment_orders[team.team_name] = res
+            if res.get("ordered"):
+                self._log_event(f"3rd period -- {res.get('story', '')}", "COACH")
+                self._emit_pbp("coach_order", team=team.team_name,
+                               coach=getattr(coach, "full_name", "Coach"),
+                               story=res.get("story", ""))
+                self._note_retaliation(opp_coach)
+
+    def _note_retaliation(self, opp_coach):
+        """The other bench answers a punishment order -- or pointedly doesn't."""
+        try:
+            from reputation_system import respond_to_punishment
+            resp = respond_to_punishment(opp_coach, {"tension": self._live_tension()})
+        except Exception:
+            return
+        if resp and resp.get("responds"):
+            self._retaliation_mod = max(self._retaliation_mod,
+                                        resp.get("retaliation_mod", 1.0))
+            self._live_heat = min(40.0, self._live_heat + resp.get("tension_delta", 0) / 2.0)
+            self._log_event(resp.get("story", ""), "COACH")
+
+    def _init_situations(self):
+        """Per-team pre-game situational finishing edge.
+
+        Compounds morale (room state, chemistry, recent dynamics), coaching
+        (influence, buy-in, GM trust, line control) and youth hunger into one
+        xG multiplier per side. Additive and inert when unused; never raises.
+        """
+        self._situation_edge = {"home": 1.0, "away": 1.0}
+        self._situation_breakdown = {}
+        try:
+            from reputation_system import situations_factor as _sf
+            for _key, _team in (("home", self.home_team), ("away", self.away_team)):
+                _bd = _sf(_team, {"is_playoff": self.is_playoff})
+                self._situation_breakdown[_key] = _bd
+                self._situation_edge[_key] = float(_bd.get("xg_mult", 1.0))
+                if abs(_bd.get("score", 0)) >= 3.5:
+                    self._log_event(f"Pregame -- {_bd.get('story', '')}",
+                                    "SITUATION")
+        except Exception:
+            pass
+
+    def _situation_xg_factor(self, attacking_team):
+        """Finishing multiplier for the attacking side from the situations
+        factor (+/-8% at the extremes)."""
+        try:
+            if attacking_team is self.home_team:
+                return self._situation_edge["home"]
+            return self._situation_edge["away"]
+        except Exception:
+            return 1.0
+
+    def _fight_weight_mult(self):
+        """Scale the Fighting draw weight so the sim's fight rate tracks the
+        tension meter. Base sim: ~0.175 fights/game; target comes from the
+        NHL-grounded fight_probability()."""
+        try:
+            from reputation_system import fight_probability
+            ordered = any(o.get("ordered") for o in
+                          getattr(self, "_punishment_orders", {}).values())
+            target = fight_probability(self._live_tension(),
+                                       is_playoff=self.is_playoff,
+                                       ordered=ordered,
+                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0))
+            return max(0.25, min(4.0, target / 0.175))
+        except Exception:
+            return 1.0
+
+    def _scrum_weight_mult(self):
+        """Post-whistle minors (roughing, unsportsmanlike): the playoffs
+        swallow the whistle on retaliation, more so late in a series.
+        Overtime officials are cautious too -- scrums in OT (period 4+) get
+        the same let-them-play treatment, while fights and majors are still
+        called."""
+        try:
+            from reputation_system import after_whistle_penalty_mult
+            m = after_whistle_penalty_mult(self.is_playoff,
+                                           getattr(self, "series_game", 1))
+            if getattr(self, "period", 1) >= 4:
+                m *= 0.6
+            return m
+        except Exception:
+            return 1.0
+
+    def _play_weight_mult(self):
+        """Ordinary infractions in the playoffs: a touch of early-series
+        desperation (more hooking/holding/tripping in Games 1-2), easing off
+        by Game 7. Regular season: 1.0."""
+        try:
+            from reputation_system import playoff_penalty_mult
+            return playoff_penalty_mult(self.is_playoff,
+                                        getattr(self, "series_game", 1))
+        except Exception:
+            return 1.0
+
+    def _maybe_brawl(self, trigger):
+        """A flashpoint (fight, major) in a heated game can erupt into a line
+        brawl: 3+ combatants at once. Grounded at ~1.2 per NHL season (6 in
+        5 seasons, 2021-22..2025-26) -- rare."""
+        if self._brawl_happened or self._in_brawl:
+            return
+        try:
+            from reputation_system import brawl_probability
+        except Exception:
+            return
+        sd = abs(self.home_score - self.away_score)
+        ordered = any(o.get("ordered") for o in self._punishment_orders.values())
+        p = brawl_probability(self._live_tension(), is_playoff=self.is_playoff,
+                              ordered=ordered, blowout=sd >= 3,
+                              period=getattr(self, "period", 1))
+        if random.random() >= p:
+            return
+        self._run_brawl(trigger)
+
+    def _run_brawl(self, trigger):
+        """The full script: 2-4 pairs drop the gloves, every skater on the
+        ice gets a 10-minute misconduct -- the NHL's actual answer to a line
+        brawl (Nov 27 '23: all 10 skaters). Misconducts, not suspensions: no
+        bloodbath, the game goes on. Logged as an incident so the next
+        meeting's meter remembers."""
+        self._brawl_happened = True
+        self._in_brawl = True
+        try:
+            home_skaters = [p for p in self._get_on_ice(self.home_team)
+                            if p.primary_position != PlayerPosition.GOALIE]
+            away_skaters = [p for p in self._get_on_ice(self.away_team)
+                            if p.primary_position != PlayerPosition.GOALIE]
+            n_pairs = min(len(home_skaters), len(away_skaters),
+                          random.randint(2, 4))
+            if n_pairs < 2:
+                self._brawl_happened = False  # not enough skaters; may try again later
+                return
+            pairs = []
+            for i in range(n_pairs):
+                hp, ap = home_skaters[i], away_skaters[i]
+                pairs.append((hp, ap))
+                self._book_fight_pair(hp, self.home_team, ap, self.away_team)
+                self.penalties_called += 2  # second half of each coincidental pair
+            for p in home_skaters:
+                self._book_misconduct(p, self.home_team)
+            for p in away_skaters:
+                self._book_misconduct(p, self.away_team)
+            names = ", ".join(f"{h.full_name.split()[-1]} vs {a.full_name.split()[-1]}"
+                              for h, a in pairs)
+            self._log_event(
+                f"LINE BRAWL! It started with {trigger} and now {names} -- "
+                f"every skater on the ice gets a 10-minute misconduct.", "BRAWL")
+            self._emit_pbp("brawl", pairs=[(h.full_name, a.full_name) for h, a in pairs],
+                           home_team=self.home_team.team_name,
+                           away_team=self.away_team.team_name)
+            self._live_heat = min(40.0, self._live_heat + 10.0)
+            # Lore: a line brawl is headline news everywhere it happens.
+            # Spec only -- the caller builds/delivers via headlines.py.
+            try:
+                self.pending_headlines.append({
+                    "kind": "line_brawl",
+                    "home": getattr(self.home_team, "team_name", "Home"),
+                    "away": getattr(self.away_team, "team_name", "Away"),
+                    "pairs": [(h.full_name, a.full_name) for h, a in pairs],
+                    "home_score": getattr(self, "home_score", 0),
+                    "away_score": getattr(self, "away_score", 0),
+                    "period": getattr(self, "period", 3),
+                    "involved": (
+                        getattr(self.home_team, "team_name", ""),
+                        getattr(self.away_team, "team_name", ""),
+                    ),
+                })
+            except Exception:
+                pass
+            try:
+                from reputation_system import record_game_incident
+                record_game_incident(self.rivalries, self.home_team,
+                                     self.away_team, "brawl")
+            except Exception:
+                pass
+        finally:
+            self._in_brawl = False
+
+    def _book_fight_pair(self, player, team, opponent=None, opposing_team=None):
+        """Book one coincidental fighting-major pair (5 each, teams stay 5v5).
+        Shared by the normal fight path and brawls."""
+        if opposing_team is None:
+            opposing_team = self.away_team if team is self.home_team else self.home_team
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
+        player.stats.penalties_in_minutes += 5
+        team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
+                               'infraction': "Fighting", 'manpower_loss': False,
+                               'terminates_on_goal': False})
+        if opponent is None:
+            opp_skaters = [p for p in self._get_on_ice(opposing_team)
+                           if p.primary_position != PlayerPosition.GOALIE]
+            opponent = random.choice(opp_skaters) if opp_skaters else None
+        if opponent is not None:
+            opponent.stats.penalties_in_minutes += 5
+            opp_penalties.append({'player': opponent, 'time': 5 * 60, 'minutes': 5,
+                                  'infraction': "Fighting", 'manpower_loss': False,
+                                  'terminates_on_goal': False})
+            self._log_event(
+                f"{player.full_name} ({team.team_name}) and "
+                f"{opponent.full_name} ({opposing_team.team_name}) drop the gloves! "
+                f"Coincidental 5-minute fighting majors -- teams stay at full strength.",
+                "FIGHT")
+        else:
+            self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
+        self._emit_pbp("fight", player=player, team=team.team_name)
+        try:
+            from momentum import observe as _mom_observe4
+            _mom_observe4(self, "fight", team)
+        except Exception:
+            pass
+        self.fights_called += 1
+        if team is self.home_team:
+            self.home_penalties_called += 1
+            self.home_pim_called += 5
+            self.away_penalties_called += 1
+            self.away_pim_called += 5
+        else:
+            self.away_penalties_called += 1
+            self.away_pim_called += 5
+            self.home_penalties_called += 1
+            self.home_pim_called += 5
+        if not self._in_brawl:
+            self._live_heat = min(40.0, self._live_heat + 6.0)
+            self._maybe_brawl("fight")
+
+    def _book_misconduct(self, player, team):
+        """10-minute misconduct: the player sits, no manpower change."""
+        player.stats.penalties_in_minutes += 10
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        team_penalties.append({'player': player, 'time': 10 * 60, 'minutes': 10,
+                               'infraction': "Misconduct", 'manpower_loss': False,
+                               'terminates_on_goal': False})
+        self.misconducts_called += 1
+        if team is self.home_team:
+            self.home_pim_called += 10
+        else:
+            self.away_pim_called += 10
+
     def _book_penalty(self, player, team, name, penalty_length, detail):
         """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
         stopping play. The whistle/faceoff is the caller's job."""
-        opposing_team = self.away_team if team == self.home_team else self.home_team
-        team_penalties = self.home_penalties if team == self.home_team else self.away_penalties
-        opp_penalties = self.away_penalties if team == self.home_team else self.home_penalties
+        opposing_team = self.away_team if team is self.home_team else self.home_team
+        team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
+        opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
 
         # Penalty semantics by type:
         # - minor (2): reduces manpower, ends on PP goal
@@ -5945,42 +6826,8 @@ class GameSim:
 
         if name == "Fighting":
             # Coincidental fighting majors: both combatants get 5, teams stay 5v5.
-            manpower_loss = False
-            terminates_on_goal = False
-            player.stats.penalties_in_minutes += 5
-            team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
-                                   'infraction': name, 'manpower_loss': False,
-                                   'terminates_on_goal': False})
-            # Find a willing combatant on the other team
-            opp_skaters = [p for p in self._get_on_ice(opposing_team)
-                           if p.primary_position != PlayerPosition.GOALIE]
-            opponent = random.choice(opp_skaters) if opp_skaters else None
-            if opponent is not None:
-                opponent.stats.penalties_in_minutes += 5
-                opp_penalties.append({'player': opponent, 'time': 5 * 60, 'minutes': 5,
-                                      'infraction': name, 'manpower_loss': False,
-                                      'terminates_on_goal': False})
-                self._log_event(
-                    f"{player.full_name} ({team.team_name}) and "
-                    f"{opponent.full_name} ({opposing_team.team_name}) drop the gloves! "
-                    f"Coincidental 5-minute fighting majors -- teams stay at full strength.",
-                    "FIGHT")
-            else:
-                self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
-            self._emit_pbp("fight", player=player, team=team.team_name)
-            self.fights_called += 1
-            # A fight is two penalties: both combatants (and teams) get 5 PIM
+            self._book_fight_pair(player, team)
             self.penalties_called += 1  # second penalty of the pair
-            if team == self.home_team:
-                self.home_penalties_called += 1
-                self.home_pim_called += 5
-                self.away_penalties_called += 1
-                self.away_pim_called += 5
-            else:
-                self.away_penalties_called += 1
-                self.away_pim_called += 5
-                self.home_penalties_called += 1
-                self.home_pim_called += 5
         else:
             player.stats.penalties_in_minutes += penalty_length
             team_penalties.append({'player': player, 'time': penalty_length * 60,
@@ -5993,17 +6840,19 @@ class GameSim:
             self.team_stats[opposing_team_name]['power_play_opportunities'] += 1
             self.team_stats[team.team_name]['penalty_kill_opportunities'] += 1
 
+        # A non-fighting major is a flashpoint: heat rises, and in a heated
+        # game it can be the spark a line brawl needs.
+        if name != "Fighting" and penalty_length == 5 and not self._in_brawl:
+            self._live_heat = min(40.0, self._live_heat + 4.0)
+            self._maybe_brawl("major")
+
         # Occasional 10-minute misconduct tacked onto a minor (no extra manpower loss)
         misconduct = ""
         if name != "Fighting" and penalty_length == 2 and random.random() < 0.04:
             player.stats.penalties_in_minutes += 10
             misconduct = " plus a 10-minute misconduct"
             self.misconducts_called += 1
-            # The player actually sits for 10 minutes of game time; the team
-            # dresses a substitute (no manpower change).
-            self._misconduct_bench.append({'player': player, 'team': team,
-                                           'time': 10 * 60})
-            if team == self.home_team:
+            if team is self.home_team:
                 self.home_pim_called += 10
             else:
                 self.away_pim_called += 10
@@ -6031,7 +6880,7 @@ class GameSim:
                            team=team.team_name,
                            minutes=penalty_length,
                            infraction=name)
-            if team == self.home_team:
+            if team is self.home_team:
                 self.home_penalties_called += 1
                 self.home_pim_called += penalty_length
             else:
@@ -6192,6 +7041,26 @@ class GameSim:
         if empty_net:
             self.game_stats[shooter.id]['empty_net_goals'] = \
                 self.game_stats[shooter.id].get('empty_net_goals', 0) + 1
+
+        # Goalie personality: charge the goal to the beaten goalie --
+        # bounce-back clock starts, tilt check for shelled battlers.
+        try:
+            import goalie_personality as _gp2
+            _defending = (self.away_team if scoring_team is self.home_team
+                          else self.home_team)
+            _beaten = self._selected_goalie(_defending)
+            if _beaten is not None and not empty_net:
+                _st2 = self.goalie_personality_state.get(_beaten.id)
+                if _st2 is None:
+                    _st2 = _gp2.new_game_state()
+                    self.goalie_personality_state[_beaten.id] = _st2
+                if _st2.get("period") != getattr(self, "period", 1):
+                    _st2["period"] = getattr(self, "period", 1)
+                    _st2["goals_this_period"] = 0
+                _gp2.record_goal_allowed(_st2)
+                _gp2.check_tilt(_beaten, _st2)
+        except Exception:
+            pass
         
         # Check if it's a special teams goal
         current_situation = self._get_current_situation()
@@ -6210,7 +7079,7 @@ class GameSim:
             self.team_stats[scoring_team.team_name]['short_handed_goals'] += 1
             
             # Opposing team gets a goal against on their power play
-            opposing_team = self.away_team if scoring_team == self.home_team else self.home_team
+            opposing_team = self.away_team if scoring_team is self.home_team else self.home_team
             self.team_stats[opposing_team.team_name]['penalty_kill_goals_against'] += 1
         
         assist_str = []
@@ -6219,10 +7088,42 @@ class GameSim:
             self.game_stats[assist_player.id]['a'] += 1
             assist_str.append(assist_player.last_name)
         
-        if scoring_team == self.home_team:
+        if scoring_team is self.home_team:
             self.home_score += 1
         else:
             self.away_score += 1
+
+        # Crowd: the building swings on every goal (live mood/energy feeds
+        # the impact-tier ctx and the tension channel from here on).
+        # The finishing mults swing with it -- same live decision as
+        # quick-sim's _crowd_on_goal.
+        try:
+            from arena_atmosphere import live_crowd_update
+            _st = {"energy": self._crowd_energy, "mood": self._crowd_mood}
+            live_crowd_update(_st, scoring_team is self.home_team,
+                              self.home_score, self.away_score,
+                              int(getattr(self, "period", 1) or 1))
+            self._crowd_energy = _st["energy"]
+            self._crowd_mood = _st["mood"]
+            from arena_atmosphere import (crowd_effects as _ce2,
+                                          roster_avg_age as _raa2)
+            _hm2, _am2 = _ce2(self._crowd_energy, self._crowd_mood,
+                              away_avg_age=_raa2(self.away_team))
+            self._crowd_home_mult = _hm2
+            self._crowd_away_mult = _am2
+        except Exception:
+            pass
+        # Momentum: goals are the heaviest event.
+        try:
+            from momentum import observe as _mom_observe
+            _mom_observe(self, "goal", scoring_team)
+        except Exception:
+            pass
+        try:
+            from matchups import record_goal as _mu_goal
+            _mu_goal(self, scoring_team)
+        except Exception:
+            pass
             
         log_msg = f"GOAL for {scoring_team.team_name}! Scored by {shooter.full_name}"
         
@@ -6268,8 +7169,8 @@ class GameSim:
         # - double minors stage down: a goal wipes the first 2 min only
         # - coincidental calls never terminate on a goal
         if self._is_team_on_power_play(scoring_team):
-            opposing_team = self.away_team if scoring_team == self.home_team else self.home_team
-            opposing_penalties = self.away_penalties if scoring_team == self.home_team else self.home_penalties
+            opposing_team = self.away_team if scoring_team is self.home_team else self.home_team
+            opposing_penalties = self.away_penalties if scoring_team is self.home_team else self.home_penalties
 
             terminating = [p for p in opposing_penalties
                            if p.get('manpower_loss', True) and p.get('terminates_on_goal', True)]
@@ -6326,6 +7227,19 @@ class GameSim:
         
         if quality == "high":
             self.team_stats[att_team_name]['high_danger_chances'] += 1
+        try:
+            from momentum import observe as _mom_observe2
+            if quality == "high":
+                _mom_observe2(self, "high_danger", attacking_team)
+            elif quality == "medium":
+                _mom_observe2(self, "medium_danger", attacking_team)
+        except Exception:
+            pass
+        try:
+            from matchups import record_chance as _mu_chance
+            _mu_chance(self, attacking_team, quality)
+        except Exception:
+            pass
         
         # Corsi tracking (Stage 1)
         self.game_stats[shooter.id]['corsi_for'] += 1
@@ -6335,6 +7249,233 @@ class GameSim:
         
         self.team_stats[att_team_name]['corsi_for'] += 1
         self.team_stats[def_team_name]['corsi_against'] += 1
+
+    # -- Module 04: analytics recording (additive; never affects sim) ----
+    def _analytics_logs(self):
+        if not hasattr(self, "shot_log") or self.shot_log is None:
+            self.shot_log = []
+        if not hasattr(self, "zone_entry_log") or self.zone_entry_log is None:
+            self.zone_entry_log = []
+        return self.shot_log, self.zone_entry_log
+
+    def _analytics_line_of(self, player, team):
+        """Forward line number of a player (L1..L4), '-' if unknown."""
+        try:
+            fw = [p for p in team.roster if p.primary_position in
+                  (PlayerPosition.CENTER, PlayerPosition.LEFT_WING,
+                   PlayerPosition.RIGHT_WING)]
+            return f"L{fw.index(player) // 3 + 1}"
+        except Exception:
+            return "-"
+
+    def _analytics_record_shot(self, shooter, attacking_team, defending_team,
+                               location, distance, shot_type, xg, grade=None):
+        """Log one shot attempt for the Analytics Hub (module 04)."""
+        try:
+            shots, _ = self._analytics_logs()
+            try:
+                sx, sy = self._shot_spot_coords(location, attacking_team)
+            except Exception:
+                sx, sy = 0.0, 0.0
+            try:
+                _gr = str(grade or "").upper()
+                if _gr not in ("A", "B", "C"):
+                    _gr = None
+            except Exception:
+                _gr = None
+            shots.append({
+                "shooter_id": getattr(shooter, "id", None),
+                "shooter": getattr(shooter, "full_name",
+                                   getattr(shooter, "name", "?")),
+                "team": getattr(attacking_team, "team_name", ""),
+                "opp": getattr(defending_team, "team_name", ""),
+                "period": int(getattr(self, "period", 1) or 1),
+                "clock": round(float(getattr(self, "clock", 0) or 0), 1),
+                "location": getattr(location, "name", str(location)),
+                "x": round(float(sx), 1), "y": round(float(sy), 1),
+                "distance": round(float(distance or 0), 1),
+                "shot_type": getattr(shot_type, "name", str(shot_type)),
+                "xg": round(float(xg or 0), 3),
+                "grade": _gr,
+                "outcome": "pending",
+                "line": self._analytics_line_of(shooter, attacking_team),
+            })
+        except Exception:
+            pass
+
+    def _analytics_tag_shot(self, outcome):
+        """Stamp the outcome on the most recent logged shot."""
+        try:
+            shots, _ = self._analytics_logs()
+            if shots:
+                shots[-1]["outcome"] = outcome
+        except Exception:
+            pass
+
+    def _analytics_record_entry(self, player, team, entry_type):
+        """Log one successful zone entry for the Analytics Hub."""
+        try:
+            _, entries = self._analytics_logs()
+            try:
+                px, py = self._ppos_get(player)
+            except Exception:
+                try:
+                    px, py = self.puck_pos
+                except Exception:
+                    px, py = 0.0, 0.0
+            entries.append({
+                "carrier_id": getattr(player, "id", None),
+                "carrier": getattr(player, "full_name",
+                                   getattr(player, "name", "?")),
+                "team": getattr(team, "team_name", ""),
+                "period": int(getattr(self, "period", 1) or 1),
+                "clock": round(float(getattr(self, "clock", 0) or 0), 1),
+                "type": getattr(entry_type, "name", str(entry_type)),
+                "x": round(float(px), 1), "y": round(float(py), 1),
+                "line": self._analytics_line_of(player, team),
+            })
+        except Exception:
+            pass
+
+    def _persist_analytics(self):
+        """Module 04: keep the last 10 games of analytics per team.
+
+        Called once per game from _emit_telemetry. Old-save safe: the
+        hub reads via getattr.
+        """
+        try:
+            home = getattr(self, "home_team", None)
+            away = getattr(self, "away_team", None)
+            if home is None or away is None:
+                return
+            shots, entries = self._analytics_logs()
+            try:
+                momentum = []
+                for _m in getattr(self, "momentum_history", []):
+                    if isinstance(_m, dict):
+                        _d = dict(_m)
+                    else:
+                        # Tuple form (period, momentum) from nudge_momentum.
+                        try:
+                            _p, _mo = _m
+                        except Exception:
+                            continue
+                        _d = {"period": _p, "time": 0,
+                              "trigger": "team talk",
+                              "momentum": _mo}
+                    _mo = _d.get("momentum")
+                    _d["momentum"] = getattr(_mo, "value", str(_mo))
+                    momentum.append(_d)
+            except Exception:
+                momentum = []
+            try:
+                lines = {str(k): {"chemistry": round(float(v), 1)}
+                         for k, v in
+                         getattr(self, "line_chemistry", {}).items()}
+            except Exception:
+                lines = {}
+            rec = {
+                "date": str(getattr(self, "game_date", "") or ""),
+                "home": getattr(home, "team_name", ""),
+                "away": getattr(away, "team_name", ""),
+                "score": (int(getattr(self, "home_score", 0) or 0),
+                          int(getattr(self, "away_score", 0) or 0)),
+                "shots": [dict(s) for s in shots],
+                "momentum": momentum,
+                "entries": [dict(e) for e in entries],
+                "lines": lines,
+                # Part B: bounded assist-pairs ledger for line-combination
+                # effectiveness views (analytics_hub / advanced_stats).
+                "assist_pairs": [list(t) for t in
+                                 getattr(self, "assist_pairs", [])],
+            }
+            for team in (home, away):
+                try:
+                    lst = list(getattr(team, "analytics_games", None) or [])
+                    lst.append(rec)
+                    del lst[:-10]
+                    team.analytics_games = lst
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _attempt_keep_in(self, attacking_team, defending_team):
+        """The point man tries to hold the blue line as the puck drifts out.
+
+        Returns True when the puck is kept in (play continues in the OZ
+        with the puck at the point); False when the exit stands. Driven
+        by the pinching defenseman's awareness/hands against the pressure
+        on him -- good puck-moving D hold it ~2 in 3, pylons ~1 in 3.
+        A nearby forechecker can still blow it up (rare).
+        """
+        import random as _r
+        dmen = [p for p in self._get_on_ice(attacking_team)
+                if p.primary_position == PlayerPosition.DEFENSE]
+        if not dmen:
+            # Fallback: anyone on the roster who plays the point.
+            try:
+                dmen = [p for p in attacking_team.roster
+                        if getattr(p, "primary_position", None)
+                        == PlayerPosition.DEFENSE][:2]
+            except Exception:
+                dmen = []
+        if not dmen:
+            return False
+        # The point man nearest the puck does the keeping.
+        try:
+            px, py = self._ppos_get(self.possession_player)
+            pincher = min(dmen,
+                          key=lambda d: abs(self._ppos_get(d)[0] - px)
+                          + abs(self._ppos_get(d)[1] - py))
+        except Exception:
+            pincher = _r.choice(dmen)
+        skill = (pincher.defensive_awareness + pincher.puck_handling
+                 + pincher.composure) / 3.0
+        keep_prob = max(0.40, min(0.80, 0.60 + (skill - 68.0) * 0.012))
+        # A forechecker bearing down contests the keep -- if he wins the
+        # battle he takes the puck (turnover), not just the zone exit.
+        try:
+            _fcheckers = [p for p in self._get_on_ice(defending_team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+            _fc = min(_fcheckers,
+                      key=lambda f: abs(self._ppos_get(f)[0] - px)
+                      + abs(self._ppos_get(f)[1] - py)) if _fcheckers else None
+            if _fc is not None:
+                _fskill = (_fc.forechecking + _fc.checking
+                           + _fc.anticipation) / 3.0
+                # Forechecker wins outright ~1 in 4 contested keeps.
+                if _r.random() < max(0.10, min(0.40,
+                                               0.25 + (_fskill - 68.0) * 0.010)):
+                    self._log_event(
+                        f"{_fc.full_name} blows up the keep-in, takes the puck.",
+                        "TURNOVER")
+                    self._turnover_possession(defending_team)
+                    return False
+        except Exception:
+            pass
+        # Heavy forecheck pressure makes the keep harder.
+        try:
+            import tactics as _txk
+            keep_prob *= max(0.85, min(1.0,
+                                       2.0 - _txk.resolve_team_tactics(
+                                           defending_team).get("pressure", 1.0)))
+        except Exception:
+            pass
+        if _r.random() < keep_prob:
+            self._log_event(f"{pincher.full_name} holds the line, keeps it in.",
+                            "KEEP_IN")
+            # Puck stays at the point in the OZ; the pincher has it.
+            self._ppos_ensure()
+            nx = 128.0 if attacking_team is self.home_team else 72.0
+            try:
+                self.puck_pos = self._clamp_boards(
+                    nx, self._ppos_get(pincher)[1])
+            except Exception:
+                pass
+            self.possession_player = pincher
+            return True
+        return False
 
     def _resolve_offensive_zone_play(self, attacking_team, defending_team):
         """
@@ -6360,7 +7501,7 @@ class GameSim:
         # _get_current_situation is home-centric (POWER_PLAY = home has the
         # manpower). Flip it when the AWAY team is attacking so modifiers and
         # formations reflect the attacking team's actual situation.
-        if attacking_team != self.home_team:
+        if attacking_team is not self.home_team:
             current_situation = {
                 SpecialSituation.POWER_PLAY: SpecialSituation.PENALTY_KILL,
                 SpecialSituation.PENALTY_KILL: SpecialSituation.POWER_PLAY,
@@ -6379,17 +7520,87 @@ class GameSim:
         # starve the shot count; raised again after the zone-state honesty
         # fix (turnovers now recompute the zone) removed phantom
         # defensive-zone "shots" that had been inflating scoring.
-        # Re-tuned 2026-09-28: validation harness showed 20 SOG/team
-        # (NHL ~30) after the hockey-IQ and zone-state changes; the old
-        # 0.60 was calibrated for a different sim.
-        shot_chance = 0.70
+        # Tuned for the hockey-IQ update: the playmaking (draw-and-dish,
+        # seam passes) creates better chances, so we need fewer of them
+        # to hit the scoring target.
+        # Base OZ event mix. The league-wide volume knob is
+        # tactics.SHOT_LIFT (recalibrated for the honest possession model);
+        # the base stays moderate so the 0.85 clamp below preserves the
+        # turnover/cycle texture and team-to-team shot_vol spread.
+        shot_chance = 0.54
         turnover_chance = 0.2
         cycle_chance = 0.2
         maintain_chance = 0.3
+
+        # Installed systems: the defending side's forecheck pressure
+        # forces turnovers (swarm teams strip pucks, passive teams
+        # contain). The attacking side's rush identity tilts the mix
+        # from cycle to shots off the rush.
+        try:
+            import tactics as _txo
+            _dtx = _txo.resolve_team_tactics(defending_team)
+            _atx = _txo.resolve_team_tactics(attacking_team)
+            turnover_chance = max(0.05, min(0.5,
+                turnover_chance * _dtx.get("pressure", 1.0)))
+            _rush = _atx.get("rush", 1.0)
+            if _rush != 1.0:
+                _shift = cycle_chance * (1.0 - 1.0 / _rush)
+                _shift = max(-shot_chance * 0.5,
+                             min(cycle_chance * 0.5, _shift))
+                cycle_chance -= _shift
+                shot_chance += _shift
+        except Exception:
+            pass
         
         # Apply special situation modifiers (Stage 3)
         shot_chance = self._apply_situation_modifiers(shot_chance, current_situation, formation)
-        
+
+        # Installed NHL systems (tactics.py): pace + PK suppression.
+        # Pace is the geometric mean of both teams' tempo -- a trap team
+        # drags even a rush team into a slower game, and vice versa.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            shot_chance *= (_att["pace"] * _dfn["pace"]) ** 0.5
+            # Zone modules drive shot volume team-by-team: swarm/rush/
+            # net-front teams shoot more, trap teams shoot less. SHOT_LIFT
+            # raises the league to real NHL volume (~29.5 SOG/team/game).
+            shot_chance *= _att.get("shot_vol", 1.0) * _tx.SHOT_LIFT
+            if (current_situation == SpecialSituation.POWER_PLAY
+                    and self._is_team_on_power_play(attacking_team)):
+                # A good kill smothers PP shot volume, not just finishing.
+                shot_chance *= (2.0 - _dfn["pk"])
+        except Exception:
+            pass
+
+        # -- Perfect mesh (additive): aligned units generate more -- the extra
+        # look, the extra pass. Half the conversion effect; the playmaker's
+        # night counts as much as the sniper's.
+        try:
+            from mesh_system import mesh_chance_factor as _mesh_chance
+            _ref = (self.possession_player
+                    if self.possession_player in attacking_skaters
+                    else attacking_skaters[0])
+            _mm = [pl for pl in attacking_skaters if pl is not _ref]
+            _cf = _mesh_chance(_ref, _mm, attacking_team,
+                               is_playoff=bool(getattr(self, "is_playoff", False)))
+            if _cf != 1.0:
+                shot_chance *= _cf
+        except Exception:
+            pass
+
+        # -- Shift fatigue (EHM lesson, additive): a unit kept out past ~40s
+        # degrades -- tired legs lose the battles that make shots. Small,
+        # capped, and on its own channel; conversion untouched elsewhere.
+        try:
+            from shift_engine import shift_fatigue_mult as _sfm
+            _sf = _sfm(self, attacking_team)
+            if _sf != 1.0:
+                shot_chance *= _sf
+        except Exception:
+            pass
+
         # Track formation usage
         if formation:
             if not hasattr(self, 'formation_usage'):
@@ -6463,9 +7674,17 @@ class GameSim:
         # Random events in offensive zone -- but only if the puck is still
         # there. The setup sequence can carry it back out (D-to-D, a
         # broken play); shooting from the neutral zone isn't hockey IQ.
+        # Before conceding the exit, the point man tries to HOLD THE BLUE
+        # LINE -- pinching to keep the puck in is one of a defenseman's
+        # core jobs, and the position sim was conceding it too cheaply
+        # (~1 in 4 OZ ticks died here, starving shot volume). Attribute-
+        # driven, never guaranteed; on a failure the exit stands.
         self._refresh_zone_state(attacking_team)
         if self.current_zone != Zone.OFFENSIVE_ZONE:
-            return "ZONE_EXIT"
+            if not self._attempt_keep_in(attacking_team, defending_team):
+                return "ZONE_EXIT"
+            self.current_zone = Zone.OFFENSIVE_ZONE
+            self.zone_time = 0
         # Attribute IQ: smart carriers are selective about when they
         # shoot. High offensive awareness + decision making in a
         # dangerous spot means take it; the same brain on the perimeter
@@ -6481,15 +7700,62 @@ class GameSim:
             _effort = self._game_effort.get(_shot_carrier.id, 1.0)
             ciq = ciq * (0.85 + 0.15 * _effort)
             iq_factor = (ciq - 72.0) / 100.0
-            _att_net = 189.0 if attacking_team == self.home_team else 11.0
+            _att_net = 189.0 if attacking_team is self.home_team else 11.0
             _ccx, _ = self._ppos_get(_shot_carrier)
             if abs(_ccx - _att_net) < 35.0:
                 shot_chance *= 1.0 + iq_factor * 1.2
             else:
                 shot_chance *= 1.0 - iq_factor * 0.8
             shot_chance = max(0.2, min(0.85, shot_chance))
+        # 6-on-5 (divergence #13): the pulled-goalie extra attacker. The
+        # canonical 2.2x lived in the dead _apply_special_situation_modifiers
+        # (zero callers); revived here on the live volume gate, AFTER the
+        # 0.85 clamp so the boost survives it. Gated on the ATTACKING team --
+        # when the other side has the puck it's an empty-net situation for
+        # them, not a 6v5.
+        try:
+            if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                shot_chance *= 2.2
+        except Exception:
+            pass
+        # Proportional split: the 0.85 clamp used to push shot+turnover
+        # past 1.0, silently killing the cycle/maintain branches (and any
+        # follow-up attached to them). Now the non-shot outcomes split
+        # whatever probability is left after the shot, by their relative
+        # weights -- P(shot) is unchanged, texture is revived.
+        _leftover = max(0.0, 1.0 - shot_chance)
+        _w_sum = turnover_chance + cycle_chance + maintain_chance
+        if _w_sum > 0 and _leftover < turnover_chance + cycle_chance:
+            turnover_chance = _leftover * turnover_chance / _w_sum
+            cycle_chance = _leftover * cycle_chance / _w_sum
+            # maintain_chance takes the rest implicitly in the else branch.
         event_roll = random.random()
-        
+
+        def _follow_up():
+            # Sustained pressure produces a second look within the same
+            # 8-20s tick -- a cycle down low generates 2-3 shots in that
+            # span in real hockey, not one. Bounded: one extra roll, shot
+            # or clear only, no recursion. The possession model still
+            # governs what happens after any shot, so chains stay honest.
+            # The look comes from down low (forwards, net-front) -- that's
+            # where sustained pressure lives, not the point. And it's
+            # decisive: a team cycling down low gets the puck to the net
+            # ~5 in 6 (the defense is scrambling, not set).
+            _fr = random.random()
+            if _fr < 0.85:
+                _fwds = [p for p in attacking_skaters
+                         if p.primary_position != PlayerPosition.DEFENSE
+                         and p.primary_position != PlayerPosition.GOALIE]
+                _fs = (self._weighted_skater_choice(_fwds, "shoot")
+                       if _fwds else
+                       self._weighted_skater_choice(attacking_skaters, "shoot"))
+                self._resolve_scoring_chance(_fs, attacking_team,
+                                             defending_team)
+            elif _fr < shot_chance + turnover_chance:
+                return self._attempt_zone_clear(defending_team,
+                                                attacking_team)
+            return None
+
         if event_roll < shot_chance:
             shooter = self._weighted_skater_choice(attacking_skaters, "shoot")
             # EHM Teamwork: an unselfish carrier with a teammate in a more
@@ -6538,9 +7804,15 @@ class GameSim:
         elif event_roll < shot_chance + turnover_chance:
             return self._attempt_zone_clear(defending_team, attacking_team)
         elif event_roll < shot_chance + turnover_chance + cycle_chance:
-            return self._resolve_offensive_cycle(attacking_team, defending_team)
+            _cr = self._resolve_offensive_cycle(attacking_team, defending_team)
+            if _cr == "CYCLE":
+                _follow_up()
+            return _cr
         else:
-            return self._maintain_offensive_possession(attacking_team)
+            _mr = self._maintain_offensive_possession(attacking_team)
+            if _mr == "MAINTAIN_POSSESSION":
+                _follow_up()
+            return _mr
 
     def _handle_overtime(self):
         """Simulates overtime.
@@ -6611,7 +7883,7 @@ class GameSim:
                           if p.primary_position != PlayerPosition.GOALIE]
         scorer = max(candidates,
                      key=lambda p: p.shooting_accuracy + p.offensive_awareness)
-        loser = self.away_team if winner == self.home_team else self.home_team
+        loser = self.away_team if winner is self.home_team else self.home_team
         _gg_goalie = self._selected_goalie(loser)
         self._update_shot_stats(scorer, winner, loser, 'high', 15.0, ShotType.WRIST_SHOT)
         if _gg_goalie is not None:
@@ -6721,23 +7993,12 @@ class GameSim:
     def _resolve_shootout_attempt(self, shooter, goalie):
         """Resolves a single shootout attempt.
 
-        League-average conversion is ~35-40% (NHL-like); elite shooters
-        convert more, elite goalies stop more. Never 0% or 100%.
+        The probability core is the ONE shared decision
+        (player_traits.resolve_shootout_attempt) -- this method only adds
+        the GameSim logging/pbp around it.
         """
-        # Attributes are 1-100. Both rolls sit near 50; the goalie holds a
-        # small edge so league-average conversion lands ~35-40% (NHL-like),
-        # elite shooters convert more, elite goalies stop more.
-        shot_roll = (40.0 + (shooter.shooting + shooter.deking - 140.0) * 0.08
-                     + random.randint(1, 20))
-        # Traits: clutch shooters elevate, danglers deke better
-        shot_roll *= _trait_bonus(shooter, "shootout_mult")
-        shot_roll *= _trait_bonus(shooter, "deke_success_mult")
-        save_roll = (43.0 + (goalie.goaltending - 70.0) * 0.15
-                     + random.randint(1, 20))
-        # Traits: wall goalies stop more, big-game goalies elevate in shootouts
-        save_roll *= _trait_bonus(goalie, "save_chance_mult")
-        save_roll *= _trait_bonus(goalie, "shootout_mult")
-        is_goal = shot_roll > save_roll
+        from player_traits import resolve_shootout_attempt as _shared_so
+        is_goal = _shared_so(shooter, goalie)
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
         self._emit_pbp("shootout_attempt", shooter=shooter, goalie=goalie,
@@ -6799,17 +8060,47 @@ class GameSim:
 
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
-        all_penalties = self.home_penalties if team == self.home_team else self.away_penalties
+        is_home = team is self.home_team
+        # Fast path: the answer only changes when the game state below
+        # changes, but this runs ~5k times per game. Key on everything read.
+        try:
+            _nlc = getattr(self, '_no_line_change_team', None)
+            _key = (
+                is_home, self.period, self.clock // 45, self.clock // 60,
+                tuple(sorted((p['player'].id,
+                              1 if p.get('manpower_loss', True) else 0)
+                             for p in self.home_penalties)),
+                tuple(sorted((p['player'].id,
+                              1 if p.get('manpower_loss', True) else 0)
+                             for p in self.away_penalties)),
+                self.home_score, self.away_score,
+                bool(getattr(self, '_ot_4v4_until_whistle', False)),
+                _nlc.team_name if _nlc is not None else None,
+                getattr(self, '_frozen_line', 0),
+                getattr(self, '_frozen_d_pair', 0),
+                tuple(sorted(getattr(self, 'goalie_pulled', ()))),
+                id(getattr(team, 'lineup', None)),
+            )
+            _cache = self.__dict__.setdefault('_on_ice_cache', {})
+            if len(_cache) > 1024:
+                _cache.clear()
+            _hit = _cache.get(_key)
+            if _hit is not None:
+                return list(_hit)
+        except Exception:
+            _key, _cache = None, None
+        all_penalties = self.home_penalties if is_home else self.away_penalties
         penalized_players = [p['player'] for p in all_penalties]
+        penalized_ids = {p.id for p in penalized_players}
         # Only manpower-loss penalties reduce strength: 5v5 -> 5v4 -> 5v3
         # (never below 3). Coincidental majors/minors and misconducts keep
         # the player in the box but the team at full strength.
         penalized_skaters = [p['player'] for p in all_penalties
                              if p.get('manpower_loss', True)
                              and getattr(p['player'], 'primary_position', None) != PlayerPosition.GOALIE]
-        opp = self.away_team if team == self.home_team else self.home_team
+        opp = self.away_team if is_home else self.home_team
         opp_mp_skaters = [p['player'] for p in
-                          (self.home_penalties if opp == self.home_team else self.away_penalties)
+                          (self.home_penalties if opp is self.home_team else self.away_penalties)
                           if p.get('manpower_loss', True)
                           and getattr(p['player'], 'primary_position', None) != PlayerPosition.GOALIE]
         num_skaters = 5
@@ -6830,29 +8121,34 @@ class GameSim:
         else:
             num_skaters = max(3, 5 - len(penalized_skaters))
         
-        # Phase 1 shift engine: units come from this team's per-unit shift
-        # clocks, not a global clock grid.
-        st = self._ensure_shift_state(team)
-        current_line = st['F']['line']
-        current_d_pair = st['D']['pair']
+        # Real shift engine: the on-ice unit comes from shift state, not
+        # clock math. Falls back to the old rotation if state is missing.
+        try:
+            from shift_engine import get_shift_state as _gss
+            _sst = _gss(self, team)
+            current_line = _sst.f_line
+            current_d_pair = _sst.d_pair
+        except Exception:
+            current_line = (self.clock // 45) % 4 + 1 # Change lines every 45 seconds
+            current_d_pair = (self.clock // 60) % 3 + 1
         # Icing: offending team cannot change lines (tired skaters stay out)
-        if getattr(self, '_no_line_change_team', None) is team:
+        if _nlc is team:
             current_line = getattr(self, '_frozen_line', current_line)
             current_d_pair = getattr(self, '_frozen_d_pair', current_d_pair)
 
-        # Line matching: aggressive home-ice deployment reacts to score state.
-        # The override syncs back to the shift clock so energy accounting
-        # tracks the unit actually on the ice.
-        if team == self.home_team and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
+        # Line matching: aggressive home-ice deployment reacts to score state
+        if is_home and getattr(team, 'tactic_line_matching', 'Standard') == 'Aggressive':
             goal_diff = self.home_score - self.away_score
             rotation = (self.clock // 45) % 2
             if goal_diff <= -2:
                 current_line = 1 if rotation == 0 else 2  # chase the game: top six
             elif goal_diff >= 2:
                 current_line = 3 if rotation == 0 else 4  # protect the lead: bottom six
-            st['F']['line'] = current_line
+        # (Shift engine mirrors this score-state rule at stoppages --
+        # see shift_engine.stoppage_change chase_game/protect_lead.)
 
         on_ice = []
+        on_ice_ids = set()
 
         # Special teams: dress the PP/PK units when manpower differs.
         # Regular-season 3v3 OT (period 4, not playoff) is the only exception:
@@ -6870,9 +8166,9 @@ class GameSim:
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
                 if len(on_ice) >= num_skaters:
                     break
-                if p and p not in penalized_players and p not in on_ice \
-                        and not self._is_benched(p):
+                if p and p.id not in penalized_ids and p.id not in on_ice_ids:
                     on_ice.append(p)
+                    on_ice_ids.add(p.id)
 
         # Get forwards from the current line (only tops up when the special
         # unit left gaps, or for even strength / 3v3 OT)
@@ -6888,9 +8184,9 @@ class GameSim:
                 pos_enum = PlayerPosition.RIGHT_WING
 
             player = self._lineup_player(team, f"F{current_line}_{pos}")
-            if player and player not in penalized_players and player not in on_ice \
-                    and not self._is_benched(player):
+            if player and player.id not in penalized_ids and player.id not in on_ice_ids:
                 on_ice.append(player)
+                on_ice_ids.add(player.id)
 
         # Get defensemen from the current pairing
         for pos in ['L', 'R']:
@@ -6903,9 +8199,9 @@ class GameSim:
                 pos_enum = PlayerPosition.RIGHT_DEFENSE
 
             player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
-            if player and player not in penalized_players and player not in on_ice \
-                    and not self._is_benched(player):
+            if player and player.id not in penalized_ids and player.id not in on_ice_ids:
                 on_ice.append(player)
+                on_ice_ids.add(player.id)
         
         # Empty net: the pulled team skates six (extra attacker, no goalie)
         pulled = team.team_name in getattr(self, "goalie_pulled", set())
@@ -6914,8 +8210,7 @@ class GameSim:
         # If lineup is incomplete, fill with best available players
         if len(on_ice) < num_skaters:
             pool = [pl for pl in team.roster
-                    if pl not in on_ice and pl not in penalized_players
-                    and not self._is_benched(pl)]
+                    if pl.id not in on_ice_ids and pl.id not in penalized_ids]
             if pulled:
                 # the 6th skater is a forward -- never dress the goalie
                 pool = [pl for pl in pool
@@ -6925,10 +8220,14 @@ class GameSim:
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         if pulled:
+            if _cache is not None and _key is not None:
+                _cache[_key] = list(on_ice)
             return on_ice  # net is empty
         # Selected starter (G1) first; fall back to best goalie on the roster.
         goalie = self._selected_goalie(team)
         on_ice.append(goalie)
+        if _cache is not None and _key is not None:
+            _cache[_key] = list(on_ice)
         return on_ice
 
     def _select_starting_lines(self):
@@ -6971,19 +8270,30 @@ class GameSim:
     # ------------------------------------------------------------------
     def _pull_eligible(self, team):
         """Can this team pull its goalie right now? Late 3rd, trailing by
-        1-2, not shorthanded, not in OT."""
+        1-2, not shorthanded, not in OT.
+
+        Timing comes from goalie_pull.pull_windows: the head coach's style
+        (aggressive/balanced/conservative) sets the base window and the
+        momentum risk reading shifts it +-15s. Conversion is untouched --
+        this is risk, not a boost.
+        """
         if getattr(self, "period", 1) != 3:
             return False
         if team.team_name in getattr(self, "goalie_pulled", set()):
             return False
-        diff = ((self.home_score - self.away_score) if team == self.home_team
+        diff = ((self.home_score - self.away_score) if team is self.home_team
                 else (self.away_score - self.home_score))
         if diff >= 0:
             return False
+        try:
+            from goalie_pull import pull_windows as _gp_windows
+            _d1, _d2, _style = _gp_windows(self, team)
+        except Exception:
+            _d1, _d2 = 120, 60
         deficit = -diff
-        if deficit == 1 and self.clock > 120:
+        if deficit == 1 and self.clock > _d1:
             return False
-        if deficit == 2 and self.clock > 60:
+        if deficit == 2 and self.clock > _d2:
             return False
         if deficit > 2:
             return False
@@ -6994,8 +8304,8 @@ class GameSim:
     def _team_in_oz(self, team):
         """Puck deep in this team's attacking end (on-the-fly pull spot)."""
         px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
-        return ((team == self.home_team and px > 125)
-                or (team == self.away_team and px < 75))
+        return ((team is self.home_team and px > 125)
+                or (team is self.away_team and px < 75))
 
     def _pull_goalie(self, team, delayed=False):
         """Pull the goalie for the extra attacker (6 skaters, empty net).
@@ -7107,22 +8417,43 @@ class GameSim:
                 self._pull_goalie(team)
 
     def _maybe_pull_goalie_for_draw(self, fx):
-        """A trailing coach keeps the goalie out for an offensive-zone draw."""
+        """A trailing coach keeps the goalie out for an offensive-zone draw.
+
+        A coach who just burned his timeout to set up the 6-on-5 also pulls
+        for the neutral-zone draw if his style allows it -- never for a
+        defensive-zone draw.
+        """
         for team in (self.home_team, self.away_team):
             if not self._pull_eligible(team):
                 continue
-            adir = 1 if team == self.home_team else -1
-            if (adir == 1 and fx > 125) or (adir == -1 and fx < 75):
+            adir = 1 if team is self.home_team else -1
+            in_oz = (adir == 1 and fx > 125) or (adir == -1 and fx < 75)
+            in_nz = 75 <= fx <= 125
+            try:
+                from goalie_pull import (
+                    timeout_pending_pull as _tpp,
+                    pull_style as _pstyle,
+                    coach_for as _cfor,
+                )
+            except Exception:
+                _tpp = _pstyle = _cfor = None
+            if in_oz:
+                if _tpp is not None:
+                    _tpp(self, team)  # single-use flag, consumed either way
                 self._pull_goalie(team)
+                continue
+            if in_nz and _tpp is not None:
+                if _pstyle(_cfor(self, team))["nz_draw"] and _tpp(self, team):
+                    self._pull_goalie(team)
 
     def _maybe_empty_net_goal(self, team_with_puck):
         """The other team's net is empty and they just turned it over."""
-        other = (self.away_team if team_with_puck == self.home_team
+        other = (self.away_team if team_with_puck is self.home_team
                  else self.home_team)
         if other.team_name not in self.goalie_pulled:
             return
         px = self.puck_pos[0] if getattr(self, "puck_pos", None) else 100.0
-        adir = 1 if team_with_puck == self.home_team else -1
+        adir = 1 if team_with_puck is self.home_team else -1
         deep_off = (adir == 1 and px > 125) or (adir == -1 and px < 75)
         neutral = (adir == 1 and px > 75) or (adir == -1 and px < 125)
         prob = 0.30 if deep_off else (0.10 if neutral else 0.03)
@@ -7140,8 +8471,8 @@ class GameSim:
         # not already deep, the scorer skates the puck into the zone first
         # so the visual shows a proper play, not a prayer from distance.
         if not deep_off:
-            anx = 189.0 if team_with_puck == self.home_team else 11.0
-            adir = 1 if team_with_puck == self.home_team else -1
+            anx = 189.0 if team_with_puck is self.home_team else 11.0
+            adir = 1 if team_with_puck is self.home_team else -1
             self._ppos_place(scorer, anx - 25 * adir, 42.5, jitter=3.0)
             self.possession_player = scorer
             self.possession_team = team_with_puck
@@ -7487,9 +8818,9 @@ class GameSim:
 
     def _get_team_goals(self, team_name):
         """Helper to get total goals for a team."""
-        if team_name == self.home_team.team_name:
+        if team_name is self.home_team.team_name:
             return self.home_score
-        elif team_name == self.away_team.team_name:
+        elif team_name is self.away_team.team_name:
             return self.away_score
         return 0
 
@@ -7537,6 +8868,15 @@ class GameSim:
         inside and play continues from the resulting faceoff.)
         """
         hit_chance = base_chance * self.physical_intensity
+        try:
+            # Installed systems (tactics.py): heavy teams finish checks,
+            # skill teams angle off. Normalized, so the league average is
+            # untouched -- only the identity moves.
+            import tactics as _tx
+            _phys = _tx.resolve_team_tactics(hitting_team)["physical"]
+            hit_chance *= max(0.8, min(1.3, _phys))
+        except Exception:
+            pass
         try:
             # Enforcer deterrence: carriers skate freer with a tough guy
             # on the ice alongside them.
@@ -7637,17 +8977,42 @@ class GameSim:
         
         hit_successful = random.random() < success_chance
         
+        # -- Impact tier (additive): tired / normal / big hit, from
+        # personnel, fatigue and coaching. A coach's "play harder"
+        # instruction shifts the distribution up (capped).
+        hit_impact = 1  # NORMAL
+        try:
+            import impact_system as _imp
+            _hteam = self._get_player_team(hitting_player)
+            _hctx = _imp.build_context(self, hitting_player, _hteam)
+            hit_impact = _imp.classify_hit_impact(hitting_player, target_player, _hctx)
+        except Exception:
+            hit_impact = 1
+
+        try:
+            from momentum import observe as _mom_observe5
+            if hit_successful and hit_impact == 2:
+                _mom_observe5(self, "big_hit", _hteam)
+        except Exception:
+            pass
         if hit_successful:
-            result = self._resolve_hit_result(hitting_player, target_player, hit_type)
-            self._record_hit_stats(hitting_player, target_player, hit_type, result)
+            result = self._resolve_hit_result(hitting_player, target_player, hit_type,
+                                              impact=hit_impact)
+            self._record_hit_stats(hitting_player, target_player, hit_type, result,
+                                   impact=hit_impact)
             return result
         else:
-            self._record_hit_stats(hitting_player, target_player, hit_type, HitResult.MISSED)
+            self._record_hit_stats(hitting_player, target_player, hit_type, HitResult.MISSED,
+                                   impact=hit_impact)
             return HitResult.MISSED
 
-    def _resolve_hit_result(self, hitting_player, target_player, hit_type):
+    def _resolve_hit_result(self, hitting_player, target_player, hit_type, impact=1):
         """
         Stage 4: Determine the outcome of a successful hit.
+
+        `impact` (0 tired / 1 normal / 2 big) scales the existing result
+        weights on top of the hit-type logic below -- big hits force more
+        turnovers and carry more injury risk, tired ones less.
         """
         # Base result probabilities
         results = [
@@ -7656,6 +9021,25 @@ class GameSim:
             (HitResult.PENALTY_DRAWN, 0.06),
             (HitResult.INJURY_CAUSED, 0.015)  # ~0.5/game at NHL hit rates
         ]
+
+        # Installed systems: the hitting side's forecheck pressure turns
+        # more hits into turnovers; its discipline decides how often the
+        # big hit draws a penalty instead.
+        try:
+            import tactics as _txh
+            _htx = _txh.resolve_team_tactics(
+                self._get_player_team(hitting_player))
+            _hpress = _htx.get("pressure", 1.0)
+            _hdisc = max(0.5, min(1.5,
+                                  2.0 - _htx.get("discipline", 1.0)))
+            results = [
+                (HitResult.SUCCESSFUL, 0.6),
+                (HitResult.TURNOVER_CAUSED, 0.25 * _hpress),
+                (HitResult.PENALTY_DRAWN, 0.1 * _hdisc),
+                (HitResult.INJURY_CAUSED, 0.05)
+            ]
+        except Exception:
+            pass
 
         # Trait: Iron Man recipients are harder to injure (0.75x chance).
         try:
@@ -7698,6 +9082,20 @@ class GameSim:
             ]
 
         # Select result based on probabilities
+        # -- Impact scaling (additive): applied AFTER the hit-type and
+        # trait logic above, so all existing tuning is preserved.
+        try:
+            import impact_system as _imp
+            _heff = _imp.hit_effects(impact)
+            results = [
+                (r, p * _heff["turnover_mult"] if r == HitResult.TURNOVER_CAUSED
+                 else p * _heff["injury_mult"] if r == HitResult.INJURY_CAUSED
+                 else p * _heff["penalty_mult"] if r == HitResult.PENALTY_DRAWN
+                 else p)
+                for r, p in results
+            ]
+        except Exception:
+            pass
         rand = random.random()
         cumulative = 0
         for result, prob in results:
@@ -7707,12 +9105,28 @@ class GameSim:
         
         return HitResult.SUCCESSFUL
 
-    def _record_hit_stats(self, hitting_player, target_player, hit_type, result):
+    def _record_hit_stats(self, hitting_player, target_player, hit_type, result, impact=1):
         """
         Stage 4: Record hitting statistics and update tracking.
         """
         hitting_team = self._get_player_team(hitting_player)
         target_team = self._get_player_team(target_player)
+        impact_name = {0: "tired", 1: "normal", 2: "big"}[impact] \
+            if impact in (0, 1, 2) else "normal"
+
+        # -- Impact consequences (additive): big hits raise the
+        # temperature and can swing momentum at the right moment.
+        try:
+            import impact_system as _imp
+            _heff = _imp.hit_effects(impact)
+            if _heff["heat"]:
+                self._live_heat = min(40.0, self._live_heat + _heff["heat"])
+            if impact == 2 and _heff["momentum"] and hitting_team is not None:
+                _hctx = _imp.build_context(self, hitting_player, hitting_team)
+                if _imp.story_worthy(impact, hitting_player, _hctx):
+                    _imp.nudge_momentum(self, hitting_team, _heff["momentum"])
+        except Exception:
+            pass
         
         # Update individual stats
         if hitting_player.id in self.game_stats:
@@ -7750,7 +9164,8 @@ class GameSim:
                            hitting_player=hitting_player,
                            target_player=target_player,
                            hit_type=hit_type.value,
-                           result=result.value)
+                           result=result.value,
+                           impact=impact_name)
         elif result == HitResult.SUCCESSFUL:
             # Routine contact is still hockey: rub-outs along the wall and
             # finishes on the forecheck happen all game. Emit it so the
@@ -7759,7 +9174,96 @@ class GameSim:
                            hitting_player=hitting_player,
                            target_player=target_player,
                            hit_type=hit_type.value,
-                           result=result.value)
+                           result=result.value,
+                           impact=impact_name)
+
+        # -- Bad blood (additive): a hit that injures an opponent is real --
+        # the victim misses games, and both clubs remember who did it. The
+        # rivalry log carries it into future in-game tension meters; the
+        # narrative-ledger bridge carries it into headlines and series
+        # storylines. Nothing else about the hit changes.
+        if result == HitResult.INJURY_CAUSED:
+            self._apply_hit_injury(target_player, hitting_player,
+                                   hitting_team, target_team,
+                                   hit_type, impact)
+
+    def _apply_hit_injury(self, victim, hitter, hitting_team, target_team,
+                          hit_type, impact):
+        """Sideline the victim of an injury-causing hit and log the feud.
+
+        Games missed scale with the hit: dirty hits (charging/boarding)
+        cost weeks, big-impact hits cost days, routine ones cost a game or
+        two. Uses the same injury attributes as the quick sim
+        (is_injured / injury_type / games_remaining_injured / last_injury /
+        injured_today) so lineups, the AHL confidence pass, and recovery
+        all treat it identically.
+        """
+        injury_type = ""
+        try:
+            dirty = hit_type in (HitType.CHARGING, HitType.BOARDING)
+            big = impact == 2
+            if dirty:
+                lo, hi = 4, 10
+            elif big:
+                lo, hi = 2, 6
+            else:
+                lo, hi = 1, 4
+            games_missed = random.randint(lo, hi)
+            if games_missed >= 8:
+                injury_type = random.choice(
+                    ['Separated shoulder', 'Concussion', 'Broken jaw'])
+            elif games_missed >= 4:
+                injury_type = random.choice(
+                    ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
+            else:
+                injury_type = random.choice(
+                    ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
+            victim.is_injured = True
+            victim.injury_type = injury_type
+            victim.games_remaining_injured = games_missed
+            victim.last_injury = injury_type
+            victim.injured_today = True
+            try:
+                self._log_event(
+                    f"{victim.full_name} injured ({injury_type}, "
+                    f"~{games_missed} games) on the {hit_type.value} by "
+                    f"{hitter.full_name}", "INJURY")
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # Both clubs remember: star hurt = 25 heat, anyone else = 12.
+        try:
+            from reputation_system import record_game_incident as _rgi
+            hname = getattr(hitter, 'full_name', 'An opponent')
+            vname = getattr(victim, 'full_name', 'a player')
+            try:
+                star = float(getattr(victim, 'overall', 0) or 0) >= 85
+            except Exception:
+                star = False
+            kind = "star_injured" if star else "player_injured"
+            detail = (f"{hname} injured {vname}"
+                      + (f" ({injury_type})" if injury_type else "")
+                      + f" with a {hit_type.value} hit")
+            _rgi(self.rivalries, hitting_team, target_team, kind, detail)
+        except Exception:
+            pass
+        # Rivalry lifecycle: a major injury becomes personal bad blood
+        # between the two men -- the room wants payback. The offseason
+        # review can solidify it into entrenched hatred. Only the sim's
+        # top severity tier qualifies; season_ending marks the 20+ game
+        # catastrophes. Additive: rivalries only.
+        try:
+            _gm = games_missed
+        except NameError:
+            _gm = 0
+        if _gm >= 8:
+            try:
+                from reputation_system import record_major_injury as _rmi
+                _rmi(self.rivalries, victim, hitter,
+                     season_ending=bool(_gm >= 20))
+            except Exception:
+                pass
 
     def _resolve_turnover(self, player_losing_puck, player_gaining_puck, turnover_type):
         """
@@ -7905,15 +9409,14 @@ class GameSim:
 
     # ===== STAGE 5: GOALTENDING EXCELLENCE =====
     
-    def _calculate_expected_goal_value(self, shot_location, shot_type, distance, factor=1.0):
+    def _calculate_expected_goal_value(self, shot_location, shot_type, shot_quality, distance, grade="B"):
         """
         Stage 5: Calculate the expected goal value for a shot (xG calculation).
 
-        Location, shot type and distance are counted exactly ONCE here.
-        The danger bucket already folded them in for display/miss purposes;
-        what arrives via `factor` is only the continuous shooter/pressure
-        component (centered ~1.0) plus any matchup adjustment applied by
-        the caller.
+        grade: the shared A/B/C chance grade. The grade's conversion
+        multiplier is the ONE shared decision (mesh_system.
+        chance_grade_finish_mult) -- the same mult quick-sim applies.
+        One decision, two fidelities; never a second copy here.
         """
         # Base xG values by shot location (calibrated to NHL ~9% avg conversion)
         base_xg = {
@@ -7939,7 +9442,18 @@ class GameSim:
             ShotType.ONE_TIMER: 1.2,
             ShotType.REBOUND: 1.5
         }.get(shot_type, 1.0)
-
+        
+        # Chance-grade multiplier (2026-09-28, parity fix): the shared
+        # A/B/C finish mult -- NOT a local copy. Grade A carries the NHL
+        # high-danger premium; grade C is suppressed. Same decision
+        # quick-sim makes in _apply_chance_grade.
+        try:
+            from mesh_system import chance_grade_finish_mult as _cgfm
+            quality_modifier = _cgfm(grade)
+        except Exception:
+            quality_modifier = {'high': 1.3, 'medium': 1.0,
+                                'low': 0.7}.get(shot_quality, 1.0)
+        
         # Distance modifier (closer = higher xG)
         distance_modifier = max(0.3, 1.2 - (distance / 50))
 
@@ -7950,17 +9464,21 @@ class GameSim:
         """
         Stage 5: Determine goaltender's playing style based on attributes.
         """
-        # Analyze goalie attributes to determine style. Attributes are 1-100.
+        # Analyze goalie attributes to determine style.
+        # Thresholds are on the live 1-100 attribute scale (the old 16/18/17
+        # assumed a 1-20 scale, which parked every goalie as POSITIONAL and
+        # left the other branches dead). Mapping is x5 of the original
+        # intent: elite positioning -> positional, elite reflexes ->
+        # reactionary, elite flexibility -> butterfly.
         positioning_score = (goaltender.positioning + goaltender.anticipation) / 2
         reflexes_score = goaltender.reflexes
-        # No 'flexibility' attribute exists; agility is the closest proxy.
-        agility = getattr(goaltender, 'agility', 70)
+        flexibility = getattr(goaltender, 'flexibility', 75)  # Default if not defined
 
         if positioning_score >= 80:
             return GoaltenderStyle.POSITIONAL
-        elif reflexes_score >= 88:
+        elif reflexes_score >= 90:
             return GoaltenderStyle.REACTIONARY
-        elif agility >= 85:
+        elif flexibility >= 85:
             return GoaltenderStyle.BUTTERFLY
         elif positioning_score >= 70 and reflexes_score >= 75:
             return GoaltenderStyle.HYBRID
@@ -8041,25 +9559,36 @@ class GameSim:
         return SaveType.PAD_SAVE  # Default fallback
 
     def _calculate_save_probability(self, goaltender, shot_location, shot_type, shot_quality, distance, expected_goal,
-                                    shooter=None):
+                                    defending_team=None):
         """
         Stage 5: Calculate the probability of a save based on goaltender skills and shot characteristics.
         """
-        # Goaltender skill factors
-        positioning_skill = (goaltender.positioning + goaltender.anticipation) / 2
-        reaction_skill = (goaltender.reflexes + goaltender.agility) / 2
-        technique_skill = (goaltender.goaltending + goaltender.rebound_control) / 2
-        
-        # Overall goaltender skill
-        goalie_skill = (positioning_skill + reaction_skill + technique_skill) / 3
-        
+        # Goaltender skill factors -- the ONE shared goalie_skill_composite
+        # (divergence #5): goaltending .40 / reflexes .25 / positioning .20 /
+        # rebound_control .10 / composure .05, the same weights quick-sim
+        # uses. (The old equal-split of three pair-averages is retired.)
+        from mesh_system import goalie_skill_composite as _gsc2
+        goalie_skill = _gsc2(goaltender)
+
         # Skill edge: good goalies reduce xG, bad goalies increase it.
-        # Attributes are 1-100; league-average goalie skill is ~70.
-        # Each point above/below adjusts xG by 2%. Elite (80): 0.80x xG.
-        # Weak (60): 1.20x xG.
-        LEAGUE_AVG_GOALIE_SKILL = 70.0
+        # Recalibrated 2026-09-28 on live rosters: the weighted composite
+        # averages 69.3 (n=253, sd 11.8) -- up from the old 67.5 anchor,
+        # and with wider spread than the old equal-split (sd 8.9), so
+        # goalies differentiate more. Anchor-preserving: the average
+        # goalie keeps the historically calibrated 0.70x; each point of
+        # skill moves xG by 2% around that anchor, so the game's scoring
+        # balance is unchanged.
+        LEAGUE_AVG_GOALIE_SKILL = 69.3
         skill_diff = goalie_skill - LEAGUE_AVG_GOALIE_SKILL
-        xg_multiplier = max(0.7, min(1.3, 1.0 - (skill_diff * 0.02)))
+        # scoring_balance.BASE_SAVE_TUNE: the shared "slight" SV% nudge
+        # toward .900 both engines apply. The average goalie keeps the
+        # calibrated anchor shape, scaled by the tune; GPG stays in band.
+        try:
+            import scoring_balance as _sbal2
+            _tune = float(_sbal2.BASE_SAVE_TUNE)
+        except Exception:
+            _tune = 1.0
+        xg_multiplier = max(0.49, min(0.91, 0.70 * _tune * (1.0 - skill_diff * 0.02)))
         effective_xg = expected_goal * xg_multiplier
         
         # Base save probability (inverse of effective xG)
@@ -8111,21 +9640,98 @@ class GameSim:
                 save_probability *= _trait_bonus(goaltender, "overtime_mult")
         except Exception:
             pass
-        
+
+        # Goalie personality (additive): temperament x traffic, battler
+        # bounce-back/tilt, technician soft-goal suppression, the screen
+        # tax on low-exposure goalies, youth tax, playoff elevator.
+        # See goalie_personality.py -- shared math with AdvancedGameSim.
+        try:
+            import goalie_personality as _gp
+            _st = self.goalie_personality_state.get(goaltender.id)
+            if _st is None:
+                _st = _gp.new_game_state()
+                self.goalie_personality_state[goaltender.id] = _st
+            # ~90s of game time per shot faced; drives the bounce-back clock.
+            _st["seconds_since_goal"] = _st.get("seconds_since_goal", 9999.0) + 90.0
+            # shot_quality is the "high"/"medium"/"low" string in this engine.
+            _qv = shot_quality
+            if isinstance(_qv, str):
+                _qv = {"high": 0.85, "medium": 0.45, "low": 0.15}.get(_qv, 0.45)
+            try:
+                _qv = float(_qv)
+            except (TypeError, ValueError):
+                _qv = 0.45
+            _traffic = shot_type in (ShotType.TIP_IN, ShotType.DEFLECTION,
+                                     ShotType.REBOUND) or _qv >= 0.75
+            # Net-front slot shots through bodies are traffic too, even at
+            # medium quality -- the screen is the weapon, not the shot.
+            try:
+                if (not _traffic and _qv >= 0.40 and shot_location in
+                        (ShotLocation.CREASE, ShotLocation.LOW_SLOT,
+                         ShotLocation.HIGH_SLOT)):
+                    _traffic = True
+            except Exception:
+                pass
+            _soft = _qv <= 0.25 and (distance or 0) > 40
+            try:
+                _cgp = int(getattr(getattr(goaltender, "stats", None),
+                                   "career_games", 0) or 0)
+            except Exception:
+                _cgp = 0
+            _gp_mult = _gp.save_prob_mult(
+                goaltender,
+                {"traffic": _traffic, "soft": _soft},
+                state=_st,
+                is_playoff=bool(getattr(self, "is_playoff", False)),
+                career_gp=_cgp,
+            )
+            if _gp_mult != 1.0:
+                save_probability *= _gp_mult
+        except Exception:
+            pass
+
+        # Coach trust / room fit (divergence #11): the same
+        # goalie_mesh_factor decision quick-sim applies -- a save-side
+        # multiplier (0.985-1.02 coach, 0.99-1.015 room). Own channel.
+        try:
+            import goalie_personality as _gp3
+            _dt = defending_team
+            try:
+                _gcoach3 = getattr(_dt, "head_coach",
+                                   getattr(_dt, "coach", None))
+            except Exception:
+                _gcoach3 = None
+            try:
+                _gcgp3 = int(getattr(getattr(goaltender, "stats", None),
+                                     "career_games", 0) or 0)
+            except Exception:
+                _gcgp3 = 0
+            _mesh3 = _gp3.goalie_mesh_factor(
+                goaltender, team=_dt, coach=_gcoach3,
+                is_playoff=bool(getattr(self, "is_playoff", False)),
+                career_gp=_gcgp3)
+            if _mesh3 != 1.0:
+                save_probability *= _mesh3
+        except Exception:
+            pass
+
         # Global calibration: NHL average SV% is ~.905.
         # (Removed - formula now naturally calibrates via xG reduction)
-        
+
         return min(max(save_probability, 0.05), 0.94)  # Clamp between 5% and 94% (NHL elite ~.930)
 
     def _determine_rebound_control(self, goaltender, save_type, shot_type, shot_power):
         """
         Stage 5: Determine how well the goaltender controls the rebound.
         """
-        # Base rebound control based on goaltender's rebound control attribute.
-        # Attributes are 1-100. Calibrated so an average goalie (~70)
-        # controls ~85% of saves cleanly; elite (~95) ~97.5%, weak (~55) ~77.5%
-        # (before save/shot modifiers).
-        base_control = 0.5 + (goaltender.rebound_control / 100.0) * 0.5
+        # Base rebound control, calibrated for the live 1-100 scale.
+        # (The old formula assumed a 1-20 scale with avg ~12; on 1-100 it
+        # evaluated above 2.2 for every goalie and pegged at the 0.97 cap, so
+        # rebound_control did nothing and rebounds barely existed.)
+        # Average goalie (~69) controls ~80% of saves cleanly;
+        # elite (~85) ~93%, weak (~55) ~69%.
+        base_control = min(0.97, max(0.50,
+                                     0.80 + (goaltender.rebound_control - 69.0) * 0.008))
         
         # Save type modifiers
         save_type_modifier = {
@@ -8355,7 +9961,7 @@ class GameSim:
         
         # Get base coaching adjustment for situation
         base_adjustment = self.coaching_adjustments.get(situation, {}).get(
-            'home' if team == self.home_team else 'away', 1.0
+            'home' if team is self.home_team else 'away', 1.0
         )
         
         # Tactical system bonuses
@@ -8383,7 +9989,7 @@ class GameSim:
 
     def _team_situation(self, team, situation):
         """Translate the home-centric situation to the given team's perspective."""
-        if team == self.home_team:
+        if team is self.home_team:
             return situation
         swap = {SpecialSituation.POWER_PLAY: SpecialSituation.PENALTY_KILL,
                 SpecialSituation.PENALTY_KILL: SpecialSituation.POWER_PLAY}
@@ -8407,13 +10013,15 @@ class GameSim:
         rate in real hockey; 5v3 is close to automatic pressure. Shorthanded
         shots go the other way.
         """
-        if self._is_team_on_power_play(attacking_team):
-            # Net manpower, not raw penalty count: coincidental minors
-            # (offsetting) don't create a real advantage.
-            n_opp = len(self._manpower_penalties(defending_team))
-            n_own = len(self._manpower_penalties(attacking_team))
-            return 3.0 if (n_opp - n_own) >= 2 else 2.2
-        if self._is_team_on_penalty_kill(attacking_team):
+        situation = self._get_current_situation()
+        if situation == SpecialSituation.POWER_PLAY \
+                and self._is_team_on_power_play(attacking_team):
+            opp_pens = (self.home_penalties if defending_team is self.home_team
+                        else self.away_penalties)
+            n_opp = sum(1 for p in opp_pens if p.get('minutes', 2) >= 2)
+            return 3.0 if n_opp >= 2 else 2.2
+        if situation == SpecialSituation.PENALTY_KILL \
+                and self._is_team_on_penalty_kill(attacking_team):
             return 0.7
         return 1.0
 
@@ -8428,28 +10036,53 @@ class GameSim:
         sit_att = self._team_situation(attacking_team, situation)
         sit_def = self._team_situation(defending_team, situation)
 
-        es_attack = {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
-                     'Offensive': 1.04, 'Very Offensive': 1.08}
-        es_defense = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
-                      'Offensive': 1.03, 'Very Offensive': 1.06}
-        factor = (es_attack.get(getattr(attacking_team, 'tactic_even_strength', 'Balanced'), 1.0)
-                  * es_defense.get(getattr(defending_team, 'tactic_even_strength', 'Balanced'), 1.0))
+        # Installed NHL systems (tactics.py) -- the single tactics channel.
+        # The legacy aggression sliders (tactic_even_strength /
+        # tactic_power_play / tactic_penalty_kill) fold into
+        # resolve_team_tactics itself now, so the old string maps below
+        # are retired: one number per side, no double-counting.
+        factor = 1.0
 
-        # Special-teams approach
-        if sit_att == SpecialSituation.POWER_PLAY:
-            pp = getattr(attacking_team, 'tactic_power_play', 'Offensive')
-            factor *= {'Conservative': 0.96, 'Balanced': 1.0, 'Offensive': 1.05,
-                       'Very Offensive': 1.10}.get(pp, 1.05)
-            pk = getattr(defending_team, 'tactic_penalty_kill', 'Defensive')
-            factor /= {'Very Defensive': 1.10, 'Defensive': 1.05, 'Balanced': 1.0,
-                       'Aggressive': 0.96}.get(pk, 1.05)
-        elif sit_def == SpecialSituation.POWER_PLAY:
-            # Attacking team is shorthanded: their PK approach suppresses own xG slightly
-            pk = getattr(attacking_team, 'tactic_penalty_kill', 'Defensive')
-            factor *= {'Very Defensive': 0.94, 'Defensive': 0.97, 'Balanced': 1.0,
-                       'Aggressive': 1.02}.get(pk, 0.97)
+        # Your attack against their structure; your power play against
+        # their kill.
+        try:
+            import tactics as _tx
+            _att = _tx.resolve_team_tactics(attacking_team)
+            _dfn = _tx.resolve_team_tactics(defending_team)
+            factor *= _att["attack"] * _dfn["defense"]
+            # O-zone system sets chance quality: cycle/volume teams get
+            # better looks, rush teams get more looks. SHOT_LIFT_DILUTION
+            # keeps scoring sane as league volume rises (extra shots are
+            # worse shots).
+            factor *= _att.get("shot_qual", 1.0) / _tx.SHOT_LIFT_DILUTION
+            if sit_att == SpecialSituation.POWER_PLAY:
+                factor *= _att["pp"] * (2.0 - _dfn["pk"])
+        except Exception:
+            pass
 
-        return max(0.8, min(1.25, factor))
+        return max(0.75, min(1.35, factor))
+
+    def _parity_factor(self, attacking_team, defending_team):
+        """Parity-engine multiplier for the attacking side, cached per game.
+
+        Same shared decision both engines call (parity_engine.
+        pregame_multiplier); this engine applies it on shot quality next
+        to the tactics xG factor. Never raises; inert (1.0) on failure.
+        """
+        try:
+            if self._parity_mult is None:
+                import parity_engine as _pe
+                _po = bool(getattr(self, "is_playoff", False))
+                self._parity_mult = {
+                    self.home_team.team_name: _pe.pregame_multiplier(
+                        self.home_team, self.away_team, playoffs=_po),
+                    self.away_team.team_name: _pe.pregame_multiplier(
+                        self.away_team, self.home_team, playoffs=_po),
+                }
+            return self._parity_mult.get(
+                getattr(attacking_team, "team_name", ""), 1.0)
+        except Exception:
+            return 1.0
 
     def _get_tactical_system_bonus(self, team, situation):
         """
@@ -9174,7 +10807,7 @@ class GameSim:
             report['team_analytics'][team_name] = {
                 'expected_goals': stats['expected_goals_for'],
                 'goals_above_expected': stats['goals_above_expected'],
-                'win_probability_final': self.win_probability if team_name == self.home_team.team_name else 1 - self.win_probability,
+                'win_probability_final': self.win_probability if team_name is self.home_team.team_name else 1 - self.win_probability,
                 'clutch_rating': stats['clutch_rating']
             }
         

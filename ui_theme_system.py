@@ -4,7 +4,6 @@
 import tkinter as tk
 from tkinter import ttk
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional
 from team_identity_system import NHLTeamIdentity
 
 @dataclass

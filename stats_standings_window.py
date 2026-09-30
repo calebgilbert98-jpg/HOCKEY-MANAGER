@@ -8,20 +8,22 @@ unchanged from the legacy build -- this is a UI rebuild only.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import Dict, List, Optional
-import random
-from datetime import datetime, timedelta
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
+from datetime import datetime
 
 import customtkinter as ctk
 
-# Import our advanced analytics system
+# (advanced_stats_analytics import removed 2026-09-28: the real-time engine was
+# populated on every screen open but never displayed. Live advanced stats on
+# the stats screens come from advanced_metrics.)
+
 try:
-    from advanced_stats_analytics import RealTimeStatsEngine, PlayerStats, TeamStats
-    ANALYTICS_AVAILABLE = True
-except ImportError:
-    ANALYTICS_AVAILABLE = False
-    print("Warning: Advanced analytics system not available, using fallback data")
+    from team_identity_system import (jersey_chip as _jersey_chip,
+                                      accent_for_team as _accent_for_team)
+except Exception:
+    _jersey_chip = None
+    _accent_for_team = None
 
 try:
     from game_classes import to_100_scale
@@ -32,7 +34,21 @@ except ImportError:
         except (TypeError, ValueError):
             return 50
 
-class StatsStandingsWindow(ctk.CTkToplevel):
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
+
+
+class StatsStandingsView(ctk.CTkFrame):
     """Advanced Stats and Standings window with deep analytics and multiple view modes"""
 
     # Tab names in order -- kept as lists so tab-name <-> index mapping stays
@@ -40,12 +56,21 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     MAIN_TABS = ["Standings", "Team Analytics", "Player Leaders",
                  "Analytics & Trends", "Division Analysis", "Divisions"]
     LEADER_TABS = ["Scoring Leaders", "Advanced Stats", "Goaltending",
-                   "Breakout Players", "Milestone Watch", "NHL Records"]
+                   "Breakout Players", "Rookie Leaders", "Award Races",
+                   "Milestone Watch", "NHL Records"]
     ANALYTICS_TABS = ["Dashboard", "Trends", "Insights"]
     RECORD_TABS = ["Season Records", "Career Records", "Current Leaders",
                    "Record Chase", "Achievements"]
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
+        # Calder season year for rookie eligibility (Sept-15 age cutoff
+        # belongs to the season's start year).
+        try:
+            import awards_race as _ar
+            _d = getattr(app, "current_date", None)
+            self._calder_year = _ar.calder_season_year(_d) if _d is not None else None
+        except Exception:
+            self._calder_year = None
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -61,14 +86,13 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self._secondary_button = secondary_button
         self._heading = heading
         self._body = body
+        self._teamcolor_tags = set()  # reserved (grid table needs no tags)
         self._ff = "Segoe UI"
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Advanced League Analytics & Standings - Hockey Manager")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the StatsStandingsWindow wrapper
         self.configure(fg_color=self._ct['BG'])
-        self.geometry("1600x1000")
-        self.minsize(1400, 800)
 
         # Enhanced state tracking
         self.selected_tab = 0
@@ -80,11 +104,9 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             'stat_type': 'Overall'
         }
 
-        # Initialize analytics engine if available
-        self.analytics_engine = None
-        if ANALYTICS_AVAILABLE:
-            self.analytics_engine = RealTimeStatsEngine()
-            self._initialize_analytics_from_game_data()
+        # (Real-time analytics engine unwired 2026-09-28: advanced_stats_analytics
+        # was populated on every screen open but never displayed anywhere. The
+        # live advanced stats on this screen come from advanced_metrics.)
 
         # Dark styling for the multi-column tables (styled ttk.Treeview,
         # per the migration guide)
@@ -94,7 +116,15 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self.create_interface()
 
         # Track window
-        self.parent.open_windows['stats_standings'] = self
+        self.app.open_windows['stats_standings'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # CTk styling helpers
@@ -212,11 +242,11 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             tree.selection_set(item)
             player = None
             try:
-                player = self.parent.tree_maps.get(tree, {}).get(item)
+                player = self.app.tree_maps.get(tree, {}).get(item)
             except Exception:
                 player = None
             if player:
-                PlayerContextMenu(self.parent).show_context_menu(event, player)
+                PlayerContextMenu(self.app).show_context_menu(event, player)
 
         tree.bind("<Button-3>", _show)
 
@@ -229,7 +259,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         were created but never packed, rendering them invisible.
         """
         frame = ctk.CTkFrame(parent, fg_color="transparent")
-        tree = self.parent._create_treeview(frame, columns, height=height)
+        tree = self.app._create_treeview(frame, columns, height=height)
         tree.configure(style='Stats.Treeview')
         scrollbar = ttk.Scrollbar(frame, orient="vertical",
                                   command=tree.yview,
@@ -254,69 +284,6 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         inner = ctk.CTkFrame(scroll, fg_color="transparent")
         inner.pack(fill="both", expand=True)
         return inner
-        
-    def _initialize_analytics_from_game_data(self):
-        """Initialize analytics engine with current game data"""
-        try:
-            if not self.parent.game_manager or not self.parent.game_manager.league:
-                return
-                
-            # Find NHL teams
-            nhl_teams = []
-            if hasattr(self.parent.game_manager.league, 'teams'):
-                nhl_teams = self.parent.game_manager.league.teams
-            elif hasattr(self.parent.game_manager.league, 'leagues'):
-                for league in self.parent.game_manager.league.leagues:
-                    if hasattr(league, 'name') and "National Hockey League" in league.name:
-                        nhl_teams = league.teams
-                        break
-            
-            if not nhl_teams:
-                return
-                
-            # Initialize analytics for each team
-            for team in nhl_teams:
-                if hasattr(team, 'roster') and team.roster:
-                    # Convert team data to analytics format
-                    home_players = []
-                    for player in team.roster:
-                        home_players.append({
-                            'id': f"{team.team_name}_{getattr(player, 'full_name', 'Unknown')}",
-                            'name': getattr(player, 'full_name', 'Unknown'),
-                            'position': getattr(player, 'primary_position', 'C')
-                        })
-                    
-                    # Initialize analytics (this would normally be done at game start)
-                    if len(home_players) > 0:
-                        self.analytics_engine.initialize_game(
-                            team.team_name, 
-                            "TBD",  # Actual opponent will be determined from schedule data
-                            home_players, 
-                            []  # Away players would be empty for this initialization
-                        )
-                        
-                        # Populate with existing player stats if available
-                        for player in team.roster:
-                            player_id = f"{team.team_name}_{getattr(player, 'full_name', 'Unknown')}"
-                            if player_id in self.analytics_engine.player_stats:
-                                stats = self.analytics_engine.player_stats[player_id]
-                                # Update with real data from player object
-                                stats.goals = getattr(player, 'goals', 0)
-                                stats.assists = getattr(player, 'assists', 0)
-                                stats.shots = getattr(player, 'shots', 0)
-                                stats.hits = getattr(player, 'hits', 0)
-                                stats.blocks = getattr(player, 'blocks', 0)
-                                stats.ice_time = getattr(player, 'ice_time', 0.0)
-                        
-                        # Update team stats
-                        if team.team_name in self.analytics_engine.team_stats:
-                            team_stats = self.analytics_engine.team_stats[team.team_name]
-                            team_stats.goals = getattr(team, 'goals_for', 0)
-                            team_stats.shots = getattr(team, 'shots_for', 0)
-                            team_stats.hits = getattr(team, 'hits_for', 0)
-                            
-        except Exception as e:
-            print(f"Warning: Could not initialize analytics from game data: {e}")
     
     # ------------------------------------------------------------------
     # Tabview with a guard for the CTk 6.0.0 deferred grid-forget race.
@@ -408,8 +375,20 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self.period_combo.set("Season")
         self.period_combo.pack(side='left', padx=(0, 12))
 
+        # Regular Season / Playoffs: the whole screen (team analytics,
+        # player leaders, dashboard) re-reads from the matching ledger.
+        # Standings stay the final regular-season table in both modes.
+        self._body(filters_frame, text="Season:", dim=True,
+                   size=11).pack(side='left', padx=(0, 6))
+        self.season_type = tk.StringVar(value="Regular Season")
+        self._combo(
+            filters_frame, variable=self.season_type,
+            values=["Regular Season", "Playoffs"],
+            command=self.on_season_type_change, width=130).pack(
+                side='left', padx=(0, 12))
+
         self._secondary_button(filters_frame, text="Close",
-                               command=self.destroy).pack(side='left')
+                               command=self.close_view).pack(side='left')
 
         # Main tabs
         self.tabview = self._make_tabview(main_frame)
@@ -463,7 +442,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     def update_data_summary(self):
         """Update the data summary in the status bar"""
         try:
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 team_count = len(league.teams)
                 # Count total players
@@ -472,7 +451,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     if hasattr(team, 'roster'):
                         total_players += len(team.roster)
                 
-                summary = f"{team_count} teams • {total_players:,} players • Analytics: {'Active' if self.analytics_engine else 'Unavailable'}"
+                summary = f"{team_count} teams • {total_players:,} players"
                 self.data_summary_label.configure(text=summary)
             else:
                 self.data_summary_label.configure(text="No league data available")
@@ -630,6 +609,10 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             self.leaders_tabview.tab("Goaltending"), "goaltending")
         self.create_enhanced_player_section(
             self.leaders_tabview.tab("Breakout Players"), "breakout")
+        self.create_rookie_leaders_section(
+            self.leaders_tabview.tab("Rookie Leaders"))
+        self.create_award_races_section(
+            self.leaders_tabview.tab("Award Races"))
         self.create_milestone_watch_section(
             self.leaders_tabview.tab("Milestone Watch"))
         self.create_records_section(
@@ -647,6 +630,437 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         ('career_shutouts', 'shutouts', 'Shutouts', (25, 50, 75, 100), 4),
         ('career_games_goalie', 'games_played', 'Games Played', (300, 500), 20),
     ]
+
+    # ------------------------------------------------------------------
+    # Rookie Leaders + Award Races (new)
+    # ------------------------------------------------------------------
+    def _league_players_and_teams(self):
+        """Return (players, teams) for the NHL league."""
+        players, teams = [], []
+        try:
+            league = getattr(self.app, "league", None)
+            if league is None and hasattr(self.app, "game_manager"):
+                league = getattr(self.app.game_manager, "league", None)
+            candidates = []
+            if league is not None:
+                if getattr(league, "teams", None):
+                    candidates = list(league.teams)
+                elif getattr(league, "leagues", None):
+                    for lg in league.leagues:
+                        if "National Hockey League" in str(getattr(lg, "name", "")):
+                            candidates = list(getattr(lg, "teams", []) or [])
+                            break
+            for team in candidates:
+                teams.append(team)
+                for p in (getattr(team, "roster", []) or []):
+                    players.append(p)
+        except Exception:
+            pass
+        return players, teams
+
+    def _pname(self, p):
+        return (getattr(p, "full_name", None) or getattr(p, "name", None)
+                or f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+                or "?")
+
+    def _pteam_abbr(self, p, teams):
+        tname = getattr(p, "team_name", "") or ""
+        if not tname:
+            # fall back: find the team whose roster holds this player
+            for t in teams:
+                if p in (getattr(t, "roster", []) or []):
+                    tname = getattr(t, "team_name", "")
+                    break
+        return self._get_team_abbreviation(tname) if tname else ""
+
+    # ------------------------------------------------------------------
+    # Regular Season / Playoffs split
+    # ------------------------------------------------------------------
+    def _in_playoff_mode(self):
+        """True when the Season toggle is on Playoffs."""
+        try:
+            return self.season_type.get() == "Playoffs"
+        except Exception:
+            return False
+
+    def _stat_ledger(self, player):
+        """The active per-player stat ledger for the current Season toggle.
+
+        Regular Season -> player.stats; Playoffs -> player.playoff_stats
+        (folded from GameSim.game_stats after every playoff game). Falls
+        back to whichever ledger exists -- old saves predate playoff_stats.
+        NHL only: neither ledger ever includes AHL numbers (ahl_stats is a
+        separate object read only by the AHL Stats screen).
+        """
+        if self._in_playoff_mode():
+            led = getattr(player, "playoff_stats", None)
+            return led if led is not None else getattr(player, "stats", None)
+        return getattr(player, "stats", None)
+
+    def _pstat(self, player, attr, default=0):
+        """One stat from the active ledger, direct-attr fallback."""
+        led = self._stat_ledger(player)
+        if led is not None and hasattr(led, attr):
+            try:
+                return getattr(led, attr)
+            except Exception:
+                pass
+        return getattr(player, attr, default)
+
+    def get_team_playoff_stats(self):
+        """Per-team playoff numbers from the bracket's per-game results.
+
+        Returns {team_name: {GP, W, L, GF, GA, result}} where result is
+        'Won Stanley Cup' or 'Lost <round>'. Empty dict when no playoff
+        games have been played yet. Read-only walk -- nothing persisted.
+        """
+        out = {}
+        try:
+            league = getattr(getattr(self.app, "game_manager", self.app),
+                             "league", None)
+            bracket = getattr(league, "playoff_bracket", None)
+            if bracket is None:
+                pw = getattr(self.app, "open_windows", {}).get("playoffs")
+                if pw is not None:
+                    try:
+                        if pw.winfo_exists():
+                            bracket = getattr(pw, "playoff_bracket", None)
+                    except Exception:
+                        bracket = None
+            if bracket is None:
+                return out
+            series_map = getattr(bracket, "playoff_series", None) or {}
+            champ = getattr(bracket, "stanley_cup_champion", None)
+            champ_name = getattr(champ, "team_name", None)
+            round_order = ["wild_card", "division_semifinals",
+                           "division_finals", "conference_finals",
+                           "stanley_cup_final"]
+            round_names = {"wild_card": "Round 1",
+                           "division_semifinals": "Round 2",
+                           "division_finals": "Conf. Final",
+                           "conference_finals": "Conf. Final",
+                           "stanley_cup_final": "Cup Final"}
+            _seen_series = set()
+            for key in round_order:
+                for s in series_map.get(key, None) or []:
+                    if id(s) in _seen_series:
+                        continue
+                    _seen_series.add(id(s))
+                    t1, t2 = getattr(s, "team1", None), getattr(s, "team2", None)
+                    for t, is_t1 in ((t1, True), (t2, False)):
+                        if t is None:
+                            continue
+                        tname = getattr(t, "team_name",
+                                        getattr(t, "name", "?"))
+                        e = out.setdefault(
+                            tname, {"GP": 0, "W": 0, "L": 0, "GF": 0,
+                                    "GA": 0, "result": ""})
+                        w = getattr(s, "team1_wins", 0) if is_t1 else \
+                            getattr(s, "team2_wins", 0)
+                        for g in getattr(s, "game_results", None) or []:
+                            try:
+                                t1s = int(g.get("t1_score", 0) or 0)
+                                t2s = int(g.get("t2_score", 0) or 0)
+                            except Exception:
+                                continue
+                            mine, theirs = (t1s, t2s) if is_t1 else (t2s, t1s)
+                            e["GP"] += 1
+                            e["GF"] += mine
+                            e["GA"] += theirs
+                        e["W"] += w
+                        e["result"] = ("Won Stanley Cup"
+                                       if tname == champ_name
+                                       else "Lost " + round_names.get(key, key))
+            # Losses = games - wins (a team appears in several series).
+            for e in out.values():
+                e["L"] = max(0, e["GP"] - e["W"])
+        except Exception:
+            pass
+        return out
+
+    def on_season_type_change(self, value=None):
+        """Season toggle flipped: regular-season-only tabs can't show
+        playoff data, so park the leaders view on Scoring Leaders, then
+        refresh whatever main tab is showing."""
+        try:
+            if self._in_playoff_mode() and hasattr(self, "leaders_tabview"):
+                rs_only = {"Breakout Players", "Rookie Leaders",
+                           "Award Races", "Milestone Watch", "NHL Records"}
+                if self.leaders_tabview.get() in rs_only:
+                    self.leaders_tabview.set("Scoring Leaders")
+        except Exception:
+            pass
+        try:
+            self.refresh_all_data()
+        except Exception as e:
+            print(f"Error refreshing on season-type change: {e}")
+
+    def create_rookie_leaders_section(self, parent_frame):
+        """Rookie Leaders tab: rookie scoring + rookie goaltending."""
+        import awards_race as ar
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+
+        players, teams = self._league_players_and_teams()
+
+        # Header
+        hdr = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        hdr.pack(fill="x", padx=12, pady=(10, 4))
+        title = ctk.CTkLabel(hdr, text="Rookie Leaders",
+                             font=ctk.CTkFont(size=16, weight="bold"),
+                             text_color=ct['TEXT'])
+        title.pack(side="left")
+        sub = ctk.CTkLabel(hdr, text="First-year players (rookie eligibility)",
+                           font=ctk.CTkFont(size=11),
+                           text_color=ct['TEXT_DIM'])
+        sub.pack(side="left", padx=(10, 0))
+
+        body = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+
+        # Left: rookie skaters
+        left = ctk.CTkFrame(body, fg_color=ct['CARD'])
+        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        ctk.CTkLabel(left, text="Rookie Scoring",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=10, pady=(8, 2))
+        cols_s = {"rank": ("#", 36), "player": ("Player", 150),
+                  "team": ("Team", 52), "gp": ("GP", 44),
+                  "g": ("G", 40), "a": ("A", 40), "p": ("P", 44)}
+        tree_s = self._make_tree(left, cols_s, height=18, padx=10, pady=6)
+        self._bind_leader_menu(tree_s)
+        tree_s._player_rows = {}
+
+        # Right: rookie goalies
+        right = ctk.CTkFrame(body, fg_color=ct['CARD'])
+        right.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        ctk.CTkLabel(right, text="Rookie Goaltending",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=ct['TEXT']).pack(anchor="w", padx=10, pady=(8, 2))
+        cols_g = {"rank": ("#", 36), "player": ("Player", 150),
+                  "team": ("Team", 52), "gp": ("GP", 44),
+                  "w": ("W", 40), "sv": ("SV%", 58), "gaa": ("GAA", 52)}
+        tree_g = self._make_tree(right, cols_g, height=18, padx=10, pady=6)
+        self._bind_leader_menu(tree_g)
+        tree_g._player_rows = {}
+
+        for i, r in enumerate(ar.rookie_skaters(players, season_year=self._calder_year)[:25], 1):
+            p = r["player"]
+            iid = tree_s.insert("", "end", values=(
+                i, self._pname(p), self._pteam_abbr(p, teams),
+                r["gp"], r["goals"], r["assists"], r["points"]))
+            tree_s._player_rows[iid] = p
+        for i, r in enumerate(ar.rookie_goalies(players, season_year=self._calder_year)[:25], 1):
+            p = r["player"]
+            iid = tree_g.insert("", "end", values=(
+                i, self._pname(p), self._pteam_abbr(p, teams),
+                r["gp"], r["wins"], f"{r['sv_pct']:.3f}", f"{r['gaa']:.2f}"))
+            tree_g._player_rows[iid] = p
+
+    def create_award_races_section(self, parent_frame):
+        """Award Races tab: per-award candidate rankings.
+
+        Each award ranks by the criterion that drives real-world voting
+        (see awards_race.py for the winner-history rationale).
+        """
+        import awards_race as ar
+        ct = self._ct
+        parent_frame.configure(fg_color=ct['PANEL'])
+
+        # Top bar: award picker
+        topbar = ctk.CTkFrame(parent_frame, fg_color="transparent")
+        topbar.pack(fill="x", padx=12, pady=(10, 4))
+        ctk.CTkLabel(topbar, text="Award Races",
+                     font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=ct['TEXT']).pack(side="left")
+        award_names = [name for name, _desc, _key in ar.AWARD_DEFINITIONS]
+        self._award_var = ctk.StringVar(value=award_names[0])
+        picker = ctk.CTkOptionMenu(topbar, variable=self._award_var,
+                                   values=award_names, width=260,
+                                   command=lambda _v: self._refresh_award_race())
+        picker.pack(side="left", padx=(12, 0))
+
+        # Criteria description
+        self._award_desc = ctk.CTkLabel(parent_frame, text="",
+                                        font=ctk.CTkFont(size=11),
+                                        text_color=ct['TEXT_DIM'],
+                                        wraplength=900, justify="left")
+        self._award_desc.pack(fill="x", padx=12, pady=(0, 6))
+
+        # Candidate table container
+        self._award_table_holder = ctk.CTkFrame(parent_frame,
+                                                fg_color="transparent")
+        self._award_table_holder.pack(fill="both", expand=True,
+                                      padx=12, pady=(0, 10))
+        self._refresh_award_race()
+
+    def _refresh_award_race(self):
+        """Rebuild the award-race table for the selected award."""
+        import awards_race as ar
+        ct = self._ct
+        holder = self._award_table_holder
+        for child in holder.winfo_children():
+            child.destroy()
+
+        name = self._award_var.get()
+        key = next((k for n, _d, k in ar.AWARD_DEFINITIONS if n == name),
+                   "hart")
+        desc = next((d for n, d, _k in ar.AWARD_DEFINITIONS if n == name), "")
+        self._award_desc.configure(
+            text=f"{name}: {desc}")
+
+        players, teams = self._league_players_and_teams()
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+        # Authoritative roster mapping: team_name labels can go stale
+        # after trades; the roster is the truth.
+        roster_map = ar.roster_team_map(teams)
+
+        rows, columns = [], {}
+        is_team_award = False
+
+        if key == "hart":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "tpct": ("Team P%", 64)}
+            for i, r in enumerate(ar.hart_race(players, team_pct,
+                                                roster_map=roster_map)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"],
+                                 (getattr(p, "assists", 0) or 0),
+                                 r["points"], f"{r['team_pct']:.3f}")))
+        elif key == "art_ross":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44)}
+            for i, r in enumerate(ar.art_ross_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["assists"], r["points"])))
+        elif key == "rocket":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "p": ("P", 44),
+                       "shpct": ("SH%", 52)}
+            for i, r in enumerate(ar.rocket_race(players)[:15], 1):
+                p = r["player"]
+                shots = getattr(p, "shots", 0) or 0
+                shpct = (r["goals"] / shots * 100) if shots else 0.0
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["points"], f"{shpct:.1f}")))
+        elif key == "norris":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "pm": ("+/-", 48)}
+            for i, r in enumerate(ar.norris_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"],
+                                 (r["points"] - r["goals"]),
+                                 r["points"], r["plus_minus"])))
+        elif key == "vezina":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "w": ("W", 40), "sv": ("SV%", 58),
+                       "gaa": ("GAA", 52), "so": ("SO", 40),
+                       "gsax": ("GSAx", 58)}
+            goalies = [p for p in players if self._is_goalie(p)]
+            for i, r in enumerate(ar.vezina_race(goalies)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["wins"], f"{r['sv_pct']:.3f}",
+                                 f"{r['gaa']:.2f}", r["shutouts"],
+                                 f"{r['gsax']:+.1f}")))
+        elif key == "calder":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "note": ("", 90)}
+            for i, r in enumerate(ar.calder_race(players, season_year=self._calder_year)[:15], 1):
+                p = r["player"]
+                if r.get("goalie"):
+                    vals = (i, self._pname(p), self._pteam_abbr(p, teams),
+                            getattr(p, "games_played", 0) or 0,
+                            "-", "-", "-",
+                            f"G: {r['sv_pct']:.3f} SV%")
+                else:
+                    vals = (i, self._pname(p), self._pteam_abbr(p, teams),
+                            getattr(p, "games_played", 0) or 0,
+                            r["goals"], r["points"] - r["goals"],
+                            r["points"], "")
+                rows.append((p, vals))
+        elif key == "selke":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "p": ("P", 44), "pm": ("+/-", 48),
+                       "tk": ("TK", 44), "fo": ("FO", 44)}
+            for i, r in enumerate(ar.selke_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["points"], r["plus_minus"],
+                                 r["takeaways"],
+                                 getattr(p, "faceoffs", 50) or 50)))
+        elif key == "byng":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "pim": ("PIM", 48)}
+            for i, r in enumerate(ar.byng_race(players)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"], r["points"] - r["goals"],
+                                 r["points"], r["pim"])))
+        elif key == "adams":
+            is_team_award = True
+            columns = {"rank": ("#", 36), "coach": ("Coach", 160),
+                       "team": ("Team", 150), "p": ("Pts", 48),
+                       "actual": ("P%", 56), "exp": ("Exp P%", 64),
+                       "over": ("Over +/-", 64)}
+            for i, r in enumerate(ar.adams_race(teams)[:15], 1):
+                rows.append((None, (i, r["coach"], r["team"], r["points"],
+                                    f"{r['actual_pct']:.3f}",
+                                    f"{r['expected_pct']:.3f}",
+                                    f"{r['score']:+.3f}")))
+        elif key == "jennings":
+            is_team_award = True
+            columns = {"rank": ("#", 36), "team": ("Team", 170),
+                       "goalies": ("Goaltenders", 220),
+                       "ga": ("GA", 48), "gagp": ("GA/GP", 58)}
+            for i, r in enumerate(ar.jennings_race(teams)[:15], 1):
+                rows.append((None, (i, r["team"], r["goalies"],
+                                    r["goals_against"],
+                                    f"{r['ga_per_game']:.2f}")))
+
+        card = ctk.CTkFrame(holder, fg_color=ct['CARD'])
+        card.pack(fill="both", expand=True)
+        tree = self._make_tree(card, columns, height=20, padx=10, pady=10)
+        tree._player_rows = {}
+        if not is_team_award:
+            self._bind_leader_menu(tree)
+        for p, vals in rows:
+            iid = tree.insert("", "end", values=vals)
+            if p is not None:
+                tree._player_rows[iid] = p
 
     def create_milestone_watch_section(self, parent_frame):
         """Milestone Watch sub-tab: players nearing career milestones.
@@ -714,10 +1128,10 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         try:
             for item in tree.get_children():
                 tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(tree, {}).clear()
 
-            league = getattr(self.parent, 'league', None)
+            league = getattr(self.app, 'league', None)
             teams = getattr(league, 'teams', []) if league else []
             if not teams:
                 self._milestone_empty_row("No league data available.")
@@ -762,8 +1176,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 _mid = tree.insert('', 'end', values=(
                     w['player'], w['team'], w['pos'], w['milestone'],
                     w['current'], w['needed'], w['season']))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_mid] = w['player_obj']
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_mid] = w['player_obj']
         except Exception as e:
             print(f"Error populating milestone watch: {e}")
     
@@ -833,13 +1247,13 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         title_container.grid(row=0, column=0, sticky="w")
         
         title_label = ttk.Label(title_container, text="NHL Records & Achievements", 
-                               font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                               foreground='#FFFFFF', background=self.parent.BG_COLOR)
+                               font=_sfont(self.app.FONT_FAMILY, 16, 'bold'),
+                               foreground='#FFFFFF', background=self.app.BG_COLOR)
         title_label.pack(anchor='w')
         
         desc_label = ttk.Label(title_container, text="Track legendary performances and chase greatness",
-                              font=(self.parent.FONT_FAMILY, 10),
-                              foreground='#B0B0B0', background=self.parent.BG_COLOR)
+                              font=_sfont(self.app.FONT_FAMILY, 10),
+                              foreground='#B0B0B0', background=self.app.BG_COLOR)
         desc_label.pack(anchor='w', pady=(3, 0))
         
         # Stats summary
@@ -847,7 +1261,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         stats_frame.grid(row=0, column=2, sticky="e")
         
         try:
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             total_records = len(record_manager.nhl_records.season_records) + len(record_manager.nhl_records.career_records)
             stats_text = f"{total_records} Official NHL Records"
             if hasattr(record_manager, 'achievements') and record_manager.achievements:
@@ -856,8 +1270,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             stats_text = "Official NHL Records Database"
             
         stats_label = ttk.Label(stats_frame, text=stats_text,
-                               font=(self.parent.FONT_FAMILY, 9),
-                               foreground='#888888', background=self.parent.BG_COLOR)
+                               font=_sfont(self.app.FONT_FAMILY, 9),
+                               foreground='#888888', background=self.app.BG_COLOR)
         stats_label.pack(anchor='e')
         
         # Enhanced toolbar
@@ -870,12 +1284,12 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         search_container.grid(row=0, column=0, sticky="w")
         
         ttk.Label(search_container, text="Search:", 
-                 font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
-                 background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
+                 font=_sfont(self.app.FONT_FAMILY, 9), foreground=self.app.TEXT_COLOR,
+                 background=self.app.BG_COLOR).pack(side='left', padx=(0, 5))
         
         self.records_search_var = tk.StringVar()
         search_entry = ttk.Entry(search_container, textvariable=self.records_search_var,
-                                font=(self.parent.FONT_FAMILY, 9), width=25)
+                                font=_sfont(self.app.FONT_FAMILY, 9), width=25)
         search_entry.pack(side='left', padx=(0, 20))
         
         # Category filter
@@ -883,13 +1297,13 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         filter_container.grid(row=0, column=1, sticky="")
         
         ttk.Label(filter_container, text="Category:",
-                 font=(self.parent.FONT_FAMILY, 9), foreground=self.parent.TEXT_COLOR,
-                 background=self.parent.BG_COLOR).pack(side='left', padx=(0, 5))
+                 font=_sfont(self.app.FONT_FAMILY, 9), foreground=self.app.TEXT_COLOR,
+                 background=self.app.BG_COLOR).pack(side='left', padx=(0, 5))
         
         self.records_filter_var = tk.StringVar(value="All Records")
         filter_combo = ttk.Combobox(filter_container, textvariable=self.records_filter_var,
                                    values=["All Records", "Scoring", "Goaltending", "Team Records"],
-                                   state="readonly", font=(self.parent.FONT_FAMILY, 9), width=15)
+                                   state="readonly", font=_sfont(self.app.FONT_FAMILY, 9), width=15)
         filter_combo.pack(side='left')
         
         # Refresh button
@@ -1120,8 +1534,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         
         # Get standings data from the dashboard system
         try:
-            if hasattr(self.parent, 'atmospheric_dashboard'):
-                standings_data = self.parent.atmospheric_dashboard._get_standings_data()
+            if hasattr(self.app, 'atmospheric_dashboard'):
+                standings_data = self.app.atmospheric_dashboard._get_standings_data()
             else:
                 standings_data = self.get_standings_data()
             
@@ -1142,7 +1556,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     def create_conference_standings(self, parent, standings_data):
         """Create standings tables for conferences/divisions"""
         # Create scrollable frame
-        canvas = tk.Canvas(parent, bg=self.parent.BG_COLOR, highlightthickness=0)
+        canvas = tk.Canvas(parent, bg=self.app.BG_COLOR, highlightthickness=0)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -1173,10 +1587,18 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             # Team data
             for rank, team in enumerate(teams, 1):
                 # Highlight user team
-                style = 'Title.TLabel' if team['name'] == getattr(self.parent, 'user_team', {}).get('team_name', '') else 'TLabel'
+                style = 'Title.TLabel' if team['name'] == getattr(self.app, 'user_team', {}).get('team_name', '') else 'TLabel'
                 
                 ttk.Label(scrollable_frame, text=str(rank), style=style).grid(row=row, column=0, sticky='w', padx=5)
-                ttk.Label(scrollable_frame, text=team['name'], style=style).grid(row=row, column=1, sticky='w', padx=5)
+                # Team identity chip + name
+                _name_cell = ttk.Frame(scrollable_frame)
+                _name_cell.grid(row=row, column=1, sticky='w', padx=5)
+                if _jersey_chip is not None:
+                    try:
+                        _jersey_chip(_name_cell, team['name']).pack(side='left', padx=(0, 6))
+                    except Exception:
+                        pass
+                ttk.Label(_name_cell, text=team['name'], style=style).pack(side='left')
                 ttk.Label(scrollable_frame, text=str(team['games_played']), style=style).grid(row=row, column=2, sticky='w', padx=5)
                 ttk.Label(scrollable_frame, text=str(team['wins']), style=style).grid(row=row, column=3, sticky='w', padx=5)
                 ttk.Label(scrollable_frame, text=str(team['losses']), style=style).grid(row=row, column=4, sticky='w', padx=5)
@@ -1290,9 +1712,16 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             self._body(panel, text=f"{i+1}.", dim=True,
                        size=11).grid(row=r, column=0, sticky='w',
                                      padx=(12, 4))
-            self._body(panel, text=team['name'][:20],
-                       size=11).grid(row=r, column=1, sticky='w',
-                                     padx=(0, 10))
+            # Team identity chip + name
+            _mini_cell = ctk.CTkFrame(panel, fg_color="transparent")
+            _mini_cell.grid(row=r, column=1, sticky='w', padx=(0, 10))
+            if _jersey_chip is not None:
+                try:
+                    _jersey_chip(_mini_cell, team['name'], w=34, h=20).pack(side='left', padx=(0, 6))
+                except Exception:
+                    pass
+            self._body(_mini_cell, text=team['name'][:20],
+                       size=11).pack(side='left')
             # Record
             self._body(panel, text=team['record'], dim=True,
                        size=11).grid(row=r, column=2, sticky='w',
@@ -1307,8 +1736,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         """Get standings data from the parent application"""
         try:
             # Try to get data from the atmospheric dashboard
-            if hasattr(self.parent, 'atmospheric_dashboard'):
-                data = self.parent.atmospheric_dashboard._get_standings_data()
+            if hasattr(self.app, 'atmospheric_dashboard'):
+                data = self.app.atmospheric_dashboard._get_standings_data()
                 if isinstance(data, dict):
                     return data
             # Fallback: get data directly from league
@@ -1321,15 +1750,15 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     
     def get_league_standings(self):
         """Get standings directly from league data"""
-        if not hasattr(self.parent, 'league') or not self.parent.league:
+        if not hasattr(self.app, 'league') or not self.app.league:
             return self.get_fallback_standings()
         
         # Get NHL teams
-        nhl_teams = [team for team in self.parent.league.teams 
+        nhl_teams = [team for team in self.app.league.teams 
                     if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
         
         if not nhl_teams:
-            nhl_teams = self.parent.league.teams[:32]  # Assume first 32 are NHL
+            nhl_teams = self.app.league.teams[:32]  # Assume first 32 are NHL
         
         # Group by division
         divisions = {}
@@ -1344,17 +1773,27 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             if division_name not in divisions:
                 divisions[division_name] = []
             
-            # Calculate points
-            points = team.wins * 2 + getattr(team, 'ties', 0) + getattr(team, 'ot_losses', 0)
-            
+            # Calculate points — prefer league.standings (the canonical record the
+            # sim writes via _update_standings_fast); fall back to team attrs.
+            ls = (getattr(self.app.league, 'standings', None) or {}).get(team.team_name)
+            if ls:
+                w, l, otl = ls.get('W', 0), ls.get('L', 0), ls.get('OTL', 0)
+                points = ls.get('Points', w * 2 + otl)
+                ties = 0
+            else:
+                w, l = team.wins, team.losses
+                ties = getattr(team, 'ties', 0)
+                otl = getattr(team, 'ot_losses', 0)
+                points = w * 2 + ties + otl
+
             divisions[division_name].append({
                 'name': team.team_name,
-                'record': f"{team.wins}-{team.losses}-{getattr(team, 'ties', 0)}",
+                'record': f"{w}-{l}-{ties}" if not ls else f"{w}-{l}-{otl}",
                 'points': points,
-                'wins': team.wins,
-                'losses': team.losses,
-                'ties': getattr(team, 'ties', 0),
-                'games_played': team.wins + team.losses + getattr(team, 'ties', 0)
+                'wins': w,
+                'losses': l,
+                'ties': ties,
+                'games_played': w + l + (otl if ls else ties)
             })
         
         # Sort by points
@@ -1457,7 +1896,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         """Populate team stats with real game data"""
         try:
             # Get teams from game manager - properly access league object
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 teams = league.teams
             else:
@@ -1506,8 +1945,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         try:
             # Try to get some real teams first
             sample_teams = []
-            if hasattr(self.parent, 'league') and self.parent.league.teams:
-                real_teams = self.parent.league.teams[:8]  # Take first 8 teams
+            if hasattr(self.app, 'league') and self.app.league.teams:
+                real_teams = self.app.league.teams[:8]  # Take first 8 teams
                 
                 for team in real_teams:
                     # Use real team data if available, fallback to 0 for missing stats
@@ -1548,18 +1987,18 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     def populate_player_leaders_data(self, tree, category):
         """Populate player leaders with real game data"""
         # Get all players from all teams
-        if hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps.setdefault(tree, {}).clear()
+        if hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps.setdefault(tree, {}).clear()
         all_players = []
         
         try:
             # Get teams from game manager
             teams = []
-            if hasattr(self.parent.game_manager, 'league'):
-                if hasattr(self.parent.game_manager.league, 'teams'):
-                    teams = self.parent.game_manager.league.teams
-                elif hasattr(self.parent.game_manager.league, 'leagues'):
-                    for league in self.parent.game_manager.league.leagues:
+            if hasattr(self.app.game_manager, 'league'):
+                if hasattr(self.app.game_manager.league, 'teams'):
+                    teams = self.app.game_manager.league.teams
+                elif hasattr(self.app.game_manager.league, 'leagues'):
+                    for league in self.app.game_manager.league.leagues:
                         if hasattr(league, 'name') and "National Hockey League" in league.name:
                             teams = league.teams
                             break
@@ -1615,8 +2054,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     assists,
                     points
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
                     
         elif category == "goaltending":
             # Filter for goalies and sort by wins
@@ -1650,8 +2089,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     f"{gaa:.2f}" if games_played > 0 else "0.00",
                     save_pct
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
                     
         else:  # rookies
             # Filter for young players (age < 24) and sort by points
@@ -1677,8 +2116,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     assists,
                     points
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[tree][_plid] = player
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[tree][_plid] = player
     
     def _get_team_abbreviation(self, team_name):
         """Get team abbreviation from full name"""
@@ -1707,8 +2146,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             all_players = []
             
             # Primary source: game manager league
-            if hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'league'):
-                league = self.parent.game_manager.league
+            if hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'league'):
+                league = self.app.game_manager.league
                 if hasattr(league, 'teams'):
                     for team in league.teams:
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
@@ -1716,15 +2155,15 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                                 all_players.extend(team.roster)
             
             # Secondary source: direct league access
-            if not all_players and hasattr(self.parent, 'league'):
-                for team in getattr(self.parent.league, 'teams', []):
+            if not all_players and hasattr(self.app, 'league'):
+                for team in getattr(self.app.league, 'teams', []):
                     if hasattr(team, 'roster'):
                         all_players.extend(team.roster)
             
             # Tertiary source: user team league
-            if not all_players and hasattr(self.parent, 'user_team'):
-                if hasattr(self.parent.user_team, 'league'):
-                    for team in getattr(self.parent.user_team.league, 'teams', []):
+            if not all_players and hasattr(self.app, 'user_team'):
+                if hasattr(self.app.user_team, 'league'):
+                    for team in getattr(self.app.user_team.league, 'teams', []):
                         if hasattr(team, 'roster'):
                             all_players.extend(team.roster)
             
@@ -1783,8 +2222,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                             )
                         
                         _plid = tree.insert('', 'end', values=values)
-                        if hasattr(self.parent, 'tree_maps'):
-                            self.parent.tree_maps.setdefault(tree, {})[_plid] = player
+                        if hasattr(self.app, 'tree_maps'):
+                            self.app.tree_maps.setdefault(tree, {})[_plid] = player
                         
                     except Exception as e:
                         print(f"Error adding player {player.full_name}: {e}")
@@ -1967,7 +2406,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             # Export team standings
             data = []
             rank = 1
-            for team in sorted(self.parent.league.teams, key=lambda t: t.points, reverse=True):
+            for team in sorted(self.app.league.teams, key=lambda t: t.points, reverse=True):
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     data.append([
                         rank,
@@ -1994,7 +2433,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             rank = 1
             all_players = []
             
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     for player in team.roster:
                         all_players.append(player)
@@ -2077,50 +2516,119 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         self.create_enhanced_standings_table(self.standings_scrollable, view_type)
     
     def create_enhanced_standings_table(self, parent, view_type):
-        """Create enhanced standings table with advanced metrics"""
-        # Column definitions based on advanced metrics setting.
-        # Every column is backed by real tracked data (no estimates).
-        if self.show_advanced.get():
-            columns = {
-                'rank': ('Rank', 50),
-                'team': ('Team', 170),
-                'gp': ('GP', 40),
-                'w': ('W', 35),
-                'l': ('L', 35),
-                'otl': ('OTL', 40),
-                'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 55),
-                'gf': ('GF', 45),
-                'ga': ('GA', 45),
-                'diff': ('+/-', 50),
-                'playoff': ('Playoff', 70)
-            }
+        """Grid-based standings table.
+
+        Team colors live ONLY in the Team column (ttk.Treeview styles
+        whole rows, so per-column color needs a real grid); playoff
+        locks get the classic green band in the Playoff column.
+        """
+        show_advanced = self.show_advanced.get()
+        # Ordered (key, title) pairs; every column backed by real data.
+        if show_advanced:
+            columns = [('rank', 'Rank'), ('team', 'Team'), ('gp', 'GP'),
+                       ('w', 'W'), ('l', 'L'), ('otl', 'OTL'),
+                       ('pts', 'PTS'), ('pt_pct', 'PT%'), ('gf', 'GF'),
+                       ('ga', 'GA'), ('diff', '+/-'), ('playoff', 'Playoff')]
         else:
-            columns = {
-                'rank': ('Rank', 50),
-                'team': ('Team', 170),
-                'gp': ('GP', 40),
-                'w': ('W', 35),
-                'l': ('L', 35),
-                'otl': ('OTL', 40),
-                'pts': ('PTS', 45),
-                'pt_pct': ('PT%', 55),
-                'diff': ('+/-', 50),
-            }
+            columns = [('rank', 'Rank'), ('team', 'Team'), ('gp', 'GP'),
+                       ('w', 'W'), ('l', 'L'), ('otl', 'OTL'),
+                       ('pts', 'PTS'), ('pt_pct', 'PT%'), ('diff', '+/-')]
 
-        # Dark styled table
-        tree = self._make_tree(parent, columns, height=25)
+        # Build the grid straight into the scroll area's inner frame; the
+        # outer CTkScrollableFrame owns the scrollbar (nesting a second
+        # canvas+scrollbar inside it collapses the viewport).
+        body = parent
 
-        # Use real data with fallback
-        self.add_enhanced_standings_data(tree, view_type, self.show_advanced.get())
+        # Header row
+        for col, (_key, title) in enumerate(columns):
+            tk.Label(body, text=title, bg=self.app.BG_COLOR,
+                     fg='#9aa3b2',
+                     font=('TkDefaultFont', 9, 'bold')).grid(
+                row=0, column=col, sticky='w', padx=6, pady=(4, 8))
+        body.grid_columnconfigure(1, weight=1)  # team column stretches
+
+        teams = self._standings_teams()
+        # League-wide playoff cut (top 16 by points) for the Playoff column
+        league_rank = sorted(teams,
+                             key=lambda t: (self._team_points(t), t.wins),
+                             reverse=True)
+        playoff_names = {t.team_name for t in league_rank[:16]}
+
+        view = (self.standings_view.get()
+                if hasattr(self, 'standings_view') else view_type)
+        sort = (self.standings_sort.get()
+                if hasattr(self, 'standings_sort') else "Points")
+        teams = self._apply_standings_view(teams, view)
+        teams = self._apply_standings_sort(teams, sort)
+
+        _fg_default = '#e8e8e8'
+        for r, team in enumerate(teams, 1):  # Show all teams in view
+            try:
+                otl = getattr(team, 'ot_losses', 0)
+                gp = team.wins + team.losses + otl
+                points = self._team_points(team)
+                pt_pct = (points / (gp * 2) * 100) if gp > 0 else 0.0
+                goals_for = getattr(team, 'goals_for', 0)
+                goals_against = getattr(team, 'goals_against', 0)
+                goal_diff = goals_for - goals_against
+                playoff = "In" if team.team_name in playoff_names else "Out"
+
+                vals = {
+                    'rank': str(r),
+                    'gp': str(gp),
+                    'w': str(team.wins),
+                    'l': str(team.losses),
+                    'otl': str(otl),
+                    'pts': str(points),
+                    'pt_pct': f"{pt_pct:.1f}%",
+                    'gf': str(goals_for),
+                    'ga': str(goals_against),
+                    'diff': f"{goal_diff:+d}",
+                    'playoff': playoff,
+                }
+
+                # Team-true color lives ONLY in the Team column.
+                _bg, _fg = self.app.BG_COLOR, _fg_default
+                if _accent_for_team is not None:
+                    try:
+                        _bg, _, _fg = _accent_for_team(team.team_name)
+                    except Exception:
+                        pass
+                for col, (key, _title) in enumerate(columns):
+                    if key == 'team':
+                        cell = tk.Frame(body, bg=_bg)
+                        cell.grid(row=r, column=col, sticky='ew',
+                                  padx=2, pady=1)
+                        if _jersey_chip is not None:
+                            try:
+                                _jersey_chip(cell, team.team_name,
+                                             w=40, h=22).pack(
+                                    side='left', padx=(6, 4), pady=2)
+                            except Exception:
+                                pass
+                        tk.Label(cell, text=team.team_name, bg=_bg, fg=_fg,
+                                 font=('TkDefaultFont', 9, 'bold')).pack(
+                            side='left', padx=(0, 8), pady=2)
+                    elif key == 'playoff' and playoff == "In":
+                        # Playoff lock: the classic green band.
+                        tk.Label(body, text="In", bg='#166534', fg='#FFFFFF',
+                                 font=('TkDefaultFont', 9, 'bold')).grid(
+                            row=r, column=col, sticky='ew', padx=2, pady=1)
+                    else:
+                        tk.Label(body, text=vals[key], bg=self.app.BG_COLOR,
+                                 fg=_fg_default).grid(
+                            row=r, column=col, sticky='w', padx=6, pady=2)
+            except Exception as e:
+                print(f"Error processing team {team.team_name}: {e}")
+                continue
     
     def _standings_teams(self):
         """NHL teams for standings, with real-team fallback."""
         teams = []
-        gm = getattr(self.parent, 'game_manager', None)
+        gm = getattr(self.app, 'game_manager', None)
         league = getattr(gm, 'league', None) if gm else None
         if league is None:
-            league = getattr(self.parent, 'league', None)
+            league = getattr(self.app, 'league', None)
         if league is not None and hasattr(league, 'teams'):
             teams = [t for t in league.teams
                      if getattr(t, 'league_name', 'National Hockey League')
@@ -2184,90 +2692,24 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         return sorted(teams, key=lambda t: (self._team_points(t), t.wins),
                       reverse=True)  # Points
 
-    def add_enhanced_standings_data(self, tree, view_type, show_advanced):
-        """Add enhanced standings data with real team information"""
-        teams = self._standings_teams()
-
-        # League-wide playoff cut (top 16 by points) for the Playoff column
-        league_rank = sorted(teams, key=lambda t: (self._team_points(t), t.wins),
-                             reverse=True)
-        playoff_names = {t.team_name for t in league_rank[:16]}
-
-        view = self.standings_view.get() if hasattr(self, 'standings_view') else view_type
-        sort = self.standings_sort.get() if hasattr(self, 'standings_sort') else "Points"
-        teams = self._apply_standings_view(teams, view)
-        teams = self._apply_standings_sort(teams, sort)
-
-        for rank, team in enumerate(teams, 1):  # Show all teams in view
-            try:
-                otl = getattr(team, 'ot_losses', 0)
-                gp = team.wins + team.losses + otl
-                points = self._team_points(team)
-                pt_pct = (points / (gp * 2) * 100) if gp > 0 else 0.0
-                goals_for = getattr(team, 'goals_for', 0)
-                goals_against = getattr(team, 'goals_against', 0)
-                goal_diff = goals_for - goals_against
-                playoff = "In" if team.team_name in playoff_names else "Out"
-
-                if show_advanced:
-                    values = (
-                        rank,
-                        team.team_name,
-                        gp,  # GP
-                        team.wins,
-                        team.losses,
-                        otl,
-                        points,  # Points
-                        f"{pt_pct:.1f}%",  # PT%
-                        goals_for,  # GF (real data)
-                        goals_against,  # GA (real data)
-                        f"{goal_diff:+d}",  # +/- (calculated)
-                        playoff,
-                    )
-                else:
-                    values = (
-                        rank,
-                        team.team_name,
-                        gp,  # GP
-                        team.wins,
-                        team.losses,
-                        otl,
-                        points,  # Points
-                        f"{pt_pct:.1f}%",  # PT%
-                        f"{goal_diff:+d}",  # +/- (calculated from real data)
-                    )
-
-                # Color coding for playoff positions
-                if team.team_name in playoff_names:
-                    tree.insert('', 'end', values=values, tags=('playoff',))
-                else:
-                    tree.insert('', 'end', values=values)
-
-            except Exception as e:
-                print(f"Error processing team {team.team_name}: {e}")
-                continue
-
-        # Configure tag colors
-        tree.tag_configure('playoff', background='#166534', foreground='#FFFFFF')  # Dark green with white text
-    
     def get_fallback_teams(self):
         """Get teams from alternative data sources if main source fails"""
         try:
             # Try direct access to parent league
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                teams = [team for team in self.parent.league.teams 
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
                 if teams:
                     return teams
             
             # Try accessing user team's league
-            if hasattr(self.parent, 'user_team') and hasattr(self.parent.user_team, 'league'):
-                teams = getattr(self.parent.user_team.league, 'teams', [])
+            if hasattr(self.app, 'user_team') and hasattr(self.app.user_team, 'league'):
+                teams = getattr(self.app.user_team.league, 'teams', [])
                 if teams:
                     return teams
             
             # Try game manager league access
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if league and hasattr(league, 'teams'):
                 teams = league.teams
                 if teams:
@@ -2317,6 +2759,19 @@ class StatsStandingsWindow(ctk.CTkToplevel):
     
     def get_advanced_stats_columns(self, category):
         """Get column definitions for advanced stats (all backed by real data)"""
+        if self._in_playoff_mode():
+            # Playoffs: one honest table -- series record from the bracket.
+            # Small samples make the per-category splits noise.
+            return {
+                'team': ('Team', 170),
+                'gp': ('GP', 50),
+                'w': ('W', 45),
+                'l': ('L', 45),
+                'gf': ('GF', 55),
+                'ga': ('GA', 55),
+                'diff': ('+/-', 60),
+                'result': ('Playoff Result', 170),
+            }
         if category == "Overall Performance":
             return {
                 'team': ('Team', 170),
@@ -2377,7 +2832,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         elif filt == "Western Conference":
             teams = [t for t in teams if getattr(t, 'conference', '') == 'Western']
         elif filt == "Division Rivals":
-            user_div = getattr(getattr(self.parent, 'user_team', None), 'division', '')
+            user_div = getattr(getattr(self.app, 'user_team', None), 'division', '')
             if user_div:
                 teams = [t for t in teams if getattr(t, 'division', '') == user_div]
         elif filt == "Playoff Teams":
@@ -2406,6 +2861,9 @@ class StatsStandingsWindow(ctk.CTkToplevel):
 
     def add_advanced_stats_data(self, tree, category, mode):
         """Add advanced statistics data (all from real tracked stats)"""
+        if self._in_playoff_mode():
+            self._add_playoff_team_stats(tree, mode)
+            return
         try:
             teams = self._filtered_analytics_teams()
             if not teams:
@@ -2493,6 +2951,36 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             # Fallback to basic calculated data
             self._add_calculated_advanced_stats(tree, category)
     
+    def _add_playoff_team_stats(self, tree, mode):
+        """Playoff-mode Team Analytics: series record per playoff team.
+
+        Built read-only from the bracket's per-game results -- no new
+        stored data. Non-playoff teams don't appear: they played zero
+        playoff games.
+        """
+        try:
+            pstats = self.get_team_playoff_stats()
+            rows = []
+            for team_name, e in pstats.items():
+                gp, w, l = e["GP"], e["W"], e["L"]
+                gf, ga = e["GF"], e["GA"]
+                diff = gf - ga
+                rows.append((team_name,
+                             (team_name, gp, w, l, gf, ga, f"{diff:+d}",
+                              e["result"] or "—")))
+            # Sort: wins first, then goal differential.
+            rows.sort(key=lambda r: (r[1][2], r[1][4] - r[1][5]),
+                      reverse=True)
+            if not rows:
+                tree.insert('', 'end', values=(
+                    "No playoff games played yet", "", "", "", "", "", "",
+                    ""))
+                return
+            for _name, values in rows:
+                tree.insert('', 'end', values=values)
+        except Exception as e:
+            print(f"Error adding playoff team stats: {e}")
+
     def _add_calculated_advanced_stats(self, tree, category):
         """Fallback: basic real team data if the main loader fails."""
         teams = self._standings_teams()[:8]
@@ -2536,6 +3024,19 @@ class StatsStandingsWindow(ctk.CTkToplevel):
 
         # Page info and controls
         self.create_pagination_controls(pagination_frame, category)
+
+        # Honest model-estimate labeling: these tabs show modeled metrics
+        # (ixG, xGF%, GSAx, ...), not tracked truth. Same disclosure as
+        # the player card's analytics section.
+        if category in ("advanced", "breakout", "goaltending"):
+            ctk.CTkLabel(
+                main_container,
+                text=("Estimates, not tracking data: ixG / xGF% / GSAx / HDSV% "
+                      "are modeled from your analytics department's lens -- "
+                      "useful signal, not measured fact."),
+                font=ctk.CTkFont(size=11, slant="italic"),
+                text_color=ct['TEXT_DIM'], wraplength=900,
+                justify="left").pack(fill="x", padx=12, pady=(0, 4))
 
         # Create treeview container
         tree_container = ctk.CTkFrame(main_container, fg_color="transparent")
@@ -2655,17 +3156,34 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 'shots': ('SOG', 50)
             }
         elif category == "advanced":
+            if self._in_playoff_mode():
+                # Playoffs: no xG model -- scoring-rate table (min GP
+                # enforced by the Min Games filter in playoff mode).
+                return {
+                    'rank': ('Rank', 50),
+                    'player': ('Player', 150),
+                    'team': ('Team', 60),
+                    'pos': ('Pos', 50),
+                    'gp': ('GP', 40),
+                    'goals': ('G', 40),
+                    'assists': ('A', 40),
+                    'points': ('PTS', 50),
+                    'ppg': ('P/GP', 55),
+                    'gpg': ('G/GP', 55),
+                }
             return {
                 'rank': ('Rank', 50),
                 'player': ('Player', 150),
                 'team': ('Team', 60),
                 'pos': ('Pos', 50),
                 'gp': ('GP', 40),
+                'ixg': ('ixG', 55),
+                'cf_pct': ('CF%', 55),
+                'xgf_pct': ('xGF%', 60),
+                'pdo': ('PDO', 60),
+                'p_per60': ('P/60', 55),
+                'game_score': ('GSc', 55),
                 'sh_pct': ('SH%', 55),
-                'ppg': ('PPG', 55),
-                'plus_minus': ('+/-', 50),
-                'pim': ('PIM', 45),
-                'shots': ('SOG', 55)
             }
         elif category == "breakout":
             return {
@@ -2673,9 +3191,11 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 'player': ('Player', 150),
                 'team': ('Team', 60),
                 'age': ('Age', 40),
-                'improvement': ('Improvement', 100),
-                'current_pace': ('Current Pace', 90),
-                'projection': ('Season Projection', 120)
+                'ixg_vs_g': ('ixG vs G', 90),
+                'xgf_pct': ('xGF%', 60),
+                'pdo': ('PDO', 60),
+                'p_per60': ('P/60', 55),
+                'signal': ('Breakout Signal', 140),
             }
         else:  # goaltending
             return {
@@ -2687,6 +3207,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                 'l': ('L', 35),
                 'gaa': ('GAA', 50),
                 'sv_pct': ('SV%', 60),
+                'gsax': ('GSAx', 55),
+                'hdsv': ('HDSV%', 60),
                 'so': ('SO', 40),
                 'sa': ('SA', 55)
             }
@@ -2708,6 +3230,17 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         name = getattr(player, 'full_name', 'Unknown')
 
         if category == "scoring":
+            if self._in_playoff_mode():
+                # Playoff scoring: +/- isn't tracked in the playoff ledger.
+                goals = int(self._pstat(player, "goals", 0) or 0)
+                assists = int(self._pstat(player, "assists", 0) or 0)
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                points = goals + assists
+                ppg = round(points / max(games, 1), 2)
+                pim = int(self._pstat(player, "penalties_in_minutes", 0) or 0)
+                shots = int(self._pstat(player, "shots", 0) or 0)
+                return (rank, name, team_abbr, position,
+                        games, goals, assists, points, ppg, "—", pim, shots)
             goals = getattr(player, 'goals', 0)
             assists = getattr(player, 'assists', 0)
             games = getattr(player, 'games_played', 0)
@@ -2720,30 +3253,71 @@ class StatsStandingsWindow(ctk.CTkToplevel):
                     games, goals, assists, points, ppg, plus_minus, pim, shots)
 
         elif category == "advanced":
-            goals = getattr(player, 'goals', 0)
-            assists = getattr(player, 'assists', 0)
-            games = getattr(player, 'games_played', 0)
-            points = goals + assists
-            shots = getattr(player, 'shots', 0)
-            sh_pct = f"{goals / shots * 100:.1f}%" if shots > 0 else "—"
-            ppg = round(points / max(games, 1), 2)
-            plus_minus = getattr(player, 'plus_minus', 0)
-            pim = getattr(player, 'penalty_minutes', 0)
-            return (rank, name, team_abbr, position,
-                    games, sh_pct, ppg, plus_minus, pim, shots)
+            if self._in_playoff_mode():
+                goals = int(self._pstat(player, "goals", 0) or 0)
+                assists = int(self._pstat(player, "assists", 0) or 0)
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                points = goals + assists
+                return (rank, name, team_abbr, position, games, goals,
+                        assists, points,
+                        f"{points / max(games, 1):.2f}",
+                        f"{goals / max(games, 1):.2f}")
+            import advanced_metrics as am
+            try:
+                m = am.skater_advanced(player)
+                return (rank, name, team_abbr, position,
+                        getattr(player, 'games_played', 0),
+                        f"{m.ixg:.1f}", f"{m.cf_pct:.1f}%",
+                        f"{m.xgf_pct:.1f}%", f"{m.pdo:.3f}",
+                        f"{m.p_per60:.2f}", f"{m.game_score:.1f}",
+                        f"{m.sh_pct:.1f}%" if m.sh_pct else "—")
+            except Exception:
+                return (rank, name, team_abbr, position,
+                        getattr(player, 'games_played', 0),
+                        "—", "—", "—", "—", "—", "—", "—")
 
         elif category == "breakout":
+            import advanced_metrics as am
             age = getattr(player, 'age', 22)
-            current = getattr(player, 'overall_rating', lambda: 70)
-            current = current() if callable(current) else current
-            grade = getattr(player, 'potential_grade', 'C') or 'C'
-            improvement = f"{grade}-grade potential"
-            current_pace = f"{to_100_scale(current)} OVR"
-            projection = f"{grade} ceiling"
-            return (rank, name, team_abbr, age,
-                    improvement, current_pace, projection)
+            try:
+                m = am.skater_advanced(player)
+                goals = getattr(player, 'goals', 0)
+                ixg_gap = m.ixg - goals
+                # Breakout signal: elite underlying numbers, production catching up
+                signals = []
+                if m.xgf_pct >= 55 and age <= 25:
+                    signals.append("Driving play")
+                if ixg_gap >= 5:
+                    signals.append("Due for goals")
+                if m.pdo <= 0.985:
+                    signals.append("Unlucky PDO")
+                if m.p_per60 >= 2.5 and age <= 23:
+                    signals.append("Elite rate")
+                signal = ", ".join(signals) if signals else "Steady"
+                return (rank, name, team_abbr, age,
+                        f"{m.ixg:.1f} vs {goals}",
+                        f"{m.xgf_pct:.1f}%", f"{m.pdo:.3f}",
+                        f"{m.p_per60:.2f}", signal)
+            except Exception:
+                return (rank, name, team_abbr, age,
+                        "—", "—", "—", "—", "—")
 
         else:  # goaltending
+            if self._in_playoff_mode():
+                # Playoff goalies: GSAx/HDSV% need the season xG model --
+                # not available for the playoff sample. Wins + SV% + SO.
+                games = int(self._pstat(player, "games_played", 0) or 0)
+                wins = int(self._pstat(player, "wins", 0) or 0)
+                losses = int(self._pstat(player, "losses", 0) or 0)
+                gaa = float(self._pstat(player, "goals_against_avg", 0) or 0)
+                sv = float(self._pstat(player, "save_percentage", 0) or 0)
+                shutouts = int(self._pstat(player, "shutouts", 0) or 0)
+                sa = int(self._pstat(player, "shots_against", 0) or 0)
+                sv_pct = f"{sv:.3f}"[1:] if sa > 0 else "—"
+                return (rank, name, team_abbr, games, wins, losses,
+                        f"{gaa:.2f}" if games > 0 else "—", sv_pct,
+                        "—", "—", shutouts, sa)
+            import advanced_metrics as am
             games = getattr(player, 'games_played', 0)
             wins = getattr(player, 'wins', 0)
             losses = getattr(player, 'losses', 0)
@@ -2752,15 +3326,21 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             shutouts = getattr(player, 'shutouts', 0)
             sa = getattr(player, 'shots_against', 0)
             sv_pct = f"{sv:.3f}"[1:] if sa > 0 else "—"
+            try:
+                gm = am.goalie_advanced(player)
+                gsax_s = f"{gm.gsax:+.1f}"
+                hdsv_s = f"{gm.hdsv_pct:.3f}"[1:]
+            except Exception:
+                gsax_s, hdsv_s = "—", "—"
             return (rank, name, team_abbr, games, wins, losses,
                     f"{gaa:.2f}" if games > 0 else "—", sv_pct,
-                    shutouts, sa)
+                    gsax_s, hdsv_s, shutouts, sa)
 
     def add_enhanced_player_data(self, tree, category):
         """Add enhanced player data from real game data (top 20, no pagination)."""
         try:
             all_players = []
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
                         try:
@@ -2814,7 +3394,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             overtime_games = 0
             shutouts = 0
             
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     total_teams += 1
                     team_games = max(team.games_played, 1)
@@ -2865,7 +3445,7 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         """Populate statistical outliers panel with real game data"""
         try:
             outliers = []
-            nhl_teams = [team for team in self.parent.league.teams 
+            nhl_teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
             
             if nhl_teams:
@@ -2963,8 +3543,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
             widget.destroy()
         
         # Create trends display
-        trends_text = tk.Text(self.trends_container, bg=self.parent.BG_COLOR, 
-                             fg=self.parent.TEXT_COLOR, wrap='word', height=20)
+        trends_text = tk.Text(self.trends_container, bg=self.app.BG_COLOR, 
+                             fg=self.app.TEXT_COLOR, wrap='word', height=20)
         trends_text.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Get real trends data from actual teams
@@ -2978,8 +3558,8 @@ class StatsStandingsWindow(ctk.CTkToplevel):
         try:
             # Get real teams
             teams = []
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                teams = [team for team in self.parent.league.teams 
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                teams = [team for team in self.app.league.teams 
                         if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
             
             if not teams:
@@ -3071,8 +3651,8 @@ Analysis will be updated as the season progresses.
         # Get real teams for this division
         division_teams = []
         try:
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'teams'):
-                all_teams = [team for team in self.parent.league.teams
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+                all_teams = [team for team in self.app.league.teams
                            if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
 
                 # For now, take any NHL teams and group them by division placeholder
@@ -3135,14 +3715,14 @@ Analysis will be updated as the season progresses.
 
             # Get teams from this division
             division_teams = []
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if (hasattr(team, 'league_name') and team.league_name == "National Hockey League" and
                     hasattr(team, 'division') and division.lower() in team.division.lower()):
                     division_teams.append(team)
 
             if not division_teams:
                 # Fallback: show a few NHL teams
-                division_teams = [team for team in self.parent.league.teams
+                division_teams = [team for team in self.app.league.teams
                                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League"][:4]
 
             if division_teams:
@@ -3180,7 +3760,7 @@ Analysis will be updated as the season progresses.
             all_players = []
 
             # Collect all players from all teams
-            for team in self.parent.league.teams:
+            for team in self.app.league.teams:
                 if hasattr(team, 'roster') and team.roster:
                     for player in team.roster:
                         is_g = self._is_goalie(player)
@@ -3189,41 +3769,92 @@ Analysis will be updated as the season progresses.
                                 all_players.append((player, team))
                         elif not is_g:
                             all_players.append((player, team))
-            
+
+            # Playoff mode: the active ledger is playoff_stats, and the
+            # Min Games filter actually applies (a 1-game 3-point night
+            # must not top a P/GP board).
+            playoff = self._in_playoff_mode()
+            if playoff:
+                try:
+                    _mg = int(self.min_games.get())
+                except Exception:
+                    _mg = 1
+                all_players = [(p, t) for p, t in all_players
+                               if int(self._pstat(p, "games_played", 0) or 0)
+                               >= _mg]
+
             # Sort players based on category
             if category == "scoring":
                 def get_points(player_team):
                     player, team = player_team
-                    goals = getattr(player.stats, 'goals', 0) if hasattr(player, 'stats') else getattr(player, 'goals', 0)
-                    assists = getattr(player.stats, 'assists', 0) if hasattr(player, 'stats') else getattr(player, 'assists', 0)
-                    return goals + assists
+                    return (int(self._pstat(player, "goals", 0) or 0)
+                            + int(self._pstat(player, "assists", 0) or 0))
                 sorted_players = sorted(all_players, key=get_points, reverse=True)
-                
+
             elif category == "advanced":
-                def get_advanced_score(player_team):
-                    player, team = player_team
-                    shots = getattr(player, 'shots', 0)
-                    shp = (getattr(player, 'goals', 0) / shots) if shots else 0
-                    return (getattr(player, 'goals', 0)
-                            + getattr(player, 'assists', 0), shp)
-                sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
-                
+                if playoff:
+                    # No xG model for the playoffs: rate table (P/GP).
+                    def get_playoff_rate(player_team):
+                        player, team = player_team
+                        gp = max(1, int(self._pstat(player, "games_played", 0)
+                                        or 0))
+                        pts = (int(self._pstat(player, "goals", 0) or 0)
+                               + int(self._pstat(player, "assists", 0) or 0))
+                        return pts / gp
+                    sorted_players = sorted(all_players, key=get_playoff_rate,
+                                            reverse=True)
+                else:
+                    import advanced_metrics as am
+                    def get_advanced_score(player_team):
+                        player, team = player_team
+                        try:
+                            m = am.skater_advanced(player)
+                            return (m.xgf_pct, m.game_score)
+                        except Exception:
+                            return (0, 0)
+                    sorted_players = sorted(all_players, key=get_advanced_score, reverse=True)
+
             elif category == "breakout":
-                young_players = [(p, t) for p, t in all_players if getattr(p, 'age', 25) <= 23]
+                import advanced_metrics as am
+                young_players = [(p, t) for p, t in all_players
+                                 if getattr(p, 'age', 25) <= 25]
                 def get_breakout_potential(player_team):
                     player, team = player_team
-                    age_factor = 25 - getattr(player, 'age', 25)
-                    potential = getattr(player, 'potential', 75)
-                    current_rating = getattr(player, 'overall_rating', lambda: 70)() if callable(getattr(player, 'overall_rating', None)) else 70
-                    return age_factor * 2 + potential + current_rating * 0.5
+                    try:
+                        m = am.skater_advanced(player)
+                        goals = getattr(player, 'goals', 0) or 0
+                        # Elite process + youth + positive regression signals
+                        score = ((m.xgf_pct - 50) * 2.0
+                                 + max(0, m.ixg - goals) * 1.5
+                                 + max(0, 1.000 - m.pdo) * 200
+                                 + max(0, 25 - getattr(player, 'age', 25)) * 1.2
+                                 + m.p_per60 * 3.0)
+                        return score
+                    except Exception:
+                        return 0
                 sorted_players = sorted(young_players, key=get_breakout_potential, reverse=True)
                 
             else:  # goaltending
-                def get_goalie_score(player_team):
-                    player, team = player_team
-                    return (getattr(player, 'save_percentage', 0),
-                            getattr(player, 'wins', 0))
-                sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
+                if playoff:
+                    # Playoff goalies: wins first, then SV% -- the Smythe lens.
+                    def get_playoff_goalie(player_team):
+                        player, team = player_team
+                        return (int(self._pstat(player, "wins", 0) or 0),
+                                float(self._pstat(player, "save_percentage",
+                                                  0) or 0))
+                    sorted_players = sorted(all_players,
+                                            key=get_playoff_goalie,
+                                            reverse=True)
+                else:
+                    import advanced_metrics as am
+                    def get_goalie_score(player_team):
+                        player, team = player_team
+                        try:
+                            return (am.goalie_advanced(player).gsax,
+                                    getattr(player, 'save_percentage', 0))
+                        except Exception:
+                            return (0, 0)
+                    sorted_players = sorted(all_players, key=get_goalie_score, reverse=True)
             
             # Store sorted players
             self.pagination_data[category]['all_players'] = sorted_players
@@ -3399,10 +4030,10 @@ Analysis will be updated as the season progresses.
             for widget in self.season_scrollable_frame.winfo_children():
                 widget.destroy()
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get current league for player comparisons
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             current_leaders = {}
             
             if league and hasattr(league, 'teams'):
@@ -3438,9 +4069,9 @@ Analysis will be updated as the season progresses.
             for category_name, records in season_categories:
                 # Category header
                 header = ttk.Label(self.season_scrollable_frame, text=category_name,
-                                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                                  foreground=self.parent.ACCENT_COLOR,
-                                  background=self.parent.CONTENT_BG)
+                                  font=_sfont(self.app.FONT_FAMILY, 14, 'bold'),
+                                  foreground=self.app.ACCENT_COLOR,
+                                  background=self.app.CONTENT_BG)
                 header.grid(row=row, column=0, columnspan=4, sticky="w", pady=(15, 10), padx=10)
                 row += 1
                 
@@ -3453,16 +4084,16 @@ Analysis will be updated as the season progresses.
                         
                         # Record name
                         name_label = ttk.Label(self.season_scrollable_frame, text=f"{display_name}:",
-                                              font=(self.parent.FONT_FAMILY, 11),
-                                              foreground=self.parent.TEXT_COLOR,
-                                              background=self.parent.CONTENT_BG)
+                                              font=_sfont(self.app.FONT_FAMILY, 11),
+                                              foreground=self.app.TEXT_COLOR,
+                                              background=self.app.CONTENT_BG)
                         name_label.grid(row=row, column=0, sticky="w", padx=(30, 10), pady=2)
                         
                         # NHL Record value
                         value_label = ttk.Label(self.season_scrollable_frame, text=record_display,
-                                               font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                                               font=_sfont(self.app.FONT_FAMILY, 11, 'bold'),
                                                foreground='#FFD700',  # Gold color
-                                               background=self.parent.CONTENT_BG)
+                                               background=self.app.CONTENT_BG)
                         value_label.grid(row=row, column=1, sticky="w", pady=2, padx=(0, 20))
                         
                         # Current season leader comparison
@@ -3483,9 +4114,9 @@ Analysis will be updated as the season progresses.
                                     color = '#B0B0B0'  # Gray for normal
                                 
                                 leader_label = ttk.Label(self.season_scrollable_frame, text=leader_text,
-                                                        font=(self.parent.FONT_FAMILY, 9),
+                                                        font=_sfont(self.app.FONT_FAMILY, 9),
                                                         foreground=color,
-                                                        background=self.parent.CONTENT_BG)
+                                                        background=self.app.CONTENT_BG)
                                 leader_label.grid(row=row, column=2, sticky="w", pady=2)
                         
                         row += 1
@@ -3500,10 +4131,10 @@ Analysis will be updated as the season progresses.
             for widget in self.career_scrollable_frame.winfo_children():
                 widget.destroy()
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get current league for player comparisons
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             current_leaders = {}
             
             if league and hasattr(league, 'teams'):
@@ -3539,9 +4170,9 @@ Analysis will be updated as the season progresses.
             for category_name, records in career_categories:
                 # Category header
                 header = ttk.Label(self.career_scrollable_frame, text=category_name,
-                                  font=(self.parent.FONT_FAMILY, 14, 'bold'),
-                                  foreground=self.parent.ACCENT_COLOR,
-                                  background=self.parent.CONTENT_BG)
+                                  font=_sfont(self.app.FONT_FAMILY, 14, 'bold'),
+                                  foreground=self.app.ACCENT_COLOR,
+                                  background=self.app.CONTENT_BG)
                 header.grid(row=row, column=0, columnspan=4, sticky="w", pady=(15, 10), padx=10)
                 row += 1
                 
@@ -3554,16 +4185,16 @@ Analysis will be updated as the season progresses.
                         
                         # Record name
                         name_label = ttk.Label(self.career_scrollable_frame, text=f"{display_name}:",
-                                              font=(self.parent.FONT_FAMILY, 11),
-                                              foreground=self.parent.TEXT_COLOR,
-                                              background=self.parent.CONTENT_BG)
+                                              font=_sfont(self.app.FONT_FAMILY, 11),
+                                              foreground=self.app.TEXT_COLOR,
+                                              background=self.app.CONTENT_BG)
                         name_label.grid(row=row, column=0, sticky="w", padx=(30, 10), pady=2)
                         
                         # NHL Record value
                         value_label = ttk.Label(self.career_scrollable_frame, text=record_display,
-                                               font=(self.parent.FONT_FAMILY, 11, 'bold'),
+                                               font=_sfont(self.app.FONT_FAMILY, 11, 'bold'),
                                                foreground='#FFD700',  # Gold color
-                                               background=self.parent.CONTENT_BG)
+                                               background=self.app.CONTENT_BG)
                         value_label.grid(row=row, column=1, sticky="w", pady=2, padx=(0, 20))
                         
                         # Current career leader comparison
@@ -3573,9 +4204,9 @@ Analysis will be updated as the season progresses.
                                 leader_text = f"Current Leader: {getattr(player, 'full_name', 'Unknown')} ({current_value})"
                                 
                                 leader_label = ttk.Label(self.career_scrollable_frame, text=leader_text,
-                                                        font=(self.parent.FONT_FAMILY, 9),
+                                                        font=_sfont(self.app.FONT_FAMILY, 9),
                                                         foreground='#B0B0B0',
-                                                        background=self.parent.CONTENT_BG)
+                                                        background=self.app.CONTENT_BG)
                                 leader_label.grid(row=row, column=2, sticky="w", pady=2)
                         
                         row += 1
@@ -3589,11 +4220,11 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.current_leaders_tree.get_children():
                 self.current_leaders_tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(self.current_leaders_tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(self.current_leaders_tree, {}).clear()
             
             # Get current league data
-            league = getattr(self.parent.game_manager, 'league', None)
+            league = getattr(self.app.game_manager, 'league', None)
             if not league or not hasattr(league, 'teams'):
                 return
             
@@ -3640,8 +4271,8 @@ Analysis will be updated as the season progresses.
                             stat_name,
                             str(value)
                         ))
-                        if hasattr(self.parent, 'tree_maps'):
-                            self.parent.tree_maps[self.current_leaders_tree][_lid] = player
+                        if hasattr(self.app, 'tree_maps'):
+                            self.app.tree_maps[self.current_leaders_tree][_lid] = player
                 
         except Exception as e:
             print(f"Error populating current leaders: {e}")
@@ -3652,12 +4283,12 @@ Analysis will be updated as the season progresses.
             # Clear existing items
             for item in self.record_chase_tree.get_children():
                 self.record_chase_tree.delete(item)
-            if hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps.setdefault(self.record_chase_tree, {}).clear()
+            if hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps.setdefault(self.record_chase_tree, {}).clear()
             
             # Get current league data and record manager
-            league = getattr(self.parent.game_manager, 'league', None)
-            record_manager = self.parent.game_manager.record_manager
+            league = getattr(self.app.game_manager, 'league', None)
+            record_manager = self.app.game_manager.record_manager
             
             if not league or not hasattr(league, 'teams') or not record_manager:
                 return
@@ -3674,28 +4305,37 @@ Analysis will be updated as the season progresses.
             
             # Get NHL records to compare against
             nhl_records = record_manager.nhl_records
-            
+
+            def _record_target(records_dict, key):
+                """Unwrap a SeasonRecord/CareerRecord to its target value."""
+                rec = records_dict.get(key)
+                if rec is None:
+                    return None
+                entry = getattr(rec, 'single_season', None) or getattr(rec, 'all_time', None)
+                return getattr(entry, 'value', None)
+
+            def _pstat(player, attr):
+                return getattr(getattr(player, 'stats', None), attr, 0) or 0
+
             # Track players approaching various records
             record_categories = [
-                ("single_season_goals", "Goals", lambda p: getattr(p, 'goals', 0)),
-                ("single_season_assists", "Assists", lambda p: getattr(p, 'assists', 0)),
-                ("single_season_points", "Points", lambda p: getattr(p, 'goals', 0) + getattr(p, 'assists', 0)),
-                ("single_season_wins", "Wins", lambda p: getattr(p, 'wins', 0) if hasattr(p, 'wins') else 0),
-                ("single_season_shutouts", "Shutouts", lambda p: getattr(p, 'shutouts', 0) if hasattr(p, 'shutouts') else 0),
+                ("single_season_goals", "Goals", lambda p: _pstat(p, 'goals')),
+                ("single_season_assists", "Assists", lambda p: _pstat(p, 'assists')),
+                ("single_season_points", "Points", lambda p: _pstat(p, 'points')),
+                ("single_season_wins", "Wins", lambda p: _pstat(p, 'wins')),
+                ("single_season_shutouts", "Shutouts", lambda p: _pstat(p, 'shutouts')),
             ]
             
             chase_data = []
             
             for record_type, display_name, stat_func in record_categories:
                 # Get the NHL record for this category
-                if record_type in nhl_records.season_records:
-                    record_info = nhl_records.season_records[record_type]
-                    target_value = record_info.value
-                    
+                target_value = _record_target(nhl_records.records, record_type)
+                if target_value:
                     # Find players with significant progress toward this record
                     for player, team in all_players:
                         current_value = stat_func(player)
-                        
+
                         if current_value > 0:  # Only consider players with some progress
                             percentage = (current_value / target_value) * 100
                             difference = target_value - current_value
@@ -3734,8 +4374,8 @@ Analysis will be updated as the season progresses.
                     str(chase_info['difference']),
                     f"{chase_info['percentage']:.1f}%"
                 ))
-                if hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps[self.record_chase_tree][_rcid] = chase_info['player_obj']
+                if hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps[self.record_chase_tree][_rcid] = chase_info['player_obj']
                 
         except Exception as e:
             print(f"Error populating record chase: {e}")
@@ -3747,7 +4387,7 @@ Analysis will be updated as the season progresses.
             for item in self.achievements_tree.get_children():
                 self.achievements_tree.delete(item)
             
-            record_manager = self.parent.game_manager.record_manager
+            record_manager = self.app.game_manager.record_manager
             
             # Get recent records broken in the game
             recent_records = record_manager.get_recent_records(20)
@@ -3797,6 +4437,9 @@ Analysis will be updated as the season progresses.
         """Create analytics dashboard content"""
         ct = self._ct
         parent_frame.configure(fg_color=ct['PANEL'])
+        # Rebuild-safe: refresh re-calls this on the same frame.
+        for _w in parent_frame.winfo_children():
+            _w.destroy()
         # Title
         title_frame = ctk.CTkFrame(parent_frame, fg_color="transparent")
         title_frame.pack(fill='x', padx=10, pady=(10, 4))
@@ -3825,16 +4468,21 @@ Analysis will be updated as the season progresses.
 
     def _fill_metric_cards(self, metrics_frame):
         """Fill the analytics metric cards from real league data."""
-        if hasattr(self.parent, 'game_manager') and self.parent.game_manager.league:
-            league = self.parent.game_manager.league
+        if self._in_playoff_mode():
+            self._fill_playoff_metric_cards(metrics_frame)
+            return
+        if hasattr(self.app, 'game_manager') and self.app.game_manager.league:
+            league = self.app.game_manager.league
 
-            # Total goals scored across league
+            # Total goals scored across league -- NHL roster ONLY. AHL
+            # numbers live on player.ahl_stats and never enter this screen
+            # (they have their own AHL Stats screen).
             total_goals = 0
             total_games = 0
             avg_attendance = 0
 
             for team in league.teams:
-                team_goals = sum(getattr(p, 'goals', 0) for p in team.roster + team.ahl_roster)
+                team_goals = sum(getattr(p, 'goals', 0) for p in team.roster)
                 total_goals += team_goals
                 total_games += team.games_played if hasattr(team, 'games_played') else 0
                 avg_attendance += getattr(team, 'avg_attendance', 15000)
@@ -3846,6 +4494,42 @@ Analysis will be updated as the season progresses.
             self._create_metric_card(metrics_frame, "Games Played", f"{total_games:,}", "#2196F3")
             self._create_metric_card(metrics_frame, "Avg Attendance", f"{avg_attendance:,.0f}", "#FF9800")
             self._create_metric_card(metrics_frame, "Active Teams", f"{len(league.teams)}", "#9C27B0")
+
+    def _fill_playoff_metric_cards(self, metrics_frame):
+        """Playoff-mode dashboard: goals, games, OT games, champion."""
+        try:
+            pstats = self.get_team_playoff_stats()
+            total_goals = sum(e["GF"] for e in pstats.values())
+            total_games = sum(e["GP"] for e in pstats.values()) // 2
+            ot_games = 0
+            champion = "TBD"
+            try:
+                league = getattr(getattr(self.app, "game_manager", self.app),
+                                 "league", None)
+                bracket = getattr(league, "playoff_bracket", None)
+                if bracket is not None:
+                    champ = getattr(bracket, "stanley_cup_champion", None)
+                    if champ is not None:
+                        champion = getattr(champ, "team_name", "TBD")
+                    for series_list in (getattr(
+                            bracket, "playoff_series", None) or {}).values():
+                        for s in series_list or []:
+                            for g in getattr(s, "game_results",
+                                             None) or []:
+                                if g.get("ot"):
+                                    ot_games += 1
+            except Exception:
+                pass
+            self._create_metric_card(metrics_frame, "Playoff Goals",
+                                     f"{total_goals:,}", "#4CAF50")
+            self._create_metric_card(metrics_frame, "Playoff Games",
+                                     f"{total_games:,}", "#2196F3")
+            self._create_metric_card(metrics_frame, "OT Games",
+                                     f"{ot_games:,}", "#FF9800")
+            self._create_metric_card(metrics_frame, "Champion",
+                                     champion, "#9C27B0")
+        except Exception as e:
+            print(f"Error filling playoff metric cards: {e}")
     
     def create_trends_analysis_content(self, parent_frame):
         """Create trends analysis content"""
@@ -3867,8 +4551,8 @@ Analysis will be updated as the season progresses.
                                                  pady=(10, 4))
 
         trends_text = tk.Text(trends_card, height=20, wrap='word',
-                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=_sfont(self.app.FONT_FAMILY, 10), relief='flat',
                               highlightthickness=0)
         trends_text.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
@@ -3900,8 +4584,8 @@ Analysis will be updated as the season progresses.
         team_insights_frame.configure(fg_color=ct['PANEL'])
 
         team_text = tk.Text(team_insights_frame, height=15, wrap='word',
-                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                            font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                            bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                            font=_sfont(self.app.FONT_FAMILY, 10), relief='flat',
                             highlightthickness=0)
         team_text.pack(fill='both', expand=True, padx=10, pady=10)
 
@@ -3910,8 +4594,8 @@ Analysis will be updated as the season progresses.
         player_insights_frame.configure(fg_color=ct['PANEL'])
 
         player_text = tk.Text(player_insights_frame, height=15, wrap='word',
-                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                              font=(self.parent.FONT_FAMILY, 10), relief='flat',
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=_sfont(self.app.FONT_FAMILY, 10), relief='flat',
                               highlightthickness=0)
         player_text.pack(fill='both', expand=True, padx=10, pady=10)
 
@@ -4009,3 +4693,21 @@ Analysis will be updated as the season progresses.
         ctk.CTkLabel(card_frame, text=value,
                      font=(self._ff, 16, 'bold'),
                      text_color=color).pack(pady=(0, 10))
+
+
+class StatsStandingsWindow(InGamePopup):
+    """Popup wrapper around StatsStandingsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Advanced League Analytics & Standings - Hockey Manager")
+        self._view = StatsStandingsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

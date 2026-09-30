@@ -13,7 +13,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from typing import Optional, Callable, Dict, Any
+from typing import Optional
 
 
 class AppColors:
@@ -38,6 +38,12 @@ class AppColors:
     ACCENT = "#00ceb8"          # Primary accent
     ACCENT_DIM = "#00a894"      # Darker accent for hover
     ACCENT_BG = "#0d2b28"       # Accent background (subtle)
+    # Contrast-safe text colors, kept in step with ACCENT by
+    # App._update_team_colors: ACCENT_TEXT is readable ON the accent,
+    # ACCENT_ON_DARK is the accent itself made readable on dark
+    # backgrounds. Both guarantee WCAG AA (4.5:1).
+    ACCENT_TEXT = "#0e0e11"     # dark text on the default teal
+    ACCENT_ON_DARK = "#00ceb8"  # default teal, already safe on dark
     
     # Semantic
     SUCCESS = "#3fb950"         # Green (wins, positive)
@@ -49,29 +55,48 @@ class AppColors:
     TEAM_DEFAULT = "#00ceb8"
 
 
-class AppFonts:
-    """Typography scale."""
-    
-    # Headings
-    HERO = ("Segoe UI", 28, "bold")        # Large hero numbers
-    H1 = ("Segoe UI", 20, "bold")          # Section titles
-    H2 = ("Segoe UI", 16, "bold")          # Card titles
-    H3 = ("Segoe UI", 14, "bold")          # Subsection
-    
-    # Body
-    BODY = ("Segoe UI", 12, "normal")      # Regular text
-    BODY_BOLD = ("Segoe UI", 12, "bold")   # Bold body
-    SMALL = ("Segoe UI", 11, "normal")     # Small text
-    SMALL_BOLD = ("Segoe UI", 11, "bold")
-    
-    # Labels (uppercase, muted)
-    LABEL = ("Segoe UI", 10, "bold")       # Small caps labels
-    CAPTION = ("Segoe UI", 9, "normal")    # Tiny captions
-    
-    # Numbers
-    STAT_LARGE = ("Segoe UI", 32, "bold")  # Big stat numbers
-    STAT_MEDIUM = ("Segoe UI", 24, "bold") # Medium stats
-    STAT_SMALL = ("Segoe UI", 18, "bold")  # Small stats
+class _AppFontsMeta(type):
+    """Metaclass: AppFonts.<NAME> returns a live ui_scale Font.
+
+    Sizes match the original fixed tuples at the Default tier; every
+    other tier (and auto-fit) rescales them in place. Attribute access
+    is cached, so repeated ``font=AppFonts.SMALL`` evaluations share
+    one Font object instead of minting new ones.
+    """
+    _SIZES = {
+        # Headings
+        "HERO":        (28, "bold"),    # Large hero numbers
+        "H1":          (20, "bold"),    # Section titles
+        "H2":          (16, "bold"),    # Card titles
+        "H3":          (14, "bold"),    # Subsection
+        # Body
+        "BODY":        (12, "normal"),  # Regular text
+        "BODY_BOLD":   (12, "bold"),    # Bold body
+        "SMALL":       (11, "normal"),  # Small text
+        "SMALL_BOLD":  (11, "bold"),
+        # Labels (uppercase, muted)
+        "LABEL":       (10, "bold"),    # Small caps labels
+        "CAPTION":     (9, "normal"),   # Tiny captions
+        # Numbers
+        "STAT_LARGE":  (32, "bold"),    # Big stat numbers
+        "STAT_MEDIUM": (24, "bold"),    # Medium stats
+        "STAT_SMALL":  (18, "bold"),    # Small stats
+    }
+
+    def __getattr__(cls, name):
+        spec = cls._SIZES.get(name)
+        if spec is None:
+            raise AttributeError("AppFonts has no attribute %r" % (name,))
+        size, weight = spec
+        try:
+            from ui_scale import get as _getfont
+            return _getfont("Segoe UI", size, weight)
+        except Exception:
+            return ("Segoe UI", size, weight)
+
+
+class AppFonts(metaclass=_AppFontsMeta):
+    """Typography scale (live fonts honoring Settings -> Font size)."""
 
 
 class AppCard(tk.Frame):
@@ -267,7 +292,9 @@ class PillBadge(tk.Frame):
     def __init__(self, parent, text="", bg=None, fg=None, 
                  font=None, padx=12, pady=4, **kwargs):
         bg = bg or AppColors.ACCENT_BG
-        fg = fg or AppColors.ACCENT
+        # ACCENT itself can be unreadable on the dark whisper bg for some
+        # team colors -- use the contrast-safe variant.
+        fg = fg or AppColors.ACCENT_ON_DARK
         
         super().__init__(parent, bg=bg, **kwargs)
         
@@ -306,7 +333,7 @@ class AppButton(tk.Canvas):
         if style == "primary":
             self.bg_color = AppColors.ACCENT
             self.hover_color = AppColors.ACCENT_DIM
-            self.text_color = "#ffffff"
+            self.text_color = AppColors.ACCENT_TEXT
         else:  # secondary
             self.bg_color = AppColors.BG_ELEVATED
             self.hover_color = AppColors.BG_HOVER
@@ -360,79 +387,6 @@ class AppButton(tk.Canvas):
         return self.create_polygon(points, smooth=True, **kwargs)
 
 
-class NavBar(tk.Frame):
-    """Bottom navigation bar (modern).
-    
-    Clean icon + label navigation with active indicator.
-    """
-    
-    def __init__(self, parent, items=None, on_select=None, **kwargs):
-        super().__init__(
-            parent, bg=AppColors.BG_ELEVATED,
-            highlightbackground=AppColors.BORDER,
-            highlightthickness=1,
-            **kwargs
-        )
-        
-        self.items = items or []
-        self.on_select = on_select
-        self.buttons = []
-        self.active_index = 0
-        
-        for i, (label, icon) in enumerate(self.items):
-            btn = self._create_nav_button(label, icon, i)
-            btn.pack(side="left", fill="both", expand=True)
-            self.buttons.append(btn)
-    
-    def _create_nav_button(self, label, icon, index):
-        btn = tk.Frame(self, bg=AppColors.BG_ELEVATED, cursor="hand2")
-        
-        # Active indicator (top bar)
-        indicator = tk.Frame(btn, bg=AppColors.ACCENT if index == 0 else AppColors.BG_ELEVATED, height=3)
-        indicator.pack(fill="x")
-        
-        # Icon (using text as placeholder)
-        icon_label = tk.Label(
-            btn, text=icon,
-            font=("Segoe UI", 20),
-            fg=AppColors.ACCENT if index == 0 else AppColors.TEXT_TERTIARY,
-            bg=AppColors.BG_ELEVATED
-        )
-        icon_label.pack(pady=(8, 0))
-        
-        # Label
-        text_label = tk.Label(
-            btn, text=label,
-            font=AppFonts.CAPTION,
-            fg=AppColors.ACCENT if index == 0 else AppColors.TEXT_TERTIARY,
-            bg=AppColors.BG_ELEVATED
-        )
-        text_label.pack(pady=(0, 8))
-        
-        # Bind clicks
-        for widget in [btn, icon_label, text_label, indicator]:
-            widget.bind("<Button-1>", lambda e, idx=index: self.select(idx))
-        
-        btn.indicator = indicator
-        btn.icon_label = icon_label
-        btn.text_label = text_label
-        
-        return btn
-    
-    def select(self, index):
-        """Select a nav item."""
-        self.active_index = index
-        for i, btn in enumerate(self.buttons):
-            is_active = (i == index)
-            color = AppColors.ACCENT if is_active else AppColors.BG_ELEVATED
-            text_color = AppColors.ACCENT if is_active else AppColors.TEXT_TERTIARY
-            
-            btn.indicator.configure(bg=color)
-            btn.icon_label.configure(fg=text_color)
-            btn.text_label.configure(fg=text_color)
-        
-        if self.on_select:
-            self.on_select(index)
 
 
 def apply_app_theme(root):

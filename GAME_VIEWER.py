@@ -4,14 +4,13 @@ Professional hockey game viewer with proper coordinate mapping and PNG backgroun
 """
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 from PIL import Image, ImageTk
 import math
 import time
 import os
-from typing import Dict, List, Tuple, Optional, Any
-import threading
-import json
+from typing import (Dict, Tuple, Any)
 
 class RebuiltNHLGameViewer:
     """
@@ -1251,7 +1250,7 @@ def launch_game_viewer(event_log, duration=3600, home_team="HOME", away_team="AW
     print("🏒 Launching Rebuilt NHL Game Viewer...")
     
     if parent is not None:
-        win = tk.Toplevel(parent)
+        win = InGamePopup(parent)
         win.transient(parent)
         viewer = RebuiltNHLGameViewer(win, event_log, duration, home_team, away_team)
         if event_log:

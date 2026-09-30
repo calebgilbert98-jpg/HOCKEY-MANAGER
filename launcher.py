@@ -5,10 +5,8 @@ Clean, simple entry point for the hockey management game
 """
 
 import sys
-import os
 from pathlib import Path
-import tkinter as tk
-from tkinter import messagebox
+from popup_system import messagebox
 
 # Ensure we can import from current directory
 current_dir = Path(__file__).parent
@@ -18,7 +16,20 @@ def main():
     """Main entry point for Puck Dynasty"""
     try:
         print("🏒 Starting Puck Dynasty...")
-        
+
+        # --- MULTIPLAYER/CHECKPOINTS: crash-detection session flag ---
+        # Written at launch, removed on clean exit (atexit below). A
+        # leftover flag at the next launch means the previous session
+        # died uncleanly -> the launcher offers checkpoint recovery.
+        try:
+            from checkpoint_manager import (
+                mark_session_start, mark_clean_shutdown)
+            mark_session_start()
+            import atexit
+            atexit.register(mark_clean_shutdown)
+        except Exception as e:
+            print(f"Session flag unavailable (non-fatal): {e}")
+
         # Import and start the simple launcher
         from simple_launcher import PuckDynastyLauncher
         

@@ -1,13 +1,16 @@
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
-from datetime import date, timedelta
+import customtkinter as ctk
+from datetime import date
 
-class GameResultsWindow(tk.Toplevel):
+class GameResultsView(ctk.CTkFrame):
     """Simple, clean game results window"""
     
-    def __init__(self, parent, results_data):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, results_data=None, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GameResultsWindow wrapper
         self.results_data = results_data
         
         # Extract date from results_data
@@ -16,44 +19,28 @@ class GameResultsWindow(tk.Toplevel):
         else:
             self.date_str = date.today().strftime("%B %d, %Y")
         
-        self.title(f"Daily Results - {self.date_str}")
-        self.geometry("1000x700")
-        self.configure(bg=self.parent.BG_COLOR)
-        
-        # Center the window
-        self._center_window()
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Create the interface
         self._create_interface()
         
         # Load and display data
         self._load_data()
-    
-    def _center_window(self):
-        """Center the window on screen"""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
-    
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _create_interface(self):
         """Create clean, simple interface"""
         # Main frame
-        main_frame = tk.Frame(self, bg=self.parent.BG_COLOR)
+        main_frame = tk.Frame(self, bg=self.app.BG_COLOR)
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Header
-        header_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
-        header_frame.pack(fill='x', pady=(0, 20))
-        
-        title_label = tk.Label(header_frame, 
-                              text=f"Daily Results - {self.date_str}",
-                              font=('Segoe UI', 18, 'bold'),
-                              fg='#FFFFFF',
-                              bg=self.parent.BG_COLOR)
-        title_label.pack()
         
         # Content notebook for tabs
         self.notebook = ttk.Notebook(main_frame)
@@ -69,12 +56,12 @@ class GameResultsWindow(tk.Toplevel):
         self._create_news_tab()
         
         # Close button
-        close_frame = tk.Frame(main_frame, bg=self.parent.BG_COLOR)
+        close_frame = tk.Frame(main_frame, bg=self.app.BG_COLOR)
         close_frame.pack(fill='x', pady=(20, 0))
         
         close_btn = tk.Button(close_frame,
                              text="Close",
-                             command=self.destroy,
+                             command=self.close_view,
                              font=('Segoe UI', 10),
                              bg='#00ceb8',
                              fg='white',
@@ -144,8 +131,9 @@ class GameResultsWindow(tk.Toplevel):
         if idx < 0 or idx >= len(self._games):
             return
         try:
-            from game_box_score import GameBoxScoreWindow
-            GameBoxScoreWindow(self, self._games[idx])
+            from game_box_score import GameBoxScoreView
+            self.app.show_screen("box_score", "Box Score", GameBoxScoreView,
+                                 self._games[idx])
         except Exception as e:
             tk.messagebox.showerror("Box Score Unavailable",
                                     f"Could not open the box score:\n{e}")
@@ -263,6 +251,24 @@ class GameResultsWindow(tk.Toplevel):
                         self.news_text.insert('end', f"• {headline}\n\n")
         else:
             self.news_text.insert('end', "No news available for today.")
+
+class GameResultsWindow(InGamePopup):
+    """Popup wrapper around GameResultsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self._view = GameResultsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+        self.title(f"Daily Results - {self._view.date_str}")
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
 
 # Legacy alias for compatibility
 AdvancedGameResultsWindow = GameResultsWindow

@@ -4,9 +4,8 @@ Handles age-based progression, training, potential tracking, and skill developme
 """
 
 import random
-import math
-from datetime import date, timedelta
-from typing import Dict, List, Tuple, Optional
+from datetime import date
+from typing import (Dict, List, Tuple)
 from dataclasses import dataclass, field
 from enum import Enum
 from game_classes import Player, PlayerPosition
@@ -129,54 +128,153 @@ class PlayerDevelopmentEngine:
         self.development_history: Dict[str, DevelopmentHistory] = {}
     
     def get_development_stage(self, player: Player) -> DevelopmentStage:
-        """Determine a player's current development stage"""
+        """Determine a player's current development stage.
+
+        Development arc shifts the age thresholds:
+        - late_bloomer: +2 years (peaks at 28-30 instead of 26-27)
+        - early_peak: -2 years (peaks at 24-25 instead of 26-27)
+        - standard: no shift
+
+        Goalies develop differently than skaters: they need more seasoning
+        (rarely NHL-ready before 23), peak later (28-32), and play longer.
+        Their whole curve is shifted +2 years. Generational goalie prospects
+        (see goalie_personality.py) are the exception -- they arrive on the
+        early-peak timetable but keep the long goalie prime (fate, not arc).
+        """
         age = player.age
-        
-        if age <= 19:
+        arc = getattr(player, 'development_arc', 'standard')
+        is_goalie = player.primary_position == PlayerPosition.GOALIE
+        generational = bool(getattr(player, 'generational_goalie', False))
+
+        # Arc shifts thresholds
+        shift = 0
+        if arc == "late_bloomer":
+            shift = 2
+        elif arc == "early_peak":
+            shift = -2
+
+        if is_goalie:
+            # Goalie curve: +2 years everywhere vs skaters...
+            shift += 2
+            if generational:
+                # ...except the generational fast-track: arrives 2 years
+                # early (back to the skater timetable) but keeps the
+                # longer goalie prime -- no early decline.
+                shift -= 2
+
+        if age <= 19 + shift:
             return DevelopmentStage.JUNIOR
-        elif age <= 23:
+        elif age <= 23 + shift:
             return DevelopmentStage.RISING
-        elif age <= 27:
+        elif age <= 27 + shift:
             return DevelopmentStage.PRIME_EARLY
-        elif age <= 31:
+        elif age <= 31 + shift:
             return DevelopmentStage.PRIME
-        elif age <= 35:
+        elif age <= 35 + shift:
             return DevelopmentStage.VETERAN
         else:
             return DevelopmentStage.AGING
     
     def calculate_base_development_rate(self, player: Player) -> float:
-        """Calculate base development rate based on age and stage"""
+        """Calculate base development rate based on age and stage.
+
+        Development arc modifies the rate:
+        - late_bloomer: 0.7x in JUNIOR/RISING, 1.3x in PRIME_EARLY/PRIME
+        - early_peak: 1.3x in JUNIOR/RISING, 0.7x in PRIME/VETERAN
+        - standard: 1.0x (unchanged)
+        """
         stage = self.get_development_stage(player)
-        
-        # Base rates by development stage
-        stage_rates = {
-            DevelopmentStage.JUNIOR: 0.8,      # High development
-            DevelopmentStage.RISING: 0.6,      # Good development
-            DevelopmentStage.PRIME_EARLY: 0.3, # Slow improvement
-            DevelopmentStage.PRIME: 0.1,       # Maintenance
-            DevelopmentStage.VETERAN: -0.2,    # Slight decline
-            DevelopmentStage.AGING: -0.5       # Noticeable decline
-        }
-        
+
+        is_goalie = player.primary_position == PlayerPosition.GOALIE
+        generational = bool(getattr(player, 'generational_goalie', False))
+
+        # Base rates by development stage.
+        # Goalies develop differently than skaters: slower early (they need
+        # seasoning -- few are NHL-ready before 23), a stronger late prime
+        # (the goalie bloom at 28-32), and a gentler decline (goalies play
+        # longer).
+        if is_goalie:
+            stage_rates = {
+                DevelopmentStage.JUNIOR: 0.6,       # Raw; needs games
+                DevelopmentStage.RISING: 0.55,      # Finding it
+                DevelopmentStage.PRIME_EARLY: 0.45, # The late bloom
+                DevelopmentStage.PRIME: 0.15,      # Established
+                DevelopmentStage.VETERAN: -0.1,    # Gentle decline
+                DevelopmentStage.AGING: -0.3       # Slower fall than skaters
+            }
+        else:
+            stage_rates = {
+                DevelopmentStage.JUNIOR: 0.8,      # High development
+                DevelopmentStage.RISING: 0.6,      # Good development
+                DevelopmentStage.PRIME_EARLY: 0.3, # Slow improvement
+                DevelopmentStage.PRIME: 0.1,       # Maintenance
+                DevelopmentStage.VETERAN: -0.2,    # Slight decline
+                DevelopmentStage.AGING: -0.5       # Noticeable decline
+            }
+
         base_rate = stage_rates[stage]
+
+        # Apply development arc multiplier (additive to engine, not override)
+        arc = getattr(player, 'development_arc', 'standard')
+        if generational and is_goalie:
+            # The fate roll: generational goalies arrive early but never pay
+            # the early-peak decline tax -- they become great young and stay
+            # great through the long goalie prime.
+            if arc == "late_bloomer":
+                if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                    base_rate *= 0.7
+                elif stage in (DevelopmentStage.PRIME_EARLY, DevelopmentStage.PRIME):
+                    base_rate *= 1.3
+                elif stage == DevelopmentStage.VETERAN:
+                    base_rate *= 0.7
+        elif arc == "late_bloomer":
+            if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                base_rate *= 0.7  # Slower early
+            elif stage in (DevelopmentStage.PRIME_EARLY, DevelopmentStage.PRIME):
+                base_rate *= 1.3  # Stronger/longer peak
+            elif stage == DevelopmentStage.VETERAN:
+                base_rate *= 0.7  # Slower decline (less negative)
+        elif arc == "early_peak":
+            if stage in (DevelopmentStage.JUNIOR, DevelopmentStage.RISING):
+                base_rate *= 1.3  # Faster early
+            elif stage == DevelopmentStage.PRIME_EARLY:
+                base_rate *= 0.5  # Peak ends sooner
+            elif stage == DevelopmentStage.PRIME:
+                base_rate -= 0.2  # Early decline (0.1 maintenance -> -0.1)
+            elif stage in (DevelopmentStage.VETERAN, DevelopmentStage.AGING):
+                base_rate *= 1.3  # Faster decline (more negative)
         
-        # Apply potential modifiers based on player's work ethic and determination
+        # Apply potential modifiers based on player's work ethic and
+        # determination. Both live on the ~100-scale in the live game, so
+        # normalize to the 1-20 scale this formula was written for.
         if hasattr(player, 'work_ethic') and hasattr(player, 'determination'):
-            work_ethic_modifier = (player.work_ethic - 50) * 0.004
-            determination_modifier = (player.determination - 50) * 0.006
+            work_ethic_modifier = ((player.work_ethic / 5.0) - 10) * 0.02
+            determination_modifier = ((player.determination / 5.0) - 10) * 0.03
             base_rate += work_ethic_modifier + determination_modifier
         
         return base_rate
     
-    def calculate_attribute_development(self, player: Player, attribute: str) -> int:
-        """Calculate how much an attribute should change"""
+    def calculate_attribute_development(self, player: Player, attribute: str,
+                                            coach=None, team=None) -> int:
+        """Calculate how much an attribute should change.
+
+        ``team`` (optional) enables the archetype/system coaching
+        dimensions; without it the legacy formula runs unchanged.
+        """
         if not hasattr(player, 'potential'):
             return 0
         
         current_value = getattr(player, attribute, 10)
-        # Use player's overall potential as a base, modified by position and age
-        potential_value = min(player.potential + random.randint(-10, 10), 100)
+        # Ceiling: the player's touted potential grade, on the live
+        # attribute scale (attributes are 1-100 in the live game).
+        try:
+            _cap = int(player._potential_cap())
+        except Exception:
+            try:
+                _cap = int(getattr(player, 'potential', 13) or 13) * 5
+            except Exception:
+                _cap = 75
+        potential_value = min(_cap + random.randint(-5, 5), 99)
         
         # Don't develop if at or above potential
         if current_value >= potential_value:
@@ -196,16 +294,39 @@ class PlayerDevelopmentEngine:
         
         # Calculate development points
         development_points = base_rate * gap_modifier * variance
+        # The coach: influence, youth touch, personality, talent.
+        if coach is not None:
+            try:
+                import reputation_system as _rs
+                development_points *= _rs.coach_development_factor(player, coach)
+            except Exception:
+                pass
+        # Archetype + system (additive): which attributes this player
+        # type absorbs and which the club's identity emphasizes. These
+        # are new dimensions -- the legacy coach factor above prices
+        # influence, youth touch, coachability and the relationship, so
+        # nothing here is double-counted. Sign-preserving (decline
+        # stays decline).
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                _drill = _cp.attribute_drill(attribute)
+                if _drill:
+                    _bd = _cp.practice_breakdown(team, player, _drill)
+                    development_points *= (_bd.get("affinity", 1.0)
+                                           * _bd.get("system", 1.0))
+            except Exception:
+                pass
         
-        # Convert to integer attribute change
-        if development_points >= 1.0:
-            return 1
-        elif development_points <= -1.0:
-            return -1
-        elif abs(development_points) > 0.3 and random.random() < abs(development_points):
+        # Monthly roll of the annual expectation: development_points keeps
+        # the original formula (stage rates, work ethic/determination, gap
+        # slowdown, variance, coach factor) as expected ANNUAL movement per
+        # attribute; each month rolls 1/12th of it, so this pass is texture
+        # under the yearly age_one_year main curve.
+        if abs(development_points) > 0.05 \
+                and random.random() < abs(development_points) / 12.0:
             return 1 if development_points > 0 else -1
-        else:
-            return 0
+        return 0
     
     def apply_training_effects(self, player: Player, training: TrainingProgram) -> Dict[str, int]:
         """Apply training program effects to player attributes"""
@@ -252,8 +373,13 @@ class PlayerDevelopmentEngine:
         
         return attribute_changes
     
-    def process_monthly_development(self, player: Player) -> Dict[str, int]:
-        """Process natural monthly development for a player"""
+    def process_monthly_development(self, player: Player, coach=None,
+                                        team=None) -> Dict[str, int]:
+        """Process natural monthly development for a player.
+
+        ``team`` (optional) enables the archetype/system coaching
+        dimensions; without it the legacy formula runs unchanged.
+        """
         if not hasattr(player, 'potential'):
             # Initialize potential if missing
             player.potential = PlayerPotential()
@@ -274,10 +400,11 @@ class PlayerDevelopmentEngine:
         # Process each attribute
         for attribute in developable_attributes:
             if hasattr(player, attribute):
-                change = self.calculate_attribute_development(player, attribute)
+                change = self.calculate_attribute_development(
+                    player, attribute, coach=coach, team=team)
                 if change != 0:
                     current_value = getattr(player, attribute)
-                    new_value = max(1, min(20, current_value + change))
+                    new_value = max(1, min(100, current_value + change))
                     setattr(player, attribute, new_value)
                     attribute_changes[attribute] = change
                     

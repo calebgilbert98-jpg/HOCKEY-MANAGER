@@ -2,9 +2,9 @@
 
 Traits represent exceptional abilities that make players perform better at
 specific skills. A "Big Hitter" throws harder, more frequent checks. A
-"Speedster" creates more breakaways. Traits are earned from elite
-attributes (typically 80+ on the native 1-100 scale) and provide concrete
-simulation bonuses.
+"Speedster" creates more breakaways. Traits are earned from attributes
+(typically 86+ on the native 1-100 scale for the headline attribute,
+70-78 for supporting ones) and provide concrete simulation bonuses.
 
 Traits are stored as a list of trait IDs on player.traits.
 """
@@ -155,7 +155,7 @@ SKATER_TRAITS = [
         name="Clutch",
         description="Elevates when the game is on the line.",
         category="mental",
-        requirements=[("pressure_player", 86), ("composure", 74)],
+        requirements=[("pressure_player", 73), ("composure", 71)],  # ~p80 of generated goalies
         sim_effects={
             "overtime_mult": 1.08,
             "shootout_mult": 1.10,
@@ -196,7 +196,7 @@ GOALIE_TRAITS = [
         name="Wall",
         description="Nearly impossible to beat cleanly; squares to every shot.",
         category="goalie",
-        requirements=[("positioning", 86)],
+        requirements=[("positioning", 76)],  # p90 of generated goalies: true elites only
         sim_effects={
             "save_chance_mult": 1.04,
         },
@@ -206,7 +206,7 @@ GOALIE_TRAITS = [
         name="Puck Handler",
         description="Acts as a third defenseman; starts breakouts with crisp passes.",
         category="goalie",
-        requirements=[("puck_handling", 86)],
+        requirements=[("puck_handling", 74)],  # p85 of generated goalies
         sim_effects={
             "breakout_pass_mult": 1.12,
             "dump_in_negation": 0.10,
@@ -222,6 +222,31 @@ GOALIE_TRAITS = [
             "overtime_mult": 1.06,
             "shootout_mult": 1.08,
             "playoff_mult": 1.05,
+        },
+    ),
+    Trait(
+        id="battler",
+        name="Battler",
+        description="Feeds on chaos and bounces back after getting scored on -- but can unravel when shelled.",
+        category="goalie",
+        requirements=[("determination", 71), ("aggressiveness", 68)],  # the battlers
+        sim_effects={
+            # Core behavior lives in goalie_personality.py (bounce-back,
+            # traffic bonus, tilt risk); this flat kicker is the trait's
+            # always-on edge in the old save-prob path.
+            "save_chance_mult": 1.015,
+        },
+    ),
+    Trait(
+        id="technician",
+        name="Technician",
+        description="Positional mastery; never beats himself on the soft ones.",
+        category="goalie",
+        requirements=[("positioning", 73), ("anticipation", 71)],  # the technicians
+        sim_effects={
+            # Core behavior lives in goalie_personality.py (soft-goal
+            # suppression); this flat kicker is the always-on edge.
+            "save_chance_mult": 1.015,
         },
     ),
 ]
@@ -262,9 +287,6 @@ def infer_traits(player) -> List[str]:
     return qualified
 
 
-def get_trait(trait_id: str) -> Trait:
-    """Get a trait definition by ID."""
-    return ALL_TRAITS.get(trait_id)
 
 
 def get_player_traits(player) -> List[Trait]:
@@ -300,3 +322,40 @@ def get_sim_bonus(player, effect_key: str, default: float = 1.0) -> float:
         for trait in traits:
             result += trait.sim_effects.get(effect_key, 0.0)
         return result if result != 0.0 else default
+
+
+# ---------------------------------------------------------------------------
+# Shootout attempt resolution -- ONE decision, two fidelities.
+# Both engines (GameSim and AdvancedGameSim) resolve every shootout attempt
+# through this function so shootout conversion is a single shared number.
+# League-average conversion is ~35-40% (NHL-like); elite shooters convert
+# more, elite goalies stop more. Never 0% or 100%.
+# ---------------------------------------------------------------------------
+
+def resolve_shootout_attempt(shooter, goalie, edge: float = 0.0) -> bool:
+    """True if the shooter scores. Pure probability -- no logging.
+
+    edge: small probability nudge in [-1, 1] applied to the outcome
+    (positive favors the shooter). Default 0.0 = today's behavior exactly:
+    no extra RNG is drawn and the comparison is untouched.
+    """
+    import random as _rng
+    _bonus = get_sim_bonus
+    shot_roll = ((getattr(shooter, "shooting", 50)
+                  + getattr(shooter, "deking", 50)) / 4
+                 + _rng.randint(1, 20))
+    # Traits: clutch shooters elevate, danglers deke better.
+    shot_roll *= _bonus(shooter, "shootout_mult")
+    shot_roll *= _bonus(shooter, "deke_success_mult")
+    save_roll = (getattr(goalie, "goaltending", 50) * 0.45
+                 + _rng.randint(1, 20))
+    # Traits: wall goalies stop more, big-game goalies elevate in shootouts.
+    save_roll *= _bonus(goalie, "save_chance_mult")
+    save_roll *= _bonus(goalie, "shootout_mult")
+    _base = shot_roll > save_roll
+    if edge:
+        # Probabilistic nudge: with probability |edge| the edge decides the
+        # attempt outright; otherwise the normal resolution stands.
+        if _rng.random() < abs(edge):
+            return edge > 0
+    return _base

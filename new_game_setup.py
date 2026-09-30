@@ -31,6 +31,8 @@ CONFIG SCHEMA (all keys always present)
     "gm_name":       str,                              # default "General Manager"
     "user_league":   "NHL",                            # league key of managed team
     "user_team":     "Boston Bruins",                  # team name of managed team
+    "playoff_format": "divisional" | "conference",     # default "divisional"
+                                                      # (setup-only)
 }
 
 DATABASE SIZES (verified by headless generation, NHL+AHL default set)
@@ -82,7 +84,8 @@ from __future__ import annotations
 
 import random
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 
 try:
     from modern_widgets import (
@@ -164,6 +167,23 @@ DEFAULT_CONFIG = {
     "gm_name": "General Manager",
     "user_league": "NHL",
     "user_team": "Boston Bruins",
+    "playoff_format": "divisional",
+}
+
+# Playoff seeding formats (setup-only choice).
+PLAYOFF_FORMATS = {
+    "divisional": {
+        "label": "Divisional \u2014 current NHL",
+        "desc": "Top 3 per division + 2 wild cards per conference. First "
+                "round: best division winner vs lowest wild card, then 2v3 "
+                "and 2v3; fixed bracket, no reseeding.",
+    },
+    "conference": {
+        "label": "Conference \u2014 classic 1v8",
+        "desc": "Top 8 per conference by points. First round: 1v8, 2v7, "
+                "3v6, 4v5; reseeded every round (highest remaining seed "
+                "hosts the lowest). Straight conference seeding \u2014 no protected seeds for division winners.",
+    },
 }
 
 
@@ -226,7 +246,8 @@ def preview_team_names(league_key: str):
 
 def make_config(mode="quick", database_size="medium", leagues=None,
                 sim_detail=None, fog_of_war=True, gm_name="",
-                user_league="NHL", user_team=""):
+                user_league="NHL", user_team="",
+                playoff_format="divisional"):
     """Build a validated config dict (schema documented at top of file)."""
     leagues = list(leagues) if leagues else list(DEFAULT_CONFIG["leagues"])
     leagues = [k for k in leagues if k in WIZARD_LEAGUES] or ["NHL"]
@@ -251,26 +272,27 @@ def make_config(mode="quick", database_size="medium", leagues=None,
         "gm_name": (gm_name or "").strip() or "General Manager",
         "user_league": user_league,
         "user_team": user_team,
+        "playoff_format": (playoff_format if playoff_format in PLAYOFF_FORMATS
+                           else "divisional"),
     }
 
 # ---------------------------------------------------------------------------
 # Wizard UI
 # ---------------------------------------------------------------------------
 
-class NewGameSetupWizard(tk.Toplevel):
-    """New-career setup wizard. Calls on_start(config) then closes."""
+class NewGameSetupView(tk.Frame):
+    """New-career setup wizard as an embedded full-screen view.
 
-    def __init__(self, parent, on_start_callback):
+    Calls on_start(config) then closes itself. Pass ``app`` for the
+    application object; when omitted, ``parent`` doubles as the app
+    (standalone / popup-wrapper use).
+    """
+
+    def __init__(self, parent, on_start_callback, app=None):
         super().__init__(parent)
+        self.app = app if app is not None else parent
         self.on_start_callback = on_start_callback
-        self.title("Puck Dynasty \u2014 New Career Setup")
-        self.geometry("920x790")
         self.configure(bg=BG)
-        self.resizable(False, False)
-        try:
-            self.transient(parent)
-        except Exception:
-            pass
 
         # State
         self.mode_var = tk.StringVar(value="quick")
@@ -280,6 +302,7 @@ class NewGameSetupWizard(tk.Toplevel):
         self.detail_vars = {k: tk.StringVar(value=WIZARD_LEAGUES[k]["detail_default"])
                             for k in WIZARD_LEAGUES}
         self.fog_var = tk.BooleanVar(value=True)
+        self.playoff_format_var = tk.StringVar(value="divisional")
         self.gm_var = tk.StringVar(value="")
         self.q_league_var = tk.StringVar(value="NHL")
         self.q_team_var = tk.StringVar(value="")
@@ -296,14 +319,49 @@ class NewGameSetupWizard(tk.Toplevel):
 
         self._build()
         self._show_mode("quick")
-        self._center()
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+    def close_view(self):
+        """Close this screen via the screen manager, or destroy as fallback."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- layout ---------------------------------------------------------
     def _build(self):
         header = tk.Frame(self, bg=BG)
         header.pack(fill="x", padx=24, pady=(18, 6))
-        tk.Label(header, text="New Career", font=(FONT, 22, "bold"),
-                 bg=BG, fg=TEXT).pack(side="left")
         tk.Label(header, text="Set up your hockey universe",
                  font=(FONT, 11), bg=BG, fg=MUTED).pack(side="left", padx=(12, 0), pady=(8, 0))
 
@@ -344,28 +402,18 @@ class NewGameSetupWizard(tk.Toplevel):
         footer.pack(fill="x", padx=24, pady=(6, 18))
         if _HAS_MODERN:
             self._cancel_btn = RoundedButton(footer, text="Cancel", bg="#2A3346", fg=TEXT,
-                          command=self.destroy, padx=18, pady=8)
+                          command=self.close_view, padx=18, pady=8)
             self._cancel_btn.pack(side="right", padx=(8, 0))
             self._start_btn = RoundedButton(footer, text="Start Career \u2192", bg=ACCENT,
                                             fg="white", font=(FONT, 12, "bold"),
                                             command=self._on_start, padx=26, pady=10)
             self._start_btn.pack(side="right")
         else:
-            self._cancel_btn = tk.Button(footer, text="Cancel", command=self.destroy)
+            self._cancel_btn = tk.Button(footer, text="Cancel", command=self.close_view)
             self._cancel_btn.pack(side="right", padx=(8, 0))
             self._start_btn = tk.Button(footer, text="Start Career \u2192", bg=ACCENT, fg="white",
                       activebackground=ACCENT, command=self._on_start)
             self._start_btn.pack(side="right")
-
-    def _center(self):
-        self.update_idletasks()
-        try:
-            px, py = self.master.winfo_rootx(), self.master.winfo_rooty()
-            pw, ph = self.master.winfo_width(), self.master.winfo_height()
-            x, y = px + (pw - 920) // 2, py + (ph - 790) // 2
-        except Exception:
-            x = y = 60
-        self.geometry(f"+{max(x, 0)}+{max(y, 0)}")
 
     def _on_mode_seg(self, value):
         self._show_mode({"Quick Start": "quick",
@@ -391,13 +439,7 @@ class NewGameSetupWizard(tk.Toplevel):
                 self._start_btn.pack(side="right")
         except Exception:
             pass
-        # Size the window to the content: quick/import are compact, custom
-        # needs the full height for all sections.
-        try:
-            self.geometry("920x560" if mode in ("quick", "import") else "920x790")
-            self._center()
-        except Exception:
-            pass
+        # (Full-screen view: no window resizing; the mode pages simply swap.)
 
     # -- shared section widgets ------------------------------------------
     def _section(self, parent, title, subtitle=""):
@@ -583,6 +625,23 @@ class NewGameSetupWizard(tk.Toplevel):
                          self.fog_var).pack(anchor="w")
         self._on_league_toggle()
 
+        # Playoff format (setup-only choice: divisional vs conference)
+        sec = self._section(parent, "Playoff Format",
+                            "How the Stanley Cup playoffs are seeded. Set "
+                            "once here \u2014 it can't change mid-save.")
+        for key in ("divisional", "conference"):
+            tk.Radiobutton(sec, text=PLAYOFF_FORMATS[key]["label"],
+                           variable=self.playoff_format_var, value=key,
+                           command=self._on_playoff_format,
+                           bg=PANEL_BG, fg=TEXT, selectcolor=ACCENT,
+                           activebackground=PANEL_BG,
+                           activeforeground=TEXT).pack(anchor="w")
+        self._playoff_format_desc = tk.Label(sec, text="", font=(FONT, 10),
+                                             bg=PANEL_BG, fg=MUTED,
+                                             justify="left", wraplength=720)
+        self._playoff_format_desc.pack(anchor="w", pady=(4, 0))
+        self._on_playoff_format()
+
         # Your team
         sec = self._section(parent, "Your Team",
                             "The club you'll manage. Leagues list updates with "
@@ -624,7 +683,7 @@ class NewGameSetupWizard(tk.Toplevel):
         try:
             from roster_import_wizard import open_roster_import_wizard
         except Exception as exc:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showerror("Import Rosters",
                                  f"Could not open the import wizard:\n{exc}")
             return
@@ -646,7 +705,7 @@ class NewGameSetupWizard(tk.Toplevel):
         try:
             self.on_start_callback(cfg)
         finally:
-            self.destroy()
+            self.close_view()
 
     def _on_size(self, label):
         key = {"Small": "small", "Medium": "medium", "Large": "large"}.get(label, label)
@@ -670,6 +729,15 @@ class NewGameSetupWizard(tk.Toplevel):
         if cur not in active and active:
             self.c_league_var.set(active[0])
         self._refresh_teams(self.c_league_var, self.c_team_var)
+
+    def _on_playoff_format(self):
+        """Refresh the one-line description under the format radios."""
+        try:
+            self._playoff_format_desc.config(
+                text=PLAYOFF_FORMATS.get(
+                    self.playoff_format_var.get(), {}).get("desc", ""))
+        except Exception:
+            pass
 
     # -- start -------------------------------------------------------------
     def _active_leagues(self):
@@ -707,11 +775,44 @@ class NewGameSetupWizard(tk.Toplevel):
                 gm_name=self.gm_var.get(),
                 user_league=self.c_league_var.get(),
                 user_team=self.c_team_var.get(),
+                playoff_format=self.playoff_format_var.get(),
             )
         try:
             self.on_start_callback(cfg)
         finally:
-            self.destroy()
+            self.close_view()
+
+
+class NewGameSetupWizard(InGamePopup):
+    """Popup wrapper around NewGameSetupView (backward compatibility).
+
+    New code should embed NewGameSetupView as a full-screen view instead
+    of opening this card.
+    """
+
+    def __init__(self, parent, on_start_callback):
+        super().__init__(parent)
+        self.title("Puck Dynasty \u2014 New Career Setup")
+        self.geometry("920x790")
+        self.resizable(False, False)
+        try:
+            self.transient(parent)
+        except Exception:
+            pass
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = NewGameSetupView(self, on_start_callback, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 
 
 def open_setup_wizard(parent, on_start_callback):

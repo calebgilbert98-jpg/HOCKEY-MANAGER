@@ -4,27 +4,59 @@ Simple, reliable player display system that guarantees player visibility
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from typing import List, Optional
-from game_classes import Player, PlayerPosition, to_100_scale
+import customtkinter as ctk
+from game_classes import (Player, to_100_scale)
 from game_classes import debug_print
 from scouting_profiles import displayed_overall
 
-class PlayerBrowserWindow(tk.Toplevel):
-    """Standalone player browser with guaranteed player display"""
-    
-    def __init__(self, parent, players: List[Player], title="Available Players"):
-        super().__init__(parent)
-        self.parent = parent
+class PlayerBrowserView(ctk.CTkFrame):
+    """Standalone player browser view with guaranteed player display.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy PlayerBrowserWindow popup card.
+    """
+
+    def __init__(self, parent, players: List[Player], title="Available Players",
+                 app=None, on_select=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color='#181818')
+        # Set by show_screen() (dashboard) or the PlayerBrowserWindow wrapper (card).
+        self._close_screen = None
+        # Optional callback for screen mode (replaces the wait_window flow).
+        self._on_select = on_select
         self.players = players
-        self.filtered_players = players.copy()
         self.selected_player = None
-        
-        # Window setup
-        self.title(title)
-        self.geometry("1200x800")
-        self.configure(background='#181818')
-        
+
+        # Paging: a Treeview with ~12k rows costs one Tcl round-trip per
+        # insert, so we render one page at a time (filters still scan all).
+        self.page = 0
+        self.page_size = 250
+        self._filter_after_id = None
+
+        # Precompute display rows ONCE: (player, values, rating). Filtering
+        # and sorting then reuse these instead of recomputing overall_rating
+        # (and the fog-of-war noise) on every keystroke.
+        user_team = self._user_team()
+        self._all_rows = []
+        for p in players:
+            try:
+                rating = p.overall_rating()
+                self._all_rows.append((p, (
+                    p.full_name,
+                    p.primary_position.value,
+                    f"{displayed_overall(p, user_team):.0f}",
+                    p.age,
+                    getattr(p, 'former_team', 'Unknown'),
+                ), rating))
+            except Exception:
+                continue
+        self._rows = []              # filtered + sorted (player, values, rating)
+        self.filtered_players = []   # players only, same order as _rows
+
         # Initialize filter variables
         self.search_var = tk.StringVar()
         self.position_var = tk.StringVar(value="All")
@@ -33,8 +65,8 @@ class PlayerBrowserWindow(tk.Toplevel):
         # Setup UI
         self.setup_ui()
         
-        # Initial population
-        self.populate_players()
+        # Initial filter + population (replaces direct populate_players)
+        self._do_filter()
         
     def setup_ui(self):
         """Setup the simple player browser UI"""
@@ -141,78 +173,107 @@ class PlayerBrowserWindow(tk.Toplevel):
         self.info_label = tk.Label(button_frame, text="Select a player to draft", 
                                   fg='#E0E0E0', bg='#181818')
         self.info_label.pack(side=tk.LEFT)
+
+        # Paging controls (Treeview renders one page; filters scan all rows)
+        page_frame = tk.Frame(button_frame, bg='#181818')
+        page_frame.pack(side=tk.LEFT, padx=20)
+        self.prev_btn = tk.Button(page_frame, text="◀ Prev", command=self._prev_page,
+                                  bg='#2A2A2A', fg='#FFFFFF',
+                                  activebackground='#3A3A3A')
+        self.prev_btn.pack(side=tk.LEFT, padx=2)
+        self.page_label = tk.Label(page_frame, text="Page 1 / 1",
+                                   fg='#E0E0E0', bg='#181818')
+        self.page_label.pack(side=tk.LEFT, padx=6)
+        self.next_btn = tk.Button(page_frame, text="Next ▶", command=self._next_page,
+                                  bg='#2A2A2A', fg='#FFFFFF',
+                                  activebackground='#3A3A3A')
+        self.next_btn.pack(side=tk.LEFT, padx=2)
         
         # Close button
-        close_btn = tk.Button(button_frame, text="Close", command=self.destroy,
+        close_btn = tk.Button(button_frame, text="Close", command=self.close_view,
                              bg='#2A2A2A', fg='#FFFFFF', activebackground='#3A3A3A')
         close_btn.pack(side=tk.RIGHT)
         
     def populate_players(self):
-        """Populate the treeview with filtered players"""
-        # Clear existing items
+        """Render the current page of the filtered/sorted rows.
+
+        Only ~250 Treeview inserts per refresh instead of one per player
+        (~12k Tcl round-trips before this change).
+        """
         for item in self.tree.get_children():
             self.tree.delete(item)
-            
-        debug_print(f"DEBUG: Populating player browser with {len(self.filtered_players)} players")
-        
-        # Add players to tree
-        for i, player in enumerate(self.filtered_players):
+
+        total = len(self._rows)
+        pages = max(1, -(-total // self.page_size))
+        self.page = min(max(0, self.page), pages - 1)
+        start = self.page * self.page_size
+        page_rows = self._rows[start:start + self.page_size]
+
+        for j, (player, values, _rating) in enumerate(page_rows):
             try:
-                former_team = getattr(player, 'former_team', 'Unknown')
-                
-                item_id = self.tree.insert('', 'end', values=(
-                    player.full_name,
-                    player.primary_position.value,
-                    # Fog of war: unscouted players show a noisy estimate
-                    f"{displayed_overall(player, self._user_team()):.0f}",
-                    player.age,
-                    former_team
-                ))
-                
-                # Store player reference
-                self.tree.set(item_id, '#0', str(i))  # Store index
-                
+                item_id = self.tree.insert('', 'end', values=values)
+                # Index into filtered_players (global, not page-local)
+                self.tree.set(item_id, '#0', str(start + j))
             except Exception as e:
-                debug_print(f"DEBUG: Error adding player {i}: {e}")
+                debug_print(f"DEBUG: Error adding player {start + j}: {e}")
                 continue
-        
-        # Update count
-        total_count = len(self.players)
-        filtered_count = len(self.filtered_players)
-        self.count_label.configure(text=f"Showing {filtered_count} of {total_count} players")
-        
-        debug_print(f"DEBUG: Added {len(self.tree.get_children())} players to tree")
-        
+
+        # Paging UI
+        shown = f"{start + 1}-{start + len(page_rows)}" if total else "0"
+        self.count_label.configure(
+            text=f"Showing {shown} of {total} players "
+                 f"(page {self.page + 1}/{pages})")
+        self.page_label.configure(text=f"Page {self.page + 1} / {pages}")
+        self.prev_btn.configure(state='normal' if self.page > 0 else 'disabled')
+        self.next_btn.configure(
+            state='normal' if self.page < pages - 1 else 'disabled')
+
+        debug_print(f"DEBUG: Rendered page {self.page + 1}/{pages} "
+                    f"({len(page_rows)} rows of {total})")
+
+    def _prev_page(self):
+        if self.page > 0:
+            self.page -= 1
+            self.populate_players()
+
+    def _next_page(self):
+        if (self.page + 1) * self.page_size < len(self._rows):
+            self.page += 1
+            self.populate_players()
+
     def on_filter_change(self, *args):
-        """Handle filter changes"""
+        """Debounced: typing in search no longer re-renders per keystroke."""
+        if self._filter_after_id is not None:
+            self.after_cancel(self._filter_after_id)
+        self._filter_after_id = self.after(200, self._do_filter)
+
+    def _do_filter(self):
+        """Apply filters over the precomputed rows, sort once, page 1."""
+        self._filter_after_id = None
         try:
             search_text = self.search_var.get().lower()
             position_filter = self.position_var.get()
-            min_rating = int(self.min_rating_var.get() or 0)
-            
-            # Filter players
-            self.filtered_players = []
-            for player in self.players:
-                # Search filter
-                if search_text and search_text not in player.full_name.lower():
+            try:
+                min_rating = int(self.min_rating_var.get() or 0)
+            except (ValueError, TypeError):
+                min_rating = 0
+
+            rows = []
+            for player, values, rating in self._all_rows:
+                if search_text and search_text not in values[0].lower():
                     continue
-                    
-                # Position filter
-                if position_filter != "All" and player.primary_position.value != position_filter:
+                if position_filter != "All" and values[1] != position_filter:
                     continue
-                    
-                # Rating filter
-                if to_100_scale(player.overall_rating()) < min_rating:
+                if to_100_scale(rating) < min_rating:
                     continue
-                    
-                self.filtered_players.append(player)
-            
-            # Sort by rating (highest first)
-            self.filtered_players.sort(key=lambda p: p.overall_rating(), reverse=True)
-            
-            # Repopulate
+                rows.append((player, values, rating))
+
+            # Sort by rating (highest first) -- rating computed once above
+            rows.sort(key=lambda r: r[2], reverse=True)
+            self._rows = rows
+            self.filtered_players = [p for p, _v, _r in rows]
+            self.page = 0
             self.populate_players()
-            
         except Exception as e:
             debug_print(f"DEBUG: Error in filter: {e}")
             
@@ -247,12 +308,9 @@ class PlayerBrowserWindow(tk.Toplevel):
                 self.info_label.configure(text="Error selecting player")
         
     def _user_team(self):
-        """User's team for fog-of-war display (via parent GUI)."""
+        """User's team for fog-of-war display (via app)."""
         try:
-            gm = getattr(self.parent, 'game_manager', None)
-            if gm is None:
-                gm = getattr(self.parent, 'parent', None)
-                gm = getattr(gm, 'game_manager', None) if gm else None
+            gm = getattr(self.app, 'game_manager', None)
             return getattr(gm, 'user_team', None) if gm else None
         except Exception:
             return None
@@ -277,25 +335,41 @@ class PlayerBrowserWindow(tk.Toplevel):
         if result:
             # Set result and close
             self.result = self.selected_player
-            self.destroy()
+            cb = getattr(self, '_on_select', None)
+            if callable(cb):
+                try:
+                    cb(self.selected_player)
+                except Exception:
+                    pass
+            self.close_view()
         
     def get_selected_player(self):
         """Get the selected player (for external use)"""
         return getattr(self, 'result', None)
 
-class SimpleDraftOrderWindow(tk.Toplevel):
-    """Simple draft order display window"""
-    
-    def __init__(self, parent, draft_manager):
-        super().__init__(parent)
-        self.parent = parent
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class SimpleDraftOrderView(ctk.CTkFrame):
+    """Simple draft order display view.
+
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy SimpleDraftOrderWindow popup card.
+    """
+
+    def __init__(self, parent, draft_manager, app=None):
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color='#181818')
+        # Set by show_screen() (dashboard) or the SimpleDraftOrderWindow wrapper (card).
+        self._close_screen = None
         self.draft_manager = draft_manager
-        
-        # Window setup
-        self.title("🎯 Draft Order")
-        self.geometry("800x600")
-        self.configure(background='#181818')
-        
+
         self.setup_ui()
         self.populate_draft_order()
         
@@ -356,7 +430,7 @@ class SimpleDraftOrderWindow(tk.Toplevel):
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Close button
-        close_btn = tk.Button(main_frame, text="Close", command=self.destroy,
+        close_btn = tk.Button(main_frame, text="Close", command=self.close_view,
                              bg='#2A2A2A', fg='#FFFFFF', activebackground='#3A3A3A')
         close_btn.pack(pady=(10, 0))
         
@@ -398,3 +472,69 @@ class SimpleDraftOrderWindow(tk.Toplevel):
                 self.tree.see(item)
                 
         debug_print(f"DEBUG: Added {len(self.tree.get_children())} picks to draft order")
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class PlayerBrowserWindow(InGamePopup):
+    """Popup wrapper around PlayerBrowserView (backward compatibility).
+
+    New code should embed PlayerBrowserView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('player_browser', title, PlayerBrowserView,
+    players)`` instead of opening this card. For the fantasy draft's
+    blocking wait_window flow, prefer the view's ``on_select`` callback.
+    """
+
+    def __init__(self, parent, players: List[Player], title="Available Players"):
+        super().__init__(parent)
+        self.title(title)
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = PlayerBrowserView(self, players, title, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def get_selected_player(self):
+        return self._view.get_selected_player()
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class SimpleDraftOrderWindow(InGamePopup):
+    """Popup wrapper around SimpleDraftOrderView (backward compatibility).
+
+    New code should embed SimpleDraftOrderView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('draft_order', 'Draft Order',
+    SimpleDraftOrderView, draft_manager)`` instead of opening this card.
+    """
+
+    def __init__(self, parent, draft_manager):
+        super().__init__(parent)
+        self.title("Draft Order")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = SimpleDraftOrderView(self, draft_manager, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

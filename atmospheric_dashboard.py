@@ -2,17 +2,17 @@
 # Immersive, story-driven dashboard with visual hierarchy and team personality
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
-from datetime import date, timedelta, datetime
-from typing import Dict, List, Optional
+from datetime import date
+from typing import (Dict, List)
 import random
 from visual_identity_system import (
     HockeyAtmosphereSystem, VisualHierarchyManager, 
     AnimationManager, ContextualElementsManager, 
     StorytellingDataPresentation
 )
-from modern_widgets import (RoundedButton, SegmentedControl, IconTile,
-                              FormStreak, draw_mini_icon)
+from modern_widgets import (RoundedButton, IconTile, FormStreak, draw_mini_icon)
 
 class AtmosphericDashboard:
     """Immersive dashboard that makes you feel like a real GM"""
@@ -971,7 +971,7 @@ class AtmosphericDashboard:
         import tkinter as tk
         from tkinter import ttk
         
-        popup = tk.Toplevel(self)
+        popup = InGamePopup(self)
         popup.title("Team Statistics")
         popup.configure(background=self.parent.BG_COLOR)
         popup.geometry("400x300")
@@ -1255,7 +1255,7 @@ class AtmosphericDashboard:
 
     def _show_game_preview(self, game_data):
         """Show detailed game preview window"""
-        preview_window = tk.Toplevel(self.parent)
+        preview_window = InGamePopup(self.parent)
         preview_window.title(f"Game Preview: vs. {game_data['opponent']}")
         preview_window.configure(bg=self.theme.colors.background)
         preview_window.geometry("500x600")
@@ -1399,7 +1399,7 @@ class AtmosphericDashboard:
         """Get salary cap space info"""
         try:
             # Calculate actual salary cap information
-            salary_cap = 83500000  # NHL salary cap
+            salary_cap = 104000000  # NHL salary cap (2026-27)
             current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) 
                                for p in self.parent.user_team.roster)
             cap_space = salary_cap - current_salary

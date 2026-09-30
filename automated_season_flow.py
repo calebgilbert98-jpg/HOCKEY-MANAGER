@@ -5,8 +5,7 @@
 from datetime import date, timedelta
 from enum import Enum
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Callable
-import random
+from typing import (List, Optional, Callable)
 
 class SeasonPhase(Enum):
     """Different phases of the hockey season"""
@@ -49,6 +48,19 @@ class AutomationSettings:
     pause_at_user_games: bool = True
     auto_skip_offseason: bool = False
     days_per_second: float = 1.0  # Speed of automation
+
+
+def _derived_trade_deadline_date(year, game_manager=None):
+    """Trade-deadline milestone date: derived from the schedule (40 days
+    before the last regular-season game); Mar 8 fallback. Never raises.
+    """
+    try:
+        from trade_deadline_manager import trade_deadline_date as _tdd
+        league = getattr(game_manager, "league", None)
+        return _tdd(league, deadline_year=year + 1)
+    except Exception:
+        return date(year + 1, 3, 8)
+
 
 class AutomatedSeasonFlow:
     """Manages automated season progression and milestone detection"""
@@ -105,7 +117,8 @@ class AutomatedSeasonFlow:
                 action=self._february_push
             ),
             SeasonMilestone(
-                date=date(year + 1, 3, 8),
+                date=_derived_trade_deadline_date(
+                    year, getattr(self, "game_manager", None)),
                 name="Trade Deadline", 
                 phase=SeasonPhase.TRADE_DEADLINE,
                 description="NHL Trade Deadline - final day for trades",
@@ -387,8 +400,7 @@ class AutomatedSeasonFlow:
     def _show_milestone_notification(self, milestone):
         """Show notification for important milestones"""
         try:
-            import tkinter as tk
-            from tkinter import messagebox
+            from popup_system import messagebox
             
             messagebox.showinfo(
                 f"Season Milestone: {milestone.name}",
@@ -448,8 +460,29 @@ class AutomatedSeasonFlow:
         print("🏆 Stanley Cup Finals: The ultimate prize awaits!")
         
     def _entry_draft(self):
-        """Entry draft day"""
+        """Entry draft day.
+
+        In auto-advance/headless seasons nobody opens the war-room UI, so
+        the draft class would sit orphaned forever. Conduct it through the
+        shared headless conductor (same pick logic as the war room's AI) --
+        unless the draft was already conducted this year (interactive war
+        room or an earlier tick), in which case this is a no-op.
+        """
         print("📋 Entry Draft: Building the future!")
+        try:
+            league = getattr(getattr(self, "game_manager", None), "league", None)
+            if league is None:
+                return
+            year = getattr(league, 'draft_prospects_year', None) \
+                or getattr(league, 'season_year', None)
+            from draft_night import conduct_entry_draft
+            picks = conduct_entry_draft(
+                league, year, app=getattr(self, "game_manager", None))
+            if picks:
+                print(f"📋 Entry Draft: {len(picks)} picks conducted "
+                      f"(headless).")
+        except Exception as _e:
+            print(f"📋 Entry Draft: headless draft failed (non-fatal): {_e}")
         
     def _free_agency_opens(self):
         """Free agency period begins"""

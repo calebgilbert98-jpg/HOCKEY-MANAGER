@@ -10,11 +10,12 @@ import calendar
 from datetime import date, timedelta
 
 import tkinter as tk
+from popup_system import InGamePopup
 
 import customtkinter as ctk
 
 
-class CalendarWindow(ctk.CTkToplevel):
+class CalendarView(ctk.CTkFrame):
     """Season calendar: month grid + day detail pane."""
 
     # Day-cell styles keyed by event priority. Each entry carries the cell
@@ -50,7 +51,7 @@ class CalendarWindow(ctk.CTkToplevel):
     # Styles whose cells get bold text (mirrors the old ttk emphasis).
     _BOLD_STYLES = ('home', 'away', 'allstar', 'deadline', 'today')
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -65,19 +66,13 @@ class CalendarWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"Season Calendar - {self.parent.user_team.team_name}")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the CalendarWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1280x860")
-        self.minsize(1024, 680)
-
-        # Window setup
-        self.resizable(True, True)
-        self.transient(parent)
 
         # Current date tracking
-        self.current_view_date = self.parent.current_date
+        self.current_view_date = self.app.current_date
         self.selected_date = None
         self._selected_btn = None
 
@@ -90,23 +85,15 @@ class CalendarWindow(ctk.CTkToplevel):
         self._populate_calendar()
 
         # Add to parent's open windows
-        self.parent.open_windows['calendar'] = self
+        self.app.open_windows['calendar'] = self
 
-        # Center window
-        self.center_window()
-
-    def center_window(self):
-        """Center the window on screen."""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        if width <= 1 or height <= 1:
-            # Not mapped yet (e.g. parent hidden); leave the wm geometry
-            # request ("1280x860") untouched instead of shrinking to 1x1.
-            return
-        x = (self.winfo_screenwidth() - width) // 2
-        y = (self.winfo_screenheight() - height) // 2
-        self.geometry(f'{width}x{height}+{x}+{y}')
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout
@@ -146,7 +133,7 @@ class CalendarWindow(ctk.CTkToplevel):
         title_box = ctk.CTkFrame(header, fg_color="transparent")
         title_box.pack(side='left', padx=16, pady=12)
         self._heading(title_box, "Season Calendar", size=20).pack(anchor='w')
-        self._body(title_box, self.parent.user_team.team_name,
+        self._body(title_box, self.app.user_team.team_name,
                    size=12, dim=True).pack(anchor='w')
 
         nav = ctk.CTkFrame(header, fg_color="transparent")
@@ -265,7 +252,7 @@ class CalendarWindow(ctk.CTkToplevel):
                              command=self._launch_trade_deadline_center).pack(
                                  fill='x', pady=3)
         self._secondary_button(self.actions_frame, text="Trade Center",
-                               command=self.parent.open_trade_window).pack(
+                               command=self.app.open_trade_window).pack(
                                    fill='x', pady=3)
         self._secondary_button(self.actions_frame, text="Market Analysis",
                                command=self._view_market_analysis).pack(
@@ -275,12 +262,12 @@ class CalendarWindow(ctk.CTkToplevel):
 
     def _launch_trade_deadline_center(self):
         """Launch the Trade Deadline Center from calendar."""
-        self.parent.open_trade_deadline_center()
+        self.app.open_trade_deadline_center()
 
     def _view_market_analysis(self):
         """Placeholder for market analysis - could open trade statistics."""
         # For now, redirect to trade window
-        self.parent.open_trade_window()
+        self.app.open_trade_window()
 
     # ------------------------------------------------------------------
     # Event data (unchanged logic)
@@ -293,7 +280,7 @@ class CalendarWindow(ctk.CTkToplevel):
         self.nhl_calendar_info = self._get_nhl_calendar_info()
 
         # Load team games and NHL events
-        for game_entry in self.parent.league.schedule:
+        for game_entry in self.app.league.schedule:
             # Handle different schedule formats
             if isinstance(game_entry, dict):
                 # New format: dictionary with date, home_team, away_team, etc.
@@ -339,10 +326,10 @@ class CalendarWindow(ctk.CTkToplevel):
             # Handle regular team games - show ALL games (EHM/FM style)
             # User's games get high importance, others get normal
             else:
-                is_user_game = self.parent.user_team in (home_team, away_team)
+                is_user_game = self.app.user_team in (home_team, away_team)
 
                 if is_user_game:
-                    is_home = self.parent.user_team == home_team
+                    is_home = self.app.user_team == home_team
                     opponent = away_team if is_home else home_team
 
                     event = {
@@ -381,9 +368,35 @@ class CalendarWindow(ctk.CTkToplevel):
                     self.events_by_date[game_date] = []
                 self.events_by_date[game_date].append(event)
 
+                # Outdoor games stamped on the schedule (Winter Classic,
+                # Stadium Series): surface the venue + matchup.
+                try:
+                    _od = game_entry.get("outdoor") if isinstance(
+                        game_entry, dict) else None
+                    if isinstance(_od, dict) and _od.get("event"):
+                        _hn = home_team.team_name if hasattr(
+                            home_team, "team_name") else str(home_team)
+                        _an = away_team.team_name if hasattr(
+                            away_team, "team_name") else str(away_team)
+                        _wx = _od.get("weather")
+                        _wxf = (_wx.get("framing", "") if isinstance(
+                            _wx, dict) else "")
+                        self._add_calendar_event(
+                            game_date, "outdoor_game",
+                            f"{_od.get('event')}: {_an} @ {_hn}",
+                            f"{_od.get('venue', 'Outdoors')}"
+                            f"{' -- ' + _wxf if _wxf else ''}",
+                            "critical")
+                except Exception:
+                    pass
+
         # NHL events are now loaded from the main schedule above
         # Only add break days and other calendar events
         self._add_break_days_and_holidays()
+
+        # Marquee events: jersey ceremonies, Olympic window, outdoor games
+        # that aren't stamped on the schedule yet.
+        self._add_marquee_events()
 
         # Add other important dates
         self._add_important_dates()
@@ -395,13 +408,13 @@ class CalendarWindow(ctk.CTkToplevel):
         The season_year is the year the season starts (e.g., 2024 for 2024-25).
         """
         try:
-            if hasattr(self.parent, 'league') and hasattr(self.parent.league, 'season_year'):
-                return self.parent.league.season_year
+            if hasattr(self.app, 'league') and hasattr(self.app.league, 'season_year'):
+                return self.app.league.season_year
         except (AttributeError, TypeError):
             pass
         # Fallback: derive from current date
         # If we're in Jan-Sep, the season started last year
-        current = self.parent.current_date
+        current = self.app.current_date
         if current.month >= 10:
             return current.year
         else:
@@ -439,13 +452,20 @@ class CalendarWindow(ctk.CTkToplevel):
         # - Thanksgiving: Nov 24 (season_year)
         # - Christmas: Dec 24-25 (season_year)
         # - All-Star: Feb 5-11 (season_year + 1)
-        # - Trade deadline: Mar 8 (season_year + 1)
+        # - Trade deadline: derived from the schedule (40 days before the
+        #   last regular-season game; Mar 8 fallback)
+        try:
+            from trade_deadline_manager import trade_deadline_date as _tdd
+            _dl = _tdd(getattr(self.app, "league", None),
+                       deadline_year=season_year + 1)
+        except Exception:
+            _dl = date(season_year + 1, 3, 8)
         return {
             'all_star_break': (
                 date(season_year + 1, 2, 5),
                 date(season_year + 1, 2, 11)
             ),
-            'trade_deadline': date(season_year + 1, 3, 8),
+            'trade_deadline': _dl,
             'christmas_break': (
                 date(season_year, 12, 24),
                 date(season_year, 12, 25)
@@ -513,6 +533,88 @@ class CalendarWindow(ctk.CTkToplevel):
             self.events_by_date[current_date].append(event)
             current_date += timedelta(days=1)
 
+    def _add_marquee_events(self):
+        """Surface marquee calendar events the sim actually stages:
+
+        - jersey-retirement ceremonies (the league's ceremony schedule,
+          skipped once the number is retired);
+        - the Olympic window in Olympic years (roster announcement Feb 9,
+          NHL dark Feb 10-24, medal games Feb 22);
+        - outdoor games stamped on the schedule (Winter Classic etc.).
+        All additive; the calendar never crashes on a missing system.
+        """
+        try:
+            league = getattr(self.app, "league", None)
+            season_year = self._get_season_year()
+            # -- Jersey ceremonies -------------------------------------
+            try:
+                import immortality as _im
+                sched = (getattr(league, "ceremony_schedule", None)
+                         or _im.ceremony_schedule_for(season_year))
+                for c in sched or []:
+                    try:
+                        y, m, d = (int(x) for x in
+                                   str(c.get("date", ""))[:10].split("-"))
+                        cdate = date(y, m, d)
+                    except Exception:
+                        continue
+                    team = next(
+                        (t for t in (getattr(league, "teams", None) or [])
+                         if getattr(t, "team_name", "") == c.get("team", "")),
+                        None)
+                    if team is not None and _im.is_number_retired(
+                            team, int(c.get("number", 0) or 0)):
+                        continue  # already in the rafters
+                    self._add_calendar_event(
+                        cdate, "ceremony",
+                        f"Jersey retirement: {c.get('player', '')} "
+                        f"No. {c.get('number', '')} ({c.get('team', '')})",
+                        f"{c.get('player', 'A franchise icon')}'s number "
+                        f"rises to the rafters.", "high")
+            except Exception:
+                pass
+            # -- Olympic window ----------------------------------------
+            try:
+                from international import is_olympic_year
+                if is_olympic_year(season_year + 1):
+                    self._add_calendar_event(
+                        date(season_year + 1, 2, 9), "olympics",
+                        "Olympic rosters announced",
+                        "Best-on-best national teams named; the NHL goes "
+                        "dark tomorrow.", "high")
+                    cur = date(season_year + 1, 2, 10)
+                    while cur <= date(season_year + 1, 2, 24):
+                        # Styled as a break so the dark stretch reads on the
+                        # grid; the details panel names it.
+                        self._add_calendar_event(
+                            cur, "break_day", "Olympic break -- NHL dark",
+                            "No NHL games; the tournament is on.", "medium")
+                        cur += timedelta(days=1)
+                    self._add_calendar_event(
+                        date(season_year + 1, 2, 22), "olympics",
+                        "Olympic medal games",
+                        "Gold-medal game day.", "high")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _add_calendar_event(self, event_date, type_, title, description,
+                            importance):
+        """Append one event, skipping exact duplicates."""
+        try:
+            existing = self.events_by_date.get(event_date) or []
+            if any(e.get("type") == type_ and e.get("title") == title
+                   for e in existing):
+                return
+            existing.append({
+                "type": type_, "title": title,
+                "description": description, "importance": importance,
+            })
+            self.events_by_date[event_date] = existing
+        except Exception:
+            pass
+
     def _add_important_dates(self):
         """Add important league dates and events (non-NHL calendar events).
 
@@ -561,7 +663,7 @@ class CalendarWindow(ctk.CTkToplevel):
         'entry_draft'/'free_agency' types the old check looked for.
         """
         events = self.events_by_date.get(day, [])
-        is_today = (day == self.parent.current_date)
+        is_today = (day == self.app.current_date)
 
         style_key, marker = 'default', ''
         if events:
@@ -600,6 +702,12 @@ class CalendarWindow(ctk.CTkToplevel):
                 style_key, marker = 'freeagency', 'FA'
             elif xmas:
                 style_key, marker = 'important', 'XMAS'
+            elif any(e['type'] == 'ceremony' for e in events):
+                style_key, marker = 'important', 'RETIRE'
+            elif any(e['type'] == 'outdoor_game' for e in events):
+                style_key, marker = 'important', 'WC'
+            elif any(e['type'] == 'olympics' for e in events):
+                style_key, marker = 'important', 'OLY'
             elif breaks:
                 style_key, marker = 'break', 'BREAK'
             elif any(e.get('importance') in ('high', 'critical')
@@ -729,9 +837,9 @@ class CalendarWindow(ctk.CTkToplevel):
 
     def _user_results(self):
         """Game results involving the user team, oldest first."""
-        user = self.parent.user_team
+        user = self.app.user_team
         results = []
-        for result in getattr(self.parent, 'game_results', None) or []:
+        for result in getattr(self.app, 'game_results', None) or []:
             try:
                 if user in (result['home_team'], result['away_team']):
                     results.append(result)
@@ -746,7 +854,7 @@ class CalendarWindow(ctk.CTkToplevel):
         Outcome is 'W', 'L' or 'T'. Returns None when the result is malformed.
         """
         try:
-            user = self.parent.user_team
+            user = self.app.user_team
             home, away = result['home_team'], result['away_team']
             is_home = (user == home)
             opponent = away if is_home else home
@@ -794,7 +902,7 @@ class CalendarWindow(ctk.CTkToplevel):
     def _iter_schedule_games(self):
         """Yield (date, home_team, away_team) for real games in the schedule,
         skipping NHL special-event entries."""
-        league = getattr(self.parent, 'league', None)
+        league = getattr(self.app, 'league', None)
         schedule = getattr(league, 'schedule', None) or []
         for entry in schedule:
             try:
@@ -832,14 +940,49 @@ class CalendarWindow(ctk.CTkToplevel):
         for game_date, home, away in self._iter_schedule_games():
             if game_date is None or game_date <= self.selected_date:
                 continue
-            if opponent in (home, away) and self.parent.user_team in (home, away):
-                venue = 'vs' if self.parent.user_team == home else '@'
+            if opponent in (home, away) and self.app.user_team in (home, away):
+                venue = 'vs' if self.app.user_team == home else '@'
                 upcoming.append(f"{game_date.strftime('%b %d')}: {venue} {self._team_label(opponent)}")
         if upcoming:
             lines.append("Upcoming: " + "; ".join(upcoming[:4]))
         else:
             lines.append("No further meetings scheduled.")
         return lines
+
+    def _insert_matchup_narrative(self, home_team, away_team):
+        """Insert grudge/rivalry/history lines for a regular-season matchup.
+
+        Reads the rivalry store, ledger grudge memory, and iconic-game
+        history via narrative_ledger.matchup_narrative (read-only -- no
+        history is invented or duplicated here). Silent when the matchup
+        is ordinary.
+        """
+        try:
+            from narrative_ledger import get_ledger, matchup_narrative
+            try:
+                _ledger = get_ledger(self.app)
+            except Exception:
+                _ledger = None
+            narr = matchup_narrative(
+                home_team, away_team,
+                league=getattr(self.app, "league", None), ledger=_ledger)
+        except Exception:
+            return
+        tags = list(narr.get("hype_tags") or [])
+        headline = narr.get("iconic_headline")
+        if not tags and not headline:
+            return
+        self.events_text.insert("end", "\nHistory & Heat\n", tags='section')
+        for tag in tags:
+            self.events_text.insert("end", f"  ★ {tag}\n", tags='team_bold')
+        if headline:
+            self.events_text.insert("end", f"  Last classic: {headline}\n")
+        mem = narr.get("mem_weight") or 0.0
+        heat = narr.get("rivalry_heat") or 0.0
+        if mem >= 40.0 or heat >= 35.0:
+            self.events_text.insert(
+                "end",
+                f"  Bad-blood index: rivalry {heat:.0f} / grudge {mem:.0f}\n")
 
     def _insert_game_details(self, event):
         """Insert enriched details for a game event.
@@ -871,26 +1014,30 @@ class CalendarWindow(ctk.CTkToplevel):
                                     tags='section')
             for line in self._season_series_lines(opponent):
                 self.events_text.insert("end", line + "\n")
+            self._insert_matchup_narrative(event.get('home_team'),
+                                           event.get('away_team'))
         else:
             # League game not involving the user team
             home = self._team_label(event.get('home_team'))
             away = self._team_label(event.get('away_team'))
             self.events_text.insert("end", f"Matchup: {away} @ {home}\n")
+            self._insert_matchup_narrative(event.get('home_team'),
+                                           event.get('away_team'))
 
     def _get_game_result(self, game_date, opponent):
         """Get the result of a game if it has been played."""
-        for result in self.parent.game_results:
+        for result in self.app.game_results:
             if (result['date'] == game_date and
                 opponent in (result['home_team'], result['away_team'])):
 
-                if self.parent.user_team == result['home_team']:
+                if self.app.user_team == result['home_team']:
                     user_score = result['home_score']
                     opp_score = result['away_score']
                 else:
                     user_score = result['away_score']
                     opp_score = result['home_score']
 
-                result_text = "Won" if result['winner'] == self.parent.user_team else "Lost"
+                result_text = "Won" if result['winner'] == self.app.user_team else "Lost"
                 return f"{result_text} {user_score}-{opp_score}"
         return None
 
@@ -915,9 +1062,9 @@ class CalendarWindow(ctk.CTkToplevel):
 
     def _go_to_today(self):
         """Navigate to current date."""
-        self.current_view_date = self.parent.current_date
+        self.current_view_date = self.app.current_date
         self._populate_calendar()
-        self._select_date(self.parent.current_date)
+        self._select_date(self.app.current_date)
 
     def _view_game_details(self):
         """View detailed game information."""
@@ -929,15 +1076,15 @@ class CalendarWindow(ctk.CTkToplevel):
 
         if game_events:
             # Open game details or schedule window
-            self.parent.open_schedule_window()
+            self.app.open_schedule_window()
 
     def _view_team_stats(self):
         """View team statistics."""
-        self.parent.open_roster_window()
+        self.app.open_roster_window()
 
     def _view_news(self):
         """View news and updates."""
-        self.parent.open_news_window()
+        self.app.open_news_window()
 
     def update_calendar(self):
         """Refresh the calendar with current data."""
@@ -959,3 +1106,23 @@ class CalendarWindow(ctk.CTkToplevel):
         except tk.TclError:
             # Window was destroyed, ignore
             pass
+
+class CalendarWindow(InGamePopup):
+    """Popup wrapper around CalendarView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        try:
+            self.title(f"Season Calendar - {parent.user_team.team_name}")
+        except Exception:
+            self.title("Season Calendar")
+        self._view = CalendarView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

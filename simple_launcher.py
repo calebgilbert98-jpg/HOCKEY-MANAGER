@@ -28,7 +28,7 @@ except ImportError as e:
         
         # Simple fallback launcher
         import tkinter as tk
-        from tkinter import messagebox
+        from popup_system import messagebox
         
         class PuckDynastyLauncher(tk.Tk):
             """Basic fallback launcher"""
@@ -76,5 +76,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        import tkinter.messagebox as messagebox
+        from popup_system import messagebox as messagebox
         messagebox.showerror("Launcher Error", f"Failed to start launcher:\n{str(e)}")

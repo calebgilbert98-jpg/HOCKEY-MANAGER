@@ -6,8 +6,11 @@ the scouting_profiles logic module.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 from modern_widgets import RoundedButton
+import customtkinter as ctk
+from ctk_theme import BG, CARD
 
 from scouting_profiles import (
     ALL_ATTRIBUTES, SKATER_ATTRIBUTES, GOALIE_ATTRIBUTES,
@@ -23,32 +26,39 @@ POSITION_GROUPS = [
 ]
 
 
-class ScoutingProfileDialog(tk.Toplevel):
-    """Browse, create, edit and delete scouting profiles."""
 
-    def __init__(self, parent, on_apply=None):
-        super().__init__(parent)
-        self._parent = parent
+def _focus_card(view, width=620):
+    """Focus-card layout: full-screen view with content in a centered card."""
+    outer = ctk.CTkFrame(view, fg_color=BG)
+    outer.pack(fill="both", expand=True)
+    card = ctk.CTkFrame(outer, fg_color=CARD, corner_radius=12, width=width)
+    card.pack(expand=True, padx=24, pady=24)
+    return card
+
+
+class ScoutingProfileView(ctk.CTkFrame):
+    """Browse, create, edit and delete scouting profiles (focus-card view)."""
+
+    def __init__(self, parent, app=None, on_apply=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ScoutingProfileDialog wrapper
+        self.configure(fg_color=BG)
         self._on_apply = on_apply  # callback(profile_name) after Apply/close
-        self.title("Scouting Profiles")
-        self.geometry("760x620")
-        self.minsize(680, 540)
-        self.transient(parent)
-        self.grab_set()
 
-        bg = getattr(parent, "CONTENT_BG", "#1e2430")
-        fg = getattr(parent, "TEXT_COLOR", "#ffffff")
-        self.configure(bg=bg)
+        bg = getattr(self.app, "CONTENT_BG", "#1e2430")
+        fg = getattr(self.app, "TEXT_COLOR", "#ffffff")
         self._bg, self._fg = bg, fg
 
-        main = tk.Frame(self, bg=bg)
+        card = _focus_card(self, width=620)
+        main = tk.Frame(card, bg=bg)
         main.pack(fill="both", expand=True, padx=12, pady=12)
 
         # -- left: profile list -------------------------------------------
         left = tk.LabelFrame(main, text="Profiles", bg=bg, fg=fg,
                              font=("Segoe UI", 10, "bold"))
         left.pack(side="left", fill="y", padx=(0, 10))
-        self._list = tk.Listbox(left, width=26, height=24, bg="#141a24", fg=fg,
+        self._list = tk.Listbox(left, width=24, height=22, bg="#141a24", fg=fg,
                                 selectbackground="#2f6fed",
                                 font=("Segoe UI", 10))
         self._list.pack(fill="y", expand=True, padx=6, pady=6)
@@ -63,16 +73,16 @@ class ScoutingProfileDialog(tk.Toplevel):
                  font=("Segoe UI", 14, "bold")).pack(anchor="w")
         self._desc_var = tk.StringVar()
         tk.Label(right, textvariable=self._desc_var, bg=bg, fg="#9aa4b5",
-                 font=("Segoe UI", 10), wraplength=440,
+                 font=("Segoe UI", 10), wraplength=380,
                  justify="left").pack(anchor="w", pady=(0, 8))
 
         cols = ("Attribute", "Minimum")
         self._attrs = ttk.Treeview(right, columns=cols, show="headings",
-                                   height=12)
+                                   height=10)
         self._attrs.heading("Attribute", text="Attribute")
         self._attrs.heading("Minimum", text="Minimum")
-        self._attrs.column("Attribute", width=220)
-        self._attrs.column("Minimum", width=90, anchor="center")
+        self._attrs.column("Attribute", width=200)
+        self._attrs.column("Minimum", width=80, anchor="center")
         self._attrs.pack(fill="x", pady=(0, 8))
 
         self._pos_var = tk.StringVar()
@@ -93,9 +103,9 @@ class ScoutingProfileDialog(tk.Toplevel):
                                        radius=9, padx=14, pady=7)
         self._edit_btn.pack(side="left", padx=(0, 6))
         self._del_btn = RoundedButton(btn, text="Delete", command=self._delete,
-                                      bg="#1e1e24", fg=fg,
-                                      font=("Segoe UI", 10),
-                                      radius=9, padx=14, pady=7)
+                                       bg="#1e1e24", fg=fg,
+                                       font=("Segoe UI", 10),
+                                       radius=9, padx=14, pady=7)
         self._del_btn.pack(side="left", padx=(0, 6))
         self._apply_btn = RoundedButton(btn, text="Apply & Close",
                                         command=self._apply_close,
@@ -105,6 +115,71 @@ class ScoutingProfileDialog(tk.Toplevel):
         self._apply_btn.pack(side="right")
 
         self._refresh_list()
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+
+    def _ask_confirm(self, text, on_yes, on_no=None):
+        """Show an in-view Yes/No panel (replaces messagebox.askyesno)."""
+        old = getattr(self, "_confirm_panel", None)
+        if old is not None:
+            try: old.destroy()
+            except Exception: pass
+        import customtkinter as ctk
+        panel = ctk.CTkFrame(self, fg_color="#2a2a3a", corner_radius=8)
+        panel.pack(fill="x", padx=12, pady=8)
+        ctk.CTkLabel(panel, text=text, wraplength=520).pack(padx=12, pady=(10, 6))
+        btns = ctk.CTkFrame(panel, fg_color="transparent")
+        btns.pack(pady=(0, 10))
+        def _yes():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            on_yes()
+        def _no():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            if on_no: on_no()
+        ctk.CTkButton(btns, text="Yes", command=_yes, width=90).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="No", command=_no, width=90).pack(side="left", padx=6)
+        self._confirm_panel = panel
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- list --------------------------------------------------------------
     def _refresh_list(self, select=None):
@@ -154,51 +229,78 @@ class ScoutingProfileDialog(tk.Toplevel):
 
     # -- actions -------------------------------------------------------------
     def _new(self):
-        ProfileEditorDialog(self, self._bg, self._fg,
-                            on_save=self._after_save)
+        self.app.show_screen('scouting_profile_editor', 'New Scouting Profile',
+                             ProfileEditorView, bg=self._bg, fg=self._fg,
+                             on_save=self._back_to_browser)
 
     def _edit(self):
         p = self._selected()
         if p and not p.builtin:
-            ProfileEditorDialog(self, self._bg, self._fg,
-                                profile=p, on_save=self._after_save)
+            self.app.show_screen('scouting_profile_editor', 'Edit Scouting Profile',
+                                 ProfileEditorView, bg=self._bg, fg=self._fg,
+                                 profile=p, on_save=self._back_to_browser)
 
-    def _after_save(self, name):
-        self._refresh_list(select=name)
+    def _back_to_browser(self, name=None):
+        """Return to the profile browser (fresh) after the editor closes."""
+        view = self.app.show_screen('scouting_profiles', 'Scouting Profiles',
+                                    ScoutingProfileView, fresh=True,
+                                    on_apply=self._on_apply)
+        if name:
+            view._refresh_list(select=name)
 
     def _delete(self):
         p = self._selected()
         if not p or p.builtin:
             return
-        if messagebox.askyesno("Delete Profile",
-                                f"Delete your custom profile '{p.name}'?",
-                                parent=self):
-            delete_custom_profile(p.name)
-            self._refresh_list()
+        self._ask_confirm(f"Delete your custom profile '{p.name}'?",
+                          lambda: (delete_custom_profile(p.name), self._refresh_list()))
 
     def _apply_close(self):
         p = self._selected()
         if self._on_apply and p:
             self._on_apply(p.name)
-        self.destroy()
+        self.close_view()
 
 
-class ProfileEditorDialog(tk.Toplevel):
-    """Create or edit a single custom scouting profile."""
+class ScoutingProfileDialog(InGamePopup):
+    """Popup wrapper around ScoutingProfileView (backward compatibility)."""
 
-    def __init__(self, parent, bg, fg, profile=None, on_save=None):
-        super().__init__(parent)
+    def __init__(self, parent, on_apply=None):
+        super().__init__(parent, modal=True)
+        self.title("Scouting Profiles")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = ScoutingProfileView(self, app=app, on_apply=on_apply)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class ProfileEditorView(ctk.CTkFrame):
+    """Create or edit a single custom scouting profile (focus-card view)."""
+
+    def __init__(self, parent, app=None, bg=None, fg=None,
+                 profile=None, on_save=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ProfileEditorDialog wrapper
+        self.configure(fg_color=BG)
         self._on_save = on_save
         self._editing_name = profile.name if profile else None
-        self.title("Edit Profile" if profile else "New Scouting Profile")
-        self.geometry("560x640")
-        self.minsize(520, 560)
-        self.transient(parent)
-        self.grab_set()
-        self.configure(bg=bg)
+        bg = bg or getattr(self.app, "CONTENT_BG", "#1e2430")
+        fg = fg or getattr(self.app, "TEXT_COLOR", "#ffffff")
         self._bg, self._fg = bg, fg
 
-        main = tk.Frame(self, bg=bg)
+        card = _focus_card(self, width=600)
+        main = tk.Frame(card, bg=bg)
         main.pack(fill="both", expand=True, padx=14, pady=14)
 
         # name + description
@@ -264,9 +366,58 @@ class ProfileEditorDialog(tk.Toplevel):
                       font=("Segoe UI", 10, "bold"),
                       radius=9, padx=14, pady=7).pack(side="left",
                                                      padx=(0, 8))
-        RoundedButton(btn, text="Cancel", command=self.destroy,
+        RoundedButton(btn, text="Cancel", command=lambda: self._finish(),
                       bg="#1e1e24", fg=fg, font=("Segoe UI", 10),
                       radius=9, padx=14, pady=7).pack(side="left")
+
+
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _finish(self, name=None):
+        """Editor complete: run the on_save callback, else close the view."""
+        cb = self._on_save
+        if callable(cb):
+            try:
+                cb(name)
+            except Exception:
+                pass
+        else:
+            self.close_view()
 
     def _attr_options(self):
         return ([f"{label}" for _, label in SKATER_ATTRIBUTES] +
@@ -342,6 +493,27 @@ class ProfileEditorDialog(tk.Toplevel):
                                   attributes=attrs,
                                   positions=list(codes))
         save_custom_profile(profile)
-        if self._on_save:
-            self._on_save(name)
-        self.destroy()
+        self._finish(name)
+
+
+class ProfileEditorDialog(InGamePopup):
+    """Popup wrapper around ProfileEditorView (backward compatibility)."""
+
+    def __init__(self, parent, bg, fg, profile=None, on_save=None):
+        super().__init__(parent, modal=True)
+        self.title("Edit Profile" if profile else "New Scouting Profile")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = ProfileEditorView(self, app=app, bg=bg, fg=fg,
+                                       profile=profile, on_save=on_save)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

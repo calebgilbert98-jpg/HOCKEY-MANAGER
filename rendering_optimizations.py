@@ -6,9 +6,7 @@ from tkinter import ttk
 import time
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
-import threading
 from collections import defaultdict
-import weakref
 
 @dataclass
 class RenderState:
@@ -408,25 +406,5 @@ class RenderingManager:
 
 
 # Integration helpers
-def setup_rendering_optimizations(app):
-    """Setup rendering optimizations for an app"""
-    if not hasattr(app, 'rendering_manager'):
-        app.rendering_manager = RenderingManager(app)
-    return app.rendering_manager
 
 
-def optimize_window_rendering(window):
-    """Apply rendering optimizations to a window"""
-    if hasattr(window, 'parent') and hasattr(window.parent, 'rendering_manager'):
-        manager = window.parent.rendering_manager
-        
-        # Optimize all widgets in the window
-        def optimize_widgets(widget):
-            manager.optimize_widget(widget)
-            try:
-                for child in widget.winfo_children():
-                    optimize_widgets(child)
-            except tk.TclError:
-                pass
-        
-        optimize_widgets(window)

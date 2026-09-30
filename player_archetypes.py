@@ -18,7 +18,6 @@ Pure logic, no GUI.
 
 from __future__ import annotations
 
-import random
 from typing import Dict, List, Tuple
 
 # ---------------------------------------------------------------------------
@@ -157,7 +156,8 @@ def attribute_value(player, key: str) -> float:
 def _pos_code(player) -> str:
     try:
         pp = getattr(player, "primary_position", None)
-        return getattr(pp, "value", str(pp))
+        _v = getattr(pp, "value", None)
+        return _v if _v is not None else str(pp)
     except Exception:
         return ""
 
@@ -450,6 +450,20 @@ def line_chemistry_report(players):
             drivers.append(
                 (f"{n1} ({a1}) + {n2} ({a2}): {sign}{value:g} — {reason}",
                  value))
+            # International bond (additive): NHL teammates who played a
+            # tournament together carry a small familiarity bump.
+            try:
+                from international import intl_bond, intl_bond_event
+                bond = intl_bond(p1, p2)
+                etag = intl_bond_event(p1, p2) if bond > 0 else ""
+            except Exception:
+                bond, etag = 0, ""
+            if bond > 0:
+                bval = min(3.0, 0.5 * bond)
+                total += bval
+                drivers.append(
+                    (f"{n1} + {n2}: +{bval:g} — international bond"
+                     + (f" ({etag})" if etag else ""), bval))
     drivers.sort(key=lambda d: abs(d[1]), reverse=True)
     return total, drivers
 
@@ -458,3 +472,74 @@ def line_chemistry_score(players) -> float:
     """Total chemistry delta for a line/pair (convenience wrapper)."""
     total, _ = line_chemistry_report(players)
     return total
+
+
+# ---------------------------------------------------------------------------
+# Shooter-choice weighting -- ONE decision, two fidelities (divergence #14).
+# Both engines weight "who takes the team's shot" with this function so the
+# shot chart is a single shared number: archetype shoot tendency (snipers
+# lead, playmakers defer) x the Sniper-ish shot_frequency_mult trait,
+# flattened (sqrt) so a sniper leads the chart without owning it.
+# ---------------------------------------------------------------------------
+
+def _piecewise_tilt(x, points):
+    """Linear interpolation over (x, tilt) points. Local copy (no import
+    cycle with mesh_system): every curve point stays a named constant."""
+    if x <= points[0][0]:
+        return points[0][1]
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        if x <= x1:
+            _f = (x - x0) / (x1 - x0) if x1 > x0 else 0.0
+            return y0 + _f * (y1 - y0)
+    return points[-1][1]
+
+
+# Shot-volume talent gate curve (2026-09-29, per Muck): steep at the star
+# band so elite volume separates by mechanics; the absolute level is set
+# so 93+ earns clear separation without cartoon volume. Calibrated
+# 2026-09-29 (damper-removal pass): top trimmed ~10% -- 6.5 shots/g for
+# elites was feeding the tail; NHL elite is ~4.5 SOG/g. 90+ still
+# separates from the 80s (1.13x), just not at cartoon volume.
+# Continuous, never a wall.
+SHOT_VOLUME_TALENT_POINTS = (
+    (60, 0.52), (65, 0.60), (70, 0.68), (75, 0.75), (80, 0.80),
+    (85, 0.84), (88, 0.86), (90, 0.88), (92, 0.92), (95, 0.97),
+)
+
+
+def shooter_choice_weight(player) -> float:
+    """Relative likelihood this skater takes his team's shot. >= 0.05.
+
+    Shared decision (both engines): tendency is ROLE (snipers shoot), the
+    talent gate is TALENT (a 65-ovr sniper must not out-shoot a 92-ovr
+    star). The gate sits OUTSIDE the sqrt -- the sqrt compresses role
+    differences, talent differences must survive it.
+    """
+    try:
+        from player_traits import get_sim_bonus as _bonus
+        _t = get_tendency(player, "shoot")
+        _w = max(0.05, float(_t)) * float(_bonus(player, "shot_frequency_mult"))
+        # Defenseman volume adjustment (shared decision, mesh_system):
+        # D take 47.6% of shots, should be ~33%. Correct the volume.
+        try:
+            from game_classes import PlayerPosition as _PP
+            from mesh_system import DEFENSE_SHOT_VOLUME_MULT as _dvm
+            _pos = getattr(player, "primary_position", None)
+            if _pos in (_PP.DEFENSE, _PP.LEFT_DEFENSE, _PP.RIGHT_DEFENSE):
+                _w *= _dvm
+        except Exception:
+            pass
+        _w = max(0.05, _w) ** 0.5
+        # Talent gates VOLUME (2026-09-29, per Muck): a 65-ovr sniper was
+        # taking 7.7 shots/game -- more than stars -- because tendency is
+        # archetype-only. SHOT_VOLUME_TALENT_POINTS curve, NO CAPS (per Muck
+        # 2026-09-29): steep at the star band so elite volume separates by
+        # mechanics, gentle below so depth still shoots. Never a wall.
+        try:
+            _ovr = float(player.overall_rating())
+        except Exception:
+            _ovr = float(getattr(player, "overall", 82.0) or 82.0)
+        _talent_gate = _piecewise_tilt(_ovr, SHOT_VOLUME_TALENT_POINTS)
+        return max(0.05, _w * _talent_gate)
+    except Exception:
+        return 1.0

@@ -5,26 +5,38 @@ Includes: Scout management, player evaluation, assignments, reports, and draft a
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import Dict, List, Optional, Any
+from tkinter import ttk
+import customtkinter as ctk
+from popup_system import messagebox, InGamePopup
+from typing import (Dict, Any)
 import datetime
-import random
-from game_classes import Player, PlayerPosition, Staff, StaffRole, to_100_scale
+from game_classes import (Player, Staff, to_100_scale)
 from scouting_profiles import displayed_overall, displayed_attribute
 from player_context_menu import PlayerContextMenu
 
 
-class ModernScoutingWindow(tk.Toplevel):
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
+
+
+class ModernScoutingView(ctk.CTkFrame):
     """Professional scouting management interface with dedicated draft support"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Professional Scouting Center")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1400x900")
-        self.minsize(1000, 700)
-        self.resizable(True, True)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ModernScoutingWindow wrapper
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Data containers
         self.game_data = self._get_game_data()
@@ -42,15 +54,20 @@ class ModernScoutingWindow(tk.Toplevel):
         self._load_initial_data()
         
         # Register window
-        self.parent.open_windows['scouting'] = self
-        
-        # Center window on screen
-        self._center_window()
+        self.app.open_windows['scouting'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
         
     def _get_game_data(self) -> Dict[str, Any]:
         """Get all game data in organized structure"""
         try:
-            game_manager = getattr(self.parent, 'game_manager', None)
+            game_manager = getattr(self.app, 'game_manager', None)
             if not game_manager:
                 return {'players': [], 'scouts': [], 'user_team': None, 'league': None, 'draft_class': []}
             
@@ -109,22 +126,14 @@ class ModernScoutingWindow(tk.Toplevel):
     
     def _ensure_tree_maps(self):
         """Ensure tree maps exist for UI management"""
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
-        required_maps = ['players_tree', 'scouts_tree', 'assignments_tree', 'reports_tree', 'draft_tree']
+        required_maps = ['players_tree', 'scouts_tree', 'assignments_tree', 'reports_tree', 'draft_tree',
+                         'targets_tree']
         for map_name in required_maps:
-            if map_name not in self.parent.tree_maps:
-                self.parent.tree_maps[map_name] = {}
-    
-    def _center_window(self):
-        """Center the window on screen"""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
+            if map_name not in self.app.tree_maps:
+                self.app.tree_maps[map_name] = {}
     
     def _create_interface(self):
         """Create the main scouting interface with 5 professional tabs"""
@@ -141,83 +150,80 @@ class ModernScoutingWindow(tk.Toplevel):
         self._create_draft_tab()  # New dedicated draft tab
         self._create_assignments_tab()
         self._create_reports_tab()
+        self._create_targets_tab()  # Scouting shortlist (trade_market)
         
         # Professional status bar
         self._create_status_bar()
         
     def _create_header(self):
         """Create professional header section"""
-        header_frame = tk.Frame(self, bg=self.parent.TITLE_BAR_COLOR, height=70)
+        header_frame = tk.Frame(self, bg=self.app.TITLE_BAR_COLOR, height=70)
         header_frame.pack(fill='x')
         header_frame.pack_propagate(False)
         
         # Title and subtitle
-        title_frame = tk.Frame(header_frame, bg=self.parent.TITLE_BAR_COLOR)
+        title_frame = tk.Frame(header_frame, bg=self.app.TITLE_BAR_COLOR)
         title_frame.pack(expand=True)
         
-        title_label = tk.Label(title_frame, text="PROFESSIONAL SCOUTING CENTER",
-                              font=(self.parent.FONT_FAMILY, 18, "bold"),
-                              bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.HEADER_COLOR)
-        title_label.pack(pady=(15, 2))
         
         # Current date and status
         current_date = datetime.datetime.now().strftime("%B %d, %Y")
         subtitle = f"Scouting Operations • {current_date}"
         subtitle_label = tk.Label(title_frame, text=subtitle,
-                                font=(self.parent.FONT_FAMILY, 10),
-                                bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR)
+                                font=_sfont(self.app.FONT_FAMILY, 10),
+                                bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR)
         subtitle_label.pack()
         
     def _create_status_bar(self):
         """Create professional status bar"""
-        status_frame = tk.Frame(self, bg=self.parent.TITLE_BAR_COLOR, height=35)
+        status_frame = tk.Frame(self, bg=self.app.TITLE_BAR_COLOR, height=35)
         status_frame.pack(fill='x', side='bottom')
         status_frame.pack_propagate(False)
         
         # Left side - main status
         self.status_label = tk.Label(status_frame, text="System Ready",
-                                   bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 9))
+                                   bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR,
+                                   font=_sfont(self.app.FONT_FAMILY, 9))
         self.status_label.pack(side='left', padx=15, pady=8)
         
         # Right side - data counts
         self.data_label = tk.Label(status_frame, text="Loading data...",
-                                 bg=self.parent.TITLE_BAR_COLOR, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 9))
+                                 bg=self.app.TITLE_BAR_COLOR, fg=self.app.TEXT_COLOR,
+                                 font=_sfont(self.app.FONT_FAMILY, 9))
         self.data_label.pack(side='right', padx=15, pady=8)
     
     def _create_players_tab(self):
         """Create players browsing and scouting tab"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Players")
         
         # Filter frame at top
         filter_frame = tk.LabelFrame(tab_frame, text="Player Filters", 
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         filter_frame.pack(fill='x', padx=10, pady=5)
         
-        filter_row = tk.Frame(filter_frame, bg=self.parent.CONTENT_BG)
+        filter_row = tk.Frame(filter_frame, bg=self.app.CONTENT_BG)
         filter_row.pack(fill='x', padx=10, pady=5)
         
         # Position filter — segmented pills instead of dropdown
-        tk.Label(filter_row, text="Position:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR).pack(side='left')
+        tk.Label(filter_row, text="Position:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR).pack(side='left')
 
         self.position_filter = tk.StringVar(value="All")
         from modern_widgets import SegmentedControl
         self.position_segmented = SegmentedControl(
             filter_row, ["All", "F", "D", "G"], initial=0,
             command=lambda v: (self.position_filter.set(v), self._filter_players()),
-            accent=self.parent.ACCENT_COLOR, bg=self.parent.CONTENT_BG,
-            fg=self.parent.TEXT_COLOR,
-            font=(self.parent.FONT_FAMILY, 10, "bold"))
+            accent=self.app.ACCENT_COLOR, bg=self.app.CONTENT_BG,
+            fg=self.app.TEXT_COLOR,
+            font=_sfont(self.app.FONT_FAMILY, 10, 'bold'))
         self.position_segmented.pack(side='left', padx=(5, 15))
         
         # Team filter
-        tk.Label(filter_row, text="Team:", bg=self.parent.CONTENT_BG, 
-                fg=self.parent.TEXT_COLOR).pack(side='left')
+        tk.Label(filter_row, text="Team:", bg=self.app.CONTENT_BG, 
+                fg=self.app.TEXT_COLOR).pack(side='left')
         
         self.team_filter = tk.StringVar(value="All")
         self.team_combo = ttk.Combobox(filter_row, textvariable=self.team_filter, width=12)
@@ -225,8 +231,8 @@ class ModernScoutingWindow(tk.Toplevel):
         self.team_combo.bind('<<ComboboxSelected>>', self._filter_players)
         
         # Name search
-        tk.Label(filter_row, text="Search:", bg=self.parent.CONTENT_BG, 
-                fg=self.parent.TEXT_COLOR).pack(side='left')
+        tk.Label(filter_row, text="Search:", bg=self.app.CONTENT_BG, 
+                fg=self.app.TEXT_COLOR).pack(side='left')
         
         self.name_search = tk.StringVar()
         search_entry = tk.Entry(filter_row, textvariable=self.name_search, width=20)
@@ -236,16 +242,16 @@ class ModernScoutingWindow(tk.Toplevel):
         # Clear button
         from modern_widgets import RoundedButton
         clear_btn = RoundedButton(filter_row, text="Clear",
-                                  bg=self.parent.ACCENT_COLOR,
-                                  fg=self.parent.HEADER_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                  bg=self.app.ACCENT_COLOR,
+                                  fg=self.app.HEADER_COLOR,
+                                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                   radius=9, padx=14, pady=7,
                                   command=self._clear_player_filters)
         clear_btn.pack(side='left', padx=5)
 
         # Scouting profile filter
-        tk.Label(filter_row, text="Profile:", bg=self.parent.CONTENT_BG,
-                fg=self.parent.TEXT_COLOR).pack(side='left', padx=(15, 0))
+        tk.Label(filter_row, text="Profile:", bg=self.app.CONTENT_BG,
+                fg=self.app.TEXT_COLOR).pack(side='left', padx=(15, 0))
 
         self.profile_filter = tk.StringVar(value="All")
         self.profile_combo = ttk.Combobox(filter_row, textvariable=self.profile_filter,
@@ -254,9 +260,9 @@ class ModernScoutingWindow(tk.Toplevel):
         self.profile_combo.bind('<<ComboboxSelected>>', self._filter_players)
 
         profiles_btn = RoundedButton(filter_row, text="Profiles",
-                                     bg=self.parent.CONTENT_BG,
-                                     fg=self.parent.TEXT_COLOR,
-                                     font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                     bg=self.app.CONTENT_BG,
+                                     fg=self.app.TEXT_COLOR,
+                                     font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                      radius=9, padx=14, pady=7,
                                      command=self._open_profile_manager)
         profiles_btn.pack(side='left', padx=5)
@@ -264,8 +270,8 @@ class ModernScoutingWindow(tk.Toplevel):
         
         # Players list
         list_frame = tk.LabelFrame(tab_frame, text="Available Players", 
-                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         list_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
@@ -294,28 +300,28 @@ class ModernScoutingWindow(tk.Toplevel):
         self.players_tree.bind('<Button-3>', self._show_player_context_menu)
         
         # Action buttons
-        btn_frame = tk.Frame(list_frame, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(list_frame, bg=self.app.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
         scout_btn = tk.Button(btn_frame, text="Scout Player", 
-                             bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
+                             bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
                              command=self._scout_player)
         scout_btn.pack(side='left', padx=(0, 10))
         
         profile_btn = tk.Button(btn_frame, text="View Profile", 
-                               bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                                command=self._view_player_profile)
         profile_btn.pack(side='left')
     
     def _create_scouts_tab(self):
         """Create scouts management tab"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Scouts")
         
         # Scouts list
         list_frame = tk.LabelFrame(tab_frame, text="Scouting Staff", 
-                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         list_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
@@ -341,27 +347,27 @@ class ModernScoutingWindow(tk.Toplevel):
         self.scouts_tree.bind('<Double-1>', self._view_scout_details)
         
         # Action buttons
-        btn_frame = tk.Frame(list_frame, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(list_frame, bg=self.app.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
         hire_btn = tk.Button(btn_frame, text="Hire Scout", 
-                            bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
+                            bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
                             command=self._hire_scout)
         hire_btn.pack(side='left', padx=(0, 10))
         
         edit_btn = tk.Button(btn_frame, text="Edit Scout", 
-                            bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                            bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                             command=self._edit_scout)
         edit_btn.pack(side='left')
     
     def _create_draft_tab(self):
         """Create draft prospects tab"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Draft")
 
         header = tk.Label(tab_frame, text="Upcoming Draft Class",
-                          bg=self.parent.CONTENT_BG, fg=self.parent.HEADER_COLOR,
-                          font=(self.parent.FONT_FAMILY, 12, "bold"))
+                          bg=self.app.CONTENT_BG, fg=self.app.HEADER_COLOR,
+                          font=_sfont(self.app.FONT_FAMILY, 12, 'bold'))
         header.pack(anchor="w", padx=12, pady=(10, 4))
 
         cols = ("Player", "Pos", "Age", "Potential")
@@ -373,7 +379,9 @@ class ModernScoutingWindow(tk.Toplevel):
 
         for p in self.game_data.get("draft_class", [])[:200]:
             try:
-                pos = getattr(p.primary_position, "value", str(p.primary_position))
+                pos = getattr(p.primary_position, "value", None)
+                if pos is None:
+                    pos = str(p.primary_position)
                 tree.insert("", "end", values=(
                     getattr(p, "full_name", "?"), pos,
                     getattr(p, "age", "?"),
@@ -383,13 +391,13 @@ class ModernScoutingWindow(tk.Toplevel):
 
     def _create_assignments_tab(self):
         """Create scouting assignments tab"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Assignments")
         
         # Active assignments
         active_frame = tk.LabelFrame(tab_frame, text="Active Assignments", 
-                                   bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                   font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                   bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                   font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         active_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
@@ -412,32 +420,32 @@ class ModernScoutingWindow(tk.Toplevel):
         v_scrollbar.pack(side='right', fill='y')
         
         # Action buttons
-        btn_frame = tk.Frame(active_frame, bg=self.parent.CONTENT_BG)
+        btn_frame = tk.Frame(active_frame, bg=self.app.CONTENT_BG)
         btn_frame.pack(fill='x', padx=10, pady=5)
         
         new_btn = tk.Button(btn_frame, text="New Assignment", 
-                           bg=self.parent.ACCENT_COLOR, fg=self.parent.HEADER_COLOR,
+                           bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
                            command=self._create_assignment)
         new_btn.pack(side='left', padx=(0, 10))
         
         cancel_btn = tk.Button(btn_frame, text="Cancel Assignment", 
-                              bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
                               command=self._cancel_assignment)
         cancel_btn.pack(side='left')
     
     def _create_reports_tab(self):
         """Create scouting reports tab"""
-        tab_frame = tk.Frame(self.notebook, bg=self.parent.CONTENT_BG)
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
         self.notebook.add(tab_frame, text="Reports")
         
         # Split view: reports list on left, report details on right
-        main_paned = tk.PanedWindow(tab_frame, orient='horizontal', bg=self.parent.CONTENT_BG)
+        main_paned = tk.PanedWindow(tab_frame, orient='horizontal', bg=self.app.CONTENT_BG)
         main_paned.pack(fill='both', expand=True, padx=10, pady=10)
         
         # Left side - Reports list
         left_frame = tk.LabelFrame(main_paned, text="Scouting Reports", 
-                                 bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                 font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                 bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                 font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         main_paned.add(left_frame)
         
@@ -464,15 +472,15 @@ class ModernScoutingWindow(tk.Toplevel):
         
         # Right side - Report details
         right_frame = tk.LabelFrame(main_paned, text="Report Details", 
-                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 10, "bold"),
+                                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
                                    relief="solid", bd=1)
         main_paned.add(right_frame)
         
         # Text area for report content
         self.report_text = tk.Text(right_frame, wrap='word', height=15, width=40,
-                                  bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR,
-                                  font=(self.parent.FONT_FAMILY, 10))
+                                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                  font=_sfont(self.app.FONT_FAMILY, 10))
         
         report_scrollbar = ttk.Scrollbar(right_frame, orient='vertical', command=self.report_text.yview)
         self.report_text.configure(yscrollcommand=report_scrollbar.set)
@@ -480,7 +488,350 @@ class ModernScoutingWindow(tk.Toplevel):
         # Pack widgets
         self.report_text.pack(side='left', fill='both', expand=True, padx=10, pady=10)
         report_scrollbar.pack(side='right', fill='y', pady=10)
-    
+
+    # ------------------------------------------------------------------
+    # Targets tab (scouting shortlist, backed by trade_market -- no
+    # parallel store; all reads/writes go through trade_market)
+    # ------------------------------------------------------------------
+    def _targets_user_team(self):
+        """User team: app.user_team first, game_manager fallback."""
+        try:
+            ut = getattr(self.app, 'user_team', None)
+            if ut is not None:
+                return ut
+        except Exception:
+            pass
+        try:
+            gm = getattr(self.app, 'game_manager', None)
+            return getattr(gm, 'user_team', None) if gm else None
+        except Exception:
+            return None
+
+    def _targets_league(self):
+        """League: app.league first, game_manager fallback."""
+        try:
+            lg = getattr(self.app, 'league', None)
+            if lg is not None:
+                return lg
+        except Exception:
+            pass
+        try:
+            gm = getattr(self.app, 'game_manager', None)
+            return getattr(gm, 'league', None) if gm else None
+        except Exception:
+            return None
+
+    def _targets_section(self, parent, title, pady, columns=None, widths=None):
+        """Build one targets section: full-width tree on top, button row
+        below. Returns (tree, button_frame)."""
+        frame = tk.LabelFrame(parent, text=title,
+                              bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                              font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
+                              relief="solid", bd=1)
+        frame.pack(fill='both', expand=True, padx=10, pady=pady)
+
+        list_wrap = tk.Frame(frame, bg=self.app.CONTENT_BG)
+        list_wrap.pack(fill='both', expand=True)
+
+        if columns is None:
+            columns = ['Player', 'Pos', 'Age', 'Ovr', 'Team',
+                       'Source', 'Note']
+        if widths is None:
+            widths = [170, 60, 50, 60, 150, 140, 420]
+        tree = ttk.Treeview(list_wrap, columns=columns, show='headings',
+                            height=14)
+        for col, width in zip(columns, widths):
+            tree.heading(col, text=col)
+            tree.column(col, width=width, minwidth=40)
+
+        scrollbar = ttk.Scrollbar(list_wrap, orient='vertical',
+                                  command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side='left', fill='both', expand=True)
+        scrollbar.pack(side='right', fill='y')
+
+        btn_frame = tk.Frame(frame, bg=self.app.CONTENT_BG)
+        btn_frame.pack(fill='x', padx=10, pady=5)
+        return tree, btn_frame
+
+    def _create_targets_tab(self):
+        """Create the Targets tab: the ONE unified trade-targets surface.
+
+        Scout suggestions and user targets share this single list (backed
+        by ShortlistManager 'Trade Targets' via trade_market) -- there is
+        no second tab and no import step. Scout rows carry the scout's name
+        and confidence band; the truth behind a tip is never shown.
+        """
+        tab_frame = tk.Frame(self.notebook, bg=self.app.CONTENT_BG)
+        self.notebook.add(tab_frame, text="Targets")
+
+        self.targets_tree, t_btn = self._targets_section(
+            tab_frame, "Trade targets (unified)", pady=(10, 10))
+
+        add_btn = tk.Button(t_btn, text="Add target",
+                            bg=self.app.ACCENT_COLOR, fg=self.app.HEADER_COLOR,
+                            command=self._targets_add)
+        add_btn.pack(side='left', padx=(0, 10))
+
+        remove_btn = tk.Button(t_btn, text="Remove",
+                               bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                               command=self._targets_remove)
+        remove_btn.pack(side='left', padx=(0, 10))
+
+        refresh_btn = tk.Button(t_btn, text="Refresh suggestions",
+                                bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                command=self._targets_refresh_suggestions)
+        refresh_btn.pack(side='left')
+
+    def _populate_targets(self):
+        """Populate the unified targets list from trade_market."""
+        tree = getattr(self, 'targets_tree', None)
+        if tree is None:
+            return
+        for item in tree.get_children():
+            tree.delete(item)
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            return
+        try:
+            entries = trade_market.get_unified_targets()
+        except Exception:
+            entries = []
+        maps = getattr(self.app, 'tree_maps', None) or {}
+        maps.setdefault('targets_tree', {}).clear()
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = maps
+        for e in entries or []:
+            pid = e.get('player_id')
+            notes = e.get('notes', '') or ''
+            player, team = None, None
+            try:
+                player, team = trade_market.resolve_player(league, pid)
+            except Exception:
+                pass
+            if player is None:
+                try:
+                    player, team = trade_market.resolve_player(
+                        league, int(pid))
+                except Exception:
+                    pass
+            if player is None:
+                player = self._find_nhl_player_by_name(
+                    league, e.get('player_name', ''))
+            if player is None:
+                continue  # left the NHL since being added
+            if team is None:
+                try:
+                    _p, team = trade_market.resolve_player(
+                        league, getattr(player, 'id', None))
+                except Exception:
+                    team = None
+            try:
+                pos = (player.primary_position.value
+                       if hasattr(player.primary_position, 'value')
+                       else str(player.primary_position))
+            except Exception:
+                pos = '?'
+            try:
+                ovr = f"{displayed_overall(player, self._user_team()):.0f}"
+            except Exception:
+                ovr = '?'
+            team_name = getattr(team, 'team_name', '—') if team else '—'
+            try:
+                kind, who = trade_market._target_source(notes)
+            except Exception:
+                kind, who = 'user', 'You'
+            source = f"Scout: {who}" if kind == 'scout' else who
+            # Display note: strip the machine prefixes, keep the meaning
+            # (incl. the scout's confidence band).
+            disp = notes
+            if kind == 'scout' and ':' in notes:
+                disp = notes.split(':', 1)[1].strip()
+            elif notes.startswith('[') and ']' in notes:
+                disp = notes.partition(']')[2].strip()
+            values = (
+                e.get('player_name') or getattr(player, 'full_name', '?'),
+                pos,
+                getattr(player, 'age', '?'),
+                ovr,
+                team_name,
+                source,
+                disp,
+            )
+            item = tree.insert('', 'end', values=values)
+            maps['targets_tree'][item] = player
+
+    def _targets_add(self):
+        """Add-target dialog: pick any NHL player into the shortlist."""
+        try:
+            import trade_market
+        except Exception:
+            messagebox.showerror("Targets", "Trade market module unavailable.")
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            messagebox.showwarning("No Data", "No league data available.")
+            return
+
+        dialog = InGamePopup(self)
+        dialog.title("Add Target")
+        dialog.geometry("720x520")
+        dialog.configure(background=self.app.BG_COLOR)
+
+        frame = ttk.Frame(dialog)
+        frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        ttk.Label(frame, text="Select a player to add to your targets:",
+                  style='Title.TLabel').pack(pady=(0, 8))
+
+        search_frame = ttk.Frame(frame)
+        search_frame.pack(fill='x', pady=(0, 6))
+        ttk.Label(search_frame, text="Search:").pack(side='left', padx=(0, 6))
+        search_var = tk.StringVar(master=dialog)
+        search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)
+        search_entry.pack(side='left')
+
+        columns = ('Name', 'Pos', 'Age', 'Ovr', 'Team')
+        picker = ttk.Treeview(frame, columns=columns, show='headings', height=14)
+        for col, w in zip(columns, (200, 60, 50, 60, 180)):
+            picker.heading(col, text=col)
+            picker.column(col, width=w)
+        picker.pack(fill='both', expand=True)
+
+        # All NHL players across every roster.
+        all_rows = []
+        try:
+            for t in (getattr(league, 'teams', None) or []):
+                if getattr(t, 'league_name', '') != 'National Hockey League':
+                    continue
+                for p in (getattr(t, 'roster', None) or []):
+                    all_rows.append((p, t))
+        except Exception:
+            pass
+
+        rowmap = {}
+
+        def _refill(*_args):
+            q = search_var.get().lower()
+            for it in picker.get_children():
+                picker.delete(it)
+            rowmap.clear()
+            for p, t in all_rows:
+                try:
+                    name = p.full_name
+                except Exception:
+                    continue
+                if q and q not in name.lower():
+                    continue
+                try:
+                    pos = (p.primary_position.value
+                           if hasattr(p.primary_position, 'value')
+                           else str(p.primary_position))
+                except Exception:
+                    pos = '?'
+                try:
+                    ovr = p.overall_rating()
+                except Exception:
+                    ovr = '?'
+                iid = picker.insert('', 'end', values=(
+                    name, pos, getattr(p, 'age', '?'), ovr,
+                    getattr(t, 'team_name', '?')))
+                rowmap[iid] = p
+
+        search_var.trace_add('write', _refill)
+        _refill()
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill='x', pady=(10, 0))
+
+        def add_selected():
+            added = 0
+            for iid in picker.selection():
+                player = rowmap.get(iid)
+                if player is None:
+                    continue
+                if trade_market.add_to_shortlist(user_team, player,
+                                                 added_by="user"):
+                    added += 1
+            self._populate_targets()
+            dialog.destroy()
+            if added:
+                messagebox.showinfo("Targets",
+                                    f"Added {added} player(s) to your targets.")
+
+        ttk.Button(btn_frame, text="Add Selected",
+                   command=add_selected).pack(side='left', padx=5)
+        ttk.Button(btn_frame, text="Cancel",
+                   command=dialog.destroy).pack(side='left', padx=5)
+
+    def _targets_remove(self):
+        """Remove the selected target(s) from the shortlist."""
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        if user_team is None:
+            return
+        selection = self.targets_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection",
+                                   "Please select a target to remove.")
+            return
+        for iid in selection:
+            player = self.app.tree_maps.get('targets_tree', {}).get(iid)
+            if player is None:
+                continue
+            trade_market.remove_from_shortlist(user_team, player.id)
+        self._populate_targets()
+
+    def _find_nhl_player_by_name(self, league, name):
+        """Name fallback for shortlist entries whose id doesn't resolve."""
+        if not name:
+            return None
+        want = name.strip().lower()
+        try:
+            for t in (getattr(league, 'teams', None) or []):
+                if getattr(t, 'league_name', '') != 'National Hockey League':
+                    continue
+                for p in (getattr(t, 'roster', None) or []):
+                    try:
+                        if p.full_name.strip().lower() == want:
+                            return p
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
+
+    def _targets_refresh_suggestions(self):
+        """Ask the user's scouts for new value tips (JPA-scaled inside
+        trade_market)."""
+        try:
+            import trade_market
+        except Exception:
+            return
+        user_team = self._targets_user_team()
+        league = self._targets_league()
+        if user_team is None or league is None:
+            messagebox.showwarning("No Data", "No league data available.")
+            return
+        n = trade_market.refresh_scout_suggestions(self.app, league)
+        self._populate_targets()
+        if n:
+            messagebox.showinfo("Scout suggestions",
+                                f"{n} new suggestion(s) from your scouts.")
+        else:
+            messagebox.showinfo("Scout suggestions",
+                                "No new suggestions (your scouts found no new "
+                                "value, or you have no scouts on staff).")
+
     def _load_initial_data(self):
         """Initial data load after the interface is built."""
         self._populate_data()
@@ -492,6 +843,7 @@ class ModernScoutingWindow(tk.Toplevel):
             self._populate_scouts()
             self._populate_assignments()
             self._populate_reports()
+            self._populate_targets()
             self._update_status()
         except Exception as e:
             print(f"Error populating scouting data: {e}")
@@ -500,7 +852,7 @@ class ModernScoutingWindow(tk.Toplevel):
     def _user_team(self):
         """The user's team, for fog-of-war display decisions."""
         try:
-            gm = getattr(self.parent, 'game_manager', None)
+            gm = getattr(self.app, 'game_manager', None)
             return getattr(gm, 'user_team', None) if gm else None
         except Exception:
             return None
@@ -518,7 +870,7 @@ class ModernScoutingWindow(tk.Toplevel):
         except Exception:
             pass
         try:
-            gm = getattr(self.parent, 'game_manager', None)
+            gm = getattr(self.app, 'game_manager', None)
             team = getattr(gm, 'user_team', None) if gm else None
             reports = getattr(team, 'scouting_reports', None)
             if reports is not None:
@@ -540,15 +892,17 @@ class ModernScoutingWindow(tk.Toplevel):
             self.profile_filter.set(current if current in names else "All")
 
     def _open_profile_manager(self):
-        """Open the scouting profile manager dialog."""
+        """Open the scouting profile manager as a screen."""
         try:
-            from scouting_profile_dialog import ScoutingProfileDialog
+            from scouting_profile_dialog import ScoutingProfileView
 
             def _on_apply(name):
                 self._refresh_profile_combo(select=name)
                 self._populate_players()
 
-            ScoutingProfileDialog(self, on_apply=_on_apply)
+            app = self.app if hasattr(self, 'app') else getattr(self, 'parent', None)
+            app.show_screen('scouting_profiles', 'Scouting Profiles',
+                            ScoutingProfileView, on_apply=_on_apply)
             # Refresh list in case customs were added/removed
             self._refresh_profile_combo()
             self._populate_players()
@@ -587,8 +941,8 @@ class ModernScoutingWindow(tk.Toplevel):
             self.players_tree.delete(item)
 
         # Initialize tree maps
-        if 'players_tree' not in self.parent.tree_maps:
-            self.parent.tree_maps['players_tree'] = {}
+        if 'players_tree' not in self.app.tree_maps:
+            self.app.tree_maps['players_tree'] = {}
 
         # Get team names for filter
         teams = set()
@@ -631,7 +985,7 @@ class ModernScoutingWindow(tk.Toplevel):
                 item = self.players_tree.insert('', 'end', values=values)
 
                 # Store player reference
-                self.parent.tree_maps['players_tree'][item] = player
+                self.app.tree_maps['players_tree'][item] = player
 
             except Exception as e:
                 print(f"Error adding player {getattr(player, 'full_name', 'Unknown')}: {e}")
@@ -644,8 +998,8 @@ class ModernScoutingWindow(tk.Toplevel):
             self.scouts_tree.delete(item)
         
         # Initialize tree maps
-        if 'scouts_tree' not in self.parent.tree_maps:
-            self.parent.tree_maps['scouts_tree'] = {}
+        if 'scouts_tree' not in self.app.tree_maps:
+            self.app.tree_maps['scouts_tree'] = {}
         
         # Add scouts to tree
         for scout in self.all_scouts:
@@ -666,7 +1020,7 @@ class ModernScoutingWindow(tk.Toplevel):
                 ))
                 
                 # Store scout reference
-                self.parent.tree_maps['scouts_tree'][item] = scout
+                self.app.tree_maps['scouts_tree'][item] = scout
                 
             except Exception as e:
                 print(f"Error adding scout {getattr(scout, 'full_name', 'Unknown')}: {e}")
@@ -788,7 +1142,7 @@ class ModernScoutingWindow(tk.Toplevel):
             return
         
         item = selection[0]
-        player = self.parent.tree_maps['players_tree'].get(item)
+        player = self.app.tree_maps['players_tree'].get(item)
         
         if not player:
             messagebox.showerror("Error", "Could not find selected player.")
@@ -816,16 +1170,19 @@ class ModernScoutingWindow(tk.Toplevel):
             return
         
         item = selection[0]
-        player = self.parent.tree_maps['players_tree'].get(item)
+        player = self.app.tree_maps['players_tree'].get(item)
         
         if not player:
             messagebox.showerror("Error", "Could not find selected player.")
             return
         
-        # Show player profile dialog
+        # Open the player profile as a full screen in the main instance
         try:
-            from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
+            if hasattr(self.app, "open_player_profile"):
+                self.app.open_player_profile(player)
+            else:
+                from ui_components import PlayerProfileWindow
+                PlayerProfileWindow(self.app, player)
         except ImportError:
             # Fallback - show basic info
             info = f"""
@@ -853,10 +1210,10 @@ Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team(
         if not item:
             return
         self.players_tree.selection_set(item)
-        player = self.parent.tree_maps.get('players_tree', {}).get(item)
+        player = self.app.tree_maps.get('players_tree', {}).get(item)
         if not player:
             return
-        PlayerContextMenu(self.parent).show_context_menu(
+        PlayerContextMenu(self.app).show_context_menu(
             event, player,
             additional_options=[
                 ("Scout Player", self._scout_player),
@@ -875,7 +1232,7 @@ Checking: {to_100_scale(displayed_attribute(player, 'checking', self._user_team(
             return
         
         item = selection[0]
-        scout = self.parent.tree_maps['scouts_tree'].get(item)
+        scout = self.app.tree_maps['scouts_tree'].get(item)
         
         if not scout:
             messagebox.showerror("Error", "Could not find selected scout.")
@@ -994,9 +1351,22 @@ Confidence: High
         self._populate_data()
 
 
+class ModernScoutingWindow(InGamePopup):
+    """Popup wrapper around ModernScoutingView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Professional Scouting Center")
+        self._view = ModernScoutingView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
 # Integration function for main application  
-def open_modern_scouting_window(parent):
-    """Open the modern scouting management window"""
-    if 'scouting' not in parent.open_windows or not parent.open_windows['scouting'].winfo_exists():
-        parent.open_windows['scouting'] = ModernScoutingWindow(parent)
-    parent.open_windows['scouting'].focus_set()

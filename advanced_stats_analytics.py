@@ -1,16 +1,30 @@
 # advanced_stats_analytics.py
 # Part 3: Advanced Statistics & Analytics Integration
 # Real-time analytics and insights like professional broadcasts
+#
+# STATUS (2026-09-28): DORMANT. This real-time event engine is not wired to any
+# shipped screen -- stats_standings_window.py populated it on every open but
+# never displayed it, so the wiring was removed. The live advanced stats shown
+# in-game come from advanced_metrics.py. Kept (not deleted) because
+# HeatMapGenerator / PossessionTracker are candidates for a future live-game
+# analytics tab. NOTE: PlayerStats.plus_minus, _is_scoring_chance, and
+# _is_high_danger_chance are unimplemented stubs -- do not display their
+# outputs until they are implemented and validated.
 
 import tkinter as tk
 from tkinter import ttk
 import time
-import math
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
-import threading
-from datetime import datetime, timedelta
+# Part B: line-combination effectiveness reader -- the assist-pairs
+# ledger lives on the analytics game records (analytics_hub); re-exported
+# here so both analytics surfaces share the one reader.
+try:
+    from analytics_hub import assist_pair_rows
+except Exception:  # pragma: no cover - analytics_hub unavailable
+    def assist_pair_rows(recs, name_lookup=None, limit=12):
+        return []
 
 # --- Core Analytics Data Structures ---
 

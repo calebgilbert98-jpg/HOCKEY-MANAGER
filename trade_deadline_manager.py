@@ -4,20 +4,78 @@ Handles deadline detection, trade validation, and deadline-specific trading rule
 """
 
 import random
-from datetime import datetime, time, timedelta
-from typing import Dict, List, Optional, Tuple, Any
-import json
+from datetime import datetime, date, time, timedelta
+from typing import (Dict, List, Tuple, Any)
+
+
+# The NHL CBA (Article 13.12(j)) sets the deadline at 3pm ET on the 40th
+# day immediately preceding the final day of the regular season. The
+# game derives it from the generated schedule: last regular-season game
+# date minus 40 days. At that point clubs are ~75% through their games,
+# which is why it also reads as a "completion %" rule.
+TRADE_DEADLINE_LEAD_DAYS = 40
+
+
+def trade_deadline_date(league=None, deadline_year=None):
+    """Return this season's trade deadline as a datetime.date.
+
+    Derived from the league schedule: 40 days before the final day of
+    the regular season (NHL CBA logic). Preseason exhibitions, playoff
+    games, and special-event entries never move it. Falls back to
+    March 8 of the deadline year when the schedule can't answer (no
+    league, QA stubs, saves from before the schedule existed).
+    """
+    try:
+        sched = getattr(league, "schedule", None) or []
+        last = None
+        for e in sched:
+            if not isinstance(e, dict):
+                continue
+            if e.get("league") != "NHL":
+                continue
+            if e.get("preseason") or e.get("playoff"):
+                continue
+            d = e.get("date")
+            if d is None:
+                continue
+            try:
+                dd = d.date() if isinstance(d, datetime) else d
+            except Exception:
+                continue
+            if last is None or dd > last:
+                last = dd
+        if last is not None:
+            return last - timedelta(days=TRADE_DEADLINE_LEAD_DAYS)
+    except Exception:
+        pass
+    try:
+        syr = int(getattr(league, "season_year", 0) or 0)
+    except Exception:
+        syr = 0
+    dy = deadline_year or (syr + 1 if syr else datetime.now().year)
+    try:
+        return date(dy, 3, 8)
+    except Exception:
+        return date(datetime.now().year, 3, 8)
 
 
 class TradeDeadlineManager:
     """Manages all trade deadline day logic and constraints"""
     
-    # NHL Trade Deadline Constants
+    # NHL Trade Deadline Constants. The date itself is DERIVED from the
+    # schedule (see trade_deadline_date); these month/day constants are
+    # only the fallback when no schedule can answer.
     DEADLINE_MONTH = 3
     DEADLINE_DAY = 8
     DEADLINE_HOUR = 15  # 3 PM ET
     DEADLINE_MINUTE = 0
-    
+
+    # Deadline-day game clock: the day runs 9:00 AM -> 3:00 PM ET in
+    # 30-minute increments (the "rush"). Game-time, not wall-clock.
+    CLOCK_START_MIN = 9 * 60
+    CLOCK_END_MIN = 15 * 60
+    CLOCK_STEP_MIN = 30
+
     def __init__(self, game_manager=None):
         self.game_manager = game_manager
         self.deadline_passed = False
@@ -32,6 +90,12 @@ class TradeDeadlineManager:
             'most_active_team': None,
             'deadline_minute_trades': 0
         }
+
+        # Game-clock state (persisted on game_manager.deadline_clock;
+        # mirrors it here for convenience). Keys: date (iso), minutes,
+        # expired.
+        self._clock = {'date': None, 'minutes': self.CLOCK_START_MIN,
+                       'expired': False}
         
         # Breaking news tracking
         self.breaking_news = []
@@ -39,12 +103,55 @@ class TradeDeadlineManager:
         
         # Initialize team market activity
         self._initialize_team_strategies()
+
+    def reset_for_new_season(self):
+        """Clear per-season deadline state at the offseason rollover.
+
+        Without this the singleton keeps last season's trade activity log
+        (stale "hot"/"warm" intel) and last season's buyer/seller
+        strategies into the new year.
+        """
+        self.trade_activity_log = []
+        self.breaking_news = []
+        self.deadline_passed = False
+        self.deadline_stats = {
+            'total_trades': 0,
+            'players_moved': 0,
+            'biggest_deal_value': 0,
+            'most_active_team': None,
+            'deadline_minute_trades': 0
+        }
+        self._initialize_team_strategies()
+        self._clock = {'date': None, 'minutes': self.CLOCK_START_MIN,
+                       'expired': False}
         
+    def deadline_date(self):
+        """This season's trade deadline as a date.
+
+        Derived from the league schedule (40 days before the final day
+        of the regular season, per the CBA); falls back to March 8 when
+        the schedule can't answer. Never raises.
+        """
+        try:
+            league = getattr(self.game_manager, "league", None)
+        except Exception:
+            league = None
+        try:
+            return trade_deadline_date(league)
+        except Exception:
+            return date(self.DEADLINE_MONTH, self.DEADLINE_DAY)
+
     def is_trade_deadline_day(self, current_date=None) -> bool:
-        """Check if the current date is trade deadline day"""
+        """Check if the current date is trade deadline day (derived)."""
         check_date = current_date or datetime.now()
-        return (check_date.month == self.DEADLINE_MONTH and 
-                check_date.day == self.DEADLINE_DAY)
+        try:
+            dd = self.deadline_date()
+            cd = (check_date.date() if isinstance(check_date, datetime)
+                  else check_date)
+            return cd == dd
+        except Exception:
+            return (check_date.month == self.DEADLINE_MONTH and
+                    check_date.day == self.DEADLINE_DAY)
     
     def is_deadline_passed(self, current_datetime=None) -> bool:
         """Check if the trade deadline has passed (3 PM ET)"""
@@ -68,15 +175,132 @@ class TradeDeadlineManager:
             
         return False
     
+    def is_deadline_day(self, game_date) -> bool:
+        """Game-date check: is this game date trade deadline day?"""
+        try:
+            dd = self.deadline_date()
+            gd = (game_date.date() if isinstance(game_date, datetime)
+                  else game_date)
+            return gd == dd
+        except Exception:
+            try:
+                return (game_date.month == self.DEADLINE_MONTH and
+                        game_date.day == self.DEADLINE_DAY)
+            except Exception:
+                return False
+
+    # ------------------------------------------------------------------
+    # Deadline-day game clock (30-minute increments, 9 AM -> 3 PM ET)
+    # ------------------------------------------------------------------
+    def _clock_store(self) -> dict:
+        """Persisted clock dict; lives on game_manager so saves keep it."""
+        gm = self.game_manager
+        if gm is not None:
+            store = getattr(gm, 'deadline_clock', None)
+            if isinstance(store, dict) and store.get('date'):
+                self._clock = store
+                return store
+        return self._clock
+
+    def _save_clock(self) -> None:
+        try:
+            if self.game_manager is not None:
+                self.game_manager.deadline_clock = dict(self._clock)
+        except Exception:
+            pass
+
+    def start_clock(self, game_date) -> None:
+        """Begin the deadline-day clock at 9:00 AM ET."""
+        iso = game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date)
+        if self._clock.get('date') == iso and not self._clock.get('expired'):
+            return  # already running today
+        self._clock = {'date': iso, 'minutes': self.CLOCK_START_MIN,
+                       'expired': False}
+        self.deadline_passed = False
+        self._save_clock()
+
+    def clock_active(self, game_date=None) -> bool:
+        c = self._clock_store()
+        if not c.get('date') or c.get('expired'):
+            return False
+        if game_date is not None:
+            iso = game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date)
+            if c['date'] != iso:
+                return False
+        return True
+
+    def clock_minutes(self) -> int:
+        return int(self._clock_store().get('minutes', self.CLOCK_START_MIN))
+
+    def clock_display(self) -> str:
+        """'11:30 AM ET' for the current clock position."""
+        m = self.clock_minutes()
+        h, mm = divmod(m, 60)
+        suffix = 'AM' if h < 12 else 'PM'
+        h12 = h % 12 or 12
+        return f"{h12}:{mm:02d} {suffix} ET"
+
+    def clock_progress(self) -> float:
+        """0.0 at 9 AM -> 1.0 at 3 PM. Drives deadline urgency."""
+        span = self.CLOCK_END_MIN - self.CLOCK_START_MIN
+        return max(0.0, min(1.0,
+                            (self.clock_minutes() - self.CLOCK_START_MIN) / span))
+
+    def time_until_close(self) -> timedelta:
+        return timedelta(minutes=max(0, self.CLOCK_END_MIN - self.clock_minutes()))
+
+    def advance_clock(self, minutes: int = None) -> dict:
+        """Move the clock forward. Returns {'minutes','display','expired'}."""
+        step = minutes if minutes else self.CLOCK_STEP_MIN
+        c = self._clock_store()
+        c['minutes'] = int(c.get('minutes', self.CLOCK_START_MIN)) + step
+        expired = c['minutes'] >= self.CLOCK_END_MIN
+        c['expired'] = bool(expired)
+        if expired:
+            self.deadline_passed = True
+        self._clock = c
+        self._save_clock()
+        return {'minutes': c['minutes'], 'display': self.clock_display(),
+                'expired': expired}
+
     def get_time_until_deadline(self) -> Dict[str, Any]:
-        """Get time remaining until trade deadline"""
+        """Get time remaining until trade deadline.
+
+        On deadline day with the game clock running, the countdown follows
+        the game clock (30-min increments toward 3 PM ET). Otherwise it
+        falls back to the wall-clock estimate as before.
+        """
+        c = self._clock_store()
+        if c.get('date') and not c.get('expired'):
+            left = self.time_until_close()
+            total_seconds = int(left.total_seconds())
+            hours, remainder = divmod(total_seconds, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            urgency = 'critical' if left <= timedelta(hours=1) else (
+                'high' if left <= timedelta(hours=3) else 'medium')
+            return {
+                'expired': False,
+                'time_left': left,
+                'formatted': f"{hours:02d}:{minutes:02d}:{seconds:02d}",
+                'hours': hours, 'minutes': minutes, 'seconds': seconds,
+                'urgency': urgency,
+                'game_clock': self.clock_display(),
+            }
+        if c.get('expired'):
+            return {'expired': True, 'time_left': timedelta(0),
+                    'formatted': "DEADLINE PASSED", 'urgency': 'expired'}
         now = datetime.now()
-        
+
+        dd = self.deadline_date()
+        today = now.date()
+        if today > dd:
+            # Next season has no schedule yet: fall back to the Mar-8
+            # constant for the countdown target.
+            dd = date(dd.year + 1, self.DEADLINE_MONTH, self.DEADLINE_DAY)
         if not self.is_trade_deadline_day(now):
             # Find next trade deadline
-            next_year = now.year if now.month <= self.DEADLINE_MONTH else now.year + 1
-            next_deadline = datetime(next_year, self.DEADLINE_MONTH, self.DEADLINE_DAY, 
-                                   self.DEADLINE_HOUR, self.DEADLINE_MINUTE)
+            next_deadline = datetime(dd.year, dd.month, dd.day,
+                                     self.DEADLINE_HOUR, self.DEADLINE_MINUTE)
         else:
             # Today is deadline day
             next_deadline = now.replace(hour=self.DEADLINE_HOUR, minute=self.DEADLINE_MINUTE, 
@@ -566,7 +790,7 @@ class TradeDeadlineManager:
         
         for team in teams:
             cap_analysis[team] = {
-                'current_cap_hit': random.randint(78000000, 83500000),
+                'current_cap_hit': random.randint(96000000, 104000000),
                 'cap_space': random.randint(500000, 15000000),
                 'deadline_space': random.randint(2000000, 25000000),  # With LTIR/retention
                 'flexibility': random.choice(['High', 'Medium', 'Low', 'None']),

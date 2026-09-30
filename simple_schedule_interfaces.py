@@ -8,7 +8,7 @@ Simplified version that focuses on core functionality.
 
 from abc import ABC, abstractmethod
 from datetime import date
-from typing import List, Optional
+from typing import List
 from simple_schedule_data import CalendarEvent, ValidationResult
 
 

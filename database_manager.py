@@ -4,7 +4,7 @@
 
 import random
 from typing import List, Dict, Optional
-from game_classes import Player, PlayerPosition, Team, League, GameBalance
+from game_classes import (Player, PlayerPosition, Team)
 from player_generator import PlayerGenerator, generate_complete_database
 from draft_generator import generate_draft_class
 
@@ -73,25 +73,74 @@ class DatabaseManager:
             if need > have:
                 print(f"  topped up {need - have} {position.value}")
 
-        # Re-sort after top-ups so the snake draft still deals best-first
-        nhl_players.sort(key=lambda p: p.overall_rating(), reverse=True)
+        # Generate NHL contracts BEFORE the draft: the draft below is
+        # cap-budget-aware, so every player needs a real salary first.
+        # (Players who end up in the AHL get their deals regenerated as
+        # AHL_VETERAN contracts after the draft, exactly as before.)
+        contract_gen = PlayerGenerator()
+        for player in nhl_players:
+            ovr = player.overall_rating()
+            if ovr >= 49:
+                tier = "NHL_ELITE"
+            elif ovr >= 44:
+                tier = "NHL_STARTER"
+            else:
+                tier = "NHL_DEPTH"
+            salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, tier)
+            player.contract.salary = salary
+            player.contract.years_remaining = years
+            player.contract.two_way = two_way
+            player.contract.ahl_salary = ahl_salary
+
+        # Day-one cap situations mirror real 2026-27: each club gets a
+        # payroll target (cap - seeded dead cap - real projected room).
+        # The draft deals the most expensive remaining player at each
+        # position to the club with the most budget left, so cap-strapped
+        # contenders start stacked and tight (Vegas, Toronto, Edmonton...)
+        # while cap-flush clubs start with room to weaponize (Detroit,
+        # Seattle, Vancouver...). The tilt is gentle -- every club still
+        # fills a full 20-man roster from across the talent curve.
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+        except Exception:
+            _rcd = None
+            _CAP = 104_000_000
+        target_payroll = {}
+        dead_by_team = {}
+        for team in teams:
+            if _rcd is not None:
+                _key = _rcd._team_key(team)
+                _dead = _rcd.total_dead_cap(_key)
+                _room = _rcd.target_cap_room(_key)
+            else:
+                _dead, _room = 0, 1_000_000
+            dead_by_team[team.team_name] = _dead
+            target_payroll[team.team_name] = _CAP - _dead - _room
+        committed = {team.team_name: 0 for team in teams}
 
         # Track assignments
         team_index = 0
         position_assignments = {team.team_name: {pos: 0 for pos in PlayerPosition} for team in teams}
-        
-        # First pass: snake-draft each position so talent is spread evenly
-        # (round 1 goes team 1..32, round 2 goes 32..1, etc.)
+
+        # First pass: budget-aware draft, per position. Each round, the
+        # club with the most payroll budget remaining picks first and
+        # takes the most expensive available player at that position.
         for position, required_count in roster_requirements.items():
             position_players = [p for p in nhl_players if p.primary_position == position and p.team_name == "Free Agent"]
+            position_players.sort(key=lambda p: p.contract.salary, reverse=True)
 
             for pick_round in range(required_count):
-                order = teams if pick_round % 2 == 0 else list(reversed(teams))
+                order = sorted(
+                    teams,
+                    key=lambda t: target_payroll[t.team_name] - committed[t.team_name],
+                    reverse=True)
                 for team in order:
                     if position_players:
                         player = position_players.pop(0)
                         player.team_name = team.team_name
                         team.add_player(player, "roster")
+                        committed[team.team_name] += player.contract.salary
                         position_assignments[team.team_name][position] += 1
         
         # Second pass: Distribute remaining players
@@ -107,11 +156,11 @@ class DatabaseManager:
             target_team = teams_by_position_need[0]
             player.team_name = target_team.team_name
             
-            # Determine roster level based on overall rating (1-100 scale)
+            # Determine roster level based on overall rating (100-point scale)
             overall = player.overall_rating()
-            if overall >= 72:
+            if overall >= 76:
                 target_team.add_player(player, "roster")
-            elif overall >= 68:
+            elif overall >= 70:
                 # Some go to AHL
                 if random.random() < 0.3:
                     target_team.add_player(player, "ahl")
@@ -142,58 +191,40 @@ class DatabaseManager:
                 prospect.team_name = team.team_name
                 team.add_player(prospect, "prospects")
         
-        # Generate contracts now that players are on NHL teams
+        # AHL assignments get minor-league deals: regenerate them as
+        # AHL_VETERAN contracts (they held placeholder NHL deals from the
+        # pre-draft pass above). NHL-roster deals are already set.
         contract_gen = PlayerGenerator()
         for team in teams:
-            for player in list(team.roster):
-                # Everyone on an NHL roster gets an NHL deal, even depth players
-                ovr = player.overall_rating()
-                if ovr >= 80:
-                    tier = "NHL_ELITE"
-                elif ovr >= 70:
-                    tier = "NHL_STARTER"
-                else:
-                    tier = "NHL_DEPTH"
-                salary, years = contract_gen.determine_contract_info(player, tier)
-                player.contract.salary = salary
-                player.contract.years_remaining = years
             for player in list(team.ahl_roster):
-                salary, years = contract_gen.determine_contract_info(player, "AHL_VETERAN")
+                salary, years, two_way, ahl_salary = contract_gen.determine_contract_info(player, "AHL_VETERAN")
                 player.contract.salary = salary
                 player.contract.years_remaining = years
+                player.contract.two_way = two_way
+                player.contract.ahl_salary = ahl_salary
 
-        # Cap compliance: no team starts over the salary cap. Trim the
-        # richest deals just enough to fit (mimics real cap management).
-        salary_cap = 83_500_000
+        # Cap compliance safety net: the budget-aware draft aims each club
+        # at its real 2026-27 situation, but randomness can still leave a
+        # club over the cap -- no team may start in violation. Scale deals
+        # proportionally so payroll + that club's seeded dead cap fits
+        # under the cap with a $500K cushion. Relative pay structure is
+        # preserved: stars still earn the most, depth still earns the least.
+        salary_cap = _CAP
         for team in teams:
+            dead = dead_by_team.get(team.team_name, 0)
+            target = salary_cap - dead - 500_000
             roster = list(team.roster)
-            payroll = sum(p.contract.salary for p in roster)
-            if payroll > salary_cap:
-                # Spread the cut proportionally so no single deal is gutted;
-                # no player loses more than 20% of their salary.
-                over = payroll - salary_cap
-                roster.sort(key=lambda p: p.contract.salary, reverse=True)
-                while over > 0:
-                    progressed = False
-                    for player in roster:
-                        if over <= 0:
-                            break
-                        max_cut = int(player.contract.salary * 0.20)
-                        already_cut = getattr(player, '_cap_trim', 0)
-                        room = max_cut - already_cut
-                        if room <= 0:
-                            continue
-                        cut = int(min(over, room, player.contract.salary - 750_000))
-                        if cut > 0:
-                            player.contract.salary -= cut
-                            player._cap_trim = already_cut + cut
-                            over -= cut
-                            progressed = True
-                    if not progressed:
-                        break
+            # Iterate: the $775k league-minimum floor can nudge payroll back
+            # over target, so rescale the non-floored deals until it fits.
+            for _ in range(10):
+                payroll = sum(p.contract.salary for p in roster)
+                if payroll <= target or target <= 0:
+                    break
+                scale = target / payroll
                 for player in roster:
-                    if hasattr(player, '_cap_trim'):
-                        delattr(player, '_cap_trim')
+                    player.contract.salary = max(
+                        775_000,
+                        int(player.contract.salary * scale // 25000 * 25000))
 
         print("NHL teams populated successfully")
         self._print_roster_summary(teams)
@@ -413,10 +444,10 @@ class DatabaseManager:
             
             stats["age_distribution"][age_range] = count
         
-        # Overall rating distribution (50-point scale)
-        for rating_range in ["25-32", "33-39", "40-44", "45-49", "50+"]:
-            lo, hi = {"25-32": (25, 32), "33-39": (33, 39), "40-44": (40, 44),
-                      "45-49": (45, 49), "50+": (50, 99)}[rating_range]
+        # Overall rating distribution (100-point scale)
+        for rating_range in ["60-69", "70-79", "80-84", "85-89", "90+"]:
+            lo, hi = {"60-69": (60, 69), "70-79": (70, 79), "80-84": (80, 84),
+                      "85-89": (85, 89), "90+": (90, 99)}[rating_range]
             count = len([p for p in all_players_list if lo <= p.overall_rating() <= hi])
             stats["overall_distribution"][rating_range] = count
 

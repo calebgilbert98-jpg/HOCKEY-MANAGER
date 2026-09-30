@@ -6,7 +6,7 @@ Phase 1: Deep Player Psychology & Hidden Attributes
 from dataclasses import dataclass, field
 from enum import Enum
 import random
-from typing import Dict, List, Optional
+from typing import (Dict, List)
 from game_classes import PlayerPosition
 
 class PersonalityType(Enum):
@@ -388,18 +388,3 @@ class EnhancedPlayer:
         return int(max(40, min(99, adjusted_rating)))
 
 # Factory function to create players with realistic attribute distributions
-def create_enhanced_player(name: str, position: PlayerPosition, age: int = None) -> EnhancedPlayer:
-    """Create a player with realistic attribute distribution"""
-    if age is None:
-        age = random.randint(18, 35)
-    
-    jersey = random.randint(1, 99)
-    
-    player = EnhancedPlayer(
-        full_name=name,
-        age=age,
-        primary_position=position,
-        jersey_number=jersey
-    )
-    
-    return player

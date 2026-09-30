@@ -23,18 +23,14 @@ Created: Phase 3 of Professional Schedule System Rebuild
 """
 
 from datetime import date, timedelta
-from typing import List, Dict, Set, Optional, Tuple, Any
+from typing import (List, Optional, Any)
 from dataclasses import dataclass, field
 from enum import Enum
 import logging
 from collections import defaultdict
-import random
 
 # Import our simplified architecture components
-from simple_schedule_data import (
-    CalendarEvent, GameEvent, SpecialEvent, EventType, 
-    ValidationResult, ValidationSeverity
-)
+from simple_schedule_data import (CalendarEvent, GameEvent, SpecialEvent, ValidationResult, ValidationSeverity)
 from simple_schedule_interfaces import IScheduleEngine, IScheduleValidator
 
 # Configure logging for schedule operations

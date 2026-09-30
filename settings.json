@@ -18,7 +18,12 @@
     "theme": "Dark (Current)",
     "font_size": "Medium (Current)",
     "auto_close_settings": true,
-    "remember_window_positions": true
+    "remember_window_positions": true,
+    "lines_view": {
+      "show_ratings": true,
+      "show_icetime": false,
+      "show_chemistry": true
+    }
   },
   "simulation": {
     "simulation_speed": "Fast (Current)",

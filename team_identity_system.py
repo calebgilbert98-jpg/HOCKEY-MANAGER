@@ -1,7 +1,7 @@
 # team_identity_system.py
 # Team visual identity system with authentic NHL colors and styling
 
-from typing import Dict, Tuple, Optional
+from typing import (Dict, Optional)
 from dataclasses import dataclass
 
 @dataclass
@@ -120,7 +120,7 @@ class NHLTeamIdentity:
                 primary="#F74902",      # Orange
                 secondary="#000000",    # Black
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Pittsburgh Penguins": TeamColors(
@@ -185,7 +185,7 @@ class NHLTeamIdentity:
                 primary="#69BE28",      # Rock Black
                 secondary="#154734",    # Salt Lake Blue
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Winnipeg Jets": TeamColors(
@@ -212,10 +212,10 @@ class NHLTeamIdentity:
                 text_on_secondary="#000000"
             ),
             "Edmonton Oilers": TeamColors(
-                primary="#041E42",      # Navy Blue
-                secondary="#FF4C00",    # Orange
+                primary="#FF4C00",      # Orange
+                secondary="#041E42",    # Royal Navy Blue
                 accent="#FFFFFF",       # White
-                text_on_primary="#FFFFFF",
+                text_on_primary="#000000",
                 text_on_secondary="#FFFFFF"
             ),
             "Los Angeles Kings": TeamColors(
@@ -230,7 +230,7 @@ class NHLTeamIdentity:
                 secondary="#EA7200",    # Orange
                 accent="#000000",       # Black
                 text_on_primary="#FFFFFF",
-                text_on_secondary="#FFFFFF"
+                text_on_secondary="#000000"
             ),
             "Seattle Kraken": TeamColors(
                 primary="#001628",      # Deep Sea Blue
@@ -302,3 +302,236 @@ class NHLTeamIdentity:
 
 # Global team identity instance
 nhl_identity = NHLTeamIdentity()
+
+
+# ---------------------------------------------------------------------------
+# UI accent resolution: one team's colors -> app-wide accent color.
+# The accent must stay readable on the dark UI, so near-black primaries
+# (Pittsburgh, Los Angeles) fall back to the secondary color.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_ACCENT = ("#00ceb8", "#00a896", "#0e0e11")  # legacy teal
+
+# WCAG AA minimum for normal text. Every (text, background) pair the
+# module hands out is guaranteed to meet it -- team colors are shifted
+# the smallest possible amount toward white/black when they don't.
+_WCAG_AA = 4.5
+_DARK_BG = "#0e0e11"  # CONTENT_BG / window background
+
+
+def _luminance(hex_color: str) -> float:
+    """Relative luminance of a hex color, 0 (black) to 1 (white)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 0.5
+
+
+def _wcag_luminance(hex_color: str) -> float:
+    """Gamma-corrected relative luminance per WCAG 2.x."""
+    try:
+        h = hex_color.lstrip("#")
+        rgb = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+
+        def lin(c):
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+        r, g, b = (lin(c) for c in rgb)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 0.5
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    """WCAG contrast ratio of a (text, background) pair. Never raises."""
+    try:
+        l1, l2 = _wcag_luminance(fg), _wcag_luminance(bg)
+        hi, lo = (l1, l2) if l1 >= l2 else (l2, l1)
+        return (hi + 0.05) / (lo + 0.05)
+    except Exception:
+        return 1.0
+
+
+def _mix_hex(a: str, b: str, t: float) -> str:
+    """Mix two hex colors; t=0 -> a, t=1 -> b. Never raises."""
+    try:
+        ah, bh = a.lstrip("#"), b.lstrip("#")
+        ar, ag, ab = (int(ah[i:i + 2], 16) for i in (0, 2, 4))
+        br, bg_, bb = (int(bh[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (
+            round(ar + (br - ar) * t),
+            round(ag + (bg_ - ag) * t),
+            round(ab + (bb - ab) * t))
+    except Exception:
+        return a
+
+
+def ensure_text_contrast(fg: str, bg: str, minimum: float = _WCAG_AA) -> str:
+    """Return fg moved the smallest possible amount toward white or black
+    so it reaches `minimum` contrast on bg.
+
+    Team colors keep their hue identity -- a dark red becomes a lighter
+    red, never gray -- and already-passing colors come back untouched.
+    Never raises.
+    """
+    try:
+        if contrast_ratio(fg, bg) >= minimum:
+            return fg
+        best = None
+        for target in ("#ffffff", "#000000"):
+            lo, hi = 0.0, 1.0  # fraction toward target; want smallest hi that passes
+            for _ in range(12):
+                mid = (lo + hi) / 2
+                if contrast_ratio(_mix_hex(fg, target, mid), bg) >= minimum:
+                    hi = mid
+                else:
+                    lo = mid
+            if best is None or hi < best[0]:
+                best = (hi, _mix_hex(fg, target, hi))
+        return best[1] if best else fg
+    except Exception:
+        return fg
+
+
+def _darken(hex_color: str, factor: float = 0.85) -> str:
+    """Scale a hex color toward black by factor (0..1)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (int(r * factor), int(g * factor), int(b * factor))
+    except Exception:
+        return hex_color
+
+
+def accent_for_team(team_name) -> tuple:
+    """Return (accent, hover, text_on_accent) for a team name.
+
+    Uses the team's primary color unless it is too dark to read on the
+    dark UI, in which case the secondary color is used. Unknown or
+    missing names fall back to the legacy teal.
+
+    The returned text color is guaranteed WCAG AA (4.5:1) on both the
+    accent and the hover backgrounds -- the team's color is shifted the
+    smallest possible amount when it would otherwise fail. Never raises.
+    """
+    colors = None
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+    except Exception:
+        colors = None
+    if colors is None:
+        return _DEFAULT_ACCENT
+    if _luminance(colors.primary) < 0.09:
+        base, text = colors.secondary, colors.text_on_secondary
+    else:
+        base, text = colors.primary, colors.text_on_primary
+    text = ensure_text_contrast(text, base)
+    hover = _darken(base, 0.85)
+    if contrast_ratio(text, hover) < _WCAG_AA:
+        # Ease the hover darkening toward the base until the text passes.
+        lo, hi = 0.85, 1.0
+        for _ in range(12):
+            mid = (lo + hi) / 2
+            if contrast_ratio(text, _darken(base, mid)) >= _WCAG_AA:
+                hi = mid
+            else:
+                lo = mid
+        hover = _darken(base, hi)
+    return base, hover, text
+
+
+def text_color_for_team(team_name) -> str:
+    """Team-colored text that stays readable on the dark UI: the primary
+    color, unless it is too dark to read on near-black, in which case the
+    secondary is used. Unknown names fall back to the legacy teal.
+
+    The returned color is guaranteed WCAG AA (4.5:1) on the dark UI
+    background -- it is lightened the smallest possible amount toward
+    white when the raw team color would fail, so the hue identity is
+    kept. Never raises.
+    """
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        if colors is None:
+            return _DEFAULT_ACCENT[0]
+        if _luminance(colors.primary) < 0.15:
+            candidate = colors.secondary
+        else:
+            candidate = colors.primary
+        return ensure_text_contrast(candidate, _DARK_BG)
+    except Exception:
+        return _DEFAULT_ACCENT[0]
+
+
+def dot_colors_for_team(team_name) -> tuple:
+    """Return (body, trim) for on-ice skater dots in the team's two
+    primary colors: body = primary, trim = secondary ring.
+
+    The trim is used for the dot's outline ring only (jersey numbers
+    stay high-contrast via text_color_for_team logic), so even teams
+    whose primary and secondary are close stay readable.
+
+    Unknown or missing names return (None, None) so callers can fall
+    back to the legacy colors. Never raises.
+    """
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        if colors is None:
+            return None, None
+        return colors.primary, colors.secondary
+    except Exception:
+        return None, None
+
+
+def jersey_chip(parent, team_name, w=46, h=26):
+    """Small jersey-stripe chip: a tk.Canvas in the team's two primary
+    colors (primary body, secondary hem stripe with trim pinstripes),
+    for standings rows, lists and anywhere a team identity mark helps.
+
+    Unknown or missing names fall back to a neutral chip. Never raises.
+    """
+    import tkinter as tk
+    cv = tk.Canvas(parent, width=w, height=h, highlightthickness=0, bd=0)
+    try:
+        colors = nhl_identity.get_team_colors(team_name)
+        if colors is None and team_name:
+            key = str(team_name).strip().lower()
+            for name, c in nhl_identity.team_colors.items():
+                if name.lower() == key:
+                    colors = c
+                    break
+        body = colors.primary if colors else "#2a2e35"
+        stripe = colors.secondary if colors else "#00ceb8"
+        trim = (colors.text_on_secondary if colors
+                else "#ffffff")
+        if trim.lower() == stripe.lower():
+            trim = body if body.lower() != stripe.lower() else "#ffffff"
+        cv.configure(bg=body)
+        cv.create_rectangle(0, 0, w, h, fill=body, outline="")
+        y0 = h - 9
+        cv.create_rectangle(0, y0, w, y0 + 2, fill=trim, outline="")
+        cv.create_rectangle(0, y0 + 2, w, y0 + 7, fill=stripe, outline="")
+        cv.create_rectangle(0, y0 + 7, w, y0 + 9, fill=trim, outline="")
+    except Exception:
+        pass
+    return cv

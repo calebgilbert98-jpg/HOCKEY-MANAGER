@@ -3,7 +3,7 @@ Lazy loading system for Hockey Manager
 Implements on-demand loading of data to reduce memory usage and improve startup times
 """
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import (Dict, List, Optional, Any)
 from dataclasses import dataclass
 import time
 import threading

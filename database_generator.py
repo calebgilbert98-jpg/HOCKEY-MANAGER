@@ -3,11 +3,10 @@
 # Supports multiple database sizes for different levels of realism and detail
 
 import random
-import math
-from datetime import datetime, timedelta
-from typing import List, Dict, Tuple, Optional, Callable, Union
-from game_classes import Player, Team, League, PlayerPosition, GameBalance, Contract, debug_print
+from typing import (List, Dict, Optional)
+from game_classes import (Player, Team, League, PlayerPosition, Contract, debug_print)
 from dataclasses import dataclass
+import mesh_system
 
 @dataclass
 class DatabaseConfig:
@@ -294,6 +293,11 @@ class DatabaseGenerator:
         self.generated_players = []
         self.generated_teams = []
         self.generated_leagues = []
+        # Fantasy-draft starts are an even playing field: when True, the
+        # day-one cap situations (payroll targets + compliance backstop)
+        # are skipped so the draft pool is unshaped. Set by main.py from
+        # the launcher's fantasy_draft option before generation.
+        self.fantasy_draft_mode = False
         
     def generate_comprehensive_database(self, progress_callback=None) -> League:
         """Generate a complete hockey database based on configuration"""
@@ -364,6 +368,17 @@ class DatabaseGenerator:
             team_players = self._generate_team_roster(team, players_per_team)
             players_created += len(team_players)
         
+        # Day-one cap situations: reshape NHL payrolls toward each club's
+        # real 2026-27 posture (cap-strapped contenders tight, cap-flush
+        # clubs with room) and guarantee no club starts over the cap.
+        # Skipped for fantasy-draft starts -- even playing field, the
+        # draft pool stays unshaped and cap compliance is not enforced
+        # during the draft.
+        if not self.fantasy_draft_mode:
+            self._apply_day_one_cap_situations([
+                t for t in main_league.teams
+                if getattr(t, 'league_name', '') == "National Hockey League"])
+        
         update_progress(65, "Generating free agent pool...", f"{players_created:,} team players created")
         
         # Generate free agents pool
@@ -376,7 +391,12 @@ class DatabaseGenerator:
         free_agent_staff_count = max(100, int(len(main_league.teams) * 2))  # ~2 staff per team as free agents
         free_agent_staff = self._generate_free_agent_staff(free_agent_staff_count)
         main_league.free_agent_staff.extend(free_agent_staff)
-        
+
+        # Generate overseas coaching talent (European clubs). Scouted and
+        # approached like free agents -- no NHL contract to wait out.
+        overseas_staff = self._generate_overseas_staff(40)
+        main_league.overseas_staff.extend(overseas_staff)
+
         update_progress(80, "Generating prospect pools...", f"{len(free_agents)} free agents, {len(free_agent_staff)} staff created")
         
         # Generate prospects pool for upcoming drafts
@@ -388,6 +408,25 @@ class DatabaseGenerator:
         
         # Generate staff for teams
         self._generate_team_staff(main_league.teams)
+
+        # Jersey numbers: seed every club's real retired numbers (plus
+        # league-wide 99), then deal numbers in seniority order so
+        # established players land their favorites.
+        try:
+            import immortality as _im
+            _yr = int(getattr(main_league, "season_year", 2026) or 2026)
+            for _t in main_league.teams:
+                try:
+                    _im.seed_retired_numbers(_t)
+                    _im.initial_number_assignment(_t, _yr)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # Link family members across the league (rare shared surnames)
+        # and seed their relationships warm -- brothers start close.
+        self._link_family_members(main_league)
         
         # Generate league schedule if needed
         if hasattr(main_league, 'generate_schedule'):
@@ -401,40 +440,315 @@ class DatabaseGenerator:
         print(f"Free agents: {len(free_agents)}")
         print(f"Prospects: {len(prospects)}")
 
-        # F1: give every AI team its archetype's tactical systems at
-        # creation. The player's team keeps manual control.
-        try:
-            from ai_coach import assign_ai_tactics
-            for team in main_league.teams:
-                try:
-                    assign_ai_tactics(team)
-                except Exception:
-                    pass
-        except ImportError:
-            pass
+        # P-5 is enforced at creation time by name_safety (star-surname
+        # filter in the name generators) -- see the note in
+        # main.setup_new_game for why there is no post-hoc scrub.
 
         return main_league
     
+    # Two roster salary-share curves for a 23-man NHL roster, largest to
+    # smallest, blended per club by payroll target (see
+    # _generate_cap_targeted_roster):
+    # - _HEAVY_SHARES: star-heavy top end. Capped-out contenders carry
+    #   this shape -- they are capped out BECAUSE they pay $12M+ talent.
+    # - _FLAT_SHARES: flatter distribution. Cap-flush clubs get this --
+    #   a team with $18M in space does not have a McDavid; its best
+    #   player is a very good ~$8M piece, and the money spreads into
+    #   depth. Both normalized to sum to 1.0 at use time.
+    _HEAVY_SHARES = (
+        0.125, 0.098, 0.088, 0.080, 0.072, 0.066, 0.060, 0.055,
+        0.050, 0.046, 0.042, 0.038, 0.035, 0.032, 0.030, 0.028,
+        0.025, 0.022, 0.020, 0.018, 0.015, 0.012, 0.006,
+    )
+    _FLAT_SHARES = (
+        0.095, 0.085, 0.078, 0.072, 0.066, 0.061, 0.056, 0.052,
+        0.048, 0.044, 0.041, 0.038, 0.035, 0.032, 0.030, 0.028,
+        0.026, 0.024, 0.022, 0.020, 0.017, 0.014, 0.010,
+    )
+    # Payroll-target range the blend interpolates across: ~$82M (fully
+    # flat -- the most cap-flush clubs) to ~$103.5M (fully star-heavy --
+    # the capped-out contenders).
+    _BLEND_LO = 82_000_000
+    _BLEND_HI = 103_500_000
+
+    _qm_salary_calib = None  # lazily calibrated [(median_salary, qm)]
+
+    def _calibrate_quality(self):
+        """Measure the median salary each quality_modifier produces.
+
+        Maps quality -> pay so roster generation can aim players at salary
+        targets. Calibrated once per generator with veteran-age players
+        (no ELC distortion); piecewise-linear inversion at use time.
+        """
+        pts = []
+        for qm in (0.55, 0.75, 0.95, 1.15, 1.35, 1.55):
+            sals = []
+            for _ in range(24):
+                p = self._create_enhanced_player(random.randint(26, 31),
+                                                 PlayerPosition.CENTER, qm)
+                sals.append(int(getattr(getattr(p, "contract", None),
+                                        "salary", 0) or 0))
+            sals.sort()
+            if sals:
+                pts.append((sals[len(sals) // 2], qm))
+        pts.sort()
+        return pts
+
+    def _quality_for_salary(self, salary: float) -> float:
+        """quality_modifier expected to produce ~salary, by calibration."""
+        if self._qm_salary_calib is None:
+            self._qm_salary_calib = self._calibrate_quality()
+        pts = self._qm_salary_calib or []
+        if not pts:
+            return 1.0
+        if salary <= pts[0][0]:
+            return 0.55
+        if salary >= pts[-1][0]:
+            return 1.70
+        for (s0, q0), (s1, q1) in zip(pts, pts[1:]):
+            if s0 <= salary <= s1:
+                f = (salary - s0) / (s1 - s0) if s1 > s0 else 0.0
+                return q0 + f * (q1 - q0)
+        return 1.0
+
+    def _generate_cap_targeted_roster(self, team: Team):
+        """Generate a 23-man NHL roster tracking the club's payroll target.
+
+        Day-one cap situations: the target is cap - seeded dead cap -
+        the club's real 2026-27 projected room (real_cap_data). Each pick
+        aims at its share of the remaining budget, so the roster shape
+        mimics a real club (stars up top, cheap depth at the bottom) and
+        the total lands near the target. Star concentration follows the
+        money: high-payroll clubs blend toward the star-heavy curve
+        (that's why they're capped out), low-payroll clubs toward the
+        flat curve (cap space means no $13M superstar on the roster).
+        Contracts come from the same 2026-market gates as everywhere
+        else; the loop self-corrects when the dice come in hot or cold.
+        Returns None if no target could be computed (caller falls back
+        to the classic path), or when the game starts with a fantasy
+        draft (even playing field -- the draft pool stays unshaped).
+        """
+        if getattr(self, "fantasy_draft_mode", False):
+            return None
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+            key = _rcd._team_key(team)
+            target = (_CAP - _rcd.total_dead_cap(key)
+                      - _rcd.target_cap_room(key))
+        except Exception:
+            return None
+
+        positions = ([PlayerPosition.CENTER, PlayerPosition.RIGHT_WING,
+                      PlayerPosition.LEFT_WING, PlayerPosition.LEFT_DEFENSE,
+                      PlayerPosition.RIGHT_DEFENSE, PlayerPosition.GOALIE] * 4)[:23]
+        # Blend flat <-> star-heavy by payroll target.
+        _t = (target - self._BLEND_LO) / (self._BLEND_HI - self._BLEND_LO)
+        _t = max(0.0, min(1.0, _t))
+        shares = [f + _t * (h - f) for f, h in
+                  zip(self._FLAT_SHARES, self._HEAVY_SHARES)][:len(positions)]
+        total_share = sum(shares) or 1.0
+        shares = [s / total_share for s in shares]
+
+        players = []
+        committed = 0
+        for i, pos in enumerate(positions):
+            share_left = sum(shares[i:])
+            budget_left = target - committed
+            if share_left > 0:
+                target_sal = shares[i] / share_left * budget_left
+            else:
+                target_sal = budget_left
+            target_sal = max(775_000, min(21_000_000, target_sal))
+            # Tier-consistent dice: the shared contract gates are tiered
+            # on overall (95+ superstar money, 90+ premium), so one lucky
+            # 95 on an $8M slot would sign for $16M+ and break the club's
+            # shape -- a cap-flush team must never roll a McDavid. Age
+            # follows the money (stars are veterans, depth is young, and
+            # cheap slots can land ELC talent like real clubs); the aim
+            # steers toward the slot and tier-crossers are re-rolled.
+            # A slot paying less than premium money must not roll premium
+            # talent (and premium slots must not roll a superstar): the
+            # tiered gates would pay them far above the slot and hand a
+            # cap-flush club a McDavid. ELC-age slots are exempt -- the
+            # entry-level scale caps their pay whatever they roll.
+            if target_sal >= 5_000_000:
+                age_lo, age_hi = 26, 33
+            elif target_sal >= 2_000_000:
+                age_lo, age_hi = 23, 30
+            else:
+                age_lo, age_hi = 18, 24
+            if target_sal < 9_000_000:
+                tier_cap = 89
+            elif target_sal < 12_000_000:
+                tier_cap = 94
+            else:
+                tier_cap = 100
+            # Franchise premium: a capped-out club's #1 pick is where the
+            # $15M+ deals live in real life (Makar $20.4M, Celebrini
+            # $18.8M). The fatter slot plus an open superstar tier lets
+            # the dice land a true franchise player; the loop's
+            # self-correction keeps the payroll on target either way.
+            if i == 0 and _t >= 0.85:
+                target_sal *= 1.15
+                tier_cap = 100
+            best, best_miss = None, None
+            qm = self._quality_for_salary(target_sal)
+            for attempt in range(12):
+                age = random.randint(age_lo, age_hi)
+                q = max(0.50, min(1.70, qm * random.uniform(0.96, 1.04)))
+                cand = self._create_enhanced_player(age, pos, q)
+                if age > 22 and cand.overall_rating() > tier_cap:
+                    # Tier-crossing: this quality runs too hot for the
+                    # slot -- cool the aim and re-roll, never sign.
+                    qm *= 0.94
+                    continue
+                sal = int(getattr(getattr(cand, "contract", None),
+                                  "salary", 0) or 0)
+                miss = abs(sal - target_sal)
+                if best is None or miss < best_miss:
+                    best, best_miss = cand, miss
+                if miss <= target_sal * 0.25:
+                    break
+                # Steer the aim toward the slot: hot rolls cool it, cold
+                # rolls warm it. (ELC-age salaries don't move with
+                # quality, so only steer once the entry-level scale no
+                # longer caps the pay.)
+                if age > 22:
+                    if sal > target_sal * 1.10:
+                        qm *= 0.95
+                    elif sal < target_sal * 0.90:
+                        qm *= 1.05
+            if best is None:
+                best = self._create_enhanced_player(
+                    random.randint(age_lo, age_hi), pos,
+                    max(0.50, min(1.70, qm * 0.90)))
+            players.append(best)
+            committed += int(getattr(getattr(best, "contract", None),
+                                     "salary", 0) or 0)
+        return players
+
+    def _apply_day_one_cap_situations(self, nhl_teams: List[Team]) -> None:
+        """Reshape day-one NHL payrolls toward real 2026-27 cap situations.
+
+        Each club gets a payroll target (cap - seeded dead cap - real
+        projected room, via real_cap_data), and each roster is generated
+        closed-loop against its own target with a star-concentration
+        shape that follows the money: capped-out contenders (Vegas,
+        Toronto, Edmonton...) are top-heavy because they pay $12M+
+        talent, while cap-flush clubs (Detroit, Seattle, Vancouver...)
+        are flat -- no McDavid on a team with $18M in space -- and hold
+        room to weaponize. Deliberately no cross-team swaps: moving an
+        expensive star to an under-target club would hand flat teams
+        superstars and destroy the shape. A proportional scale-down
+        backstops any club still over the cap afterwards: no team may
+        start in violation.
+        """
+        try:
+            import real_cap_data as _rcd
+            from salary_cap_system import DEFAULT_CAP as _CAP
+        except Exception:
+            return
+        if not nhl_teams:
+            return
+
+        def _sal(p) -> int:
+            return int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
+
+        def _payroll(team) -> int:
+            return sum(_sal(p) for p in (getattr(team, "roster", None) or []))
+
+        # Hard compliance safety net (same rule as the classic path).
+        # Measured on the TRUE cap charge -- active roster + minor-league
+        # burial + real seeded dead cap -- so a club can't slip over via
+        # buried one-way money in the minors.
+        try:
+            from salary_cap_system import roster_cap_charge as _rcc
+        except Exception:
+            _rcc = None
+        for team in nhl_teams:
+            key = _rcd._team_key(team)
+            dead = _rcd.total_dead_cap(key)
+            cap_target = _CAP - 500_000  # max allowed total charge
+            roster = list(getattr(team, "roster", None) or [])
+            for _ in range(10):
+                pay = ((_rcc(team) if _rcc else _payroll(team)) + dead)
+                if pay <= cap_target or cap_target <= 0:
+                    break
+                scale = (cap_target - dead) / max(1, pay - dead)
+                for p in roster:
+                    c = getattr(p, "contract", None)
+                    if c is not None:
+                        c.salary = max(775_000,
+                                       int(c.salary * scale // 25000 * 25000))
+
+    def _link_family_members(self, league):
+        """Link family members across the league.
+
+        Players sharing a RARE surname (2-4 league-wide, so no 'Smith
+        brothers' false positives from common names) are family in the
+        game world -- the Staals/Hughes treatment. Links are mutual and
+        their relationships start warm; the monthly relationship engine
+        takes it from there.
+        """
+        try:
+            pool = []
+            for team in getattr(league, 'teams', []) or []:
+                pool.extend(getattr(team, 'roster', []) or [])
+            pool.extend(getattr(league, 'free_agents', []) or [])
+            # Draft prospects too -- brothers in the same draft class
+            # (the Hughes/Staal treatment) are exactly this flavor.
+            pool.extend(getattr(league, 'draft_prospects', []) or [])
+
+            by_surname = {}
+            for p in pool:
+                sn = (getattr(p, 'last_name', '') or '').strip()
+                if sn:
+                    by_surname.setdefault(sn, []).append(p)
+
+            for surname, members in by_surname.items():
+                if not 2 <= len(members) <= 4:
+                    continue
+                if any(len(getattr(m, 'family_ids', None) or []) >= 2 for m in members):
+                    continue  # already spoken for -- keep families small
+                ids = [m.id for m in members]
+                for m in members:
+                    fam = getattr(m, 'family_ids', None)
+                    if fam is None:
+                        m.family_ids = fam = []
+                    for oid in ids:
+                        if oid != m.id and oid not in fam:
+                            fam.append(oid)
+                    # Brothers start close.
+                    rels = getattr(m, 'relationships', None)
+                    if rels is None:
+                        m.relationships = rels = {}
+                    for oid in ids:
+                        if oid != m.id:
+                            rels[oid] = max(rels.get(oid, 0), 80)
+        except Exception:
+            pass  # family linking is flavor -- never break generation
+
     def _generate_team_staff(self, teams):
         """Generate coaching staff and management for all teams."""
-        from game_classes import Staff, StaffRole
-        
+        from game_classes import Staff, StaffRole, default_staff_budget
+
         # Staff positions and their frequency
         staff_positions = [
             (StaffRole.HEAD_COACH, 1),  # Each team needs 1 head coach
-            (StaffRole.ASSISTANT_COACH, 2),  # 2 assistant coaches  
+            (StaffRole.ASSISTANT_COACH, 2),  # 2 assistant coaches
             (StaffRole.GOALIE_COACH, 1),  # 1 goalie coach
             (StaffRole.GENERAL_MANAGER, 1),  # 1 GM
             (StaffRole.PROFESSIONAL_SCOUT, 3),  # 3 scouts
         ]
-        
+
         first_names = [
             "Adam", "Alex", "Andrew", "Anthony", "Brian", "Bruce", "Carl", "Chris", "Craig", "Dan",
             "Dave", "David", "Doug", "Eric", "Frank", "Gary", "Glen", "Greg", "Jack", "James",
             "Jeff", "Jim", "Joe", "John", "Ken", "Kevin", "Larry", "Mark", "Matt", "Mike",
             "Paul", "Peter", "Rick", "Rob", "Ron", "Scott", "Steve", "Tim", "Todd", "Tom"
         ]
-        
+
         last_names = [
             "Anderson", "Brown", "Clark", "Davis", "Evans", "Garcia", "Harris", "Johnson", "Jones",
             "Lee", "Lewis", "Martin", "Miller", "Moore", "Robinson", "Rodriguez", "Smith", "Taylor",
@@ -442,25 +756,52 @@ class DatabaseGenerator:
             "Carter", "Collins", "Cooper", "Edwards", "Green", "Hall", "Hill", "Jackson", "King",
             "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker"
         ]
-        
+
+        # Minor-league staff: every club's AHL affiliate gets a head coach,
+        # two assistants, and a GM running the farm. They count against the
+        # staff budget and can only be approached by other clubs in the
+        # offseason (real-world rule).
+        ahl_positions = [
+            (StaffRole.HEAD_COACH, 1),
+            (StaffRole.ASSISTANT_COACH, 2),
+            (StaffRole.GENERAL_MANAGER, 1),
+        ]
+
         for team in teams:
             debug_print(f"Generating staff for {team.team_name}...")
-            
+            # League-wide staff budget, tiered by market size.
+            team.staff_budget = default_staff_budget(team.team_name)
+
             for role, count in staff_positions:
                 for _ in range(count):
                     first_name = random.choice(first_names)
                     last_name = random.choice(last_names)
-                    
+
                     # Create staff member using the dataclass constructor
                     staff_member = Staff(
                         first_name=first_name,
                         last_name=last_name,
                         role=role,
                         age=random.randint(35, 65),
-                        experience=random.randint(1, 20)
+                        experience=random.randint(1, 20),
+                        assignment="nhl",
                     )
-                    
+
                     # Add to team staff
+                    team.staff.append(staff_member)
+
+            for role, count in ahl_positions:
+                for _ in range(count):
+                    staff_member = Staff(
+                        first_name=random.choice(first_names),
+                        last_name=random.choice(last_names),
+                        role=role,
+                        age=random.randint(30, 60),
+                        experience=random.randint(1, 15),
+                        assignment="ahl",
+                        # AHL salaries run lower than NHL equivalents.
+                        salary=random.randint(150000, 400000),
+                    )
                     team.staff.append(staff_member)
     
     def _generate_free_agent_staff(self, count):
@@ -481,6 +822,7 @@ class DatabaseGenerator:
             StaffRole.PROFESSIONAL_SCOUT,
             StaffRole.AMATEUR_SCOUT,
             StaffRole.EUROPEAN_SCOUT,
+            StaffRole.ANALYTICS_DIRECTOR,
             StaffRole.SKILLS_COACH,
             StaffRole.CONDITIONING_COACH
         ]
@@ -516,8 +858,65 @@ class DatabaseGenerator:
             )
             
             free_agent_staff.append(staff_member)
-        
+
         return free_agent_staff
+
+    def _generate_overseas_staff(self, count):
+        """Generate coaches employed by European clubs (SHL, Liiga, NL, DEL,
+        Czech Extraliga). They can be scouted and approached at any time --
+        there is no NHL contract to wait out."""
+        from game_classes import Staff, StaffRole
+
+        roles = [
+            StaffRole.HEAD_COACH,
+            StaffRole.ASSISTANT_COACH,
+            StaffRole.GOALIE_COACH,
+            StaffRole.SKILLS_COACH,
+            StaffRole.POWER_PLAY_COACH,
+            StaffRole.PENALTY_KILL_COACH,
+        ]
+        first_names = [
+            # Swedish / Finnish
+            "Mats", "Lars", "Johan", "Anders", "Henrik", "Niklas", "Petter",
+            "Mikko", "Jussi", "Antti", "Juho", "Ville", "Tomi", "Kari",
+            # Czech / Slovak / German / Swiss
+            "Pavel", "Tomas", "Marek", "Lukas", "Jan", "Martin", "Josef",
+            "Marco", "Luca", "Nico", "Stefan", "Ralph", "Uwe", "Dmitri",
+            # Russian
+            "Alexei", "Sergei", "Igor", "Viktor", "Oleg", "Andrei",
+        ]
+        last_names = [
+            "Lindqvist", "Karlsson", "Johansson", "Nilsson", "Bergström",
+            "Virtanen", "Korhonen", "Mäkinen", "Nieminen", "Laine",
+            "Novak", "Svoboda", "Dvorak", "Horvat", "Weber", "Müller",
+            "Fischer", "Sturm", "Kovalenko", "Fedorov", "Sokolov",
+        ]
+        clubs = [
+            "Frölunda HC (SHL)", "Djurgårdens IF (SHL)", "Färjestad BK (SHL)",
+            "Tappara (Liiga)", "Kärpät (Liiga)", "HIFK (Liiga)",
+            "ZSC Lions (NL)", "SC Bern (NL)", "EHC Biel (NL)",
+            "Eisbären Berlin (DEL)", "Adler Mannheim (DEL)",
+            "Sparta Praha (Extraliga)", "HC Kometa Brno (Extraliga)",
+            "SKA St. Petersburg (KHL)", "CSKA Moscow (KHL)",
+        ]
+        nationalities = ["Sweden", "Finland", "Czech Republic", "Russia",
+                         "Germany", "Switzerland", "Slovakia"]
+
+        overseas = []
+        for _ in range(count):
+            club = random.choice(clubs)
+            staff_member = Staff(
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
+                role=random.choice(roles),
+                age=random.randint(32, 62),
+                nationality=random.choice(nationalities),
+                experience=random.randint(4, 22),
+                assignment="overseas",
+                current_club=club,
+            )
+            overseas.append(staff_member)
+        return overseas
     
     def _generate_league_teams(self, league_info: dict) -> List[Team]:
         """Generate teams for a specific league"""
@@ -612,20 +1011,44 @@ class DatabaseGenerator:
         if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
             nhl_roster_size = 23
             ahl_prospects_size = actual_target - nhl_roster_size
-            
-            # Generate NHL roster first
-            nhl_players = self._generate_players_by_position(nhl_roster_size, quality_modifier * 1.1, team)
+
+            # Generate NHL roster first -- against this club's real 2026-27
+            # payroll target so day-one cap situations mirror real life
+            # (falls back to the classic path if no target is available).
+            nhl_players = self._generate_cap_targeted_roster(team)
+            if nhl_players is None:
+                nhl_players = self._generate_players_by_position(nhl_roster_size, quality_modifier * 1.1, team)
             for player in nhl_players:
                 team.add_player(player, "roster")
                 players.append(player)
             
             # Generate AHL/prospects
             ahl_prospects = self._generate_players_by_position(ahl_prospects_size, quality_modifier * 0.8, team)
+            from player_generator import PlayerGenerator as _PG
+            _pg = _PG()
             for i, player in enumerate(ahl_prospects):
                 # Split between AHL and prospects
                 roster_type = "ahl" if i < ahl_prospects_size * 0.7 else "prospects"
                 team.add_player(player, roster_type)
                 players.append(player)
+                if roster_type == "ahl":
+                    # Minor-league deals (two-way), mirroring the classic
+                    # population path: one-way NHL money in the minors
+                    # would pile up unrealistic burial charges on day one.
+                    c = getattr(player, "contract", None)
+                    if c is not None:
+                        (sal, yrs, tw, ahl_sal) = _pg.determine_contract_info(
+                            player, "AHL_VETERAN")
+                        c.salary = sal
+                        c.years_remaining = yrs
+                        c.two_way = tw
+                        c.ahl_salary = ahl_sal
+                        # Minor-leaguers don't carry NHL clauses.
+                        c.no_trade_clause = False
+                        c.no_movement_clause = False
+                        c.modified_ntc_teams = 0
+                        c.modified_ntc_approved = False
+                        c.ntc_waiver_for = ""
         else:
             # Non-NHL teams get all players in main roster
             all_players = self._generate_players_by_position(actual_target, quality_modifier, team)
@@ -702,7 +1125,14 @@ class DatabaseGenerator:
         
         # Get appropriate names
         first_name = random.choice(EXTENDED_FIRST_NAMES.get(nationality, EXTENDED_FIRST_NAMES["Other"]))
-        last_name = random.choice(EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
+        # P-5: star-surname filter (Caleb's name_safety) -- generated players
+        # must not borrow a recognizable real player's surname.
+        try:
+            import name_safety as _ns
+            last_name = _ns.pick_surname(
+                EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
+        except Exception:
+            last_name = random.choice(EXTENDED_LAST_NAMES.get(nationality, EXTENDED_LAST_NAMES["Other"]))
         birthplace = random.choice(EXTENDED_BIRTHPLACES.get(nationality, EXTENDED_BIRTHPLACES["Other"]))
         
         # Create base player
@@ -825,18 +1255,38 @@ class DatabaseGenerator:
         # Generate contract information for professional players
         if age >= 18:
             player.contract = self._generate_contract(player, age)
-        
+
+        # Career NHL games: age-plausible service time, not a dice roll.
+        # Young players start near zero and accrue real games from here
+        # (see _credit_nhl_games_played); veterans arrive with a believable
+        # history behind them. Drives waiver exemption.
+        try:
+            if age <= 20:
+                player.nhl_games_played = 0
+            elif age <= 22:
+                player.nhl_games_played = random.randint(
+                    0, (age - 20) * 60)
+            else:
+                _seasons = age - 21
+                _per = random.randint(40, 78)
+                if random.random() < 0.25:
+                    # Fringe / late-bloomer: less NHL time.
+                    _per = random.randint(5, 30)
+                player.nhl_games_played = min(1400, _seasons * _per)
+        except Exception:
+            pass
+
         return player
     
     def _set_enhanced_attributes(self, player: Player, age: int, quality_modifier: float):
         """Set realistic attributes based on age, position, and quality.
 
-        Uses the canonical 1-100 attribute scale (same as player_generator
+        Uses the native 100-point attribute scale (same as player_generator
         and the sim engine): NHL-quality players land roughly 56-92 before
         age adjustment.
         """
 
-        # Base attribute ranges adjusted by quality (1-100 scale)
+        # Base attribute ranges adjusted by quality (100-point scale)
         base_min = max(10, int(56 * quality_modifier))
         base_max = min(100, int(88 * quality_modifier))
         
@@ -884,7 +1334,7 @@ class DatabaseGenerator:
         
         for attr in advanced_attrs:
             if attr == 'injury_proneness':
-                # Higher = more injury-prone (1-100)
+                # Lower is better for injury proneness (1-100 scale)
                 value = random.randint(5, 50)
             else:
                 base_value = random.randint(base_min, base_max)
@@ -895,6 +1345,30 @@ class DatabaseGenerator:
         # Set playing tendencies
         player.shooting_tendency = random.randint(20, 80)
         player.hitting_tendency = random.randint(20, 80)
+
+        # Positioning split (2026-09-28, per Muck): every skater gets
+        # offensive_positioning (getting open, net-front spot wins, shot
+        # quality) and defensive_positioning (gap control, box-outs, blocks,
+        # takeaways) on the native 100-point scale, tilted by position --
+        # forwards lean offensive, defensemen lean defensive. Goalies keep
+        # the single `positioning` (crease). ~1.5% unicorns come out elite
+        # at both ends (the Bergeron/Coffey mold).
+        if player.primary_position != PlayerPosition.GOALIE:
+            _is_dman = player.primary_position in (
+                PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                PlayerPosition.RIGHT_DEFENSE)
+            if _is_dman:
+                _off_range = (max(1, base_min - 12), max(1, base_max - 4))
+                _def_range = (base_min + 2, min(100, base_max + 8))
+            else:
+                _off_range = (base_min + 2, min(100, base_max + 8))
+                _def_range = (max(1, base_min - 12), max(1, base_max - 4))
+            _off, _dfn = mesh_system.roll_positioning_split(
+                _off_range[0], _off_range[1], _def_range[0], _def_range[1])
+            player.offensive_positioning = max(
+                1, min(100, int(_off * current_factor)))
+            player.defensive_positioning = max(
+                1, min(100, int(_dfn * current_factor)))
         
         # Set potential grade
         if age < 23:
@@ -908,42 +1382,49 @@ class DatabaseGenerator:
         player.potential_grade = random.choices(potential_grades, weights=weights)[0]
     
     def _generate_contract(self, player: Player, age: int) -> Contract:
-        """Generate a realistic contract for a player"""
-        
-        # Contract length based on age and quality
-        if age < 25:
-            years = random.choice([1, 2, 3])  # Entry level or short term
-        elif age < 30:
-            years = random.choice([2, 3, 4, 5])  # Prime years
-        else:
-            years = random.choice([1, 2, 3])  # Veteran contracts
-        
-        # Salary based on overall rating and age
+        """Generate a realistic contract for a player.
+
+        Delegates to PlayerGenerator.determine_contract_info -- the single
+        source of truth for the 2026 summer market (same gates the classic
+        population path uses: 95+ superstar / 90+ premium, ELCs for kids,
+        two-way structure, above-market bidding wars). The old inline
+        bands below were written for the 1-50 attribute scale; on the
+        native 1-100 scale every skater cleared the top band and landed at
+        $7-12M, putting all 32 clubs ~$150M+ over the cap on day one.
+        """
+        from player_generator import PlayerGenerator as _PG
+        _gen = _PG()
         overall = player.overall_rating()
-        
-        if overall >= 90:
-            salary = random.randint(7000000, 12000000)  # Elite players
-        elif overall >= 84:
-            salary = random.randint(4000000, 8000000)   # Top players
-        elif overall >= 78:
-            salary = random.randint(2000000, 5000000)   # Good players
-        elif overall >= 70:
-            salary = random.randint(900000, 2500000)    # Role players
+        if overall >= 49:
+            tier = "NHL_ELITE"
+        elif overall >= 44:
+            tier = "NHL_STARTER"
         else:
-            salary = random.randint(750000, 1200000)    # Depth players
-        
-        # Age adjustments
-        if age < 23:
-            salary = min(salary, 3000000)  # Entry level cap considerations
-        elif age > 35:
-            salary = int(salary * 0.7)  # Veteran discounts
-        
+            tier = "NHL_DEPTH"
+        salary, years, two_way, ahl_salary = _gen.determine_contract_info(player, tier)
+
         contract = Contract(
             salary=salary,
             years_remaining=years,
-            no_trade_clause=overall >= 90 and random.random() < 0.3
+            two_way=two_way,
+            ahl_salary=ahl_salary,
         )
-        
+        # Trade protection: the same demand model the user negotiates
+        # against (trade_engine.clause_demand_score) -- stars with leverage
+        # get clauses, kids don't, no flat dice roll.
+        try:
+            import trade_engine as _te
+            _demand = _te.clause_demand_score(player)
+            if random.random() < _demand * 0.85:
+                _te.apply_clause_to_contract(
+                    contract,
+                    "nmc" if overall >= 86 and random.random() < 0.35
+                    else ("mntc" if random.random() < 0.55 else "ntc"),
+                    random.choice([8, 10, 12, 15, 16, 20]),
+                    player=player)
+        except Exception:
+            pass
+
         return contract
     
     def _get_weighted_nationality(self) -> str:
@@ -1015,31 +1496,6 @@ def generate_database(config_name: str) -> League:
     
     return generator.generate_comprehensive_database()
 
-def get_database_info(config_name: str) -> str:
-    """Get detailed information about a database configuration"""
-    
-    if config_name not in DATABASE_CONFIGURATIONS:
-        return "Unknown configuration"
-    
-    config = DATABASE_CONFIGURATIONS[config_name]
-    
-    info = f"""
-{config.name}
-{config.description}
-
-Database Details:
-• Total Players: {config.total_players:,}
-• Draft Prospects: {config.prospects_per_draft} per year
-• League Depth: {config.leagues_count} leagues with {config.minor_league_depth} levels
-• International Diversity: {config.international_factor:.1f}x
-• Veteran Balance: {config.veteran_distribution:.0%}
-• Staff per Team: {config.staff_count}
-
-Performance Impact: {"Low" if config.total_players < 15000 else "Medium" if config.total_players < 75000 else "High"}
-Recommended for: {"Beginners" if config_name == "Small" else "Most players" if config_name == "Medium" else "Experienced managers" if config_name == "Large" else "Hardcore simulation fans"}
-"""
-    
-    return info.strip()
 
 # Example usage and testing
 if __name__ == "__main__":

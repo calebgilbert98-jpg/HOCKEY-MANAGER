@@ -13,14 +13,21 @@ from the Schedule screen's Recap/Stats buttons. Shows a real box score:
 Degrades gracefully for quick-simmed games that only carry scores.
 """
 
+from player_context_menu import bind_player_context
 import customtkinter as ctk
+from popup_system import InGamePopup
 
 
-class GameBoxScoreWindow(ctk.CTkToplevel):
-    TABS = ("Scoring Summary", "Player Stats", "Team Stats", "Shot Chart")
+class GameBoxScoreView(ctk.CTkFrame):
+    """Game box score view (embedded full-screen).
 
-    def __init__(self, parent, game_result, initial_tab="Scoring Summary"):
-        super().__init__(parent)
+    A plain CTkFrame so it can be embedded anywhere: full-screen inside the
+    main window (the default, via HockeyManagerGUI.show_screen) or inside
+    the legacy GameBoxScoreWindow popup card.
+    """
+    TABS = ("Scoring Summary", "Player Stats", "Team Stats")
+
+    def __init__(self, parent, game_result, initial_tab="Scoring Summary", app=None):
         from ctk_theme import (
             BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
             TEAL, GOLD, GREEN, RED,
@@ -28,11 +35,11 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         self._c = dict(BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER, TEXT=TEXT,
                        TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT, TEAL=TEAL,
                        GOLD=GOLD, GREEN=GREEN, RED=RED)
+        self.app = app if app is not None else parent
+        ctk.CTkFrame.__init__(self, parent, fg_color=BG)
+        # Set by show_screen() (dashboard) or the GameBoxScoreWindow wrapper (card).
+        self._close_screen = None
         self.result = game_result
-        self.title("Box Score")
-        self.configure(fg_color=BG)
-        self.geometry("760x640")
-        self.minsize(680, 520)
 
         r = self.result
         home, away = r.get('home_team'), r.get('away_team')
@@ -123,6 +130,13 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                 ).pack(side='left', padx=10)
 
     def _three_stars(self):
+        # Prefer the stars recorded at game time (stars.record_game_stars)
+        # so the box score agrees with the player card and monthly
+        # narratives. Older results fall back to the ratings sort.
+        saved = self.result.get('three_stars')
+        if saved:
+            return [(s.get('name'), s.get('team_name'), s.get('line'))
+                    for s in saved[:3] if isinstance(s, dict)]
         ratings = self.result.get('player_ratings') or {}
         by_id = self._roster_lookup()
         stars = []
@@ -147,7 +161,6 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         self._fill_scoring(self.tabs.tab("Scoring Summary"))
         self._fill_players(self.tabs.tab("Player Stats"))
         self._fill_teams(self.tabs.tab("Team Stats"))
-        self._fill_shot_chart(self.tabs.tab("Shot Chart"))
         if initial_tab in self.TABS:
             try:
                 self.tabs.set(initial_tab)
@@ -155,7 +168,15 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                 pass
 
         from ctk_theme import secondary_button
-        secondary_button(self, text="Close", command=self.destroy).pack(pady=(0, 14))
+        secondary_button(self, text="Close", command=self.close_view).pack(pady=(0, 14))
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Scoring Summary tab
@@ -292,17 +313,17 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                      text_color=c['TEAL'], anchor='w').pack(anchor='w', padx=8, pady=(4, 2))
         self._grid_table(
             body,
-            headers=["Player", "Pos", "G", "A", "P", "+/-", "SOG", "Hits", "Blk", "FO"],
-            widths=[200, 52, 40, 40, 40, 44, 52, 52, 52, 64],
+            headers=["Player", "Pos", "G", "A", "P", "SOG", "Hits", "Blk", "FO"],
+            widths=[220, 52, 40, 40, 40, 52, 52, 52, 64],
             rows=[[getattr(p, 'full_name', '?'),
                    self._pos_short(p),
                    gs.get('g', 0), gs.get('a', 0),
                    gs.get('g', 0) + gs.get('a', 0),
-                   gs.get('plus_minus', 0),
                    gs.get('shots_on_goal', 0), gs.get('hits', 0),
                    gs.get('blocked_shots', gs.get('blocked_shots_by', 0)),
                    f"{gs.get('faceoffs_won', 0)}-{gs.get('faceoffs_lost', 0)}"]
-                  for p, gs in skaters])
+                  for p, gs in skaters],
+            players=[p for p, gs in skaters])
 
         if goalies:
             ctk.CTkLabel(body, text="Goaltenders", font=('Segoe UI', 13, 'bold'),
@@ -327,7 +348,8 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                 body,
                 headers=["Goaltender", "SA", "Saves", "SV%", "GA"],
                 widths=[220, 52, 64, 64, 52],
-                rows=grows)
+                rows=grows,
+                players=[p for p, gs in goalies])
 
     @staticmethod
     def _pos_short(player):
@@ -335,7 +357,7 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
         val = getattr(pos, 'value', None) or getattr(pos, 'name', '') or ''
         return str(val)
 
-    def _grid_table(self, parent, headers, widths, rows):
+    def _grid_table(self, parent, headers, widths, rows, players=None):
         c = self._c
         frame = ctk.CTkFrame(parent, fg_color=c['CARD'], corner_radius=8)
         frame.pack(fill='x', padx=8, pady=2)
@@ -355,6 +377,12 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                                    fg_color=bg, corner_radius=4)
                 lbl.grid(row=ri, column=ci, padx=4, pady=2,
                          sticky='ew' if ci == 0 else '')
+                # Right-click player name for context menu
+                if ci == 0 and players and ri - 1 < len(players):
+                    try:
+                        bind_player_context(lbl, players[ri - 1], self)
+                    except Exception:
+                        pass
         frame.grid_columnconfigure(0, weight=1)
 
     # ------------------------------------------------------------------
@@ -452,69 +480,29 @@ class GameBoxScoreWindow(ctk.CTkToplevel):
                              row=ri, column=2, padx=6, pady=2)
         frame.grid_columnconfigure(0, weight=1)
 
-    def _fill_shot_chart(self, tab):
-        """E4: shot chart with click-to-replay."""
-        import tkinter as tk
-        c = self._c
-        body = ctk.CTkFrame(tab, fg_color='transparent')
-        body.pack(fill='both', expand=True, padx=6, pady=6)
 
-        ctk.CTkLabel(body, text="Shot Chart (click a shot to replay)",
-                     font=('Segoe UI', 12, 'bold'),
-                     text_color=c['TEXT']).pack(pady=(0, 6))
+class GameBoxScoreWindow(InGamePopup):
+    """Popup wrapper around GameBoxScoreView (backward compatibility).
 
-        # Canvas: simplified rink (200x85 ft, scaled)
-        W, H = 600, 260
-        canvas = tk.Canvas(body, width=W, height=H, bg='#0d1b2a',
-                          highlightthickness=0)
-        canvas.pack(pady=6)
+    New code should embed GameBoxScoreView as a full-screen view via
+    ``HockeyManagerGUI.show_screen('box_score', 'Box Score', GameBoxScoreView,
+    game_result)`` instead of opening this card.
+    """
 
-        # Rink outline
-        canvas.create_rectangle(10, 10, W-10, H-10, outline='#1e3a5f', width=2)
-        # Center line
-        canvas.create_line(W//2, 10, W//2, H-10, fill='#1e3a5f', width=1)
-        # Goals (simplified)
-        canvas.create_rectangle(5, H//2-15, 12, H//2+15, fill='#ff4444', outline='')
-        canvas.create_rectangle(W-12, H//2-15, W-5, H//2+15, fill='#ff4444', outline='')
+    def __init__(self, parent, game_result, initial_tab="Scoring Summary"):
+        super().__init__(parent)
+        self.title("Box Score")
+        # Closing the card must tear down the popup card (manager-owned),
+        # not just the inner frame.
+        self._view = GameBoxScoreView(self, game_result, initial_tab, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
 
-        # Plot shots from the sim's event log
-        events = self.result.get('event_log') or []
-        shots = [e for e in events
-                 if 'GOAL' in str(e.get('type', '')) or
-                    'SAVE' in str(e.get('type', ''))]
-        # Scale: rink 200x85 -> canvas 580x240
-        sx = (W - 20) / 200
-        sy = (H - 20) / 85
-
-        colors = {'goal': '#00ff88', 'save': '#4488ff',
-                  'miss': '#ff4444', 'block': '#888888'}
-        for shot in shots:
-            details = shot.get('details', {}) or {}
-            # Shooter position from details, or estimate from shot quality
-            pos = details.get('shooter_pos') or (100, 42.5)
-            x = 10 + pos[0] * sx
-            y = 10 + pos[1] * sy
-            outcome = 'goal' if 'GOAL' in str(shot.get('type', '')) else 'save'
-            color = colors.get(outcome, '#4488ff')
-            r = 4
-            oid = canvas.create_oval(x-r, y-r, x+r, y+r,
-                                    fill=color, outline='white', width=1)
-            # Click to replay
-            ts = shot.get('timestamp', 0)
-            canvas.tag_bind(oid, '<Button-1>',
-                           lambda e, t=ts: self._replay_moment(t))
-
-        # Legend
-        legend = ctk.CTkFrame(body, fg_color='transparent')
-        legend.pack(pady=4)
-        for label, color in [('Goal', '#00ff88'), ('Save', '#4488ff'),
-                             ('Miss', '#ff4444'), ('Block', '#888888')]:
-            ctk.CTkLabel(legend, text=f"● {label}",
-                         text_color=color,
-                         font=('Segoe UI', 10)).pack(side='left', padx=10)
-
-    def _replay_moment(self, timestamp):
-        """E4: jump the viewer to a timestamp."""
-        # This hooks into the game viewer if available
-        if hasattr(self, '_viewer') and self._viewer:
-            self._viewer.seek_to(timestamp)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

@@ -4,13 +4,28 @@ Gradual skill improvement through focused training sessions
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
+import customtkinter as ctk
 from typing import Dict, List, Optional, Tuple
-from datetime import date, timedelta
+from datetime import date
 from dataclasses import dataclass, field
 from enum import Enum
 import random
-import json
+
+
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
 
 
 class PracticeType(Enum):
@@ -70,10 +85,13 @@ class PracticeSession:
     practice_type: PracticeType
     intensity: PracticeIntensity
     duration_minutes: int
-    trainer_quality: int  # 1-20 scale
+    trainer_quality: int  # 1-20 scale (legacy fallback when no team given)
     date_completed: date
     skill_gain: float  # Actual skill points gained
     fatigue_cost: int  # Fatigue added to player
+    # Coaching-aware stamp (new): who ran it and why it worked.
+    coach_name: str = ""
+    breakdown: Optional[dict] = None  # coach_practice.practice_breakdown()
 
 @dataclass
 class PracticeResult:
@@ -189,37 +207,86 @@ class PracticeEngine:
         
         return True, "Ready to practice"
     
-    def execute_practice(self, player, practice_type: PracticeType, 
+    def execute_practice(self, player, practice_type: PracticeType,
                         intensity: PracticeIntensity, duration_minutes: int = 60,
-                        trainer_quality: int = 10) -> PracticeSession:
-        """Execute a practice session and apply improvements"""
-        
+                        trainer_quality: int = 10,
+                        team=None) -> PracticeSession:
+        """Execute a practice session and apply improvements.
+
+        When ``team`` is given, the flat ``trainer_quality`` is replaced by
+        the real coaching staff: who runs the drill, how well they teach
+        it, the player's archetype affinity and attitude, the coach/player
+        fit, and whether the drill fits the club's system
+        (coach_practice.practice_breakdown). Without a team the legacy
+        trainer_quality path runs unchanged.
+        """
+
+        # Coaching-aware effectiveness (additive: legacy path untouched).
+        breakdown = None
+        coaching_mult = None
+        fatigue_mult = 1.0
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                breakdown = _cp.practice_breakdown(
+                    team, player, practice_type.value)
+                coaching_mult = float(breakdown.get("total_mult", 1.0))
+                fatigue_mult = float(breakdown.get("fatigue_mult", 1.0))
+            except Exception:
+                breakdown, coaching_mult = None, None
+
         # Calculate base effectiveness
         base_effectiveness = self._calculate_base_effectiveness(
-            player, practice_type, intensity, duration_minutes, trainer_quality
+            player, practice_type, intensity, duration_minutes,
+            trainer_quality, coaching_mult=coaching_mult
         )
-        
+
         # Apply improvements to relevant attributes
         skill_gains = {}
         practice_map = self.practice_effectiveness[practice_type]
-        
+
         for attribute, multiplier in practice_map.items():
             if hasattr(player, attribute):
                 current_value = getattr(player, attribute)
-                
+
                 # Calculate improvement with diminishing returns
                 improvement = self._calculate_skill_improvement(
                     current_value, base_effectiveness * multiplier, player.age
                 )
-                
+
                 if improvement > 0:
-                    new_value = min(100, current_value + improvement)  # native 1-100 scale
+                    new_value = min(100, current_value + improvement)  # native 100-scale cap
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
-        
-        # Calculate fatigue cost
+
+        # Calculate fatigue cost (a motivating coach manages load better)
         fatigue_cost = self._calculate_fatigue_cost(intensity, duration_minutes)
-        
+        try:
+            fatigue_cost = max(1, int(round(fatigue_cost * fatigue_mult)))
+        except Exception:
+            pass
+
+        # Friction has a price: a bad coach fit on a hard skate costs a
+        # little morale (the room notices).
+        if breakdown and intensity in (PracticeIntensity.INTENSE,
+                                       PracticeIntensity.EXTREME):
+            try:
+                _mc = float(breakdown.get("morale_cost", 0) or 0)
+                if _mc > 0 and hasattr(player, "morale"):
+                    player.morale = max(1.0, min(100.0,
+                                                 float(player.morale) - _mc))
+            except Exception:
+                pass
+
+        # Training the system trains the system: aligned practice nudges
+        # tactical familiarity (the identity gets rehearsed).
+        if breakdown and breakdown.get("trains_system") and team is not None:
+            try:
+                _fam = float(getattr(team, "tactics_familiarity", 85) or 85)
+                team.tactics_familiarity = min(100.0, _fam + 0.5)
+            except Exception:
+                pass
+
         # Create session record
         session = PracticeSession(
             practice_type=practice_type,
@@ -228,20 +295,23 @@ class PracticeEngine:
             trainer_quality=trainer_quality,
             date_completed=date.today(),
             skill_gain=sum(skill_gains.values()),
-            fatigue_cost=fatigue_cost
+            fatigue_cost=fatigue_cost,
+            coach_name=(breakdown.get("coach_name", "") if breakdown else ""),
+            breakdown=breakdown,
         )
-        
+
         # Update player history
         history = self.get_player_history(player.id)
         history.add_session(session)
-        
+
         return session
     
     def _calculate_base_effectiveness(self, player, practice_type: PracticeType,
-                                   intensity: PracticeIntensity, duration: int, 
-                                   trainer_quality: int) -> float:
+                                   intensity: PracticeIntensity, duration: int,
+                                   trainer_quality: int,
+                                   coaching_mult: Optional[float] = None) -> float:
         """Calculate base practice effectiveness"""
-        
+
         # Intensity multipliers
         intensity_mult = {
             PracticeIntensity.LIGHT: 0.5,
@@ -249,35 +319,43 @@ class PracticeEngine:
             PracticeIntensity.INTENSE: 1.5,
             PracticeIntensity.EXTREME: 2.0
         }
-        
+
         # Duration effect (diminishing returns after 60 minutes)
         duration_mult = min(1.5, duration / 60)
         if duration > 60:
             duration_mult = 1.0 + (duration - 60) / 120  # Slower gains past 60 min
-        
-        # Trainer quality (1-20 scale)
-        trainer_mult = 0.5 + (trainer_quality / 20) * 0.8  # 0.5 to 1.3 range
-        
+
+        # The teacher: the real coaching staff when a team is given
+        # (coach_practice breakdown: who runs the drill, archetype affinity,
+        # attitude, coach fit, system fit), else the legacy flat number.
+        if coaching_mult is not None:
+            teacher_mult = max(0.4, min(1.75, coaching_mult))
+        else:
+            # Trainer quality (1-20 scale)
+            teacher_mult = 0.5 + (trainer_quality / 20) * 0.8  # 0.5 to 1.3 range
+
         # Player age factor (younger players learn faster)
         age_mult = self._get_age_multiplier(player.age)
-        
-        # Player work ethic (if available)
+
+        # Player work ethic (if available); work_rate is native 1-100.
+        # (Kept for the legacy path; the coaching-aware path folds attitude
+        # into coaching_mult via practice_attitude.)
         work_ethic_mult = 1.0
-        if hasattr(player, 'work_rate'):
+        if coaching_mult is None and hasattr(player, 'work_rate'):
             work_ethic_mult = 0.7 + (player.work_rate / 100) * 0.6
-        
+
         # Random factor for realism
         random_mult = random.uniform(0.8, 1.2)
-        
-        base_effectiveness = (intensity_mult[intensity] * duration_mult * 
-                            trainer_mult * age_mult * work_ethic_mult * random_mult)
-        
+
+        base_effectiveness = (intensity_mult[intensity] * duration_mult *
+                            teacher_mult * age_mult * work_ethic_mult * random_mult)
+
         return base_effectiveness * 0.1  # Scale to reasonable improvement levels
     
     def _calculate_skill_improvement(self, current_value: int, effectiveness: float, age: int) -> float:
         """Calculate actual skill point improvement with diminishing returns"""
         
-        # Diminishing returns - harder to improve high attributes
+        # Diminishing returns - harder to improve high attributes (100-scale)
         if current_value >= 90:
             effectiveness *= 0.2
         elif current_value >= 76:
@@ -327,44 +405,80 @@ class PracticeEngine:
         recovery = self.fatigue_recovery_rate * days
         history.current_fatigue = max(0, history.current_fatigue - recovery)
     
-    def get_practice_recommendations(self, player) -> List[Tuple[PracticeType, str]]:
-        """Get recommended practice types for a player"""
+    def get_practice_recommendations(self, player, team=None) -> List[Tuple[PracticeType, str]]:
+        """Get recommended practice types for a player.
+
+        Ranks by need (weakest attributes) crossed with how well the drill
+        lands for THIS player: archetype affinity, the coach who'd run it,
+        and system fit. Each recommendation explains itself.
+        """
+        # Weakness per practice type: average the mapped attributes.
+        scored = []
+        for ptype in PracticeType:
+            attr_map = self.practice_effectiveness.get(ptype, {})
+            vals = [getattr(player, a, 50) for a in attr_map
+                    if hasattr(player, a)]
+            if not vals:
+                continue
+            weakness = 100.0 - sum(vals) / len(vals)  # 0..~75
+            scored.append((ptype, weakness))
+
+        # Coaching-aware landing factor per drill (1.0 when no team given).
+        landing = {}
+        if team is not None:
+            try:
+                import coach_practice as _cp
+                for ptype, _w in scored:
+                    try:
+                        bd = _cp.practice_breakdown(team, player, ptype.value)
+                        # Affinity x coach x system x attitude -- how well the
+                        # drill sticks, independent of raw need.
+                        landing[ptype] = (float(bd.get("affinity", 1.0))
+                                          * float(bd.get("coach_mult", 1.0))
+                                          * float(bd.get("system", 1.0))
+                                          * float(bd.get("attitude", 1.0)))
+                    except Exception:
+                        landing[ptype] = 1.0
+            except Exception:
+                pass
+
+        def _rank_key(item):
+            ptype, weakness = item
+            return weakness * landing.get(ptype, 1.0)
+
+        ranked = sorted(scored, key=_rank_key, reverse=True)
         recommendations = []
-        
-        # Analyze player's weak areas
-        attributes = {
-            'skating': getattr(player, 'skating', 10),
-            'shooting': getattr(player, 'shooting', 10),
-            'passing': getattr(player, 'passing', 10),
-            'checking': getattr(player, 'checking', 10),
-            'defense': getattr(player, 'defense', 10),
-            'faceoffs': getattr(player, 'faceoffs', 10),
-        }
-        
-        # Sort by lowest values (areas that need work)
-        sorted_attrs = sorted(attributes.items(), key=lambda x: x[1])
-        
-        practice_mapping = {
-            'skating': (PracticeType.SKATING, "Improve speed and agility"),
-            'shooting': (PracticeType.SHOOTING, "Develop scoring ability"),
-            'passing': (PracticeType.PASSING, "Enhance playmaking skills"),
-            'checking': (PracticeType.CHECKING, "Build physical presence"),
-            'defense': (PracticeType.DEFENSE, "Strengthen defensive play"),
-            'faceoffs': (PracticeType.FACEOFFS, "Improve faceoff percentage")
-        }
-        
-        # Recommend top 3 weakest areas
-        for attr_name, value in sorted_attrs[:3]:
-            if attr_name in practice_mapping and value < 15:
-                practice_type, reason = practice_mapping[attr_name]
-                recommendations.append((practice_type, f"{reason} (Current: {value})"))
-        
-        # Add leadership/teamwork for older players
+        for ptype, weakness in ranked[:3]:
+            if weakness < 8:  # nothing meaningfully weak
+                continue
+            reason_bits = []
+            if team is not None:
+                try:
+                    import coach_practice as _cp2
+                    bd = _cp2.practice_breakdown(team, player, ptype.value)
+                    aw = bd.get("affinity_why", "")
+                    if aw:
+                        reason_bits.append(aw)
+                    cn = bd.get("coach_name", "")
+                    if cn:
+                        reason_bits.append(
+                            f"{cn} runs it "
+                            f"({bd.get('coach_rating', 50):.0f})")
+                    sl = bd.get("system_label", "")
+                    if sl and "Outside" not in sl:
+                        reason_bits.append(sl.lower())
+                except Exception:
+                    pass
+            reason = "; ".join(reason_bits) if reason_bits else \
+                "biggest gap in his game"
+            recommendations.append(
+                (ptype, f"{ptype.value.replace('_', ' ').title()} -- {reason}"))
+
+        # Veterans get leadership work when it's a real gap.
         if player.age >= 25:
             leadership_val = getattr(player, 'leadership', 10)
             if leadership_val < 15:
                 recommendations.append((PracticeType.LEADERSHIP, "Develop leadership qualities"))
-        
         return recommendations
     
     def schedule_practice(self, player, practice_type: PracticeType, intensity: PracticeIntensity, total_sessions: int):
@@ -417,29 +531,44 @@ class PracticeEngine:
                     history.current_schedule = None
 
 
-class DevelopmentOverviewWindow(tk.Toplevel):
+class DevelopmentOverviewView(ctk.CTkFrame):
     """Development overview window showing all team players"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Development Overview & Progress")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("1200x800")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the DevelopmentOverviewWindow wrapper
+        self.configure(fg_color=self.app.BG_COLOR)
         
         # Initialize practice engine
         if not hasattr(parent, 'practice_engine'):
-            parent.practice_engine = PracticeEngine()
+            self.app.practice_engine = PracticeEngine()
         
-        self.practice_engine = parent.practice_engine
+        self.practice_engine = self.app.practice_engine
         self.selected_player = None
         
         self._create_interface()
         self._populate_players()
         
         # Track window for lifecycle management
-        self.parent.open_windows['development_overview'] = self
-    
+        self.app.open_windows['development_overview'] = self
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+    def _practice_team(self):
+        """The team whose coaching staff runs practice (None = legacy)."""
+        try:
+            return getattr(getattr(self, 'app', None), 'user_team', None)
+        except Exception:
+            return None
+
     def _create_interface(self):
         """Create the enhanced development overview interface"""
         # Main container with zero padding to maximize usable area
@@ -452,7 +581,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         # Title
         title_label = ttk.Label(top_frame, text="🏒 Player Development Center", 
-                               style='Title.TLabel', font=(self.parent.FONT_FAMILY, 24, 'bold'))  # Increased from 18 to 24
+                               style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 24, 'bold'))  # Increased from 18 to 24
         title_label.pack(side='left')
         
         # Quick action buttons
@@ -500,12 +629,12 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         status_frame.pack(fill='x', pady=(3, 0))
         
         self.status_bar = ttk.Label(status_frame, text="Select a player to view development details", 
-                                   style='Content.TLabel', font=(self.parent.FONT_FAMILY, 14))  # Increased from 10 to 14
+                                   style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 14))  # Increased from 10 to 14
         self.status_bar.pack(side='left')
         
         # Bottom right - Close button
         ttk.Button(status_frame, text="❌ Close", 
-                  command=self.destroy, style='TButton').pack(side='right')
+                  command=self.close_view, style='TButton').pack(side='right')
     
     def _create_player_list(self, parent):
         """Create enhanced player selection list"""
@@ -586,7 +715,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         parent.grid_columnconfigure(1, weight=0)
         
         # Scrollable frame for player details
-        canvas = tk.Canvas(parent, bg=self.parent.CONTENT_BG)
+        canvas = tk.Canvas(parent, bg=self.app.CONTENT_BG)
         scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         self.details_frame = ttk.Frame(canvas, style='Content.TFrame')
         
@@ -605,23 +734,22 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         # Default message
         self.default_label = ttk.Label(self.details_frame, 
                                      text="Select a player to view detailed development information",
-                                     style='Content.TLabel', font=(self.parent.FONT_FAMILY, 16))  # Increased from 12 to 16
+                                     style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 16))  # Increased from 12 to 16
         self.default_label.pack(pady=50)
     
     def _open_practice_window(self):
         """Open the practice center for active roster players"""
-        if 'practice_center' not in self.parent.open_windows or not self.parent.open_windows['practice_center'].winfo_exists():
-            self.parent.open_windows['practice_center'] = PracticeCenterWindow(self.parent)
-        self.parent.open_windows['practice_center'].focus_set()
+        self.app.show_screen('practice_center', 'Practice Center',
+                             PracticeCenterView)
     
     def _show_team_analysis(self):
         """Show comprehensive team development analysis"""
         # Check if we have access to user team data
         user_team = None
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            user_team = self.parent.user_team
-        elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-            user_team = self.parent.game_manager.user_team
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            user_team = self.app.user_team
+        elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+            user_team = self.app.game_manager.user_team
         else:
             messagebox.showwarning("No Team", "No team data available")
             return
@@ -644,9 +772,9 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         total_players = len(all_players)
         avg_overall = sum(p.overall_rating() for p in all_players) / total_players
         
-        elite_players = [p for p in all_players if p.overall_rating() >= 80]
-        good_players = [p for p in all_players if 65 <= p.overall_rating() < 80]
-        developing_players = [p for p in all_players if p.overall_rating() < 65]
+        elite_players = [p for p in all_players if p.overall_rating() >= 85]
+        good_players = [p for p in all_players if 75 <= p.overall_rating() < 85]
+        developing_players = [p for p in all_players if p.overall_rating() < 75]
         
         # Practice analysis
         active_practitioners = []
@@ -705,17 +833,17 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             analysis_text += "• Veteran-heavy roster - Focus on mentorship and leadership development\n"
         
         # Show analysis in a scrollable dialog
-        analysis_window = tk.Toplevel(self)
+        analysis_window = InGamePopup(self)
         analysis_window.title("Team Development Analysis")
-        analysis_window.configure(background=self.parent.BG_COLOR)
+        analysis_window.configure(background=self.app.BG_COLOR)
         analysis_window.geometry("600x500")
         
         # Text widget with scrollbar
         text_frame = ttk.Frame(analysis_window, style='Content.TFrame')
         text_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
-        text_widget = tk.Text(text_frame, wrap='word', font=(self.parent.FONT_FAMILY, 14),  # Increased from 10 to 14
-                             bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        text_widget = tk.Text(text_frame, wrap='word', font=_sfont(self.app.FONT_FAMILY, 14),  # Increased from 10 to 14
+                             bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         scrollbar = ttk.Scrollbar(text_frame, orient='vertical', command=text_widget.yview)
         text_widget.configure(yscrollcommand=scrollbar.set)
         
@@ -758,7 +886,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         self.player_info_frame.pack(fill='x', padx=10, pady=10)
         
         self.player_name_label = ttk.Label(self.player_info_frame, text="Select a player to begin practice", 
-                                         style='Title.TLabel', font=(self.parent.FONT_FAMILY, 14, 'bold'))
+                                         style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 14, 'bold'))
         self.player_name_label.pack()
         
         # Practice type selection
@@ -782,6 +910,22 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         ttk.Button(type_combo_frame, text="💡 Get Recommendations", 
                   command=self._show_recommendations, style='TButton').pack(side='right', padx=(10, 0))
         
+        # Coaching read: who runs the selected drill and how it lands.
+        # Updates live as the practice type changes (trace below).
+        coach_frame = ttk.LabelFrame(self.controls_frame, text="Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=5)
+        self.coaching_read_label = ttk.Label(coach_frame, text="",
+                                            style='Content.TLabel',
+                                            wraplength=360, justify='left')
+        self.coaching_read_label.pack(fill='x', padx=10, pady=8)
+        self._update_coaching_read()
+        try:
+            self.practice_type_var.trace_add(
+                'write', lambda *_a: self._update_coaching_read())
+        except Exception:
+            pass
+
         # Intensity selection
         intensity_frame = ttk.LabelFrame(parent, text="Intensity Level", style='Card.TLabelframe')
         intensity_frame.pack(fill='x', padx=10, pady=5)
@@ -878,10 +1022,10 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         # Check if we have access to user team data
         user_team = None
-        if hasattr(self.parent, 'user_team') and self.parent.user_team:
-            user_team = self.parent.user_team
-        elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-            user_team = self.parent.game_manager.user_team
+        if hasattr(self.app, 'user_team') and self.app.user_team:
+            user_team = self.app.user_team
+        elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+            user_team = self.app.game_manager.user_team
         else:
             # Show error message in the tree
             error_item = self.player_tree.insert('', 'end', values=(
@@ -908,7 +1052,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             elif filter_value == "Under 25":
                 all_players = [p for p in all_players if p.age < 25]
             elif filter_value == "Needs Development":
-                all_players = [p for p in all_players if p.overall_rating() < 14]
+                all_players = [p for p in all_players if p.overall_rating() < 70]
         
         # Apply sorting
         sort_type = getattr(self, 'sort_var', None)
@@ -990,13 +1134,13 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             item_id = self.player_tree.insert('', 'end', values=values, tags=(player.id, tag))
             
             # Store player reference in tree map for easy access
-            if not hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps = {}
-            if 'development_tree_map' not in self.parent.tree_maps:
-                self.parent.tree_maps['development_tree_map'] = {}
-            self.parent.tree_maps['development_tree_map'][item_id] = player
+            if not hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps = {}
+            if 'development_tree_map' not in self.app.tree_maps:
+                self.app.tree_maps['development_tree_map'] = {}
+            self.app.tree_maps['development_tree_map'][item_id] = player
             # Widget-keyed entry so the app-wide right-click menu resolves it.
-            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
+            self.app.tree_maps.setdefault(self.player_tree, {})[item_id] = player
         
         # Update status bar
         if hasattr(self, 'status_bar'):
@@ -1029,11 +1173,11 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         item_id = selection[0]
         
         # Get player from tree map
-        if (hasattr(self.parent, 'tree_maps') and 
-            'development_tree_map' in self.parent.tree_maps and
-            item_id in self.parent.tree_maps['development_tree_map']):
+        if (hasattr(self.app, 'tree_maps') and 
+            'development_tree_map' in self.app.tree_maps and
+            item_id in self.app.tree_maps['development_tree_map']):
             
-            self.selected_player = self.parent.tree_maps['development_tree_map'][item_id]
+            self.selected_player = self.app.tree_maps['development_tree_map'][item_id]
             self._display_comprehensive_player_details()
         else:
             # Fallback: try to find player by name from tree values
@@ -1043,10 +1187,10 @@ class DevelopmentOverviewWindow(tk.Toplevel):
                 
                 # Search for player by name
                 user_team = None
-                if hasattr(self.parent, 'user_team') and self.parent.user_team:
-                    user_team = self.parent.user_team
-                elif hasattr(self.parent, 'game_manager') and hasattr(self.parent.game_manager, 'user_team'):
-                    user_team = self.parent.game_manager.user_team
+                if hasattr(self.app, 'user_team') and self.app.user_team:
+                    user_team = self.app.user_team
+                elif hasattr(self.app, 'game_manager') and hasattr(self.app.game_manager, 'user_team'):
+                    user_team = self.app.game_manager.user_team
                 
                 if user_team:
                     all_players = (user_team.roster + 
@@ -1062,7 +1206,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             # If we get here, show error message
             error_label = ttk.Label(self.details_frame, 
                                    text="Error: Could not load player details. Please try selecting another player.",
-                                   style='Content.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                                   style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 12))
             error_label.pack(pady=50)
     
     def _display_comprehensive_player_details(self):
@@ -1079,12 +1223,12 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         # Player name and basic info
         name_label = ttk.Label(header_frame, text=player.full_name, 
-                              style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                              style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 16, 'bold'))
         name_label.pack()
         
         basic_info = f"{player.primary_position.value} • Age {player.age} • Overall: {player.overall_rating()}"
         basic_label = ttk.Label(header_frame, text=basic_info, 
-                               style='Content.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                               style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 12))
         basic_label.pack()
         
         # Development Status Section
@@ -1130,7 +1274,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         tech_frame.grid(row=0, column=0, sticky='nw', padx=(0, 20))
         
         ttk.Label(tech_frame, text="Technical Skills:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         tech_skills = [
             ("Skating", getattr(player, 'skating', 10)),
@@ -1152,7 +1296,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         mental_frame.grid(row=0, column=1, sticky='nw', padx=(0, 20))
         
         ttk.Label(mental_frame, text="Mental Attributes:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         mental_skills = [
             ("Work Rate", getattr(player, 'work_rate', 10)),
@@ -1174,13 +1318,13 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         physical_frame.grid(row=0, column=2, sticky='nw')
         
         ttk.Label(physical_frame, text="Physical Attributes:", 
-                 style='Subtitle.TLabel', font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 style='Subtitle.TLabel', font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         physical_skills = [
             ("Strength", getattr(player, 'strength', 10)),
             ("Speed", getattr(player, 'speed', 10)),
             ("Stamina", getattr(player, 'stamina', 10)),
-            ("Injury Prone", getattr(player, 'injury_proneness', 10)),
+            ("Injury Prone", getattr(player, 'injury_proneness', 50)),
             ("Aggression", getattr(player, 'aggression', 10)),
             ("Bravery", getattr(player, 'bravery', 10))
         ]
@@ -1228,7 +1372,41 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             rec_text = f"{player.full_name} is well-balanced across all areas.\nFocus on maintaining current skill levels."
         
         ttk.Label(rec_content, text=rec_text, style='Content.TLabel').pack(anchor='w')
-        
+
+        # Coaching Read Section: who runs the top recommended drill and
+        # how it lands for this player (session coach, teaching quality,
+        # archetype affinity, attitude, personality fit, system fit).
+        coach_frame = ttk.LabelFrame(self.details_frame, text="🎓 Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=(0, 10))
+
+        coach_content = ttk.Frame(coach_frame, style='Content.TFrame')
+        coach_content.pack(fill='x', padx=10, pady=10)
+
+        try:
+            import coach_practice as _cp
+            if recommendations:
+                _read_type = recommendations[0][0]
+            elif history.current_schedule:
+                _read_type = history.current_schedule['type']
+            else:
+                _read_type = None
+            if _read_type is not None:
+                _read_name = _read_type.value.replace('_', ' ').title()
+                _bd = _cp.practice_breakdown(self._practice_team(), player,
+                                             _read_type.value)
+                _lines = _cp.describe_session(_bd)
+                coach_text = (f"Top drill: {_read_name}\n"
+                              + "\n".join("• " + _l for _l in _lines)
+                              if _lines else "No coaching staff on file.")
+            else:
+                coach_text = "No recommended drill yet."
+        except Exception:
+            coach_text = "Coaching read unavailable."
+
+        ttk.Label(coach_content, text=coach_text, style='Content.TLabel',
+                  wraplength=560, justify='left').pack(anchor='w')
+
         # Quick Practice Section
         quick_practice_frame = ttk.LabelFrame(self.details_frame, text="⚡ Quick Practice", 
                                             style='Card.TLabelframe')
@@ -1285,7 +1463,7 @@ class DevelopmentOverviewWindow(tk.Toplevel):
             outlook_color = 'red'
         
         ttk.Label(traj_content, text=outlook, style='Content.TLabel',
-                 foreground=outlook_color, font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                 foreground=outlook_color, font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         
         # Age-specific development advice
         if player.age <= 21:
@@ -1327,9 +1505,10 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         
         try:
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             # Show quick results
             practice_name = practice_type.value.replace('_', ' ').title()
             result_text = f"Quick {practice_name} practice completed!\n"
@@ -1442,9 +1621,10 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         # Execute practice
         try:
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             # Show results
             self._show_practice_results(session)
             
@@ -1462,16 +1642,28 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         results_text += f"Type: {session.practice_type.value.replace('_', ' ').title()}\n"
         results_text += f"Intensity: {session.intensity.value.title()}\n"
         results_text += f"Duration: {session.duration_minutes} minutes\n"
+        if session.coach_name:
+            results_text += f"Run by: {session.coach_name}\n"
         results_text += f"Skill Improvement: +{session.skill_gain:.2f} points\n"
         results_text += f"Fatigue Cost: +{session.fatigue_cost} points\n\n"
-        
+
+        # Why it worked (or didn't): the coaching breakdown, legible.
+        try:
+            if session.breakdown:
+                import coach_practice as _cp
+                for _line in _cp.describe_session(session.breakdown):
+                    results_text += f"• {_line}\n"
+                results_text += "\n"
+        except Exception:
+            pass
+
         if session.skill_gain > 0.5:
             results_text += "Excellent practice session! 🌟"
         elif session.skill_gain > 0.2:
             results_text += "Good practice session! 👍"
         else:
             results_text += "Light practice session. 💪"
-        
+
         messagebox.showinfo("Practice Results", results_text)
     
     def _update_history(self):
@@ -1484,14 +1676,14 @@ class DevelopmentOverviewWindow(tk.Toplevel):
         for item in self.history_tree.get_children():
             self.history_tree.delete(item)
         
-        if not hasattr(self.parent, 'user_team') or not self.parent.user_team:
+        if not hasattr(self.app, 'user_team') or not self.app.user_team:
             return
         
         # Get all recent sessions from all players
         all_sessions = []
-        all_players = (self.parent.user_team.roster + 
-                      self.parent.user_team.ahl_roster + 
-                      self.parent.user_team.prospects)
+        all_players = (self.app.user_team.roster + 
+                      self.app.user_team.ahl_roster + 
+                      self.app.user_team.prospects)
         
         for player in all_players:
             history = self.practice_engine.get_player_history(player.id)
@@ -1517,6 +1709,24 @@ class DevelopmentOverviewWindow(tk.Toplevel):
 
 
 # Function to test the practice system
+
+
+class DevelopmentOverviewWindow(InGamePopup):
+    """Popup wrapper around DevelopmentOverviewView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Development Overview & Progress")
+        self._view = DevelopmentOverviewView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 def test_practice_system():
     """Test the enhanced practice system"""
     print("🏒 Testing Enhanced Practice System...")
@@ -1600,49 +1810,53 @@ def test_practice_system():
     print("\n✅ Enhanced Practice System test complete!")
 
 
-class PracticeCenterWindow(tk.Toplevel):
+class PracticeCenterView(ctk.CTkFrame):
     """Practice center window for active roster players only"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the PracticeCenterWindow wrapper
         
         # Handle practice engine - parent might be the game manager directly or have a game_manager attribute
         if hasattr(parent, 'game_manager'):
             # Parent has a game_manager attribute
-            self.practice_engine = getattr(parent.game_manager, 'practice_engine', None)
+            self.practice_engine = getattr(self.app.game_manager, 'practice_engine', None)
             if not self.practice_engine:
                 self.practice_engine = PracticeEngine()
-                parent.game_manager.practice_engine = self.practice_engine
+                self.app.game_manager.practice_engine = self.practice_engine
         else:
             # Parent IS the game manager (HockeyManagerGUI)
             self.practice_engine = getattr(parent, 'practice_engine', None)
             if not self.practice_engine:
                 self.practice_engine = PracticeEngine()
-                parent.practice_engine = self.practice_engine
+                self.app.practice_engine = self.practice_engine
         
         self.selected_player = None
         
-        self.title("Practice Center")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
-        
-        # Make window modal
-        self.transient(parent)
-        self.grab_set()
-        
+        self.configure(fg_color=self.app.BG_COLOR)
+
         self._create_interface()
         self.update_views()
-        
-        # Center the window
-        self.geometry("+%d+%d" % (parent.winfo_rootx() + 50, parent.winfo_rooty() + 50))
-    
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+    def _practice_team(self):
+        """The team whose coaching staff runs practice (None = legacy)."""
+        try:
+            return getattr(getattr(self, 'app', None), 'user_team', None)
+        except Exception:
+            return None
+
     def _create_interface(self):
         """Create the practice center interface"""
-        # Title
-        title_label = ttk.Label(self, text="Practice Center - Active Roster Only", 
-                              style='Title.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
-        title_label.pack(pady=(10, 0))
         
         subtitle_label = ttk.Label(self, text="Schedule individual practice sessions for players on the active roster", 
                                  style='Content.TLabel')
@@ -1658,13 +1872,13 @@ class PracticeCenterWindow(tk.Toplevel):
         content_frame.grid_rowconfigure(0, weight=1)
         
         # Left panel - Player list
-        left_panel = self.parent._create_panel(content_frame, "Active Roster Players", 0, 0)
+        left_panel = self.app._create_panel(content_frame, "Active Roster Players", 0, 0)
         
         # Player list
         self._create_player_list(left_panel)
         
         # Right panel - Practice controls
-        right_panel = self.parent._create_panel(content_frame, "Practice Session", 0, 1)
+        right_panel = self.app._create_panel(content_frame, "Practice Session", 0, 1)
         
         # Practice controls
         self._create_practice_controls(right_panel)
@@ -1673,7 +1887,7 @@ class PracticeCenterWindow(tk.Toplevel):
         button_frame = ttk.Frame(self, style='Content.TFrame')
         button_frame.pack(fill='x', padx=20, pady=10)
         
-        ttk.Button(button_frame, text="Close", command=self.destroy).pack(side='right')
+        ttk.Button(button_frame, text="Close", command=self.close_view).pack(side='right')
     
     def _create_player_list(self, parent):
         """Create the active roster player list"""
@@ -1686,7 +1900,7 @@ class PracticeCenterWindow(tk.Toplevel):
             'practice': ('Current Practice', 120)
         }
         
-        self.player_tree = self.parent._create_treeview(parent, columns)  # Remove fixed height
+        self.player_tree = self.app._create_treeview(parent, columns)  # Remove fixed height
         self.player_tree.bind('<<TreeviewSelect>>', self._on_player_select)
         
         # Grid the treeview to match panel layout
@@ -1704,7 +1918,7 @@ class PracticeCenterWindow(tk.Toplevel):
         for item in self.player_tree.get_children():
             self.player_tree.delete(item)
         
-        user_team = self.parent.game_manager.user_team
+        user_team = self.app.game_manager.user_team
         active_roster = user_team.roster  # Only active roster players
         
         for player in active_roster:
@@ -1727,29 +1941,80 @@ class PracticeCenterWindow(tk.Toplevel):
             ), tags=(player.id,))
             
             # Store player object reference
-            if 'practice_center_tree_map' not in self.parent.tree_maps:
-                self.parent.tree_maps['practice_center_tree_map'] = {}
-            self.parent.tree_maps['practice_center_tree_map'][item_id] = player
+            if 'practice_center_tree_map' not in self.app.tree_maps:
+                self.app.tree_maps['practice_center_tree_map'] = {}
+            self.app.tree_maps['practice_center_tree_map'][item_id] = player
             # Widget-keyed entry so the app-wide right-click menu resolves it.
-            self.parent.tree_maps.setdefault(self.player_tree, {})[item_id] = player
+            self.app.tree_maps.setdefault(self.player_tree, {})[item_id] = player
     
+    def _update_coaching_read(self):
+        """Refresh the Coaching Read box for the selected drill."""
+        try:
+            label = getattr(self, "coaching_read_label", None)
+            if label is None:
+                return
+            player = getattr(self, "selected_player", None)
+            if player is None:
+                label.config(text="Select a player to see the coaching read.")
+                return
+            import coach_practice as _cp
+            ptype_value = str(self.practice_type_var.get()).lower()
+            bd = _cp.practice_breakdown(self._practice_team(), player,
+                                        ptype_value)
+            desc = _cp.describe_session(bd)
+            label.config(text="\n".join("\u2022 " + l for l in desc)
+                         if desc else "No coaching staff on file.")
+        except Exception:
+            pass
+
+
     def _on_player_select(self, event):
         """Handle player selection"""
         selection = self.player_tree.selection()
         if selection:
             item_id = selection[0]
-            self.selected_player = self.parent.tree_maps.get('practice_center_tree_map', {}).get(item_id)
+            self.selected_player = self.app.tree_maps.get('practice_center_tree_map', {}).get(item_id)
             self._update_practice_controls()
     
     def _create_practice_controls(self, parent):
-        """Create practice controls"""
-        self.controls_frame = ttk.Frame(parent, style='Content.TFrame')
-        self.controls_frame.grid(row=0, column=0, sticky='nsew', padx=10, pady=10)
-        
-        # Make the frame expandable
-        parent.grid_rowconfigure(0, weight=1)
+        """Create practice controls.
+
+        Scrollable single column: practice type + coaching read +
+        intensity + schedule + actions exceed small windows, and the
+        action buttons must never be cut off.
+        """
+        # parent is an app _create_panel frame: its title bar lives in
+        # row 0, so the scrollable content goes in row 1.
+        parent.grid_rowconfigure(1, weight=1)
         parent.grid_columnconfigure(0, weight=1)
-        
+        # The panel's outer frame needs weight as well, otherwise the
+        # canvas collapses to its tiny requested height.
+        _outer = parent.master
+        if _outer is not None:
+            try:
+                _outer.grid_rowconfigure(0, weight=1)
+                _outer.grid_columnconfigure(0, weight=1)
+            except Exception:
+                pass
+
+        canvas = tk.Canvas(parent, bg=self.app.CONTENT_BG,
+                           highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical",
+                                  command=canvas.yview)
+        self.controls_frame = ttk.Frame(canvas, style='Content.TFrame')
+        self.controls_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        self._controls_window = canvas.create_window(
+            (0, 0), window=self.controls_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        # Keep the inner frame as wide as the canvas so packed
+        # sections fill the column on resize.
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(
+            self._controls_window, width=e.width))
+        canvas.grid(row=1, column=0, sticky='nsew', padx=(10, 0), pady=10)
+        scrollbar.grid(row=1, column=1, sticky='ns', pady=10)
+
         self._update_practice_controls()
     
     def _update_practice_controls(self):
@@ -1803,6 +2068,21 @@ class PracticeCenterWindow(tk.Toplevel):
                            variable=self.practice_type_var, value=practice_type.value).grid(
                            row=row, column=col, sticky='w', padx=(0, 20), pady=2)
         
+        # Coaching read: who runs the selected drill and how it lands.
+        coach_frame = ttk.LabelFrame(self.controls_frame, text="Coaching Read",
+                                     style='Card.TLabelframe')
+        coach_frame.pack(fill='x', pady=5)
+        self.coaching_read_label = ttk.Label(coach_frame, text="",
+                                            style='Content.TLabel',
+                                            wraplength=360, justify='left')
+        self.coaching_read_label.pack(fill='x', padx=10, pady=8)
+        self._update_coaching_read()
+        try:
+            self.practice_type_var.trace_add(
+                'write', lambda *_a: self._update_coaching_read())
+        except Exception:
+            pass
+
         # Intensity selection
         intensity_frame = ttk.LabelFrame(self.controls_frame, text="Intensity", style='Card.TLabelframe')
         intensity_frame.pack(fill='x', pady=5)
@@ -1944,9 +2224,10 @@ class PracticeCenterWindow(tk.Toplevel):
                 duration = 60
             
             session = self.practice_engine.execute_practice(
-                self.selected_player, practice_type, intensity, duration, trainer_quality
+                self.selected_player, practice_type, intensity, duration, trainer_quality,
+                team=self._practice_team()
             )
-            
+
             if session:
                 messagebox.showinfo("Practice Complete",
                                   f"Practice session completed for {self.selected_player.full_name}!\n"
@@ -1979,5 +2260,23 @@ class PracticeCenterWindow(tk.Toplevel):
         self._update_practice_controls()
 
 
+
+
+class PracticeCenterWindow(InGamePopup):
+    """Popup wrapper around PracticeCenterView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Practice Center")
+        self._view = PracticeCenterView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
 if __name__ == "__main__":
     test_practice_system()

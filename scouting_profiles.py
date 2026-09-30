@@ -248,7 +248,8 @@ def delete_custom_profile(name: str) -> bool:
 def _pos_code(player) -> str:
     try:
         pp = getattr(player, "primary_position", None)
-        return getattr(pp, "value", str(pp))
+        _v = getattr(pp, "value", None)
+        return _v if _v is not None else str(pp)
     except Exception:
         return ""
 

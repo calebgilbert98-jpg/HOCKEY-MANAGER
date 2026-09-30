@@ -54,4 +54,4 @@ face_cache/
 test_extract/
 *.exe
 *.ipynb
-press_conference_page.py
+qa_output/

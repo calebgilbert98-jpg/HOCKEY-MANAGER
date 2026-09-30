@@ -4,7 +4,7 @@ Provides consistent right-click player interactions across all windows
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from popup_system import messagebox, InGamePopup
 
 class PlayerContextMenu:
     """Universal player context menu for consistent player interactions across all windows"""
@@ -119,19 +119,37 @@ class PlayerContextMenu:
             for label, command in additional_options:
                 context_menu.add_command(label=label, command=command)
         
-        # Show menu
+        # Show menu (Shift+F10 keyboard events carry no pointer
+        # position -- fall back to the widget's center)
+        x_root = getattr(event, "x_root", 0) or 0
+        y_root = getattr(event, "y_root", 0) or 0
+        if not x_root and not y_root:
+            try:
+                w = event.widget
+                x_root = w.winfo_rootx() + w.winfo_width() // 2
+                y_root = w.winfo_rooty() + w.winfo_height() // 2
+            except Exception:
+                pass
         try:
-            context_menu.tk_popup(event.x_root, event.y_root)
+            context_menu.tk_popup(x_root, y_root)
         finally:
             context_menu.grab_release()
     
     def _view_player_profile(self, player):
-        """Open player profile window"""
+        """Open the player profile as a full screen in the main instance.
+
+        Delegates to the app's canonical open_player_profile (screen-first,
+        popup only as a last resort). A messagebox summary is the final
+        fallback so a right-click never silently dies inside a menu callback.
+        """
         try:
-            from ui_components import PlayerProfileWindow
-            PlayerProfileWindow(self.parent, player)
-        except ImportError:
-            # Fallback if PlayerProfileWindow doesn't exist
+            app = self._app()
+            if hasattr(app, "open_player_profile"):
+                app.open_player_profile(player)
+                return
+        except Exception:
+            pass
+        try:
             messagebox.showinfo(
                 "Player Profile", 
                 f"Player: {player.full_name}\\n"
@@ -141,6 +159,8 @@ class PlayerContextMenu:
                 f"Potential: {getattr(player, 'potential', 'Unknown')}\\n\\n"
                 f"Team: {getattr(player, 'team_name', 'Free Agent')}"
             )
+        except Exception:
+            pass
     
     def _scout_player(self, player):
         """Open scouting assignment dialog or show existing report"""
@@ -184,7 +204,7 @@ class PlayerContextMenu:
     
     def _create_scout_assignment_dialog(self, player):
         """Create a dialog for scout assignment"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Scout Assignment - {player.full_name}")
         dialog.geometry("400x300")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -275,7 +295,7 @@ class PlayerContextMenu:
                 win.grab_set()
             except Exception:
                 pass
-            from ctk_theme import heading, body, PANEL, GREEN, RED, GOLD
+            from ctk_theme import (heading, body, PANEL, GREEN, RED)
             heading(win, "Physio Report", size=16).pack(anchor="w", padx=18, pady=(16, 2))
             body(win, player.full_name, dim=True).pack(anchor="w", padx=18, pady=(0, 12))
             card = ctk.CTkFrame(win, fg_color=PANEL, corner_radius=12)
@@ -306,7 +326,7 @@ class PlayerContextMenu:
                 ("Career games missed", str(getattr(player, "career_games_missed", 0))),
                 ("Days missed (season)", str(getattr(player, "days_missed", 0))),
                 ("Durability", _word(getattr(player, "durability", 30))),
-                ("Injury proneness", _word(100 - (getattr(player, "injury_proneness", 50) or 0))),
+                ("Injury proneness", _word(50 - (getattr(player, "injury_proneness", 10) or 0))),
                 ("Stamina", _word(getattr(player, "stamina", 30))),
             ]
             for label, value in rows:
@@ -318,7 +338,7 @@ class PlayerContextMenu:
             note = ""
             if injured:
                 note = "Follow the medical team's timeline — rushing him back risks re-injury."
-            elif (getattr(player, "injury_proneness", 0) or 0) > 60:
+            elif (getattr(player, "injury_proneness", 0) or 0) > 12:
                 note = "Injury-prone: consider managing his minutes in back-to-backs."
             if note:
                 body(card, note, dim=True, size=11).pack(anchor="w", padx=16, pady=(10, 4))
@@ -331,7 +351,7 @@ class PlayerContextMenu:
     def _add_to_shortlist(self, player):
         """Add player to shortlist with category selection"""
         # Create shortlist dialog
-        shortlist_dialog = tk.Toplevel(self.parent)
+        shortlist_dialog = InGamePopup(self.parent)
         shortlist_dialog.title("Add to Shortlist")
         shortlist_dialog.geometry("400x300")
         shortlist_dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -424,9 +444,25 @@ class PlayerContextMenu:
         """Open enhanced player comparison tool"""
         self._create_enhanced_comparison_window(player)
     
+    def _show_comparison_results(self, player1, player2, compare_window):
+        """Legacy entry point: render results into a frame in the given window."""
+        results_frame = compare_window
+        # If the window already has content, add a fresh results area
+        try:
+            import tkinter as tk
+            results_frame = tk.Frame(compare_window)
+            results_frame.pack(fill='both', expand=True, padx=10, pady=10)
+        except Exception:
+            pass
+        self._show_enhanced_comparison_results(player1, player2, results_frame)
+
     def _create_comparison_window(self, player):
-        """Create comparison window"""
-        compare_window = tk.Toplevel(self.parent)
+        """Create comparison window (legacy; delegates to enhanced version)."""
+        return self._create_enhanced_comparison_window(player)
+
+    def _create_comparison_window_legacy(self, player):
+        """Original comparison window (kept for reference)."""
+        compare_window = InGamePopup(self.parent)
         compare_window.title(f"Compare Players - {player.full_name}")
         compare_window.geometry("600x500")
         
@@ -590,7 +626,7 @@ class PlayerContextMenu:
     
     def _create_training_assignment_dialog(self, player):
         """Create training assignment dialog"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Training Assignment - {player.full_name}")
         dialog.geometry("400x350")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -682,13 +718,17 @@ class PlayerContextMenu:
         )
     
     def _view_contract_details(self, player):
-        """Open player profile with contract tab selected"""
+        """Open the player profile screen with the contract tab selected."""
         try:
-            from ui_components import PlayerProfileWindow
-            # Create the profile window
-            profile_window = PlayerProfileWindow(self.parent, player)
+            app = self._app()
+            view = None
+            if hasattr(app, "open_player_profile"):
+                view = app.open_player_profile(player)
             # Focus on the contract tab (tab index 3 based on order: Overview, Attributes, Stats, Contract, Development)
-            profile_window.notebook.select(3)
+            if view is not None and hasattr(view, "notebook"):
+                view.notebook.select(3)
+                return
+            raise RuntimeError("profile screen did not return a view")
         except (ImportError, Exception) as e:
             # Fallback to message box if profile window unavailable
             if hasattr(player, 'contract') and player.contract:
@@ -732,25 +772,53 @@ class PlayerContextMenu:
         )
     
     def _propose_trade(self, player):
-        """Open trade proposal window with player pre-selected"""
+        """Open the Trade Center with this player pre-loaded on the table."""
         try:
-            # Try to open existing trade window
+            app = None
             if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'open_trade_window'):
-                self.parent.parent.open_trade_window()
-                messagebox.showinfo("Trade Window", f"Trade window opened. Add {player.full_name} to your trade proposal.")
+                app = self.parent.parent
             elif hasattr(self.parent, 'open_trade_window'):
-                self.parent.open_trade_window()
-                messagebox.showinfo("Trade Window", f"Trade window opened. Add {player.full_name} to your trade proposal.")
+                app = self.parent
+            if app is not None and hasattr(app, 'open_trade_window'):
+                user_team = getattr(app, 'user_team', None)
+                rosters = []
+                if user_team is not None:
+                    rosters = (list(getattr(user_team, 'roster', []) or []) +
+                               list(getattr(user_team, 'ahl_roster', []) or []) +
+                               list(getattr(user_team, 'prospects', []) or []))
+                own = player in rosters
+                preset = {"partner": self._trade_partner_for(app, player, own),
+                          "user_assets": [player] if own else [],
+                          "partner_assets": [] if own else [player],
+                          "mode": "new"}
+                app.open_trade_window(preset=preset)
             else:
-                # Create quick trade proposal dialog
                 self._create_trade_proposal_dialog(player)
         except Exception:
             # Fallback to trade proposal dialog
             self._create_trade_proposal_dialog(player)
+
+    @staticmethod
+    def _trade_partner_for(app, player, own):
+        """Best-guess trade partner: the player's team (or first rival)."""
+        try:
+            league = getattr(getattr(app, 'game_manager', app), 'league', None)
+            if league is not None and not own:
+                for t in getattr(league, 'teams', []) or []:
+                    rosters = (list(getattr(t, 'roster', []) or []) +
+                               list(getattr(t, 'ahl_roster', []) or []) +
+                               list(getattr(t, 'prospects', []) or []))
+                    if player in rosters:
+                        return t
+            teams = [t for t in getattr(league, 'teams', []) or []
+                     if t is not getattr(app, 'user_team', None)]
+            return teams[0] if teams else None
+        except Exception:
+            return None
     
     def _create_trade_proposal_dialog(self, player):
         """Create a trade proposal dialog"""
-        dialog = tk.Toplevel(self.parent)
+        dialog = InGamePopup(self.parent)
         dialog.title(f"Trade Proposal - {player.full_name}")
         dialog.geometry("500x400")
         dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -836,7 +904,7 @@ class PlayerContextMenu:
     
     def _create_enhanced_comparison_window(self, player):
         """Create enhanced comparison window with better styling and functionality"""
-        compare_window = tk.Toplevel(self.parent)
+        compare_window = InGamePopup(self.parent)
         compare_window.title(f"Player Comparison - {player.full_name}")
         compare_window.geometry("900x700")
         compare_window.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
@@ -1043,6 +1111,39 @@ class PlayerContextMenu:
             analysis += f"Focus training on: {', '.join(weaknesses[:2])}\\n"
         
         return analysis
+
+def bind_player_context(widget, player_or_getter, parent_window):
+    """Right-click (or Shift+F10) on ANY widget showing a player name.
+
+    The EHM/FM24 interaction: every player name in the game opens the
+    standard player menu. player_or_getter is either a player object or
+    a callable(event) -> player (for rows/cells resolved at click time).
+
+    One line per surface:
+        bind_player_context(name_label, player, self)
+    """
+    mgr = PlayerContextMenu(parent_window)
+
+    def _show(event):
+        try:
+            player = (player_or_getter(event) if callable(player_or_getter)
+                      else player_or_getter)
+        except Exception:
+            player = None
+        if player is not None:
+            mgr.show_context_menu(event, player)
+
+    try:
+        widget.bind("<Button-3>", _show)
+    except Exception:
+        pass
+    try:
+        # Keyboard alternative (accessibility): Shift+F10 opens it too.
+        widget.bind("<Shift-F10>", _show)
+    except Exception:
+        pass
+    return mgr
+
 
 def add_player_context_menu(treeview, parent_window):
     """

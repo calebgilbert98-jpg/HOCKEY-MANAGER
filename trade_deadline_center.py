@@ -1,20 +1,21 @@
 """
 Trade Deadline Center - Immersive Trade Deadline Day Experience
-Accessible only on March 8th (NHL Trade Deadline Day)
+Accessible only on trade deadline day (derived: 40 days before the last
+regular-season game, per the CBA; Mar 8 fallback)
 """
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
 import time
 from datetime import datetime, timedelta
-import threading
 import random
 
 # Import the trade deadline manager for backend logic
-from trade_deadline_manager import TradeDeadlineManager, get_deadline_manager
+from trade_deadline_manager import get_deadline_manager
 
 
-class TradeDeadlineCenter(tk.Toplevel):
+class TradeDeadlineCenter(InGamePopup):
     """Immersive Trade Deadline Center - Active only on Trade Deadline Day"""
     
     def __init__(self, parent):
@@ -277,8 +278,19 @@ class TradeDeadlineCenter(tk.Toplevel):
         self._update_countdown()
         self._animate_ticker()
 
+    def refresh(self):
+        """Refresh countdown/ticker on demand (called after each 30-min tick)."""
+        try:
+            self._update_countdown()
+        except Exception:
+            pass
+
     def _update_countdown(self):
-        """Update the countdown timer each second"""
+        """Update the countdown timer each second.
+
+        On deadline day the countdown follows the game clock (30-minute
+        increments toward 3 PM ET); otherwise the wall-clock estimate.
+        """
         if getattr(self, 'deadline_passed', False):
             return
         try:
@@ -288,7 +300,10 @@ class TradeDeadlineCenter(tk.Toplevel):
                 self.countdown_label.config(text="DEADLINE PASSED", foreground=self.NEUTRAL_GRAY)
                 self.status_label.config(text="TRADE DEADLINE HAS PASSED - No more trades allowed")
                 return
-            self.countdown_label.config(text=time_info.get('formatted', '--:--:--'))
+            text = time_info.get('formatted', '--:--:--')
+            if time_info.get('game_clock'):
+                text = f"{time_info['game_clock']}  ·  {text} left"
+            self.countdown_label.config(text=text)
         except Exception:
             pass
         if self.winfo_exists():
@@ -326,15 +341,15 @@ class TradeDeadlineCenter(tk.Toplevel):
         style.configure('DeadlineTitle.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.URGENT_RED, 
-                       font=('Segoe UI', 28, 'bold'))
+                       font=('Segoe UI', 20, 'bold'))
         style.configure('DeadlineSubtitle.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.TEXT_WHITE, 
-                       font=('Segoe UI', 16))
+                       font=('Segoe UI', 12))
         style.configure('CountdownLabel.TLabel', 
                        background=self.DEADLINE_BG, 
                        foreground=self.DEADLINE_GOLD, 
-                       font=('Consolas', 48, 'bold'))
+                       font=('Consolas', 32, 'bold'))
         style.configure('TickerLabel.TLabel', 
                        background=self.URGENT_RED, 
                        foreground=self.TEXT_WHITE, 
@@ -378,11 +393,6 @@ class TradeDeadlineCenter(tk.Toplevel):
         header_frame = ttk.Frame(parent, style='Deadline.TFrame')
         header_frame.pack(fill='x', pady=(0, 20))
         
-        # Title
-        title_label = ttk.Label(header_frame, 
-                               text="NHL TRADE DEADLINE CENTER", 
-                               style='DeadlineTitle.TLabel')
-        title_label.pack(pady=(0, 10))
         
         # Countdown timer
         countdown_frame = ttk.Frame(header_frame, style='Deadline.TFrame')
@@ -518,6 +528,21 @@ class TradeDeadlineCenter(tk.Toplevel):
             pady=8
         )
         quick_trade_btn.pack(side='left', padx=5)
+
+        # Advance the deadline clock 30 minutes (same as Continue)
+        advance_btn = tk.Button(
+            buttons_frame,
+            text="ADVANCE 30 MIN ⏩",
+            command=self._advance_deadline_clock,
+            bg='#1d4ed8',
+            fg=self.TEXT_WHITE,
+            font=('Segoe UI', 10, 'bold'),
+            relief='raised',
+            bd=3,
+            padx=20,
+            pady=8
+        )
+        advance_btn.pack(side='left', padx=5)
         
         # Emergency Trade button
         emergency_btn = tk.Button(
@@ -893,13 +918,20 @@ class TradeDeadlineCenter(tk.Toplevel):
     def _open_emergency_trade(self):
         """Open emergency trade interface for last-minute deals"""
         EmergencyTradeInterface(self, self.deadline_manager)
+
+    def _advance_deadline_clock(self):
+        """Advance the deadline-day game clock 30 minutes (same as Continue)."""
+        try:
+            self.parent.simulate_day()
+        except Exception as e:
+            print(f"deadline clock advance failed: {e}")
     
     def _open_market_browser(self):
         """Open comprehensive market browser"""
         DeadlineMarketBrowser(self, self.deadline_manager)
 
 
-class QuickTradeInterface(tk.Toplevel):
+class QuickTradeInterface(InGamePopup):
     """Quick trade proposal interface for deadline day"""
     
     def __init__(self, parent, deadline_manager):
@@ -1064,7 +1096,7 @@ class QuickTradeInterface(tk.Toplevel):
         self.destroy()
 
 
-class EmergencyTradeInterface(tk.Toplevel):
+class EmergencyTradeInterface(InGamePopup):
     """Emergency trade interface for last-minute deadline deals"""
     
     def __init__(self, parent, deadline_manager):
@@ -1145,7 +1177,7 @@ class EmergencyTradeInterface(tk.Toplevel):
         self.destroy()
 
 
-class DeadlineMarketBrowser(tk.Toplevel):
+class DeadlineMarketBrowser(InGamePopup):
     """Comprehensive market browser for deadline day trading"""
     
     def __init__(self, parent, deadline_manager):
@@ -1197,9 +1229,6 @@ class DeadlineMarketBrowser(tk.Toplevel):
         title_frame = tk.Frame(header_frame, bg=self.DEADLINE_RED)
         title_frame.pack(expand=True, fill='both')
         
-        tk.Label(title_frame, text="DEADLINE MARKET INTELLIGENCE",
-                bg=self.DEADLINE_RED, fg=self.TEXT_WHITE,
-                font=('Segoe UI', 18, 'bold')).pack(pady=5)
         
         tk.Label(title_frame, text=f"Market Analysis • {time_info['formatted']} to Deadline",
                 bg=self.DEADLINE_RED, fg=self.DEADLINE_GOLD,
@@ -1779,23 +1808,6 @@ class DeadlineMarketBrowser(tk.Toplevel):
         current_text = self.ticker_label.cget('text')
         new_text = f"{current_text} --- {trade}"
         self.ticker_label.config(text=new_text)
-        
-    # Button command methods (placeholders for now)
-    def _open_emergency_trade(self):
-        """Open emergency trade interface"""
-        if hasattr(self.parent, 'open_trade_window'):
-            self.parent.open_trade_window()
-        
-    def _open_quick_proposals(self):
-        """Open quick trade proposals"""
-        # Placeholder - could open simplified trade interface
-        pass
-        
-    def _open_market_analysis(self):
-        """Open market analysis window"""
-        # Placeholder - could show detailed market data
-        pass
-        
     def _close_deadline_center(self):
         """Close the trade deadline center"""
         self.auto_trades_active = False
@@ -1803,29 +1815,12 @@ class DeadlineMarketBrowser(tk.Toplevel):
 
 
 def is_trade_deadline_day():
-    """Check if today is trade deadline day (March 8th for this season)"""
+    """Check if today is trade deadline day (derived from the schedule)"""
     # Use the deadline manager for consistent logic
     manager = get_deadline_manager()
     return manager.is_trade_deadline_day()
 
 
-def create_trade_deadline_button(parent_frame, parent_app):
-    """Create trade deadline center access button (only visible on deadline day)"""
-    if not is_trade_deadline_day():
-        return None
-        
-    deadline_btn = tk.Button(
-        parent_frame,
-        text="TRADE DEADLINE CENTER",
-        bg='#00ceb8',
-        fg='white',
-        font=('Segoe UI', 14, 'bold'),
-        relief='raised',
-        bd=3,
-        command=lambda: TradeDeadlineCenter(parent_app)
-    )
-    
-    return deadline_btn
 
 
 if __name__ == "__main__":

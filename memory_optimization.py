@@ -5,7 +5,7 @@ Implements memory pools, object recycling, and memory monitoring for large datas
 
 import gc
 import time
-from typing import Dict, List, Optional, Any, Set
+from typing import (Dict, List, Optional, Set)
 from dataclasses import dataclass, field
 from collections import deque
 import threading
@@ -429,9 +429,6 @@ class MemoryOptimizer:
 # Global memory optimizer instance
 _global_memory_optimizer: Optional[MemoryOptimizer] = None
 
-def get_memory_optimizer() -> Optional[MemoryOptimizer]:
-    """Get the global memory optimizer instance"""
-    return _global_memory_optimizer
 
 def initialize_memory_optimizer() -> MemoryOptimizer:
     """Initialize the global memory optimizer"""

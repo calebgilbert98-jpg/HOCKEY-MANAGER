@@ -3,9 +3,6 @@
 
 from dataclasses import dataclass, field
 import random
-from enum import Enum
-from typing import Dict, List, Optional
-import itertools
 
 # Use the same enums and counters as the original game_classes.py
 from game_classes import PlayerPosition, PlayerRole, GameBalance, player_id_counter
@@ -280,7 +277,7 @@ def convert_to_v2(player):
     v2_player.x = player.x
     v2_player.y = player.y
     v2_player.potential_grade = player.potential_grade
-    v2_player.morale = getattr(player, 'morale', 10)  # Copy morale or default to 10
+    v2_player.morale = getattr(player, 'morale', 50)  # Copy morale or default to 50
     
     # Copy legacy mental attributes to new ones where possible
     v2_player.composure = getattr(player, 'composure', random.randint(40, 90))

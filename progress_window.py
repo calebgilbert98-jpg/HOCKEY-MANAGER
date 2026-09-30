@@ -2,15 +2,15 @@
 # Progress dialog for database generation
 
 import tkinter as tk
+from popup_system import InGamePopup
 from tkinter import ttk
-import threading
 import time
 
 class ProgressWindow:
     """Professional progress window for database generation"""
     
     def __init__(self, parent=None):
-        self.root = tk.Toplevel(parent) if parent else tk.Tk()
+        self.root = InGamePopup(parent) if parent else tk.Tk()
         self.root.title("Puck Dynasty - Database Generation")
         self.root.geometry("500x200")
         self.root.configure(bg='#1e1e1e')

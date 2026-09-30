@@ -2,17 +2,30 @@
 # Contains the classes for all the major pop-up windows in the application.
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
+from popup_system import (messagebox, InGamePopup)
 import customtkinter as ctk
-from game_classes import StaffRole, PlayerPosition, ScoutingReport, to_100_scale
-from datetime import timedelta
+from game_classes import (StaffRole, PlayerPosition, to_100_scale)
 import random
 import os
 import re
 from player_context_menu import PlayerContextMenu, add_player_context_menu
 from ui_widgets import PillButton
-from modern_ui import AppColors, AppCard
 from manager_career import morale_label
+
+
+def _sfont(family, size, weight=""):
+    """Scale-aware font tuple replacement (honors Settings -> Font size).
+
+    Returns a live tkinter Font registered with ui_scale; changing the
+    tier resizes open-window text in place. Falls back to a plain tuple
+    when ui_scale is unavailable (headless stubs).
+    """
+    try:
+        from ui_scale import font as _mkfont
+        return _mkfont(family, size, weight)
+    except Exception:
+        return (family, size, weight) if weight else (family, size)
 
 
 def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
@@ -135,7 +148,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     Returns True when the user confirms, False otherwise.
     """
     result = {'ok': False}
-    dlg = tk.Toplevel(parent)
+    dlg = InGamePopup(parent)
     dlg.title(title)
     dlg.transient(parent)
     dlg.resizable(False, False)
@@ -189,14 +202,14 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
-class RosterWindow(ctk.CTkToplevel):
+class RosterView(ctk.CTkFrame):
     """Roster Management (CustomTkinter): dark cards, modern tab bar,
     pill filters, styled stat tables, depth-chart tiles, cap tab."""
 
     # Tab keys in display order
     _TAB_ORDER = ('nhl', 'ahl', 'prospects', 'depth', 'cap')
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -212,12 +225,10 @@ class RosterWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"{parent.user_team.team_name} - Roster Management")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the RosterWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1600x1000")
-        self.minsize(1400, 800)
 
         # State variables (unchanged from the ttk version)
         self.selected_players = {'nhl': set(), 'ahl': set(), 'prospects': set()}
@@ -239,7 +250,7 @@ class RosterWindow(ctk.CTkToplevel):
         self._tab_names = {}
 
         # Initialize context menu manager
-        self.context_menu_manager = PlayerContextMenu(self.parent)
+        self.context_menu_manager = PlayerContextMenu(self.app)
 
         # Create the interface
         self.create_enhanced_interface()
@@ -247,11 +258,20 @@ class RosterWindow(ctk.CTkToplevel):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['roster'] = self
+        self.app.open_windows['roster'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_enhanced_interface(self):
         """Create the comprehensive roster management interface."""
         ct = self._ct
@@ -295,30 +315,76 @@ class RosterWindow(ctk.CTkToplevel):
         for key in self._TAB_ORDER:
             self.tabview.add(self._tab_names[key])
 
-        # Build each tab's content
-        self.create_enhanced_nhl_tab()
-        self.create_enhanced_ahl_tab()
-        self.create_enhanced_prospects_tab()
-        self.create_depth_chart_tab()
-        self.create_salary_cap_tab()
+        # Build tabs lazily: only the initially visible tab's widgets are
+        # created up front; the rest build on first selection. CTk widget
+        # construction dominates screen-open cost, so this cuts per-open
+        # widget count by ~80%. Data population always goes through the
+        # normal refresh path, so lazily built tabs are current on arrival.
+        self._tab_builders = {
+            'nhl': self.create_enhanced_nhl_tab,
+            'ahl': self.create_enhanced_ahl_tab,
+            'prospects': self.create_enhanced_prospects_tab,
+            'depth': self.create_depth_chart_tab,
+            'cap': self.create_salary_cap_tab,
+        }
+        self._tabs_built = set()
+        self._build_roster_tab(self._TAB_ORDER[0])
+        try:
+            self.tabview.configure(command=self._on_roster_tab_selected)
+        except Exception:
+            pass
 
         # Action buttons footer
         self.create_action_footer(main_container)
 
+    def _build_roster_tab(self, key):
+        """Build one tab's widgets on first use, then populate it."""
+        if key in getattr(self, '_tabs_built', set()):
+            return
+        builder = getattr(self, '_tab_builders', {}).get(key)
+        if builder is None:
+            return
+        self._tabs_built.add(key)
+        builder()
+        try:
+            if key in ('nhl', 'ahl', 'prospects'):
+                self.update_roster_tab(key)
+            elif key == 'depth':
+                self.refresh_depth_chart()
+            elif key == 'cap':
+                self.refresh_salary_cap()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _on_roster_tab_selected(self):
+        """CTkTabview change callback: build the newly shown tab on demand."""
+        try:
+            current_name = self.tabview.get()
+        except Exception:
+            return
+        for key, tab_name in self._tab_names.items():
+            if tab_name == current_name:
+                self._build_roster_tab(key)
+                break
+
     def _cap_numbers(self):
         """Shared payroll figures for the header and the Salary Cap tab.
 
-        Includes buyout dead cap so the header always agrees with the
-        Salary Cap tab. Display only -- cap rules themselves live in the sim.
+        Uses the central cap accounting (roster + in-game buyouts + seeded
+        real-life dead cap) so the header, the Salary Cap tab, trade
+        validation, and the Next Day blocker always agree. Display only --
+        cap rules themselves live in the sim.
         Returns (salary_cap, current_payroll, cap_space, dead_cap).
         """
-        salary_cap = 83500000
-        current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
-                             for p in self.parent.user_team.roster)
-        season = getattr(getattr(self.parent, 'league', None), 'season_year', 2026)
-        dead_cap = (getattr(self.parent.user_team, 'buyout_cap_hits', {}) or {}).get(season, 0)
-        current_salary += dead_cap
-        return salary_cap, current_salary, salary_cap - current_salary, dead_cap
+        try:
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(self.app.user_team)
+            return bd["cap"], bd["total"], bd["space"], bd["dead_cap"]
+        except Exception:
+            salary_cap = getattr(self.app.user_team, 'salary_cap', 104000000)
+            current_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000))
+                                 for p in self.app.user_team.roster)
+            return salary_cap, current_salary, salary_cap - current_salary, 0
 
     def create_header_section(self, parent):
         """Create header with team overview and quick stats."""
@@ -329,13 +395,13 @@ class RosterWindow(ctk.CTkToplevel):
         top = ctk.CTkFrame(header, fg_color="transparent")
         top.pack(fill="x", padx=20, pady=(14, 4))
 
-        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} ROSTER",
+        self._heading(top, text=f"{self.app.user_team.team_name.upper()} ROSTER",
                       size=18).pack(side="left")
 
         # Quick roster stats on the right
-        nhl_count = len(self.parent.user_team.roster)
-        ahl_count = len(self.parent.user_team.ahl_roster)
-        prospects_count = len(self.parent.user_team.prospects)
+        nhl_count = len(self.app.user_team.roster)
+        ahl_count = len(self.app.user_team.ahl_roster)
+        prospects_count = len(self.app.user_team.prospects)
         _, _, cap_space, _ = self._cap_numbers()
         stats_text = (f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | "
                       f"Prospects: {prospects_count} | Cap Space: ${cap_space:,}")
@@ -344,7 +410,7 @@ class RosterWindow(ctk.CTkToplevel):
 
         # Subtitle with season info
         try:
-            season_year = self.parent.league.season_year
+            season_year = self.app.league.season_year
             season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
         except Exception:
             season_str = "2026-27"
@@ -433,7 +499,8 @@ class RosterWindow(ctk.CTkToplevel):
             'draft_round': ('Round', 60),
             'league': ('League', 100),
             'development': ('Development', 80),
-            'eta': ('ETA', 60)
+            'eta': ('ETA', 60),
+            'rights': ('Rights', 90),
         }
 
         self.prospects_tree = self.create_enhanced_treeview(prospects_frame, prospects_columns, 'prospects')
@@ -542,7 +609,7 @@ class RosterWindow(ctk.CTkToplevel):
             sub_lbl.pack(pady=(0, 6))
 
             def _open(_event, p=player):
-                self.parent.open_player_profile(p)
+                self.app.open_player_profile(p)
 
             def _hover_on(_event, t=tile):
                 t.configure(fg_color=ct['ROW_HOVER'])
@@ -557,6 +624,13 @@ class RosterWindow(ctk.CTkToplevel):
                 child.bind('<Button-1>', _open)
                 child.bind('<Enter>', _hover_on)
                 child.bind('<Leave>', _hover_off)
+            # EHM/FM24: right-click any player name for the player menu
+            try:
+                from player_context_menu import bind_player_context
+                for w in (tile, name_lbl, sub_lbl):
+                    bind_player_context(w, player, self)
+            except Exception:
+                pass
         else:
             tile = ctk.CTkFrame(parent, fg_color="transparent", corner_radius=8,
                                 border_width=1, border_color=ct['BORDER'])
@@ -570,7 +644,7 @@ class RosterWindow(ctk.CTkToplevel):
         body = self._depth_section_card(parent, "FORWARDS")
 
         # Top 12 forwards by overall, dealt onto 4 lines of LW-C-RW
-        forwards = [p for p in self.parent.user_team.roster
+        forwards = [p for p in self.app.user_team.roster
                     if p.primary_position.value in ('C', 'LW', 'RW')]
         forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -588,7 +662,7 @@ class RosterWindow(ctk.CTkToplevel):
         body = self._depth_section_card(parent, "DEFENSE")
 
         # Top 6 defensemen by overall, dealt onto 3 pairs of LD-RD
-        defensemen = [p for p in self.parent.user_team.roster
+        defensemen = [p for p in self.app.user_team.roster
                       if p.primary_position.value in ('LD', 'RD', 'D')]
         defensemen.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -604,7 +678,7 @@ class RosterWindow(ctk.CTkToplevel):
         """Create goalies depth chart visualization."""
         body = self._depth_section_card(parent, "GOALIES")
 
-        goalies = [p for p in self.parent.user_team.roster
+        goalies = [p for p in self.app.user_team.roster
                    if p.primary_position.value == 'G']
         goalies.sort(key=lambda p: p.overall_rating(), reverse=True)
 
@@ -642,7 +716,7 @@ class RosterWindow(ctk.CTkToplevel):
 
         # Calculate salary cap info (shared with the header via _cap_numbers)
         salary_cap, current_salary, cap_space, dead_cap = self._cap_numbers()
-        cap_percentage = (current_salary / salary_cap) * 100
+        cap_percentage = (current_salary / salary_cap) * 100 if salary_cap else 0
 
         # Cap usage bar (pill-shaped progress bar)
         bar_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -667,7 +741,21 @@ class RosterWindow(ctk.CTkToplevel):
             ("Cap Usage:", f"{cap_percentage:.1f}%"),
         ]
         if dead_cap:
-            cap_labels.append(("Buyout Dead Cap:", f"${dead_cap:,}"))
+            cap_labels.append(("Total Dead Cap:", f"${dead_cap:,}"))
+            try:
+                from salary_cap_system import cap_breakdown as _cbd
+                _bd = _cbd(self.app.user_team)
+                if _bd["seeded_retained"]:
+                    cap_labels.append(("Retained Salary (real):",
+                                       f"${_bd['seeded_retained']:,}"))
+                if _bd["seeded_overage"]:
+                    cap_labels.append(("Bonus Overage (real):",
+                                       f"${_bd['seeded_overage']:,}"))
+                if _bd["seeded_buyout"]:
+                    cap_labels.append(("Buyouts (real 2026-27):",
+                                       f"${_bd['seeded_buyout']:,}"))
+            except Exception:
+                pass
         for i, (label, value) in enumerate(cap_labels):
             row, col = i // 2, (i % 2) * 2
             ctk.CTkLabel(info, text=label, font=("Segoe UI", 10),
@@ -727,7 +815,7 @@ class RosterWindow(ctk.CTkToplevel):
         self.contract_tree.delete(*self.contract_tree.get_children())
 
         # Get all NHL roster players
-        for player in sorted(self.parent.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
+        for player in sorted(self.app.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
             # Get contract details
             salary = getattr(player, 'salary', getattr(player.contract, 'salary', 750000))
             years_left = getattr(player, 'contract_years', getattr(player.contract, 'years_remaining', 0))
@@ -763,9 +851,9 @@ class RosterWindow(ctk.CTkToplevel):
         left = ctk.CTkFrame(footer, fg_color="transparent")
         left.pack(side="left")
         self._secondary_button(left, text="Trade Block",
-                               command=self.parent.open_trade_block_window).pack(side="left", padx=5)
+                               command=self.app.open_trade_block_window).pack(side="left", padx=5)
         self._secondary_button(left, text="Contract Extensions",
-                               command=self.parent.open_contract_extensions_window).pack(side="left", padx=5)
+                               command=self.app.open_contract_extensions_window).pack(side="left", padx=5)
 
         right = ctk.CTkFrame(footer, fg_color="transparent")
         right.pack(side="right")
@@ -774,7 +862,7 @@ class RosterWindow(ctk.CTkToplevel):
         self._secondary_button(right, text="Refresh",
                                command=self.update_views).pack(side="left", padx=5)
         self._secondary_button(right, text="Close",
-                               command=self.destroy).pack(side="left", padx=5)
+                               command=self.close_view).pack(side="left", padx=5)
 
     def _setup_tree_style(self):
         """Dark, flat styling for the roster tables.
@@ -834,7 +922,7 @@ class RosterWindow(ctk.CTkToplevel):
         """Row of PillButtons; returns dict value -> button. Caller keeps it
         in a group list so _paint_pill_groups can repaint all copies."""
         return make_pill_group(parent, options, on_select,
-                               font_family=self.parent.FONT_FAMILY)
+                               font_family=self.app.FONT_FAMILY)
 
     def _paint_pill_groups(self):
         for groups_attr, current in (
@@ -940,11 +1028,13 @@ class RosterWindow(ctk.CTkToplevel):
         elif roster_type == 'ahl':
             self._primary_button(actions, text="Call Up",
                                  command=lambda: self.bulk_move_players('ahl', 'nhl')).pack(side="left", padx=3)
-            self._secondary_button(actions, text="Send to Prospects",
+            self._secondary_button(actions, text="Return to Junior",
                                    command=lambda: self.bulk_move_players('ahl', 'prospects')).pack(side="left", padx=3)
         elif roster_type == 'prospects':
             self._primary_button(actions, text="Promote to AHL",
                                  command=lambda: self.bulk_move_players('prospects', 'ahl')).pack(side="left", padx=3)
+            self._secondary_button(actions, text="Rights Watch",
+                                   command=self.open_rights_watch).pack(side="left", padx=3)
 
     # ------------------------------------------------------------------
     # Tables
@@ -1055,6 +1145,133 @@ class RosterWindow(ctk.CTkToplevel):
             pass
         return False
 
+    def _rights_status(self, player):
+        """Signed vs unsigned rights status for the prospects table.
+
+        Shows only the user's own rights bookkeeping -- expiry year and
+        warning state. No scouting truth leaks: nothing here reveals a
+        prospect's hidden potential.
+        """
+        try:
+            _c = getattr(player, 'contract', None)
+            if (_c is not None and getattr(_c, 'salary', 0)
+                    and getattr(_c, 'years_remaining', 0) > 0):
+                return "Signed"
+        except Exception:
+            pass
+        try:
+            _rt = getattr(player, 'rights_team', '') or ''
+            _exp = int(getattr(player, 'rights_expiry_year', 0) or 0)
+        except Exception:
+            _rt, _exp = '', 0
+        try:
+            _uname = getattr(getattr(self.app, 'user_team', None),
+                             'team_name', '')
+            _yr = int(getattr(getattr(self.app, 'league', None),
+                              'season_year', 0) or 0)
+        except Exception:
+            _uname, _yr = '', 0
+        if _rt and _exp and (_rt == _uname or not _uname):
+            _warn = "⚠ " if _yr and _exp - _yr <= 1 else ""
+            return f"{_warn}Rights '{str(_exp)[2:]}"
+        return "—"
+
+    def _unsigned_rights_prospects(self):
+        """The user's unsigned rights-held prospects, soonest expiry
+        first."""
+        try:
+            _team = self.app.user_team
+            _uname = getattr(_team, 'team_name', '')
+            _pool = list(getattr(_team, 'prospects', []) or [])
+        except Exception:
+            return []
+        _out = []
+        for _p in _pool:
+            try:
+                _c = getattr(_p, 'contract', None)
+                if (_c is not None and getattr(_c, 'salary', 0)
+                        and getattr(_c, 'years_remaining', 0) > 0):
+                    continue  # signed
+                if (getattr(_p, 'rights_team', '') or '') != _uname:
+                    continue
+                _exp = int(getattr(_p, 'rights_expiry_year', 0) or 0)
+                if not _exp:
+                    continue
+                _out.append((_exp, _p))
+            except Exception:
+                continue
+        _out.sort(key=lambda _t: (_t[0], getattr(_t[1], 'full_name', '')))
+        return [p for _e, p in _out]
+
+    def open_rights_watch(self):
+        """Rights Watch: every unsigned rights-held prospect, soonest
+        expiry first, with warning states and one-click ELC talks."""
+        ct = self._ct
+        dlg = InGamePopup(self)
+        dlg.title("Rights Watch")
+        dlg.geometry("620x520")
+        dlg.configure(fg_color=ct['BG'])
+        dlg.transient(self)
+        self._heading(dlg, text="Rights Watch", size=16).pack(pady=(14, 2))
+        self._body(
+            dlg,
+            text=("Your unsigned rights-held prospects. Sign them to an "
+                  "entry-level deal before their rights expire, or they "
+                  "re-enter the draft and you lose them for nothing."),
+            size=10, dim=True, wraplength=560).pack(pady=(0, 8))
+        try:
+            _yr = int(getattr(getattr(self.app, 'league', None),
+                              'season_year', 0) or 0)
+        except Exception:
+            _yr = 0
+        _prospects = self._unsigned_rights_prospects()
+        _list_frame = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
+        _list_frame.pack(fill='both', expand=True, padx=14, pady=6)
+        lb = tk.Listbox(_list_frame, bg=ct['CARD'], fg=ct['TEXT'],
+                        relief='flat', font=("Segoe UI", 11),
+                        selectbackground=ct['ROW_SELECTED'],
+                        highlightthickness=0, activestyle='none')
+        lb.pack(fill='both', expand=True, padx=8, pady=8)
+        if not _prospects:
+            lb.insert(tk.END, "  No unsigned rights-held prospects. "
+                              "Every drafted prospect is signed.")
+        for _p in _prospects:
+            _exp = int(getattr(_p, 'rights_expiry_year', 0) or 0)
+            try:
+                _pos = _p.primary_position.value
+            except Exception:
+                _pos = "?"
+            _left = _exp - _yr if _yr else None
+            if _left is not None and _left <= 0:
+                _state, _color = "EXPIRES THIS YEAR", ct['RED']
+            elif _left == 1:
+                _state, _color = "1 year left", "#e8b93c"
+            else:
+                _state, _color = f"{_left} years left", ct['TEXT_DIM']
+            lb.insert(tk.END,
+                      f"  {getattr(_p, 'full_name', '?'):<24} {_pos:<3} "
+                      f"age {getattr(_p, 'age', '?'):<3}  "
+                      f"rights thru {_exp}  -- {_state}")
+            lb.itemconfig(tk.END, foreground=_color)
+
+        def _open_elc():
+            _sel = lb.curselection()
+            if not _sel or not _prospects:
+                return
+            _p = _prospects[_sel[0]]
+            try:
+                self.app.open_contract_negotiation_window(_p, is_elc=True)
+            except Exception:
+                pass
+            dlg.destroy()
+
+        _btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
+        _btn_row.pack(pady=(0, 12))
+        self._primary_button(_btn_row, text="Open ELC talks",
+                             command=_open_elc).pack(side="left", padx=6)
+        self._secondary_button(_btn_row, text="Close",
+                               command=dlg.destroy).pack(side="left", padx=6)
+
     def populate_roster_tree(self, tree, players, roster_type):
         """Populate table with player data."""
         # Clear existing items
@@ -1100,13 +1317,20 @@ class RosterWindow(ctk.CTkToplevel):
                 values.extend([readiness, development])
             elif roster_type == 'prospects':
                 draft_year = getattr(player, 'draft_year', 'Undrafted')
-                draft_round = getattr(player, 'draft_round', 'FA')
-                league = getattr(player, 'current_league', 'Amateur')
+                # draft_round is stamped by the draft generator (prospect
+                # development engine); 0/empty means undrafted / free agent.
+                draft_round = getattr(player, 'draft_round', 0) or 'FA'
+                # farm_league is where the engine actually simmed him last
+                # season (prospect_development); fall back to legacy fields.
+                league = (getattr(player, 'farm_league', '') or
+                          getattr(player, 'current_league', '') or 'Amateur')
                 development = self.calculate_development_trend(player)
                 eta = self.calculate_eta(player)
+                rights = self._rights_status(player)
                 # Remove salary and contract columns for prospects, add prospect-specific data
                 values = [checkbox, name, position, age, overall, potential,
-                         draft_year, draft_round, league, development, eta]
+                         draft_year, draft_round, league, development, eta,
+                         rights]
 
             # Insert item
             item_id = tree.insert('', 'end', values=values)
@@ -1143,7 +1367,24 @@ class RosterWindow(ctk.CTkToplevel):
         return f"{performance}"
 
     def calculate_nhl_readiness(self, player):
-        """Calculate NHL readiness percentage for AHL players."""
+        """NHL readiness for AHL players: talent grade adjusted by the
+        situation -- injury openings, coach fit, line fit, farm trend, and
+        his live NHL audition. The arrows flag a number the moment is
+        moving (▲ up / ▼ down)."""
+        try:
+            import prospect_development as _pd
+            team = getattr(self.app, 'user_team', None)
+            score, deltas = _pd.situational_readiness(player, team)
+            net = sum(d for _, d in deltas)
+            tag = " ▲" if net >= 8 else (" ▼" if net <= -8 else "")
+            return f"{score:.0f}%{tag}"
+        except Exception:
+            pass
+        try:
+            import prospect_development as _pd
+            return f"{_pd.callup_readiness(player):.0f}%"
+        except Exception:
+            pass
         readiness = min(100, max(0, (player.overall_rating() - 35) * 5))
         return f"{readiness:.0f}%"
 
@@ -1172,6 +1413,13 @@ class RosterWindow(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     # Table interaction
     # ------------------------------------------------------------------
+    def _name_column_id(self, tree):
+        """Return the treeview column id (e.g. '#3') of the 'name' column."""
+        try:
+            return f"#{list(tree['columns']).index('name') + 1}"
+        except (ValueError, tk.TclError):
+            return None
+
     def handle_tree_click(self, event, tree, roster_type):
         """Handle tree click events."""
         region = tree.identify_region(event.x, event.y)
@@ -1181,13 +1429,25 @@ class RosterWindow(ctk.CTkToplevel):
                 item_id = tree.identify_row(event.y)
                 if item_id:
                     self.toggle_player_selection(item_id, tree, roster_type)
+                return
+            # Single left-click on the player's name opens the profile card.
+            if col == self._name_column_id(tree):
+                item_id = tree.identify_row(event.y)
+                if item_id and item_id in self.player_maps[roster_type]:
+                    player = self.player_maps[roster_type][item_id]
+                    self.app.open_player_profile(player)
 
     def handle_double_click(self, event, tree, roster_type):
         """Handle double-click to open player profile."""
+        # The name column already opens the profile on single click, so a
+        # double-click there must not open a second card.
+        if tree.identify_region(event.x, event.y) == 'cell':
+            if tree.identify_column(event.x) == self._name_column_id(tree):
+                return
         item_id = tree.identify_row(event.y)
         if item_id and item_id in self.player_maps[roster_type]:
             player = self.player_maps[roster_type][item_id]
-            self.parent.open_player_profile(player)
+            self.app.open_player_profile(player)
 
     def show_context_menu(self, event, tree, roster_type):
         """Show enhanced context menu for player actions using universal system."""
@@ -1203,23 +1463,83 @@ class RosterWindow(ctk.CTkToplevel):
                     ("Send to AHL", lambda: self.move_player(player, 'nhl', 'ahl')),
                     ("Add to Trade Block", lambda: self.add_to_trade_block(player))
                 ]
+                # Junior-aged signed CHL prospects can go straight back
+                # to junior (new CBA: everyone else stays pro).
+                try:
+                    import game_classes as _gc2
+                    _elig_nhl = (
+                        getattr(player, "contract", None) is not None
+                        and _gc2.junior_track_of(player) == "CHL"
+                        and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _elig_nhl = False
+                if _elig_nhl:
+                    roster_options.insert(
+                        1, ("Return to Junior",
+                            lambda: self.move_player(player, 'nhl', 'prospects')))
             elif roster_type == 'ahl':
+                # Only junior-eligible signed prospects get a junior
+                # option; everyone else stays in the pro system (a
+                # signed veteran can no longer be stashed in the
+                # prospects list to dodge the cap).
+                try:
+                    import game_classes as _gc3
+                    _elig_ahl = (
+                        getattr(player, "contract", None) is not None
+                        and _gc3.junior_track_of(player) == "CHL"
+                        and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _elig_ahl = False
                 roster_options = [
                     ("Call Up to NHL", lambda: self.move_player(player, 'ahl', 'nhl')),
-                    ("Send to Prospects", lambda: self.move_player(player, 'ahl', 'prospects'))
                 ]
+                if _elig_ahl:
+                    roster_options.append(
+                        ("Return to Junior",
+                         lambda: self.move_player(player, 'ahl', 'prospects')))
             elif roster_type == 'prospects':
                 roster_options = [
                     ("Promote to AHL", lambda: self.move_player(player, 'prospects', 'ahl'))
                 ]
+                # Unsigned rights-held prospect: explicit ELC negotiation
+                # instead of the silent auto-sign on promotion.
+                try:
+                    _elc_elig = (
+                        getattr(player, "contract", None) is None
+                        and (getattr(player, "rights_team", "") or "")
+                        == getattr(getattr(self.app, "user_team", None),
+                                    "team_name", ""))
+                    # ELC eligibility: 25+ is outside the Entry Level
+                    # System (CBA 9.1(b); new CBA, no European exception).
+                    if _elc_elig:
+                        try:
+                            from draft_generator import age_on_sept15 as _s15m
+                            import salary_cap_system as _scs_m
+                            _sy_m = getattr(getattr(self.app, "league", None),
+                                            "season_year", None)
+                            _s15v = _s15m(getattr(player, "birth_date", ""),
+                                          _sy_m)
+                            _elc_age_m = (_s15v if _s15v is not None
+                                          else getattr(player, "age", 20))
+                            if _scs_m.elc_years_for_age(_elc_age_m) <= 0:
+                                _elc_elig = False
+                        except Exception:
+                            pass
+                except Exception:
+                    _elc_elig = False
+                if _elc_elig:
+                    roster_options.insert(
+                        0, ("Offer ELC…",
+                            lambda: self.app.open_contract_negotiation_window(
+                                player, is_elc=True)))
 
             # Add contract options
             roster_options.append(("Contract Extension",
-                                 lambda: self.parent.open_contract_negotiation_window(player, True)))
+                                 lambda: self.app.open_contract_negotiation_window(player, True)))
 
             # Use universal context menu
             if not hasattr(self, 'context_menu_manager'):
-                self.context_menu_manager = PlayerContextMenu(self.parent)
+                self.context_menu_manager = PlayerContextMenu(self.app)
 
             self.context_menu_manager.show_context_menu(event, player, roster_options)
 
@@ -1298,18 +1618,18 @@ class RosterWindow(ctk.CTkToplevel):
     def update_roster_tab(self, roster_type):
         """Update specific roster tab."""
         if roster_type == 'nhl':
-            self.populate_roster_tree(self.nhl_tree, self.parent.user_team.roster, 'nhl')
+            self.populate_roster_tree(self.nhl_tree, self.app.user_team.roster, 'nhl')
         elif roster_type == 'ahl':
-            self.populate_roster_tree(self.ahl_tree, self.parent.user_team.ahl_roster, 'ahl')
+            self.populate_roster_tree(self.ahl_tree, self.app.user_team.ahl_roster, 'ahl')
         elif roster_type == 'prospects':
-            self.populate_roster_tree(self.prospects_tree, self.parent.user_team.prospects, 'prospects')
+            self.populate_roster_tree(self.prospects_tree, self.app.user_team.prospects, 'prospects')
 
         self.update_roster_summary(roster_type)
 
     def update_roster_summary(self, roster_type):
         """Update roster summary information."""
         if roster_type == 'nhl':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
             selected_count = len(self.selected_players['nhl'])
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
@@ -1319,7 +1639,7 @@ class RosterWindow(ctk.CTkToplevel):
             self.nhl_summary_label.configure(text=summary)
 
         elif roster_type == 'ahl':
-            players = self.parent.user_team.ahl_roster
+            players = self.app.user_team.ahl_roster
             selected_count = len(self.selected_players['ahl'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
@@ -1328,7 +1648,7 @@ class RosterWindow(ctk.CTkToplevel):
             self.ahl_summary_label.configure(text=summary)
 
         elif roster_type == 'prospects':
-            players = self.parent.user_team.prospects
+            players = self.app.user_team.prospects
             selected_count = len(self.selected_players['prospects'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
             high_potential = len([p for p in players if getattr(p, 'potential_grade', 'C') in ['A+', 'A', 'A-']])
@@ -1339,11 +1659,11 @@ class RosterWindow(ctk.CTkToplevel):
     def select_all_players(self, roster_type):
         """Select all players in the roster."""
         if roster_type == 'nhl':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
         elif roster_type == 'ahl':
-            players = self.parent.user_team.ahl_roster
+            players = self.app.user_team.ahl_roster
         else:
-            players = self.parent.user_team.prospects
+            players = self.app.user_team.prospects
 
         self.selected_players[roster_type] = {p.id for p in players}
         self.update_roster_tab(roster_type)
@@ -1358,63 +1678,271 @@ class RosterWindow(ctk.CTkToplevel):
         selected_ids = self.selected_players[from_roster].copy()
 
         if not selected_ids:
-            tk.messagebox.showinfo("No Selection", "Please select players to move.")
+            messagebox.showinfo("No Selection", "Please select players to move.")
             return
 
         # Get source and destination lists
         if from_roster == 'nhl':
-            source_list = self.parent.user_team.roster
+            source_list = self.app.user_team.roster
         elif from_roster == 'ahl':
-            source_list = self.parent.user_team.ahl_roster
+            source_list = self.app.user_team.ahl_roster
         else:
-            source_list = self.parent.user_team.prospects
+            source_list = self.app.user_team.prospects
 
         # Move players
         players_to_move = [p for p in source_list if p.id in selected_ids]
 
+        # Junior return (AHL -> prospects) only applies to signed,
+        # junior-aged CHL prospects. Pre-filter here so a bulk move
+        # doesn't pop one blocking dialog per ineligible player --
+        # move_player still enforces the rule per player.
+        _junior_bulk = (from_roster in ('nhl', 'ahl')
+                        and to_roster not in ('nhl', 'ahl'))
+        _skipped = 0
+        _unsigned_skipped = 0
+        _is_promotion_bulk = (from_roster not in ('nhl', 'ahl')
+                              and to_roster in ('nhl', 'ahl'))
         for player in players_to_move:
+            if _junior_bulk:
+                try:
+                    import game_classes as _gcb
+                    _ok = (getattr(player, "contract", None) is not None
+                           and _gcb.junior_track_of(player) == "CHL"
+                           and int(getattr(player, "age", 20) or 20) < 20)
+                except Exception:
+                    _ok = False
+                if not _ok:
+                    _skipped += 1
+                    continue
+            if _is_promotion_bulk and getattr(player, "contract", None) is None:
+                # Unsigned prospects need an explicit ELC first -- one
+                # summary instead of a dialog per kid.
+                _unsigned_skipped += 1
+                continue
             self.move_player(player, from_roster, to_roster)
+        if _skipped:
+            messagebox.showinfo(
+                "Return to Junior",
+                f"{_skipped} selected player(s) can't go back to junior -- "
+                f"only signed under-20 CHL prospects are eligible.")
+        if _unsigned_skipped:
+            messagebox.showinfo(
+                "Unsigned prospects",
+                f"{_unsigned_skipped} selected prospect(s) need an "
+                f"entry-level contract first -- right-click and choose "
+                f"'Offer ELC' to negotiate, then promote.")
 
         # Clear selections and update views
         self.selected_players[from_roster].clear()
         self.update_views()
 
     def move_player(self, player, from_roster, to_roster):
-        """Move a single player between rosters."""
+        """Move a single player between rosters.
+
+        Promotion (prospects -> NHL/AHL): an unsigned prospect can't
+        skate for $0 -- promotion is blocked until he has an ELC, and
+        the user is routed straight into contract talks ("Offer ELC").
+        The CHL-NHL agreement gates AHL assignment for under-20 CHL
+        prospects (new CBA: 19-year-old first-rounders excepted).
+
+        Junior return (NHL/AHL -> prospects): a SIGNED junior-aged
+        (under-20) CHL prospect goes back to his junior club. An
+        ex-college player can never go back to college once he's signed
+        an NHL deal -- minors or NHL only. This also closes the old
+        loophole where a signed veteran could be stashed in the
+        prospects list to dodge the cap.
+        """
+        try:
+            import game_classes as _gc
+        except Exception:
+            _gc = None
+        _is_promotion = (from_roster not in ('nhl', 'ahl')
+                         and to_roster in ('nhl', 'ahl'))
+        _is_junior_return = (from_roster in ('nhl', 'ahl')
+                             and to_roster not in ('nhl', 'ahl'))
+
+        if _is_promotion:
+            # CHL-NHL agreement (new CBA 2026): an under-20 CHL prospect
+            # is not AHL-eligible -- he goes back to junior -- EXCEPT a
+            # 19-year-old drafted in the first round, who may be loaned
+            # to the AHL. Applies signed or unsigned.
+            if to_roster == 'ahl' and _gc is not None and \
+                    not _gc.prospect_ahl_eligible(player):
+                _age = int(getattr(player, "age", 20) or 20)
+                messagebox.showwarning(
+                    "CHL-NHL agreement",
+                    f"{player.full_name} is {_age} and CHL-drafted -- "
+                    f"he isn't eligible for the AHL roster. Under the "
+                    f"new CBA only 19-year-old first-round picks may be "
+                    f"loaned to the AHL. He'll keep developing in junior.")
+                return
+            # 23-man NHL roster limit.
+            if to_roster == 'nhl' and \
+                    len(self.app.user_team.roster) >= 23:
+                messagebox.showerror(
+                    "Roster Full",
+                    "Your NHL roster is full (23). Move someone out "
+                    "first.")
+                return
+            # Signing gate: an unsigned prospect (contract=None) can't
+            # skate for $0. No silent auto-sign -- the user negotiates
+            # the ELC explicitly ("Offer ELC" on the prospects menu).
+            # Promotion just routes into contract talks.
+            if getattr(player, "contract", None) is None:
+                # ELC eligibility backstop: 25+ prospects sit outside the
+                # Entry Level System (CBA 9.1(b); new CBA) -- the ELC
+                # dialog can't serve them. (Nearly unreachable: rights
+                # expire long before 25.)
+                _elc_ok = True
+                try:
+                    from draft_generator import age_on_sept15 as _s15p
+                    import salary_cap_system as _scs_p
+                    _sy_p = getattr(getattr(self.app, "league", None),
+                                    "season_year", None)
+                    _s15v_p = _s15p(getattr(player, "birth_date", ""), _sy_p)
+                    _elc_age_p = (_s15v_p if _s15v_p is not None
+                                  else getattr(player, "age", 20))
+                    if _scs_p.elc_years_for_age(_elc_age_p) <= 0:
+                        _elc_ok = False
+                except Exception:
+                    pass
+                if not _elc_ok:
+                    messagebox.showwarning(
+                        "Outside the Entry Level System",
+                        f"{player.full_name} is past ELC age and can't "
+                        f"sign an entry-level contract.")
+                    return
+                # Backstop: prospects who predate rights stamping
+                # get stamped on the fly so the ELC gate has
+                # something to consume.
+                _league = getattr(self.app, 'league', None)
+                try:
+                    if _league is not None and not getattr(
+                            player, "rights_team", ""):
+                        from datetime import date as _date
+                        _yr = getattr(_league, "current_year",
+                                      _date.today().year)
+                        try:
+                            _league.stamp_draft_rights(
+                                player,
+                                self.app.user_team.team_name, int(_yr))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                if messagebox.askyesno(
+                        "Unsigned prospect",
+                        f"{player.full_name} needs an entry-level contract "
+                        f"before he can join the {to_roster.upper()} "
+                        f"roster.\n\nOpen contract talks now?"):
+                    try:
+                        self.app.open_contract_negotiation_window(
+                            player, is_elc=True)
+                    except Exception:
+                        pass
+                return
+            try:
+                player.playing_where = "NHL" if to_roster == 'nhl' \
+                    else "AHL"
+            except Exception:
+                pass
+
+        elif _is_junior_return:
+            # Only signed players get junior-assignment semantics;
+            # unsigned ones just rejoin the unsigned pool.
+            if getattr(player, "contract", None) is not None:
+                _track = _gc.junior_track_of(player) if _gc else "EUROPE"
+                _jage = int(getattr(player, "age", 20) or 20)
+                if not (_track == "CHL" and _jage < 20):
+                    if _track == "NCAA":
+                        _why = (f"{player.full_name} signed an NHL "
+                                f"contract -- that ended his NCAA "
+                                f"eligibility. He can only play in the "
+                                f"NHL or AHL now, never back in college.")
+                    else:
+                        _why = (f"Only junior-aged (under-20) CHL "
+                                f"prospects can be returned to junior. "
+                                f"{player.full_name} stays with the pro "
+                                f"club.")
+                    messagebox.showwarning("Can't return to junior", _why)
+                    return
+                try:
+                    player.playing_where = _gc.junior_assignment_label(
+                        player) if _gc else "Junior"
+                except Exception:
+                    pass
+                try:
+                    self.app.add_news(
+                        f"{player.full_name} was returned to junior "
+                        f"({player.playing_where}).")
+                except Exception:
+                    pass
+
+        # New-CBA paper-transaction rule: a player assigned to the AHL must
+        # play at least one game down there before he can be recalled.
+        # Grandfathered players (old saves, never assigned) pass through.
+        if from_roster == 'ahl' and to_roster == 'nhl':
+            try:
+                import ahl_system as _ahl_gate_w
+                _block = _ahl_gate_w.ahl_recall_block_reason(player)
+            except Exception:
+                _block = None
+            if _block:
+                messagebox.showwarning("Recall blocked (new CBA)", _block)
+                return
+
         # Remove from source
         if from_roster == 'nhl':
-            self.parent.user_team.roster.remove(player)
+            self.app.user_team.roster.remove(player)
         elif from_roster == 'ahl':
-            self.parent.user_team.ahl_roster.remove(player)
+            self.app.user_team.ahl_roster.remove(player)
         else:
-            self.parent.user_team.prospects.remove(player)
+            self.app.user_team.prospects.remove(player)
 
         # Add to destination
         if to_roster == 'nhl':
-            self.parent.user_team.roster.append(player)
+            self.app.user_team.roster.append(player)
+            # Dressing room: a promotion into the NHL room -- the room
+            # reacts to WHO he is. First appearance per team only
+            # (guarded inside); shuffling a regular up and down is quiet.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(
+                    self.app.user_team, player, how="callup",
+                    date_str=str(getattr(self.app, "current_date", "")))
+            except Exception:
+                pass
         elif to_roster == 'ahl':
-            self.parent.user_team.ahl_roster.append(player)
+            self.app.user_team.ahl_roster.append(player)
+            # NHL->AHL is an assignment under the new CBA: stamp the
+            # recall gate (a promotion from the prospect pool is not).
+            if from_roster == 'nhl':
+                try:
+                    import ahl_system as _ahl_stamp_w
+                    _ahl_stamp_w.stamp_ahl_assignment(player)
+                except Exception:
+                    pass
         else:
-            self.parent.user_team.prospects.append(player)
+            self.app.user_team.prospects.append(player)
 
         # Update any open windows
-        self.parent.update_all_views()
+        self.app.update_all_views()
 
     def add_to_trade_block(self, player):
         """Add player to trade block."""
-        if not hasattr(self.parent, 'trade_block'):
-            self.parent.trade_block = []
+        if not hasattr(self.app, 'trade_block'):
+            self.app.trade_block = []
 
-        if player not in self.parent.trade_block:
-            self.parent.trade_block.append(player)
-            tk.messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
+        if player not in self.app.trade_block:
+            self.app.trade_block.append(player)
+            messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
         else:
-            tk.messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
+            messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
 
     def open_lines_editor(self):
         """Open the live lines editor."""
         try:
-            self.parent.open_edit_lines_window()
+            self.app.open_edit_lines_window()
         except Exception:
             pass
 
@@ -1432,14 +1960,14 @@ class RosterWindow(ctk.CTkToplevel):
 
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"roster_export_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.csv"
+            filename = f"roster_export_{self.app.user_team.team_name.replace(' ', '_')}_{timestamp}.csv"
             filepath = os.path.join(exports_dir, filename)
 
             # Collect all roster data
             roster_data = []
 
             # Add NHL roster
-            for player in self.parent.user_team.roster:
+            for player in self.app.user_team.roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1460,7 +1988,7 @@ class RosterWindow(ctk.CTkToplevel):
                 ])
 
             # Add AHL roster
-            for player in self.parent.user_team.ahl_roster:
+            for player in self.app.user_team.ahl_roster:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1481,7 +2009,7 @@ class RosterWindow(ctk.CTkToplevel):
                 ])
 
             # Add Prospects
-            for player in self.parent.user_team.prospects:
+            for player in self.app.user_team.prospects:
                 contract = player.contract
                 salary = getattr(contract, 'salary', 750000) if contract else 750000
                 years_remaining = getattr(contract, 'years_remaining', 0) if contract else 0
@@ -1510,7 +2038,7 @@ class RosterWindow(ctk.CTkToplevel):
                 writer.writerow(headers)
                 writer.writerows(roster_data)
 
-            tk.messagebox.showinfo("Export Successful",
+            messagebox.showinfo("Export Successful",
                                  f"Roster exported successfully!\n\n"
                                  f"File: {filename}\n"
                                  f"Location: {exports_dir}\n"
@@ -1518,18 +2046,24 @@ class RosterWindow(ctk.CTkToplevel):
 
         except Exception as e:
             print(f"Error exporting roster: {e}")
-            tk.messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
+            messagebox.showerror("Export Error", f"Failed to export roster:\n{str(e)}")
 
     def update_views(self):
-        """Update all roster views."""
-        self.update_roster_tab('nhl')
-        self.update_roster_tab('ahl')
-        self.update_roster_tab('prospects')
+        """Update all roster views.
+
+        Only already-built tabs are refreshed; unbuilt tabs populate from
+        current data when first selected (_build_roster_tab), so nothing
+        can go stale.
+        """
+        built = getattr(self, '_tabs_built', {'nhl', 'ahl', 'prospects', 'depth', 'cap'})
+        for rt in ('nhl', 'ahl', 'prospects'):
+            if rt in built:
+                self.update_roster_tab(rt)
 
         # Update header stats
-        nhl_count = len(self.parent.user_team.roster)
-        ahl_count = len(self.parent.user_team.ahl_roster)
-        prospects_count = len(self.parent.user_team.prospects)
+        nhl_count = len(self.app.user_team.roster)
+        ahl_count = len(self.app.user_team.ahl_roster)
+        prospects_count = len(self.app.user_team.prospects)
 
         # Header cap figures (buyout dead cap included, matching the Salary Cap tab)
         _, _, cap_space, _ = self._cap_numbers()
@@ -1549,10 +2083,13 @@ class RosterWindow(ctk.CTkToplevel):
                 self._tab_names[key] = new_name
 
         # Keep the Depth Chart and Salary Cap tabs in sync too, even when
-        # they are not the currently visible tab
+        # they are not the currently visible tab (only if already built;
+        # unbuilt tabs populate on first selection).
         try:
-            self.refresh_depth_chart()
-            self.refresh_salary_cap()
+            if 'depth' in built:
+                self.refresh_depth_chart()
+            if 'cap' in built:
+                self.refresh_salary_cap()
         except (tk.TclError, AttributeError):
             pass
 
@@ -1570,11 +2107,29 @@ class RosterWindow(ctk.CTkToplevel):
         except (AttributeError, tk.TclError):
             pass
 
-class FreeAgencyWindow(ctk.CTkToplevel):
+
+
+class RosterWindow(InGamePopup):
+    """Popup wrapper around RosterView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title(f"{parent.user_team.team_name} - Roster Management")
+        self._view = RosterView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class FreeAgencyView(ctk.CTkFrame):
     """Free Agency Market (CustomTkinter): dark cards, pill filters,
     styled stat tables, CTk dialogs for contracts/comparison/analysis."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -1591,12 +2146,10 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Free Agency Market")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the FreeAgencyWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
 
         # State variables (unchanged from the ttk version)
         self.selected_players = []
@@ -1612,11 +2165,20 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['free_agency'] = self
+        self.app.open_windows['free_agency'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_enhanced_interface(self):
         """Create the modern free agency interface."""
         ct = self._ct
@@ -1644,12 +2206,53 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         for name in ("Free Agent Players", "Free Agent Staff", "Market Overview"):
             self.tabview.add(name)
 
-        self.create_enhanced_player_tab()
-        self.create_enhanced_staff_tab()
-        self.create_market_overview_tab()
+        # Build tabs lazily: only the visible tab's widgets are created up
+        # front; the rest build on first selection (same rationale as
+        # RosterView -- CTk widget construction dominates screen-open cost).
+        self._fa_tab_builders = {
+            'players': self.create_enhanced_player_tab,
+            'staff': self.create_enhanced_staff_tab,
+            'market': self.create_market_overview_tab,
+        }
+        self._fa_tab_keys = {"Free Agent Players": 'players',
+                             "Free Agent Staff": 'staff',
+                             "Market Overview": 'market'}
+        self._fa_tabs_built = set()
+        self._build_fa_tab('players')
+        try:
+            self.tabview.configure(command=self._on_fa_tab_selected)
+        except Exception:
+            pass
 
         # Action buttons footer
         self.create_action_footer(main_container)
+
+    def _build_fa_tab(self, key):
+        """Build one FA tab's widgets on first use, then populate it."""
+        if key in getattr(self, '_fa_tabs_built', set()):
+            return
+        builder = getattr(self, '_fa_tab_builders', {}).get(key)
+        if builder is None:
+            return
+        self._fa_tabs_built.add(key)
+        builder()
+        try:
+            if key == 'players':
+                self.populate_filtered_players()
+            elif key == 'staff':
+                self.populate_filtered_staff()
+            # 'market' renders current data as part of its build.
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _on_fa_tab_selected(self):
+        """CTkTabview change callback: build the newly shown tab on demand."""
+        try:
+            key = self._fa_tab_keys.get(self.tabview.get())
+        except Exception:
+            key = None
+        if key:
+            self._build_fa_tab(key)
 
     def create_header_section(self, parent):
         """Create the header with market overview and quick stats."""
@@ -1663,8 +2266,8 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         self._heading(top, text="FREE AGENCY MARKET", size=18).pack(side="left")
 
         # Quick stats on the right
-        player_count = len(self.parent.game_manager.free_agents)
-        staff_count = len(self.parent.league.free_agent_staff)
+        player_count = len(self.app.game_manager.free_agents)
+        staff_count = len(self.app.league.free_agent_staff)
         self._body(top, text=f"Available: {player_count} Players \u2022 {staff_count} Staff",
                    dim=True, size=12).pack(side="right")
 
@@ -1675,9 +2278,9 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                    dim=True, size=11).pack(side="left")
 
         # Team cap space on the right
-        user_team = self.parent.game_manager.user_team
+        user_team = self.app.game_manager.user_team
         current_salary = sum(getattr(p, "salary", getattr(p.contract, "salary", 750000)) for p in user_team.roster)
-        cap_space = 83500000 - current_salary  # NHL salary cap
+        cap_space = getattr(user_team, 'salary_cap', 104000000) - current_salary  # NHL salary cap
         if cap_space > 10000000:
             cap_color = ct['TEAL']
         elif cap_space > 0:
@@ -1908,7 +2511,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         }
         self.fa_player_tree = self._create_fa_treeview(
             player_tab, player_columns, height=22,
-            sort_cmd=self.parent._sort_treeview_generic)
+            sort_cmd=self.app._sort_treeview_generic)
 
         # Bind events
         add_player_context_menu(self.fa_player_tree, self)
@@ -1974,6 +2577,12 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         self.staff_experience_filter = tk.StringVar(master=self, value='All')
         self.staff_salary_filter = tk.StringVar(master=self, value='All')
         self.staff_sort_filter = tk.StringVar(master=self, value='Overall')
+        self.staff_source_filter = tk.StringVar(master=self, value='All')
+
+        self._pill_row(pills, "Source:", [(v, v) for v in
+                       ('All', 'Free Agents', 'Overseas', 'Rival AHL')],
+                       self.staff_source_filter, self._staff_set_filter,
+                       self._staff_pill_groups)
 
         self._pill_row(pills, "Department:", [(v, v) for v in
                        ('All', 'Management', 'Coaching', 'Development',
@@ -1995,6 +2604,11 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                        self.staff_sort_filter, self._staff_set_filter,
                        self._staff_pill_groups)
 
+        # Club staff-budget line (league-wide rule, market-tiered).
+        self.staff_budget_label = self._body(staff_tab, text="",
+                                             dim=True, size=11)
+        self.staff_budget_label.pack(anchor="w", padx=14, pady=(0, 2))
+
         # Results and selection info
         info_frame = ctk.CTkFrame(staff_tab, fg_color="transparent")
         info_frame.pack(fill="x", padx=14, pady=(0, 2))
@@ -2012,14 +2626,15 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             'dept': ('Department', 120),
             'ovr': ('Rating', 60),
             'experience': ('Experience', 100),
-            'salary': ('Salary', 100),
+            'salary': ('Ask', 100),
             'years': ('Contract', 80),
             'age': ('Age', 50),
-            'nationality': ('Country', 80)
+            'nationality': ('Country', 80),
+            'club': ('Club', 170),
         }
         self.fa_staff_tree = self._create_fa_treeview(
             staff_tab, staff_columns, height=22,
-            sort_cmd=self.parent._sort_treeview_generic)
+            sort_cmd=self.app._sort_treeview_generic)
 
         # Bind events
         self.fa_staff_tree.bind('<Button-3>', self.show_staff_context_menu)
@@ -2094,7 +2709,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
 
     def populate_player_market_stats(self, parent_frame):
         """Populate player market statistics."""
-        free_agents = self.parent.game_manager.free_agents
+        free_agents = self.app.game_manager.free_agents
         if not free_agents:
             self._body(parent_frame, text="No free agents available",
                        dim=True).pack(anchor="w", padx=12, pady=5)
@@ -2128,17 +2743,21 @@ class FreeAgencyWindow(ctk.CTkToplevel):
 
     def populate_staff_market_stats(self, parent_frame):
         """Populate staff market statistics."""
-        available_staff = self.parent.game_manager.league.free_agent_staff
-        if not available_staff:
+        from game_classes import staff_market_ask
+        league = self.app.game_manager.league
+        available_staff = list(getattr(league, 'free_agent_staff', None) or [])
+        overseas = list(getattr(league, 'overseas_staff', None) or [])
+        if not available_staff and not overseas:
             self._body(parent_frame, text="No staff available",
                        dim=True).pack(anchor="w", padx=12, pady=5)
             return
 
-        total_staff = len(available_staff)
-        avg_age = sum(s.age for s in available_staff) / total_staff
+        total_staff = len(available_staff) + len(overseas)
+        pool = available_staff + overseas
+        avg_age = sum(s.age for s in pool) / total_staff
 
         staff_ratings = []
-        for s in available_staff:
+        for s in pool:
             try:
                 if hasattr(s, 'overall_rating') and callable(getattr(s, 'overall_rating')):
                     staff_ratings.append(s.overall_rating())
@@ -2153,16 +2772,16 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         avg_rating = sum(staff_ratings) / len(staff_ratings) if staff_ratings else 10
 
         role_counts = {}
-        for staff in available_staff:
+        for staff in pool:
             role = staff.role.value
             role_counts[role] = role_counts.get(role, 0) + 1
 
-        avg_salary = sum(getattr(s, 'salary', 100000) for s in available_staff) / total_staff
+        avg_ask = sum(staff_market_ask(s) for s in pool) / total_staff
 
         for stat in (f"Total Available: {total_staff}",
                      f"Average Age: {avg_age:.1f}",
                      f"Average Rating: {avg_rating:.1f}",
-                     f"Avg. Salary: ${avg_salary:,.0f}"):
+                     f"Avg. Ask: ${avg_ask:,.0f}"):
             self._body(parent_frame, text=stat, dim=True, size=11).pack(
                 anchor="w", padx=12, pady=1)
 
@@ -2177,7 +2796,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def populate_top_players_by_position(self, parent_frame, positions):
         """Populate top players for specific positions."""
         ct = self._ct
-        position_players = [p for p in self.parent.game_manager.free_agents
+        position_players = [p for p in self.app.game_manager.free_agents
                             if p.primary_position.value in positions]
         if not position_players:
             self._body(parent_frame, text="No players available",
@@ -2212,9 +2831,9 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         item_id = tree.identify_row(event.y)
         if item_id:
             player_name = tree.item(item_id, 'values')[0]
-            for player in self.parent.game_manager.free_agents:
+            for player in self.app.game_manager.free_agents:
                 if player.full_name == player_name:
-                    self.parent.open_contract_negotiation_window(player)
+                    self.app.open_contract_negotiation_window(player)
                     break
 
     # ------------------------------------------------------------------
@@ -2232,12 +2851,16 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                                command=self.refresh_market).pack(
             side="left", padx=(0, 10))
         self._secondary_button(bulk, text="Export List",
-                               command=self.export_free_agents).pack(side="left")
+                               command=self.export_free_agents).pack(
+            side="left", padx=(0, 10))
+        self._secondary_button(bulk, text="📝 Offer Sheets",
+                               command=self.app.open_offer_sheet_window).pack(
+            side="left")
 
         controls = ctk.CTkFrame(footer, fg_color="transparent")
         controls.pack(side="right")
         self._secondary_button(controls, text="Close",
-                               command=self.destroy).pack(side="right", padx=(10, 0))
+                               command=self.close_view).pack(side="right", padx=(10, 0))
         self._secondary_button(controls, text="Help",
                                command=self.show_help).pack(side="right")
 
@@ -2269,7 +2892,15 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         sort_by = self.player_sort_filter.get()
 
         filtered_players = []
-        for player in self.parent.game_manager.free_agents:
+        for player in self.app.game_manager.free_agents:
+            # Draft lock: draft-eligible players never appear as signable
+            # free agents (they can only change clubs via the draft).
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(player):
+                    continue
+            except Exception:
+                pass
             if name_filter and name_filter not in player.full_name.lower():
                 continue
             if position_filter != 'All' and player.primary_position.value != position_filter:
@@ -2368,17 +2999,23 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             item_id = self.fa_player_tree.insert('', 'end', values=values,
                                                  tags=(tag,) if tag else ())
 
-            if 'fa_players' not in self.parent.tree_maps:
-                self.parent.tree_maps['fa_players'] = {}
-            self.parent.tree_maps['fa_players'][item_id] = player
-            # Widget-keyed entry so add_player_context_menu() can resolve it.
-            self.parent.tree_maps.setdefault(self.fa_player_tree, {})[item_id] = player
+            if 'fa_players' not in self.app.tree_maps:
+                self.app.tree_maps['fa_players'] = {}
+            self.app.tree_maps['fa_players'][item_id] = player
 
         self.player_results_label.configure(text=f"Showing {len(filtered_players)} players")
         set_tree_empty_state(self.fa_player_tree, "No players match your filters")
 
     def populate_filtered_staff(self):
-        """Populate the staff tree with filtered results."""
+        """Populate the staff tree with filtered results.
+
+        Three sources: unemployed free agents, overseas coaches, and rival
+        clubs' AHL staff (approachable only in the offseason -- real rule).
+        The Salary filter/sort and the Ask column use the market ask, not
+        the staffer's old salary.
+        """
+        from game_classes import (Staff as StaffClass, staff_market_ask,
+                                  can_approach_staff)
         for item in self.fa_staff_tree.get_children():
             self.fa_staff_tree.delete(item)
 
@@ -2388,16 +3025,50 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         experience_filter = self.staff_experience_filter.get()
         salary_filter = self.staff_salary_filter.get()
         sort_by = self.staff_sort_filter.get()
+        source_filter = (self.staff_source_filter.get()
+                         if hasattr(self, 'staff_source_filter') else 'All')
 
-        filtered_staff = []
-        for staff in self.parent.league.free_agent_staff:
-            if name_filter and name_filter not in staff.full_name.lower():
+        league = getattr(self.app, 'league', None)
+        try:
+            user_team = self.app.game_manager.user_team
+        except Exception:
+            user_team = None
+        try:
+            current_date = self.app.game_manager.current_date
+        except Exception:
+            current_date = None
+
+        # ---- Build the combined market ----
+        entries = []  # (staff, source, employer_team)
+        if league is not None:
+            for s in (getattr(league, 'free_agent_staff', None) or []):
+                entries.append((s, 'free_agent', None))
+            for s in (getattr(league, 'overseas_staff', None) or []):
+                entries.append((s, 'overseas', None))
+            for t in (getattr(league, 'teams', None) or []):
+                if t is user_team:
+                    continue
+                for s in (getattr(t, 'staff', None) or []):
+                    if (getattr(s, 'assignment', 'nhl') or 'nhl') == 'ahl':
+                        entries.append((s, 'ahl_poach', t))
+
+        _source_labels = {'free_agent': 'Free Agents', 'overseas': 'Overseas',
+                          'ahl_poach': 'Rival AHL'}
+
+        filtered = []
+        for staff, source, employer in entries:
+            if (source_filter != 'All'
+                    and _source_labels.get(source) != source_filter):
+                continue
+            try:
+                if name_filter and name_filter not in staff.full_name.lower():
+                    continue
+            except Exception:
                 continue
             if role_filter != 'All' and staff.role.value != role_filter:
                 continue
 
             if department_filter != 'All':
-                from game_classes import Staff as StaffClass
                 staff_dept = StaffClass.get_role_department(staff.role)
                 if staff_dept != department_filter:
                     continue
@@ -2415,39 +3086,48 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                 elif experience_filter == '16+ Years' and exp < 16:
                     continue
 
+            ask = staff_market_ask(staff)
             if salary_filter != 'All':
-                sal = staff.salary
-                if salary_filter == 'Under $100k' and sal >= 100_000:
+                if salary_filter == 'Under $100k' and ask >= 100_000:
                     continue
-                elif salary_filter == '$100k-$250k' and not (100_000 <= sal <= 250_000):
+                elif salary_filter == '$100k-$250k' and not (100_000 <= ask <= 250_000):
                     continue
-                elif salary_filter == '$250k-$500k' and not (250_000 < sal <= 500_000):
+                elif salary_filter == '$250k-$500k' and not (250_000 < ask <= 500_000):
                     continue
-                elif salary_filter == '$500k-$1M' and not (500_000 < sal <= 1_000_000):
+                elif salary_filter == '$500k-$1M' and not (500_000 < ask <= 1_000_000):
                     continue
-                elif salary_filter == 'Over $1M' and sal <= 1_000_000:
+                elif salary_filter == 'Over $1M' and ask <= 1_000_000:
                     continue
 
-            filtered_staff.append(staff)
+            filtered.append((staff, source, employer, ask))
 
         if sort_by == 'Overall':
-            filtered_staff.sort(key=lambda s: s.overall_rating, reverse=True)
+            filtered.sort(key=lambda e: e[0].overall_rating, reverse=True)
         elif sort_by == 'Name':
-            filtered_staff.sort(key=lambda s: s.full_name)
+            filtered.sort(key=lambda e: e[0].full_name)
         elif sort_by == 'Role':
-            filtered_staff.sort(key=lambda s: s.role.value)
+            filtered.sort(key=lambda e: e[0].role.value)
         elif sort_by == 'Experience':
-            filtered_staff.sort(key=lambda s: max(0, s.age - 25), reverse=True)
+            filtered.sort(key=lambda e: max(0, e[0].age - 25), reverse=True)
         elif sort_by == 'Salary':
-            filtered_staff.sort(key=lambda s: s.salary, reverse=True)
+            filtered.sort(key=lambda e: e[3], reverse=True)
         elif sort_by == 'Age':
-            filtered_staff.sort(key=lambda s: s.age)
+            filtered.sort(key=lambda e: e[0].age)
 
-        for staff in filtered_staff:
-            from game_classes import Staff as StaffClass
+        for staff, source, employer, ask in filtered:
             department = StaffClass.get_role_department(staff.role)
             experience = max(0, staff.age - 25)
             rating = to_100_scale(staff.overall_rating)
+
+            allowed, reason = can_approach_staff(
+                staff, employer, user_team, current_date)
+            if source == 'free_agent':
+                club = "Free agent"
+            elif source == 'overseas':
+                club = getattr(staff, 'current_club', '') or "Overseas"
+            else:
+                club = (f"{getattr(employer, 'team_name', '')} (AHL)"
+                        + ("" if allowed else " \u2014 offseason only"))
 
             values = [
                 staff.full_name,
@@ -2455,21 +3135,34 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                 department,
                 rating,
                 f"{experience}y",
-                f"${staff.salary:,}",
+                f"${ask:,}",
                 f"{staff.contract_years}y",
                 staff.age,
-                staff.nationality
+                staff.nationality,
+                club,
             ]
 
             tag = self._ovr_tag(rating)
             item_id = self.fa_staff_tree.insert('', 'end', values=values,
                                                 tags=(tag,) if tag else ())
 
-            if 'fa_staff' not in self.parent.tree_maps:
-                self.parent.tree_maps['fa_staff'] = {}
-            self.parent.tree_maps['fa_staff'][item_id] = staff
+            if 'fa_staff' not in self.app.tree_maps:
+                self.app.tree_maps['fa_staff'] = {}
+            self.app.tree_maps['fa_staff'][item_id] = (staff, source, employer)
 
-        self.staff_results_label.configure(text=f"Showing {len(filtered_staff)} staff")
+        # Club staff-budget line.
+        try:
+            _t = user_team
+            _b = int(getattr(_t, 'staff_budget', 0) or 0)
+            _c = _t.staff_payroll() if hasattr(_t, 'staff_payroll') else 0
+            self.staff_budget_label.configure(
+                text=f"Club staff budget: ${_b:,}   \u2022   "
+                     f"Committed: ${_c:,}   \u2022   "
+                     f"Available: ${_b - _c:,}")
+        except Exception:
+            pass
+
+        self.staff_results_label.configure(text=f"Showing {len(filtered)} staff")
         set_tree_empty_state(self.fa_staff_tree, "No staff match your filters")
 
     def clear_player_filters(self):
@@ -2492,6 +3185,8 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         self.staff_experience_filter.set('All')
         self.staff_salary_filter.set('All')
         self.staff_sort_filter.set('Overall')
+        if hasattr(self, 'staff_source_filter'):
+            self.staff_source_filter.set('All')
         self._staff_paint_pills()
         self.populate_filtered_staff()
 
@@ -2511,23 +3206,49 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Sign the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to sign.")
+            messagebox.showwarning("No Selection", "Please select a player to sign.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        # UFA window (real NHL: the market opens July 1 -- no free-agent
+        # signings in June). One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "sign_ufa", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Free Agency", _why)
+                return
+        except Exception:
+            pass
+
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
-            self.parent.open_contract_negotiation_window(player)
+            self.app.open_contract_negotiation_window(player)
+
+    def _fa_staff_entry(self, item_id):
+        """Unwrap a staff tree-map entry -> (staff, source, employer).
+
+        Backward-compatible with bare-Staff entries (treated as free agents).
+        """
+        entry = self.app.tree_maps.get('fa_staff', {}).get(item_id)
+        if isinstance(entry, tuple):
+            staff = entry[0] if len(entry) > 0 else None
+            source = entry[1] if len(entry) > 1 else 'free_agent'
+            employer = entry[2] if len(entry) > 2 else None
+            return staff, source, employer
+        return entry, 'free_agent', None
 
     def hire_selected_staff(self):
         """Hire the selected staff member via a real contract offer."""
         selection = self.fa_staff_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a staff member to hire.")
+            messagebox.showwarning("No Selection", "Please select a staff member to hire.")
             return
 
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff, source, employer = self._fa_staff_entry(selection[0])
         if staff:
-            self._open_staff_contract_dialog(staff)
+            self._open_staff_contract_dialog(staff, hire_source=source,
+                                             from_team=employer)
 
     def negotiate_with_player(self, event=None):
         """Negotiate with a player (double-click handler)."""
@@ -2544,11 +3265,11 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             return
 
         self.fa_staff_tree.selection_set(item_id)
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+        staff, _src, _emp = self._fa_staff_entry(item_id)
         if not staff:
             return
 
-        menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        menu = tk.Menu(self, tearoff=0, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         menu.add_command(label=f"Hire {staff.full_name}", command=self.hire_selected_staff)
         menu.add_command(label="View Staff Profile", command=self.view_selected_staff_profile)
 
@@ -2558,140 +3279,62 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """View the selected player's profile."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to view.")
+            messagebox.showwarning("No Selection", "Please select a player to view.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
-            self.parent.open_player_profile(player)
+            self.app.open_player_profile(player)
 
     def view_selected_staff_profile(self):
         """View the selected staff member's profile."""
         selection = self.fa_staff_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a staff member to view.")
+            messagebox.showwarning("No Selection", "Please select a staff member to view.")
             return
 
-        staff = self.parent.tree_maps.get('fa_staff', {}).get(selection[0])
+        staff, source, employer = self._fa_staff_entry(selection[0])
         if staff:
-            self._open_staff_profile_dialog(staff)
+            self._open_staff_profile_dialog(staff, hire_source=source,
+                                            from_team=employer)
 
     # ------------------------------------------------------------------
-    # Staff contract dialog (CTk rebuild of the old ttk dialog)
+    # Staff contract negotiation (full-screen jump)
     # ------------------------------------------------------------------
-    def _open_staff_contract_dialog(self, staff):
-        """Negotiate a real contract offer with a free-agent staff member."""
-        ct = self._ct
-        dlg = ctk.CTkToplevel(self)
-        dlg.title(f"Contract Offer - {staff.full_name}")
-        dlg.configure(fg_color=ct['BG'])
-        dlg.geometry("480x420")
-        dlg.resizable(False, False)
-        dlg.transient(self)
-        dlg.grab_set()
+    def _open_staff_contract_dialog(self, staff, hire_source="free_agent",
+                                      from_team=None):
+        """Negotiate a real contract offer with a staff member.
 
-        card = ctk.CTkFrame(dlg, fg_color=ct['PANEL'], corner_radius=12)
-        card.pack(fill="both", expand=True, padx=16, pady=16)
+        Full-screen jump via show_screen(). fresh=True: each negotiation
+        builds for its own staffer. Approach rules are enforced BEFORE the
+        jump: rival AHL staff can only be approached in the offseason, and
+        other clubs' NHL staff are not approachable at all.
+        """
+        from game_classes import can_approach_staff
+        try:
+            user_team = self.app.game_manager.user_team
+            current_date = self.app.game_manager.current_date
+        except Exception:
+            user_team = None
+            current_date = None
+        allowed, reason = can_approach_staff(staff, from_team, user_team,
+                                             current_date)
+        if not allowed:
+            messagebox.showwarning("Cannot Approach", reason)
+            return
+        # Overseas coaches can be approached any time, but the approach
+        # itself is the negotiation -- jump straight in.
+        self.app.show_screen("staff_contract",
+                             f"Contract Offer - {staff.full_name}",
+                             StaffContractView, staff, fresh=True,
+                             hire_source=hire_source, from_team=from_team)
 
-        body = ctk.CTkFrame(card, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=20, pady=16)
 
-        self._heading(body, text=f"{staff.full_name}", size=15).pack(anchor="w")
-        self._body(body, text=f"{staff.role.value} \u2022 {staff.nationality} \u2022 Age {staff.age}",
-                   dim=True, size=11).pack(anchor="w", pady=(2, 10))
-
-        # Asking terms banner
-        asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
-        asking.pack(fill="x", pady=(0, 12))
-        self._body(asking, text=f"Asking: ${staff.salary:,} / year  \u2022  {staff.contract_years} years",
-                   size=12).pack(anchor="w", padx=12, pady=10)
-
-        offer_info = {'years': 2, 'salary_mult': 1.0}
-
-        self._body(body, text="Contract length:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
-        years_seg = ctk.CTkSegmentedButton(
-            body, values=["1", "2", "3", "4", "5"],
-            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
-            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        years_seg.set("2")
-        years_seg.pack(anchor="w", pady=(0, 10))
-
-        self._body(body, text="Salary offer:", dim=True, size=11).pack(anchor="w", pady=(0, 4))
-        sal_seg = ctk.CTkSegmentedButton(
-            body, values=["80%", "Asking", "120%"],
-            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
-            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        sal_seg.set("Asking")
-        sal_seg.pack(anchor="w", pady=(0, 12))
-
-        offer_label = self._body(body, text="", size=12)
-        offer_label.pack(anchor="w", pady=(0, 2))
-        chance_label = self._body(body, text="", size=11)
-        chance_label.pack(anchor="w", pady=(0, 12))
-
-        mult_map = {"80%": 0.8, "Asking": 1.0, "120%": 1.2}
-
-        def _paint():
-            offer_info['years'] = int(years_seg.get())
-            offer_info['salary_mult'] = mult_map[sal_seg.get()]
-            salary = int(staff.salary * offer_info['salary_mult'])
-            offer_label.configure(
-                text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
-                     f"year{'s' if offer_info['years'] > 1 else ''}")
-            chance = self._staff_offer_accept_chance(staff, offer_info['salary_mult'])
-            if chance >= 0.75:
-                color = ct['GREEN']
-            elif chance >= 0.45:
-                color = ct['GOLD']
-            else:
-                color = ct['RED']
-            chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
-                                   text_color=color)
-
-        _paint()
-
-        btns = ctk.CTkFrame(body, fg_color="transparent")
-        btns.pack(fill="x", pady=(4, 0))
-        self._secondary_button(btns, text="Cancel",
-                               command=dlg.destroy).pack(side="right", padx=(10, 0))
-        self._primary_button(btns, text="Make Offer",
-                             command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'],
-                                 int(staff.salary * offer_info['salary_mult']),
-                                 dlg)).pack(side="right")
-
-    def _staff_offer_accept_chance(self, staff, salary_mult):
-        """Rough acceptance chance for a staff offer (display only)."""
-        rating = to_100_scale(staff.overall_rating)
-        prestige = getattr(self.parent.game_manager.user_team, 'prestige', 50)
-        base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
-        return max(0.05, min(0.98, base))
-
-    def _resolve_staff_offer(self, staff, years, salary, dlg):
-        """Resolve a staff contract offer (original acceptance logic)."""
-        chance = self._staff_offer_accept_chance(staff, salary / max(1, staff.salary))
-
-        if self.parent.game_manager.sign_free_agent_staff(staff, salary, years):
-            import random
-            if random.random() < chance:
-                tk.messagebox.showinfo("Offer Accepted",
-                                       f"{staff.full_name} has accepted your offer!")
-                self.populate_filtered_staff()
-                self.refresh_market_overview_data()
-                dlg.destroy()
-            else:
-                tk.messagebox.showinfo("Offer Declined",
-                                       f"{staff.full_name} has declined your offer. "
-                                       f"Consider offering a better salary.")
-        else:
-            tk.messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
-
-    def _open_staff_profile_dialog(self, staff):
+    def _open_staff_profile_dialog(self, staff, hire_source="free_agent",
+                                     from_team=None):
         """View a free-agent staff member's profile (CTk)."""
         ct = self._ct
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title(f"Staff Profile - {staff.full_name}")
         dlg.configure(fg_color=ct['BG'])
         dlg.geometry("460x500")
@@ -2716,20 +3359,172 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         for attr_name, attr_value in attrs.items():
             self._fa_attr_row(scroll, attr_name, attr_value)
 
+        self._staff_track_record_section(scroll, staff)
+
         ctk.CTkFrame(scroll, fg_color=ct['BORDER'], height=1).pack(fill="x", pady=10)
 
         exp = max(0, staff.age - 25)
+        from game_classes import staff_market_ask as _sma
         for text in (f"Age: {staff.age}",
                      f"Nationality: {staff.nationality}",
                      f"Experience: {exp} years",
-                     f"Asking: ${staff.salary:,} / year",
+                     f"Asking: ${_sma(staff):,} / year",
                      f"Contract: {staff.contract_years} years"):
             self._body(scroll, text=text, dim=True, size=11).pack(anchor="w", pady=1)
 
         self._primary_button(scroll, text=f"Hire {staff.full_name}",
                              command=lambda: (dlg.destroy(),
-                                              self._open_staff_contract_dialog(staff))
+                                              self._open_staff_contract_dialog(
+                                                  staff, hire_source=hire_source,
+                                                  from_team=from_team))
                              ).pack(anchor="w", pady=(14, 0))
+
+    def _staff_track_record_section(self, scroll, staff):
+        """Track-record card for scouts: graded calls, hit rate, and how
+        their finds ripple through the club's reputation.
+
+        The record -- not hidden ability -- is what a GM should judge a
+        scout by. Every filed read is graded against what happened next:
+        validated breakouts bank GM respect, player confidence and fan
+        buzz; misses plant doubt and can cost the scout his job.
+        """
+        try:
+            from game_classes import StaffRole
+            scout_roles = {StaffRole.HEAD_SCOUT,
+                           StaffRole.PROFESSIONAL_SCOUT,
+                           StaffRole.AMATEUR_SCOUT}
+            is_scout = getattr(staff, "role", None) in scout_roles
+        except Exception:
+            is_scout = False
+        if not is_scout:
+            return
+        ct = self._ct
+        try:
+            import analytics_scouting as _as
+            record_line = _as.scout_record_line(staff)
+            history = list(getattr(staff, "tip_history", []) or [])
+        except Exception:
+            record_line = "no graded calls yet"
+            history = []
+        box = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        box.pack(fill="x", pady=(10, 4))
+        self._heading(box, text="Scout Track Record", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(box, text=f"Graded calls: {record_line}", size=11).pack(
+            anchor="w", padx=12, pady=(0, 2))
+        self._body(box,
+                   text=("Every read this scout files is graded against what "
+                         "happens next. A validated breakout banks the club: "
+                         "+GM respect, player confidence, fan buzz. A miss "
+                         "plants doubt -- and clubs fire scouts under 40%."),
+                   dim=True, size=10).pack(anchor="w", padx=12, pady=(0, 6))
+        if history:
+            for h in list(reversed(history[-8:])):
+                try:
+                    kind = h.get("kind", "")
+                    res = h.get("result", "?")
+                    pname = h.get("player_name", h.get("player", "?"))
+                    date = h.get("date", "")
+                    mark = "✓" if res == "hit" else "✗" if res == "miss" else "·"
+                    color = (ct['GREEN'] if res == "hit"
+                             else ct['RED'] if res == "miss" else ct['TEXT_DIM'])
+                    row = ctk.CTkFrame(box, fg_color="transparent")
+                    row.pack(fill="x", padx=12, pady=1)
+                    ctk.CTkLabel(row, text=mark,
+                                 font=("Segoe UI", 10, "bold"),
+                                 text_color=color, width=18).pack(side="left")
+                    self._body(row,
+                               text=f"{pname} — {kind} read, {date}",
+                               size=10).pack(side="left")
+                except Exception:
+                    pass
+            ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
+        self._staff_open_reads_section(scroll, staff)
+
+    def _staff_open_reads_section(self, scroll, staff):
+        """This scout's current open reads -- private to your club.
+
+        Scout tips are never broadcast in the news feed; they are your
+        staff's private reports to you. Buy reads (targets) and sell
+        reads (your own players showing regression signs) filed this
+        month live here, with the evidence, the uncertainty, and the
+        risks exactly as the scout wrote them. Accuracy is the scout's
+        own: a better eye writes better reads.
+        """
+        ct = self._ct
+        try:
+            sid = getattr(staff, "id", None)
+            user_team = getattr(getattr(self, "app", None), "user_team",
+                                None)
+            if sid is None or user_team is None:
+                return
+            buys = [(pid, t) for pid, t in
+                    (getattr(user_team, "scout_buy_tips", None) or {}).items()
+                    if isinstance(t, dict) and t.get("scout_id") == sid]
+            sells = [(pid, t) for pid, t in
+                     (getattr(user_team, "scout_sell_tips", None) or {}).items()
+                     if isinstance(t, dict) and t.get("scout_id") == sid]
+        except Exception:
+            return
+        if not buys and not sells:
+            return
+        box = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        box.pack(fill="x", pady=(10, 4))
+        self._heading(box, text="Open Reads", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(box, text=("Private to your club -- never broadcast. "
+                              "Act on them, or wait for the ledger to grade "
+                              "them."),
+                   dim=True, size=10).pack(anchor="w", padx=12, pady=(0, 6))
+
+        def _read_row(tip, direction):
+            try:
+                kind = tip.get("kind", "") or ""
+                tag = f" [{kind}]" if kind in ("AHL", "PROSPECT") else ""
+                name = tip.get("name", "?")
+                pteam = tip.get("pteam", "")
+                head = (f"{name}{tag} ({pteam})" if pteam
+                        else f"{name}{tag}")
+                if direction == "sell":
+                    head += " -- regression signs"
+                row = ctk.CTkFrame(box, fg_color="transparent")
+                row.pack(fill="x", padx=12, pady=2)
+                dot = ctk.CTkLabel(row,
+                                   text="▲" if direction == "buy" else "▼",
+                                   font=("Segoe UI", 10, "bold"),
+                                   text_color=(ct['GREEN'] if direction == "buy"
+                                               else ct['GOLD']),
+                                   width=18)
+                dot.pack(side="left")
+                col = ctk.CTkFrame(row, fg_color="transparent")
+                col.pack(side="left", fill="x", expand=True)
+                self._body(col, text=head, size=11).pack(anchor="w")
+                reason = tip.get("reason", "")
+                conf = tip.get("confidence", "")
+                if reason or conf:
+                    sub = reason
+                    if conf:
+                        sub += f" ({conf} confidence)" if sub else \
+                            f"{conf} confidence"
+                    self._body(col, text=sub, dim=True,
+                               size=10).pack(anchor="w")
+                for r in (tip.get("risks", "") or [])[:2]:
+                    self._body(col, text=f"Risk: {r}", dim=True,
+                               size=10).pack(anchor="w")
+            except Exception:
+                pass
+
+        if buys:
+            self._body(box, text="Buy reads", size=11).pack(
+                anchor="w", padx=12, pady=(4, 0))
+            for _, tip in buys:
+                _read_row(tip, "buy")
+        if sells:
+            self._body(box, text="Sell reads", size=11).pack(
+                anchor="w", padx=12, pady=(4, 0))
+            for _, tip in sells:
+                _read_row(tip, "sell")
+        ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
 
     def _fa_attr_row(self, parent, name, value):
         """One attribute row with a meter (used by staff profiles)."""
@@ -2754,18 +3549,18 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Compare multiple selected players."""
         selection = self.fa_player_tree.selection()
         if len(selection) < 2:
-            tk.messagebox.showwarning("Selection Required",
+            messagebox.showwarning("Selection Required",
                                        "Please select at least 2 players to compare.")
             return
 
         players = []
         for item_id in selection:
-            player = self.parent.tree_maps.get('fa_players', {}).get(item_id)
+            player = self.app.tree_maps.get('fa_players', {}).get(item_id)
             if player:
                 players.append(player)
 
         if len(players) < 2:
-            tk.messagebox.showwarning("Error", "Could not find selected players.")
+            messagebox.showwarning("Error", "Could not find selected players.")
             return
 
         self.create_player_comparison_window(players)
@@ -2773,7 +3568,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def create_player_comparison_window(self, players):
         """Create a window comparing multiple players (CTk)."""
         ct = self._ct
-        compare_window = ctk.CTkToplevel(self)
+        compare_window = InGamePopup(self)
         compare_window.title(f"Player Comparison ({len(players)} players)")
         compare_window.configure(fg_color=ct['BG'])
         compare_window.geometry("900x700")
@@ -2902,18 +3697,18 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Compare multiple selected staff members."""
         selection = self.fa_staff_tree.selection()
         if len(selection) < 2:
-            tk.messagebox.showwarning("Selection Required",
+            messagebox.showwarning("Selection Required",
                                        "Please select at least 2 staff members to compare.")
             return
 
         staff_list = []
         for item_id in selection:
-            staff = self.parent.tree_maps.get('fa_staff', {}).get(item_id)
+            staff, _src, _emp = self._fa_staff_entry(item_id)
             if staff:
                 staff_list.append(staff)
 
         if len(staff_list) < 2:
-            tk.messagebox.showwarning("Error", "Could not find selected staff members.")
+            messagebox.showwarning("Error", "Could not find selected staff members.")
             return
 
         self.create_staff_comparison_window(staff_list)
@@ -2921,7 +3716,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
     def create_staff_comparison_window(self, staff_list):
         """Create a window comparing multiple staff members (CTk)."""
         ct = self._ct
-        compare_window = ctk.CTkToplevel(self)
+        compare_window = InGamePopup(self)
         compare_window.title(f"Staff Comparison ({len(staff_list)} staff)")
         compare_window.configure(fg_color=ct['BG'])
         compare_window.geometry("800x600")
@@ -2988,18 +3783,18 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Show market analysis for the selected player."""
         selection = self.fa_player_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection",
+            messagebox.showwarning("No Selection",
                                        "Please select a player for market analysis.")
             return
 
-        player = self.parent.tree_maps.get('fa_players', {}).get(selection[0])
+        player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.create_market_analysis_window(player)
 
     def create_market_analysis_window(self, player):
         """Create a market analysis window for a player (CTk)."""
         ct = self._ct
-        analysis_window = ctk.CTkToplevel(self)
+        analysis_window = InGamePopup(self)
         analysis_window.title(f"Market Analysis - {player.full_name}")
         analysis_window.configure(fg_color=ct['BG'])
         analysis_window.geometry("700x600")
@@ -3138,9 +3933,9 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         """Calculate the market value of a player."""
         base_value = 750000  # Minimum NHL salary
 
-        # Rating-based value
+        # Rating-based value (100-scale: 74 OVR starter -> (74/92)^2 ~= 0.65x)
         rating = player.overall_rating()
-        rating_multiplier = (rating / 50) ** 2  # Exponential scaling
+        rating_multiplier = (rating / 92) ** 2  # Exponential scaling
 
         # Age factor
         age = player.age
@@ -3170,7 +3965,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         age = player.age
         rating = player.overall_rating()
 
-        if age < 25 and rating > 40:
+        if age < 25 and rating > 75:
             return 6  # Young star, long term
         elif age < 28:
             return 5  # Prime player
@@ -3222,7 +4017,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
         target_age = target_player.age
         target_pos = target_player.primary_position.value
 
-        for player in self.parent.game_manager.free_agents:
+        for player in self.app.game_manager.free_agents:
             if player == target_player:
                 continue
 
@@ -3254,20 +4049,35 @@ class FreeAgencyWindow(ctk.CTkToplevel):
             self._build_market_overview(tab)
         except Exception:
             pass
-        tk.messagebox.showinfo("Market Refreshed",
+        messagebox.showinfo("Market Refreshed",
                                "Free agency market data has been refreshed.")
 
     def update_views(self):
-        """Update all views with current data."""
+        """Update all views with current data.
+
+        Only already-built tabs are refreshed; unbuilt tabs populate from
+        current data when first selected (_build_fa_tab).
+        """
+        built = getattr(self, '_fa_tabs_built',
+                        {'players', 'staff', 'market'})
         current = self.tabview.get()
-        self.populate_filtered_players()
-        self.populate_filtered_staff()
+        if 'players' in built:
+            self.populate_filtered_players()
+        if 'staff' in built:
+            self.populate_filtered_staff()
         # Re-select the previously active tab (population doesn't change it,
         # but keep this deterministic for callers during __init__).
         self.tabview.set(current)
 
     def refresh_market_overview_data(self):
-        """Refresh just the market overview numbers after a signing."""
+        """Refresh just the market overview numbers after a signing.
+
+        Skipped when the tab was never built -- it renders current data on
+        first selection anyway.
+        """
+        if 'market' not in getattr(self, '_fa_tabs_built',
+                                   {'players', 'staff', 'market'}):
+            return
         try:
             tab = self.tabview.tab("Market Overview")
             for child in tab.winfo_children():
@@ -3294,7 +4104,7 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                     writer.writerow(['Type', 'Name', 'Position/Role', 'Age', 'Rating',
                                      'Salary', 'Contract Years', 'Nationality'])
 
-                    for player in self.parent.game_manager.free_agents:
+                    for player in self.app.game_manager.free_agents:
                         salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
                         years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
                         writer.writerow(['Player', player.full_name,
@@ -3302,15 +4112,15 @@ class FreeAgencyWindow(ctk.CTkToplevel):
                                          to_100_scale(player.overall_rating()),
                                          salary, years, getattr(player, 'nationality', 'Unknown')])
 
-                    for staff in self.parent.league.free_agent_staff:
+                    for staff in self.app.league.free_agent_staff:
                         writer.writerow(['Staff', staff.full_name, staff.role.value,
                                          staff.age, to_100_scale(staff.overall_rating),
                                          staff.salary, staff.contract_years, staff.nationality])
 
-                tk.messagebox.showinfo("Export Complete",
+                messagebox.showinfo("Export Complete",
                                        f"Free agent data exported to {filename}")
             except Exception as e:
-                tk.messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
+                messagebox.showerror("Export Error", f"Failed to export data: {str(e)}")
 
     def show_help(self):
         """Show help information."""
@@ -3346,301 +4156,128 @@ Right-click for additional options and analysis tools.
 
 The Market Overview tab provides analytics and top available talent.
 """
-        tk.messagebox.showinfo("Free Agency Help", help_text)
+        messagebox.showinfo("Free Agency Help", help_text)
 
-class CTkTradeRosterList(ctk.CTkFrame):
-    """Rich roster browser for the Trade Center.
 
-    Toolbar: live name search, position-group filter, sort dropdown.
-    Rows: name / position / age / OVR (100-scale) / potential / salary /
-    contract years / trade-value badge. Rows stay clickable/selectable.
 
-    Interface mirrors CTkPlayerList: set_players(players), get_selected(),
-    clear_selection().
-    """
-
-    POS_GROUPS = (
-        ("All", None),
-        ("Forwards", {"C", "LW", "RW"}),
-        ("Defense", {"LD", "RD", "D"}),
-        ("Goalies", {"G"}),
-    )
-    SORTS = ("OVR", "Potential", "Age", "Salary")
-
-    def __init__(self, parent, **kw):
-        from ctk_theme import (TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM,
-                               TEXT_FAINT, GOLD, GREEN, RED, BLUE,
-                               ROW_HOVER, ROW_SELECTED)
-        self._c = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD, BORDER=BORDER,
-                       TEXT=TEXT, TEXT_DIM=TEXT_DIM, TEXT_FAINT=TEXT_FAINT,
-                       GOLD=GOLD, GREEN=GREEN, RED=RED, BLUE=BLUE,
-                       ROW_HOVER=ROW_HOVER, ROW_SELECTED=ROW_SELECTED)
-        # Optional callbacks: on_double_click(player), on_right_click(player)
-        self.on_double_click = kw.pop("on_double_click", None)
-        self.on_right_click = kw.pop("on_right_click", None)
-        kw.setdefault("fg_color", "transparent")
-        super().__init__(parent, **kw)
-        self._roster = []
-        self._rows = []          # (frame, player)
-        self._selected = None
-        self._selected_frame = None
-
-        # ---- Toolbar: search + position filter + sort ----
-        toolbar = ctk.CTkFrame(self, fg_color="transparent")
-        toolbar.pack(fill="x", padx=6, pady=(6, 2))
-        self._search_var = tk.StringVar(master=self)
-        search = ctk.CTkEntry(toolbar, textvariable=self._search_var,
-                              placeholder_text="Search players...",
-                              height=30, fg_color=CARD,
-                              border_color=BORDER, text_color=TEXT,
-                              placeholder_text_color=TEXT_FAINT)
-        search.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        search.bind("<KeyRelease>", lambda _e: self._apply())
-        self._pos_var = tk.StringVar(master=self, value="All")
-        pos_box = ctk.CTkComboBox(
-            toolbar, values=[g[0] for g in self.POS_GROUPS],
-            variable=self._pos_var, width=108, height=30,
-            fg_color=CARD, border_color=BORDER, text_color=TEXT,
-            button_color=TEAL, dropdown_fg_color=CARD,
-            dropdown_text_color=TEXT,
-            command=lambda _v: self._apply())
-        pos_box.pack(side="left", padx=(0, 6))
-        self._sort_var = tk.StringVar(master=self, value="OVR")
-        sort_box = ctk.CTkComboBox(
-            toolbar, values=list(self.SORTS),
-            variable=self._sort_var, width=104, height=30,
-            fg_color=CARD, border_color=BORDER, text_color=TEXT,
-            button_color=TEAL, dropdown_fg_color=CARD,
-            dropdown_text_color=TEXT,
-            command=lambda _v: self._apply())
-        sort_box.pack(side="left")
-
-        self._count_lbl = ctk.CTkLabel(
-            self, text="", font=("Segoe UI", 10), text_color=TEXT_FAINT,
-            anchor="w")
-        self._count_lbl.pack(anchor="w", padx=12, pady=(0, 2))
-
-        self._list = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self._list.pack(fill="both", expand=True, padx=2, pady=(0, 6))
-        self._empty_lbl = None
-
-    # ------------------------------------------------------------------
-    # Data
-    # ------------------------------------------------------------------
-    def set_players(self, players):
-        self._roster = list(players or [])
-        self._selected = None
-        self._selected_frame = None
-        self._apply()
-
-    def get_selected(self):
-        return self._selected
-
-    def clear_selection(self):
-        if self._selected_frame is not None:
-            self._selected_frame.configure(fg_color="transparent")
-        self._selected = None
-        self._selected_frame = None
-
-    # ------------------------------------------------------------------
-    # Filtering / sorting
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _ovr(p):
-        try:
-            return int(to_100_scale(p.overall_rating()))
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _pot(p):
-        try:
-            return int(to_100_scale(p._potential_cap()))
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _age(p):
-        try:
-            return int(getattr(p, "age", 99) or 99)
-        except Exception:
-            return 99
-
-    @staticmethod
-    def _salary(p):
-        try:
-            return int(getattr(p, "salary", 0) or 0)
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _pos_value(p):
-        try:
-            return p.primary_position.value
-        except Exception:
-            return ""
-
-    def _apply(self):
-        query = (self._search_var.get() or "").strip().lower()
-        pos_name = self._pos_var.get()
-        group = dict(self.POS_GROUPS).get(pos_name)
-        players = self._roster
-        if group is not None:
-            players = [p for p in players if self._pos_value(p) in group]
-        if query:
-            players = [p for p in players
-                       if query in str(getattr(p, "full_name", p)).lower()]
-        sort = self._sort_var.get()
-        if sort == "Potential":
-            players = sorted(players, key=self._pot, reverse=True)
-        elif sort == "Age":
-            players = sorted(players, key=self._age)
-        elif sort == "Salary":
-            players = sorted(players, key=self._salary, reverse=True)
-        else:
-            players = sorted(players, key=self._ovr, reverse=True)
-        self._rebuild(players)
-
-    def _rebuild(self, players):
-        for frame, _ in self._rows:
-            frame.destroy()
-        self._rows = []
-        self._selected = None
-        self._selected_frame = None
-        if self._empty_lbl is not None:
-            self._empty_lbl.destroy()
-            self._empty_lbl = None
-        n = len(self._roster)
-        self._count_lbl.configure(
-            text=f"{len(players)} of {n} players" if len(players) != n
-            else f"{n} players")
-        if not players:
-            self._empty_lbl = ctk.CTkLabel(
-                self._list, text="No players match.",
-                font=("Segoe UI", 11, "italic"),
-                text_color=self._c["TEXT_FAINT"])
-            self._empty_lbl.pack(padx=8, pady=12)
-            return
-        for p in players:
-            self._add_row(p)
-
-    # ------------------------------------------------------------------
-    # Rows
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _ovr_color(ovr):
-        from ctk_theme import TEAL, GOLD, GREEN, TEXT_DIM
-        if ovr >= 85:
-            return GREEN
-        if ovr >= 78:
-            return TEAL
-        if ovr >= 70:
-            return GOLD
-        return TEXT_DIM
-
-    def _add_row(self, player):
-        c = self._c
-        row = ctk.CTkFrame(self._list, fg_color="transparent", corner_radius=8)
-        row.pack(fill="x", padx=4, pady=2)
-        row.grid_columnconfigure(0, weight=1)
-
-        name = str(getattr(player, "full_name", player))
-        pos = self._pos_value(player)
-        age = getattr(player, "age", "?")
-        salary = self._salary(player)
-        sal_txt = f"${salary / 1e6:.1f}M" if salary else "Unsigned"
-        try:
-            yrs = getattr(getattr(player, "contract", None),
-                          "years_remaining", None)
-            yrs_txt = f" · {yrs}y" if yrs else ""
-        except Exception:
-            yrs_txt = ""
-        ovr = self._ovr(player)
-        pot = self._pot(player)
-        pot_grade = str(getattr(player, "potential_grade", "") or "").strip()
-        try:
-            import trade_engine as te
-            val = te.asset_value(player)
-        except Exception:
-            val = 0
-
-        left = ctk.CTkFrame(row, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=(10, 4), pady=5)
-        nm = ctk.CTkLabel(left, text=name, font=("Segoe UI", 12, "bold"),
-                          text_color=c["TEXT"], anchor="w")
-        nm.pack(anchor="w")
-        sub = ctk.CTkLabel(
-            left, text=f"{pos} · Age {age} · {sal_txt}{yrs_txt}",
-            font=("Segoe UI", 10), text_color=c["TEXT_DIM"], anchor="w")
-        sub.pack(anchor="w")
-
-        badge = ctk.CTkFrame(row, fg_color=c["PANEL"], corner_radius=10,
-                             border_width=1, border_color=c["BORDER"])
-        badge.grid(row=0, column=1, padx=4)
-        bl = ctk.CTkLabel(badge, text=f"VAL {val}",
-                          font=("Segoe UI", 10, "bold"), text_color=c["TEAL"])
-        bl.pack(padx=8, pady=2)
-
-        right = ctk.CTkFrame(row, fg_color="transparent")
-        right.grid(row=0, column=2, sticky="e", padx=(4, 10), pady=5)
-        ovr_lbl = ctk.CTkLabel(right, text=str(ovr),
-                               font=("Segoe UI", 15, "bold"),
-                               text_color=self._ovr_color(ovr), anchor="e")
-        ovr_lbl.pack(anchor="e")
-        pot_txt = f"POT {pot_grade} ({pot})" if pot_grade else f"POT {pot}"
-        pot_lbl = ctk.CTkLabel(right, text=pot_txt, font=("Segoe UI", 9),
-                               text_color=c["TEXT_FAINT"], anchor="e")
-        pot_lbl.pack(anchor="e")
-
-        for w in (row, left, nm, sub, badge, bl, right, ovr_lbl, pot_lbl):
-            w.bind("<Button-1>",
-                   lambda e, f=row, pl=player: self._select(f, pl))
-            w.bind("<Double-Button-1>",
-                   lambda e, pl=player: self._double_click(pl))
-            w.bind("<Button-3>",
-                   lambda e, pl=player: self._right_click(e, pl))
-            w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
-            w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
-        self._rows.append((row, player))
-
-    def _double_click(self, player):
-        self._select_player_only(player)
-        if callable(self.on_double_click):
-            self.on_double_click(player)
-
-    def _right_click(self, event, player):
-        if callable(self.on_right_click):
+class FreeAgencyWindow(InGamePopup):
+    """Popup wrapper around FreeAgencyView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Free Agency Market")
+        self._view = FreeAgencyView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
             try:
-                self.on_right_click(player, event)
-            except TypeError:
-                self.on_right_click(player)
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+def _perceiver_ctx(app, ai_manager, holder_team):
+    """What the USER (perceiver) brings to the read: my scouts' eyes, my
+    history with his GM, his poker face, and the standings situation.
+    Every lookup is defensive -- a missing piece just yields a neutral ctx.
+    """
+    ctx = {}
+    try:
+        user_team = app.user_team
+        league = app.league
+    except Exception:
+        return ctx
+    try:  # my scouts: good staff read him cleanly, bad staff file noise
+        from team_draft_boards import scouting_quality as _sq
+        ctx["scout_quality01"] = _sq(user_team) / 100.0
+    except Exception:
+        pass
+    try:  # my relationship with his GM: rivalry vs good relations
+        import reputation_system as _rs
+        ctx["respect01"] = _rs.gm_gm_respect(
+            league, user_team, holder_team) / 100.0
+        ctx["heat01"] = _rs.gm_gm_heat(league, user_team, holder_team) / 100.0
+    except Exception:
+        pass
+    try:  # franchise rivalry: bad blood between the TEAMS, not just the GMs
+        import reputation_system as _rs
+        _rivs = getattr(league, "rivalries", None) or []
+        _rh = _rs.get_rivalry_heat(_rivs, user_team, holder_team)
+        ctx["team_heat01"] = float(_rh.get("heat", 0)) / 100.0
+    except Exception:
+        pass
+    try:  # his poker face: a skilled veteran leaks less than a rookie
+        import ai_extension_planning as _aep
+        ident = (ai_manager.gm_identities.get(holder_team.team_name)
+                 if ai_manager is not None else None)
+        ctx["holder_skill01"] = _aep.gm_ability01(ident)
+    except Exception:
+        pass
+    try:  # the situation: same division + the standings race
+        _ud = getattr(user_team, "division", "") or ""
+        _hd = getattr(holder_team, "division", "") or ""
+        ctx["same_division"] = bool(_ud and _ud == _hd)
+    except Exception:
+        pass
+    try:
+        import trade_storylines as _ts
+        ctx["holder_stance"] = _ts.stance(app, holder_team.team_name)
+    except Exception:
+        pass
+    try:
+        ctx["perceiver_key"] = getattr(user_team, "team_name", "user")
+    except Exception:
+        pass
+    return ctx
 
-    def _select_player_only(self, player):
-        for frame, pl in self._rows:
-            if pl is player:
-                self._select(frame, pl)
-                break
 
-    def _hover(self, frame, on):
-        if frame is self._selected_frame:
-            return
-        frame.configure(fg_color=self._c["ROW_HOVER"] if on else "transparent")
+def gm_trade_value_badges(ai_manager, team, app=None, level="NHL"):
+    """badge_fn for CTkPlayerList: the USER's read of how THIS team's GM
+    values each player.
 
-    def _select(self, frame, player):
-        if self._selected_frame is not None:
-            self._selected_frame.configure(fg_color="transparent")
-        self._selected = player
-        self._selected_frame = frame
-        frame.configure(fg_color=self._c["ROW_SELECTED"])
+    EHM-style trade screen: at a glance you see who the other GM considers
+    UNTOUCHABLE / CORE / VALUED / GETTABLE. Built on the same
+    franchise_score the extension forward book uses, so the tag and the
+    money the GM reserves always agree -- but filtered through YOUR
+    scouts, YOUR relationship with his GM, his poker face, and the
+    standings situation (see perceived_trade_value). Prospects get a
+    PROSPECT prefix so the level is unmistakable. Falls back to a neutral
+    read when the AI manager or the GM identity isn't available.
+    """
+    try:
+        identity = ai_manager.gm_identities.get(team.team_name)
+    except Exception:
+        identity = None
+    try:
+        strategy = ai_manager.team_strategies.get(team.team_name)
+    except Exception:
+        strategy = None
+    try:
+        import ai_extension_planning as _aep
+    except Exception:
+        return None
+    ctx = _perceiver_ctx(app, ai_manager, team) if app is not None else {}
+    _prospect = (level or "NHL") == "Prospects"
+
+    def _badge(player):
+        try:
+            label, color, _p, _t = _aep.perceived_trade_value(
+                player, identity, strategy, ctx)
+            if _prospect:
+                label = f"PROSPECT \u00b7 {label}"
+            return (label, color)
+        except Exception:
+            return None
+    return _badge
 
 
-class TradeWindow(ctk.CTkToplevel):
+class TradeWindow(InGamePopup):
     """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
 
     METER_W = 280
     METER_H = 22
 
-    def __init__(self, parent):
+    def __init__(self, parent, preset=None):
         from ctk_theme import (
             init_ctk_theme, CTkOfferList,
             primary_button, secondary_button, heading, body,
@@ -3652,13 +4289,25 @@ class TradeWindow(ctk.CTkToplevel):
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
                         RED=RED, BLUE=BLUE)
         init_ctk_theme()
-        super().__init__(parent)
+        # A workbench, not a verdict: non-modal with click-out so the
+        # user can dismiss it freely and keep exploring. Sending an
+        # offer never resolves instantly -- the AI GM answers in a few
+        # days via the inbox.
+        super().__init__(parent, modal=False, dismiss_on_backdrop=True)
         self.parent = parent
         self.title("Trade Center")
         self.geometry("1280x780")
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
+        self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
+        # Deal sweeteners (user's outgoing assets only):
+        #   _retention: player id -> pct of cap hit retained (0/25/50)
+        #   _pick_protection: pick id -> "top-3" | "top-10" | "lottery"
+        self._retention = {}
+        self._pick_protection = {}
         self._history_visible = False
+        self._preset = preset or {}
+        self._negotiation_id = self._preset.get("negotiation_id")
 
         # Slim branded banner strip (decorative; never breaks the window)
         try:
@@ -3688,8 +4337,14 @@ class TradeWindow(ctk.CTkToplevel):
         partner_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
         partner_row.pack(fill='x', padx=10, pady=(8, 0))
         body(partner_row, "Trade partner:").pack(side='left', padx=(14, 0), pady=8)
+        # Realistic: trade partners are NHL franchises only --
+        # never standalone AHL clubs.
+        def _is_nhl(t):
+            ln = str(getattr(t, 'league_name', '') or '')
+            return (t != parent.user_team and
+                    ('National Hockey League' in ln or 'NHL' in ln or not ln))
         partner_teams = sorted(t.team_name for t in parent.league.teams
-                               if t != parent.user_team)
+                               if _is_nhl(t))
         self.partner_combo = ctk.CTkComboBox(
             partner_row, values=partner_teams, width=260,
             command=lambda _v: self.update_trade_partner_roster())
@@ -3715,10 +4370,14 @@ class TradeWindow(ctk.CTkToplevel):
         user_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         heading(user_frame, parent.user_team.team_name, size=13).pack(
             anchor='w', padx=12, pady=(10, 4))
-        self.user_list = CTkTradeRosterList(
-            user_frame,
-            on_double_click=lambda p: self._add_player_to_trade('user', p),
-            on_right_click=lambda p, e=None: self._player_menu('user', p, e))
+        # Realistic logic: trade assets by level (NHL/AHL/Prospects).
+        # Trades are between NHL franchises; AHL/prospects are org assets.
+        self._user_level = ctk.StringVar(value="NHL")
+        _ulvl = ctk.CTkSegmentedButton(user_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._user_level,
+                                       command=lambda _v: self._refresh_user_list())
+        _ulvl.pack(fill='x', padx=8, pady=(0, 4))
+        self.user_list = CTkPlayerList(user_frame)
         self.user_list.pack(fill='both', expand=True, padx=8, pady=4)
         btn_row = ctk.CTkFrame(user_frame, fg_color="transparent")
         btn_row.pack(fill='x', padx=8, pady=(4, 2))
@@ -3741,6 +4400,15 @@ class TradeWindow(ctk.CTkToplevel):
                          command=lambda: self._remove_from_trade('user')).pack(
                              anchor='e', padx=12, pady=(4, 8))
 
+        # Salary retention (real NHL retained-salary transactions): keep up
+        # to 50% of an outgoing player's cap hit to sweeten the deal. The
+        # retained slice becomes your dead cap for the rest of his contract.
+        body(center, "SALARY RETENTION", size=10, dim=True).pack(anchor='w', padx=12)
+        self._retention_slots_label = body(center, "", size=10, dim=True)
+        self._retention_slots_label.pack(anchor='w', padx=12)
+        self.retention_frame = ctk.CTkFrame(center, fg_color="transparent")
+        self.retention_frame.pack(fill='x', padx=8, pady=(2, 4))
+
         # Live trade meter
         body(center, "TRADE METER", size=10, dim=True).pack(anchor='w', padx=12)
         self.meter_canvas = tk.Canvas(center, width=self.METER_W, height=self.METER_H,
@@ -3759,9 +4427,10 @@ class TradeWindow(ctk.CTkToplevel):
                          command=lambda: self._remove_from_trade('partner')).pack(
                              anchor='e', padx=12, pady=(4, 8))
 
-        primary_button(center, text="Propose Trade",
-                       command=self.propose_trade).pack(fill='x', padx=12, pady=(6, 0))
-        body(center, "The AI GM evaluates value, needs and cap space.\nLowball and expect a counter.",
+        self.propose_btn = primary_button(center, text="Send Offer",
+                                          command=self.propose_trade)
+        self.propose_btn.pack(fill='x', padx=12, pady=(6, 0))
+        body(center, "The other GM takes a few days to answer.\nYou can close this and keep working -- the reply lands in your inbox.",
              size=10, dim=True).pack(padx=12, pady=(8, 10))
 
         # Partner roster
@@ -3769,10 +4438,16 @@ class TradeWindow(ctk.CTkToplevel):
         partner_frame.grid(row=0, column=2, sticky="nsew", padx=(4, 0))
         self.partner_title = heading(partner_frame, "Trade Partner", size=13)
         self.partner_title.pack(anchor='w', padx=12, pady=(10, 4))
-        self.partner_list = CTkTradeRosterList(
-            partner_frame,
-            on_double_click=lambda p: self._add_player_to_trade('partner', p),
-            on_right_click=lambda p, e=None: self._player_menu('partner', p, e))
+        self._partner_level = ctk.StringVar(value="NHL")
+        _plvl = ctk.CTkSegmentedButton(partner_frame, values=["NHL", "AHL", "Prospects"],
+                                       variable=self._partner_level,
+                                       command=lambda _v: self.update_trade_partner_roster())
+        _plvl.pack(fill='x', padx=8, pady=(0, 4))
+        # EHM-style: whose value is whose -- their GM's read on each player.
+        body(partner_frame, "Their GM values each player:  "
+             "UNTOUCHABLE (not moving)  ·  CORE  ·  VALUED  ·  GETTABLE",
+             size=10, dim=True).pack(anchor='w', padx=12, pady=(0, 2))
+        self.partner_list = CTkPlayerList(partner_frame)
         self.partner_list.pack(fill='both', expand=True, padx=8, pady=4)
         pbtn_row = ctk.CTkFrame(partner_frame, fg_color="transparent")
         pbtn_row.pack(fill='x', padx=8, pady=(4, 10))
@@ -3786,14 +4461,91 @@ class TradeWindow(ctk.CTkToplevel):
         self.history_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
 
         self.update_views()
+        self._apply_preset()
+        self._wire_player_menus()
+
+    # ------------------------------------------------------------------
+    # Preset (opened from an inbox negotiation or a player menu)
+    # ------------------------------------------------------------------
+    def _apply_preset(self):
+        pr = self._preset
+        if not pr:
+            return
+        partner = pr.get("partner")
+        if partner is not None:
+            try:
+                self.partner_combo.set(partner.team_name)
+            except Exception:
+                pass
+            self.update_trade_partner_roster()
+        for side in ("user", "partner"):
+            assets = pr.get("user_assets" if side == "user" else "partner_assets")
+            if assets:
+                self.trade_offers[side] = [a for a in assets
+                                           if a not in self.trade_offers[side]]
+        self._refresh_offer_lists()
+        self._update_meter()
+        if pr.get("mode") == "counter":
+            # Restore the deal's retention/protection terms so the user
+            # counters from the same terms, not from scratch.
+            try:
+                import trade_negotiation as _tn
+                _neg = _tn.get_negotiation(self.parent, self._negotiation_id)
+                if _neg is not None:
+                    self._retention = {
+                        getattr(a, 'id', None): float(v)
+                        for a in self.trade_offers['user']
+                        for k, v in (_neg.retention or {}).items()
+                        if str(k) == str(getattr(a, 'id', '')) and float(v or 0) > 0}
+                    self._pick_protection = {
+                        getattr(a, 'id', ''): v
+                        for a in self.trade_offers['user']
+                        for k, v in (_neg.pick_protection or {}).items()
+                        if str(k) == str(getattr(a, 'id', '')) and v}
+            except Exception:
+                pass
+            self._refresh_offer_lists()
+            try:
+                self.propose_btn.configure(text="Send Counter-Offer")
+                self.title(f"Trade Center -- countering {partner.team_name}"
+                           if partner is not None else "Trade Center")
+            except Exception:
+                pass
+
+    def _wire_player_menus(self):
+        """EHM/FM24: right-click any player row for the player menu."""
+        try:
+            from player_context_menu import PlayerContextMenu
+            mgr = PlayerContextMenu(self)
+            self.user_list.on_right_click = (
+                lambda e, p: mgr.show_context_menu(e, p))
+            self.partner_list.on_right_click = (
+                lambda e, p: mgr.show_context_menu(e, p))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Views
     # ------------------------------------------------------------------
+    def _level_roster(self, team, level):
+        """Get a team's roster at the given level (NHL/AHL/Prospects)."""
+        if level == "AHL":
+            players = getattr(team, 'ahl_roster', [])
+        elif level == "Prospects":
+            players = getattr(team, 'prospects', [])
+        else:
+            players = getattr(team, 'roster', [])
+        return sorted(players, key=lambda p: p.overall_rating(), reverse=True)
+
+    def _refresh_user_list(self):
+        _lvl = self._user_level.get()
+        _badge = (lambda _p: ("PROSPECT", "#a1a1aa")) \
+            if _lvl == "Prospects" else None
+        self.user_list.set_players(
+            self._level_roster(self.parent.user_team, _lvl), badge_fn=_badge)
+
     def update_views(self):
-        roster = sorted(self.parent.user_team.roster,
-                        key=lambda p: p.overall_rating(), reverse=True)
-        self.user_list.set_players(roster)
+        self._refresh_user_list()
         self.update_trade_partner_roster()
         self._refresh_offer_lists()
         self._update_meter()
@@ -3803,22 +4555,115 @@ class TradeWindow(ctk.CTkToplevel):
         team = next((t for t in self.parent.league.teams
                      if t.team_name == name), None)
         if team:
-            self.partner_title.configure(text=team.team_name)
-            roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
-            self.partner_list.set_players(roster)
+            lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
+            self.partner_title.configure(text=f"{team.team_name} ({lvl})")
+            try:
+                _badge_fn = gm_trade_value_badges(
+                    self.parent.ai_manager, team,
+                    app=self.parent, level=lvl)
+            except Exception:
+                _badge_fn = None
+            self.partner_list.set_players(self._level_roster(team, lvl),
+                                          badge_fn=_badge_fn)
             needs = self.te.team_needs(team)[:3]
             self.needs_label.configure(text="  ".join(needs) if needs else "—")
         # Partner changed -> clear their side of the deal
         self.trade_offers['partner'] = []
+        self._asset_levels['partner'] = {}
         self._refresh_offer_lists()
         self._update_meter()
 
     def _refresh_offer_lists(self):
         for side, lst in (('user', self.user_offer_list),
                           ('partner', self.partner_offer_list)):
-            labels = [f"{self.te.asset_label(a)}  [{self.te.asset_value(a)}]"
-                      for a in self.trade_offers[side]]
+            labels = []
+            for a in self.trade_offers[side]:
+                lvl = self._asset_levels[side].get(id(a), "NHL")
+                tag = "" if lvl == "NHL" else f" ({lvl})"
+                label = f"{self.te.asset_label(a)}{tag}  [{self.te.asset_value(a)}]"
+                if not self.te._is_pick(a):
+                    # Trade protection badge -- real clauses, real consequences.
+                    ctag = self.te.clause_tag(a)
+                    if ctag:
+                        label += f"  [{ctag}]"
+                if side == 'user':
+                    if not self.te._is_pick(a):
+                        pct = self._retention.get(getattr(a, 'id', None), 0)
+                        if pct:
+                            label += f"  ⟡ retains {pct:g}%"
+                    else:
+                        prot = self.te.protection_label(
+                            self._pick_protection.get(getattr(a, 'id', ''), ''))
+                        if prot:
+                            label += f"  ⟡ {prot}"
+                labels.append(label)
             lst.set_items(labels)
+        self._refresh_retention_section()
+
+    # ------------------------------------------------------------------
+    # Salary retention
+    # ------------------------------------------------------------------
+    def _refresh_retention_section(self):
+        """Rebuild the per-player retention rows for the user's offer."""
+        for child in self.retention_frame.winfo_children():
+            child.destroy()
+        try:
+            from ctk_theme import body as _body
+            used = self.te.retention_slots_used(self.parent.user_team)
+            self._retention_slots_label.configure(
+                text=f"Retention slots used: {used}/{self.te.MAX_RETENTION_SLOTS}")
+        except Exception:
+            pass
+        players = [a for a in self.trade_offers['user']
+                   if not self.te._is_pick(a)]
+        if not players:
+            return
+        import customtkinter as ctk
+        from ctk_theme import body as _body
+        for p in players:
+            row = ctk.CTkFrame(self.retention_frame, fg_color="transparent")
+            row.pack(fill='x', pady=1)
+            try:
+                hit = self.te._player_cap_hit(p)
+                name = f"{p.full_name} (${hit / 1e6:.2f}M)"
+            except Exception:
+                name = str(p)
+            _body(row, name, size=11).pack(side='left', padx=(4, 8))
+            var = ctk.StringVar(
+                value=f"{self._retention.get(getattr(p, 'id', None), 0):g}%")
+            seg = ctk.CTkSegmentedButton(
+                row, values=["0%", "25%", "50%"], variable=var, width=150,
+                command=lambda v, _p=p: self._set_retention(_p, v))
+            seg.pack(side='right', padx=4)
+
+    def _set_retention(self, player, value):
+        """User picked a retention pct for one outgoing player."""
+        try:
+            pct = float(str(value).replace("%", "") or 0)
+        except Exception:
+            pct = 0
+        pid = getattr(player, 'id', None)
+        if pct > 0:
+            # Validate now so the meter never shows an illegal promise.
+            # The game date drives the new-CBA 75-day double-retention
+            # clock, same as execution.
+            _gdate = getattr(self.parent, "current_date", None)
+            _gleague = getattr(self.parent, "league", None)
+            ok, note = self.te.apply_retention_dry_run(
+                self.parent.user_team, player, pct,
+                extra={k: v for k, v in self._retention.items() if k != pid},
+                trade_date=_gdate,
+                season_windows=self.te.regular_season_windows(_gleague))
+            if not ok:
+                from tkinter import messagebox
+                messagebox.showwarning("Can't retain", note)
+                self._refresh_retention_section()
+                return
+            self._retention[pid] = pct
+        else:
+            self._retention.pop(pid, None)
+        self._refresh_offer_lists()
+        self._update_meter()
 
     # ------------------------------------------------------------------
     # Trade meter
@@ -3871,18 +4716,27 @@ class TradeWindow(ctk.CTkToplevel):
             self.meter_label.configure(
                 text=f"{ev.label}  (you {ev.user_value} vs them {ev.partner_value})",
                 text_color=color)
-        # Cap impact for the user
+        # Cap impact for the user (central cap accounting: roster + dead cap,
+        # so this label always agrees with the actual trade validation).
+        # Retention-aware: money you retain on outgoing players stays home
+        # as your dead cap instead of leaving with them.
         gm_team = self.parent.user_team
-        in_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['partner']
-                     if not self.te._is_pick(p))
-        out_sal = sum(getattr(p, 'salary', 0) or 0 for p in self.trade_offers['user']
-                      if not self.te._is_pick(p))
+        user_players = [p for p in self.trade_offers['user']
+                        if not self.te._is_pick(p)]
+        partner_players = [p for p in self.trade_offers['partner']
+                           if not self.te._is_pick(p)]
+        in_sal = sum(self.te._player_cap_hit(p) for p in partner_players)
+        out_sal = sum(self.te._player_cap_hit(p) for p in user_players)
         try:
-            new_pay = gm_team.payroll - out_sal + in_sal
+            from salary_cap_system import total_cap_charge
+            kept_home = self.te._retention_adjustment(user_players, self._retention)
+            new_pay = total_cap_charge(gm_team) - out_sal + kept_home + in_sal
             room = gm_team.salary_cap - new_pay
             ok = room >= 0
+            ret_note = (f" (incl. ${kept_home / 1e6:.2f}M retained)"
+                        if kept_home else "")
             self.cap_label.configure(
-                text=f"Cap room after: ${room / 1e6:.1f}M"
+                text=f"Cap room after: ${room / 1e6:.1f}M{ret_note}"
                      if ok else f"OVER CAP by ${-room / 1e6:.1f}M — shed salary!",
                 text_color=ct['GREEN'] if ok else ct['RED'])
         except Exception:
@@ -3901,6 +4755,9 @@ class TradeWindow(ctk.CTkToplevel):
         """Double-click on a roster row: add that player to the deal."""
         if player and player not in self.trade_offers[side]:
             self.trade_offers[side].append(player)
+            lvl = (self._user_level.get() if side == 'user'
+                   else self._partner_level.get())
+            self._asset_levels[side][id(player)] = lvl
             self._refresh_offer_lists()
             self._update_meter()
 
@@ -3930,7 +4787,13 @@ class TradeWindow(ctk.CTkToplevel):
         idx = lst.get_selected_index()
         if idx is None or idx >= len(self.trade_offers[side]):
             return
+        gone = self.trade_offers[side][idx]
         del self.trade_offers[side][idx]
+        if side == 'user':
+            # Deal terms die with the asset.
+            self._retention.pop(getattr(gone, 'id', None), None)
+            self._pick_protection.pop(getattr(gone, 'id', ''), None)
+            self._pick_protection.pop(str(getattr(gone, 'id', '')), None)
         self._refresh_offer_lists()
         self._update_meter()
 
@@ -3939,6 +4802,12 @@ class TradeWindow(ctk.CTkToplevel):
         for yr in sorted(getattr(team, 'draft_picks', {}).keys()):
             for pk in team.draft_picks[yr]:
                 if getattr(pk, 'current_team', '') == team.team_name:
+                    # BUG-016: expired picks are dead paper, not assets.
+                    try:
+                        if not pk.can_be_traded():
+                            continue
+                    except Exception:
+                        pass
                     picks.append(pk)
         return picks
 
@@ -3954,21 +4823,87 @@ class TradeWindow(ctk.CTkToplevel):
         if not picks:
             messagebox.showinfo("No picks", f"{team.team_name} has no tradeable picks.")
             return
-        dlg = ctk.CTkToplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Add draft pick")
-        dlg.geometry("420x360")
+        dlg.geometry("420x420")
         dlg.configure(fg_color=BG)
         dlg.transient(self)
         heading(dlg, f"Select a {team.team_name} pick:", size=12).pack(pady=(14, 6))
-        pick_list = CTkOfferList(dlg, height=200)
+        pick_list = CTkOfferList(dlg, height=170)
         pick_list.pack(fill='both', expand=True, padx=12)
         pick_list.set_items([f"{self.te.asset_label(pk)}  [{self.te.asset_value(pk)}]"
                              for pk in picks])
 
+        # Pick protection (real NHL lottery protection, 1st-rounders only):
+        # if the pick lands in the protected zone, the original club keeps
+        # it and the holder gets their next-year 1st instead. Requires the
+        # club to still hold its next-year 1st-rounder.
+        prot_var = ctk.StringVar(value="None")
+        prot_frame = ctk.CTkFrame(dlg, fg_color="transparent")
+        prot_frame.pack(fill='x', padx=12, pady=(6, 0))
+        body(prot_frame, "Protection:", size=11, dim=True).pack(side='left')
+        prot_seg = ctk.CTkSegmentedButton(
+            prot_frame, values=["None", "Top-3", "Top-10", "Lottery"],
+            variable=prot_var, width=240)
+        prot_seg.pack(side='right')
+        prot_note = body(dlg, "", size=10, dim=True)
+        prot_note.pack(padx=12, pady=(2, 0))
+
+        def _refresh_prot_state(*_a):
+            idx = pick_list.get_selected_index()
+            ok, why = True, ""
+            if idx is not None and 0 <= idx < len(picks):
+                pk = picks[idx]
+                if pk.round != 1:
+                    ok, why = False, "Only 1st-round picks can be protected."
+                else:
+                    nxt = pk.year + 1
+                    own_next = any(
+                        q.round == 1 and q.current_team == team.team_name
+                        for q in (getattr(team, 'draft_picks', {}) or {}).get(nxt, []))
+                    if not own_next:
+                        ok, why = False, (
+                            f"{team.team_name} doesn't hold its {nxt} 1st-rounder "
+                            f"-- nothing to defer to.")
+            try:
+                prot_seg.configure(state="normal" if ok else "disabled")
+            except Exception:
+                pass
+            prot_note.configure(text=why if not ok else
+                                "If the pick lands in the protected zone, it defers "
+                                "to next year's 1st.")
+            if not ok:
+                prot_var.set("None")
+
+        try:
+            _last_prot_idx = {"i": None}
+
+            def _poll_prot():
+                try:
+                    if not dlg.winfo_exists():
+                        return
+                    cur = pick_list.get_selected_index()
+                    if cur != _last_prot_idx["i"]:
+                        _last_prot_idx["i"] = cur
+                        _refresh_prot_state()
+                    dlg.after(200, _poll_prot)
+                except Exception:
+                    pass
+
+            _poll_prot()
+        except Exception:
+            pass
+        _refresh_prot_state()
+
         def add():
             idx = pick_list.get_selected_index()
             if idx is not None:
-                self.trade_offers[side].append(picks[idx])
+                pk = picks[idx]
+                self.trade_offers[side].append(pk)
+                prot = {"Top-3": "top-3", "Top-10": "top-10",
+                        "Lottery": "lottery"}.get(prot_var.get(), "")
+                if prot and side == 'user' and pk.round == 1:
+                    self._pick_protection[pk.id] = prot
                 self._refresh_offer_lists()
                 self._update_meter()
                 dlg.destroy()
@@ -3983,6 +4918,9 @@ class TradeWindow(ctk.CTkToplevel):
                      if t.team_name == self.partner_combo.get()), None)
 
     def propose_trade(self):
+        """Send the offer. The AI GM answers in a few days via the inbox --
+        this window can be closed freely in the meantime."""
+        import trade_negotiation as tn
         partner = self._partner_team()
         if partner is None:
             messagebox.showwarning("No partner", "Select a trade partner first.")
@@ -3992,76 +4930,121 @@ class TradeWindow(ctk.CTkToplevel):
         if not user_assets or not partner_assets:
             messagebox.showwarning("Incomplete", "Put assets on both sides first.")
             return
-        # Cap check for the user before bothering the AI
-        if not self.te._cap_ok_after(self.parent.user_team, user_assets, partner_assets):
-            messagebox.showerror("Cap problem",
-                                 "This trade puts YOU over the salary cap. Shed salary first.")
-            return
-        resp = self.te.ai_consider_trade(partner, user_assets, partner_assets,
-                                         user_team=self.parent.user_team)
-        if resp.decision == 'accept':
-            self._complete_trade(partner, user_assets, partner_assets)
-            messagebox.showinfo("Trade Accepted", resp.message +
-                                "\n\n" + self._last_summary)
-        elif resp.decision == 'reject':
-            messagebox.showerror("Trade Rejected", resp.message)
-        else:
-            self._counter_dialog(partner, user_assets, partner_assets, resp)
-
-    def _counter_dialog(self, partner, user_assets, partner_assets, resp):
-        from ctk_theme import secondary_button, primary_button, heading, body, BG, PANEL
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("Counter-offer")
-        dlg.geometry("460x280")
-        dlg.configure(fg_color=BG)
-        dlg.transient(self)
-        heading(dlg, f"{partner.team_name} counters", size=15).pack(pady=(16, 6))
-        body(dlg, resp.message, size=11, dim=True).pack(pady=6, padx=24)
-        btns = ctk.CTkFrame(dlg, fg_color="transparent")
-        btns.pack(pady=16)
-
-        def accept_counter():
-            ua = list(user_assets) + list(resp.want_added)
-            pa = list(partner_assets) + list(resp.will_add)
-            if not self.te._cap_ok_after(self.parent.user_team, ua, pa):
-                messagebox.showerror("Cap problem",
-                                     "The counter puts you over the cap.")
+        _league = (getattr(getattr(self.parent, 'game_manager', None),
+                           'league', None)
+                   or getattr(self.parent, 'league', None))
+        # Two-way preflight: the partner's clause players get the same
+        # destination-aware check the AI applies on its side -- up front,
+        # not 1-3 days later when the answer comes back. Non-blocking: the
+        # user can still send, but not blind.
+        _their_vetoes = self.te.trade_vetoes(
+            partner, self.parent.user_team,
+            [p for p in partner_assets if not self.te._is_pick(p)], _league)
+        if _their_vetoes:
+            _bits = []
+            for _tv in _their_vetoes:
+                _vp = _tv["player"]
+                _vn = getattr(_vp, "full_name", str(_vp))
+                try:
+                    _wok, _wwhy = self.te.will_waive_ntc(
+                        _vp, partner, self.parent.user_team, _league)
+                except Exception:
+                    _wok = False
+                _bits.append(f"\u2022 {_vn} ({_tv['detail']}) -- "
+                             f"{'likely to waive' if _wok else 'may refuse'}")
+            if not messagebox.askyesno(
+                    "Trade protection",
+                    "Heads-up -- the other side has clause players:\n\n"
+                    + "\n".join(_bits)
+                    + "\n\nThey'll be asked to waive for a move to the "
+                    f"{self.parent.user_team.team_name}, and a refusal kills "
+                    "the deal. Send the offer anyway?"):
                 return
-            dlg.destroy()
-            self._complete_trade(partner, ua, pa)
-            messagebox.showinfo("Trade Accepted",
-                                "Counter accepted!\n\n" + self._last_summary)
-
-        primary_button(btns, text="Accept Counter",
-                       command=accept_counter).pack(side='left', padx=8)
-        secondary_button(btns, text="Walk Away",
-                         command=dlg.destroy).pack(side='left', padx=8)
-
-    def _complete_trade(self, partner, user_assets, partner_assets):
-        gm = getattr(self.parent, 'game_manager', None)
-        date_str = str(getattr(gm, 'current_date', '')) if gm else ''
-        trade = self.te.execute_trade(self.parent.user_team, partner,
-                                      user_assets, partner_assets, date_str)
-        self._last_summary = trade.summary
-        if gm is not None:
-            gm.trade_history.append(trade)
-            # Media + news
-            try:
-                traded = [a for a in user_assets if not self.te._is_pick(a)]
-                received = [a for a in partner_assets if not self.te._is_pick(a)]
-                if hasattr(gm, 'media_system') and gm.media_system:
-                    gm.media_system.process_trade(
-                        user_team=self.parent.user_team, other_team=partner,
-                        traded_players=traded, received_players=received)
-            except Exception:
-                pass
-            try:
-                self.parent.add_news_story(f"TRADE: {trade.summary}")
-            except Exception:
-                pass
-        self.trade_offers = {'user': [], 'partner': []}
-        self.parent.update_all_views()
-        self.update_views()
+        # No-trade / no-movement clauses: the user's own clause players must
+        # waive for this specific destination before the offer goes out.
+        # Yes = ask him, No = pull him from the offer, Cancel = stop.
+        # Cap check FIRST: no point asking a player to waive his clause for
+        # a deal that can't clear the cap -- and stamping the waiver before
+        # this check used to leak a live single-use waiver on cap failure.
+        _pre_retention = {k: v for k, v in self._retention.items() if v}
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets,
+                                     retention=_pre_retention):
+            messagebox.showerror("Cap problem",
+                                 "This trade puts YOU over the salary cap. "
+                                 "Shed salary first.")
+            return
+        # Waivers stamped in this pass belong to the proposal being built:
+        # if the user cancels, they are cleared -- a dead proposal spends
+        # nothing (the same rule the MP host applies to dead deals).
+        _stamped = []
+        for _v in self.te.trade_vetoes(
+                self.parent.user_team, partner,
+                [p for p in user_assets if not self.te._is_pick(p)], _league):
+            _p, _pname = _v["player"], getattr(
+                _v["player"], "full_name", str(_v["player"]))
+            _ans = messagebox.askyesnocancel(
+                "No-trade clause",
+                f"{_pname} has a {_v['detail']}.\n\nAsk him to waive it for "
+                f"a move to the {partner.team_name}?\n\n"
+                f"Yes = ask him  |  No = remove him from the offer  |  "
+                f"Cancel = stop")
+            if _ans is None:
+                for _sp in _stamped:
+                    try:
+                        _sp.contract.ntc_waiver_for = ""
+                    except Exception:
+                        pass
+                return
+            if _ans is False:
+                self.trade_offers['user'] = [
+                    a for a in self.trade_offers['user'] if a is not _p]
+                self._retention.pop(getattr(_p, 'id', None), None)
+                user_assets = list(self.trade_offers['user'])
+                self._refresh_offer_lists()
+                self._update_meter()
+                continue
+            _ok, _why = self.te.will_waive_ntc(
+                _p, self.parent.user_team, partner, _league)
+            if _ok:
+                try:
+                    _p.contract.ntc_waiver_for = partner.team_name
+                    _stamped.append(_p)
+                except Exception:
+                    pass
+                messagebox.showinfo("Waiver granted", _why)
+            else:
+                messagebox.showwarning(
+                    "Waiver refused",
+                    f"{_why}\n\nHe's staying put -- remove him from the "
+                    f"offer or cancel.")
+                return
+        # Deal terms the user set on this screen (retention %, pick protection).
+        # Rebuilt here because the waiver loop above may have pulled a player
+        # (and his retention row) out of the offer on a refused waiver.
+        retention = {k: v for k, v in self._retention.items() if v}
+        pick_protection = dict(self._pick_protection)
+        if self._negotiation_id and self._preset.get("mode") == "counter":
+            neg = tn.get_negotiation(self.parent, self._negotiation_id)
+            if neg is not None and neg.is_open:
+                tn.send_counter(self.parent, neg, user_assets, partner_assets,
+                                retention=retention,
+                                pick_protection=pick_protection)
+                messagebox.showinfo(
+                    "Counter-offer sent",
+                    f"Your revised proposal is with {partner.team_name}.\n"
+                    "They will answer in a few days -- the reply lands in "
+                    "your inbox. You can close this window.")
+                self.destroy()
+                return
+        tn.send_offer(self.parent, partner, user_assets, partner_assets,
+                      retention=retention, pick_protection=pick_protection)
+        messagebox.showinfo(
+            "Offer sent",
+            f"Your offer is with {partner.team_name}'s front office.\n"
+            "Expect an answer within a few days -- it will arrive in your "
+            "inbox, so feel free to close this and keep working.")
+        self.destroy()
 
     # ------------------------------------------------------------------
     # History
@@ -4090,15 +5073,15 @@ class TradeWindow(ctk.CTkToplevel):
         self._history_visible = True
 
 
-class ScoutingWindow(tk.Toplevel):
+class ScoutingView(ctk.CTkFrame):
     """Modern Scouting Department: fog-of-war prospects, regional scouts, draft board."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Scouting Department")
-        self.geometry("1280x780")
-        self.configure(background=parent.BG_COLOR)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ScoutingWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         import scouting as scmod
         self.scmod = scmod
         self._gm = getattr(parent, 'game_manager', parent)
@@ -4111,10 +5094,7 @@ class ScoutingWindow(tk.Toplevel):
         # ---- Header ----
         header = ttk.Frame(self, style='Panel.TFrame', padding=(14, 10))
         header.pack(fill='x', padx=10, pady=(10, 0))
-        ttk.Label(header, text="Scouting Department",
-                  font=(parent.FONT_FAMILY, 18, 'bold'),
-                  style='Heading.TLabel').pack(side='left')
-        n_prospects = len(getattr(parent.league, 'draft_prospects', []) or [])
+        n_prospects = len(getattr(self.app.league, 'draft_prospects', []) or [])
         ttk.Label(header, text=f"{n_prospects} draft-eligible prospects on the radar",
                   style='Secondary.TLabel').pack(side='left', padx=(12, 0))
 
@@ -4126,8 +5106,8 @@ class ScoutingWindow(tk.Toplevel):
         main_pane.add(left, weight=1)
 
         ttk.Label(left, text="YOUR SCOUTS", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.scouts_tree = parent._create_treeview(
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.scouts_tree = self.app._create_treeview(
             left, {'name': ('Name', 120), 'jpa': ('JPA', 36),
                    'jpp': ('JPP', 36), 'region': ('Region', 90)}, height=6)
         self.scouts_tree.pack(fill='x', pady=(0, 4))
@@ -4149,8 +5129,8 @@ class ScoutingWindow(tk.Toplevel):
                    style='Secondary.TButton').pack(anchor='w', pady=(0, 8))
 
         ttk.Label(left, text="ACTIVE ASSIGNMENTS", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
-        self.assign_tree = parent._create_treeview(
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+        self.assign_tree = self.app._create_treeview(
             left, {'player': ('Player', 110), 'view': ('Views', 44),
                    'acc': ('Acc', 36)}, height=8)
         self.assign_tree.pack(fill='both', expand=True)
@@ -4158,7 +5138,7 @@ class ScoutingWindow(tk.Toplevel):
                    style='Secondary.TButton').pack(anchor='w', pady=(6, 0))
         ttk.Label(left, text="Regional scouts file reports automatically every few days.",
                   style='Secondary.TLabel', wraplength=260,
-                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
+                  font=_sfont(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(6, 0))
 
         # ============ CENTER: prospects + report ============
         center = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
@@ -4167,20 +5147,20 @@ class ScoutingWindow(tk.Toplevel):
         top_row = ttk.Frame(center, style='Panel.TFrame')
         top_row.pack(fill='x', pady=(0, 4))
         ttk.Label(top_row, text="PROSPECT POOL", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(side='left')
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(side='left')
         filt_frame = ttk.Frame(top_row, style='Panel.TFrame')
         filt_frame.pack(side='left', padx=(10, 4))
         self._prospect_pills = make_pill_group(
             filt_frame,
             [(o, o) for o in ("All Prospects", "Forwards", "Defensemen",
                               "Goalies", "Top 50", "Not Scouted")],
-            self._set_prospect_filter, parent.FONT_FAMILY)
+            self._set_prospect_filter, self.app.FONT_FAMILY)
         self._paint_prospect_pills()
         ttk.Entry(top_row, textvariable=self.search_var, width=14).pack(side='left', padx=4)
         ttk.Button(top_row, text="Search", command=self._refresh_prospects,
                    style='Secondary.TButton').pack(side='left')
 
-        self.prospects_tree = parent._create_treeview(
+        self.prospects_tree = self.app._create_treeview(
             center, {'rank': ('#', 36), 'name': ('Name', 140), 'pos': ('Pos', 40),
                      'age': ('Age', 36), 'nat': ('Nat', 70), 'pot': ('Pot', 80),
                      'status': ('Status', 90)}, height=11)
@@ -4199,10 +5179,10 @@ class ScoutingWindow(tk.Toplevel):
         right = ttk.Frame(main_pane, style='Panel.TFrame', padding=8)
         main_pane.add(right, weight=1)
         ttk.Label(right, text="MY DRAFT BOARD", style='Secondary.TLabel',
-                  font=(parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
         ttk.Label(right, text="Your rankings drive auto-draft on draft night.",
                   style='Secondary.TLabel', wraplength=240,
-                  font=(parent.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
+                  font=_sfont(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
         self.board_list = tk.Listbox(right, height=24, activestyle='none',
                                      bg='#232a3a', fg='#ffffff',
                                      selectbackground='#0d2b28', relief='flat',
@@ -4224,17 +5204,26 @@ class ScoutingWindow(tk.Toplevel):
         self._refresh_all()
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _build_report_card(self):
         f = self.report_frame
         self.rep_title = ttk.Label(f, text="Select a prospect",
-                                  font=(self.parent.FONT_FAMILY, 13, 'bold'),
+                                  font=_sfont(self.app.FONT_FAMILY, 13, 'bold'),
                                   style='Card.TLabel')
         self.rep_title.pack(anchor='w')
-        self.rep_pot = ttk.Label(f, text="", font=(self.parent.FONT_FAMILY, 12, 'bold'),
+        self.rep_pot = ttk.Label(f, text="", font=_sfont(self.app.FONT_FAMILY, 12, 'bold'),
                                 style='Card.TLabel')
         self.rep_pot.pack(anchor='w', pady=(2, 0))
         self.rep_meta = ttk.Label(f, text="", style='Card.TLabel',
-                                 font=(self.parent.FONT_FAMILY, 10))
+                                 font=_sfont(self.app.FONT_FAMILY, 10))
         self.rep_meta.pack(anchor='w')
         cols = ttk.Frame(f, style='Card.TFrame')
         cols.pack(fill='x', pady=(6, 0))
@@ -4243,18 +5232,18 @@ class ScoutingWindow(tk.Toplevel):
         right_c = ttk.Frame(cols, style='Card.TFrame')
         right_c.pack(side='left', fill='x', expand=True)
         ttk.Label(left_c, text="Strengths", style='Card.TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.rep_strengths = ttk.Label(left_c, text="—", style='Card.TLabel',
                                       wraplength=260, justify='left')
         self.rep_strengths.pack(anchor='w')
         ttk.Label(right_c, text="Weaknesses", style='Card.TLabel',
-                  font=(self.parent.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
+                  font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w')
         self.rep_weak = ttk.Label(right_c, text="—", style='Card.TLabel',
                                   wraplength=260, justify='left')
         self.rep_weak.pack(anchor='w')
         self.rep_notes = ttk.Label(f, text="", style='Card.TLabel',
                                   wraplength=560, justify='left',
-                                  font=(self.parent.FONT_FAMILY, 10))
+                                  font=_sfont(self.app.FONT_FAMILY, 10))
         self.rep_notes.pack(anchor='w', pady=(6, 0))
         brow = ttk.Frame(f, style='Card.TFrame')
         brow.pack(fill='x', pady=(8, 0))
@@ -4276,9 +5265,9 @@ class ScoutingWindow(tk.Toplevel):
         from game_classes import StaffRole
         tree = self.scouts_tree
         tree.delete(*tree.get_children())
-        scouts = [s for s in self.parent.user_team.staff
+        scouts = [s for s in self.app.user_team.staff
                   if self.scmod.is_scout(s)]
-        tm = self.parent.tree_maps.setdefault(tree, {})
+        tm = self.app.tree_maps.setdefault(tree, {})
         for s in scouts:
             region = self.scmod.get_scout_region(self._gm, s) or "—"
             item = tree.insert('', 'end', values=(
@@ -4290,7 +5279,7 @@ class ScoutingWindow(tk.Toplevel):
 
     def _on_scout_selected(self, event=None):
         sel = self.scouts_tree.selection()
-        tm = self.parent.tree_maps.get(self.scouts_tree, {})
+        tm = self.app.tree_maps.get(self.scouts_tree, {})
         self.selected_scout = tm.get(sel[0]) if sel else None
         if self.selected_scout:
             self.region_var.set(
@@ -4319,7 +5308,7 @@ class ScoutingWindow(tk.Toplevel):
                  ("Sofia", "Lindqvist"), ("Petr", "Novak"), ("Dave", "Morrison")]
         fn, ln = _r.choice(names)
         scout = Staff(first_name=fn, last_name=ln, role=StaffRole.AMATEUR_SCOUT)
-        self.parent.user_team.staff.append(scout)
+        self.app.user_team.staff.append(scout)
         messagebox.showinfo("Scout Hired",
                             f"{scout.full_name} joined your scouting department.\n"
                             f"Assign them a region to start filing reports.")
@@ -4328,9 +5317,9 @@ class ScoutingWindow(tk.Toplevel):
     def _refresh_assignments(self):
         tree = self.assign_tree
         tree.delete(*tree.get_children())
-        tm = self.parent.tree_maps.setdefault(tree, {})
-        for player, scout in getattr(self.parent, 'scouting_assignments', {}).items():
-            report = self.parent.user_team.scouting_reports.get(player.id)
+        tm = self.app.tree_maps.setdefault(tree, {})
+        for player, scout in getattr(self.app, 'scouting_assignments', {}).items():
+            report = self.app.user_team.scouting_reports.get(player.id)
             views = getattr(report, 'viewings', 0) if report else 0
             acc = getattr(report, 'accuracy', '—') if report else '—'
             item = tree.insert('', 'end', values=(
@@ -4340,16 +5329,16 @@ class ScoutingWindow(tk.Toplevel):
 
     def _remove_assignment(self):
         sel = self.assign_tree.selection()
-        tm = self.parent.tree_maps.get(self.assign_tree, {})
+        tm = self.app.tree_maps.get(self.assign_tree, {})
         player = tm.get(sel[0]) if sel else None
-        if player and player in getattr(self.parent, 'scouting_assignments', {}):
-            del self.parent.scouting_assignments[player]
+        if player and player in getattr(self.app, 'scouting_assignments', {}):
+            del self.app.scouting_assignments[player]
             self._refresh_assignments()
             self._refresh_prospects()
 
     # ------------------------------------------------------------------
     def _filtered_prospects(self):
-        all_p = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+        all_p = sorted(getattr(self.app.league, 'draft_prospects', []) or [],
                        key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
         ft = self.filter_var.get()
         from game_classes import PlayerPosition
@@ -4367,7 +5356,7 @@ class ScoutingWindow(tk.Toplevel):
         elif ft == "Top 50":
             all_p = all_p[:50]
         elif ft == "Not Scouted":
-            reports = self.parent.user_team.scouting_reports
+            reports = self.app.user_team.scouting_reports
             all_p = [p for p in all_p if p.id not in reports]
         q = self.search_var.get().lower().strip()
         if q:
@@ -4387,9 +5376,9 @@ class ScoutingWindow(tk.Toplevel):
     def _refresh_prospects(self):
         tree = self.prospects_tree
         tree.delete(*tree.get_children())
-        tm = self.parent.tree_maps.setdefault(tree, {})
-        reports = self.parent.user_team.scouting_reports
-        assigns = getattr(self.parent, 'scouting_assignments', {})
+        tm = self.app.tree_maps.setdefault(tree, {})
+        reports = self.app.user_team.scouting_reports
+        assigns = getattr(self.app, 'scouting_assignments', {})
         for i, p in enumerate(self._filtered_prospects()[:400]):
             report = reports.get(p.id)
             if report:
@@ -4417,7 +5406,7 @@ class ScoutingWindow(tk.Toplevel):
 
     def _on_prospect_selected(self, event=None):
         sel = self.prospects_tree.selection()
-        tm = self.parent.tree_maps.get(self.prospects_tree, {})
+        tm = self.app.tree_maps.get(self.prospects_tree, {})
         self.selected_prospect = tm.get(sel[0]) if sel else None
         self._show_report()
 
@@ -4425,7 +5414,7 @@ class ScoutingWindow(tk.Toplevel):
         p = self.selected_prospect
         if p is None:
             return
-        reports = self.parent.user_team.scouting_reports
+        reports = self.app.user_team.scouting_reports
         report = reports.get(p.id)
         try:
             pos = p.primary_position.value
@@ -4459,7 +5448,7 @@ class ScoutingWindow(tk.Toplevel):
             top = pot.split("–")[-1].strip()
             self.rep_pot.config(text=f"Potential: {pot}  (consensus — scout for certainty)",
                                 foreground=self.scmod.grade_color(top))
-            assigned = p in getattr(self.parent, 'scouting_assignments', {})
+            assigned = p in getattr(self.app, 'scouting_assignments', {})
             self.rep_meta.config(
                 text="No report yet — " +
                      ("a scout is watching." if assigned else "assign a scout or a region."))
@@ -4475,13 +5464,13 @@ class ScoutingWindow(tk.Toplevel):
         scout = self.selected_scout
         if scout is None:
             from game_classes import StaffRole
-            scouts = [s for s in self.parent.user_team.staff
+            scouts = [s for s in self.app.user_team.staff
                       if self.scmod.is_scout(s)]
             if not scouts:
                 messagebox.showwarning("No Scouts", "Hire a scout first.")
                 return
             scout = scouts[0]
-        assigns = self.parent.scouting_assignments
+        assigns = self.app.scouting_assignments
         if p in assigns:
             messagebox.showinfo("Already Assigned", "This prospect is already being scouted.")
             return
@@ -4499,12 +5488,12 @@ class ScoutingWindow(tk.Toplevel):
     def _refresh_board(self):
         lb = self.board_list
         lb.delete(0, tk.END)
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         by_id = {p.id: p for p in
-                 getattr(self.parent.league, 'draft_prospects', []) or []}
+                 getattr(self.app.league, 'draft_prospects', []) or []}
         # prune missing
         ids = [i for i in ids if i in by_id]
-        self.scmod.set_draft_board(self.parent.user_team, ids)
+        self.scmod.set_draft_board(self.app.user_team, ids)
         for n, pid in enumerate(ids, 1):
             p = by_id[pid]
             try:
@@ -4517,10 +5506,10 @@ class ScoutingWindow(tk.Toplevel):
         p = self.selected_prospect
         if p is None:
             return
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         if p.id not in ids:
             ids.append(p.id)
-            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self.scmod.set_draft_board(self.app.user_team, ids)
             self._refresh_board()
 
     def _move_board(self, direction):
@@ -4530,10 +5519,10 @@ class ScoutingWindow(tk.Toplevel):
             return
         i = sel[0]
         j = i + direction
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         if 0 <= j < len(ids):
             ids[i], ids[j] = ids[j], ids[i]
-            self.scmod.set_draft_board(self.parent.user_team, ids)
+            self.scmod.set_draft_board(self.app.user_team, ids)
             self._refresh_board()
             lb.select_set(j)
 
@@ -4542,20 +5531,38 @@ class ScoutingWindow(tk.Toplevel):
         sel = lb.curselection()
         if not sel:
             return
-        ids = self.scmod.get_draft_board(self.parent.user_team)
+        ids = self.scmod.get_draft_board(self.app.user_team)
         del ids[sel[0]]
-        self.scmod.set_draft_board(self.parent.user_team, ids)
+        self.scmod.set_draft_board(self.app.user_team, ids)
         self._refresh_board()
 
     def _reset_board(self):
-        prospects = sorted(getattr(self.parent.league, 'draft_prospects', []) or [],
+        prospects = sorted(getattr(self.app.league, 'draft_prospects', []) or [],
                            key=lambda p: getattr(p, 'draft_ranking', 0),
                            reverse=True)[:50]
-        self.scmod.set_draft_board(self.parent.user_team, [p.id for p in prospects])
+        self.scmod.set_draft_board(self.app.user_team, [p.id for p in prospects])
         self._refresh_board()
 
 
-class DraftWindow(ctk.CTkToplevel):
+
+
+class ScoutingWindow(InGamePopup):
+    """Popup wrapper around ScoutingView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Scouting Department")
+        self._view = ScoutingView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class DraftView(ctk.CTkFrame):
     """Draft night war room: live board, ticker, shortlist, draft-day trades, grades."""
 
     # Map any potential-grade variant onto a draft_night.grade_color key.
@@ -4563,7 +5570,7 @@ class DraftWindow(ctk.CTkToplevel):
                    'B-': 'B', 'C+': 'C', 'C': 'C', 'C-': 'C',
                    'D+': 'D', 'D': 'D', 'D-': 'D', 'F': 'F'}
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -4579,10 +5586,9 @@ class DraftWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("NHL Entry Draft")
-        self.geometry("1280x800")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the DraftWindow wrapper
         self.configure(fg_color=BG)
 
         # Slim branded banner strip (decorative; never breaks the window)
@@ -4605,10 +5611,27 @@ class DraftWindow(ctk.CTkToplevel):
         self.current_pick = 0
         self.draft_order = []          # [round, team, draft_pick]
         self.picks_made = []           # (team_name, overall, player)
+        self._draft_started = False    # re-entry guard for start_draft()
+        # Per-team draft boards (team_draft_boards.build_team_boards):
+        # {team_name: [prospects in that team's order]}. None until
+        # start_draft() builds them; AI falls back to consensus when
+        # they are unavailable.
+        self.team_boards = None
+        # Pre-draft joint scouting reports
+        # (team_draft_boards.build_draft_reports): {team_name:
+        # {"team_name", "board", "projected_picks"}}. Built once per
+        # draft in start_draft; also stashed on the league.
+        self.team_reports = None
         self.selected_prospect = None
+        self._armed_prospect = None  # M4: two-step inline pick confirmation
         self.strategy_var = tk.StringVar(master=self, value="BPA")
         self.pos_filter_var = tk.StringVar(master=self, value="All Positions")
         self._ai_after_id = None
+        # Single-player draft clock (item 1): per-draft RNG for ticker +
+        # AI selection (item 3: deterministic replays).
+        self._draft_rng = random.Random()
+        self._sp_clock_id = None
+        self._sp_clock_left = 0
 
         ct = self._ct
 
@@ -4633,6 +5656,23 @@ class DraftWindow(ctk.CTkToplevel):
         self.clock_label.pack(padx=16)
         self.pick_info_label = self._body(self.clock_frame, text="", dim=True)
         self.pick_info_label.pack(padx=16, pady=(0, 8))
+        # Draft pace control (M5): 1x / 4x / sim-to-my-pick.
+        pace_row = ctk.CTkFrame(self.clock_frame, fg_color="transparent")
+        pace_row.pack(pady=(0, 8))
+        ctk.CTkLabel(pace_row, text="PACE",
+                     font=("Segoe UI", 9, 'bold'),
+                     text_color=ct['TEXT_DIM']).pack(side='left', padx=(0, 6))
+        self._pace_btns = {}
+        for _mode, _lbl in (("1x", "1×"), ("4x", "4×"),
+                            ("sim", "▶▶ My pick")):
+            _pb = ctk.CTkButton(pace_row, text=_lbl, width=70, height=24,
+                               font=("Segoe UI", 10, 'bold'),
+                               command=lambda m=_mode: self._set_pace(m))
+            _pb.pack(side='left', padx=2)
+            self._pace_btns[_mode] = _pb
+        self._pace_mode = '1x'
+        self._sim_active = False
+        self._paint_pace_btns()
 
         # ---- 3 columns (grid; CTk has no PanedWindow) ----
         main_pane = ctk.CTkFrame(self, fg_color="transparent")
@@ -4642,17 +5682,59 @@ class DraftWindow(ctk.CTkToplevel):
         main_pane.grid_columnconfigure(2, weight=1)
         main_pane.grid_rowconfigure(0, weight=1)
 
-        # LEFT: draft board
+        # LEFT: draft board -- tabbed: the available-prospect board is the
+        # primary surface (war-room convention); results and the user's own
+        # picks live one tap away.
         left = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
         ctk.CTkLabel(left, text="DRAFT BOARD",
                      font=("Segoe UI", 10, 'bold'),
                      text_color=ct['TEXT_DIM']).pack(anchor='w',
                                                      padx=12, pady=(10, 4))
+        tab_row = ctk.CTkFrame(left, fg_color="transparent")
+        tab_row.pack(fill='x', padx=12, pady=(0, 4))
+        self._board_tab_var = tk.StringVar(master=self, value="Available")
+        self._board_tab_btns = {}
+        # The "Scout Report" tab is the user's pre-draft joint scouting
+        # report: the department's private board (top 40) + projected picks
+        # mapped onto owned slots. It lives here, above the fold, instead of
+        # in the war-room column where it fell below 900px.
+        _tab_widths = {"Available": 150, "Results": 80, "My Picks": 80,
+                       "Scout Report": 100}
+        for _tab in ("Available", "Results", "My Picks", "Scout Report"):
+            # The available board shows the PUBLIC consensus ranking,
+            # not any club's private list -- label it so.
+            _label = (("Available — Consensus" if _tab == "Available"
+                       else _tab))
+            _b = ctk.CTkButton(tab_row, text=_label,
+                               width=_tab_widths[_tab],
+                               height=26,
+                               font=("Segoe UI", 10, 'bold'),
+                               command=lambda t=_tab: self._draft_board_tab(t))
+            _b.pack(side='left', padx=(0, 6))
+            self._board_tab_btns[_tab] = _b
         self._setup_tree_style()
         board_card = ctk.CTkFrame(left, fg_color=ct['CARD'], corner_radius=8)
         board_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
-        self.draft_results_tree = self._create_draft_board(board_card)
+        self._board_tab_frames = {}
+        for _tab in ("Available", "Results", "My Picks", "Scout Report"):
+            _f = tk.Frame(board_card, bg=ct['CARD'])
+            self._board_tab_frames[_tab] = _f
+        self.available_tree = self._create_available_board(
+            self._board_tab_frames["Available"])
+        self.draft_results_tree = self._create_draft_board(
+            self._board_tab_frames["Results"])
+        self.mypicks_tree = self._create_mypicks_board(
+            self._board_tab_frames["My Picks"])
+        # The joint scouting report lives in its own tab (read-only,
+        # scrollable): the user's private board + projected picks.
+        self.scouting_report_box = ctk.CTkTextbox(
+            self._board_tab_frames["Scout Report"],
+            fg_color=ct['CARD'], text_color=ct['TEXT'],
+            font=("Segoe UI", 10), state='disabled', wrap='word')
+        self.scouting_report_box.pack(fill='both', expand=True,
+                                      padx=8, pady=8)
+        self._draft_board_tab("Available")
 
         # CENTER: war room
         center = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
@@ -4704,7 +5786,10 @@ class DraftWindow(ctk.CTkToplevel):
                      font=("Segoe UI", 10, 'bold'),
                      text_color=ct['TEXT_DIM']).pack(anchor='w',
                                                      padx=12, pady=(4, 2))
-        self.shortlist = tk.Listbox(center, height=14, activestyle='none',
+        # Shortlist capped at 8 rows: the war room must fit in 900px
+        # height with the prospect card + action buttons visible (no
+        # clipping; single-level scrolling rule).
+        self.shortlist = tk.Listbox(center, height=8, activestyle='none',
                                     bg=ct['CARD'], fg=ct['TEXT'],
                                     selectbackground=ct['ROW_SELECTED'],
                                     relief='flat',
@@ -4712,12 +5797,17 @@ class DraftWindow(ctk.CTkToplevel):
                                     highlightbackground=ct['BORDER'])
         self.shortlist.pack(fill='x', padx=12, pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
-        self.shortlist.bind('<Button-3>', self._show_shortlist_menu)
+        self.shortlist.bind('<Double-1>', self._on_shortlist_double)
 
         self.selected_label = self._body(center, text="No prospect selected",
                                    dim=True)
         self.selected_label.configure(wraplength=300)
         self.selected_label.pack(anchor='w', padx=12, pady=(0, 6))
+
+        # M2: inline prospect card -- evaluation at the moment of decision.
+        self.prospect_card = ctk.CTkFrame(center, fg_color=ct['CARD'],
+                                          corner_radius=8)
+        self.prospect_card.pack(fill='x', padx=12, pady=(0, 6))
 
         btn_col = ctk.CTkFrame(center, fg_color="transparent")
         btn_col.pack(fill='x', padx=12, pady=(0, 10))
@@ -4732,6 +5822,8 @@ class DraftWindow(ctk.CTkToplevel):
                                                   text="Trade This Pick",
                                                   command=self.trade_current_pick)
         self.trade_pick_button.pack(fill='x', pady=2)
+        # Esc disarms a two-step pick confirmation.
+        self.bind('<Escape>', lambda _e: self._disarm_draft_button())
 
         # RIGHT: ticker
         right = ctk.CTkFrame(main_pane, fg_color=ct['PANEL'], corner_radius=10)
@@ -4755,6 +5847,26 @@ class DraftWindow(ctk.CTkToplevel):
         self.start_draft()
 
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        # MULTIPLAYER: stop a pending draft-clock wait and release the clock.
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_tree_style(self):
         """Dark, flat styling for the draft board (styled ttk.Treeview, per
         the migration guide -- the board carries sortable columns)."""
@@ -4800,13 +5912,13 @@ class DraftWindow(ctk.CTkToplevel):
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
                          command=lambda c=col, t=tree:
-                         self.parent._sort_treeview_generic(t, c))
+                         self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='center')
         # Potential-grade row colors (same scale as the other CTk screens)
         for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
-        self.parent._bind_player_context_menu(tree, 'default', False)
+        self.app._bind_player_context_menu(tree, 'default', False)
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
                                  command=tree.yview,
                                  style='Draft.Vertical.TScrollbar')
@@ -4821,40 +5933,402 @@ class DraftWindow(ctk.CTkToplevel):
         g = (str(grade) if grade is not None else 'C').strip()
         return self.dn.grade_color(self._GRADE_BASE.get(g, 'C'))
 
-    # ------------------------------------------------------------------
-    def start_draft(self):
-        # Make sure every team owns its picks (idempotent if already done)
+    # -- M1: tabbed draft board -------------------------------------------
+    def _draft_board_tab(self, name):
+        """Switch the left column between Available / Results / My Picks /
+        Scout Report."""
+        self._board_tab_var.set(name)
+        ct = self._ct
+        for tab, btn in self._board_tab_btns.items():
+            active = tab == name
+            btn.configure(fg_color=ct['TEAL'] if active else ct['CARD'],
+                          text_color=ct['BG'] if active else ct['TEXT_DIM'])
+        for tab, frame in self._board_tab_frames.items():
+            if tab == name:
+                frame.pack(fill='both', expand=True)
+            else:
+                frame.pack_forget()
+
+    def _create_available_board(self, parent):
+        """Ranked available-prospect board (the war room's primary surface)."""
+        ct = self._ct
+        columns = {'rank': ('#', 36), 'player': ('Player', 150),
+                   'pos': ('Pos', 42), 'pot': ('Pot', 64), 'age': ('Age', 36)}
+        tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                            show='headings', style='Draft.Treeview',
+                            height=30)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree:
+                         self.app._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+        for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
+            tree.tag_configure(f"pot_{g}",
+                               foreground=self.dn.grade_color(g))
         try:
-            self.parent.league.initialize_all_draft_picks()
+            self.app._bind_player_context_menu(tree, 'default', False)
         except Exception:
             pass
-        current_year = self.parent.league.season_year
+        v_scroll = ttk.Scrollbar(parent, orient="vertical",
+                                 command=tree.yview,
+                                 style='Draft.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        tree.bind('<<TreeviewSelect>>', self._on_available_select)
+        tree.bind('<Double-1>', self._on_available_double)
+        return tree
+
+    def _create_mypicks_board(self, parent):
+        """The user's own selections, one tab away."""
+        ct = self._ct
+        columns = {'pick': ('#', 40), 'player': ('Player', 160),
+                   'pos': ('Pos', 42), 'pot': ('Pot', 60)}
+        tree = ttk.Treeview(parent, columns=list(columns.keys()),
+                            show='headings', style='Draft.Treeview',
+                            height=30)
+        for col, (text, width) in columns.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col, t=tree:
+                         self.app._sort_treeview_generic(t, c))
+            tree.column(col, width=width, anchor='center')
+        for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
+            tree.tag_configure(f"pot_{g}",
+                               foreground=self.dn.grade_color(g))
+        try:
+            self.app._bind_player_context_menu(tree, 'default', False)
+        except Exception:
+            pass
+        v_scroll = ttk.Scrollbar(parent, orient="vertical",
+                                 command=tree.yview,
+                                 style='Draft.Vertical.TScrollbar')
+        tree.configure(yscrollcommand=v_scroll.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(10, 0), pady=10)
+        v_scroll.pack(side="right", fill="y", padx=(0, 6), pady=10)
+        return tree
+
+    def _prospect_by_id(self, pid):
+        for p in getattr(self.app.league, 'draft_prospects', None) or []:
+            if str(getattr(p, 'id', '')) == str(pid):
+                return p
+        return None
+
+    def _refresh_available_board(self):
+        tree = getattr(self, 'available_tree', None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
+        for i, p in enumerate(self._board_sorted_available(), 1):
+            report = reports.get(getattr(p, 'id', None))
+            pot = (self.scmod.report_potential_display(report, p) if report
+                   else self.scmod.consensus_range(p))
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            grade = self._GRADE_BASE.get(
+                str(getattr(p, 'potential_grade', 'C')).strip(), 'C')
+            tree.insert('', 'end',
+                        iid=str(getattr(p, 'id', '')),
+                        values=(i, getattr(p, 'full_name', '?'), pos, pot,
+                                getattr(p, 'age', '?')),
+                        tags=(f"pot_{grade}",))
+
+    def _refresh_mypicks_board(self):
+        tree = getattr(self, 'mypicks_tree', None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        try:
+            uname = self.app.user_team.team_name
+        except Exception:
+            return
+        for team_name, overall, player in self.picks_made:
+            if team_name != uname:
+                continue
+            try:
+                pos = player.primary_position.value
+            except Exception:
+                pos = "?"
+            grade = self._GRADE_BASE.get(
+                str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
+            tree.insert('', 'end', values=(
+                overall, getattr(player, 'full_name', '?'), pos,
+                getattr(player, 'potential_grade', '?')),
+                tags=(f"pot_{grade}",))
+
+    def _render_scouting_report(self):
+        """Fill the Scout Report tab from the user's pre-draft joint report:
+        the department's private ranking (top 40) plus projected picks mapped
+        onto our owned slots. User's team only -- other clubs' reports are
+        never rendered."""
+        box = getattr(self, 'scouting_report_box', None)
+        if box is None:
+            return
+        lines = []
+        try:
+            uname = self.app.user_team.team_name
+            rep = (getattr(self, 'team_reports', None) or {}).get(uname)
+        except Exception:
+            rep = None
+        if not rep:
+            lines = ["Scouting report unavailable."]
+        else:
+            try:
+                consensus = sorted(
+                    self.app.league.draft_prospects,
+                    key=lambda p: getattr(p, 'draft_ranking', 0),
+                    reverse=True)
+                crank = {id(p): i + 1 for i, p in enumerate(consensus)}
+            except Exception:
+                crank = {}
+            board = rep.get('board') or []
+
+            def _pos(p):
+                try:
+                    return p.primary_position.value
+                except Exception:
+                    return "?"
+
+            lines.append("JOINT BOARD — our department's ranking "
+                         f"(top 40 of {len(board)})")
+            for i, p in enumerate(board[:40], 1):
+                lines.append(
+                    f"{i:>2}. {getattr(p, 'full_name', '?')} "
+                    f"({_pos(p)}) · consensus #{crank.get(id(p), '?')}")
+            lines.append("")
+            lines.append("PROJECTED PICKS — if the draft falls per "
+                         "our board")
+            owned = rep.get('projected_picks') or []
+            if not owned:
+                lines.append("(no picks owned)")
+            for pr in owned:
+                pl = pr.get('prospect')
+                if pl is None:
+                    lines.append(f"Rd {pr.get('round')} · "
+                                 f"#{pr.get('overall')} → "
+                                 "(board exhausted)")
+                else:
+                    lines.append(f"Rd {pr.get('round')} · "
+                                 f"#{pr.get('overall')} → "
+                                 f"{getattr(pl, 'full_name', '?')} "
+                                 f"({_pos(pl)})")
+        try:
+            box.configure(state='normal')
+            box.delete('1.0', 'end')
+            box.insert('1.0', "\n".join(lines))
+            box.configure(state='disabled')
+        except Exception:
+            pass
+
+    def _on_available_select(self, event=None):
+        sel = self.available_tree.selection()
+        if not sel:
+            return
+        p = self._prospect_by_id(sel[0])
+        if p is None:
+            return
+        self.selected_prospect = p
+        if self._armed_prospect is not None and self._armed_prospect is not p:
+            self._disarm_draft_button()
+        self._render_prospect_card(p)
+
+    def _on_available_double(self, event=None):
+        self._on_available_select()
+        if self.selected_prospect is not None:
+            self._arm_draft_button(self.selected_prospect)
+
+    # -- M2: inline prospect card ------------------------------------------
+    def _render_prospect_card(self, p):
+        """Evaluation at the moment of decision: identity, scout view,
+        storyline, and team-need fit -- without leaving the war room."""
+        ct = self._ct
+        card = self.prospect_card
+        for w in card.winfo_children():
+            w.destroy()
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = "?"
+        name = getattr(p, 'full_name', '?')
+        age = getattr(p, 'age', '?')
+        ht = getattr(p, 'height', '') or ''
+        wt = getattr(p, 'weight', '') or ''
+        nat = (getattr(p, 'nationality', None)
+               or getattr(p, 'nation', '') or '')
+        # Consensus rank among the available pool
+        try:
+            avail = self._available_prospects()
+            crank = avail.index(p) + 1 if p in avail else None
+        except Exception:
+            crank = None
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill='x', padx=10, pady=(8, 0))
+        ctk.CTkLabel(head, text=name,
+                     font=("Segoe UI", 13, 'bold'),
+                     text_color=ct['TEXT']).pack(side='left')
+        if crank:
+            ctk.CTkLabel(head, text=f"Consensus #{crank}",
+                         font=("Segoe UI", 10, 'bold'),
+                         text_color=ct['GOLD']).pack(side='right')
+        meta_bits = [b for b in
+                     (pos, f"Age {age}",
+                      f"{ht}" if ht else "", f"{wt}" if wt else "",
+                      str(nat) if nat else "") if b]
+        self._body(head, text="  ·  ".join(meta_bits),
+                   dim=True).pack(anchor='w', padx=10)
+        # Scout view (fog-of-war) + storyline + need fit
+        reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
+        report = reports.get(getattr(p, 'id', None))
+        if report is not None:
+            try:
+                viewings = int(getattr(report, 'viewings', 0) or 0)
+            except Exception:
+                viewings = 0
+            acc = getattr(report, 'accuracy', '') or ''
+            scout_line = (f"Your scout: {self.scmod.report_potential_display(report, p)}"
+                          f"  ·  {viewings} viewing{'s' if viewings != 1 else ''}"
+                          + (f"  ·  {acc} accuracy" if acc else ""))
+        else:
+            scout_line = (f"Unscouted — consensus "
+                          f"{self.scmod.consensus_range(p)}")
+        self._body(card, text=scout_line, dim=False).pack(
+            anchor='w', padx=10, pady=(2, 0))
+        # Team-board rank: where the USER's own scouts slot him (fog-of-war
+        # safe -- it's their scouts' opinion, never true potential). Other
+        # teams' boards are never shown.
+        try:
+            from team_draft_boards import team_rank_of
+            _ut = getattr(self.app.user_team, 'team_name', None)
+            _trank = team_rank_of(getattr(self, 'team_boards', None),
+                                  _ut, p)
+            if _trank:
+                self._body(card, text=f"Our scouts rank him #{_trank}",
+                           dim=True).pack(anchor='w', padx=10)
+        except Exception:
+            pass
+        details = []
+        if report is not None:
+            strengths = list(getattr(report, 'strengths', None) or [])[:2]
+            weaknesses = list(getattr(report, 'weaknesses', None) or [])[:2]
+            if strengths:
+                details.append("Strengths: " + ", ".join(str(s) for s in strengths))
+            if weaknesses:
+                details.append("Weaknesses: " + ", ".join(str(s) for s in weaknesses))
+        try:
+            storylines = getattr(self.app.league, 'prospect_storylines', {}) or {}
+            story = storylines.get(p)
+            if story:
+                details.append(f"📖 {story.get('title', story.get('type', ''))}")
+        except Exception:
+            pass
+        for line in details:
+            lbl = self._body(card, text=line, dim=True)
+            lbl.configure(wraplength=320)
+            lbl.pack(anchor='w', padx=10)
+        # Team-need fit chip
+        try:
+            needs = self.te.team_needs(self.app.user_team) or []
+            if pos in needs[:2]:
+                chip = ctk.CTkLabel(card, text="✓ FITS TEAM NEED",
+                                    font=("Segoe UI", 9, 'bold'),
+                                    text_color=ct['GREEN'])
+                chip.pack(anchor='w', padx=10, pady=(2, 8))
+            else:
+                ctk.CTkLabel(card, text="", font=("Segoe UI", 2)).pack(pady=(0, 8))
+        except Exception:
+            pass
+        # Right-click opens the full player profile.
+        try:
+            card.bind('<Button-3>',
+                      lambda _e, _p=p: self.app.open_player_profile(_p))
+            for w in card.winfo_children():
+                w.bind('<Button-3>',
+                       lambda _e, _p=p: self.app.open_player_profile(_p))
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    def start_draft(self):
+        # Re-entry guard: __init__ starts the draft, so an explicit second
+        # call (as the runtime QA once did) must not rebuild the order,
+        # re-roll the 32 team boards, or re-drive the market -- a rebuild
+        # after draft-day trades would show 225 rows for 224 slots and
+        # replace the boards mid-draft. Fresh views start unflagged.
+        if getattr(self, '_draft_started', False):
+            return
+        # Make sure every team owns its picks (idempotent if already done)
+        try:
+            self.app.league.initialize_all_draft_picks()
+        except Exception:
+            pass
+        current_year = self.app.league.season_year
         self.draft_order = []
         try:
-            order = self.parent.league.get_draft_order(current_year)
+            order = self.app.league.get_draft_order(current_year)
         except Exception:
             order = []
-        for overall_pick, team, draft_pick in order:
+        # Deterministic per-draft RNG: replays with the same seed pick
+        # identically; every slot draws from it (item 3).
+        try:
+            self._draft_rng = random.Random(
+                self.dn.stable_draft_seed(current_year))
+        except Exception:
+            self._draft_rng = random.Random()
+        # get_draft_order returns (overall_pick, team, draft_pick); the ROUND
+        # lives on draft_pick.round (1-7). The overall pick number is the
+        # authoritative first element -- never the enumeration index.
+        for overall, team, draft_pick in (order or []):
             try:
-                draft_pick.overall_pick = overall_pick
+                round_num = int(getattr(draft_pick, 'round', 0) or 0)
+            except Exception:
+                round_num = 0
+            try:
+                draft_pick.overall_pick = overall
             except Exception:
                 pass
-            self.draft_order.append([draft_pick.round, team, draft_pick])
+            self.draft_order.append([round_num, team, draft_pick])
         if not self.draft_order:
-            standings = getattr(self.parent.league, 'standings', None) or {}
+            standings = getattr(self.app.league, 'standings', None) or {}
+            _nhl = [t for t in self.app.league.teams
+                    if getattr(t, 'league_name', '') == 'National Hockey League']
             sorted_teams = sorted(
-                self.parent.league.teams,
+                _nhl or list(self.app.league.teams),
                 key=lambda t: standings.get(t.team_name, {}).get('Points', 0))
             for round_num in range(1, self.total_rounds + 1):
                 for team in sorted_teams:
                     self.draft_order.append([round_num, team, None])
         self.current_pick = 0
         self.picks_made = []
+        # Pre-draft joint scouting reports: every team's scouting +
+        # analytics department ranks the class once (their private board)
+        # and maps it onto the picks they own. Generated ONCE per draft
+        # here -- never per pick. AI teams draft from their report's
+        # board; the user's report is viewable in the war room.
+        # Imported here to avoid a module cycle.
+        try:
+            from team_draft_boards import build_draft_reports
+            self.team_reports = build_draft_reports(
+                self.app.league, self.draft_order)
+            self.team_boards = {
+                _n: _r["board"] for _n, _r in self.team_reports.items()}
+        except Exception:
+            self.team_reports = None
+            self.team_boards = None
+        try:
+            self.app.league.team_draft_reports = self.team_reports
+        except Exception:
+            pass
+        self._render_scouting_report()
         self.draft_results_tree.delete(*self.draft_results_tree.get_children())
         self.ticker.delete(0, tk.END)
         self._ticker("Welcome to draft night. The floor is buzzing.")
         self._refresh_shortlist()
         self.process_draft_pick()
+        self._draft_started = True
 
     # ------------------------------------------------------------------
     def _ticker(self, line):
@@ -4863,13 +6337,13 @@ class DraftWindow(ctk.CTkToplevel):
             self.ticker.delete(120, tk.END)
 
     def _available_prospects(self):
-        return sorted(self.parent.league.draft_prospects,
+        return sorted(self.app.league.draft_prospects,
                       key=lambda p: getattr(p, 'draft_ranking', 0), reverse=True)
 
     def _board_sorted_available(self):
         """Available prospects ordered by the user's draft board, then consensus."""
         avail = self._available_prospects()
-        rank = self.scmod.board_rank_map(self.parent.user_team)
+        rank = self.scmod.board_rank_map(self.app.user_team)
         if not rank:
             return avail
         return sorted(avail, key=lambda p: rank.get(p.id, 10_000 + getattr(p, 'draft_ranking', 0) * -1))
@@ -4903,7 +6377,7 @@ class DraftWindow(ctk.CTkToplevel):
         self._shortlist_players = []
         filt = self.pos_filter_var.get()
         from game_classes import PlayerPosition
-        reports = self.parent.user_team.scouting_reports
+        reports = self.app.user_team.scouting_reports
         count = 0
         for p in self._board_sorted_available():
             if filt == "Forwards" and p.primary_position not in (
@@ -4924,7 +6398,9 @@ class DraftWindow(ctk.CTkToplevel):
             except Exception:
                 pos = "?"
             idx = self.shortlist.size()
-            self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}")
+            _ban = "  [INELIGIBLE — rights held/lost]" if \
+                self._redraft_banned(self.app.user_team, p) else ""
+            self.shortlist.insert(tk.END, f"{p.full_name}  ({pos})  {pot}{_ban}")
             self.shortlist.itemconfig(
                 idx, foreground=self._pot_color(
                     getattr(p, 'potential_grade', 'C')))
@@ -4932,6 +6408,20 @@ class DraftWindow(ctk.CTkToplevel):
             count += 1
             if count >= 30:
                 break
+        # Keep the tabbed board in step with the shortlist.
+        try:
+            self._refresh_available_board()
+        except Exception:
+            pass
+        try:
+            self._refresh_mypicks_board()
+        except Exception:
+            pass
+
+    def _on_shortlist_double(self, event=None):
+        self._on_shortlist_select()
+        if self.selected_prospect is not None:
+            self._arm_draft_button(self.selected_prospect)
 
     def _on_shortlist_select(self, event=None):
         sel = self.shortlist.curselection()
@@ -4939,7 +6429,9 @@ class DraftWindow(ctk.CTkToplevel):
             return
         p = self._shortlist_players[sel[0]]
         self.selected_prospect = p
-        reports = self.parent.user_team.scouting_reports
+        if self._armed_prospect is not None and self._armed_prospect is not p:
+            self._disarm_draft_button()
+        reports = self.app.user_team.scouting_reports
         report = reports.get(p.id)
         pot = (self.scmod.report_potential_display(report, p) if report
                else self.scmod.consensus_range(p) + " (consensus)")
@@ -4949,34 +6441,67 @@ class DraftWindow(ctk.CTkToplevel):
             pos = "?"
         self.selected_label.configure(
             text=f"Selected: {p.full_name} ({pos}, {p.age}) — Potential {pot}")
+        self._render_prospect_card(p)
 
-    # ------------------------------------------------------------------
-    def process_draft_pick(self):
-        if self.current_pick >= len(self.draft_order):
-            self.end_draft()
-            return
-        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+    # -- M5: draft pace ----------------------------------------------------
+    def _set_pace(self, mode):
+        """1x / 4x / sim-to-my-pick. Sim takes effect immediately."""
+        self._pace_mode = mode
+        self._paint_pace_btns()
+        if mode == 'sim' and not self._sim_active:
+            try:
+                if self._ai_after_id:
+                    self.after_cancel(self._ai_after_id)
+            except Exception:
+                pass
+            self._ai_after_id = None
+            if self.current_pick < len(self.draft_order):
+                self.process_draft_pick()
+
+    def _paint_pace_btns(self):
+        ct = self._ct
+        for mode, btn in getattr(self, '_pace_btns', {}).items():
+            active = mode == getattr(self, '_pace_mode', '1x')
+            try:
+                btn.configure(fg_color=ct['TEAL'] if active else ct['CARD'],
+                              text_color=ct['BG'] if active else ct['TEXT_DIM'])
+            except Exception:
+                pass
+
+    def _mp_clock_for(self, team):
+        """True when a remote human owns this pick (MP draft-clock wait)."""
+        try:
+            return bool(
+                getattr(self.app, 'mp_host', None) is not None
+                and not bool(getattr(team, 'is_user_team', False))
+                and __import__('game_classes').is_human_managed(team))
+        except Exception:
+            return False
+
+    def _refresh_clock_ui(self, round_num, team_on_clock, overall):
+        """Header/clock/next-pick labels + button states. No scheduling and
+        no market hooks -- safe to call from the sim loop."""
         if round_num != self.current_round:
             self.current_round = round_num
-        overall = self.current_pick + 1
-        pick_in_round = (self.current_pick %
-                         max(1, len(self.parent.league.teams))) + 1
-
+        try:
+            _nhl_count = sum(1 for _t in self.app.league.teams
+                             if getattr(_t, 'league_name', '') ==
+                             'National Hockey League') or 32
+        except Exception:
+            _nhl_count = 32
+        pick_in_round = (self.current_pick % max(1, _nhl_count)) + 1
         self.draft_status_label.configure(
             text=f"Round {round_num} of {self.total_rounds}")
         self.clock_label.configure(text=team_on_clock.team_name)
         self.pick_info_label.configure(
             text=f"Pick #{overall}  (Round {round_num}, #{pick_in_round} in round)")
-
-        is_user = team_on_clock == self.parent.user_team
+        is_user = team_on_clock == self.app.user_team
         state = 'normal' if is_user else 'disabled'
         self.draft_button.configure(state=state)
         self.auto_button.configure(state=state)
         self.trade_pick_button.configure(state=state)
-
-        # Your next pick info
         nxt = next((i for i in range(self.current_pick, len(self.draft_order))
-                    if self.draft_order[i][1] == self.parent.user_team), None)
+                    if self.draft_order[i][1] == self.app.user_team), None)
         if nxt is not None:
             r = self.draft_order[nxt][0]
             self.next_pick_label.configure(
@@ -4984,73 +6509,405 @@ class DraftWindow(ctk.CTkToplevel):
         else:
             self.next_pick_label.configure(text="No picks remaining")
 
+    def _start_sp_draft_clock(self):
+        """Single-player draft countdown for the local human's pick.
+
+        Expiry auto-picks via the user's own strategy (BPA/Need) so the
+        draft can never stall. The tick defers while a modal draft dialog
+        (trade offer/counter) holds the grab -- the clock never fires
+        under a dialog.
+        """
+        self._cancel_sp_draft_clock()
+        try:
+            _secs = int((self.app.get_settings().get('draft', {}) or {}
+                         ).get('clock_seconds', 60))
+        except Exception:
+            _secs = 60
+        if _secs <= 0:
+            return
+        self._sp_clock_left = _secs
+        self._sp_clock_tick()
+
+    def _cancel_sp_draft_clock(self):
+        _id = getattr(self, '_sp_clock_id', None)
+        if _id:
+            try:
+                self.after_cancel(_id)
+            except Exception:
+                pass
+        self._sp_clock_id = None
+
+    def _sp_clock_tick(self):
+        self._sp_clock_id = None
+        if self.current_pick >= len(self.draft_order):
+            return
+        _r, _team, _dp = self.draft_order[self.current_pick]
+        if _team != self.app.user_team:
+            return
+        try:
+            if self.grab_current() is not None:
+                # Modal open (trade offer/counter): defer, don't fire.
+                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+                return
+        except Exception:
+            pass
+        if self._sp_clock_left <= 0:
+            try:
+                self._ticker(f"{_team.team_name} ran out the clock -- "
+                             f"auto-pick.")
+            except Exception:
+                pass
+            self.auto_pick()
+            return
+        try:
+            self.clock_label.configure(
+                text=f"{_team.team_name} ({self._sp_clock_left}s)")
+        except Exception:
+            pass
+        self._sp_clock_left -= 1
+        self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+
+    def _ai_step(self):
+        """One synchronous AI step for sim mode. Returns True to continue."""
+        if self.current_pick >= len(self.draft_order):
+            return False
+        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if team_on_clock == self.app.user_team:
+            return False
+        if self._mp_clock_for(team_on_clock):
+            return False
+        if round_num == 1:
+            try:
+                from draft_day_trades import on_clock_check
+                if on_clock_check(self):
+                    return True  # order changed; step again
+            except Exception:
+                pass
+            _r2, team_on_clock, _dp = self.draft_order[self.current_pick]
+            if (team_on_clock == self.app.user_team
+                    or self._mp_clock_for(team_on_clock)):
+                return False
+            round_num = _r2
+        overall = self.current_pick + 1
+        self._refresh_clock_ui(round_num, team_on_clock, overall)
+        reach, steal = self._do_ai_pick()
+        if overall <= 3 or reach or steal:
+            # Pause on round-1 drama: drop to 1x so the user actually sees it.
+            self._set_pace('1x')
+            return False
+        return True
+
+    def _run_sim(self):
+        """Sim-to-my-pick: run AI picks synchronously until the user's
+        clock, an MP clock, draft end, or round-1 drama."""
+        if self._sim_active:
+            return
+        self._sim_active = True
+        try:
+            guard = 0
+            while guard < 500 and self._ai_step():
+                guard += 1
+        finally:
+            self._sim_active = False
+        self._refresh_shortlist()
+        self.process_draft_pick()
+
+    # ------------------------------------------------------------------
+    def process_draft_pick(self):
+        if self.current_pick >= len(self.draft_order):
+            self.end_draft()
+            return
+        round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
+        # DRAFT-DAY MARKET: round 1 runs like the trade deadline. Before the
+        # clock starts, the phones ring -- an AI club below may trade up for
+        # the slot (AI on the clock), or an AI club may call the user with an
+        # offer (user on the clock). Human-managed clubs are never moved
+        # without consent; multiplayer draft-clock waits are untouched.
+        if round_num == 1:
+            try:
+                from draft_day_trades import on_clock_check
+                if on_clock_check(self):
+                    round_num, team_on_clock, _dp = \
+                        self.draft_order[self.current_pick]
+            except Exception:
+                pass
+        if round_num != self.current_round:
+            self.current_round = round_num
+        overall = self.current_pick + 1
+        self._refresh_clock_ui(round_num, team_on_clock, overall)
+
+        is_user = team_on_clock == self.app.user_team
+
+        # The phone rings for the user too: an AI club that loves someone
+        # near the top of the board may call about your round-1 pick.
+        if is_user and round_num == 1:
+            try:
+                from draft_day_trades import incoming_offer_for_user
+                incoming_offer_for_user(self)
+                # The call may have moved the pick; re-read the clock.
+                if self.current_pick < len(self.draft_order):
+                    _r2, team_on_clock, _dp = \
+                        self.draft_order[self.current_pick]
+                    is_user = team_on_clock == self.app.user_team
+                    if not is_user:
+                        state = 'disabled'
+                        self.draft_button.configure(state=state)
+                        self.auto_button.configure(state=state)
+                        self.trade_pick_button.configure(state=state)
+            except Exception:
+                pass
+
+        # Your next pick info is handled inside _refresh_clock_ui.
+
+        # SINGLE-PLAYER draft clock (item 1): the local human's pick runs
+        # a countdown; expiry auto-picks via their own strategy. Purely
+        # single-player (mp_host is None) -- multiplayer keeps its own
+        # 60s host clock untouched.
+        if is_user and getattr(self.app, 'mp_host', None) is None:
+            self._start_sp_draft_clock()
+        else:
+            self._cancel_sp_draft_clock()
+
+        # MULTIPLAYER: a team claimed by a remote human doesn't get an AI
+        # auto-pick -- its manager picks live on the draft clock (60s,
+        # then the AI makes the pick for them).
+        if not is_user:
+            if self._mp_clock_for(team_on_clock):
+                self.draft_button.configure(state='disabled')
+                self.auto_button.configure(state='disabled')
+                self.trade_pick_button.configure(state='disabled')
+                self.clock_label.configure(
+                    text=f"{team_on_clock.team_name} (GM deciding...)")
+                try:
+                    self.app._mp_open_draft_clock(
+                        team_on_clock, round_num, overall)
+                except Exception as e:
+                    print(f"draft clock failed (non-fatal): {e}")
+                try:
+                    if getattr(self, '_mp_wait_id', None):
+                        self.after_cancel(self._mp_wait_id)
+                except Exception:
+                    pass
+                self._mp_wait_id = self.after(
+                    1000, self._mp_check_client_pick)
+                return
+
         if not is_user:
             if self._ai_after_id:
                 try:
                     self.after_cancel(self._ai_after_id)
                 except Exception:
                     pass
-            self._ai_after_id = self.after(650, self.ai_make_pick)
+            if self._pace_mode == 'sim' and not self._sim_active:
+                self._run_sim()
+                return
+            delay = 150 if self._pace_mode == '4x' else 650
+            self._ai_after_id = self.after(delay, self.ai_make_pick)
 
-    def ai_make_pick(self):
-        self._ai_after_id = None
+    def _mp_check_client_pick(self):
+        """Draft-clock wait loop: execute the client's pick, auto-pick on
+        timeout, or keep waiting."""
+        self._mp_wait_id = None
+        try:
+            st = getattr(self.app, '_mp_draft_clock', None)
+        except Exception:
+            st = None
+        if not st or st.get("done"):
+            return
         if self.current_pick >= len(self.draft_order):
             return
+        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        if st.get("team_id") != team_on_clock.team_name or \
+                st.get("overall") != self.current_pick + 1:
+            return  # stale clock (draft moved on without us)
+        pid = st.get("pick_id")
+        if pid:
+            prospect = None
+            try:
+                for p in getattr(self.app.league,
+                                 "draft_prospects", None) or []:
+                    if str(getattr(p, "id", "")) == str(pid):
+                        prospect = p
+                        break
+            except Exception:
+                pass
+            if prospect is not None:
+                if self._redraft_banned(team_on_clock, prospect):
+                    # Real NHL rule: ignore the illegal selection; clear it
+                    # so the client can submit a legal pick before the clock.
+                    try:
+                        st["pick_id"] = None
+                        self.app.mp_host.broadcast_chat(
+                            f"{team_on_clock.team_name} tried to re-draft a "
+                            f"prospect whose rights they lost -- not allowed "
+                            f"under NHL rules.")
+                    except Exception:
+                        pass
+                    self._mp_wait_id = self.after(
+                        1000, self._mp_check_client_pick)
+                    return
+                st["done"] = True
+                try:
+                    self.app._mp_clear_draft_clock()
+                except Exception:
+                    pass
+                self.execute_pick(team_on_clock, prospect)
+                return
+            # Unknown id (race): keep waiting for a valid one.
+        import time as _time
+        if _time.time() > float(st.get("deadline", 0)):
+            st["done"] = True
+            try:
+                self.app._mp_clear_draft_clock()
+            except Exception:
+                pass
+            try:
+                self.app.mp_host.broadcast_chat(
+                    f"{team_on_clock.team_name} ran out the draft clock -- "
+                    f"auto-pick.")
+            except Exception:
+                pass
+            self.ai_make_pick()
+            return
+        self._mp_wait_id = self.after(1000, self._mp_check_client_pick)
+
+    def _do_ai_pick(self):
+        """Execute one AI pick synchronously. Returns (reach, steal).
+
+        Selection itself lives in draft_night.ai_select_prospect -- the
+        same implementation the headless conductor uses, so the war room
+        and the sim can't diverge.
+        """
+        if self.current_pick >= len(self.draft_order):
+            return (False, False)
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
         available = self._available_prospects()
         if not available:
             self.end_draft()
-            return
-        needs = self.te.team_needs(team_on_clock)
-        # Consider top 12, weigh positional need + randomness
-        candidates = available[:12]
+            return (False, False)
+        # Real NHL rule: the club that lost a re-entry's rights can't
+        # re-select him in this draft -- filter him from this team's pool.
+        available = [p for p in available
+                     if not self._redraft_banned(team_on_clock, p)]
+        if not available:
+            self.end_draft()
+            return (False, False)
+        try:
+            needs = self.te.team_needs(team_on_clock)
+        except Exception:
+            needs = []
+        try:
+            board = (getattr(self, 'team_boards', None) or {}).get(
+                getattr(team_on_clock, 'team_name', None))
+        except Exception:
+            board = None
+        try:
+            _strat = self.app.ai_manager.get_team_strategy(
+                getattr(team_on_clock, 'team_name', ''))
+            priority = getattr(_strat, 'priority', None)
+        except Exception:
+            priority = None
         round_num = self.draft_order[self.current_pick][0]
-        scored = []
-        for p in candidates:
-            try:
-                pos = p.primary_position.value
-            except Exception:
-                pos = "?"
-            base = getattr(p, 'draft_ranking', 0)
-            if pos in needs[:2]:
-                base *= 1.08
-            if pos == 'G' and round_num <= 1:
-                base *= 0.80  # goalies rarely go top-10
-            base *= random.uniform(0.94, 1.06)
-            scored.append((base, p))
-        scored.sort(key=lambda s: s[0], reverse=True)
-        selected = scored[0][1]
-        # Reach / steal detection for the ticker
-        idx = available.index(selected)
+        overall = self.current_pick + 1
+        # Dynamic need pivot: (position, round) this club already drafted
+        # tonight, mirroring the headless conductor.
+        _tname = getattr(team_on_clock, 'team_name', None)
+        _drafted = []
+        try:
+            for _ptn, _po, _pp in (getattr(self, 'picks_made', None) or []):
+                if _ptn != _tname:
+                    continue
+                try:
+                    _ppos = _pp.primary_position.value
+                except Exception:
+                    _ppos = "?"
+                try:
+                    _prnd = self.draft_order[_po - 1][0]
+                except Exception:
+                    _prnd = 7
+                _drafted.append((_ppos, _prnd))
+        except Exception:
+            _drafted = []
+        selected, reach, steal = self.dn.ai_select_prospect(
+            team_on_clock, available, board, needs, round_num, priority,
+            self._draft_rng, overall=overall, drafted=_drafted)
+        if selected is None:
+            self.end_draft()
+            return (False, False)
         self.execute_pick(team_on_clock, selected,
-                          reach=idx >= 8, steal=idx == 0 and self.current_pick >= 4)
+                          reach=reach, steal=steal)
+        return (reach, steal)
+
+    def ai_make_pick(self):
+        """Scheduled (1x/4x) AI pick: one synchronous pick, then the draft
+        flow continues via execute_pick -> process_draft_pick."""
+        self._ai_after_id = None
+        if self.current_pick >= len(self.draft_order):
+            return
+        self._do_ai_pick()
 
     def make_user_pick(self):
         if not self.selected_prospect:
             messagebox.showwarning("No Prospect", "Select a prospect from the shortlist.")
             return
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             return
         p = self.selected_prospect
-        if p not in self.parent.league.draft_prospects:
+        if p not in self.app.league.draft_prospects:
             messagebox.showwarning("Unavailable", "That prospect was already drafted.")
             self._refresh_shortlist()
             return
-        if not messagebox.askyesno("Confirm Pick",
-                                   f"Draft {p.full_name}?\nThis cannot be undone."):
+        if self._redraft_banned(team_on_clock, p):
+            messagebox.showwarning(
+                "Not Eligible",
+                "NHL rules: you held this prospect's draft rights and lost "
+                "them unsigned -- your club can't re-select him in this draft.")
             return
+        # M4: two-step inline confirm -- first click arms, second commits.
+        # No per-pick modal; mis-clicks die on the armed button instead.
+        if self._armed_prospect is not p:
+            self._arm_draft_button(p)
+            return
+        self._disarm_draft_button()
         self.execute_pick(team_on_clock, p)
+
+    def _arm_draft_button(self, p):
+        """Arm the draft button for one prospect; a second click commits."""
+        self._armed_prospect = p
+        name = getattr(p, 'full_name', '?')
+        if len(name) > 20:
+            name = name[:19] + "…"
+        try:
+            self.draft_button.configure(text=f"CONFIRM — DRAFT {name}")
+        except Exception:
+            pass
+
+    def _disarm_draft_button(self):
+        self._armed_prospect = None
+        try:
+            self.draft_button.configure(text="Draft Selected")
+        except Exception:
+            pass
 
     def auto_pick(self):
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             return
         available = self._board_sorted_available()
         if not available:
+            # Prospect pool exhausted: terminate the draft so no pick
+            # driver can spin on an un-advanced current_pick.
+            self.end_draft()
+            return
+        # Real NHL rule: skip prospects this club can't re-select.
+        available = [p for p in available
+                     if not self._redraft_banned(team_on_clock, p)]
+        if not available:
+            self.end_draft()
             return
         if self.strategy_var.get() == "Need":
-            needs = self.te.team_needs(self.parent.user_team)
+            needs = self.te.team_needs(self.app.user_team)
             pick = None
             for p in available[:8]:
                 try:
@@ -5065,12 +6922,41 @@ class DraftWindow(ctk.CTkToplevel):
             selected = available[0]
         self.execute_pick(team_on_clock, selected)
 
+    def _redraft_banned(self, team, player) -> bool:
+        """Real NHL rule: a club that held a prospect's draft rights and lost
+        them unsigned may not re-select him in the immediate re-entry draft."""
+        try:
+            banned_from = str(getattr(player, 'draft_reentry_from', '') or '')
+            return bool(banned_from) and \
+                banned_from == getattr(team, 'team_name', None)
+        except Exception:
+            return False
+
     def execute_pick(self, team, player, reach=False, steal=False):
         round_num, _t, _dp = self.draft_order[self.current_pick]
         overall = self.current_pick + 1
+        if self._redraft_banned(team, player):
+            # Defensive: pick paths filter this upstream; never advance.
+            return False
         team.add_player(player, "prospects")
+        # Draft rights: stamp immediately at pick time (CHL 4yr/3yr /
+        # NCAA 4yr / Europe 4yr from the player's junior league, new
+        # CBA). The season rollover has a backstop for any prospect
+        # that slips through, but the pick path is the canonical
+        # stamper.
         try:
-            self.parent.league.draft_prospects.remove(player)
+            _dy = getattr(self.app.league, "draft_prospects_year", None) \
+                or getattr(getattr(self.app, "current_date", None), "year", 2027)
+            self.app.league.stamp_draft_rights(player, team.team_name, _dy)
+        except Exception:
+            pass
+        # The immediate re-draft ban is spent once he's selected.
+        try:
+            player.draft_reentry_from = ""
+        except Exception:
+            pass
+        try:
+            self.app.league.draft_prospects.remove(player)
         except ValueError:
             pass
         try:
@@ -5085,24 +6971,51 @@ class DraftWindow(ctk.CTkToplevel):
             tags=(f"pot_{pot_grade}",))
         self.parent.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
-                                         round_num, reach=reach, steal=steal))
+                                         round_num, reach=reach, steal=steal,
+                                         rng=self._draft_rng))
         self.picks_made.append((team.team_name, overall, player))
+        # Draft Story Engine: fire pick drama (reach/steal/surprise)
         try:
-            self.parent.news_log.append({
-                'date': self.parent.current_date, 'type': 'draft',
+            from draft_stories import draft_pick_drama
+            # Get projected rank from league
+            proj_rank = None
+            try:
+                proj_map = getattr(self.app.league, 'prospect_projected_rank', {})
+                proj_rank = proj_map.get(id(player))
+            except Exception:
+                pass
+            if proj_rank is None:
+                # Fallback: use reach/steal flags to estimate
+                proj_rank = overall  # no drama if unknown
+            # Only fire for notable picks (top 3, or reach/steal)
+            if overall <= 3 or reach or steal:
+                # Get app reference
+                app = self.app
+                draft_pick_drama(app, overall, player, team, proj_rank)
+        except Exception:
+            pass
+        try:
+            self.app.news_log.append({
+                'date': self.app.current_date, 'type': 'draft',
                 'story': f"With pick #{overall}, the {team.team_name} select "
                          f"{player.full_name} ({pos})."})
         except Exception:
             pass
         self.current_pick += 1
         self.selected_prospect = None
+        self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
-        # Keep the board scrolled to the newest pick
-        kids = self.draft_results_tree.get_children()
-        if kids:
-            self.draft_results_tree.see(kids[0])
-        self.process_draft_pick()
+        # Keep the board scrolled to the newest pick (skip during sim --
+        # the sim loop drives the draft and scroll churn is pure noise).
+        if not self._sim_active:
+            kids = self.draft_results_tree.get_children()
+            if kids:
+                self.draft_results_tree.see(kids[0])
+        # In sim mode the driver loop advances the draft; otherwise the
+        # next pick is scheduled/driven from here.
+        if not self._sim_active:
+            self.process_draft_pick()
 
     # ------------------------------------------------------------------
     def trade_current_pick(self):
@@ -5111,10 +7024,17 @@ class DraftWindow(ctk.CTkToplevel):
         if self.current_pick >= len(self.draft_order):
             return
         _r, team_on_clock, user_pick = self.draft_order[self.current_pick]
-        if team_on_clock != self.parent.user_team:
+        if team_on_clock != self.app.user_team:
             messagebox.showinfo("Not Your Pick", "You can only trade your own pick.")
             return
-        dlg = ctk.CTkToplevel(self)
+        if user_pick is None:
+            # Fallback draft order (no pick objects): nothing to trade.
+            messagebox.showinfo(
+                "No Pick Data",
+                "Pick ownership data isn't available for this draft, "
+                "so the pick can't be traded.")
+            return
+        dlg = InGamePopup(self)
         dlg.title("Trade this pick")
         dlg.geometry("480x460")
         dlg.configure(fg_color=ct['BG'])
@@ -5125,11 +7045,13 @@ class DraftWindow(ctk.CTkToplevel):
         self._body(dlg, text="Select a partner and one of their upcoming picks:",
              dim=True).pack(pady=(0, 8))
 
-        teams = sorted(t.team_name for t in self.parent.league.teams
-                       if t != self.parent.user_team)
+        teams = sorted(t.team_name for t in self.app.league.teams
+                       if t != self.app.user_team
+                       and getattr(t, 'league_name', '') ==
+                       'National Hockey League')
 
         def _partner_picks(name):
-            team = next((t for t in self.parent.league.teams
+            team = next((t for t in self.app.league.teams
                          if t.team_name == name), None)
             out = []
             for i in range(self.current_pick + 1, len(self.draft_order)):
@@ -5189,11 +7111,11 @@ class DraftWindow(ctk.CTkToplevel):
             if not sel or not dlg._picks:
                 return
             j, partner_pick, _r2 = dlg._picks[sel[0]]
-            partner = next(t for t in self.parent.league.teams
+            partner = next(t for t in self.app.league.teams
                            if t.team_name == combo.get())
             resp = self.te.ai_consider_trade(
                 partner, [user_pick], [partner_pick],
-                user_team=self.parent.user_team)
+                user_team=self.app.user_team)
             if resp.decision == 'reject':
                 messagebox.showerror("Rejected", resp.message)
                 return
@@ -5203,10 +7125,14 @@ class DraftWindow(ctk.CTkToplevel):
                 if not messagebox.askyesno("Counter-offer",
                                            f"{resp.message}\n\nAccept?"):
                     return
-                self._execute_pick_swap(j, user_pick, partner_pick,
-                                        resp.want_added, resp.will_add)
+                _done = self._execute_pick_swap(
+                    j, user_pick, partner_pick,
+                    resp.want_added, resp.will_add)
             else:
-                self._execute_pick_swap(j, user_pick, partner_pick, [], [])
+                _done = self._execute_pick_swap(
+                    j, user_pick, partner_pick, [], [])
+            if not _done:
+                return  # legality preflight blocked it; dialog stays open
             dlg.destroy()
             messagebox.showinfo("Trade Complete", "Pick swap completed.")
             self.process_draft_pick()
@@ -5224,10 +7150,88 @@ class DraftWindow(ctk.CTkToplevel):
             if entry[2] is draft_pick:
                 entry[1] = new_team
 
+    def _validate_pick_swap(self, partner_team, user_pick, partner_pick,
+                              want_added, will_add):
+        """Centralized legality preflight for a draft pick swap: the two
+        base picks PLUS any counter-added assets. Mirrors the gates
+        trade_engine enforces for full trades -- freeze/deadline,
+        ownership, cap in both directions, NTC/NMC consent.
+
+        The counter path used to skip all of this: an AI counter could
+        add a player who'd since moved, blow either cap, or carry an
+        un-waived clause straight into the swap. Returns (ok, message).
+        """
+        te = self.te
+        league = self.app.league
+        user_team = self.app.user_team
+        user_gives = [user_pick] + list(want_added or [])
+        partner_gives = [partner_pick] + list(will_add or [])
+        # 1. Freeze / deadline gate
+        try:
+            _dstr = str(getattr(self.app, 'current_date', ''))
+            if not te.trades_allowed(_dstr, league):
+                return (False, "Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
+        # 2. Ownership -- counter-added assets may have moved since the
+        # counter was built.
+        for a in user_gives:
+            if te._is_pick(a):
+                if str(getattr(a, 'current_team', '')) != \
+                        user_team.team_name:
+                    return (False, f"You no longer own "
+                                   f"{te.asset_label(a)}.")
+            elif a not in (getattr(user_team, 'roster', []) or []):
+                return (False, f"{getattr(a, 'full_name', 'A player')} is "
+                                "no longer on your roster.")
+        for a in partner_gives:
+            if te._is_pick(a):
+                if str(getattr(a, 'current_team', '')) != \
+                        partner_team.team_name:
+                    return (False, f"{partner_team.team_name} no longer "
+                                   f"owns {te.asset_label(a)}.")
+            elif a not in (getattr(partner_team, 'roster', []) or []):
+                return (False, f"{getattr(a, 'full_name', 'A player')} is "
+                                "no longer on their roster.")
+        # 3. Cap, both directions
+        try:
+            if not te._cap_ok_after(user_team, user_gives, partner_gives):
+                return (False, "This trade puts YOU over the salary cap.")
+        except Exception:
+            pass
+        try:
+            if not te._cap_ok_after(partner_team, partner_gives, user_gives):
+                return (False, f"This trade puts {partner_team.team_name} "
+                                "over the salary cap.")
+        except Exception:
+            pass
+        # 4. NTC/NMC consent on every moving player
+        try:
+            for _from, _to, _assets in (
+                    (user_team, partner_team, user_gives),
+                    (partner_team, user_team, partner_gives)):
+                _skaters = [a for a in _assets if not te._is_pick(a)]
+                for _v in te.trade_vetoes(_from, _to, _skaters, league):
+                    _ok, _why = te.will_waive_ntc(
+                        _v["player"], _from, _to, league)
+                    if not _ok:
+                        return (False, _why or "A no-trade clause blocks "
+                                             "this deal.")
+        except Exception:
+            pass
+        return (True, "")
+
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
-        user_team = self.parent.user_team
+        user_team = self.app.user_team
         partner_team = self.draft_order[partner_idx][1]
+        # Legality preflight: the counter path used to skip every gate.
+        _ok, _why = self._validate_pick_swap(
+            partner_team, user_pick, partner_pick, want_added, will_add)
+        if not _ok:
+            messagebox.showerror("Trade blocked", _why)
+            return False
         # Swap the picks
         self._swap_pick_owner(user_pick, partner_team)
         self._swap_pick_owner(partner_pick, user_team)
@@ -5250,34 +7254,79 @@ class DraftWindow(ctk.CTkToplevel):
                     user_team.add_player(a)
                 except Exception:
                     pass
-        # History + news
-        gm = getattr(self.parent, 'game_manager', None)
+        # History + news. CompletedTrade records the FULL deal -- the two
+        # base picks plus every counter-added asset (the old record
+        # silently dropped the extras).
+        gm = getattr(self.app, 'game_manager', None)
         summary = (f"{user_team.team_name} acquires pick "
                    f"#{partner_idx + 1} from {partner_team.team_name}.")
+        _user_gives = [user_pick] + list(want_added or [])
+        _partner_gives = [partner_pick] + list(will_add or [])
         if gm is not None:
             if not hasattr(gm, 'trade_history'):
                 gm.trade_history = []
             gm.trade_history.append(self.te.CompletedTrade(
                 str(getattr(gm, 'current_date', '')), user_team.team_name,
                 partner_team.team_name,
-                [self.te.asset_label(user_pick)],
-                [self.te.asset_label(partner_pick)], summary))
+                [self.te.asset_label(a) for a in _user_gives],
+                [self.te.asset_label(a) for a in _partner_gives], summary))
         try:
-            self.parent.add_news_story(f"DRAFT TRADE: {summary}")
+            self.app.add_news_story(f"DRAFT TRADE: {summary}")
         except Exception:
             pass
         self._ticker(f"TRADE: {summary}")
+        return True
 
     # ------------------------------------------------------------------
     def show_grades(self):
+        """Draft review: grade + value-vs-slot for every team, the best
+        value pick of the draft, and the user's own picks -- persisted to
+        league.draft_grades_history so past drafts can be revisited.
+
+        Grades measure the draft, not hidden truth: they compare each
+        club's haul against slot value (the public draft board), never
+        against a prospect's true ceiling.
+        """
         ct = self._ct
-        grades = self.dn.draft_grades(self.picks_made)
-        dlg = ctk.CTkToplevel(self)
+        try:
+            _lg = self.app.league
+            _dy = int(getattr(_lg, 'draft_prospects_year', None)
+                      or getattr(_lg, 'season_year', 0) or 0)
+            grades = self.dn.persist_draft_grades(
+                _lg, _dy, self.picks_made)
+        except Exception:
+            grades = self.dn.draft_grades(self.picks_made)
+        dlg = InGamePopup(self)
         dlg.title("Draft Grades")
-        dlg.geometry("420x540")
+        dlg.geometry("560x680")
         dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
-        self._heading(dlg, text="Draft Grades", size=16).pack(pady=14)
+        self._heading(dlg, text="Draft Grades", size=16).pack(pady=(14, 2))
+        self._body(
+            dlg,
+            text=("How each club's haul stacks up against slot value, "
+                  "curved across all 32 teams. A+ is a franchise-altering "
+                  "night; F means the board said the picks were reaches."),
+            size=10, dim=True, wraplength=500).pack(pady=(0, 8))
+
+        # Best value pick of the draft (value / slot value).
+        _best_line = ""
+        try:
+            _best = max(
+                self.picks_made,
+                key=lambda _t: (self.dn.drafted_player_value(_t[2])
+                                / max(1.0, self.dn.pick_slot_value(_t[1]))))
+            _btn, _bov, _bp = _best
+            _br = (self.dn.drafted_player_value(_bp)
+                   / max(1.0, self.dn.pick_slot_value(_bov)))
+            _best_line = (f"Best value: #{_bov} "
+                          f"{getattr(_bp, 'full_name', '?')} ({_btn}) -- "
+                          f"{_br:.2f}x slot value")
+        except Exception:
+            pass
+        if _best_line:
+            self._body(dlg, text=_best_line, size=11).pack(pady=(0, 6))
+
         grades_card = ctk.CTkFrame(dlg, fg_color=ct['CARD'], corner_radius=8)
         grades_card.pack(fill='both', expand=True, padx=14, pady=6)
         lb = tk.Listbox(grades_card, bg=ct['CARD'], fg=ct['TEXT'],
@@ -5286,24 +7335,60 @@ class DraftWindow(ctk.CTkToplevel):
                         highlightthickness=0, activestyle='none')
         lb.pack(fill='both', expand=True, padx=8, pady=8)
         user_grade = None
+        _uname = getattr(getattr(self.app, 'user_team', None),
+                         'team_name', '')
         for team, grade, ratio in grades:
-            lb.insert(tk.END, f"  {grade}   {team}")
-            lb.itemconfig(tk.END, foreground=self._pot_color(grade))
-            if team == self.parent.user_team.team_name:
+            lb.insert(tk.END, f"  {grade:>2}   {team:<28}  {ratio:.2f}x")
+            lb.itemconfig(tk.END, foreground=self.dn.grade_color(grade))
+            if team == _uname:
                 user_grade = grade
+        # The user's own picks, so the review answers "how did I do".
+        _mine = [(ov, p) for tn, ov, p in self.picks_made if tn == _uname]
+        if _mine:
+            self._body(dlg, text="Your picks:", size=11).pack(
+                pady=(6, 0))
+            _lines = []
+            for _ov, _p in _mine[:9]:
+                try:
+                    _pos = _p.primary_position.value
+                except Exception:
+                    _pos = "?"
+                _lines.append(f"#{_ov} {getattr(_p, 'full_name', '?')} "
+                              f"({_pos})")
+            self._body(dlg, text="   ".join(_lines), size=10, dim=True,
+                       wraplength=520).pack(pady=(0, 4))
         if user_grade:
             ug = ctk.CTkLabel(dlg, text=f"Your draft grade: {user_grade}",
                               font=("Segoe UI", 13, 'bold'),
-                              text_color=self._pot_color(user_grade))
+                              text_color=self.dn.grade_color(user_grade))
             ug.pack(pady=10)
+        self._primary_button(dlg, text="Close",
+                             command=dlg.destroy).pack(pady=(0, 12))
 
     def end_draft(self):
+        # Terminate the pick order: a draft that ends early (e.g. the
+        # prospect pool runs out) must not leave current_pick mid-order,
+        # or any direct pick driver spins forever re-calling pick methods.
+        try:
+            self.current_pick = len(self.draft_order)
+        except Exception:
+            pass
         if self._ai_after_id:
             try:
                 self.after_cancel(self._ai_after_id)
             except Exception:
                 pass
         self._ai_after_id = None
+        try:
+            if getattr(self, '_mp_wait_id', None):
+                self.after_cancel(self._mp_wait_id)
+        except Exception:
+            pass
+        self._mp_wait_id = None
+        try:
+            self.app._mp_clear_draft_clock()
+        except Exception:
+            pass
         self.draft_status_label.configure(text="Draft Complete")
         self.clock_label.configure(text="—")
         self.pick_info_label.configure(text="All 7 rounds complete")
@@ -5312,15 +7397,63 @@ class DraftWindow(ctk.CTkToplevel):
         self.trade_pick_button.configure(state='disabled')
         self.grades_button.configure(state='normal')
         self._ticker("That's a wrap on draft night.")
+        # Real NHL re-entry: undrafted prospects are automatically eligible
+        # again next year while age-eligible -- stash them for the next draft
+        # class (processed in _hold_entry_draft). The immediate re-draft ban
+        # (draft_reentry_from) only lasts one draft, so clear it now.
+        try:
+            _lg = self.app.league
+            _left = list(getattr(_lg, "draft_prospects", None) or [])
+            for _p in _left:
+                try:
+                    _p.draft_reentry_from = ""
+                except Exception:
+                    pass
+            _lg.undrafted_pool = _left
+        except Exception:
+            pass
+        # Stamp this draft year as conducted (idempotency guard): the
+        # headless conductor and the offseason guarantee both respect it,
+        # so a war-room draft can never be re-conducted by the sim.
+        try:
+            _lg = self.app.league
+            _dy = int(getattr(_lg, 'draft_prospects_year', None)
+                      or getattr(_lg, 'season_year', 0) or 0)
+            self.dn.mark_draft_conducted(_lg, _dy)
+        except Exception:
+            pass
+        # Stop the single-player draft clock (item 1).
+        try:
+            self._cancel_sp_draft_clock()
+        except Exception:
+            pass
         self.show_grades()
 
 
-class ScheduleWindow(ctk.CTkToplevel):
+
+
+class DraftWindow(InGamePopup):
+    """Popup wrapper around DraftView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("NHL Entry Draft")
+        self._view = DraftView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class ScheduleView(ctk.CTkFrame):
     """League Schedule (CustomTkinter): tabbed My Team / League tables,
     month-filter combo, color-coded game rows (win/loss/today), modern
     action buttons. All schedule logic preserved."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -5337,12 +7470,10 @@ class ScheduleWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("League Schedule")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ScheduleWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1000x750")
-        self.minsize(900, 650)
 
         ct = self._ct
         main_container = ctk.CTkFrame(self, fg_color=ct['BG'], corner_radius=0)
@@ -5424,6 +7555,15 @@ class ScheduleWindow(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     # CTk styling helpers
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _setup_tree_style(self):
         """Dark, flat styling for the schedule tables (styled ttk.Treeview,
         per the migration guide -- the tables carry 5 sortable columns and
@@ -5474,6 +7614,13 @@ class ScheduleWindow(ctk.CTkToplevel):
             tree.tag_configure('win', foreground=ct['GREEN'])
             tree.tag_configure('loss', foreground=ct['RED'])
             tree.tag_configure('upcoming', foreground=ct['TEXT'])
+            # Marquee playoff series: the dates fans circle. Gold beats
+            # win/loss green/red -- it is the rarer, deliberate signal.
+            tree.tag_configure('marquee', foreground=ct['GOLD'])
+            # Background-only companion to 'today': lets a marquee game
+            # played today keep its highlight without a second tag
+            # fighting 'marquee' over the foreground.
+            tree.tag_configure('today_bg', background=ct['ROW_SELECTED'])
 
     def _create_schedule_treeview(self, parent, columns, height=25):
         """Dark-styled game table inside a rounded card."""
@@ -5486,7 +7633,7 @@ class ScheduleWindow(ctk.CTkToplevel):
                             height=height)
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
-                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+                         command=lambda c=col, t=tree: self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='center')
 
         v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
@@ -5600,14 +7747,14 @@ class ScheduleWindow(ctk.CTkToplevel):
             'away_team': entry['away'],
             'score': entry['score'],
             'status': entry['status'],
-            'has_been_played': entry['status'] == "Final",
+            'has_been_played': str(entry['status']).startswith("Final"),
         }
 
     def watch_selected_game(self):
         """Launch the game viewer for the selected game."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected", "Please select a game to watch.")
+            messagebox.showwarning("No Game Selected", "Please select a game to watch.")
             return
 
         if game_data['has_been_played']:
@@ -5620,12 +7767,12 @@ class ScheduleWindow(ctk.CTkToplevel):
         # engine on day advance (double-counting stats), so they are only
         # offered as a non-committing preview.
         try:
-            is_past_game = game_data['date'] < self.parent.current_date
+            is_past_game = game_data['date'] < self.app.current_date
         except TypeError:
             is_past_game = False
 
         if is_past_game:
-            response = tk.messagebox.askyesno(
+            response = messagebox.askyesno(
                 "Game Not Played",
                 "This game hasn't been played yet.\n\n"
                 "Would you like to simulate and watch it?\n"
@@ -5634,7 +7781,7 @@ class ScheduleWindow(ctk.CTkToplevel):
                 return
             self._launch_game_viewer(game_data, commit=True)
         else:
-            response = tk.messagebox.askyesno(
+            response = messagebox.askyesno(
                 "Future Game",
                 "This game is scheduled for today or the future.\n\n"
                 "Watch a preview simulation? It will not affect your season.")
@@ -5651,20 +7798,20 @@ class ScheduleWindow(ctk.CTkToplevel):
         """
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected", "Please select a game to simulate.")
+            messagebox.showwarning("No Game Selected", "Please select a game to simulate.")
             return
 
         if game_data['has_been_played']:
-            tk.messagebox.showinfo("Game Already Played", "This game has already been played.")
+            messagebox.showinfo("Game Already Played", "This game has already been played.")
             return
 
         try:
-            is_past_game = game_data['date'] < self.parent.current_date
+            is_past_game = game_data['date'] < self.app.current_date
         except TypeError:
             is_past_game = False
 
         if not is_past_game:
-            tk.messagebox.showinfo(
+            messagebox.showinfo(
                 "Future Game",
                 "This game is scheduled for today or the future.\n"
                 "It will be played automatically when you advance the season.\n\n"
@@ -5701,7 +7848,7 @@ class ScheduleWindow(ctk.CTkToplevel):
 
                 # Add to game results if not already there
                 if not self._find_game_result(game_data):
-                    self.parent.game_results.append(game_result)
+                    self.app.game_results.append(game_result)
                     self._update_team_stats_from_game(game_result)
                     self.update_views()
 
@@ -5722,7 +7869,7 @@ class ScheduleWindow(ctk.CTkToplevel):
                                parent=self)
 
         except Exception as e:
-            tk.messagebox.showerror("Game Viewer Error",
+            messagebox.showerror("Game Viewer Error",
                                     f"Failed to launch game viewer:\n{str(e)}")
             print(f"Game viewer launch error: {e}")
 
@@ -5775,7 +7922,7 @@ class ScheduleWindow(ctk.CTkToplevel):
 
             # Don't store a duplicate if one was recorded meanwhile
             if self._find_game_result(game_data):
-                tk.messagebox.showinfo("Already Recorded",
+                messagebox.showinfo("Already Recorded",
                                        "A result for this game is already recorded.")
                 self.update_views()
                 return
@@ -5783,18 +7930,18 @@ class ScheduleWindow(ctk.CTkToplevel):
             game_result = self._build_game_result(game_data, sim)
 
             # Add to game results
-            self.parent.game_results.append(game_result)
+            self.app.game_results.append(game_result)
 
             # Update team stats
             self._update_team_stats_from_game(game_result)
 
             # Show result
-            tk.messagebox.showinfo("Game Simulated",
+            messagebox.showinfo("Game Simulated",
                                    f"Game Result:\n\n"
                                    f"{away_team.team_name} {sim.away_score} - {sim.home_score} {home_team.team_name}")
 
         except Exception as e:
-            tk.messagebox.showerror("Simulation Error",
+            messagebox.showerror("Simulation Error",
                                     f"Failed to simulate game:\n{str(e)}")
 
     def _update_team_stats_from_game(self, game_result):
@@ -5829,7 +7976,7 @@ class ScheduleWindow(ctk.CTkToplevel):
 
     def _find_game_result(self, game_data):
         """Find the stored result matching the selected game."""
-        for gr in self.parent.game_results:
+        for gr in self.app.game_results:
             gd, grdate = game_data['date'], gr.get('date')
             same_day = (gd == grdate or
                         (hasattr(gd, 'date') and hasattr(grdate, 'date') and
@@ -5844,40 +7991,81 @@ class ScheduleWindow(ctk.CTkToplevel):
         """View detailed stats for the selected game."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected",
+            messagebox.showwarning("No Game Selected",
                                       "Please select a game first.")
             return
         result = self._find_game_result(game_data)
         if not result:
-            tk.messagebox.showinfo("No Data",
+            messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no stats available.")
             return
-        from game_box_score import GameBoxScoreWindow
-        GameBoxScoreWindow(self.parent, result, initial_tab="Team Stats")
+        GameDetailWindow(self.app, result, initial_tab="stats")
 
     def view_game_recap(self):
         """View game recap and highlights."""
         game_data = self.get_selected_game_data()
         if not game_data:
-            tk.messagebox.showwarning("No Game Selected",
+            messagebox.showwarning("No Game Selected",
                                       "Please select a game first.")
             return
         result = self._find_game_result(game_data)
         if not result:
-            tk.messagebox.showinfo("No Data",
+            messagebox.showinfo("No Data",
                                    "This game hasn't been played yet — no recap available.")
             return
-        from game_box_score import GameBoxScoreWindow
-        GameBoxScoreWindow(self.parent, result, initial_tab="Scoring Summary")
+        GameDetailWindow(self.app, result, initial_tab="recap")
+
+    def _matchup_narrative(self, home, away):
+        """Live narrative metadata for a regular-season matchup.
+
+        Reads the rivalry store, ledger grudge memory and iconic history
+        (narrative_ledger.matchup_narrative); cached per matchup for the
+        render pass so the 82-game list stays cheap. Playoff rows never
+        reach here -- the bracket's stamp wins.
+        """
+        try:
+            hn = getattr(home, "team_name", "") or ""
+            an = getattr(away, "team_name", "") or ""
+            key = (hn, an)
+            cache = self.__dict__.setdefault("_narrative_cache", {})
+            if key not in cache:
+                from narrative_ledger import get_ledger, matchup_narrative
+                try:
+                    _led = get_ledger(self.app)
+                except Exception:
+                    _led = None
+                cache[key] = matchup_narrative(
+                    home, away, league=getattr(self.app, "league", None),
+                    ledger=_led)
+            return cache[key]
+        except Exception:
+            return None
+
+    @staticmethod
+    def _playoff_entry_result(raw):
+        """(score, status) for a bracket-stamped playoff entry, else None.
+
+        The bracket sims playoff games itself, so they never land in
+        game_results -- but _stamp_played_game records the score on the
+        schedule entry. The calendar prefers the stamp.
+        """
+        raw = raw or {}
+        if raw.get("playoff") and raw.get("played"):
+            return (f"{raw.get('away_score', 0)}-{raw.get('home_score', 0)}",
+                    "Final")
+        return None
 
     @staticmethod
     def _parse_schedule_entry(game_entry):
-        """Normalize one league.schedule entry to (date, home_team, away_team).
+        """Normalize one league.schedule entry.
 
-        Returns None for malformed entries and non-game special events
-        (e.g. All-Star / NHL_EVENT entries).
+        Returns (date, home_team, away_team, raw) where raw is the
+        original dict entry (carries playoff/marquee/hype fields) or
+        None for tuple-format entries. None for malformed entries and
+        non-game special events (e.g. All-Star / NHL_EVENT entries).
         """
         game_date = home = away = None
+        raw = game_entry if isinstance(game_entry, dict) else None
         if isinstance(game_entry, dict):
             # New format: dictionary with date, home_team, away_team, etc.
             game_date = game_entry.get('date')
@@ -5893,17 +8081,34 @@ class ScheduleWindow(ctk.CTkToplevel):
         if (game_date is None or not hasattr(game_date, 'strftime')
                 or not (hasattr(home, 'team_name') and hasattr(away, 'team_name'))):
             return None
-        return game_date, home, away
+        return game_date, home, away, raw
+
+    def _parsed_schedule(self):
+        """Schedule entries normalized to (date, home, away, raw), parsed once.
+
+        The raw league.schedule mixes dict and tuple formats and is
+        re-scanned by several views; parse it once per schedule object and
+        reuse. Rebuilds automatically when the schedule list is replaced
+        (new season / load game). The 4th element is the original dict
+        entry (or None) so playoff/marquee/hype fields survive to the
+        renderer.
+        """
+        src = self.app.league.schedule
+        if getattr(self, '_parsed_schedule_src', None) is not src:
+            parsed = []
+            for game_entry in src:
+                entry = self._parse_schedule_entry(game_entry)
+                if entry:
+                    parsed.append(entry)
+            self._parsed_schedule_cache = parsed
+            self._parsed_schedule_src = src
+        return self._parsed_schedule_cache
 
     def _schedule_months(self):
         """Month labels present in the schedule, in chronological order."""
         months = []
         seen = set()
-        for game_entry in self.parent.league.schedule:
-            parsed = self._parse_schedule_entry(game_entry)
-            if not parsed:
-                continue
-            game_date = parsed[0]
+        for game_date, home, away, _raw in self._parsed_schedule():
             try:
                 label = game_date.strftime("%b %Y")
             except (AttributeError, ValueError):
@@ -5920,14 +8125,14 @@ class ScheduleWindow(ctk.CTkToplevel):
         game, 'completed' (dimmed) for other past games, 'upcoming' otherwise.
         Returns '' for games not involving the user's team.
         """
-        if self.parent.user_team not in (home, away):
+        if self.app.user_team not in (home, away):
             return ''
         row_tag = 'completed'
         if status == "Final" and "-" in score:
             try:
                 a_s, h_s = (int(x) for x in score.split("-"))
-                mine = h_s if home == self.parent.user_team else a_s
-                theirs = a_s if home == self.parent.user_team else h_s
+                mine = h_s if home == self.app.user_team else a_s
+                theirs = a_s if home == self.app.user_team else h_s
                 row_tag = 'win' if mine > theirs else 'loss'
             except (ValueError, IndexError):
                 row_tag = 'completed'
@@ -5941,6 +8146,9 @@ class ScheduleWindow(ctk.CTkToplevel):
 
         self.schedule_data.clear()
         self._first_upcoming = None
+        # Fresh narrative read each render: grudges form mid-season, and
+        # the matchup cache must not outlive the data it was built from.
+        self.__dict__.pop("_narrative_cache", None)
 
         # Month filter options
         month_values = ['All'] + self._schedule_months()
@@ -5950,12 +8158,7 @@ class ScheduleWindow(ctk.CTkToplevel):
             self.month_combo.set('All')
         selected_month = self.month_filter.get()
 
-        for game_entry in self.parent.league.schedule:
-            parsed = self._parse_schedule_entry(game_entry)
-            if not parsed:
-                continue
-            game_date, home, away = parsed
-
+        for game_date, home, away, raw in self._parsed_schedule():
             # Month filter
             try:
                 if selected_month != 'All' and game_date.strftime("%b %Y") != selected_month:
@@ -5967,22 +8170,79 @@ class ScheduleWindow(ctk.CTkToplevel):
             status = "Scheduled"
             score = "- : -"
 
-            if game_date < self.parent.current_date:
-                # Look for actual game result
-                for game_result in self.parent.game_results:
-                    if (game_result['date'] == game_date and
-                        game_result['home_team'] == home and
-                        game_result['away_team'] == away):
-                        score = f"{game_result['away_score']}-{game_result['home_score']}"
-                        status = "Final"
-                        break
-                if status != "Final":
+            if game_date < self.app.current_date:
+                # Playoff entries carry their own stamp
+                # (played/home_score/away_score): the bracket sims them,
+                # not the daily game loop, so they never land in
+                # game_results. Prefer the stamp; fall back to the index.
+                _stamped = self._playoff_entry_result(raw)
+                if _stamped is not None:
+                    score, status = _stamped
+                    game_result = None
+                else:
+                    # O(1) result lookup via the app's matchup index (was a full
+                    # scan of game_results per scheduled game: O(games x results))
+                    game_result = self.app.find_game_result(game_date, home, away)
+                if game_result is not None:
+                    score = f"{game_result['away_score']}-{game_result['home_score']}"
+                    status = "Final"
+                elif status != "Final":
                     score = "0-0"  # Fallback if no result found
                     status = "Simulated"
-            elif game_date == self.parent.current_date:
+            elif game_date == self.app.current_date:
                 status = "Today"
 
-            values = (game_date.strftime("%b %d, %Y"), away.team_name, score, home.team_name, status)
+            # Playoff/marquee presentation: the bracket publishes round_key,
+            # series_id, marquee and hype_tags on each calendar entry.
+            # Marquee series are the ones fans circle -- gold row + a star
+            # and the top hype tag in the status column.
+            raw = raw or {}
+            is_playoff = bool(raw.get("round_key") or raw.get("series_id"))
+            marquee = bool(raw.get("marquee"))
+            hype_tags = list(raw.get("hype_tags") or [])
+            if not is_playoff:
+                # Regular-season grudge games: the schedule generator
+                # doesn't stamp narrative metadata (and the template cache
+                # would strip it), so enrich live from the four narrative
+                # systems -- rivalry store, ledger grudge memory, iconic
+                # history. Cached per matchup for the render pass.
+                try:
+                    _narr = self._matchup_narrative(home, away)
+                except Exception:
+                    _narr = None
+                if _narr:
+                    marquee = marquee or bool(_narr.get("marquee"))
+                    if not hype_tags:
+                        hype_tags = list(_narr.get("hype_tags") or [])
+
+            # Color tag for games involving the user's team (win/loss/today)
+            row_tag = self._game_row_tag(home, away, score, status)
+            # NOTE: ttk Treeview tags with *conflicting* options (two tags
+            # both setting foreground) do not compose under a custom
+            # style -- resolve to a single foreground tag in Python.
+            # Tags with distinct options (marquee fg + today_bg bg) do
+            # combine, in any order.
+            if marquee:
+                # Marquee gold is the rarer, deliberate signal: it beats
+                # win/loss/dimmed. Keep the "today" background highlight
+                # via a background-only tag.
+                tags = ["marquee"]
+                if row_tag == "today":
+                    tags.append("today_bg")
+            elif row_tag:
+                tags = [row_tag]
+            else:
+                tags = []
+            display_status = status
+            if is_playoff and display_status == "Scheduled":
+                display_status = "Playoffs"
+            if marquee:
+                star = "\u2605" + (f" {hype_tags[0]}" if hype_tags else "")
+                display_status = f"{display_status} {star}".strip()
+            league_tags = tuple(tags)
+
+            values = (game_date.strftime("%b %d, %Y"), away.team_name,
+                      score, home.team_name, display_status)
 
             # Store game data for easy access (keyed the same way
             # get_selected_game_data() looks it up: display date string +
@@ -5993,17 +8253,17 @@ class ScheduleWindow(ctk.CTkToplevel):
                 'home': home,
                 'away': away,
                 'score': score,
-                'status': status
+                'status': display_status,
+                'marquee': marquee,
+                'hype_tags': hype_tags,
+                'round_key': raw.get("round_key"),
             }
 
-            # Color tag for games involving the user's team (win/loss/today)
-            row_tag = self._game_row_tag(home, away, score, status)
-            league_tags = (row_tag,) if row_tag else ()
             item_id = self.league_schedule_tree.insert('', 'end', values=values,
                                                        tags=league_tags)
-            if self.parent.user_team in (home, away):
+            if self.app.user_team in (home, away):
                 my_item_id = self.my_schedule_tree.insert('', 'end', values=values,
-                                                           tags=(row_tag,))
+                                                           tags=tuple(tags))
                 if self._first_upcoming is None and status in ("Today", "Scheduled"):
                     self._first_upcoming = my_item_id
 
@@ -6011,7 +8271,7 @@ class ScheduleWindow(ctk.CTkToplevel):
             self.my_schedule_tree.see(self._first_upcoming)
             self.my_schedule_tree.selection_set(self._first_upcoming)
         try:
-            team = self.parent.user_team
+            team = self.app.user_team
             rec = f"{getattr(team, 'wins', 0)}-{getattr(team, 'losses', 0)}-{getattr(team, 'otl', getattr(team, 'ot_losses', 0))}"
             self.my_sched_header.configure(
                 text=f"{team.team_name}  \u2022  {rec}  \u2022  Green = win, red = loss")
@@ -6021,7 +8281,25 @@ class ScheduleWindow(ctk.CTkToplevel):
         set_tree_empty_state(self.my_schedule_tree, "No games scheduled for your team")
         set_tree_empty_state(self.league_schedule_tree, "No league games scheduled")
 
-class FinancesWindow(ctk.CTkToplevel):
+
+
+class ScheduleWindow(InGamePopup):
+    """Popup wrapper around ScheduleView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("League Schedule")
+        self._view = ScheduleView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class FinancesView(ctk.CTkFrame):
     """Comprehensive financial management window with detailed breakdown and projections.
 
     Rebuilt with CustomTkinter (Sept 2026): CTkToplevel shell, CTkTabview
@@ -6031,7 +8309,7 @@ class FinancesWindow(ctk.CTkToplevel):
     logic is unchanged from the ttk version.
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -6048,12 +8326,10 @@ class FinancesWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title(f"{parent.user_team.team_name} - Financial Management")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the FinancesWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
 
         # Initialize data structures
         self.current_season = 2024
@@ -6065,11 +8341,20 @@ class FinancesWindow(ctk.CTkToplevel):
         self.update_views()
 
         # Track window
-        self.parent.open_windows['finances'] = self
+        self.app.open_windows['finances'] = self
 
     # ------------------------------------------------------------------
     # Layout construction
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def create_interface(self):
         """Create the comprehensive financial interface."""
         ct = self._ct
@@ -6123,7 +8408,7 @@ class FinancesWindow(ctk.CTkToplevel):
         top.pack(fill="x", padx=20, pady=(14, 4))
 
         # Title
-        self._heading(top, text=f"{self.parent.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
+        self._heading(top, text=f"{self.app.user_team.team_name.upper()} FINANCIAL MANAGEMENT",
                       size=18).pack(side="left")
 
         # Quick stats on the right
@@ -6525,7 +8810,7 @@ class FinancesWindow(ctk.CTkToplevel):
                             show='headings', style='FIN.Treeview', height=height)
         for col, (text, width) in columns.items():
             tree.heading(col, text=text,
-                         command=lambda c=col, t=tree: self.parent._sort_treeview_generic(t, c))
+                         command=lambda c=col, t=tree: self.app._sort_treeview_generic(t, c))
             tree.column(col, width=width, anchor='w' if col == 'name' else 'center')
 
         # Status tags -- color-code contract situations
@@ -6603,19 +8888,40 @@ class FinancesWindow(ctk.CTkToplevel):
 
     # Calculation methods
     def calculate_current_payroll(self):
-        """Calculate the current NHL payroll."""
+        """Calculate the current cap charge (the number that matters).
+
+        Uses the canonical cap_breakdown(): active-roster hits + buried
+        one-way money in the minors + all dead cap (buyouts, seeded
+        penalties, retained), minus any cap dollars temporarily shed by
+        players sitting on the waiver wire. This is the same charge the
+        Next Day compliance check and trade validation enforce, so the
+        finance screens can never disagree with them.
+        """
+        try:
+            from salary_cap_system import cap_breakdown
+            return max(0, int(cap_breakdown(self.app.user_team)["total"]))
+        except Exception:
+            pass
         total = 0
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
                 total += player.salary
-        return total
+        # Waiver shed: players on the wire temporarily don't count, so an
+        # over-cap club sees its real cap space here (matches the Next Day
+        # compliance check and trade validation).
+        try:
+            from salary_cap_system import waiver_shed_charge
+            total -= waiver_shed_charge(self.app.user_team)
+        except Exception:
+            pass
+        return max(0, total)
 
     def calculate_ahl_payroll(self):
         """Calculate the AHL payroll."""
         total = 0
-        for player in getattr(self.parent.user_team, 'ahl_roster', []):
+        for player in getattr(self.app.user_team, 'ahl_roster', []):
             if hasattr(player, 'contract') and hasattr(player.contract, 'salary'):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
@@ -6629,7 +8935,7 @@ class FinancesWindow(ctk.CTkToplevel):
 
     def _salary_cap(self):
         """The team's salary cap (falls back to the default NHL cap)."""
-        return getattr(self.parent.user_team, 'salary_cap', 83_500_000)
+        return getattr(self.app.user_team, 'salary_cap', 104_000_000)
 
     # Update methods
     def update_views(self):
@@ -6675,7 +8981,7 @@ class FinancesWindow(ctk.CTkToplevel):
                     'Defense': {'count': 0, 'total': 0},
                     'Forwards': {'count': 0, 'total': 0}}
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
 
             if hasattr(player, 'primary_position'):
@@ -6719,22 +9025,22 @@ class FinancesWindow(ctk.CTkToplevel):
         self.contracts_tree.delete(*self.contracts_tree.get_children())
         # Keyed by the treeview widget, matching the app-wide tree_maps
         # convention (see main._create_treeview / _show_player_context_menu).
-        self.parent.tree_maps[self.contracts_tree] = {}
+        self.app.tree_maps[self.contracts_tree] = {}
 
         # Get all players based on roster filter
         roster_filter = self.roster_filter.get()
         players = []
 
         if roster_filter == 'All':
-            players.extend(self.parent.user_team.roster)
-            players.extend(getattr(self.parent.user_team, 'ahl_roster', []))
-            players.extend(getattr(self.parent.user_team, 'prospects', []))
+            players.extend(self.app.user_team.roster)
+            players.extend(getattr(self.app.user_team, 'ahl_roster', []))
+            players.extend(getattr(self.app.user_team, 'prospects', []))
         elif roster_filter == 'NHL':
-            players = self.parent.user_team.roster
+            players = self.app.user_team.roster
         elif roster_filter == 'AHL':
-            players = getattr(self.parent.user_team, 'ahl_roster', [])
+            players = getattr(self.app.user_team, 'ahl_roster', [])
         elif roster_filter == 'Prospects':
-            players = getattr(self.parent.user_team, 'prospects', [])
+            players = getattr(self.app.user_team, 'prospects', [])
 
         # Apply filters and populate tree
         for player in players:
@@ -6785,7 +9091,7 @@ class FinancesWindow(ctk.CTkToplevel):
 
             item = self.contracts_tree.insert('', 'end', values=values,
                                               tags=(self._STATUS_TAGS.get(status, ''),))
-            self.parent.tree_maps[self.contracts_tree][item] = player
+            self.app.tree_maps[self.contracts_tree][item] = player
 
     def determine_contract_status(self, player, years_remaining):
         """Determine the contract status of a player."""
@@ -6814,7 +9120,7 @@ class FinancesWindow(ctk.CTkToplevel):
         projected_payroll = 0
         expiring_players = []
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
 
@@ -6921,7 +9227,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         # Contract expiry analysis
         expiring_next_year = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             if years_left <= 1:
                 expiring_next_year.append(player)
@@ -6931,7 +9237,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         # Age demographics
         old_expensive_players = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             age = getattr(player, 'age', 22)
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 750000)
             if age > 33 and salary > 4_000_000:
@@ -6982,7 +9288,7 @@ Expiring Contracts:   {len(expiring_players)} players
 
         report = f"""
 SALARY BREAKDOWN REPORT
-{self.parent.user_team.team_name} - {self.current_season} Season
+{self.app.user_team.team_name} - {self.current_season} Season
 {'='*60}
 
 SUMMARY
@@ -6997,7 +9303,7 @@ TOP 10 SALARIES
 """
 
         # Sort players by salary
-        sorted_players = sorted(self.parent.user_team.roster,
+        sorted_players = sorted(self.app.user_team.roster,
                               key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0),
                               reverse=True)
 
@@ -7020,7 +9326,7 @@ TOP 10 SALARIES
         """Generate contract timeline report."""
         report = f"""
 CONTRACT TIMELINE REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 CONTRACTS BY EXPIRY YEAR
@@ -7029,7 +9335,7 @@ CONTRACTS BY EXPIRY YEAR
 
         # Group by expiry year
         expiry_groups = {}
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             years_left = getattr(player.contract, 'years_remaining', 1) if hasattr(player, 'contract') else 1
             expiry_year = self.current_season + years_left
 
@@ -7056,7 +9362,7 @@ CONTRACTS BY EXPIRY YEAR
         """Generate position analysis report."""
         report = f"""
 POSITION ANALYSIS REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 DETAILED POSITION BREAKDOWN
@@ -7071,7 +9377,7 @@ DETAILED POSITION BREAKDOWN
             'Wingers': []
         }
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             if hasattr(player, 'primary_position'):
                 if player.primary_position == PlayerPosition.GOALIE:
                     positions['Goalies'].append(player)
@@ -7109,7 +9415,7 @@ DETAILED POSITION BREAKDOWN
         """Generate age demographics report."""
         report = f"""
 AGE DEMOGRAPHICS REPORT
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 AGE GROUP BREAKDOWN
@@ -7120,7 +9426,7 @@ AGE GROUP BREAKDOWN
             '18-22': [], '23-26': [], '27-30': [], '31-34': [], '35+': []
         }
 
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             age = getattr(player, 'age', 22)
             if age <= 22:
                 age_groups['18-22'].append(player)
@@ -7156,7 +9462,7 @@ AGE GROUP BREAKDOWN
         """Generate performance vs salary analysis."""
         report = f"""
 PERFORMANCE vs SALARY ANALYSIS
-{self.parent.user_team.team_name}
+{self.app.user_team.team_name}
 {'='*50}
 
 VALUE ANALYSIS
@@ -7166,7 +9472,7 @@ VALUE ANALYSIS
 
         # Calculate value scores
         player_values = []
-        for player in self.parent.user_team.roster:
+        for player in self.app.user_team.roster:
             salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
             ovr = player.overall_rating()
 
@@ -7204,7 +9510,7 @@ VALUE ANALYSIS
         if not item_id:
             return
         self.contracts_tree.selection_set(item_id)
-        player = self.parent.tree_maps.get(self.contracts_tree, {}).get(item_id)
+        player = self.app.tree_maps.get(self.contracts_tree, {}).get(item_id)
         if not player:
             return
         PlayerContextMenu(self).show_context_menu(
@@ -7219,46 +9525,44 @@ VALUE ANALYSIS
     def view_contract_player_profile(self):
         """View the selected player's profile."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
-            self.parent.open_player_profile(player)
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
+            self.app.open_player_profile(player)
 
     def negotiate_extension(self):
         """Open contract negotiation for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
-            # Open contract negotiation window
-            if 'contract_negotiation' not in self.parent.open_windows or not self.parent.open_windows['contract_negotiation'].winfo_exists():
-                self.parent.open_windows['contract_negotiation'] = ContractNegotiationWindow(self.parent, player, is_extension=True)
-            self.parent.open_windows['contract_negotiation'].focus_set()
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
+            # Contract talks are a full-screen jump now (session resumes).
+            self.app.open_contract_negotiation_window(player, is_extension=True)
 
     def trade_player(self):
         """Open trade window for selected player."""
         selection = self.contracts_tree.selection()
-        if selection and selection[0] in self.parent.tree_maps.get(self.contracts_tree, {}):
-            player = self.parent.tree_maps.get(self.contracts_tree, {})[selection[0]]
+        if selection and selection[0] in self.app.tree_maps.get(self.contracts_tree, {}):
+            player = self.app.tree_maps.get(self.contracts_tree, {})[selection[0]]
             # Open trade window with this player pre-selected
-            self.parent.open_trade_window()
+            self.app.open_trade_window()
 
     # Action methods
     def open_contract_extensions(self):
-        """Open contract extensions window."""
-        if 'contract_extensions' not in self.parent.open_windows or not self.parent.open_windows['contract_extensions'].winfo_exists():
-            self.parent.open_windows['contract_extensions'] = ContractExtensionsWindow(self.parent)
-        self.parent.open_windows['contract_extensions'].focus_set()
+        """Open contract extensions (full-screen jump)."""
+        self.app.open_contract_extensions_window()
 
     def open_trade_evaluator(self):
         """Open trade evaluator tool (the Trade Center)."""
-        self.parent.open_trade_window()
+        self.app.open_trade_window()
 
     def show_salary_analytics(self):
         """Show advanced salary analytics."""
-        SalaryAnalyticsWindow(self.parent)
+        self.app.show_screen('salary_analytics', 'Salary Analytics',
+                             SalaryAnalyticsView)
 
     def open_buyout_calculator(self):
-        """Open buyout calculator."""
-        BuyoutCalculatorWindow(self.parent)
+        """Open buyout calculator (full-screen jump)."""
+        self.app.show_screen('buyout_calculator', 'Buyout Calculator',
+                             BuyoutCalculatorView)
 
     def check_cap_compliance(self):
         """Check salary cap compliance."""
@@ -7285,12 +9589,12 @@ VALUE ANALYSIS
 
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"financial_report_{self.parent.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
+            filename = f"financial_report_{self.app.user_team.team_name.replace(' ', '_')}_{timestamp}.txt"
             filepath = os.path.join(exports_dir, filename)
 
             # Calculate financial data
             current_payroll = sum(getattr(p.contract, 'salary', getattr(p, 'salary', 750000))
-                                for p in self.parent.user_team.roster
+                                for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') or hasattr(p, 'salary'))
 
             salary_cap = self._salary_cap()
@@ -7299,7 +9603,7 @@ VALUE ANALYSIS
             # Generate detailed report
             report_content = f"""
 DETAILED FINANCIAL REPORT
-{self.parent.user_team.team_name} - {datetime.now().strftime('%Y-%m-%d')}
+{self.app.user_team.team_name} - {datetime.now().strftime('%Y-%m-%d')}
 {'='*70}
 
 SALARY CAP SUMMARY
@@ -7315,7 +9619,7 @@ ROSTER BREAKDOWN
 """
 
             # Sort players by salary for detailed breakdown
-            sorted_players = sorted(self.parent.user_team.roster,
+            sorted_players = sorted(self.app.user_team.roster,
                                   key=lambda p: getattr(p.contract, 'salary', getattr(p, 'salary', 750000)),
                                   reverse=True)
 
@@ -7328,9 +9632,9 @@ ROSTER BREAKDOWN
             # Contract expiry analysis
             report_content += f"\n\nCONTRACT EXPIRY ANALYSIS\n{'-'*25}\n"
 
-            expiring_this_year = [p for p in self.parent.user_team.roster
+            expiring_this_year = [p for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) <= 1]
-            expiring_next_year = [p for p in self.parent.user_team.roster
+            expiring_next_year = [p for p in self.app.user_team.roster
                                 if hasattr(p, 'contract') and getattr(p.contract, 'years_remaining', 0) == 2]
 
             report_content += f"Contracts expiring this season: {len(expiring_this_year)}\n"
@@ -7347,7 +9651,7 @@ ROSTER BREAKDOWN
             report_content += f"\n\nSALARY BY POSITION\n{'-'*18}\n"
 
             position_totals = {}
-            for player in self.parent.user_team.roster:
+            for player in self.app.user_team.roster:
                 pos = str(player.primary_position)
                 salary = getattr(player.contract, 'salary', getattr(player, 'salary', 750000))
 
@@ -7395,7 +9699,25 @@ ROSTER BREAKDOWN
 
 
 
-class NewsWindow(ctk.CTkToplevel):
+
+
+class FinancesWindow(InGamePopup):
+    """Popup wrapper around FinancesView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title(f"{parent.user_team.team_name} - Financial Management")
+        self._view = FinancesView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class NewsView(ctk.CTkFrame):
     """League news feed — modern CTk rebuild.
 
     Two-pane layout: a scrollable feed of rounded article cards (headline,
@@ -7440,7 +9762,7 @@ class NewsWindow(ctk.CTkToplevel):
         "Other": "#71717a",
     }
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
@@ -7456,12 +9778,10 @@ class NewsWindow(ctk.CTkToplevel):
         self._heading = heading
         self._body = body
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("League News")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the NewsWindow wrapper
         self.configure(fg_color=BG)
-        self.geometry("1200x750")
-        self.minsize(1000, 600)
 
         ct = self._ct
         self._filter = "All"
@@ -7531,6 +9851,15 @@ class NewsWindow(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     @classmethod
     def _clean_story(cls, story):
         """Strip emoji and tidy whitespace for display."""
@@ -7579,7 +9908,7 @@ class NewsWindow(ctk.CTkToplevel):
 
     def _load_articles(self):
         """Read the parent's news log into (story, date_str, category) tuples."""
-        news_log = getattr(self.parent, "news_log", None) or []
+        news_log = getattr(self.app, "news_log", None) or []
         articles = []
         for item in reversed(news_log):
             if isinstance(item, dict):
@@ -7712,155 +10041,856 @@ class NewsWindow(ctk.CTkToplevel):
         self._reader_text.configure(state="disabled")
 
 
-class GMOptionsWindow(tk.Toplevel):
-    def __init__(self, parent):
+
+
+class NewsWindow(InGamePopup):
+    """Popup wrapper around NewsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
-        self.parent = parent
-        self.title("General Manager Options")
-        self.geometry("600x450")
-        self.configure(background=parent.BG_COLOR)
+        self.title("League News")
+        self._view = NewsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class GMOptionsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMOptionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
 
         header = ttk.Frame(self, style='Panel.TFrame', padding=(20, 14))
         header.pack(fill='x', padx=10, pady=(10, 0))
         ttk.Label(header, text="GM OPTIONS",
-                  font=(parent.FONT_FAMILY, 16, 'bold'),
+                  font=_sfont(self.app.FONT_FAMILY, 16, 'bold'),
                   style='Heading.TLabel').pack(side='left')
 
         # GM Management Options
         management_frame = ttk.LabelFrame(self, text="Team Management", padding=15)
         management_frame.pack(fill='x', padx=20, pady=10)
 
-        ttk.Button(management_frame, text="Manage Trade Block", command=self.parent.open_trade_block_window).pack(pady=5, fill='x')
-        ttk.Button(management_frame, text="Handle Waivers", command=self.parent.open_waivers_window).pack(pady=5, fill='x')
-        ttk.Button(management_frame, text="Set Captains", command=self.parent.open_set_captains_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Manage Trade Block", command=self.app.open_trade_block_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Handle Waivers", command=self.app.open_waivers_window).pack(pady=5, fill='x')
+        ttk.Button(management_frame, text="Set Captains", command=self.app.open_set_captains_window).pack(pady=5, fill='x')
         ttk.Button(management_frame, text="Negotiate Extensions", command=self.negotiate_extensions, style='Accent.TButton').pack(pady=5, fill='x')
 
         # Game Settings & Preferences
         settings_frame = ttk.LabelFrame(self, text="Game Settings & Preferences", padding=15)
         settings_frame.pack(fill='x', padx=20, pady=10)
 
-        ttk.Button(settings_frame, text="Settings & Preferences", command=self.parent.open_settings_window).pack(pady=5, fill='x')
+        ttk.Button(settings_frame, text="Settings & Preferences", command=self.app.open_settings_window).pack(pady=5, fill='x')
 
         # Close button
-        ttk.Button(self, text="Close", command=self.destroy).pack(pady=20)
+        ttk.Button(self, text="Close", command=self.close_view).pack(pady=20)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def negotiate_extensions(self):
-        if 'contract_extensions' not in self.parent.open_windows or not self.parent.open_windows['contract_extensions'].winfo_exists():
-            self.parent.open_windows['contract_extensions'] = ContractExtensionsWindow(self.parent)
-        self.parent.open_windows['contract_extensions'].focus_set()
+        self.app.open_contract_extensions_window()
 
-class ContractNegotiationWindow(tk.Toplevel):
-    def __init__(self, parent, player, is_extension=False):
+
+
+class GMOptionsWindow(InGamePopup):
+    """Popup wrapper around GMOptionsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
-        self.parent = parent
+        self.title("General Manager Options")
+        self._view = GMOptionsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class ContractNegotiationView(ctk.CTkFrame):
+    """Contract talks as a full-screen view (FM/EHM style).
+
+    Offer builder on the left, team/player context on the right: cap space,
+    the agent's ask, comparable contracts, and this negotiation's offer
+    history. Negotiation state lives in ``app.negotiation_sessions`` so the
+    user can jump to another screen mid-talks and resume from the navbar.
+    """
+
+    def __init__(self, parent, player=None, is_extension=False, app=None,
+                 is_elc=False):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the wrapper
         self.player = player
         self.is_extension = is_extension
-        self.title(f"Negotiate with {player.full_name}")
-        self.geometry("500x450")
-        self.configure(background=parent.BG_COLOR)
-        self.transient(parent)
-        self.grab_set()
+        # ELC mode: negotiating a first contract with an unsigned
+        # rights-held prospect. Term is locked to the signing-age table,
+        # salary lives inside the ELC band, and signing/performance
+        # bonuses are on the table instead of trade protection.
+        self.is_elc = bool(is_elc)
+        self._elc_counter = None  # agent's counter terms, when offered
+        self.configure(fg_color=self.app.BG_COLOR)
+        self._session = self._get_session()
+        self._build()
+        self._refresh_history()
+        self._refresh_context()
 
-        # Create main container with padding
-        main_frame = ttk.Frame(self, style='Panel.TFrame')
-        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+    # ---------- session ----------
 
-        # Title section
-        title_text = "Contract Extension" if is_extension else "Contract Offer"
-        ttk.Label(main_frame, text=title_text, style='Title.TLabel').pack(pady=(0, 10))
-        
-        # Player info section
-        player_frame = ttk.LabelFrame(main_frame, text="Player Information", style='Panel.TLabelframe')
-        player_frame.pack(fill='x', pady=(0, 15))
-        
-        ttk.Label(player_frame, text=f"Name: {player.full_name}", style='TLabel').pack(anchor='w', padx=10, pady=5)
-        ttk.Label(player_frame, text=f"Position: {player.primary_position.value}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Age: {player.age}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Overall Rating: {to_100_scale(player.overall_rating())}", style='TLabel').pack(anchor='w', padx=10, pady=2)
-        ttk.Label(player_frame, text=f"Potential: {player.potential_grade}", style='TLabel').pack(anchor='w', padx=10, pady=(2, 10))
-        
-        # Current contract info (if extension)
-        if is_extension and hasattr(player, 'salary'):
-            current_frame = ttk.LabelFrame(main_frame, text="Current Contract", style='Panel.TLabelframe')
-            current_frame.pack(fill='x', pady=(0, 15))
-            
-            ttk.Label(current_frame, text=f"Current Salary: ${player.salary:,}", style='TLabel').pack(anchor='w', padx=10, pady=5)
-            if hasattr(player, 'contract_years'):
-                ttk.Label(current_frame, text=f"Years Remaining: {player.contract_years}", style='TLabel').pack(anchor='w', padx=10, pady=(2, 10))
-        
-        # Contract offer section
-        offer_frame = ttk.LabelFrame(main_frame, text="Contract Offer", style='Panel.TLabelframe')
-        offer_frame.pack(fill='x', pady=(0, 15))
-        
-        # Salary input
-        salary_frame = ttk.Frame(offer_frame)
-        salary_frame.pack(fill='x', padx=10, pady=10)
-        ttk.Label(salary_frame, text="Annual Salary: $", style='TLabel').pack(side='left')
-        self.salary_var = tk.StringVar(master=self, value="750000")
-        salary_entry = ttk.Entry(salary_frame, textvariable=self.salary_var, width=15)
-        salary_entry.pack(side='left', padx=(5, 0))
-        
-        # Years input
-        years_frame = ttk.Frame(offer_frame)
-        years_frame.pack(fill='x', padx=10, pady=(5, 10))
-        ttk.Label(years_frame, text="Contract Length:", style='TLabel').pack(side='left')
-        self.years_var = tk.StringVar(master=self, value="1")
-        years_entry = ttk.Entry(years_frame, textvariable=self.years_var, width=5)
-        years_entry.pack(side='left', padx=(5, 5))
-        ttk.Label(years_frame, text="years", style='TLabel').pack(side='left')
-        
-        # Total value display
-        self.total_label = ttk.Label(offer_frame, text="Total Contract Value: $0", style='Subtitle.TLabel')
-        self.total_label.pack(anchor='w', padx=10, pady=(10, 15))
-        
-        # Update total when values change
-        self.salary_var.trace('w', self.update_total)
-        self.years_var.trace('w', self.update_total)
-        self.update_total()
-        
-        # Buttons
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill='x', pady=20)
-        
-        ttk.Button(button_frame, text="Submit Offer", command=self.submit_offer, style='TButton').pack(side='right', padx=(5, 0))
-        ttk.Button(button_frame, text="Cancel", command=self.destroy, style='TButton').pack(side='right')
+    def _get_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is None:
+            sessions = {}
+            self.app.negotiation_sessions = sessions
+        player = self.player
+        key = getattr(player, "id", None) or id(player)
+        sess = sessions.get(key)
+        if sess is None or sess.get("player") is not player:
+            sess = {
+                "player": player,
+                "is_extension": self.is_extension,
+                "is_elc": self.is_elc,
+                "offers": [],          # (salary, years, result)
+                "asking_price": None,  # last known agent ask
+                "draft_salary": "",
+                "draft_years": 1,
+                "draft_clause": "none",
+                "draft_clause_size": 10,
+                "draft_signing_bonus": "",
+                "draft_perf_bonus": "",
+            }
+            sessions[key] = sess
+        self._sess_key = key
+        return sess
 
-    def update_total(self, *args):
-        """Update the total contract value display."""
+    def _close_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is not None:
+            sessions.pop(self._sess_key, None)
         try:
-            salary = int(self.salary_var.get().replace(',', ''))
+            self.app.refresh_screen_navbar()
+        except Exception:
+            pass
+
+    # ---------- market data ----------
+
+    @staticmethod
+    def _estimate_market_value(player):
+        """Standard market-value curve (matches ContractExtensionsView)."""
+        try:
+            ovr = player.overall_rating()
+        except Exception:
+            ovr = 75
+        base_value = max(750000, (ovr - 60) * 250000)
+        age_modifier = 1.0
+        age = getattr(player, "age", 27)
+        if 23 <= age <= 29:
+            age_modifier = 1.2
+        elif age >= 30:
+            age_modifier = max(0.5, 1.0 - ((age - 30) * 0.05))
+        pos = getattr(player, "primary_position", None)
+        pos_name = getattr(pos, "value", str(pos))
+        position_modifier = 1.0
+        if pos_name == "C":
+            position_modifier = 1.15
+        elif pos_name in ("LD", "RD"):
+            position_modifier = 1.1
+        potential_modifier = 1.0
+        if age <= 25:
+            potential_modifier = {"A": 1.5, "B": 1.3, "C": 1.1,
+                                  "D": 1.0, "F": 0.9}.get(
+                                      getattr(player, "potential_grade", "C"), 1.0)
+        try:
+            performance_bonus = (player.stats.goals * 50000
+                                 + player.stats.assists * 30000)
+        except Exception:
+            performance_bonus = 0
+        return max(750000, int(base_value * age_modifier
+                               * position_modifier * potential_modifier)
+                   + performance_bonus)
+
+    def _comparables(self, limit=5):
+        player = self.player
+        try:
+            my_ovr = player.overall_rating()
+        except Exception:
+            my_ovr = 75
+        my_pos = getattr(getattr(player, "primary_position", ""), "value", "")
+        comps = []
+        league = getattr(self.app, "league", None)
+        for team in getattr(league, "teams", []) or []:
+            for p in getattr(team, "roster", []) or []:
+                if p is player:
+                    continue
+                try:
+                    ovr = p.overall_rating()
+                except Exception:
+                    continue
+                if abs(ovr - my_ovr) > 4:
+                    continue
+                ppos = getattr(getattr(p, "primary_position", ""), "value", "")
+                if ppos != my_pos:
+                    continue
+                sal = getattr(getattr(p, "contract", None), "salary",
+                              getattr(p, "salary", 0)) or 0
+                yrs = getattr(getattr(p, "contract", None), "years_remaining",
+                              getattr(p, "contract_years", 0)) or 0
+                comps.append((abs(ovr - my_ovr), p.full_name, sal, yrs, ovr))
+        comps.sort(key=lambda c: (c[0], -c[2]))
+        return comps[:limit]
+
+    # ---------- layout ----------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _build(self):
+        p = self.player
+        app = self.app
+        if self.is_elc:
+            title_text = "Entry-Level Contract"
+        else:
+            title_text = "Contract Extension" if self.is_extension else "Contract Offer"
+        # ELC band for the hint line (term locked to the signing-age table).
+        self._elc_floor, self._elc_ceil, self._elc_years = None, None, None
+        if self.is_elc:
+            try:
+                import salary_cap_system as _scs_b
+                try:
+                    from draft_generator import age_on_sept15 as _s15_b
+                except Exception:
+                    _s15_b = None
+                _sy = getattr(getattr(app, "league", None), "season_year", None)
+                _elc_age_b = getattr(p, "age", 20)
+                if _s15_b is not None:
+                    try:
+                        _s15v = _s15_b(getattr(p, "birth_date", ""), _sy)
+                        if _s15v is not None:
+                            _elc_age_b = _s15v
+                    except Exception:
+                        pass
+                self._elc_floor, self._elc_ceil, self._elc_years = \
+                    _scs_b.elc_band(_elc_age_b, _sy)
+            except Exception:
+                pass
+
+        # Header
+        header = ttk.Frame(self, style="Panel.TFrame", padding=14)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        try:
+            pos = p.primary_position.value
+        except Exception:
+            pos = ""
+        try:
+            ovr = p.overall_rating()
+        except Exception:
+            ovr = "?"
+        ttk.Label(header, text=f"{title_text}: {p.full_name}",
+                  style="TLabel",
+                  font=(app.FONT_FAMILY, 16, "bold")).pack(anchor="w")
+        ttk.Label(header,
+                  text=f"{pos}  •  Age {getattr(p, 'age', '?')}  •  "
+                       f"OVR {ovr}  •  POT {getattr(p, 'potential_grade', '?')}",
+                  style="Secondary.TLabel",
+                  font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+        if self.is_extension:
+            try:
+                cur_sal = p.contract.salary
+                cur_yrs = p.contract.years_remaining
+                ttk.Label(header,
+                          text=f"Current deal: ${cur_sal:,} × {cur_yrs} yr(s) remaining",
+                          style="Secondary.TLabel",
+                          font=(app.FONT_FAMILY, 11)).pack(anchor="w")
+            except Exception:
+                pass
+        if self.is_elc and int(getattr(self, "_elc_years", 0) or 0) <= 0:
+            # 25+ prospects sit outside the Entry Level System -- the
+            # dialog can't produce a legal offer (handle_elc_offer will
+            # refuse on submit; the menu gates normally prevent this).
+            ttk.Label(header,
+                      text="Not ELC-eligible: 25+ is outside the Entry "
+                           "Level System (CBA 9.1(b)).",
+                      style="Secondary.TLabel",
+                      font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+
+        # Two columns in a scrollable area (fits full-screen and popup wrapper)
+        scroll = ctk.CTkScrollableFrame(self, fg_color=self.app.BG_COLOR)
+        scroll.pack(fill=tk.BOTH, expand=True, padx=12, pady=6)
+        cols = ttk.Frame(scroll, style="Panel.TFrame")
+        cols.pack(fill=tk.BOTH, expand=True)
+        cols.columnconfigure(0, weight=3)
+        cols.columnconfigure(1, weight=2)
+
+        left = ttk.Frame(cols, style="Card.TFrame", padding=14)
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        right = ttk.Frame(cols, style="Card.TFrame", padding=14)
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+
+        # ---- Left: offer builder ----
+        ttk.Label(left, text="Your Offer", style="TLabel",
+                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(0, 8))
+
+        salary_row = ttk.Frame(left, style="Card.TFrame")
+        salary_row.pack(fill=tk.X, pady=4)
+        ttk.Label(salary_row, text="Annual salary: $",
+                  style="TLabel").pack(side=tk.LEFT)
+        init_sal = self._session.get("draft_salary") or "750000"
+        if self.is_elc and self._elc_floor is not None:
+            # Never prefill below the displayed ELC floor -- the offer
+            # would be dead on arrival.
+            try:
+                init_sal = str(max(
+                    int(str(init_sal).replace(",", "").strip() or 0),
+                    int(self._elc_floor)))
+            except Exception:
+                init_sal = str(self._elc_floor)
+        self.salary_var = tk.StringVar(master=self, value=str(init_sal))
+        ttk.Entry(salary_row, textvariable=self.salary_var,
+                  width=16).pack(side=tk.LEFT, padx=(6, 0))
+        if self.is_elc and self._elc_floor is not None:
+            ttk.Label(salary_row,
+                      text=f"  (ELC band ${self._elc_floor:,}-"
+                           f"${self._elc_ceil:,}/yr)",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+
+        years_row = ttk.Frame(left, style="Card.TFrame")
+        years_row.pack(fill=tk.X, pady=4)
+        if self.is_elc:
+            # Term isn't negotiable on an ELC: the signing-age table sets
+            # it (3/2/1). years_var is still kept for the shared paths.
+            self.years_var = tk.IntVar(master=self,
+                                       value=int(self._elc_years or 3))
+            ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
+            ttk.Label(years_row,
+                      text=f"{int(self._elc_years or 3)} year(s)  "
+                           f"(ELC term set by signing age — not negotiable)",
+                      style="TLabel").pack(side=tk.LEFT, padx=(8, 0))
+        else:
+            ttk.Label(years_row, text="Term:", style="TLabel").pack(side=tk.LEFT)
+            max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
+            self.years_var = tk.IntVar(master=self,
+                                       value=int(self._session.get("draft_years") or 1))
+            ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
+                      orient="horizontal", length=220).pack(side=tk.LEFT, padx=8)
+            ttk.Label(years_row, textvariable=self.years_var,
+                      style="TLabel", width=3).pack(side=tk.LEFT)
+            ttk.Label(years_row, text=f"year(s)  (max {max_years})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+
+        # ---- ELC bonuses (instead of trade protection) ----
+        if self.is_elc:
+            try:
+                import salary_cap_system as _scs_c
+                _sb_cap_txt = "10% of base"
+                _pb_cap = _scs_c.ELC_PERF_BONUS_MAX
+            except Exception:
+                _pb_cap = 1000000
+            sb_row = ttk.Frame(left, style="Card.TFrame")
+            sb_row.pack(fill=tk.X, pady=4)
+            ttk.Label(sb_row, text="Signing bonus: $",
+                      style="TLabel").pack(side=tk.LEFT)
+            self.signing_var = tk.StringVar(
+                master=self,
+                value=str(self._session.get("draft_signing_bonus") or "0"))
+            ttk.Entry(sb_row, textvariable=self.signing_var,
+                      width=16).pack(side=tk.LEFT, padx=(6, 0))
+            ttk.Label(sb_row, text=f"/yr  (max {_sb_cap_txt})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            pb_row = ttk.Frame(left, style="Card.TFrame")
+            pb_row.pack(fill=tk.X, pady=4)
+            ttk.Label(pb_row, text="Performance bonus: $",
+                      style="TLabel").pack(side=tk.LEFT)
+            self.perf_var = tk.StringVar(
+                master=self,
+                value=str(self._session.get("draft_perf_bonus") or "0"))
+            ttk.Entry(pb_row, textvariable=self.perf_var,
+                      width=16).pack(side=tk.LEFT, padx=(6, 0))
+            ttk.Label(pb_row, text=f"/yr  (max ${_pb_cap:,})",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            self.signing_var.trace_add("write", self._update_total)
+            self.perf_var.trace_add("write", self._update_total)
+
+        # ---- Trade protection (real clauses, real leverage) ----
+        if not self.is_elc:
+            import trade_engine as _te
+            clause_row = ttk.Frame(left, style="Card.TFrame")
+            clause_row.pack(fill=tk.X, pady=4)
+            ttk.Label(clause_row, text="Trade protection:",
+                      style="TLabel").pack(side=tk.LEFT)
+            self._clause_names = {"none": "None",
+                                  "nmc": "No-movement clause",
+                                  "ntc": "Full no-trade",
+                                  "mntc": "Modified no-trade"}
+            self._clause_keys = {v: k for k, v in self._clause_names.items()}
+            _cur = str(self._session.get("draft_clause") or "none")
+            if _cur not in self._clause_names:
+                _cur = "none"
+            self.clause_var = tk.StringVar(master=self,
+                                           value=self._clause_names[_cur])
+            self.clause_menu = ttk.OptionMenu(
+                clause_row, self.clause_var, self._clause_names[_cur],
+                *self._clause_names.values(), command=self._on_clause_change)
+            self.clause_menu.pack(side=tk.LEFT, padx=8)
+            # Real NHL: trade protection requires UFA eligibility (27+ / 7 pro
+            # seasons) -- kids can't be offered what the CBA won't allow.
+            try:
+                if not _te.clause_eligible(getattr(self, "player", None)):
+                    self.clause_menu.configure(state="disabled")
+                    self.clause_var.set(self._clause_names["none"])
+                    self._session["draft_clause"] = "none"
+            except Exception:
+                pass
+            self.clause_size_frame = ttk.Frame(clause_row, style="Card.TFrame")
+            ttk.Label(self.clause_size_frame, text="blocked teams:",
+                      style="Secondary.TLabel").pack(side=tk.LEFT)
+            self.clause_size_var = tk.IntVar(
+                master=self, value=int(self._session.get("draft_clause_size")
+                                       or 10))
+            ttk.Scale(self.clause_size_frame, from_=3, to=20,
+                      variable=self.clause_size_var,
+                      orient="horizontal", length=110).pack(side=tk.LEFT, padx=6)
+            ttk.Label(self.clause_size_frame, textvariable=self.clause_size_var,
+                      style="TLabel", width=3).pack(side=tk.LEFT)
+            self.clause_size_var.trace_add("write", self._on_clause_size_change)
+            self.clause_hint_var = tk.StringVar(master=self, value="")
+            ttk.Label(left, textvariable=self.clause_hint_var,
+                      style="Secondary.TLabel", wraplength=520).pack(anchor="w",
+                                                                     pady=(0, 4))
+            self._on_clause_change(self.clause_var.get())
+            self._refresh_clause_hint()
+        else:
+            # ELC mode: no trade protection on an entry-level deal. Stubs
+            # keep the shared paths (history, walk-away) from touching
+            # missing attributes.
+            self._clause_names = {"none": "None"}
+            self._clause_keys = {"None": "none"}
+            self.clause_var = tk.StringVar(master=self, value="None")
+            self.clause_size_var = tk.IntVar(master=self, value=10)
+            self.clause_hint_var = tk.StringVar(master=self, value="")
+
+        self.total_label = ttk.Label(left, text="Total: $0", style="TLabel",
+                                     font=(app.FONT_FAMILY, 12, "bold"))
+        self.total_label.pack(anchor="w", pady=(8, 4))
+        self.salary_var.trace_add("write", self._update_total)
+        self.years_var.trace_add("write", self._update_total)
+        self._update_total()
+
+        # Result banner
+        self.banner_var = tk.StringVar(master=self, value="")
+        self.banner = ttk.Label(left, textvariable=self.banner_var,
+                                style="Secondary.TLabel", wraplength=520)
+        self.banner.pack(anchor="w", pady=(4, 8))
+        if self.is_elc and self._elc_floor is not None:
+            # The banner doubles as the ELC rule card: band, locked term,
+            # and why there's no clause picker.
+            self.banner_var.set(
+                f"Entry-Level Contract: base must sit inside the band "
+                f"(${self._elc_floor:,}-${self._elc_ceil:,}/yr); term is "
+                f"fixed at {int(self._elc_years or 3)} year(s). No trade "
+                f"protection on an ELC — signing and performance bonuses "
+                f"are the sweetener.")
+
+        btn_row = ttk.Frame(left, style="Card.TFrame")
+        btn_row.pack(fill=tk.X, pady=(4, 2))
+        ttk.Button(btn_row, text="Submit Offer",
+                   command=self.submit_offer).pack(side=tk.LEFT, padx=(0, 8))
+        # ELC mode: appears when the agent counters -- one click accepts
+        # his number.
+        self.counter_btn = ttk.Button(btn_row, text="",
+                                      command=self._accept_elc_counter)
+        if self.is_elc:
+            self.counter_btn.pack(side=tk.LEFT, padx=(0, 8))
+            self.counter_btn.pack_forget()
+        ttk.Button(btn_row, text="Walk Away",
+                   command=self.walk_away).pack(side=tk.LEFT)
+
+        # Jump links
+        jump_row = ttk.Frame(left, style="Card.TFrame")
+        jump_row.pack(fill=tk.X, pady=(10, 0))
+        ttk.Label(jump_row, text="Jump to:", style="Secondary.TLabel").pack(
+            side=tk.LEFT, padx=(0, 8))
+        ttk.Button(jump_row, text="Roster",
+                   command=lambda: self._jump("roster")).pack(side=tk.LEFT,
+                                                              padx=4)
+        ttk.Button(jump_row, text="Extensions",
+                   command=lambda: self._jump("extensions")).pack(side=tk.LEFT,
+                                                                   padx=4)
+        ttk.Button(jump_row, text="Cap Analytics",
+                   command=lambda: self._jump("cap")).pack(side=tk.LEFT, padx=4)
+        ttk.Button(jump_row, text="Inbox",
+                   command=lambda: self._jump("inbox")).pack(side=tk.LEFT,
+                                                             padx=4)
+
+        # ---- Right: context ----
+        ttk.Label(right, text="Negotiation Context", style="TLabel",
+                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w",
+                                                           pady=(0, 8))
+        self.context_box = tk.Text(right, height=14, wrap="word",
+                                   bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
+                                   relief="flat", padx=8, pady=8,
+                                   font=(app.FONT_FAMILY, 10))
+        self.context_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.context_box.configure(state="disabled")
+
+        ttk.Label(right, text="Offer History", style="TLabel",
+                  font=(app.FONT_FAMILY, 12, "bold")).pack(anchor="w",
+                                                           pady=(4, 4))
+        self.history_box = tk.Text(right, height=8, wrap="word",
+                                   bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
+                                   relief="flat", padx=8, pady=8,
+                                   font=(app.FONT_FAMILY, 10))
+        self.history_box.pack(fill=tk.BOTH, expand=True)
+        self.history_box.configure(state="disabled")
+
+    def _jump(self, where):
+        try:
+            if where == "roster":
+                self.app.open_roster_window()
+            elif where == "extensions":
+                self.app.open_contract_extensions_window()
+            elif where == "cap":
+                self.app.open_salary_analytics_window()
+            elif where == "inbox":
+                self.app.open_inbox_window()
+        except Exception:
+            pass
+
+    # ---------- live updates ----------
+
+    def _on_clause_change(self, _display=None):
+        key = self._clause_keys.get(self.clause_var.get(), "none")
+        self._session["draft_clause"] = key
+        if key == "mntc":
+            self.clause_size_frame.pack(side=tk.LEFT, padx=(4, 0))
+        else:
+            self.clause_size_frame.pack_forget()
+        self._refresh_clause_hint()
+
+    def _on_clause_size_change(self, *args):
+        try:
+            self._session["draft_clause_size"] = int(
+                self.clause_size_var.get())
+        except Exception:
+            pass
+        self._refresh_clause_hint()
+
+    def _clause_key(self):
+        return self._clause_keys.get(self.clause_var.get(), "none")
+
+    def _refresh_clause_hint(self):
+        import trade_engine as _te
+        try:
+            # Real NHL: no trade protection without UFA eligibility.
+            if not _te.clause_eligible(self.player):
+                self.clause_hint_var.set(
+                    "Trade protection isn't available here -- the NHL only "
+                    "allows it for players 27+ or with 7 pro seasons.")
+                return
+            key = self._clause_key()
+            demand = _te.clause_demand_score(
+                self.player, getattr(self.app, "user_team", None),
+                getattr(self.app, "league", None))
+            if key == "none":
+                if demand >= 0.65:
+                    self.clause_hint_var.set(
+                        "His camp is pushing hard for trade protection -- "
+                        "expect to pay more without it.")
+                elif demand >= 0.35:
+                    self.clause_hint_var.set(
+                        "Trade protection would sweeten your offer.")
+                else:
+                    self.clause_hint_var.set("")
+            else:
+                val = _te.clause_annual_value(self.player, key)
+                self.clause_hint_var.set(
+                    f"Offering {_te.clause_offer_label(key, self.clause_size_var.get())} "
+                    f"— worth about ${val:,}/yr to him.")
+        except Exception:
+            self.clause_hint_var.set("")
+
+    def _update_total(self, *args):
+        try:
+            salary = int(str(self.salary_var.get()).replace(",", ""))
             years = int(self.years_var.get())
-            total = salary * years
-            self.total_label.config(text=f"Total Contract Value: ${total:,}")
+            if self.is_elc:
+                # ELC total: base + signing bonus + performance bonus, per
+                # year, times the locked term.
+                def _n(v):
+                    try:
+                        return int(str(v.get()).replace(",", "") or 0)
+                    except (ValueError, AttributeError):
+                        return 0
+                sb = _n(self.signing_var)
+                pb = _n(self.perf_var)
+                self.total_label.config(
+                    text=f"Total: ${(salary + sb + pb) * years:,}  "
+                         f"(${salary:,}/yr + ${sb:,} SB + ${pb:,} perf "
+                         f"× {years} yr)")
+                self._session["draft_salary"] = str(salary)
+                self._session["draft_years"] = years
+                self._session["draft_signing_bonus"] = str(sb)
+                self._session["draft_perf_bonus"] = str(pb)
+                return
+            self.total_label.config(
+                text=f"Total: ${salary * years:,}  "
+                     f"(${salary:,}/yr × {years} yr)")
+            self._session["draft_salary"] = str(salary)
+            self._session["draft_years"] = years
         except (ValueError, AttributeError):
-            self.total_label.config(text="Total Contract Value: $0")
+            self.total_label.config(text="Total: $0")
+
+    def _refresh_context(self):
+        app = self.app
+        p = self.player
+        if self.is_elc:
+            self._refresh_elc_context()
+            return
+        lines = []
+        # Cap
+        try:
+            live_cap = app.get_live_cap() if hasattr(app, "get_live_cap") else None
+            payroll = getattr(app.user_team, "payroll", None)
+            if live_cap and payroll is not None:
+                lines.append(f"Salary cap: ${live_cap:,}")
+                lines.append(f"Team payroll: ${payroll:,}")
+                lines.append(f"Cap space: ${live_cap - payroll:,}")
+                lines.append("")
+        except Exception:
+            pass
+        # Agent's ask
+        ask = self._session.get("asking_price")
+        if ask:
+            lines.append(f"Agent's ask: ${ask:,}/yr")
+        else:
+            mv = self._estimate_market_value(p)
+            lines.append(f"Estimated market value: ${mv:,}/yr")
+        lines.append("")
+        # Comparables
+        lines.append("Comparable contracts:")
+        comps = self._comparables()
+        if not comps:
+            lines.append("  (no close comparables found)")
+        for _, name, sal, yrs, ovr in comps:
+            lines.append(f"  {name} ({ovr} OVR): ${sal:,}/yr × {yrs}")
+        self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", "end")
+        self.context_box.insert("end", "\n".join(lines))
+        self.context_box.configure(state="disabled")
+
+    def _refresh_elc_context(self):
+        """Right-column context in ELC mode: the camp's ask, not comparables.
+
+        An unsigned prospect has no NHL comparables worth showing -- what
+        matters is pedigree (what his draft slot usually gets) and what
+        his camp is asking for.
+        """
+        lines = []
+        try:
+            import salary_cap_system as _scs_e
+            _sy = getattr(getattr(self.app, "league", None),
+                          "season_year", None)
+            ask = _scs_e.elc_prospect_ask(self.player, _sy)
+            lines.append(
+                f"Agent's ask: ${ask['salary']:,}/yr × {ask['years']} yr(s)")
+            if ask["signing_bonus"]:
+                lines.append(
+                    f"  + ${ask['signing_bonus']:,}/yr signing bonus")
+            if ask["performance_bonus"]:
+                lines.append(
+                    f"  + ${ask['performance_bonus']:,}/yr performance bonus")
+            lines.append("")
+            lines.append(ask["flavor"])
+            lines.append("")
+            lines.append(
+                f"ELC band: ${ask['floor']:,}-${ask['ceiling']:,}/yr base. "
+                f"Term is fixed at {ask['years']} year(s) by signing age — "
+                f"the one thing you can't negotiate.")
+        except Exception as e:
+            lines.append(f"(ask unavailable: {e})")
+        self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", "end")
+        self.context_box.insert("end", "\n".join(lines))
+        self.context_box.configure(state="disabled")
+
+    def _refresh_history(self):
+        offers = self._session.get("offers", [])
+        self.history_box.configure(state="normal")
+        self.history_box.delete("1.0", "end")
+        if not offers:
+            self.history_box.insert("end", "No offers yet this session.")
+        else:
+            for i, (sal, yrs, result) in enumerate(offers, 1):
+                self.history_box.insert(
+                    "end", f"Round {i}: ${sal:,}/yr × {yrs} — {result}\n")
+        self.history_box.configure(state="disabled")
+
+    # ---------- actions ----------
+
+    def _record_offer(self, salary, years, result):
+        self._session["offers"].append((salary, years, result))
+        self._refresh_history()
 
     def submit_offer(self):
+        if self.is_elc:
+            self._submit_elc_offer()
+            return
+        p = self.player
         try:
-            salary_str = self.salary_var.get().replace(',', '')
-            salary = int(salary_str)
+            salary = int(str(self.salary_var.get()).replace(",", ""))
             years = int(self.years_var.get())
-            
-            # Validate inputs
-            if salary <= 0:
-                messagebox.showerror("Invalid Input", "Salary must be greater than $0.")
-                return
-            if years <= 0 or years > 8:
-                messagebox.showerror("Invalid Input", "Contract length must be between 1 and 8 years.")
-                return
-            
-            # Set the values on the player object first
-            self.player.salary = salary
-            self.player.contract_years = years
-            
-            # Then call handle_contract_offer with proper arguments
-            accepted = self.parent.handle_contract_offer(self.player, extension=self.is_extension)
-            if accepted:
-                self.destroy()
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
+            self.banner_var.set("Please enter valid numbers for salary and years.")
+            return
+        if salary <= 0:
+            self.banner_var.set("Salary must be greater than $0.")
+            return
+        max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
+        if years < 1 or years > max_years:
+            self.banner_var.set(
+                f"Contract length must be between 1 and {max_years} years.")
+            return
+        # Same signing path as the original popup: stage the offer on the
+        # player object, then run the central handler (inbox routing).
+        # Clause terms ride along as staged single-use attributes.
+        p.salary = salary
+        p.contract_years = years
+        p.offered_clause_kind = self._clause_key()
+        p.offered_clause_list_size = int(self.clause_size_var.get() or 10)
+        import trade_engine as _te
+        _clause_txt = _te.clause_offer_label(
+            p.offered_clause_kind, p.offered_clause_list_size)
+        accepted = self.app.handle_contract_offer(
+            p, extension=self.is_extension, notify="inbox")
+        if accepted:
+            self._record_offer(salary, years, f"accepted ✓ ({_clause_txt})")
+            self._close_session()
+            self.close_view()
+        else:
+            self._record_offer(salary, years,
+                               f"rejected — agent responded via inbox "
+                               f"({_clause_txt})")
+            self.banner_var.set(
+                "Offer rejected. The agent's response is in your inbox — "
+                "adjust the offer or jump back here from the navbar chip.")
+            try:
+                self.app.refresh_screen_navbar()
+            except Exception:
+                pass
 
-class TradeBlockWindow(tk.Toplevel):
+    def _submit_elc_offer(self):
+        """One ELC offer round: validate the band, run the prospect
+        handshake, and either sign him, show the agent's counter, or
+        report the rejection. The view stays open until it's signed or
+        the user walks away."""
+        p = self.player
+
+        def _num(var):
+            try:
+                return int(str(var.get()).replace(",", "") or 0)
+            except (ValueError, AttributeError):
+                return None
+
+        salary, sb, pb = (_num(self.salary_var), _num(self.signing_var),
+                          _num(self.perf_var))
+        if salary is None or sb is None or pb is None or salary <= 0:
+            self.banner_var.set("Enter valid numbers for salary and bonuses.")
+            return
+        years = int(self.years_var.get() or 0)
+        res = self.app.handle_elc_offer(p, salary, sb, pb)
+        verdict = res.get("verdict")
+        if verdict == "accepted":
+            self._record_offer(salary, years,
+                               f"accepted ✓ (${sb:,} SB, ${pb:,}/yr perf)")
+            self._close_session()
+            self.close_view()
+        elif verdict == "counter":
+            c = res.get("counter") or {}
+            self._elc_counter = c
+            self._record_offer(salary, years, "countered by agent")
+            self.banner_var.set(
+                f"Agent counters: ${c.get('salary', 0):,}/yr "
+                f"× {c.get('years', years)} + ${c.get('signing_bonus', 0):,} "
+                f"signing bonus + ${c.get('performance_bonus', 0):,}/yr "
+                f"performance bonus. Accept below or adjust your offer.")
+            try:
+                self.counter_btn.config(
+                    text=f"Accept ${c.get('salary', 0):,}/yr counter")
+                self.counter_btn.pack(side=tk.LEFT, padx=(0, 8))
+            except Exception:
+                pass
+        else:
+            self._record_offer(
+                salary, years, f"{verdict} -- {res.get('note', '')}")
+            self.banner_var.set(res.get("note") or "Offer rejected.")
+            self._elc_counter = None
+            try:
+                self.counter_btn.pack_forget()
+            except Exception:
+                pass
+
+    def _accept_elc_counter(self):
+        """One-click acceptance: fill the agent's number and submit."""
+        c = self._elc_counter or {}
+        if not c:
+            return
+        try:
+            self.salary_var.set(str(c.get("salary", 0)))
+            self.signing_var.set(str(c.get("signing_bonus", 0)))
+            self.perf_var.set(str(c.get("performance_bonus", 0)))
+        except Exception:
+            pass
+        self._submit_elc_offer()
+
+    def walk_away(self):
+        self._record_offer(
+            int(str(self.salary_var.get()).replace(",", "") or 0),
+            int(self.years_var.get() or 0), "walked away")
+        self._close_session()
+        self.close_view()
+
+
+class ContractNegotiationWindow(InGamePopup):
+    """Popup wrapper around ContractNegotiationView (backward compatibility).
+
+    New code should embed ContractNegotiationView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent, player=None, is_extension=False):
+        super().__init__(parent)
+        self._view = ContractNegotiationView(self, app=parent, player=player,
+                                             is_extension=is_extension)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class TradeBlockWindow(InGamePopup):
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -7881,9 +10911,6 @@ class TradeBlockWindow(tk.Toplevel):
         main_frame = ttk.Frame(self)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="Trade Block", style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
         
         # Create notebook for different sections
         notebook = ttk.Notebook(main_frame)
@@ -7916,6 +10943,21 @@ class TradeBlockWindow(tk.Toplevel):
                   command=self.remove_from_trade_block).pack(side='left', padx=5)
         ttk.Button(controls_frame, text="Generate Interest", 
                   command=self.generate_trade_interest).pack(side='left', padx=5)
+        
+        # League-wide visibility note: AI GMs read the same board.
+        try:
+            league = getattr(self.parent, 'league', None)
+            teams = [t for t in (getattr(league, 'teams', None) or [])
+                     if t is not getattr(self.parent, 'user_team', None)]
+            n_others = len(teams)
+        except Exception:
+            n_others = 31
+        visible_lbl = ttk.Label(
+            parent,
+            text=(f"Visible league-wide \u2014 all {n_others} other GMs can see "
+                  "these players and may shop for them."),
+            style='Muted.TLabel')
+        visible_lbl.pack(fill='x', padx=10, pady=(0, 4))
         
         # Trade block players list
         block_frame = ttk.LabelFrame(parent, text="Players on Trade Block")
@@ -7966,7 +11008,7 @@ class TradeBlockWindow(tk.Toplevel):
         other_frame = ttk.LabelFrame(parent, text="Available Players")
         other_frame.pack(fill='both', expand=True, padx=10, pady=10)
         
-        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary', 'Interest')
+        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary', 'Availability')
         self.other_tree = ttk.Treeview(other_frame, columns=columns, show='headings', height=15)
         
         for col in columns:
@@ -7975,6 +11017,8 @@ class TradeBlockWindow(tk.Toplevel):
                 self.other_tree.column(col, width=120)
             elif col in ['Position', 'Age', 'Overall']:
                 self.other_tree.column(col, width=80)
+            elif col == 'Availability':
+                self.other_tree.column(col, width=280)
             else:
                 self.other_tree.column(col, width=100)
         make_tree_sortable(self.other_tree)
@@ -8031,6 +11075,15 @@ class TradeBlockWindow(tk.Toplevel):
         if not hasattr(self.parent.user_team, 'trade_block'):
             self.parent.user_team.trade_block = []
         
+        # Regenerate the league-wide board (mirrors the user's manual block
+        # into league.trade_blocks; trade_market never raises).
+        try:
+            import trade_market
+            trade_market.refresh_trade_blocks(
+                self.parent, getattr(self.parent, 'league', None))
+        except Exception:
+            pass
+        
         self.update_trade_block_display()
         self.update_interest_display()
     
@@ -8041,7 +11094,7 @@ class TradeBlockWindow(tk.Toplevel):
     
     def create_player_selection_dialog(self):
         """Create dialog to select players for trade block."""
-        dialog = tk.Toplevel(self)
+        dialog = InGamePopup(self)
         dialog.title("Add Player to Trade Block")
         dialog.geometry("600x400")
         dialog.configure(background=self.parent.BG_COLOR)
@@ -8103,7 +11156,7 @@ class TradeBlockWindow(tk.Toplevel):
         """Remove selected player from trade block."""
         selection = self.block_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select a player to remove.")
+            messagebox.showwarning("No Selection", "Please select a player to remove.")
             return
         
         for item in selection:
@@ -8118,7 +11171,7 @@ class TradeBlockWindow(tk.Toplevel):
     def generate_trade_interest(self):
         """Generate interest from other teams."""
         if not hasattr(self.parent.user_team, 'trade_block') or not self.parent.user_team.trade_block:
-            tk.messagebox.showinfo("No Players", "Add players to your trade block first.")
+            messagebox.showinfo("No Players", "Add players to your trade block first.")
             return
         
         import random
@@ -8140,7 +11193,7 @@ class TradeBlockWindow(tk.Toplevel):
                     })
         
         self.update_interest_display()
-        tk.messagebox.showinfo("Interest Generated", "Trade interest has been generated for your players!")
+        messagebox.showinfo("Interest Generated", "Trade interest has been generated for your players!")
     
     def update_trade_block_display(self):
         """Update the trade block display."""
@@ -8154,6 +11207,12 @@ class TradeBlockWindow(tk.Toplevel):
         for player in trade_block:
             salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
             years_left = getattr(player.contract, 'years_remaining', 0) if player.contract else 0
+            try:
+                pos = (player.primary_position.value
+                       if hasattr(player.primary_position, 'value')
+                       else str(player.primary_position))
+            except Exception:
+                pos = '?'
             
             # Calculate interest level
             interest_count = len(self.interested_teams.get(player, []))
@@ -8168,7 +11227,7 @@ class TradeBlockWindow(tk.Toplevel):
             
             _bid = self.block_tree.insert('', 'end', values=(
                 player.full_name,
-                str(player.primary_position),
+                pos,
                 player.age,
                 player.overall_rating(),
                 f"${salary:,}",
@@ -8215,33 +11274,68 @@ class TradeBlockWindow(tk.Toplevel):
                 if team != self.parent.user_team]
     
     def on_team_selected(self, event=None):
-        """Handle team selection."""
-        # Would populate with selected team's trade block
-        # For now, show placeholder
+        """Show the selected team's real trade block (trade_market data).
+
+        Replaces the old random.sample placeholder: reads
+        trade_market.get_trade_blocks(league), resolves each id, and shows
+        the truthful availability note. Unresolvable ids are skipped
+        gracefully; an empty block shows an empty-state message.
+        """
+        try:
+            import trade_market
+        except Exception:
+            trade_market = None
+        for item in self.other_tree.get_children():
+            self.other_tree.delete(item)
         selected_team = self.team_var.get()
-        if selected_team:
-            # Clear and show message
-            self.parent.tree_maps.setdefault(self.other_tree, {}).clear()
-            for item in self.other_tree.get_children():
-                self.other_tree.delete(item)
-            
-            # Find team and show some players as "available"
-            team = next((t for t in self.parent.league.teams if t.team_name == selected_team), None)
-            if team:
-                import random
-                available_players = random.sample(team.roster, min(5, len(team.roster)))
-                for player in available_players:
-                    salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
-                    _oid = self.other_tree.insert('', 'end', values=(
-                        team.team_name,
-                        player.full_name,
-                        str(player.primary_position),
-                        player.age,
-                        player.overall_rating(),
-                        f"${salary:,}",
-                        random.choice(['Available', 'Limited Interest', 'High Price'])
-                    ))
-                    self.parent.tree_maps[self.other_tree][_oid] = player
+        app = getattr(self, 'parent', None)
+        league = getattr(app, 'league', None) if app is not None else None
+        rows = 0
+        if trade_market is not None and league is not None and selected_team:
+            try:
+                blocks = trade_market.get_trade_blocks(league)
+            except Exception:
+                blocks = {}
+            for pid in (blocks.get(selected_team, []) or []):
+                try:
+                    player, team = trade_market.resolve_player(league, pid)
+                except Exception:
+                    player, team = None, None
+                if player is None or team is None:
+                    continue  # stale/unresolvable id -- skip gracefully
+                try:
+                    salary = getattr(getattr(player, 'contract', None),
+                                     'salary', 750000) or 750000
+                except Exception:
+                    salary = 750000
+                try:
+                    pos = (player.primary_position.value
+                           if hasattr(player.primary_position, 'value')
+                           else str(player.primary_position))
+                    ovr = player.overall_rating()
+                except Exception:
+                    pos, ovr = '?', '?'
+                try:
+                    note = trade_market.block_availability_note(app, league, pid)
+                except Exception:
+                    note = 'Available'
+                self.other_tree.insert('', 'end', values=(
+                    team.team_name,
+                    player.full_name,
+                    pos,
+                    getattr(player, 'age', '?'),
+                    ovr,
+                    f"${salary:,}",
+                    note,
+                ))
+                rows += 1
+        if rows:
+            set_tree_empty_state(self.other_tree)
+        else:
+            label = selected_team if selected_team else "No team"
+            set_tree_empty_state(
+                self.other_tree,
+                f"{label} has no players on the block")
     
     def refresh_other_blocks(self):
         """Refresh other teams' trade blocks."""
@@ -8255,7 +11349,7 @@ class TradeBlockWindow(tk.Toplevel):
             values = self.other_tree.item(item)['values']
             team_name, player_name = values[0], values[1]
             
-            tk.messagebox.showinfo("Interest Expressed", 
+            messagebox.showinfo("Interest Expressed", 
                                  f"You have expressed interest in {player_name} from {team_name}.\n\n"
                                  f"The team will consider your interest and may respond with trade proposals.")
     
@@ -8263,13 +11357,13 @@ class TradeBlockWindow(tk.Toplevel):
         """Start trade negotiation."""
         selection = self.interest_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select an interest to negotiate.")
+            messagebox.showwarning("No Selection", "Please select an interest to negotiate.")
             return
         
         values = self.interest_tree.item(selection[0])['values']
         player_name, team_name = values[0], values[1]
         
-        tk.messagebox.showinfo("Trade Negotiation", 
+        messagebox.showinfo("Trade Negotiation", 
                              f"Starting trade negotiation for {player_name} with {team_name}.\n\n"
                              f"This would open the trade negotiation interface.")
     
@@ -8277,20 +11371,20 @@ class TradeBlockWindow(tk.Toplevel):
         """Decline trade interest."""
         selection = self.interest_tree.selection()
         if not selection:
-            tk.messagebox.showwarning("No Selection", "Please select an interest to decline.")
+            messagebox.showwarning("No Selection", "Please select an interest to decline.")
             return
         
         # Remove from interest tracking
         self.interest_tree.delete(selection[0])
-        tk.messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
+        messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
 
-class WaiversWindow(tk.Toplevel):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Waivers")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
+class WaiversView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the WaiversWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8300,7 +11394,7 @@ class WaiversWindow(tk.Toplevel):
         instruction_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         instruction_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(instruction_frame, text="Waiver Wire Management", font=(parent.FONT_FAMILY, 16, 'bold'), 
+        ttk.Label(instruction_frame, text="Waiver Wire Management", font=_sfont(self.app.FONT_FAMILY, 16, 'bold'), 
                  style='Heading.TLabel').pack(anchor='w', padx=10, pady=5)
         
         ttk.Label(instruction_frame, text="Players must clear waivers when being sent down to the AHL if they have played " 
@@ -8324,7 +11418,7 @@ class WaiversWindow(tk.Toplevel):
                   'ovr': ('OVR', 50), 'games': ('NHL Games', 80), 
                   'salary': ('Salary', 100), 'actions': ('Actions', 150)}
         
-        self.eligible_tree = parent._create_treeview(my_players_frame, columns, 20)
+        self.eligible_tree = self.app._create_treeview(my_players_frame, columns, 20)
         self.eligible_tree.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Create a button frame for my players
@@ -8335,12 +11429,22 @@ class WaiversWindow(tk.Toplevel):
                   command=self.place_on_waivers).pack(side='left', padx=5)
         
         # Waiver wire tab
-        wire_columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50), 
-                       'ovr': ('OVR', 50), 'games': ('NHL Games', 80), 
+        # NHL claim-priority strip: the order claims resolve in, lowest
+        # points percentage first (last season's final table until Nov 1,
+        # current standings after). A club that claims drops to the bottom.
+        self._priority_frame = ttk.Frame(waiver_wire_frame, style='Panel.TFrame')
+        self._priority_frame.pack(fill='x', padx=5, pady=(5, 0))
+        self._priority_label = ttk.Label(
+            self._priority_frame, text="", style='Muted.TLabel', wraplength=1000,
+            font=_sfont(self.app.FONT_FAMILY, 9))
+        self._priority_label.pack(anchor='w', padx=5, pady=4)
+        wire_columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50),
+                       'ovr': ('OVR', 50), 'games': ('NHL Games', 80),
                        'salary': ('Salary', 100), 'team': ('Current Team', 150),
+                       'days': ('Days Left', 70),
                        'actions': ('Actions', 150)}
-        
-        self.waiver_tree = parent._create_treeview(waiver_wire_frame, wire_columns, 20)
+
+        self.waiver_tree = self.app._create_treeview(waiver_wire_frame, wire_columns, 20)
         self.waiver_tree.pack(fill='both', expand=True, padx=5, pady=5)
         add_player_context_menu(self.waiver_tree, self)
         
@@ -8354,6 +11458,14 @@ class WaiversWindow(tk.Toplevel):
         self.populate_eligible_players()
         self.populate_waiver_wire()
         
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def is_waiver_eligible(self, player):
         """Determine if player is waiver-eligible based on age and NHL games played."""
         # Players over 25 or with more than 160 NHL games require waivers
@@ -8366,7 +11478,7 @@ class WaiversWindow(tk.Toplevel):
         self.parent.tree_maps.setdefault(self.eligible_tree, {}).clear()
 
         # Get all NHL roster players who would be eligible for waivers
-        eligible_players = [p for p in self.parent.user_team.roster if self.is_waiver_eligible(p)]
+        eligible_players = [p for p in self.app.user_team.roster if self.is_waiver_eligible(p)]
         
         for player in eligible_players:
             player_values = (
@@ -8390,9 +11502,9 @@ class WaiversWindow(tk.Toplevel):
     def populate_waiver_wire(self):
         """Populate the tree with players currently on the waiver wire."""
         self.waiver_tree.delete(*self.waiver_tree.get_children())
-        self.parent.tree_maps.setdefault(self.waiver_tree, {}).clear()
 
-        for player in self.parent.waiver_list:
+        for player in self.app.waiver_list:
+            _pending = bool(getattr(player, "user_claim_pending", False))
             player_values = (
                 player.full_name,
                 player.age,
@@ -8401,17 +11513,45 @@ class WaiversWindow(tk.Toplevel):
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",
                 player.team_name,
-                "Claim"
+                max(0, int(getattr(player, 'waiver_days', 0) or 0)),
+                "Claim Submitted" if _pending else "Claim"
             )
             item = self.waiver_tree.insert('', 'end', values=player_values)
             self.waiver_tree.item(item, tags=(str(player.id),))
-            self.parent.tree_maps[self.waiver_tree][item] = player
-            
+
         # Configure row click event
         self.waiver_tree.bind('<ButtonRelease-1>', self.on_waiver_click)
 
         set_tree_empty_state(self.waiver_tree, "The waiver wire is empty")
-        
+        self._refresh_priority_strip()
+
+    def _refresh_priority_strip(self):
+        """Show the NHL claim order and where the user's club sits in it."""
+        try:
+            import waiver_logic as _wl
+            _lg = getattr(getattr(self.app, 'game_manager', None),
+                          'league', None) or getattr(self.app, 'league', None)
+            _order = _wl.waiver_priority_order(
+                _lg, getattr(self.app, "current_date", None))
+            _basis = _wl.waiver_priority_basis_label(
+                _lg, getattr(self.app, "current_date", None))
+            _mine = str(getattr(getattr(self.app, 'user_team', None),
+                                'team_name', '') or '')
+            _names = [str(getattr(t, 'team_name', '')) for t in _order]
+            try:
+                _my_rank = _names.index(_mine) + 1
+            except ValueError:
+                _my_rank = None
+            _top = ", ".join(f"{i+1}. {n}" for i, n in enumerate(_names[:8]))
+            if len(_names) > 8:
+                _top += f", ... ({len(_names)} clubs)"
+            _txt = (f"Claim priority ({_basis}): {_top}"
+                    + (f" -- your club is #{_my_rank}." if _my_rank
+                       else "."))
+            self._priority_label.configure(text=_txt)
+        except Exception:
+            pass
+
     def on_eligible_click(self, event):
         """Handle click on eligible players tree."""
         region = self.eligible_tree.identify_region(event.x, event.y)
@@ -8430,12 +11570,23 @@ class WaiversWindow(tk.Toplevel):
             item = self.waiver_tree.identify_row(event.y)
             column = self.waiver_tree.identify_column(event.x)
             
-            # If clicking on the Actions column (column #8)
-            if column == '#8':
+            # If clicking on the Actions column (column #9)
+            if column == '#9':
                 self.claim_from_waivers(item)
     
     def place_on_waivers(self, item=None):
         """Place the selected player on waivers."""
+        # Waiver window (the wire doesn't run in the June dead month).
+        # One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Waivers", _why)
+                return
+        except Exception:
+            pass
         if not item:
             selected = self.eligible_tree.selection()
             if not selected:
@@ -8444,9 +11595,31 @@ class WaiversWindow(tk.Toplevel):
             item = selected[0]
             
         player_id = int(self.eligible_tree.item(item, "tags")[0])
-        player = next((p for p in self.parent.user_team.roster if p.id == player_id), None)
+        player = next((p for p in self.app.user_team.roster if p.id == player_id), None)
         
         if player:
+            # Real NHL: a no-movement clause blocks waiver placement (and
+            # the AHL assignment that follows) without the player's
+            # consent. A no-trade clause alone does NOT block waivers.
+            import trade_engine as _te
+            _kind, _detail = _te.clause_of(player)
+            if _kind == "NMC":
+                _ask = messagebox.askyesno(
+                    "No-movement clause",
+                    f"{player.full_name} has a {_detail}.\n\n"
+                    "He must approve being exposed on waivers. Ask him?")
+                if not _ask:
+                    return
+                _lg = getattr(getattr(self.app, 'game_manager', None),
+                              'league', None) or getattr(self.app, 'league', None)
+                _ok, _why = _te.will_waive_ntc(
+                    player, self.app.user_team, None, _lg, context="waivers")
+                if not _ok:
+                    messagebox.showwarning(
+                        "Waiver refused",
+                        f"{_why}\n\nHe's staying on the roster.")
+                    return
+                messagebox.showinfo("Waiver approved", _why)
             confirm = qol_confirm(self, "Confirm Waiver",
                                   f"Place {player.full_name} on waivers? "
                                   "Other teams will have a chance to claim them.",
@@ -8455,20 +11628,33 @@ class WaiversWindow(tk.Toplevel):
                 # Add to waiver list
                 player.on_waivers = True
                 player.waiver_days = 2  # Players stay on waivers for 2 days
-                self.parent.waiver_list.append(player)
+                self.app.waiver_list.append(player)
                 
                 # Add to news log
-                self.parent.add_news(f"{player.full_name} placed on waivers by {self.parent.user_team.team_name}.")
+                self.app.add_news(f"{player.full_name} placed on waivers by {self.app.user_team.team_name}.")
                 
                 # Update the views
                 self.populate_eligible_players()
                 self.populate_waiver_wire()
-                messagebox.showinfo("Player on Waivers", 
+                messagebox.showinfo("Player on Waivers",
                                    f"{player.full_name} has been placed on waivers. "
-                                   "They will remain on waivers for 2 days, during which time other teams may claim them.")
+                                   "They will remain on waivers for 2 days, during which time other teams may claim them. "
+                                   f"Their cap hit is temporarily shed until waivers clear -- "
+                                   f"this can bring an over-cap roster back into compliance.")
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
+        # Waiver window (the wire doesn't run in the June dead month).
+        # One rulebook in transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_claim", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Waivers", _why)
+                return
+        except Exception:
+            pass
         if not item:
             selected = self.waiver_tree.selection()
             if not selected:
@@ -8477,58 +11663,83 @@ class WaiversWindow(tk.Toplevel):
             item = selected[0]
             
         player_id = int(self.waiver_tree.item(item, "tags")[0])
-        player = next((p for p in self.parent.waiver_list if p.id == player_id), None)
+        player = next((p for p in self.app.waiver_list if p.id == player_id), None)
         
         if player:
             # Check if user's team has roster space
-            if len(self.parent.user_team.roster) >= 23:
+            if len(self.app.user_team.roster) >= 23:
                 messagebox.showerror("Roster Full", 
                                     "Your NHL roster is full. Please release or reassign a player before claiming from waivers.")
                 return
                 
             # Check salary cap compliance
-            if player.contract.salary > self.parent.user_team.cap_space:
+            if player.contract.salary > self.app.user_team.cap_space:
                 messagebox.showerror("Cap Space Issue", 
                                     f"You don't have enough cap space to add this player's ${player.contract.salary:,} salary.")
                 return
                 
-            confirm = qol_confirm(self, "Confirm Claim",
-                                  f"Claim {player.full_name} from waivers? "
-                                  "They will be added to your NHL roster.",
-                                  confirm_text="Claim Player")
+            if getattr(player, "user_claim_pending", False):
+                messagebox.showinfo("Claim Pending",
+                                    f"You already have a pending claim on {player.full_name}. "
+                                    "It will be processed at noon in waiver priority order.")
+                return
+            # Your waiver priority right now (the wire tab shows the full order).
+            _rank = None
+            try:
+                import waiver_logic as _wl
+                _lg = getattr(getattr(self.app, 'game_manager', None),
+                              'league', None) or getattr(self.app, 'league', None)
+                _rank = _wl.waiver_priority_rank(
+                    _lg, self.app.user_team,
+                    getattr(self.app, "current_date", None))
+            except Exception:
+                pass
+            _rank_txt = f" (your waiver priority: #{_rank})" if _rank else ""
+            confirm = qol_confirm(self, "Submit Claim",
+                                  f"Submit a waiver claim for {player.full_name}? "
+                                  f"Claims are processed at noon in waiver priority order{_rank_txt} -- "
+                                  "a higher-priority club that also claims him gets him first.",
+                                  confirm_text="Submit Claim")
             if confirm:
-                # Remove from previous team
-                old_team = next((t for t in self.parent.league.teams if t.team_name == player.team_name), None)
-                if old_team:
-                    old_team.remove_player(player)
-                
-                # Remove from waiver list
-                self.parent.waiver_list.remove(player)
-                player.on_waivers = False
-                player.waiver_days = 0
-                
-                # Add to user team
-                self.parent.user_team.add_player(player)
-                
+                # Real NHL: the claim is queued and processed at noon in
+                # priority order (main.process_waivers), not granted
+                # instantly. The flag is spent when the claim resolves.
+                player.user_claim_pending = True
+
                 # Add to news log
-                self.parent.add_news(f"{player.full_name} claimed off waivers by {self.parent.user_team.team_name}.")
-                
+                self.app.add_news(f"{self.app.user_team.team_name} submitted a waiver claim for {player.full_name}.")
+
                 # Update views
                 self.populate_waiver_wire()
-                messagebox.showinfo("Player Claimed", 
-                                   f"{player.full_name} has been claimed from waivers and added to your NHL roster.")
-                
-                # Refresh the main roster view if it's open
-                if 'roster' in self.parent.open_windows and self.parent.open_windows['roster'].winfo_exists():
-                    self.parent.open_windows['roster'].populate_trees()
+                messagebox.showinfo("Claim Submitted",
+                                   f"Waiver claim submitted for {player.full_name}. "
+                                   f"It will be processed at the next waiver run in priority order{_rank_txt}.")
 
-class ContractExtensionsWindow(tk.Toplevel):
-    def __init__(self, parent):
+
+
+class WaiversWindow(InGamePopup):
+    """Popup wrapper around WaiversView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
-        self.parent = parent
-        self.title("Contract Extensions")
-        self.geometry("1000x700")
-        self.configure(background=parent.BG_COLOR)
+        self.title("Waivers")
+        self._view = WaiversView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class ContractExtensionsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ContractExtensionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8538,8 +11749,6 @@ class ContractExtensionsWindow(tk.Toplevel):
         instruction_frame = ttk.Frame(main_frame, style='Panel.TFrame')
         instruction_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(instruction_frame, text="Contract Extensions", font=(parent.FONT_FAMILY, 16, 'bold'), 
-                 style='Header.TLabel').pack(anchor='w', padx=10, pady=5)
         
         ttk.Label(instruction_frame, text="Negotiate extensions with players entering the final year of their contract. "
                                          "Per NHL rules, you can extend contracts at any time in the final year.", 
@@ -8574,7 +11783,7 @@ class ContractExtensionsWindow(tk.Toplevel):
         
         ttk.Button(footer_frame, text="Negotiate Selected", command=self.negotiate_selected).pack(side='left', padx=5)
         ttk.Button(footer_frame, text="Auto-Negotiate All", command=self.auto_negotiate_all).pack(side='left', padx=5)
-        ttk.Button(footer_frame, text="Close", command=self.destroy).pack(side='right', padx=5)
+        ttk.Button(footer_frame, text="Close", command=self.close_view).pack(side='right', padx=5)
         
         self.populate_tables()
         
@@ -8583,11 +11792,11 @@ class ContractExtensionsWindow(tk.Toplevel):
         self.expiring_tree.delete(*self.expiring_tree.get_children())
         self.all_contracts_tree.delete(*self.all_contracts_tree.get_children())
         
-        team = self.parent.user_team
+        team = self.app.user_team
         
         # Tree data maps to retrieve player objects
-        self.parent.tree_maps[self.expiring_tree] = {}
-        self.parent.tree_maps[self.all_contracts_tree] = {}
+        self.app.tree_maps[self.expiring_tree] = {}
+        self.app.tree_maps[self.all_contracts_tree] = {}
         
         # Sort players by overall rating
         sorted_players = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
@@ -8609,12 +11818,12 @@ class ContractExtensionsWindow(tk.Toplevel):
             
             # Add to All Contracts tab
             item_id = self.all_contracts_tree.insert('', 'end', values=values)
-            self.parent.tree_maps[self.all_contracts_tree][item_id] = player
+            self.app.tree_maps[self.all_contracts_tree][item_id] = player
             
             # Add to Expiring Contracts tab if contract expires this season
             if player.contract.years_remaining <= 1:
                 item_id = self.expiring_tree.insert('', 'end', values=values, tags=('expiring',))
-                self.parent.tree_maps[self.expiring_tree][item_id] = player
+                self.app.tree_maps[self.expiring_tree][item_id] = player
                 
         # Add right-click context menu for trees
         self.expiring_tree.bind("<Button-3>", lambda e: self._show_context_menu(e, self.expiring_tree))
@@ -8626,8 +11835,8 @@ class ContractExtensionsWindow(tk.Toplevel):
         
     def calculate_market_value(self, player):
         """Calculate a player's market value based on attributes, age, position, etc."""
-        # Base value determined by overall rating
-        base_value = player.overall_rating() * 100000
+        # Base value determined by overall rating (100-scale: 74 OVR starter -> $3.5M)
+        base_value = max(750000, (player.overall_rating() - 60) * 250000)
         
         # Age modifier - players in their prime (23-29) get premium
         age_modifier = 1.0
@@ -8645,7 +11854,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             position_modifier = 1.1
         elif player.primary_position == PlayerPosition.GOALIE:
             # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 82 else 0.9
+            position_modifier = 1.0 if player.overall_rating() >= 80 else 0.9
         
         # Potential modifier for young players
         potential_modifier = 1.0
@@ -8671,16 +11880,16 @@ class ContractExtensionsWindow(tk.Toplevel):
             return
 
         tree.selection_set(item_id)
-        player = self.parent.tree_maps.get(tree, {}).get(item_id)
+        player = self.app.tree_maps.get(tree, {}).get(item_id)
         if not player:
             return
-
-        PlayerContextMenu(self.parent).show_context_menu(
-            event, player,
-            additional_options=[
-                ("Negotiate Extension",
-                 lambda: self.open_negotiation_window(player)),
-            ])
+            
+        menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
+        menu.add_command(label="Negotiate Extension", 
+                        command=lambda: self.open_negotiation_window(player))
+        menu.add_command(label="View Player Profile", 
+                        command=lambda: self.app.open_player_profile(player))
+        menu.tk_popup(event.x_root, event.y_root)
     
     def negotiate_from_event(self, event, tree):
         """Handle double-click on tree item."""
@@ -8688,42 +11897,51 @@ class ContractExtensionsWindow(tk.Toplevel):
         if not item_id:
             return
             
-        player = self.parent.tree_maps.get(tree, {}).get(item_id)
+        player = self.app.tree_maps.get(tree, {}).get(item_id)
         if player:
             self.open_negotiation_window(player)
     
     def open_negotiation_window(self, player):
-        """Open the negotiation window for a specific player."""
+        """Jump to the extension-negotiation screen for a specific player."""
         if player.contract.years_remaining > 1:
-            messagebox.showinfo("Not Eligible", 
-                               f"{player.full_name} has {player.contract.years_remaining} years left on their contract. "
-                               f"Per NHL rules, players can only negotiate extensions in the final year of their contract.")
+            self._say(f"{player.full_name} has {player.contract.years_remaining} years "
+                      f"left on their contract. Per NHL rules, extensions can only be "
+                      f"negotiated in the final year.")
             return
-            
+
         # Calculate recommended contract offer
         market_value = self.calculate_market_value(player)
-        max_years = 8  # NHL max extension is 8 years for own players
-        
-        # Open Advanced Contract Negotiation Window
-        self.parent.open_windows['extension_negotiation'] = ExtensionNegotiationWindow(
-            self.parent, player, market_value, max_years)
-        self.parent.open_windows['extension_negotiation'].focus_set()
-    
+        max_years = 7  # new CBA max extension is 7 years for own players
+
+        # Full-screen jump; the extensions list is resumable from the navbar.
+        self.app.show_screen("extension_negotiation",
+                             f"Extension: {player.full_name}",
+                             ExtensionNegotiationView, player, market_value,
+                             max_years)
+
+    def _say(self, text):
+        if not hasattr(self, "_status_var"):
+            self._status_var = tk.StringVar(master=self, value="")
+            ttk.Label(self, textvariable=self._status_var,
+                      style="Secondary.TLabel",
+                      wraplength=720).pack(anchor="w", padx=10, pady=(0, 6))
+        self._status_var.set(text)
+
     def negotiate_selected(self):
         """Negotiate with the selected player."""
         selection = self.expiring_tree.selection()
         if not selection:
-            messagebox.showinfo("No Selection", "Please select a player to negotiate with.")
+            self._say("Please select a player to negotiate with.")
             return
-            
+
         item_id = selection[0]
-        player = self.parent.tree_maps.get(self.expiring_tree, {}).get(item_id)
+        player = self.app.tree_maps.get(self.expiring_tree, {}).get(item_id)
         if player:
             self.open_negotiation_window(player)
     
     def auto_negotiate_all(self):
         """Auto-negotiate with all expiring contracts."""
-        team = self.parent.user_team
+        team = self.app.user_team
         expiring_players = [p for p in team.roster if p.contract.years_remaining <= 1]
         
         if not expiring_players:
@@ -8753,20 +11971,27 @@ class ContractExtensionsWindow(tk.Toplevel):
                 # Update player contract
                 player.contract.salary = salary_offer
                 player.contract.years_remaining = years
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr1
+                    _clr1(player)
+                except Exception:
+                    pass
                 result_messages.append(f"{player.full_name}: Accepted {years} years at ${salary_offer:,}")
             else:
                 result_messages.append(f"{player.full_name}: Rejected {years} years at ${salary_offer:,}")
         
         # Show results
-        result_window = tk.Toplevel(self)
+        result_window = InGamePopup(self)
         result_window.title("Auto-Negotiation Results")
         result_window.geometry("500x400")
-        result_window.configure(background=self.parent.BG_COLOR)
+        result_window.configure(background=self.app.BG_COLOR)
         
         ttk.Label(result_window, text="Contract Extension Results", 
-                font=(self.parent.FONT_FAMILY, 14, 'bold')).pack(pady=10)
+                font=(self.app.FONT_FAMILY, 14, 'bold')).pack(pady=10)
         
-        result_text = tk.Text(result_window, width=60, height=20, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        result_text = tk.Text(result_window, width=60, height=20, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         result_text.pack(pady=10, padx=10, fill='both', expand=True)
         
         for msg in result_messages:
@@ -8778,56 +12003,113 @@ class ContractExtensionsWindow(tk.Toplevel):
         self.populate_tables()
     
     def simulate_negotiation(self, player, salary_offer, years):
-        """Simulate contract negotiation based on player expectations."""
-        # Calculate minimum acceptable salary based on overall rating and age
-        min_salary = player.overall_rating() * 75000
-        
-        # Adjust for age
-        if player.age >= 30:
-            min_salary *= max(0.5, 1.0 - ((player.age - 30) * 0.05))
-        
-        # Chance of accepting depends on how good the offer is
-        acceptance_chance = 0.5  # Base chance
-        
-        # Adjust based on salary offered vs minimum expected
-        if salary_offer >= min_salary * 1.2:
-            acceptance_chance += 0.4  # Great offer
-        elif salary_offer >= min_salary * 1.1:
-            acceptance_chance += 0.25  # Good offer
-        elif salary_offer >= min_salary:
-            acceptance_chance += 0.1  # Fair offer
-        else:
-            acceptance_chance -= 0.3  # Poor offer
-        
-        # Adjust based on years
-        ideal_years = 8 if player.age <= 25 else 5 if player.age <= 30 else 2
-        years_diff = abs(years - ideal_years)
-        
-        if years_diff == 0:
-            acceptance_chance += 0.2  # Perfect term
-        elif years_diff <= 1:
-            acceptance_chance += 0.1  # Close to ideal term
-        elif years_diff >= 3:
-            acceptance_chance -= 0.2  # Far from ideal term
-        
-        # Adjust for player loyalty
-        if hasattr(player, 'teamwork') and player.teamwork > 15:
-            acceptance_chance += 0.1  # Loyal player
-        
+        """Simulate contract negotiation: the PLAYER weighs the offer.
+
+        The player-decision model (player_decision.py) replaces the old
+        money-only math: ambition (cup/money/ice/stability/home), loyalty,
+        role, hometown, people in the room, and bad blood all move the
+        needle. The GM-stature hooks below are unchanged.
+        """
+        _uteam = (getattr(getattr(self, 'app', None), 'game_manager', None)
+                  is not None and
+                  getattr(self.app.game_manager, 'user_team', None)) or \
+            getattr(getattr(self, 'app', None), 'user_team', None)
+        try:
+            import player_decision as _pd
+            import reputation_system as _rs
+            _premium = _rs.gm_ask_premium(_uteam) if _uteam is not None else 1.0
+            _appeal, _reasons = _pd.contract_appeal(
+                player, _uteam, salary_offer, years,
+                current_team=_uteam,  # re-signing: he is staying home
+                league=getattr(getattr(self, 'app', None), 'league', None),
+                app=getattr(self, 'app', None),
+                market_mult=_premium)
+            acceptance_chance = 0.05 + 0.90 * _appeal
+        except Exception:
+            # Legacy money/term fallback if the model is unavailable.
+            min_salary = max(750000, (player.overall_rating() - 60) * 187500)
+            try:
+                if _uteam is not None:
+                    import reputation_system as _rs
+                    min_salary *= _rs.gm_ask_premium(_uteam)
+            except Exception:
+                pass
+            if player.age >= 30:
+                min_salary *= max(0.5, 1.0 - ((player.age - 30) * 0.05))
+            acceptance_chance = 0.5
+            if salary_offer >= min_salary * 1.2:
+                acceptance_chance += 0.4
+            elif salary_offer >= min_salary * 1.1:
+                acceptance_chance += 0.25
+            elif salary_offer >= min_salary:
+                acceptance_chance += 0.1
+            else:
+                acceptance_chance -= 0.3
+            ideal_years = 8 if player.age <= 25 else 5 if player.age <= 30 else 2
+            years_diff = abs(years - ideal_years)
+            if years_diff == 0:
+                acceptance_chance += 0.2
+            elif years_diff <= 1:
+                acceptance_chance += 0.1
+            elif years_diff >= 3:
+                acceptance_chance -= 0.2
+            if hasattr(player, 'teamwork') and player.teamwork > 15:
+                acceptance_chance += 0.1
+
+        # GM stature: stars can afford to be picky about who they play
+        # for -- a respected GM gets a small bump, a clown GM gets the
+        # cold shoulder. Depth players just want a contract. Additive.
+        try:
+            if _uteam is not None:
+                import reputation_system as _rs
+                acceptance_chance += _rs.gm_fa_accept_delta(_uteam, player)
+        except Exception:
+            pass
+
         # Final result
         return random.random() < max(0.05, min(0.95, acceptance_chance))
 
-class ExtensionNegotiationWindow(tk.Toplevel):
-    def __init__(self, parent, player, market_value, max_years):
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class ContractExtensionsWindow(InGamePopup):
+    """Popup wrapper around ContractExtensionsView (backward compatibility).
+
+    New code should embed ContractExtensionsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
         super().__init__(parent)
-        self.parent = parent
+        self._view = ContractExtensionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class ExtensionNegotiationView(ctk.CTkFrame):
+    def __init__(self, parent, player, market_value, max_years, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ExtensionNegotiationWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
         self.player = player
         self.market_value = market_value
         self.max_years = max_years
         
-        self.title(f"Negotiate Extension with {player.full_name}")
-        self.geometry("700x600")
-        self.configure(background=parent.BG_COLOR)
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Main frame
         main_frame = ttk.Frame(self, style='Panel.TFrame')
@@ -8952,7 +12234,13 @@ class ExtensionNegotiationWindow(tk.Toplevel):
         button_frame.pack(fill='x', padx=5, pady=10)
         
         ttk.Button(button_frame, text="Submit Offer", command=self.submit_offer).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="Cancel", command=self.destroy).pack(side='right', padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.close_view).pack(side='right', padx=5)
+
+        # In-view message banner + counter-offer host (no popups)
+        self._banner_frame = ttk.Frame(main_frame)
+        self._banner_frame.pack(fill='x', padx=5, pady=(0, 4))
+        self._counter_host = ttk.Frame(main_frame)
+        self._counter_host.pack(fill='x', padx=5, pady=4)
     
     def update_total(self, *args):
         """Update the total contract value display."""
@@ -8978,114 +12266,607 @@ class ExtensionNegotiationWindow(tk.Toplevel):
             salary_str = self.salary_var.get().replace(',', '')
             salary = int(salary_str)
             years = self.years_var.get()
-            
+
             # Parse bonus
             bonus_str = self.bonus_var.get().replace(',', '')
             bonus = int(bonus_str) if bonus_str else 0
-            
-            # Validate inputs
+
+            # Validate inputs (in-view banner, not a popup)
             if salary < 750000:
-                messagebox.showerror("Invalid Salary", "Salary must be at least $750,000 (NHL minimum).")
+                self._say("Salary must be at least $750,000 (NHL minimum).")
                 return
-                
+
             if years < 1 or years > self.max_years:
-                messagebox.showerror("Invalid Contract Length", 
-                                   f"Contract length must be between 1 and {self.max_years} years.")
+                self._say(f"Contract length must be between 1 and {self.max_years} years.")
                 return
-                
+
             if bonus < 0:
-                messagebox.showerror("Invalid Bonus", "Signing bonus cannot be negative.")
+                self._say("Signing bonus cannot be negative.")
                 return
-            
+
             # Calculate likelihood of acceptance
             acceptance_chance = self.calculate_acceptance_chance(salary, years, bonus)
-            
+
             # Simulate player decision
             accepted = random.random() < acceptance_chance
-            
+
             if accepted:
                 # Update player contract
                 self.player.contract.salary = salary
                 self.player.contract.years_remaining = years
                 self.player.contract.signing_bonus = bonus
+                # New SPC: the old deal's retention state dies with it (the
+                # retaining club's ledger entry survives independently).
+                try:
+                    from trade_engine import clear_retention_state as _clr2
+                    _clr2(self.player)
+                except Exception:
+                    pass
                 self.player.contract.no_trade_clause = self.ntc_var.get()
-                
-                messagebox.showinfo("Offer Accepted", 
-                                  f"{self.player.full_name} has accepted your contract extension offer.\n\n"
-                                  f"{years} years at ${salary:,}/year\n"
-                                  f"{'With' if self.ntc_var.get() else 'Without'} No-Trade Clause\n"
-                                  f"Signing Bonus: ${bonus:,}")
-                self.destroy()
+
+                _why = ""
+                try:
+                    _rs0 = getattr(self, "_last_appeal_reasons", []) or []
+                    if _rs0:
+                        _why = f" ({_rs0[0][0].upper()}{_rs0[0][1:]}.)"
+                except Exception:
+                    pass
+                self._say(f"{self.player.full_name} has accepted: {years} years "
+                          f"at ${salary:,}/year "
+                          f"({'with' if self.ntc_var.get() else 'without'} NTC, "
+                          f"bonus ${bonus:,}).{_why}")
+                self._hide_counter()
+                self.after(1200, self.close_view)
             else:
                 counter_years = min(years + random.randint(-1, 1), self.max_years)
                 counter_salary = int(salary * random.uniform(1.05, 1.2))
-                
-                response = messagebox.askyesno("Offer Rejected", 
-                                             f"{self.player.full_name} has rejected your contract extension offer.\n\n"
-                                             f"Counter offer: {counter_years} years at ${counter_salary:,}/year\n\n"
-                                             f"Would you like to accept this counter offer?")
-                
-                if response:
-                    # Update player contract with counter offer
-                    self.player.contract.salary = counter_salary
-                    self.player.contract.years_remaining = counter_years
-                    self.player.contract.signing_bonus = bonus
-                    self.player.contract.no_trade_clause = self.ntc_var.get()
-                    
-                    messagebox.showinfo("Counter Offer Accepted", 
-                                      f"You have accepted {self.player.full_name}'s counter offer.\n\n"
-                                      f"{counter_years} years at ${counter_salary:,}/year")
-                    self.destroy()
-        
+                self._show_counter(counter_years, counter_salary, bonus)
+
         except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter valid numbers for salary, years, and bonus.")
+            self._say("Please enter valid numbers for salary, years, and bonus.")
+
+    def _say(self, text):
+        """Show a status message in the view's banner (no popup)."""
+        if not hasattr(self, "_banner_var"):
+            self._banner_var = tk.StringVar(master=self, value="")
+            banner = ttk.Label(self._banner_frame, textvariable=self._banner_var,
+                               style="Secondary.TLabel", wraplength=640)
+            banner.pack(anchor="w", padx=10, pady=(0, 6))
+        self._banner_var.set(text)
+
+    def _show_counter(self, counter_years, counter_salary, bonus):
+        """In-view counter-offer panel (replaces the askyesno popup)."""
+        self._hide_counter()
+        panel = ttk.LabelFrame(self._counter_host, text="Agent's Counter-Offer",
+                               padding=10)
+        panel.pack(fill=tk.X, padx=5, pady=8)
+        ttk.Label(panel,
+                  text=f"{self.player.full_name}'s camp rejected your offer.\n"
+                       f"Counter: {counter_years} years at ${counter_salary:,}/year",
+                  style="TLabel", wraplength=600).pack(anchor="w", pady=(0, 8))
+        btns = ttk.Frame(panel)
+        btns.pack(anchor="w")
+        ttk.Button(btns, text="Accept Counter",
+                   command=lambda: self._accept_counter(counter_years,
+                                                        counter_salary,
+                                                        bonus)).pack(side=tk.LEFT,
+                                                                     padx=(0, 8))
+        ttk.Button(btns, text="Adjust My Offer",
+                   command=self._hide_counter).pack(side=tk.LEFT)
+        self._counter_panel = panel
+        self._say("Offer rejected — the agent countered. Accept it or adjust your offer above.")
+
+    def _hide_counter(self):
+        panel = getattr(self, "_counter_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+        self._counter_panel = None
+
+    def _accept_counter(self, counter_years, counter_salary, bonus):
+        self.player.contract.salary = counter_salary
+        self.player.contract.years_remaining = counter_years
+        self.player.contract.signing_bonus = bonus
+        self.player.contract.no_trade_clause = self.ntc_var.get()
+        self._say(f"Counter accepted: {self.player.full_name}, "
+                  f"{counter_years} years at ${counter_salary:,}/year.")
+        self._hide_counter()
+        self.after(1200, self.close_view)
     
     def calculate_acceptance_chance(self, salary, years, bonus):
-        """Calculate the likelihood of the player accepting the contract offer."""
-        # Base acceptance chance
-        chance = 0.5
-        
-        # Adjust based on salary vs market value
-        salary_ratio = salary / self.market_value
-        
-        if salary_ratio >= 1.1:
-            chance += 0.3  # Great offer
-        elif salary_ratio >= 1.0:
-            chance += 0.15  # Good offer
-        elif salary_ratio >= 0.9:
-            chance += 0.05  # Fair offer
-        else:
-            chance -= 0.3  # Poor offer
-        
-        # Adjust based on player age and contract length
-        ideal_years = 8 if self.player.age <= 25 else 5 if self.player.age <= 30 else 2
-        years_diff = abs(years - ideal_years)
-        
-        if years_diff == 0:
-            chance += 0.15  # Perfect term
-        elif years_diff <= 1:
-            chance += 0.05  # Close to ideal term
-        elif years_diff >= 4:
-            chance -= 0.15  # Far from ideal term
-        
+        """Likelihood the player accepts: the player-decision model
+        (ambition, loyalty, role, hometown, people, bad blood) sets the
+        base chance; bonus money and trade protection add on top, as before.
+        """
+        _app = getattr(self, 'app', None)
+        _uteam = (getattr(getattr(_app, 'game_manager', None), 'user_team', None)
+                  or getattr(_app, 'user_team', None))
+        _league = getattr(_app, 'league', None)
+        try:
+            import player_decision as _pd
+            import reputation_system as _rs
+            _premium = _rs.gm_ask_premium(_uteam) if _uteam is not None else 1.0
+            # extension (he is ours) vs open-market signing (he is leaving
+            # his last club): the stay-vs-go math differs completely.
+            _pteam = getattr(self.player, 'team_name', '') or ''
+            _uname = getattr(_uteam, 'team_name', '') or ''
+            if _uteam is not None and _pteam == _uname:
+                _current = _uteam
+            else:
+                _current = _pd.previous_team(self.player, _league)
+            _appeal, _reasons = _pd.contract_appeal(
+                self.player, _uteam, salary, years,
+                current_team=_current, league=_league, app=_app,
+                market_mult=_premium)
+            try:
+                self._last_appeal_reasons = list(_reasons or [])
+            except Exception:
+                pass
+            chance = 0.05 + 0.90 * _appeal
+        except Exception:
+            # Legacy money/term fallback.
+            chance = 0.5
+            salary_ratio = salary / max(1, getattr(self, 'market_value', salary) or 1)
+            if salary_ratio >= 1.1:
+                chance += 0.3
+            elif salary_ratio >= 1.0:
+                chance += 0.15
+            elif salary_ratio >= 0.9:
+                chance += 0.05
+            else:
+                chance -= 0.3
+            ideal_years = 8 if self.player.age <= 25 else 5 if self.player.age <= 30 else 2
+            years_diff = abs(years - ideal_years)
+            if years_diff == 0:
+                chance += 0.15
+            elif years_diff <= 1:
+                chance += 0.05
+            elif years_diff >= 4:
+                chance -= 0.15
+
         # Bonus adds slight bonus to acceptance
         if bonus > 0:
-            chance += min(0.1, bonus / (salary * years) * 0.5)
-        
-        # No-trade clause adds value for veterans
-        if self.ntc_var.get() and self.player.age >= 28:
-            chance += 0.1
-        
+            chance += min(0.1, bonus / max(1, salary * years) * 0.5)
+
+        # Trade protection: one shared valuation (trade_engine), scaled by
+        # how hard this player actually pushes for a clause -- not a flat
+        # veteran bonus.
+        if self.ntc_var.get():
+            import trade_engine as _te
+            chance += _te.clause_acceptance_bonus(self.player, "ntc")
+
         # Cap the chance between 5% and 95%
         return max(0.05, min(0.95, chance))
 
-class SetCaptainsWindow(tk.Toplevel):
-    def __init__(self, parent):
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class ExtensionNegotiationWindow(InGamePopup):
+    """Popup wrapper around ExtensionNegotiationView (backward compatibility).
+
+    New code should embed ExtensionNegotiationView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent, player, market_value, max_years):
         super().__init__(parent)
-        self.parent = parent
-        self.title("Set Captains")
-        self.geometry("400x300")
-        self.configure(background=parent.BG_COLOR)
+        self._view = ExtensionNegotiationView(self, app=parent, player=player,
+                                              market_value=market_value,
+                                              max_years=max_years)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class StaffContractView(ctk.CTkFrame):
+    """Full-screen staff contract negotiation.
+
+    Jumped to via HockeyManagerGUI.show_screen() (was: a 480x420
+    InGamePopup from FreeAgencyView._open_staff_contract_dialog). The
+    negotiation is roll-first through game_manager.sign_free_agent_staff().
+
+    Sept 2026: the salary offer is a free dollar entry (tailored offers,
+    not 80/100/120% steps). The club's league-wide staff budget is shown
+    and enforced -- offers cannot exceed the remaining budget. hire_source
+    tracks where the staffer came from ("free_agent" | "overseas" |
+    "ahl_poach") so a successful hire leaves the right pool/club.
+    """
+
+    def __init__(self, parent, staff=None, app=None, hire_source="free_agent",
+                 from_team=None):
+        super().__init__(parent, fg_color="transparent")
+        from ctk_theme import (
+            init_ctk_theme, primary_button, secondary_button, heading, body,
+            TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
+            ROW_HOVER, ROW_SELECTED,
+        )
+        init_ctk_theme()
+        self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
+                        CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
+                        BLUE=BLUE, ROW_HOVER=ROW_HOVER,
+                        ROW_SELECTED=ROW_SELECTED)
+        self._primary_button = primary_button
+        self._secondary_button = secondary_button
+        self._heading = heading
+        self._body = body
+        self.app = app
+        self.staff = staff
+        self.hire_source = hire_source or "free_agent"
+        self.from_team = from_team
+        self._close_screen = None  # set by show_screen()
+        self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _parse_offer(self):
+        """Parse the dollar entry into an int, or None when invalid."""
+        try:
+            raw = self._salary_entry.get().strip()
+            raw = raw.replace("$", "").replace(",", "").replace(" ", "")
+            value = int(float(raw))
+            return value if value > 0 else None
+        except Exception:
+            return None
+
+    def _build(self):
+        from game_classes import staff_market_ask
+        ct = self._ct
+        staff = self.staff
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
+                            width=560)
+        card.pack(pady=18)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        if staff is None:
+            self._body(body, text="No staff member selected.",
+                       dim=True).pack(anchor="w", pady=12)
+            self._secondary_button(body, text="Back",
+                                   command=self.close_view).pack(anchor="w",
+                                                                pady=(8, 0))
+            return
+
+        self._heading(body, text=f"{staff.full_name}",
+                      size=16).pack(anchor="w")
+        try:
+            _role = staff.role.value
+        except Exception:
+            _role = getattr(staff, "role", "")
+        self._body(body,
+                   text=f"{_role} \u2022 {getattr(staff, 'nationality', '')} "
+                        f"\u2022 Age {getattr(staff, 'age', '?')}",
+                   dim=True, size=11).pack(anchor="w", pady=(2, 6))
+
+        # Where he comes from (poach context).
+        _src_line = ""
+        if self.hire_source == "overseas":
+            _src_line = (f"Currently coaching: "
+                         f"{getattr(staff, 'current_club', '') or 'overseas'}")
+        elif self.hire_source == "ahl_poach" and self.from_team is not None:
+            _src_line = (f"Under contract: "
+                         f"{getattr(self.from_team, 'team_name', '')} (AHL)")
+        if _src_line:
+            self._body(body, text=_src_line, dim=True,
+                       size=11).pack(anchor="w", pady=(0, 4))
+
+        ask = staff_market_ask(staff)
+
+        # Asking terms banner
+        asking = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        asking.pack(fill="x", pady=(0, 12))
+        self._body(asking,
+                   text=f"Asking: ${ask:,} / year",
+                   size=12).pack(anchor="w", padx=12, pady=10)
+
+        # Club staff budget banner (league-wide rule, market-tiered).
+        try:
+            _team = self.app.game_manager.user_team
+            _budget = int(getattr(_team, 'staff_budget', 0) or 0)
+            _committed = _team.staff_payroll() if hasattr(_team, 'staff_payroll') else 0
+            _remaining = _budget - _committed
+        except Exception:
+            _budget = _committed = _remaining = 0
+        budget_card = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        budget_card.pack(fill="x", pady=(0, 12))
+        self._body(budget_card,
+                   text=f"Club staff budget: ${_budget:,}  \u2022  "
+                        f"Committed: ${_committed:,}  \u2022  "
+                        f"Available: ${_remaining:,}",
+                   size=11, dim=True).pack(anchor="w", padx=12, pady=10)
+        self._budget_remaining = _remaining
+
+        offer_info = {'years': 2}
+
+        self._body(body, text="Contract length:", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        years_seg = ctk.CTkSegmentedButton(
+            body, values=["1", "2", "3", "4", "5"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        years_seg.set("2")
+        years_seg.pack(anchor="w", pady=(0, 10))
+
+        # Free dollar entry -- tailored offers, not fixed steps.
+        self._body(body, text="Salary offer ($ / year):", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        self._salary_entry = ctk.CTkEntry(
+            body, width=220, fg_color=ct['BG'], border_color=ct['BORDER'])
+        self._salary_entry.insert(0, f"{ask:,}")
+        self._salary_entry.pack(anchor="w", pady=(0, 12))
+        self._salary_entry.bind('<KeyRelease>', lambda _e: _paint())
+
+        # Which club the hire joins -- NHL roster or AHL affiliate. Poached
+        # AHL staffers default to the farm (lateral move); everyone else
+        # defaults to the NHL club.
+        self._body(body, text="Assign to:", dim=True,
+                   size=11).pack(anchor="w", pady=(0, 4))
+        _default_asg = "AHL" if (self.hire_source == "ahl_poach") else "NHL"
+        asg_seg = ctk.CTkSegmentedButton(
+            body, values=["NHL", "AHL"],
+            selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
+            unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
+            command=lambda _v: _paint())
+        asg_seg.set(_default_asg)
+        asg_seg.pack(anchor="w", pady=(0, 12))
+        self._asg_seg = asg_seg
+
+        offer_label = self._body(body, text="", size=12)
+        offer_label.pack(anchor="w", pady=(0, 2))
+        chance_label = self._body(body, text="", size=11)
+        chance_label.pack(anchor="w", pady=(0, 12))
+
+        def _paint():
+            offer_info['years'] = int(years_seg.get())
+            salary = self._parse_offer()
+            if salary is None:
+                offer_label.configure(text="Enter an offer amount.")
+                chance_label.configure(text="")
+                return
+            offer_label.configure(
+                text=f"Your offer: ${salary:,} / year  x  {offer_info['years']} "
+                     f"year{'s' if offer_info['years'] > 1 else ''}")
+            chance = self._staff_offer_accept_chance(staff, salary)
+            if chance >= 0.75:
+                color = ct['GREEN']
+            elif chance >= 0.45:
+                color = ct['GOLD']
+            else:
+                color = ct['RED']
+            chance_label.configure(text=f"Estimated acceptance chance: {chance:.0%}",
+                                   text_color=color)
+            # Over-budget flag, live.
+            if salary > (self._budget_remaining or 0):
+                chance_label.configure(
+                    text=f"Estimated acceptance chance: {chance:.0%}  \u2014  "
+                         f"exceeds your available staff budget "
+                         f"(${self._budget_remaining:,})",
+                    text_color=ct['RED'])
+
+        _paint()
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x", pady=(4, 0))
+        self._secondary_button(btns, text="Back",
+                               command=self.close_view).pack(side="right",
+                                                            padx=(10, 0))
+        self._primary_button(btns, text="Make Offer",
+                             command=lambda: self._resolve_staff_offer(
+                                 staff, offer_info['years'],
+                                 self._asg_seg.get().lower())).pack(side="right")
+
+    def _staff_offer_accept_chance(self, staff, offer_salary):
+        """Rough acceptance chance for a staff offer (display only)."""
+        from game_classes import staff_market_ask
+        ask = staff_market_ask(staff)
+        salary_mult = offer_salary / max(1, ask)
+        rating = to_100_scale(staff.overall_rating)
+        try:
+            prestige = getattr(self.app.game_manager.user_team, 'prestige', 50)
+        except Exception:
+            prestige = 50
+        base = 0.45 + (salary_mult - 1.0) * 1.4 + (prestige - 50) / 400 - (rating - 60) / 600
+        # GM stature: top coaches want to work for a GM the league
+        # respects. Additive, bounded +/-0.08.
+        try:
+            import reputation_system as _rs
+            base += _rs.gm_staff_accept_delta(
+                self.app.game_manager.user_team)
+        except Exception:
+            pass
+        return max(0.05, min(0.98, base))
+
+    def _resolve_staff_offer(self, staff, years, assignment="nhl"):
+        """Resolve a staff contract offer (original acceptance logic).
+
+        The acceptance roll happens FIRST; the roster is only mutated
+        on acceptance. (Signing before the roll hired staffers who had
+        just declined the offer.)
+
+        assignment picks which club the hire joins: "nhl" or "ahl".
+        """
+        import random
+        salary = self._parse_offer()
+        if salary is None:
+            messagebox.showerror("Invalid Offer",
+                                 "Enter a valid salary amount in dollars.")
+            return
+        # League-wide staff budget: hard block.
+        try:
+            team = self.app.game_manager.user_team
+            remaining = (team.staff_budget_remaining()
+                         if hasattr(team, 'staff_budget_remaining') else 0)
+        except Exception:
+            remaining = 0
+        if salary > remaining:
+            messagebox.showerror(
+                "Over Budget",
+                f"That offer (${salary:,}/yr) exceeds your available staff "
+                f"budget (${remaining:,}). Every club in the league works "
+                f"under a staff payroll budget -- trim the offer or move "
+                f"money by letting staff go.")
+            return
+        chance = self._staff_offer_accept_chance(staff, salary)
+        if random.random() < chance:
+            # Only leave the source pool/club AFTER a successful signing --
+            # if sign_free_agent_staff fails (e.g. a budget race), the
+            # staffer must not be lost from their old club/pool.
+            if self.app.game_manager.sign_free_agent_staff(
+                    staff, salary, years, assignment):
+                league = getattr(self.app, 'league', None)
+                if self.hire_source == "overseas" and league is not None:
+                    pool = getattr(league, "overseas_staff", None)
+                    if pool is not None and staff in pool:
+                        pool.remove(staff)
+                elif (self.hire_source == "ahl_poach"
+                      and self.from_team is not None
+                      and staff in self.from_team.staff):
+                    self.from_team.staff.remove(staff)
+                messagebox.showinfo("Offer Accepted",
+                                    f"{staff.full_name} has accepted your offer!")
+                try:
+                    self.app.update_all_views()
+                except Exception:
+                    pass
+                self.close_view()
+            else:
+                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
+        else:
+            messagebox.showinfo("Offer Declined",
+                                f"{staff.full_name} has declined your offer. "
+                                f"Consider offering a better salary.")
+
+class CaptainChangeDialog(InGamePopup):
+    """Pre-change judgment call: stripping the C has consequences.
+
+    Buttons: speak with him first / announce it cold / cancel.
+    Result in self.result: "speak" | "cold" | "cancel".
+    """
+
+    def __init__(self, app, old_name, new_name, reasons, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("Changing the Captaincy")
+        self.result = "cancel"
+        body = ttk.Frame(self, style='Card.TFrame', padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(
+            body,
+            text=(f"Stripping the C from {old_name} will have consequences.\n"
+                  f"{new_name} takes over -- unless {old_name} is spoken "
+                  "to first and respects the call."),
+            style='TLabel', wraplength=480, justify='left').pack(
+                anchor='w', pady=(0, 10))
+        if reasons:
+            ttk.Label(body, text="What you know:",
+                      style='TLabel').pack(anchor='w')
+            for r in reasons[:5]:
+                ttk.Label(body, text=f"\u2022 {r}", style='Secondary.TLabel',
+                          wraplength=480, justify='left').pack(
+                              anchor='w', padx=8, pady=1)
+        btns = ttk.Frame(body, style='Card.TFrame')
+        btns.pack(fill='x', pady=(16, 0))
+        ttk.Button(btns, text="Speak with him first",
+                   command=lambda: self._choose("speak")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Announce it cold",
+                   command=lambda: self._choose("cold")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Cancel",
+                   command=lambda: self._choose("cancel")).pack(side='left')
+        try:
+            self.geometry("560x460")
+        except Exception:
+            pass
+
+    def _choose(self, value):
+        self.result = value
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+class CaptainPushbackDialog(InGamePopup):
+    """He pushed back: stand firm, compromise (keep an A), or back down.
+
+    Result in self.result: "firm" | "alternate" | "backdown".
+    """
+
+    _QUOTES = {
+        "pushback": "\u201cAfter everything I've given this team? You're "
+                    "making a mistake.\u201d",
+        "extreme": "\u201cWe're done here.\u201d He walks out.",
+    }
+
+    def __init__(self, app, old_name, new_name, tier, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("He Pushed Back")
+        self.result = "backdown"
+        body = ttk.Frame(self, style='Card.TFrame', padding=20)
+        body.pack(fill='both', expand=True)
+        ttk.Label(
+            body,
+            text=(f"{old_name} is not accepting the change to {new_name}:\n\n"
+                  f"{self._QUOTES.get(tier, '')}\n\n"
+                  "You have to make the call."),
+            style='TLabel', wraplength=480, justify='left').pack(
+                anchor='w', pady=(0, 16))
+        btns = ttk.Frame(body, style='Card.TFrame')
+        btns.pack(fill='x')
+        ttk.Button(btns, text="Stand firm",
+                   command=lambda: self._choose("firm")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Name him alternate (A)",
+                   command=lambda: self._choose("alternate")).pack(
+                       side='left', padx=(0, 8))
+        ttk.Button(btns, text="Back down",
+                   command=lambda: self._choose("backdown")).pack(side='left')
+        try:
+            self.geometry("560x400")
+        except Exception:
+            pass
+
+    def _choose(self, value):
+        self.result = value
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+
+class SetCaptainsView(ctk.CTkFrame):
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SetCaptainsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
 
         self.captain_var = tk.StringVar(master=self)
         self.alternate1_var = tk.StringVar(master=self)
@@ -9095,10 +12876,16 @@ class SetCaptainsWindow(tk.Toplevel):
         self.load_captains()
 
     def _create_widgets(self):
-        main_frame = ttk.Frame(self, padding=10)
+        # Focus card: this was a small dialog; on the full-screen view its
+        # content lives in a centered card instead of stretching edge to edge.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ttk.Frame(self, style='Card.TFrame', padding=24, width=560)
+        card.grid(row=0, column=0, pady=24)
+        main_frame = ttk.Frame(card, style='Card.TFrame')
         main_frame.pack(fill='both', expand=True)
 
-        players = [p.full_name for p in self.parent.user_team.roster]
+        players = [p.full_name for p in self.app.user_team.roster]
 
         ttk.Label(main_frame, text="Captain (C):").pack(pady=(0, 5))
         captain_combo = ttk.Combobox(main_frame, textvariable=self.captain_var, values=players, state='readonly')
@@ -9115,7 +12902,7 @@ class SetCaptainsWindow(tk.Toplevel):
         ttk.Button(main_frame, text="Save Captains", command=self.save_captains).pack(pady=20)
 
     def load_captains(self):
-        for p in self.parent.user_team.roster:
+        for p in self.app.user_team.roster:
             if p.captaincy == 'C':
                 self.captain_var.set(p.full_name)
             elif p.captaincy == 'A':
@@ -9125,57 +12912,351 @@ class SetCaptainsWindow(tk.Toplevel):
                     self.alternate2_var.set(p.full_name)
 
     def save_captains(self):
-        for p in self.parent.user_team.roster:
-            p.captaincy = None
+        team = self.app.user_team
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            _cc = None
 
-        captain_name = self.captain_var.get()
-        alt1_name = self.alternate1_var.get()
-        alt2_name = self.alternate2_var.get()
+        def _by_name(nm):
+            if not nm:
+                return None
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if p.full_name == nm:
+                        return p
+                except Exception:
+                    pass
+            return None
 
-        for p in self.parent.user_team.roster:
-            if p.full_name == captain_name:
-                p.captaincy = 'C'
-            elif p.full_name == alt1_name or p.full_name == alt2_name:
-                p.captaincy = 'A'
-        
+        old_c = next((p for p in (getattr(team, "roster", None) or [])
+                      if getattr(p, "captaincy", "") == "C"), None)
+        new_c = _by_name(self.captain_var.get())
+        alt1 = _by_name(self.alternate1_var.get())
+        alt2 = _by_name(self.alternate2_var.get())
+
+        # A deposition: an established captain is losing the C to someone
+        # else (or to a vacancy). That has consequences -- route through
+        # the judgment-call flow instead of the silent wipe.
+        deposition = (
+            _cc is not None and old_c is not None
+            and _cc.is_established_captain(old_c)
+            and (new_c is None or new_c is not old_c))
+        if deposition:
+            if not self._run_deposition_flow(team, old_c, new_c, _cc):
+                return  # backed down or cancelled: leave everything as is
+            self._apply_letters(team, new_c, alt1, alt2,
+                               skip_captain=True)
+        else:
+            self._apply_letters(team, new_c, alt1, alt2,
+                               skip_captain=False)
+        # A human just chose: never mistake these letters for auto-repair.
+        try:
+            self.app.user_team._captaincy_auto_assigned = False
+        except Exception:
+            pass
         messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
-        self.parent.update_all_views()
-        self.destroy()
+        self.app.update_all_views()
+        self.close_view()
+
+    @staticmethod
+    def _apply_letters(team, new_c, alt1, alt2, skip_captain=False):
+        """Write the chosen letters. skip_captain: the C was already dealt
+        by the deposition flow -- only the alternates are (re)written."""
+        for p in (getattr(team, "roster", None) or []):
+            try:
+                if skip_captain and getattr(p, "captaincy", "") == "C":
+                    continue
+                p.captaincy = None
+            except Exception:
+                pass
+        targets = []
+        if new_c is not None and not skip_captain:
+            targets.append((new_c, "C"))
+        if alt1 is not None:
+            targets.append((alt1, "A"))
+        if alt2 is not None:
+            targets.append((alt2, "A"))
+        for p, letter in targets:
+            try:
+                if getattr(p, "captaincy", "") == "C" and letter != "C":
+                    continue  # never clobber the dealt C
+                p.captaincy = letter
+            except Exception:
+                pass
+
+    def _run_deposition_flow(self, team, old_c, new_c, _cc):
+        """The judgment call. Returns True when the change went through
+        (letters applied via captaincy_change), False on back-down/cancel.
+        Headless fallback: talk first, stand firm -- same as the AI."""
+        try:
+            league = getattr(self.app, "league", None)
+            info = _cc.assess_deposition(old_c, new_c, team, league)
+            old_name = getattr(old_c, "full_name", "the captain")
+            new_name = (getattr(new_c, "full_name", "no one")
+                        if new_c is not None else "no one")
+            dlg = CaptainChangeDialog(self.app, old_name, new_name,
+                                      info.get("reasons", []))
+            dlg.wait_window()
+            pre = dlg.result
+        except Exception:
+            pre, info = "speak", {"acceptance": 0.5}
+            old_name = getattr(old_c, "full_name", "the captain")
+            new_name = (getattr(new_c, "full_name", "no one")
+                        if new_c is not None else "no one")
+        if pre == "cancel":
+            return False
+        talked = (pre == "speak")
+        acceptance = float(info.get("acceptance", 0.5))
+        acceptance += 0.18 if talked else -0.10
+        acceptance = max(0.02, min(0.98, acceptance))
+        tier = _cc.roll_tier(acceptance)
+        if tier in ("pushback", "extreme"):
+            try:
+                pdlg = CaptainPushbackDialog(self.app, old_name, new_name,
+                                             tier)
+                pdlg.wait_window()
+                call = pdlg.result
+            except Exception:
+                call = "firm"
+            if call == "backdown":
+                return False
+            compromise = (call == "alternate")
+        else:
+            compromise = False
+        try:
+            date_str = self.app.current_date.isoformat()
+        except Exception:
+            date_str = ""
+        report = _cc.apply_deposition(team, old_c, new_c, tier,
+                                      talked=talked, date_str=date_str,
+                                      compromise_alternate=compromise)
+        for line in (report.get("news") or []):
+            try:
+                self.app.add_news(line)
+            except Exception:
+                pass
+        detail = "\n".join(report.get("lines", []))
+        if detail:
+            try:
+                messagebox.showinfo("Captaincy Change", detail)
+            except Exception:
+                pass
+        # Extreme fallout leaves a repair path in the Dressing Room
+        # ("Clear the air" row) -- nothing more to do here.
+        return True
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class SetCaptainsWindow(InGamePopup):
+    """Popup wrapper around SetCaptainsView (backward compatibility).
+
+    New code should embed SetCaptainsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(args[0] if args else kwargs.get("parent"))
+        parent = args[0] if args else kwargs.get("parent")
+        kwargs.pop("parent", None)
+        self._view = SetCaptainsView(self, app=parent, *args[1:], **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class MandatoryCaptainsView(SetCaptainsView):
+    """Item 7: mandatory, non-dismissible captain picker.
+
+    Built on the SetCaptainsView combobox flow. Confirm validates
+    (exactly 1 C + 2 As, no goalie letters, no double letters) and shows
+    a clear inline error instead of silently fixing; persistence goes
+    through GameManager._persist_captaincy_pick, the manual tool's
+    by-name flow. There is no cancel path -- the hosting window refuses
+    to close until a legal pick is confirmed.
+    """
+
+    def _create_widgets(self):
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        card = ttk.Frame(self, style='Card.TFrame', padding=24, width=600)
+        card.grid(row=0, column=0, pady=24, sticky='n')
+        main_frame = ttk.Frame(card, style='Card.TFrame')
+        main_frame.pack(fill='both', expand=True)
+
+        team_name = getattr(getattr(self.app, 'user_team', None),
+                            'team_name', 'your team')
+        ttk.Label(
+            main_frame, text="Name your captains",
+            style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 14, 'bold')
+        ).pack(anchor='w', pady=(0, 4))
+        ttk.Label(
+            main_frame,
+            text=("NHL Rule 6.1 requires every club to dress exactly one "
+                  f"captain (C) and two alternates (A). Pick {team_name}'s "
+                  "letters to continue \u2014 a goaltender cannot wear a "
+                  "letter, and one player cannot hold two letters."),
+            style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 10),
+            wraplength=540, justify='left'
+        ).pack(anchor='w', pady=(0, 14))
+
+        players = [p.full_name for p in self.app.user_team.roster]
+
+        ttk.Label(main_frame, text="Captain (C):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.captain_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        ttk.Label(main_frame, text="Alternate Captain (A):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.alternate1_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        ttk.Label(main_frame, text="Alternate Captain (A):", style='Card.TLabel',
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
+                  ).pack(anchor='w', pady=(0, 5))
+        ttk.Combobox(main_frame, textvariable=self.alternate2_var,
+                     values=players, state='readonly',
+                     font=_sfont(self.app.FONT_FAMILY, 11)
+                     ).pack(fill='x', pady=(0, 10))
+
+        self.error_var = tk.StringVar(master=self)
+        self.error_label = ttk.Label(
+            main_frame, textvariable=self.error_var, style='Card.TLabel',
+            font=_sfont(self.app.FONT_FAMILY, 10, 'bold'),
+            foreground='#e5484d', wraplength=540, justify='left')
+        self.error_label.pack(anchor='w', pady=(2, 8))
+
+        ttk.Button(main_frame, text="Confirm Captains",
+                   command=self.save_captains).pack(pady=(6, 4))
+
+    def save_captains(self):
+        """Validate, then persist exactly like the manual tool. Invalid
+        picks are rejected with an inline message -- never silently
+        fixed, and the blocker stays open."""
+        gm = getattr(self.app, 'game_manager', None) or self.app
+        err = gm._validate_captaincy_pick(
+            self.app.user_team, self.captain_var.get(),
+            self.alternate1_var.get(), self.alternate2_var.get())
+        if err:
+            self.error_var.set(err)
+            try:
+                self.error_label.update_idletasks()
+            except Exception:
+                pass
+            return
+        gm._persist_captaincy_pick(
+            self.app.user_team, self.captain_var.get(),
+            self.alternate1_var.get(), self.alternate2_var.get())
+        try:
+            self.app.update_all_views()
+        except Exception:
+            pass
+        self.close_view()
+
+
+class MandatoryCaptainsWindow(InGamePopup):
+    """Item 7: modal, non-dismissible host for MandatoryCaptainsView.
+
+    The card cannot be closed -- not by its X button, not by Escape --
+    until a legal 1C+2A pick is confirmed. Callers block on wait_window().
+    """
+
+    def __init__(self, app, team=None, **kwargs):
+        kwargs.pop("parent", None)
+        super().__init__(app, modal=True, **kwargs)
+        self.title("Name Your Captains")
+        # Non-dismissible: the popup manager ignores Escape / click-out
+        # for non-dismissible cards, and the title-bar X is refused below.
+        try:
+            self._dismissible = False
+        except Exception:
+            pass
+        self.protocol("WM_DELETE_WINDOW", self._refuse_close)
+        self._view = MandatoryCaptainsView(self, app=app)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+        try:
+            self.geometry("640x640")
+            self.fit_to_content(min_w=620, min_h=560)
+        except Exception:
+            pass
+
+    def _refuse_close(self):
+        """The blocker has no cancel path: nudge the user back to the form."""
+        try:
+            self._view.error_var.set(
+                "Pick exactly one captain (C) and two alternates (A) "
+                "to continue.")
+        except Exception:
+            pass
+
 
 # --- Drag-and-Drop Edit Lines Window ---
-class GMDashboardWindow(tk.Toplevel):
+class GMDashboardView(ctk.CTkFrame):
     """GM Dashboard: record, cap, contracts, top performers, vitals, staff."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("GM Dashboard")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("860x720")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMDashboardWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
 
     # ---------- helpers ----------
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def _card(self, master, title, r, c):
         card = ttk.Frame(master, style='Card.TFrame', padding=12)
         card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=_sfont(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _big(self, card, text):
         ttk.Label(card, text=text, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+                  font=_sfont(self.app.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
 
     # ---------- build ----------
     def _build(self):
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
         w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
         gp = w + l + otl
@@ -9183,13 +13264,13 @@ class GMDashboardWindow(tk.Toplevel):
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
         ttk.Label(header, text=f"{team.city} {team.team_name}",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                  font=_sfont(self.app.FONT_FAMILY, 16, 'bold'),
                   style='TLabel').pack(side=tk.LEFT)
         season = getattr(league, 'season_year', '')
         ttk.Label(header, text=f"  Season {season}" if season else "",
                   style='Secondary.TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=_sfont(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
         self.grid_host = ttk.Frame(self, style='Panel.TFrame')
@@ -9275,7 +13356,7 @@ class GMDashboardWindow(tk.Toplevel):
         if team.roster:
             avg_morale = sum(p.morale for p in team.roster) / len(team.roster)
             avg_age = sum(p.age for p in team.roster) / len(team.roster)
-            self._line(card, f"Avg morale: {avg_morale:.1f}/10")
+            self._line(card, f"Avg morale: {avg_morale:.1f}/100")
             self._line(card, f"Avg age: {avg_age:.1f} years")
             self._line(card, f"Roster size: {len(team.roster)} players")
 
@@ -9293,14 +13374,32 @@ class GMDashboardWindow(tk.Toplevel):
             self._line(card, f"Head Coach: {hc.full_name}")
 
     def _refresh(self):
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
         w, l, otl, pts = st.get("W", 0), st.get("L", 0), st.get("OTL", 0), st.get("Points", 0)
         self._fill_cards(team, league, st, w, l, otl, pts, w + l + otl)
 
 
-class SeasonGoalsWindow(tk.Toplevel):
+
+
+class GMDashboardWindow(InGamePopup):
+    """Popup wrapper around GMDashboardView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("GM Dashboard")
+        self._view = GMDashboardView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class SeasonGoalsView(ctk.CTkFrame):
     """Season Goals: board expectation, live progress, milestones, youth watch."""
 
     EXPECTATIONS = [
@@ -9311,12 +13410,12 @@ class SeasonGoalsWindow(tk.Toplevel):
         ("rebuild", "Rebuild"),
     ]
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Season Goals")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("640x600")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SeasonGoalsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         self._exp_var = tk.StringVar(
             master=self,
             value=getattr(parent.user_team, 'board_expectation', 'playoffs'))
@@ -9326,18 +13425,18 @@ class SeasonGoalsWindow(tk.Toplevel):
         card = ttk.Frame(self, style='Card.TFrame', padding=12)
         card.pack(fill=tk.X, padx=12, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _set_expectation(self, key):
         self._exp_var.set(key)
-        self.parent.user_team.board_expectation = key
+        self.app.user_team.board_expectation = key
         self._paint_pills()
         self._refresh_progress()
 
@@ -9346,14 +13445,11 @@ class SeasonGoalsWindow(tk.Toplevel):
             btn.set_selected(self._exp_var.get() == key)
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Season Goals",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh_progress).pack(side=tk.RIGHT)
 
         # Board expectation pills
@@ -9365,7 +13461,7 @@ class SeasonGoalsWindow(tk.Toplevel):
         self._pill_btns = []
         for key, label in self.EXPECTATIONS:
             b = PillButton(row, text=label, bg='#1a2233',
-                           font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                           font=(self.app.FONT_FAMILY, 9, 'bold'),
                            padx=11, pady=5,
                            command=lambda k=key: self._set_expectation(k))
             b.pack(side=tk.LEFT, padx=3, pady=2)
@@ -9402,10 +13498,11 @@ class SeasonGoalsWindow(tk.Toplevel):
             child.destroy()
         for child in self.mile_lines.winfo_children():
             child.destroy()
-        team = self.parent.user_team
-        league = self.parent.league
+        team = self.app.user_team
+        league = self.app.league
         st = league.standings.get(team.team_name, {"W": 0, "L": 0, "OTL": 0, "Points": 0})
-        w, l, otl, pts = st["W"], st["L"], st["OTL"], st["Points"]
+        w, l, otl = st["W"], st["L"], st["OTL"]
+        pts = st.get("Points", 2 * w + otl)
         gp = w + l + otl
 
         # Conference rank and playoff cut
@@ -9422,7 +13519,7 @@ class SeasonGoalsWindow(tk.Toplevel):
         def _mkline(master, text, secondary=False):
             ttk.Label(master, text=text,
                       style='Secondary.TLabel' if secondary else 'TLabel',
-                      font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                      font=(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
         exp = self._exp_var.get()
         exp_label = dict(self.EXPECTATIONS)[exp]
@@ -9467,44 +13564,80 @@ class SeasonGoalsWindow(tk.Toplevel):
             mark = "✓" if done else "○"
             _mkline(self.mile_lines, f"{mark}  {label}")
 
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
-class TeamAnalyticsWindow(tk.Toplevel):
+class SeasonGoalsWindow(InGamePopup):
+    """Popup wrapper around SeasonGoalsView (backward compatibility).
+
+    New code should embed SeasonGoalsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(args[0] if args else kwargs.get("parent"))
+        parent = args[0] if args else kwargs.get("parent")
+        kwargs.pop("parent", None)
+        self._view = SeasonGoalsView(self, app=parent, *args[1:], **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class TeamAnalyticsView(ctk.CTkFrame):
     """Team Analytics: offense, defense, goalies, scoring mix, discipline."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Team Analytics")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("880x640")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TeamAnalyticsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _card(self, title, r, c):
         card = ttk.Frame(self.grid_host, style='Card.TFrame', padding=12)
         card.grid(row=r, column=c, sticky='nsew', padx=6, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=_sfont(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _big(self, card, text):
         ttk.Label(card, text=text, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
+                  font=_sfont(self.app.FONT_FAMILY, 18, 'bold')).pack(anchor='w', pady=(2, 4))
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Team Analytics",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=_sfont(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
 
         self.grid_host = ttk.Frame(self, style='Panel.TFrame')
@@ -9594,42 +13727,65 @@ class TeamAnalyticsWindow(tk.Toplevel):
                              f"({ppg:.2f} P/GP)")
 
     def _refresh(self):
-        self._fill(self.parent.user_team)
+        self._fill(self.app.user_team)
 
 
-class SalaryAnalyticsWindow(tk.Toplevel):
+
+
+class TeamAnalyticsWindow(InGamePopup):
+    """Popup wrapper around TeamAnalyticsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Team Analytics")
+        self._view = TeamAnalyticsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class SalaryAnalyticsView(ctk.CTkFrame):
     """Salary Analytics: payroll mix by position, top cap hits, expiring money."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Salary Analytics")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("720x600")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SalaryAnalyticsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(bg_color=self.app.BG_COLOR)
         self._build()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _card(self, title):
         card = ttk.Frame(self, style='Card.TFrame', padding=12)
         card.pack(fill=tk.X, padx=12, pady=6)
         ttk.Label(card, text=title, style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=_sfont(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         ttk.Separator(card, orient='horizontal').pack(fill='x', pady=(4, 8))
         return card
 
     def _line(self, card, text, secondary=False):
         ttk.Label(card, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
+                  font=_sfont(self.app.FONT_FAMILY, 10)).pack(anchor='w', pady=1)
 
     def _build(self):
-        team = self.parent.user_team
+        team = self.app.user_team
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Salary Analytics",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         PillButton(header, text="Refresh", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                   font=_sfont(self.app.FONT_FAMILY, 9, 'bold'),
                    padx=12, pady=5, command=self._refresh).pack(side=tk.RIGHT)
         self.body = ttk.Frame(self, style='Panel.TFrame')
         self.body.pack(fill=tk.BOTH, expand=True)
@@ -9638,7 +13794,7 @@ class SalaryAnalyticsWindow(tk.Toplevel):
     def _fill(self):
         for child in self.body.winfo_children():
             child.destroy()
-        team = self.parent.user_team
+        team = self.app.user_team
         payroll = team.payroll
         cap = team.salary_cap
 
@@ -9712,24 +13868,39 @@ def buyout_schedule(player):
     return total_cost, annual, buyout_years, rows
 
 
-class BuyoutCalculatorWindow(tk.Toplevel):
+
+
+class SalaryAnalyticsWindow(InGamePopup):
+    """Popup wrapper around SalaryAnalyticsView (backward compatibility)."""
+    def __init__(self, parent, *args, **kwargs):
+        super().__init__(parent)
+        self.title("Salary Analytics")
+        self._view = SalaryAnalyticsView(self, app=parent, *args, **kwargs)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+class BuyoutCalculatorView(ctk.CTkFrame):
     """Buyout Calculator: real NHL buyout math with execute."""
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Buyout Calculator")
-        self.configure(background=parent.BG_COLOR)
-        self.geometry("680x620")
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the BuyoutCalculatorWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         self._selected = None
         self._build()
 
     def _build(self):
         header = ttk.Frame(self, style='Panel.TFrame', padding=12)
         header.pack(fill=tk.X, padx=12, pady=(12, 4))
-        ttk.Label(header, text="Buyout Calculator",
-                  font=(self.parent.FONT_FAMILY, 16, 'bold'),
-                  style='TLabel').pack(side=tk.LEFT)
         ttk.Label(header, text="NHL rules: 2/3 of remaining salary (1/3 if under 26), "
                                "spread over 2× remaining term",
                   style='Secondary.TLabel', wraplength=340,
@@ -9743,17 +13914,16 @@ class BuyoutCalculatorWindow(tk.Toplevel):
         left = ttk.Frame(cols, style='Card.TFrame', padding=10)
         left.grid(row=0, column=0, sticky='nsew', padx=(0, 6))
         ttk.Label(left, text="Roster", style='TLabel',
-                  font=(self.parent.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
+                  font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         self.lb = tk.Listbox(left, height=22, activestyle='none',
                              bg='#232a3a', fg='#ffffff',
                              selectbackground='#0d2b28', relief='flat',
                              highlightthickness=1,
                              highlightbackground='#2e2e38',
-                             font=(self.parent.FONT_FAMILY, 10))
+                             font=(self.app.FONT_FAMILY, 10))
         self.lb.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
         self.lb.bind('<<ListboxSelect>>', self._on_select)
-        self.lb.bind('<Button-3>', self._show_roster_menu)
-        self._players = sorted(self.parent.user_team.roster,
+        self._players = sorted(self.app.user_team.roster,
                                key=lambda p: p.contract.salary, reverse=True)
         for p in self._players:
             self.lb.insert(tk.END,
@@ -9772,7 +13942,7 @@ class BuyoutCalculatorWindow(tk.Toplevel):
     def _line(self, master, text, secondary=False, bold=False):
         ttk.Label(master, text=text,
                   style='Secondary.TLabel' if secondary else 'TLabel',
-                  font=(self.parent.FONT_FAMILY, 10,
+                  font=(self.app.FONT_FAMILY, 10,
                         'bold' if bold else 'normal')).pack(anchor='w', pady=1)
 
     def _show_placeholder(self):
@@ -9830,14 +14000,14 @@ class BuyoutCalculatorWindow(tk.Toplevel):
             self._line(self.detail, txt, secondary=True)
         ttk.Separator(self.detail, orient='horizontal').pack(fill='x', pady=6)
         PillButton(self.detail, text="Execute Buyout", bg='#0e0e11',
-                   font=(self.parent.FONT_FAMILY, 10, 'bold'),
+                   font=(self.app.FONT_FAMILY, 10, 'bold'),
                    padx=16, pady=7,
                    command=self._execute_buyout).pack(anchor='w', pady=(4, 0))
 
     def _render_active_buyouts(self):
         for child in self.active_box.winfo_children():
             child.destroy()
-        team = self.parent.user_team
+        team = self.app.user_team
         hits = getattr(team, 'buyout_cap_hits', {}) or {}
         if hits:
             self._line(self.active_box, "Active buyout cap hits:", bold=True)
@@ -9847,47 +14017,267 @@ class BuyoutCalculatorWindow(tk.Toplevel):
             self._line(self.active_box, "No active buyouts.", secondary=True)
 
     def _execute_buyout(self):
-        from tkinter import messagebox
+        """Show an in-view confirmation panel for the buyout (no popup)."""
         p = self._selected
         if not p:
             return
         total, annual, byears, rows = buyout_schedule(p)
         if not rows:
             return
-        if not qol_confirm(
-                self,
-                "Confirm Buyout",
-                f"Buy out {p.full_name}?\n\n"
-                f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
-                f"over {byears} years.\n"
-                f"{p.full_name} will become a free agent.",
-                confirm_text="Buy Out"):
+        for child in self.detail.winfo_children():
+            child.destroy()
+        self._line(self.detail, "Confirm Buyout", bold=True)
+        self._line(self.detail,
+                   f"Buy out {p.full_name}? {p.full_name} will become "
+                   f"a free agent.", secondary=True)
+        self._line(self.detail,
+                   f"Cost: ${total:,.0f} spread as ${annual:,.0f}/yr "
+                   f"over {byears} years.", secondary=True)
+        btns = ttk.Frame(self.detail, style='Card.TFrame')
+        btns.pack(anchor='w', pady=(10, 0))
+        PillButton(btns, text="Confirm Buy Out", bg='#5c1a1a',
+                   font=(self.app.FONT_FAMILY, 10, 'bold'),
+                   padx=16, pady=7,
+                   command=lambda: self._confirm_buyout(
+                       p, total, annual, byears, rows)).pack(side=tk.LEFT,
+                                                             padx=(0, 8))
+        PillButton(btns, text="Cancel", bg='#0e0e11',
+                   font=(self.app.FONT_FAMILY, 10),
+                   padx=16, pady=7,
+                   command=self._render_detail).pack(side=tk.LEFT)
+
+    def _confirm_buyout(self, p, total, annual, byears, rows):
+        # Buyout window (real NHL: June 15-30). One rulebook in
+        # transaction_windows.py.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "buyout", getattr(self.app, "current_date", None))
+            if not _ok:
+                messagebox.showinfo("Buyout Window", _why)
+                return
+        except Exception:
+            pass
+        team = self.app.user_team
+        league = self.app.league
+        # One rulebook: the shared buyout mutation (buyout_window.py).
+        # Same math + same season-year keying as before this refactor.
+        try:
+            import buyout_window as _bw
+            total, annual, byears, rows = _bw.execute_buyout(
+                league, team, p,
+                season_year=getattr(league, 'season_year', 2026))
+        except Exception:
             return
-        team = self.parent.user_team
-        league = self.parent.league
-        season = getattr(league, 'season_year', 2026)
-        hits = getattr(team, 'buyout_cap_hits', None)
-        if hits is None:
-            hits = {}
-            team.buyout_cap_hits = hits
-        for i, hit, _s in rows:
-            yr = season + i - 1
-            hits[yr] = hits.get(yr, 0) + hit
-        if p in team.roster:
-            team.roster.remove(p)
-        p.team_name = "Free Agent"
-        messagebox.showinfo("Buyout Complete",
-                            f"{p.full_name} has been bought out and is now "
-                            f"a free agent.\nDead cap: ${annual:,.0f}/yr for "
-                            f"{byears} years.")
         self._selected = None
-        self._show_placeholder()
+        for child in self.detail.winfo_children():
+            child.destroy()
+        self._line(self.detail, "Buyout complete", bold=True)
+        self._line(self.detail,
+                   f"{p.full_name} has been bought out and is now a free "
+                   f"agent. Dead cap: ${annual:,.0f}/yr for "
+                   f"{byears} years.", secondary=True)
         # rebuild listbox + active buyouts
         self.lb.delete(0, tk.END)
         self._players = sorted(team.roster,
                                key=lambda pl: pl.contract.salary, reverse=True)
         for pl in self._players:
             self.lb.insert(tk.END,
-                           f"{pl.full_name} ({pl.primary_position.value}) — "
-                           f"${pl.contract.salary / 1e6:.2f}M × {pl.contract.years_remaining}")
+                           f"{pl.full_name} ({pl.primary_position.value}) -- "
+                           f"${pl.contract.salary / 1e6:.2f}M x "
+                           f"{pl.contract.years_remaining}")
         self._render_active_buyouts()
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+class BuyoutCalculatorWindow(InGamePopup):
+    """Popup wrapper around BuyoutCalculatorView (backward compatibility).
+
+    New code should embed BuyoutCalculatorView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._view = BuyoutCalculatorView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+class GameDetailWindow(InGamePopup):
+    """Game Recap / Game Stats: scoring summary, team stats, three stars."""
+
+    def __init__(self, parent, game_result, initial_tab="recap"):
+        super().__init__(parent)
+        self.parent = parent
+        self.result = game_result
+        self.title("Game Details")
+        self.configure(background=parent.BG_COLOR)
+        self.geometry("640x560")
+        self._build(initial_tab)
+
+    def _line(self, master, text, secondary=False, bold=False, size=10):
+        ttk.Label(master, text=text,
+                  style='Secondary.TLabel' if secondary else 'TLabel',
+                  font=(self.parent.FONT_FAMILY, size,
+                        'bold' if bold else 'normal')).pack(anchor='w', pady=1)
+
+    def _build(self, initial_tab):
+        r = self.result
+        home, away = r['home_team'], r['away_team']
+        hs, aws = r['home_score'], r['away_score']
+        date = r['date']
+        date_str = date.strftime("%b %d, %Y") if hasattr(date, 'strftime') else str(date)
+
+        header = ttk.Frame(self, style='Panel.TFrame', padding=14)
+        header.pack(fill=tk.X, padx=12, pady=(12, 6))
+        ttk.Label(header, text=f"{away.team_name}  {aws}  @  {hs}  {home.team_name}",
+                  style='TLabel',
+                  font=(self.parent.FONT_FAMILY, 15, 'bold')).pack(anchor='center')
+        sub = date_str
+        if r.get('shootout'):
+            sub += "  •  Shootout"
+        elif r.get('overtime'):
+            sub += "  •  Overtime"
+        ttk.Label(header, text=sub, style='Secondary.TLabel',
+                  font=(self.parent.FONT_FAMILY, 10)).pack(anchor='center')
+
+        tabs = ttk.Frame(self, style='Panel.TFrame')
+        tabs.pack(fill=tk.X, padx=12, pady=(0, 6))
+        self.body = ttk.Frame(self, style='Card.TFrame', padding=12)
+        self.body.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self._tab_var = tk.StringVar(value=initial_tab)
+        for key, label in (("recap", "Game Recap"), ("stats", "Game Stats")):
+            PillButton(tabs, text=label, bg='#0e0e11',
+                       font=(self.parent.FONT_FAMILY, 9, 'bold'),
+                       padx=14, pady=6,
+                       command=lambda k=key: self._show_tab(k)).pack(side=tk.LEFT, padx=(0, 6))
+        self._show_tab(initial_tab)
+
+    def _show_tab(self, tab):
+        for child in self.body.winfo_children():
+            child.destroy()
+        if tab == "recap":
+            self._fill_recap()
+        else:
+            self._fill_stats()
+
+    def _roster_lookup(self):
+        r = self.result
+        by_id = {}
+        for team in (r['home_team'], r['away_team']):
+            for p in team.roster:
+                by_id[p.id] = (p, team)
+        return by_id
+
+    def _fill_recap(self):
+        r = self.result
+        self._line(self.body, "Scoring Summary", bold=True, size=12)
+        events = r.get('event_log') or []
+        by_id = self._roster_lookup()
+        goals = [e for e in events if e.get('type') == 'GOAL_ADVANCED']
+        if not goals:
+            self._line(self.body,
+                       "Detailed scoring data is unavailable for this game.",
+                       secondary=True)
+        home_running = away_running = 0
+        for i, e in enumerate(goals, 1):
+            d = e.get('details', {})
+            info = by_id.get(d.get('scorer_id'))
+            if info:
+                p, team = info
+                name = p.full_name
+                abbr = team.team_name
+            else:
+                name, abbr = "Unknown", "?"
+            if abbr == r['home_team'].team_name:
+                home_running += 1
+            elif abbr == r['away_team'].team_name:
+                away_running += 1
+            gtype = d.get('goal_type', '').replace('_', ' ').title()
+            xg = d.get('expected_goal')
+            extra = f"  •  {gtype}" if gtype else ""
+            extra += f"  •  xG {xg}" if xg is not None else ""
+            self._line(self.body,
+                       f"{i}. {name} ({abbr}){extra}   [{away_running}-{home_running}]",
+                       secondary=True)
+        notable = [n for n in (r.get('notable_events') or [])
+                   if n.get('event') not in ('overtime',)]
+        if notable:
+            ttk.Separator(self.body, orient='horizontal').pack(fill='x', pady=8)
+            self._line(self.body, "Notable", bold=True, size=12)
+            for n in notable:
+                who = ""
+                pl = n.get('player')
+                if pl is not None:
+                    who = getattr(pl, 'full_name', str(pl)) + " — "
+                self._line(self.body, f"{who}{n.get('event', '')}",
+                           secondary=True)
+
+    def _fill_stats(self):
+        r = self.result
+        self._line(self.body, "Team Stats", bold=True, size=12)
+        events = r.get('event_log') or []
+        by_id = self._roster_lookup()
+        goals_h = goals_a = saves_h = saves_a = 0
+        for e in events:
+            d = e.get('details', {})
+            if e.get('type') == 'GOAL_ADVANCED':
+                info = by_id.get(d.get('scorer_id'))
+                if info and info[1].team_name == r['home_team'].team_name:
+                    goals_h += 1
+                else:
+                    goals_a += 1
+            elif e.get('type') == 'SAVE_ADVANCED':
+                info = by_id.get(d.get('goaltender_id'))
+                if info and info[1].team_name == r['home_team'].team_name:
+                    saves_h += 1
+                else:
+                    saves_a += 1
+        shots_h = goals_h + saves_a   # home shots = home goals + away goalie saves
+        shots_a = goals_a + saves_h
+        rows = [
+            ("Goals", goals_a, goals_h),
+            ("Shots on Goal", shots_a, shots_h),
+            ("Saves", saves_a, saves_h),
+        ]
+        a_name, h_name = r['away_team'].team_name, r['home_team'].team_name
+        self._line(self.body, f"{'':22s}{a_name[:18]:>18s}  {h_name[:18]:>18s}",
+                   secondary=True, bold=True)
+        for label, av, hv in rows:
+            self._line(self.body, f"{label:22s}{av:>18d}  {hv:>18d}",
+                       secondary=True)
+        if not events:
+            self._line(self.body, "Detailed stats unavailable for this game.",
+                       secondary=True)
+
+        ratings = r.get('player_ratings') or {}
+        stars = []
+        for team_name, pmap in ratings.items():
+            for pid, rating in pmap.items():
+                info = by_id.get(pid)
+                name = info[0].full_name if info else "Unknown"
+                stars.append((rating, name, team_name))
+        stars.sort(reverse=True)
+        if stars:
+            ttk.Separator(self.body, orient='horizontal').pack(fill='x', pady=8)
+            self._line(self.body, "Three Stars", bold=True, size=12)
+            medals = ["★", "★★", "★★★"]
+            for i, (rating, name, tname) in enumerate(stars[:3]):
+                self._line(self.body,
+                           f"{medals[i]}  {name} ({tname}) — {rating}/10",
+                           secondary=True)

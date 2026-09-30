@@ -1,14 +1,17 @@
 """
 Event Day Hubs - immersive standalone pages for the league's three tentpole days:
   * Draft Day Central   (June 23-25, rookie draft)
-  * Trade Deadline      (existing TradeDeadlineCenter, March 8)
+  * Trade Deadline      (existing TradeDeadlineCenter, derived date:
+                         40 days before the last regular-season game)
   * Free Agent Frenzy   (July 1, start of free agency)
 
 Each hub is a full-screen, broadcast-style page with a live wire feed,
 done-deals tracker, and quick actions into the relevant management windows.
 """
+from player_context_menu import bind_player_context
 import tkinter as tk
-from tkinter import ttk
+import customtkinter as ctk
+from popup_system import InGamePopup
 from datetime import date
 
 
@@ -44,28 +47,12 @@ def get_todays_event(d=None):
     return None
 
 
-def days_until_event(d=None):
-    """Days until the next tentpole event (for dashboard banners)."""
-    from datetime import date as _date
-    d = d or _date.today()
-    cands = []
-    for month, day, name in ((6, 23, 'draft'), (7, 1, 'free_agency'), (3, 8, 'deadline')):
-        for yr in (d.year, d.year + 1):
-            try:
-                ev = _date(yr, month, day)
-            except ValueError:
-                continue
-            if ev >= d:
-                cands.append(((ev - d).days, name, ev))
-                break
-    cands.sort()
-    return cands[0] if cands else (None, None, None)
 
 
 # ----------------------------------------------------------------------------
 # Base hub
 # ----------------------------------------------------------------------------
-class EventDayHub(tk.Toplevel):
+class EventDayHubView(ctk.CTkFrame):
     """Shared immersive shell: header, 3-column content, scrolling wire ticker."""
 
     BG = '#0e0e11'
@@ -83,17 +70,12 @@ class EventDayHub(tk.Toplevel):
     EVENT_TAGLINE = ""
     EVENT_EMOJI = ""
 
-    def __init__(self, parent, game_manager):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, game_manager, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
         self.gm = game_manager
-        self.configure(bg=self.BG)
-        self.title(self.EVENT_TITLE)
-        try:
-            self.state('zoomed')
-        except Exception:
-            self.geometry("1600x950")
-        self.minsize(1200, 750)
+        self.configure(fg_color=self.BG)
+        self._close_screen = None  # set by show_screen() or wrapper
 
         self._ticker_text = ""
         self._ticker_x = 0
@@ -102,7 +84,14 @@ class EventDayHub(tk.Toplevel):
         self._build_columns()   # subclass fills left/center/right
         self._build_ticker()
         self._animate_ticker()
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # -- shell -------------------------------------------------------------
     def _build_shell(self):
@@ -175,9 +164,10 @@ class EventDayHub(tk.Toplevel):
         return btn
 
     def _close_button(self):
+        # Route through close_view so subclasses can cancel timers.
         tk.Button(self.actions_bar, text="Close", bg=self.PANEL, fg=self.MUTED,
                   font=('Segoe UI', 11), relief='flat', padx=18, pady=8,
-                  cursor='hand2', command=self.destroy).pack(side='right')
+                  cursor='hand2', command=self.close_view).pack(side='right')
 
     # -- ticker ------------------------------------------------------------
     def _build_ticker(self):
@@ -251,13 +241,14 @@ class EventDayHub(tk.Toplevel):
 # ----------------------------------------------------------------------------
 # Draft Day Central
 # ----------------------------------------------------------------------------
-class DraftDayCentral(EventDayHub):
+class DraftDayCentral(EventDayHubView):
     EVENT_TITLE = "DRAFT DAY CENTRAL"
     EVENT_TAGLINE = "Seven rounds. 224 picks. One future. Follow every selection live."
 
     def _build_actions(self, bar):
-        self._action_button("Open Draft Board", self._open_draft, accent=True)
-        self._action_button("War Room / Auto-Draft", self._open_draft)
+        # M7: one board action; "Trade This Pick" routes to the live
+        # draft-day pick swap when a board is open, else the Trade Center.
+        self._action_button("Draft Board / War Room", self._open_draft, accent=True)
         self._action_button("Trade This Pick", self._open_trade)
         self._action_button("Scouting Department", self._open_scouting)
         self._close_button()
@@ -274,28 +265,98 @@ class DraftDayCentral(EventDayHub):
                          highlightthickness=1)
         clock.pack(fill='x', padx=14, pady=(0, 10))
         team, pickinfo = self._on_the_clock()
-        tk.Label(clock, text=team, bg=self.CARD, fg=self.WHITE,
-                 font=('Segoe UI', 16, 'bold')).pack(pady=(10, 2))
-        tk.Label(clock, text=pickinfo, bg=self.CARD, fg=self.MUTED,
-                 font=('Segoe UI', 11)).pack(pady=(0, 10))
+        self._clock_team_lbl = tk.Label(clock, text=team, bg=self.CARD, fg=self.WHITE,
+                                       font=('Segoe UI', 16, 'bold'))
+        self._clock_team_lbl.pack(pady=(10, 2))
+        self._clock_info_lbl = tk.Label(clock, text=pickinfo, bg=self.CARD, fg=self.MUTED,
+                                        font=('Segoe UI', 11))
+        self._clock_info_lbl.pack(pady=(0, 10))
 
-        self._build_prospect_cards(self.center_col)
+        self._column_title(self.center_col, "TOP AVAILABLE PROSPECTS")
+        self._prospect_wrap = tk.Frame(self.center_col, bg=self.PANEL)
+        self._prospect_wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+        self._fill_prospect_cards()
 
         # RIGHT: draft-day deals + class snapshot
         self._column_title(self.right_col, "DRAFT-DAY DEALS")
         self.deals_box = self._feed_box(self.right_col, height=12)
         self._feed_write(self.deals_box, self._deals_lines())
         self._column_title(self.right_col, "CLASS SNAPSHOT")
-        snap = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
-                        highlightthickness=1)
-        snap.pack(fill='x', padx=14, pady=(0, 12))
-        for label, value in self._class_snapshot():
-            r = tk.Frame(snap, bg=self.CARD)
-            r.pack(fill='x', padx=12, pady=3)
-            tk.Label(r, text=label, bg=self.CARD, fg=self.MUTED,
-                     font=('Segoe UI', 10)).pack(side='left')
-            tk.Label(r, text=value, bg=self.CARD, fg=self.GOLD,
-                     font=('Segoe UI', 10, 'bold')).pack(side='right')
+        self._snap_frame = tk.Frame(self.right_col, bg=self.CARD, highlightbackground=self.BORDER,
+                                    highlightthickness=1)
+        self._snap_frame.pack(fill='x', padx=14, pady=(0, 12))
+        self._fill_snapshot()
+
+        # M6: keep the hub live while the draft moves.
+        self._live_after_id = None
+        self._live_tick()
+
+    # -- live refresh (M6) ---------------------------------------------------
+    def _clear(self, frame):
+        try:
+            for _c in frame.winfo_children():
+                _c.destroy()
+        except Exception:
+            pass
+
+    def _refresh_live_sections(self):
+        """Rewrite every live section from current state. Safe to call on
+        a timer: every read is guarded, and it no-ops if widgets are gone."""
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        try:
+            self._feed_write(self.wire_box, self._wire_lines())
+        except Exception:
+            pass
+        try:
+            self._feed_write(self.deals_box, self._deals_lines())
+        except Exception:
+            pass
+        try:
+            team, pickinfo = self._on_the_clock()
+            self._clock_team_lbl.configure(text=team)
+            self._clock_info_lbl.configure(text=pickinfo)
+        except Exception:
+            pass
+        try:
+            self._fill_prospect_cards()
+        except Exception:
+            pass
+        try:
+            self._fill_snapshot()
+        except Exception:
+            pass
+
+    def _live_tick(self):
+        self._cancel_live_tick()
+        try:
+            self._refresh_live_sections()
+        except Exception:
+            pass
+        try:
+            self._live_after_id = self.after(4000, self._live_tick)
+        except Exception:
+            self._live_after_id = None
+
+    def _cancel_live_tick(self):
+        _aid = getattr(self, '_live_after_id', None)
+        if _aid:
+            try:
+                self.after_cancel(_aid)
+            except Exception:
+                pass
+        self._live_after_id = None
+
+    def close_view(self):
+        # M6: never leave a refresh timer running after the hub closes.
+        try:
+            self._cancel_live_tick()
+        except Exception:
+            pass
+        super().close_view()
 
     # -- data ----------------------------------------------------------------
     def _prospects(self):
@@ -356,11 +417,15 @@ class DraftDayCentral(EventDayHub):
             bits.append(f"Proj. pick #{proj}")
         return " \u00b7 ".join(bits)
 
-    def _build_prospect_cards(self, parent):
-        """Multi-field prospect cards built only from real prospect attributes."""
-        self._column_title(parent, "TOP AVAILABLE PROSPECTS")
-        wrap = tk.Frame(parent, bg=self.PANEL)
-        wrap.pack(fill='both', expand=True, padx=14, pady=(0, 12))
+    def _fill_prospect_cards(self):
+        """Rebuild the top-available prospect cards from current state.
+
+        M6: called once at build and again on every live refresh, so the
+        cards stay honest as the board empties. Only public attributes
+        (letter grade, scout notes) -- never true potential numbers.
+        """
+        wrap = self._prospect_wrap
+        self._clear(wrap)
         ordered = self._sorted_prospects()
         cards = ordered[:6]
         if not cards:
@@ -377,8 +442,14 @@ class DraftDayCentral(EventDayHub):
             name = getattr(p, 'full_name', str(p))
             pos = self._pos_code(p)
             age = getattr(p, 'age', '?')
-            tk.Label(top, text=f"#{rank_of.get(id(p), '?')}  {name}", bg=self.CARD,
-                     fg=self.WHITE, font=('Segoe UI', 11, 'bold')).pack(side='left')
+            _name_lbl = tk.Label(top, text=f"#{rank_of.get(id(p), '?')}  {name}", bg=self.CARD,
+                     fg=self.WHITE, font=('Segoe UI', 11, 'bold'))
+            _name_lbl.pack(side='left')
+            try:
+                bind_player_context(_name_lbl, p, self)
+                bind_player_context(card, p, self)
+            except Exception:
+                pass
             tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD,
                      fg=self.MUTED, font=('Segoe UI', 10)).pack(side='right')
             mid = tk.Frame(card, bg=self.CARD)
@@ -393,6 +464,18 @@ class DraftDayCentral(EventDayHub):
             tk.Label(card, text=self._scout_note(p), bg=self.CARD, fg=self.MUTED,
                      font=('Segoe UI', 9, 'italic'), anchor='w', justify='left',
                      wraplength=430).pack(fill='x', padx=10, pady=(2, 8))
+
+    def _fill_snapshot(self):
+        """Rebuild the class-snapshot rows (M6: live on refresh)."""
+        snap = self._snap_frame
+        self._clear(snap)
+        for label, value in self._class_snapshot():
+            r = tk.Frame(snap, bg=self.CARD)
+            r.pack(fill='x', padx=12, pady=3)
+            tk.Label(r, text=label, bg=self.CARD, fg=self.MUTED,
+                     font=('Segoe UI', 10)).pack(side='left')
+            tk.Label(r, text=value, bg=self.CARD, fg=self.GOLD,
+                     font=('Segoe UI', 10, 'bold')).pack(side='right')
 
     def _top_available(self, n=8):
         prosp = self._sorted_prospects()[:n]
@@ -412,7 +495,7 @@ class DraftDayCentral(EventDayHub):
     def _on_the_clock(self):
         # If the live draft window is open, mirror it; otherwise show user's next pick
         try:
-            dw = self.parent.open_windows.get('draft')
+            dw = self.app.open_windows.get('draft')
             if dw is not None and dw.winfo_exists():
                 clock = getattr(dw, 'clock_label', None)
                 info = getattr(dw, 'pick_info_label', None)
@@ -432,7 +515,7 @@ class DraftDayCentral(EventDayHub):
     def _wire_lines(self):
         lines = []
         try:
-            dw = self.parent.open_windows.get('draft')
+            dw = self.app.open_windows.get('draft')
             picks = getattr(dw, 'picks_made', []) if dw is not None and dw.winfo_exists() else []
             for team_name, overall, player in picks[-30:]:
                 pname = getattr(player, 'full_name', str(player))
@@ -444,10 +527,74 @@ class DraftDayCentral(EventDayHub):
                      "selection by selection, as the night unfolds.",
                      "",
                      "Open the Draft Board to run your war room."]
+        # Part 3: draft-week buzz lines (within a few days of the draft
+        # window). Guarded; never breaks the wire.
+        try:
+            for _buzz in self._draft_buzz_lines():
+                lines.append(_buzz)
+        except Exception:
+            pass
         return lines
 
+    def _draft_buzz_lines(self):
+        """1-2 draft-week buzz lines off the top-hype prospects.
+
+        Only fires inside the draft-week window (June 20-25); reads only
+        league.draft_prospects and never touches game state.
+        """
+        lines = []
+        try:
+            _d = getattr(getattr(self, 'gm', None), 'current_date', None)
+            if _d is None or getattr(_d, 'month', 0) != 6:
+                return lines
+            if not (20 <= getattr(_d, 'day', 0) <= 25):
+                return lines
+            prosp = self._prospects()
+            if not prosp:
+                return lines
+
+            def _hype(p):
+                try:
+                    return float(getattr(p, 'draft_hype', 0) or 0)
+                except Exception:
+                    return 0.0
+
+            ordered = sorted(prosp, key=_hype, reverse=True)
+            _top = ordered[0] if ordered else None
+            if _top is not None and _hype(_top) > 0:
+                _name = getattr(_top, 'full_name', str(_top))
+                # "Generational" is reserved for the flagged obvious-generational
+                # prospect; anyone else gets ordinary top-prospect buzz even
+                # when the hype is loudest.
+                if getattr(_top, 'generational', False):
+                    lines.append(
+                        "BUZZ: %s is the name on every scout's lips — "
+                        "the 'generational' whispers are getting louder." % _name)
+                else:
+                    lines.append(
+                        "BUZZ: %s is the name on every scout's lips — "
+                        "the consensus top prospect of this class." % _name)
+            if len(ordered) > 1 and len(lines) < 2 and _hype(ordered[1]) > 0:
+                _name2 = getattr(ordered[1], 'full_name', str(ordered[1]))
+                lines.append(
+                    "BUZZ: rival war rooms can't stop talking about "
+                    "%s either — the top of this board is loaded." % _name2)
+        except Exception:
+            pass
+        return lines[:2]
+
     def _deals_lines(self):
-        # Draft-day trades involving picks show up here when the draft runs
+        # Draft-day trades involving picks show up here when the draft runs.
+        # The draft-day deal engine records real deals on the league; fall
+        # back to the empty state when none have happened yet.
+        deals = []
+        try:
+            league = getattr(getattr(self, 'gm', None), 'league', None)
+            deals = list(getattr(league, 'draft_day_deals', None) or [])
+        except Exception:
+            deals = []
+        if deals:
+            return deals[-8:]
         return ["No draft-day trades yet.",
                 "Pick swaps will be tracked here as they happen."]
 
@@ -460,7 +607,7 @@ class DraftDayCentral(EventDayHub):
         top3 = ", ".join(f"{k}: {v}" for k, v in pos.most_common(3))
         nat = Counter(str(getattr(p, 'nationality', getattr(p, 'nation', '?'))) for p in prosp)
         top_nat = nat.most_common(1)[0][0] if nat else "—"
-        return [("Eligible prospects", str(len(prosp))),
+        return [("Remaining prospects", str(len(prosp))),
                 ("Top positions", top3),
                 ("Top nation", top_nat),
                 ("Rounds", "7")]
@@ -473,19 +620,50 @@ class DraftDayCentral(EventDayHub):
     # -- actions ---------------------------------------------------------------
     def _open_draft(self):
         try:
-            self.parent.open_draft_window()
+            self.app.open_draft_window()
         except Exception:
             pass
 
-    def _open_trade(self):
+    def _find_draft_view(self):
+        """Locate an open DraftView (dashboard screen or popup card)."""
         try:
-            self.parent.open_trade_window()
+            from collections import deque
+            seen = set()
+            queue = deque([self.app])
+            while queue:
+                w = queue.popleft()
+                if id(w) in seen:
+                    continue
+                seen.add(id(w))
+                if callable(getattr(w, 'trade_current_pick', None)) \
+                        and getattr(w, 'draft_order', None):
+                    return w
+                try:
+                    queue.extend(w.winfo_children())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return None
+
+    def _open_trade(self):
+        # M7: "Trade This Pick" routes to the live draft-day pick-swap
+        # dialog when a draft board is open; otherwise the Trade Center.
+        try:
+            dv = self._find_draft_view()
+            if dv is not None:
+                dv.trade_current_pick()
+                return
+        except Exception:
+            pass
+        try:
+            self.app.open_trade_window()
         except Exception:
             pass
 
     def _open_scouting(self):
         try:
-            self.parent.open_scouting_window()
+            self.app.open_scouting_window()
         except Exception:
             pass
 
@@ -493,7 +671,7 @@ class DraftDayCentral(EventDayHub):
 # ----------------------------------------------------------------------------
 # Free Agent Frenzy
 # ----------------------------------------------------------------------------
-class FreeAgencyFrenzy(EventDayHub):
+class FreeAgencyFrenzy(EventDayHubView):
     EVENT_TITLE = "FREE AGENT FRENZY"
     EVENT_TAGLINE = "The market is open. Every contender is on the phone. Don't get left behind."
 
@@ -540,6 +718,12 @@ class FreeAgencyFrenzy(EventDayHub):
     def _top_ufa_players(self, n=10):
         """Top free agents as player objects, sorted by OVR."""
         fas = self._ufa_list()
+        # Draft lock: draft-eligible players aren't signable free agents.
+        try:
+            from draft_generator import player_locked_by_draft as _locked
+            fas = [p for p in fas if not _locked(p)]
+        except Exception:
+            pass
         def key(p):
             try:
                 return p.overall_rating()
@@ -584,8 +768,14 @@ class FreeAgencyFrenzy(EventDayHub):
             name = getattr(p, 'full_name', str(p))
             pos = self._pos_code(p)
             age = getattr(p, 'age', '?')
-            tk.Label(top, text=f"#{i}  {name}", bg=self.CARD, fg=self.WHITE,
-                     font=('Segoe UI', 11, 'bold')).pack(side='left')
+            _name_lbl = tk.Label(top, text=f"#{i}  {name}", bg=self.CARD, fg=self.WHITE,
+                     font=('Segoe UI', 11, 'bold'))
+            _name_lbl.pack(side='left')
+            try:
+                bind_player_context(_name_lbl, p, self)
+                bind_player_context(card, p, self)
+            except Exception:
+                pass
             tk.Label(top, text=f"{pos}  \u00b7  Age {age}", bg=self.CARD, fg=self.MUTED,
                      font=('Segoe UI', 10)).pack(side='right')
             mid = tk.Frame(card, bg=self.CARD)
@@ -636,7 +826,7 @@ class FreeAgencyFrenzy(EventDayHub):
             return [("Team", "—")]
         try:
             payroll = self._team_payroll(ut)
-            cap = getattr(self.gm.league, 'salary_cap', 83500000) if hasattr(self.gm, 'league') else 83500000
+            cap = getattr(self.gm.league, 'salary_cap', 104000000) if hasattr(self.gm, 'league') else 104000000
             space = cap - payroll
             def fmt(v):
                 return f"${v/1e6:.1f}M"
@@ -655,19 +845,19 @@ class FreeAgencyFrenzy(EventDayHub):
     # -- actions ---------------------------------------------------------------
     def _open_fa(self):
         try:
-            self.parent.open_free_agency_window()
+            self.app.open_free_agency_window()
         except Exception:
             pass
 
     def _open_finances(self):
         try:
-            self.parent.open_finances_window()
+            self.app.open_finances_window()
         except Exception:
             pass
 
     def _open_trade(self):
         try:
-            self.parent.open_trade_window()
+            self.app.open_trade_window()
         except Exception:
             pass
 
@@ -677,7 +867,7 @@ class FreeAgencyFrenzy(EventDayHub):
 # ----------------------------------------------------------------------------
 def prompt_event_day(parent, game_manager, event):
     """Ask the user whether to open the event hub when the day arrives."""
-    from tkinter import messagebox
+    from popup_system import messagebox
     titles = {
         'draft': ("Draft Day is here!",
                   "The NHL Entry Draft begins today.\n\nOpen Draft Day Central for the live pick-by-pick experience?"),
@@ -691,11 +881,66 @@ def prompt_event_day(parent, game_manager, event):
         return
     try:
         if event == 'draft':
-            DraftDayCentral(parent, game_manager)
+            DraftDayCentralWindow(parent, game_manager)
         elif event == 'deadline':
             from trade_deadline_center import TradeDeadlineCenter
             TradeDeadlineCenter(parent)
         elif event == 'free_agency':
-            FreeAgencyFrenzy(parent, game_manager)
+            FreeAgencyFrenzyWindow(parent, game_manager)
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Legacy popup wrappers (backward compatibility)
+# ---------------------------------------------------------------------------
+
+class EventDayHub(InGamePopup):
+    """Popup wrapper around EventDayHubView."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title(self.EVENT_TITLE)
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self.minsize(1200, 750)
+        self._view = EventDayHubView(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+class DraftDayCentralWindow(EventDayHub):
+    """Popup wrapper for Draft Day Central."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title("Draft Day Central")
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self._view = DraftDayCentral(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+class FreeAgencyFrenzyWindow(EventDayHub):
+    """Popup wrapper for Free Agency Frenzy."""
+    def __init__(self, parent, game_manager):
+        InGamePopup.__init__(self, parent)
+        self.title("Free Agency Frenzy")
+        try:
+            self.state('zoomed')
+        except Exception:
+            self.geometry("1600x950")
+        self._view = FreeAgencyFrenzy(self, game_manager, app=parent)
+        self._view.pack(fill="both", expand=True)
+        self._view._close_screen = self.destroy
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+
+# Keep original names working as popup wrappers for existing callers
+DraftDayCentralPopup = DraftDayCentralWindow
+FreeAgencyFrenzyPopup = FreeAgencyFrenzyWindow

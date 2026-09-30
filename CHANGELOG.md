@@ -3,6 +3,94 @@
 All notable changes to Puck Dynasty are documented here. Dates are in
 America/Halifax time.
 
+## [Unreleased] - Multiplayer Phase 1 (online career)
+
+Authoritative-host multiplayer over virtual LAN (Radmin VPN; the game
+just sees a LAN). One machine hosts the canonical league; friends join,
+claim teams, and stay in sync through full-state snapshots. See
+`docs/MULTIPLAYER_DESIGN.md` (architecture + setup) and
+`docs/MULTIPLAYER_MERGE_GUIDE.md` (exact merge surface for collaborators).
+
+### Networking (`multiplayer/` package, new)
+- `protocol.py`: 4-byte length-prefixed pickle framing, `MessageReader`
+  for partial TCP reads, message constructors, `SUPPORTED_ACTIONS`;
+  `PROTOCOL_VERSION = 1` (mismatched clients rejected with an
+  "update your game" message). `WELCOME` carries an additive optional
+  `teams` roster for the lobby.
+- `net_host.py`: `MultiplayerHost` (port 27107) — accept loop, lobby,
+  team claims, ACTION validation (own-team-only, supported-action-only),
+  queued intents resolved on the main thread via `resolve_action`,
+  full-state `STATE_SYNC` broadcasts. Daemon threads; game objects are
+  never touched off the main thread.
+- `net_client.py`: `MultiplayerClient` — connect/handshake, team claim,
+  actions with ACK/REJECT, snapshot apply. Every `STATE_SYNC` is also
+  written to a single rotating `saves/checkpoints/client_last_sync.hm`
+  fallback (one file, never grows) so a client keeps its last synced
+  state if the host dies.
+- Pickle-over-TCP trust model: LAN/VPN only, never the open internet.
+
+### Launcher (`enhanced_launcher.py`, `launcher.py`)
+- New `HOST MULTIPLAYER` / `JOIN MULTIPLAYER` buttons in the action bar.
+- Host flow: name/port dialog → normal new-game setup → host lobby
+  (shows LAN/Radmin IPs, live manager list) → `START LEAGUE` syncs
+  everyone with a full snapshot.
+- Join flow: connect (worker thread) → lobby with team-claim buttons →
+  game is built from the host's first snapshot; the client's Continue
+  button is disabled (only the host advances days).
+- Crash recovery: `launcher.py` writes a session flag at startup and
+  clears it on clean exit (`atexit`); a leftover flag triggers a
+  "Recover last session?" prompt that rebuilds the game from the latest
+  checkpoint.
+
+### Crash-safe checkpoints (`checkpoint_manager.py`, new)
+- 5-slot rotating ring in `saves/checkpoints/` + `manifest.json`
+  (atomic writes, monotonic sequence numbers). Bounded by design — the
+  old unbounded every-7-day autosave is left alone.
+- Triggers: game start, every Continue (day advance), before the
+  fantasy draft (taken *before* rosters are wiped), and after each
+  completed fantasy draft round (via a one-time `make_pick` wrapper
+  covering all human + AI pick sites).
+- Clients are notified of host checkpoints; toasts surface sync,
+  day-advance, and action ACK/reject events in-game.
+
+### Game integration (`main.py`, `fantasy_draft.py`)
+- `HockeyManagerGUI(game_manager, mp_host=None, mp_client=None)`;
+  `_poll_multiplayer()` 250ms main-thread bridge (the only path between
+  network threads and the UI); `_apply_multiplayer_snapshot()`;
+  `_apply_multiplayer_action()` dispatch.
+- Phase-1 scoping: `set_lines`/`set_tactics` stay local (lineup state is
+  GUI session state, not serialized — each manager sets lines on their
+  own screen); roster/cap mutations are validated stubs returning a
+  clean "not implemented yet (Phase 1b)" rejection, ready for
+  incremental implementation.
+- `test_multiplayer_phase1.py`: 12/12 headless integration tests
+  (handshake, version mismatch, team claims, ACTION round-trip,
+  cross-team/unsupported rejection, chat, day announce, client fallback,
+  disconnect, ring bounds, crash-flag lifecycle, async snapshot).
+
+### Performance (audit -> implementation, 2026-09-26)
+- MP snapshot off the main thread: `NetHost.broadcast_state_async()`
+  serializes on a worker (coalescing while busy); `simulate_day` toasts
+  and returns while busy, defers client actions to `snapshot_done`.
+  Fixed `NetHost.stop()` never waking `accept()` (EADDRINUSE on rebind).
+- Player browser: 250 rows/page, precomputed display rows, 200 ms
+  filter debounce (filter pass 1.1 s -> 0.05 s under 12k players).
+- `game_results` capped at 4000 / `news_log` at 1000, with derived
+  date + matchup indexes and `find_game_result()` O(1) lookup.
+- Schedule template cache (`saves/schedule_cache/`): new-game
+  schedule build 13 s -> 0.01 s on cache hit (validated, falls back
+  to generation on mismatch).
+- Weekly AI free agency: `overall_rating()` computed once per FA per
+  team (was up to 4x) via optional `overall=` params; `get_free_agents`
+  scan measured at 3.25 ms and kept as the correct source of truth.
+- `ScheduleWindow`: schedule parsed once per refresh; per-game result
+  lookup via index instead of O(games x results) nested scan.
+- `get_settings()` no longer constructs a `SettingsWindow`;
+  `settings_window.load_settings()` reads JSON directly.
+- Deleted dead modules: `modern_dashboard.py`, `modern_nav.py`,
+  `modern_roster.py`, `page_navigator.py`, `db_importer.py`
+  (+ unused `ModernDashboard` import in `main.py`).
+
 ## [0.9.0] - 2026-09-26
 
 ### Simulation engine

@@ -3,11 +3,9 @@
 # Fully optional system that adds immersive media interactions
 
 import random
-import tkinter as tk
-from tkinter import ttk, messagebox
 from datetime import date, timedelta
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
+from typing import (List, Optional)
 from enum import Enum
 
 class MediaEngagementLevel(Enum):
@@ -412,6 +410,15 @@ class MediaSystem:
         
         # Apply consequences based on response
         self._apply_media_consequences(event, response_choice)
+
+        # Dressing-room cascade (module 03): the room hears the presser.
+        try:
+            import dressing_room as _dr
+            _team = getattr(self.game_manager, "user_team", None)
+            if _team is not None and isinstance(event, dict):
+                _dr.cascade_on_press(_team, event, response_choice)
+        except Exception:
+            pass
     
     def _apply_media_consequences(self, event, response_choice):
         """Apply consequences of media interactions"""
@@ -437,26 +444,16 @@ class MediaSystem:
         if impact_level in ['medium', 'high']:
             morale_change = 0
             if response_choice in ['supportive', 'confident']:
-                morale_change = 1
+                morale_change = 5
             elif response_choice in ['uncertain', 'critical']:
-                morale_change = -1
-            
+                morale_change = -5
+
             # Apply to team morale (if morale system exists)
             if hasattr(self.game_manager, 'user_team') and self.game_manager.user_team:
                 team = self.game_manager.user_team
                 for player in team.roster:
                     if hasattr(player, 'morale'):
-                        player.morale = max(1, min(20, player.morale + morale_change))
-                # F3: trigger dressing-room cascade from press conference
-                try:
-                    from dressing_room import get_team_dynamics
-                    dyn = get_team_dynamics(team)
-                    if morale_change > 0:
-                        dyn.morale_cascade('positive', 1, team.roster)
-                    elif morale_change < 0:
-                        dyn.morale_cascade('negative', 1, team.roster)
-                except ImportError:
-                    pass
+                        player.morale = max(1, min(100, player.morale + morale_change))
     
     def generate_daily_storylines(self):
         """Generate new storylines based on current team situation"""

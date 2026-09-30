@@ -10,7 +10,6 @@ pickled into save files via to_dict()/from_dict().
 """
 
 import random
-from dataclasses import dataclass, field
 from datetime import date
 from typing import Dict, List, Optional, Tuple
 
@@ -43,6 +42,109 @@ EXPECTATIONS = {
 }
 
 
+class OwnerProfile:
+    """The person signing the cheques. Personality drives the patience game.
+
+    Archetypes:
+      patient_builder  - believes in projects; grants patience easily, means it.
+      demanding        - win-now; grants rarely and remembers refusals.
+      meddler          - grants, but attaches conditions (play the kids / cut spending).
+      distant          - barely watches; coin-flip, decided on vibes.
+    """
+
+    ARCHETYPES = {
+        "patient_builder": {
+            "label": "Patient builder",
+            "grant": 0.75,
+            "grant_line": ("\"I hired you to build something, not to win October. "
+                           "You've got time — spend it well.\""),
+            "refuse_line": ("\"I'd love to give you more rope, but the partners "
+                            "are asking questions I can't answer.\""),
+        },
+        "demanding": {
+            "label": "Demanding win-now owner",
+            "grant": 0.35,
+            "grant_line": ("\"Fine. Sixty days. But I want to see a plan, not excuses — "
+                           "and the next skid ends this conversation.\""),
+            "refuse_line": ("\"Patience? I bought a hockey team, not a trust fund. "
+                            "Win games.\""),
+        },
+        "meddler": {
+            "label": "Meddling owner",
+            "grant": 0.55,
+            "grant_line": ("\"Alright — but I'm watching the lineup card. The kids play, "
+                           "the veterans earn it. We do this my way now.\""),
+            "refuse_line": ("\"I gave you my patience when I signed the cheques. "
+                            "Don't ask me twice.\""),
+        },
+        "distant": {
+            "label": "Distant financier",
+            "grant": 0.50,
+            "grant_line": ("\"My people say the underlying numbers are fine. "
+                           "Keep me out of the papers and we're good.\""),
+            "refuse_line": ("\"The accountants are nervous. So am I. "
+                            "That's all I have to say about that.\""),
+        },
+    }
+
+    def __init__(self, archetype: str = "patient_builder"):
+        if archetype not in self.ARCHETYPES:
+            archetype = "patient_builder"
+        self.archetype = archetype
+
+    @classmethod
+    def random(cls, rng=None) -> "OwnerProfile":
+        import random as _r
+        r = rng or _r
+        # League-wide ownership mix: most owners understand projects take time.
+        roll = r.random()
+        if roll < 0.35:
+            return cls("patient_builder")
+        if roll < 0.60:
+            return cls("demanding")
+        if roll < 0.80:
+            return cls("meddler")
+        return cls("distant")
+
+    @property
+    def label(self) -> str:
+        return self.ARCHETYPES[self.archetype]["label"]
+
+    @property
+    def base_grant(self) -> float:
+        return self.ARCHETYPES[self.archetype]["grant"]
+
+    def to_dict(self) -> dict:
+        return {"archetype": self.archetype}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "OwnerProfile":
+        return cls((data or {}).get("archetype", "patient_builder"))
+
+
+# Monthly review bands per board expectation: (min_points_pct, tone, delta).
+# Below the last band = "alarmed" with the expectation's alarmed_delta.
+# Boards judge trends, not games — and a rebuild board judges development,
+# not the standings.
+MONTHLY_BANDS = {
+    "win_cup":  {"bands": [(0.68, "delighted", 5), (0.58, "satisfied", 2),
+                           (0.48, "concerned", -4)], "alarmed": -8},
+    "contend":  {"bands": [(0.62, "delighted", 5), (0.54, "satisfied", 2),
+                           (0.44, "concerned", -3)], "alarmed": -7},
+    "playoffs": {"bands": [(0.58, "delighted", 4), (0.50, "satisfied", 2),
+                           (0.40, "concerned", -3)], "alarmed": -6},
+    "rebuild":  {"bands": [(0.50, "delighted", 4), (0.42, "satisfied", 2),
+                           (0.32, "concerned", -2)], "alarmed": -5},
+}
+
+# Crisis triggers: the only per-game board channel. Boards don't review
+# every game — they intervene when the situation is dire or disastrous.
+CRISIS_LOSS_STREAK = 8      # -10 + formal warning
+CRISIS_WIN_STREAK = 8       # +5, a run worth noticing
+DISASTER_START_GAMES = 12   # winless-ish start over this many games...
+DISASTER_START_PCT = 0.15   # ...at or below this points% = -12
+
+
 class BoardSystem:
     """Tracks board confidence and job security."""
 
@@ -55,6 +157,27 @@ class BoardSystem:
         self.last_review: str = ""
         self.warnings_given: int = 0
         self.sacked: bool = False
+        # Muck's flag: if False, board cannot sack (confidence still matters
+        # for budgets/morale). Set from settings.json -> career.gm_can_be_sacked.
+        self.can_be_sacked: bool = True
+        # -- patience model (Muck's retune): boards judge trends, not games --
+        self.season_number: int = 1      # career year at this club
+        self.streak: int = 0            # signed: +win streak / -loss streak
+        self.patience_factor: float = 1.0  # >1 = patient board (divides negatives)
+        self.owner: OwnerProfile = OwnerProfile()
+        self.inherited_rebuild: bool = False  # hired into a mess?
+        self.roster_youth: bool = False       # young roster buys slack
+        self.recent_cups: int = 0             # banked goodwill
+        self.patience_until: str = ""         # ISO date: granted-patience window
+        self.patience_cooldown_until: str = ""
+        self.refusal_hangover_until: str = ""
+        self.patience_refusals: int = 0
+        self.disaster_start_flagged: bool = False
+        self._disaster: bool = False    # scandal / catastrophic skid: no honeymoon
+        self.last_crisis: str = ""      # surfaced by main.py after record_result
+        # -- anti-double-jeopardy: one bad stretch, one punishment -----------
+        self._month_key: str = ""       # "YYYY-MM" of tracked deltas
+        self._month_delta: int = 0      # signed confidence movement this month
 
     # -- setup ------------------------------------------------------------
     def set_expectation(self, key: str):
@@ -72,27 +195,157 @@ class BoardSystem:
         else:
             self.set_expectation("rebuild")
 
-    # -- results ----------------------------------------------------------
-    def record_result(self, won: bool, went_ot: bool, was_favorite: bool,
-                      is_playoff: bool = False) -> int:
-        """Update confidence after a game. Returns the delta applied."""
-        if is_playoff:
-            delta = 6 if won else -8
-        elif won:
-            delta = 4 if was_favorite else 7  # bonus for upset wins
-        else:
-            delta = -6 if was_favorite else -3  # harsher for upset losses
-            if went_ot:
-                delta += 2  # at least took a point
+    # -- patience model ---------------------------------------------------
+    def on_hired(self, team_strength: float, roster_avg_age: float,
+                 date_iso: str, recent_cups: int = 0,
+                 owner: Optional[OwnerProfile] = None):
+        """Seed the patience model on day one.
+
+        A first-year GM inheriting a mess gets a honeymoon: the board knows
+        projects take time and owners don't want to rotate GMs every year.
+        """
+        self.season_number = 1
+        self.inherited_rebuild = (self.expectation == "rebuild"
+                                  or team_strength < 52)
+        self.roster_youth = roster_avg_age < 26
+        self.recent_cups = recent_cups
+        self.owner = owner or OwnerProfile.random()
+        self._compute_patience_factor()
+
+    def _compute_patience_factor(self):
+        """Patience > 1 divides every negative delta. Finite, and earned."""
+        f = 1.0
+        if self.season_number == 1:
+            f += 0.4                      # honeymoon: bumpy starts expected
+        elif self.season_number == 2:
+            f += 0.15
+        if self.inherited_rebuild:
+            f += 0.2                      # "the team wasn't in a good spot"
+        if self.roster_youth:
+            f += 0.1
+        f += 0.3 * min(self.recent_cups, 2)  # banked goodwill, decays with time
+        self.patience_factor = max(0.7, min(1.8, f))
+
+    @staticmethod
+    def _on_or_after(today_iso: str, until_iso: str) -> bool:
+        """True if today is within a window ending at until_iso."""
+        if not today_iso or not until_iso:
+            return False
+        try:
+            import datetime as _dt
+            return (_dt.date.fromisoformat(today_iso)
+                    <= _dt.date.fromisoformat(until_iso))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _add_days(date_iso: str, days: int) -> str:
+        import datetime as _dt
+        try:
+            d = _dt.date.fromisoformat(date_iso) + _dt.timedelta(days=days)
+            return d.isoformat()
+        except Exception:
+            return date_iso
+
+    def _dampen_negative(self, delta: int, today_iso: str = "") -> int:
+        """Apply the patience model to a negative delta. Min -1."""
+        d = delta / max(0.7, self.patience_factor)
+        if self._on_or_after(today_iso, self.patience_until):
+            d *= 0.5                      # owner publicly backed you
+        if self._on_or_after(today_iso, self.refusal_hangover_until):
+            d *= 1.25                     # spent your capital, kept losing
+        return -max(1, int(round(-d)))
+
+    def _apply_delta(self, delta: int, today_iso: str = "",
+                     channel: str = "other") -> int:
+        """Central confidence mover. Enforces the anti-pile-on rules:
+
+        - Monthly negative cap (-12): a bad stretch gets punished ONCE, not
+          once per channel (crisis trigger + monthly review + press answers
+          can't stack into a death spiral).
+        - Comeback boost: positive movement counts 1.5x when confidence is
+          under 25 — a win at rock bottom is a lifeline, not a footnote.
+        Big one-off events (scandal etc.) bypass the cap: they're discrete,
+        not the same stretch twice.
+        """
+        if not delta:
+            return 0
+        month = (today_iso or "")[:7]
+        if month and month != self._month_key:
+            self._month_key = month
+            self._month_delta = 0
+        if delta > 0 and self.confidence < 25:
+            delta = int(round(delta * 1.5))
+        if delta < 0 and channel != "big_event":
+            if self._month_delta <= -12:
+                return 0                    # already punished this month
+            allowed = -12 - self._month_delta  # e.g. -5 when -7 banked
+            delta = max(delta, allowed)
         self.confidence = max(0, min(100, self.confidence + delta))
-        if won:
-            self.season_wins += 1
-        elif went_ot:
-            self.season_otl += 1
-        else:
-            self.season_losses += 1
+        self._month_delta += delta
         self._check_sack()
         return delta
+
+    # -- results ----------------------------------------------------------
+    def record_result(self, won: bool, went_ot: bool, was_favorite: bool,
+                      is_playoff: bool = False, today_iso: str = "") -> int:
+        """Track the result. The board does NOT review every game — it only
+        intervenes when the situation is dire or disastrous. Returns the
+        confidence delta applied (usually 0). Check self.last_crisis after."""
+        if won:
+            self.season_wins += 1
+            self.streak = self.streak + 1 if self.streak >= 0 else 1
+        elif went_ot:
+            self.season_otl += 1
+            self.streak = 0               # a point stops the bleeding
+        else:
+            self.season_losses += 1
+            self.streak = self.streak - 1 if self.streak <= 0 else -1
+        self.last_crisis = ""
+        delta = 0
+        games = self.season_wins + self.season_losses + self.season_otl
+
+        if is_playoff:
+            # Short series: every game matters, but modestly.
+            delta = 2 if won else -3
+        elif self.streak == -CRISIS_LOSS_STREAK:
+            delta = self._dampen_negative(-10, "")
+            self.warnings_given += 1
+            self.last_crisis = (
+                f"Board alarmed: {CRISIS_LOSS_STREAK}-game losing streak. "
+                "A formal warning has been issued — turn it around.")
+        elif self.streak <= -12:
+            # Burning it to the ground: honeymoon over, even in year one.
+            self._disaster = True
+            self.warnings_given += 1
+            self.last_crisis = (
+                "The board has seen enough. This is a disaster — "
+                "the next review decides your future.")
+            delta = self._dampen_negative(-10, "")
+        elif self.streak == CRISIS_WIN_STREAK:
+            delta = 5
+            self.last_crisis = (
+                f"Board delighted: {CRISIS_WIN_STREAK}-game winning streak. "
+                "The project is ahead of schedule.")
+        elif (not self.disaster_start_flagged and games <= DISASTER_START_GAMES
+                and games >= 8
+                and (self.season_wins * 2 + self.season_otl) / (games * 2)
+                <= DISASTER_START_PCT):
+            # 0-10 start puts a fire under anyone — honeymoon or not.
+            delta = -12
+            self.disaster_start_flagged = True
+            self._disaster = True
+            self.warnings_given += 1
+            self.last_crisis = (
+                "Disastrous start: the board is furious. Win now or else.")
+        if delta:
+            return self._apply_delta(delta, today_iso, channel="crisis")
+        return 0
+
+    def apply_press_board_effect(self, total: int, today_iso: str = "") -> int:
+        """Route press-conference board effects through the monthly cap so a
+        bad month plus a bad presser can't stack into a spiral."""
+        return self._apply_delta(total, today_iso, channel="press")
 
     def record_big_event(self, kind: str) -> int:
         """Off-ice events: 'good_trade', 'bad_trade', 'star_signing',
@@ -102,11 +355,25 @@ class BoardSystem:
             "star_leaves": -7, "scandal": -10,
         }
         delta = deltas.get(kind, 0)
-        self.confidence = max(0, min(100, self.confidence + delta))
-        self._check_sack()
+        if kind == "scandal":
+            self._disaster = True  # no honeymoon for this
+        if delta:
+            self._apply_delta(delta, "", channel="big_event")
         return delta
 
     def _check_sack(self):
+        # Respect the user's "GM can be sacked" setting. If disabled,
+        # confidence floors at 1 (job safe, but budgets/morale still suffer).
+        if not self.can_be_sacked:
+            if self.confidence <= 0:
+                self.confidence = 1
+            return
+        # First-year honeymoon: owners don't rotate GMs after one bumpy
+        # season — unless it's a genuine disaster (scandal, catastrophic skid).
+        if self.season_number == 1 and not self._disaster:
+            if self.confidence <= 0:
+                self.confidence = 1
+            return
         if self.confidence <= 0 and not self.sacked:
             self.sacked = True
 
@@ -123,27 +390,115 @@ class BoardSystem:
             return "Under Pressure"
         return "In Danger"
 
-    def monthly_review(self, points_pct: float) -> Tuple[str, str]:
-        """Return (headline, body) for the monthly board email."""
-        exp = EXPECTATIONS.get(self.expectation or "playoffs")
-        if points_pct >= 0.65:
-            tone, d = "delighted", 6
-        elif points_pct >= 0.55:
-            tone, d = "satisfied", 3
-        elif points_pct >= 0.45:
-            tone, d = "concerned", -4
-        else:
-            tone, d = "alarmed", -8
-        self.confidence = max(0, min(100, self.confidence + d))
+    def current_consequences(self) -> List[str]:
+        """Concrete teeth: what low confidence costs the GM right now.
+
+        Used by the Manager Hub to show stakes, and by main.py to apply
+        budget/morale effects. Empty list = no consequences (Secure).
+        """
+        out = []
+        c = self.confidence
+        if self.sacked:
+            return ["You have been sacked."]
+        if c < 20:
+            out.append("Transfer budget frozen — board will not approve spending.")
+            out.append("Players are unsettled: morale dips across the roster.")
+            out.append("Media pressure is intense; every loss is a crisis.")
+            if self.can_be_sacked:
+                out.append("ONE more bad stretch and the board will act.")
+        elif c < 40:
+            out.append("Transfer budget cut by 25% — the board is watching the money.")
+            out.append("Star players are questioning the project.")
+        elif c < 70:
+            out.append("The board expects improvement; no new spending without approval.")
+        return out
+
+    def monthly_review(self, points_pct: float,
+                       today_iso: str = "") -> Tuple[str, str]:
+        """The board's real channel: a monthly review against bands set by
+        the club's expectation — a rebuild board judges development, not the
+        standings. Negatives run through the patience model and the monthly
+        anti-pile-on cap."""
+        exp = self.expectation or "playoffs"
+        spec = MONTHLY_BANDS.get(exp, MONTHLY_BANDS["playoffs"])
+        tone, delta = "alarmed", spec["alarmed"]
+        for min_pct, t, d in spec["bands"]:
+            if points_pct >= min_pct:
+                tone, delta = t, d
+                break
+        if delta < 0:
+            delta = self._dampen_negative(delta, today_iso)
+        applied = self._apply_delta(delta, today_iso, channel="monthly")
+        # If the cap absorbed part of it, say so honestly.
+        absorbed = delta - applied
         self._check_sack()
+        label = EXPECTATIONS.get(exp, {}).get("label", exp)
         headline = f"Board review: {tone.capitalize()} with progress"
         body = (
             f"The board is {tone} with the team's direction. "
-            f"Expectation: {exp['label']}. Current points percentage: {points_pct:.1%}. "
+            f"Expectation: {label}. Current points percentage: {points_pct:.1%}. "
             f"Board confidence is now {self.confidence}/100 ({self.job_status})."
         )
+        if absorbed < 0:
+            body += (" The board is already accounting for this stretch — "
+                     "it won't punish you twice for the same run of results.")
         self.last_review = body
         return headline, body
+
+    def request_patience(self, today_iso: str) -> Tuple[bool, str, str]:
+        """Ask the owner for time. A GM-initiated meeting when the walls are
+        closing in.
+
+        Granted: +3 confidence, negatives halved for 60 days, the room settles.
+        Refused: -4, and the next two months' negatives sting 25% more — you
+        spent your political capital and kept losing.
+        One ask per 120 days; only when confidence is under 55.
+        """
+        arch = OwnerProfile.ARCHETYPES[self.owner.archetype]
+        if self.confidence >= 55:
+            return (False, "No meeting needed",
+                    "The board is content enough — no need to ask for patience "
+                    "while things are stable.")
+        if self._on_or_after(today_iso, self.patience_cooldown_until):
+            return (False, "Too soon",
+                    "You only just asked. Give it time before going back — "
+                    f"not before {self.patience_cooldown_until}.")
+        import random as _r
+        chance = self.owner.base_grant
+        if self.season_number == 1:
+            chance += 0.10            # new GM, inherited situation
+        if self.inherited_rebuild:
+            chance += 0.05
+        chance -= 0.15 * self.patience_refusals
+        chance = max(0.05, min(0.95, chance))
+        self.patience_cooldown_until = self._add_days(today_iso, 120)
+        if _r.random() < chance:
+            self.patience_until = self._add_days(today_iso, 60)
+            self._apply_delta(3, today_iso, channel="patience")
+            headline = "The owner backs you — publicly"
+            body = (arch["grant_line"] + " For the next 60 days the board "
+                    "will judge the trend, not the week. The dressing room "
+                    "settles knowing the manager is safe.")
+            return (True, headline, body)
+        self.patience_refusals += 1
+        self.refusal_hangover_until = self._add_days(today_iso, 60)
+        self._apply_delta(-4, today_iso, channel="patience")
+        headline = "The owner refuses to wait"
+        body = (arch["refuse_line"] + " The refusal is public. For the next "
+                "60 days every setback will sting more — you asked for time "
+                "and the answer was no.")
+        return (False, headline, body)
+
+    def patience_status(self, today_iso: str = "") -> str:
+        """One-liner for the Manager Hub."""
+        if self._on_or_after(today_iso, self.patience_until):
+            return f"Owner backing active until {self.patience_until}."
+        if self._on_or_after(today_iso, self.patience_cooldown_until):
+            return ("Patience already requested — next ask available after "
+                    f"{self.patience_cooldown_until}.")
+        if self.confidence < 55:
+            return "You can request a meeting with the owner."
+        return ""
 
     def season_review(self, made_playoffs: bool, playoff_rounds_won: int,
                       won_cup: bool) -> Tuple[str, str, int]:
@@ -158,8 +513,12 @@ class BoardSystem:
         delta = 15 if met else -20
         if won_cup:
             delta = max(delta, 20)
-        self.confidence = max(0, min(100, self.confidence + delta))
-        self._check_sack()
+            self.recent_cups = min(2, self.recent_cups + 1)
+        if delta < 0:
+            # Patience applies at season's end too — a year-one GM who missed
+            # with a rebuild roster doesn't eat the full -20.
+            delta = self._dampen_negative(delta)
+        self._apply_delta(delta, "", channel="season")
         headline = ("Board delighted: expectations met"
                     if met else "Board disappointed: expectations missed")
         body = (
@@ -167,9 +526,22 @@ class BoardSystem:
             f"{'You met it. ' if met else 'You fell short. '}"
             f"Board confidence is now {self.confidence}/100 ({self.job_status})."
         )
+        # Roll the clock: patience is finite. Each missed year erodes it;
+        # meeting expectations rebuilds a little. Owners don't rotate GMs
+        # yearly, but they don't wait forever either.
+        self.season_number += 1
+        if met:
+            self.patience_factor = min(1.8, self.patience_factor + 0.1)
+        else:
+            self.patience_factor = max(0.7, self.patience_factor - 0.15)
+        if self.recent_cups and not won_cup:
+            self.recent_cups = max(0, self.recent_cups - 1)  # goodwill decays
         # Reset season counters
         self.season_wins = self.season_losses = self.season_otl = 0
+        self.streak = 0
         self.warnings_given = 0
+        self.disaster_start_flagged = False
+        self._disaster = False
         return headline, body, delta
 
     # -- persistence ------------------------------------------------------
@@ -183,14 +555,35 @@ class BoardSystem:
             "last_review": self.last_review,
             "warnings_given": self.warnings_given,
             "sacked": self.sacked,
+            "season_number": self.season_number,
+            "streak": self.streak,
+            "patience_factor": self.patience_factor,
+            "owner": self.owner.to_dict(),
+            "inherited_rebuild": self.inherited_rebuild,
+            "roster_youth": self.roster_youth,
+            "recent_cups": self.recent_cups,
+            "patience_until": self.patience_until,
+            "patience_cooldown_until": self.patience_cooldown_until,
+            "refusal_hangover_until": self.refusal_hangover_until,
+            "patience_refusals": self.patience_refusals,
+            "disaster_start_flagged": self.disaster_start_flagged,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "BoardSystem":
         b = cls()
         for k, v in (data or {}).items():
-            if hasattr(b, k):
+            if k == "owner":
+                b.owner = OwnerProfile.from_dict(v)
+            elif hasattr(b, k):
                 setattr(b, k, v)
+        # Migration: a sack issued under the pre-retune model must not stand
+        # into a year-1 career -- under the new honeymoon rule a bumpy first
+        # season (no disaster) floors confidence at 1 instead of ending the
+        # career. Clear the stale flag so old saves continue correctly.
+        if b.season_number == 1 and not b._disaster and b.sacked:
+            b.sacked = False
+            b.confidence = max(1, b.confidence)
         return b
 
 
@@ -225,13 +618,13 @@ def get_player_personality(player) -> str:
 
 
 def morale_label(morale: int) -> str:
-    if morale >= 9:
+    if morale >= 85:
         return "Superb"
-    if morale >= 7:
+    if morale >= 65:
         return "Good"
-    if morale >= 5:
+    if morale >= 45:
         return "Okay"
-    if morale >= 3:
+    if morale >= 25:
         return "Poor"
     return "Abysmal"
 
@@ -294,12 +687,12 @@ def update_player_happiness(player, team_games_played: int) -> List[str]:
         player.transfer_requested = True
         events.append(f"TRANSFER REQUEST: {player.first_name} {player.last_name} has asked to leave the club.")
 
-    # Morale follows happiness loosely
-    morale = getattr(player, "morale", 7) or 7
-    if happiness >= 70 and morale < 10:
-        player.morale = min(10, morale + 1)
+    # Morale follows happiness loosely (both 1-100)
+    morale = getattr(player, "morale", 70) or 70
+    if happiness >= 70 and morale < 100:
+        player.morale = min(100, morale + 5)
     elif happiness < 30 and morale > 1:
-        player.morale = max(1, morale - 1)
+        player.morale = max(1, morale - 5)
 
     player.happiness = happiness
     player.playing_time_concern = concern
@@ -354,37 +747,37 @@ def chat_with_player(player, action: str) -> Tuple[str, Dict[str, int]]:
     """Apply a private chat action. Returns (result_text, effects_dict)."""
     personality = get_player_personality(player)
     happiness = getattr(player, "happiness", 70) or 70
-    morale = getattr(player, "morale", 7) or 7
+    morale = getattr(player, "morale", 70) or 70
     name = f"{player.first_name} {player.last_name}"
     effects = {"happiness": 0, "morale": 0, "concern": 0}
 
     if action == "praise":
-        dh, dm = 8, 1
+        dh, dm = 8, 5
         if personality == "Driven":
-            dh, dm = 12, 2
+            dh, dm = 12, 10
         text = f"{name} appreciated the praise and looks motivated."
     elif action == "criticize":
         if personality in ("Driven", "Professional"):
-            dh, dm = -4, 1
+            dh, dm = -4, 5
             text = f"{name} took the criticism on the chin and vows to respond on the ice."
         else:
-            dh, dm = -12, -2
+            dh, dm = -12, -10
             text = f"{name} reacted badly to the criticism. His agent called to complain."
     elif action == "promise_icetime":
         player.promise_made = "more_icetime"
-        dh, dm, dc = 10, 1, -25
+        dh, dm, dc = 10, 5, -25
         effects["concern"] = dc
         text = f"You promised {name} more ice time. He'll be watching your line selections."
         player.happiness = max(0, min(100, happiness + dh))
-        player.morale = max(1, min(10, morale + dm))
+        player.morale = max(1, min(100, morale + dm))
         player.playing_time_concern = max(0, (getattr(player, "playing_time_concern", 0) or 0) + dc)
         return text, {"happiness": dh, "morale": dm, "concern": dc}
     elif action == "reassure_future":
-        dh, dm = 5, 1
+        dh, dm = 5, 5
         text = f"{name} seemed reassured by your words."
     elif action == "discipline":
         if personality == "Volatile":
-            dh, dm = -15, -2
+            dh, dm = -15, -10
             text = f"{name} exploded at the discipline. This could get ugly."
         else:
             dh, dm, dc = -5, 0, -15
@@ -404,7 +797,7 @@ def chat_with_player(player, action: str) -> Tuple[str, Dict[str, int]]:
     effects["happiness"] = dh
     effects["morale"] = dm
     player.happiness = max(0, min(100, happiness + dh))
-    player.morale = max(1, min(10, morale + dm))
+    player.morale = max(1, min(100, morale + dm))
     if effects["concern"]:
         player.playing_time_concern = max(0, (getattr(player, "playing_time_concern", 0) or 0) + effects["concern"])
     return text, effects
@@ -469,7 +862,7 @@ PREMATCH_QUESTIONS = [
         "ask": "Will we see any young players given a chance soon?",
         "answers": [
             ("If they're good enough, they'll play", "confident", 1, 1, 2,
-             "The academy prospects are buzzing."),
+             "The drafted prospects are buzzing."),
             ("They need to earn it in practice", "calm", 0, 1, 0,
              "Sensible. Nobody is upset."),
             ("We're not a development charity", "defensive", -2, 0, -2,
@@ -578,6 +971,71 @@ def build_prematch_presser(user_team, opponent, ctx: dict) -> List[dict]:
     return out
 
 
+def _drama_questions(drama: list) -> List[dict]:
+    """Incident-driven press questions, asked before the routine ones --
+    the room wants to know where the coach stands on the night's
+    flashpoint. Answers move morale, the board, and the fans, exactly
+    like the rest of the presser."""
+    out = []
+    for d in drama or []:
+        kind = d.get("kind")
+        if kind == "line_brawl":
+            out.append({
+                "id": "drama_brawl",
+                "journalist": "Dave Tremblay (TSN)",
+                "question": ("It turned ugly out there -- the gloves came "
+                             "off all over the ice late. What's your message "
+                             "to the room?"),
+                "answers": [
+                    {"label": "Back them: 'That's playoff hockey. I love it.'",
+                     "tone": "passionate", "morale_effect": 1,
+                     "board_effect": -1, "fan_effect": 2,
+                     "reaction": ("The room roars its approval -- the "
+                                  "players love a coach who has their back. "
+                                  "The board winces at the circus.")},
+                    {"label": "Calm it: 'We can't take ourselves out of games.'",
+                     "tone": "calm", "morale_effect": 0,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("The veterans nod. The board appreciates "
+                                  "a steady hand.")},
+                    {"label": "Deflect: 'Ask the league office.'",
+                     "tone": "evasive", "morale_effect": -1,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("The players wanted their coach to pick a "
+                                  "side. The fans wanted one too.")},
+                ],
+            })
+        elif kind == "controversial_hit":
+            hitter = d.get("hitter", "your player")
+            victim = d.get("victim", "their player")
+            fined = d.get("fined", False)
+            out.append({
+                "id": "drama_hit",
+                "journalist": "Sarah Chen (Hockey Night)",
+                "question": (f"The league reviewed {hitter}'s hit on "
+                             f"{victim}{' and handed down a fine' if fined else ''}. "
+                             f"Any concern about how your player handled it?"),
+                "answers": [
+                    {"label": "Defend him: 'Clean hit. He plays on the edge.'",
+                     "tone": "passionate", "morale_effect": 1,
+                     "board_effect": 0, "fan_effect": 1,
+                     "reaction": (f"{hitter} hears his coach went to bat for "
+                                  "him -- the room tightens. The fans eat it up.")},
+                    {"label": "Measured: 'We'll accept whatever comes.'",
+                     "tone": "calm", "morale_effect": -1,
+                     "board_effect": 1, "fan_effect": 0,
+                     "reaction": ("The board likes the professionalism. "
+                                  "The room wanted more fight.")},
+                    {"label": "No comment.",
+                     "tone": "evasive", "morale_effect": 0,
+                     "board_effect": 0, "fan_effect": -1,
+                     "reaction": ("Nobody believes a coach has no opinion on "
+                                  "a hit like that. The fans grumble.")},
+                ],
+            })
+    return out
+
+
 def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
                             score: str, star_name: str, ctx: dict) -> List[dict]:
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
@@ -602,7 +1060,8 @@ def build_postmatch_presser(user_team, opponent, won: bool, drew: bool,
             "question": _fill(q["ask"], full_ctx),
             "answers": answers,
         })
-    return out
+    # The night's flashpoints get asked about first.
+    return _drama_questions(full_ctx.get("drama")) + out
 
 
 # ---------------------------------------------------------------------------
@@ -707,11 +1166,11 @@ def apply_team_talk(team, option: dict, context: dict) -> Tuple[str, float]:
         reaction = "The players nodded along."
 
     for p in getattr(team, "roster", []) or []:
-        m = getattr(p, "morale", 7) or 7
+        m = getattr(p, "morale", 70) or 70
         # Leaders and big-game players respond more
-        leadership = getattr(p, "leadership", 10) or 10
-        adj = morale_delta + (1 if leadership >= 15 and morale_delta > 0 else 0)
-        p.morale = max(1, min(10, m + adj))
+        leadership = getattr(p, "leadership", 50) or 50
+        adj = morale_delta + (1 if leadership >= 75 and morale_delta > 0 else 0)
+        p.morale = max(1, min(100, m + adj * 5))
 
     return reaction, boost
 
@@ -894,49 +1353,6 @@ class TrainingSystem:
 
 
 # ---------------------------------------------------------------------------
-# Youth intake
-# ---------------------------------------------------------------------------
-
-def generate_youth_intake(team_name: str, count: int = 4) -> List[dict]:
-    """Generate raw prospect data for the annual youth intake.
-
-    Returns plain dicts; the GUI converts them to Player objects.
-    """
-    first_names = ["Liam", "Noah", "Lucas", "Ethan", "Mason", "Logan", "Owen",
-                   "Nathan", "Gabriel", "Félix", "Alexis", "Thomas", "Jake",
-                   "Cole", "Brady", "Dylan", "Ryan", "Kyle", "Tyler", "Zach"]
-    last_names = ["Tremblay", "Gagnon", "Roy", "Côté", "Bouchard", "Gauthier",
-                  "Morin", "Lavoie", "Fortin", "Leblanc", "Bergeron", "Pelletier",
-                  "Smith", "Johnson", "Brown", "Wilson", "Clark", "Miller",
-                  "Novak", "Lindqvist", "Virtanen", "Kuznetsov", "Dube", "Stützle"]
-    positions = ["C", "LW", "RW", "LW", "RW", "C", "D", "D", "D", "G"]
-    prospects = []
-    for _ in range(count):
-        age = random.randint(17, 19)
-        potential = random.randint(12, 19)
-        overall = max(5, potential - random.randint(4, 8))
-        pos = random.choice(positions)
-        prospects.append({
-            "first_name": random.choice(first_names),
-            "last_name": random.choice(last_names),
-            "age": age,
-            "position": pos,
-            "overall": overall,
-            "potential": potential,
-            "personality": random.choice(PERSONALITIES),
-            "scout_note": random.choice([
-                "Silky hands and great vision.",
-                "A relentless forechecker.",
-                "Big shot from the point.",
-                "Calm beyond his years in net.",
-                "Elite skating, raw offensively.",
-                "High hockey IQ, needs strength.",
-            ]),
-        })
-    return prospects
-
-
-# ---------------------------------------------------------------------------
 # Manager reputation
 # ---------------------------------------------------------------------------
 
@@ -1012,6 +1428,7 @@ class CareerState:
         self.intake_preview_sent: int = 0
         self.prompts_enabled: bool = True
         self.career_start_date: str = ""
+        self.sack_announced: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -1024,6 +1441,7 @@ class CareerState:
             "intake_preview_sent": self.intake_preview_sent,
             "prompts_enabled": self.prompts_enabled,
             "career_start_date": self.career_start_date,
+            "sack_announced": self.sack_announced,
         }
 
     @classmethod
@@ -1039,4 +1457,5 @@ class CareerState:
         c.intake_preview_sent = data.get("intake_preview_sent", 0)
         c.prompts_enabled = data.get("prompts_enabled", True)
         c.career_start_date = data.get("career_start_date", "")
+        c.sack_announced = data.get("sack_announced", False)
         return c

@@ -3,7 +3,6 @@
 
 import tkinter as tk
 from tkinter import ttk
-import math
 from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass
 
@@ -325,62 +324,3 @@ class TeamStandingsWidget(ttk.Frame):
         else:
             return self.theme.colors.muted_text  # Out of playoffs
 
-class StatComparisonWidget(ttk.Frame):
-    """Professional stat comparison widget for player analysis"""
-    
-    def __init__(self, parent, players: List, stat_name: str, theme, **kwargs):
-        super().__init__(parent, style='Card.TFrame', **kwargs)
-        self.players = players
-        self.stat_name = stat_name
-        self.theme = theme
-        self.configure(padding=16)
-        
-        self._create_comparison_chart()
-    
-    def _create_comparison_chart(self):
-        """Create horizontal bar chart for stat comparison"""
-        header = ttk.Label(self, text=f"{self.stat_name.upper()} COMPARISON", 
-                          style='Heading.TLabel')
-        header.pack(anchor='w', pady=(0, 12))
-        
-        if not self.players:
-            return
-        
-        # Get max value for scaling
-        max_value = max(getattr(player, self.stat_name.lower(), 0) for player in self.players)
-        if max_value == 0:
-            max_value = 1
-        
-        for player in self.players[:5]:  # Show top 5
-            self._create_player_comparison_bar(player, max_value)
-    
-    def _create_player_comparison_bar(self, player, max_value: float):
-        """Create individual player comparison bar"""
-        player_frame = ttk.Frame(self, style='Card.TFrame')
-        player_frame.pack(fill='x', pady=4)
-        
-        # Player name
-        name_label = ttk.Label(player_frame, text=player.full_name, style='Body.TLabel')
-        name_label.pack(anchor='w')
-        
-        # Bar container
-        bar_container = tk.Frame(player_frame, height=20, bg=self.theme.colors.border_light)
-        bar_container.pack(fill='x', pady=(2, 4))
-        bar_container.pack_propagate(False)
-        
-        # Stat value
-        stat_value = getattr(player, self.stat_name.lower(), 0)
-        bar_width = (stat_value / max_value) * 100
-        
-        if bar_width > 0:
-            # Colored bar
-            color = self.theme.get_stat_color(stat_value, max_value)
-            bar_fill = tk.Frame(bar_container, bg=color, height=20)
-            bar_fill.place(x=0, y=0, relheight=1, width=f"{bar_width}%")
-        
-        # Value label
-        value_label = tk.Label(bar_container, text=str(stat_value),
-                              bg=self.theme.colors.border_light,
-                              fg=self.theme.colors.primary_text,
-                              font=self.theme.fonts['small'])
-        value_label.place(relx=1, rely=0.5, anchor='e', x=-4)

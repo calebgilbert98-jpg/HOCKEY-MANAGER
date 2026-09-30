@@ -5,7 +5,8 @@ player pools, draft visualization, and comprehensive draft management.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup
 import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -28,7 +29,9 @@ class DraftConfiguration:
     serpentine: bool = True
     protected_players: int = 0  # Number of players each team can protect
     salary_cap_enabled: bool = True
-    trade_deadline_round: int = 10  # Can trade picks until this round
+    # NOTE: no trading in fantasy drafts, by design. (A stale
+    # trade_deadline_round field was removed 2026-09-28: it was never read
+    # anywhere and wrongly implied pick trading existed.)
     draft_order_type: str = "Randomized"  # Type of draft order used
     
 @dataclass
@@ -50,7 +53,15 @@ class TeamDraftStrategy:
     
 class FantasyDraftManager:
     """Manages the fantasy draft logic and data"""
-    
+
+    # Cap-awareness model for AI drafting: the first _CAP_CORE_SIZE picks
+    # are the cap-relevant NHL core; the rest is AHL depth. Remaining
+    # unfilled core slots are assumed to cost _DEPTH_FILL_RATE each, so the
+    # AI can project its final payroll and prefer value as the cap fills.
+    # This is a soft nudge only -- the draft never enforces compliance.
+    _CAP_CORE_SIZE = 23
+    _DEPTH_FILL_RATE = 1_500_000
+
     def __init__(self, teams: List[Team], all_players: List[Player], config: Optional[DraftConfiguration] = None):
         self.teams = teams
         self.all_players = all_players
@@ -152,6 +163,16 @@ class FantasyDraftManager:
                 if actual_player:
                     current_pick.player = actual_player
                     actual_player.team_name = current_pick.team.team_name
+                    # A drafted player starts letter-less on his new club:
+                    # no two-C rosters, no inherited captaincies. Letters
+                    # are dealt at the start of preseason (user picks his
+                    # own via the mandatory chooser; AI clubs auto-repair).
+                    try:
+                        actual_player.captaincy = ""
+                        actual_player.captain_tenure_years = 0
+                        actual_player.alternate_tenure_years = 0
+                    except Exception:
+                        pass
                     self.current_pick += 1
                     debug_print(f"DEBUG: Successfully drafted {actual_player.full_name} for {current_pick.team.team_name}")
                     return True
@@ -166,6 +187,47 @@ class FantasyDraftManager:
         """Check if draft is complete"""
         return self.current_pick >= len(self.draft_picks)
     
+    def _team_drafted_players(self, team: Team):
+        """Players this team has already drafted (in pick order)."""
+        return [pick.player for pick in self.draft_picks
+                if pick.team.team_name == team.team_name and pick.player]
+
+    def _committed_cap(self, team: Team) -> float:
+        """Total salary already committed by this team's draft picks."""
+        total = 0.0
+        for player in self._team_drafted_players(team):
+            contract = getattr(player, 'contract', None)
+            if contract is not None:
+                total += float(getattr(contract, 'salary', 0) or 0)
+        return total
+
+    def _cap_pressure_factor(self, team: Team, player: Player) -> float:
+        """Soft cap-awareness for AI drafting.
+
+        Projects the club's final payroll as committed salary + this
+        player's salary + a depth rate for each unfilled core slot. While
+        the projection fits under the cap the factor is 1.0 (draft the
+        best player, period); as the projection pushes over, expensive
+        players are progressively discounted so the AI leans into value
+        deals and roster balance. Never blocks a pick -- the fantasy
+        draft does not enforce cap compliance.
+        """
+        if not getattr(self.config, 'salary_cap_enabled', True):
+            return 1.0
+        contract = getattr(player, 'contract', None)
+        salary = float(getattr(contract, 'salary', 0) or 0)
+        if salary <= 0:
+            return 1.0
+        cap = float(getattr(team, 'salary_cap', 0) or 104_000_000)
+        committed = self._committed_cap(team)
+        picks_made = len(self._team_drafted_players(team))
+        slots_left = max(0, self._CAP_CORE_SIZE - picks_made - 1)
+        projected = committed + salary + self._DEPTH_FILL_RATE * slots_left
+        if projected <= cap:
+            return 1.0
+        over_frac = (projected - cap) / cap
+        return max(0.5, 1.0 - 2.0 * over_frac)
+
     def analyze_team_needs(self, team: Team) -> Dict[str, float]:
         """Analyze team's positional needs based on current draft picks"""
         # Count current picks by position
@@ -175,8 +237,7 @@ class FantasyDraftManager:
         }
         
         # Count drafted players for this team
-        team_picks = [pick.player for pick in self.draft_picks 
-                     if pick.team.team_name == team.team_name and pick.player]
+        team_picks = self._team_drafted_players(team)
         
         for player in team_picks:
             pos = player.primary_position.value
@@ -225,11 +286,17 @@ class FantasyDraftManager:
         if round_num > 5:  # Later rounds
             risk_factor = 1.0 + (strategy.risk_tolerance * 0.2)
             
-        # Contract value factor - NEW strategic element
+        # Contract value factor - strategic element: value per dollar,
+        # term flexibility, clause restrictions
         contract_factor = self.calculate_contract_value(player, round_num)
-            
+
+        # Cap-pressure factor: as the club's projected payroll approaches
+        # the cap, expensive players are softly discounted so the AI
+        # builds a balanced, affordable roster (never a hard block).
+        cap_factor = self._cap_pressure_factor(team, player)
+
         # Combine all factors
-        final_value = (base_value + age_factor) * need_multiplier * pos_weight * risk_factor * contract_factor
+        final_value = (base_value + age_factor) * need_multiplier * pos_weight * risk_factor * contract_factor * cap_factor
         
         return final_value
         
@@ -341,19 +408,241 @@ class FantasyDraftManager:
               
         return selected_player
 
-class FantasyDraftWindow(tk.Toplevel):
-    """Modern Interactive Fantasy Draft Window"""
-    
-    def __init__(self, parent, game_manager):
+    # Real NHL roster limit.
+    NHL_ROSTER_MAX = 23
+
+    def assign_drafted_player(self, team: Team, player: Player) -> str:
+        """Roster assignment shared by every pick site (UI + headless).
+
+        Returns where the player landed: "roster", "ahl" or "prospects".
+        The NHL roster caps at 23 (real league rule): once full, further
+        picks go to the AHL, where their cap hit buries per the CBA.
+        Previously every 40+ pick landed on the NHL roster, producing
+        40-man rosters league-wide after a 40-round draft.
+        """
+        try:
+            r = player.overall_rating()
+        except Exception:
+            r = 50.0
+        ros = getattr(team, "roster", None)
+        if not isinstance(ros, list):
+            ros = team.roster = []
+        ahl = getattr(team, "ahl_roster", None)
+        if not isinstance(ahl, list):
+            ahl = team.ahl_roster = []
+        pro = getattr(team, "prospects", None)
+        if not isinstance(pro, list):
+            pro = team.prospects = []
+        if r >= 40 and len(ros) < self.NHL_ROSTER_MAX:
+            ros.append(player)
+            return "roster"
+        if r >= 35:
+            ahl.append(player)
+            return "ahl"
+        pro.append(player)
+        return "prospects"
+
+    def normalize_post_draft_rosters(self) -> None:
+        """Post-draft soundness pass (called by complete_draft and headless
+        flows). A 40-round draft leaves every club with 40 new players; the
+        per-pick 23-cap keeps only the first 23, which can be a butchered
+        shape (15 defensemen and 1 center). So the normalizer CONSTRUCTS
+        each NHL roster from the whole organization pool the way a real GM
+        finalizes cuts: 2-3 goalies, position floors (4C / 6W / 7D), the
+        rest by overall, never over 23. Leftovers return to the AHL /
+        prospects by the usual overall thresholds."""
+        def _ovr(p):
+            try:
+                return p.overall_rating()
+            except Exception:
+                return 50.0
+
+        def _goalie(p):
+            try:
+                return p.primary_position == PlayerPosition.GOALIE
+            except Exception:
+                return False
+
+        def _pos_group(p):
+            try:
+                nm = p.primary_position.name
+            except Exception:
+                return "W"
+            if nm == "GOALIE":
+                return "G"
+            if nm == "CENTER":
+                return "C"
+            if nm in ("LEFT_WING", "RIGHT_WING"):
+                return "W"
+            if nm in ("LEFT_DEFENSE", "RIGHT_DEFENSE", "DEFENSE"):
+                return "D"
+            return "W"
+
+        for team in self.teams:
+            ros = [p for p in (getattr(team, "roster", None) or [])]
+            ahl = getattr(team, "ahl_roster", None)
+            if not isinstance(ahl, list):
+                ahl = team.ahl_roster = []
+            pro = getattr(team, "prospects", None)
+            if not isinstance(pro, list):
+                pro = team.prospects = []
+            pool = ros + ahl + pro
+            if not pool:
+                continue
+            goalies = sorted([p for p in pool if _goalie(p)],
+                             key=_ovr, reverse=True)
+            skaters = sorted([p for p in pool if not _goalie(p)],
+                             key=_ovr, reverse=True)
+            new_ros, used = [], set()
+
+            def _take(cands, k):
+                got = []
+                for p in cands:
+                    if len(got) >= k:
+                        break
+                    if id(p) not in used:
+                        used.add(id(p))
+                        got.append(p)
+                return got
+
+            # goalies: 2, plus a 3rd when he's a real prospect (ovr >= 40)
+            new_ros += _take(goalies, 2)
+            if len(goalies) > 2 and _ovr(goalies[2]) >= 40:
+                new_ros += _take([goalies[2]], 1)
+            # position floors, best-first
+            by_pos = {"C": [], "W": [], "D": []}
+            for p in skaters:
+                by_pos[_pos_group(p)].append(p)
+            new_ros += _take(by_pos["C"], 4)
+            new_ros += _take(by_pos["W"], 6)
+            new_ros += _take(by_pos["D"], 7)
+            # fill to 23 by overall
+            new_ros += _take(skaters, self.NHL_ROSTER_MAX - len(new_ros))
+            # leftovers back to AHL / prospects by overall
+            new_ahl, new_pro = [], []
+            for p in sorted(pool, key=_ovr, reverse=True):
+                if id(p) in used:
+                    continue
+                if _ovr(p) >= 35:
+                    new_ahl.append(p)
+                else:
+                    new_pro.append(p)
+            team.roster, team.ahl_roster, team.prospects = \
+                new_ros, new_ahl, new_pro
+        # Critical-gap free agency: a club that drafted fewer than 2
+        # goalies or 3 centers org-wide signs the best undrafted free
+        # agents at those positions, exactly like a real GM would after
+        # the draft. (The draft AI's needs signal can drown in its top-8
+        # randomness over 40 rounds; this does not retune it.)
+        try:
+            undrafted = self.get_available_players()
+        except Exception:
+            undrafted = []
+        fa_goalies = sorted([p for p in undrafted if _goalie(p)],
+                            key=_ovr, reverse=True)
+        fa_centers = sorted([p for p in undrafted
+                             if _pos_group(p) == "C"],
+                            key=_ovr, reverse=True)
+        def _wing_side(p):
+            try:
+                nm = p.primary_position.name
+            except Exception:
+                return "W"
+            if nm == "LEFT_WING":
+                return "LW"
+            if nm == "RIGHT_WING":
+                return "RW"
+            return "W"
+
+        fa_pools = {
+            "G": fa_goalies,
+            "C": fa_centers,
+            "W": sorted([p for p in undrafted if _pos_group(p) == "W"],
+                        key=_ovr, reverse=True),
+            "D": sorted([p for p in undrafted if _pos_group(p) == "D"],
+                        key=_ovr, reverse=True),
+        }
+        # (group, floor): a real GM signs FAs to reach these. Wings get
+        # a per-side floor first so a 1-LW/5-RW club signs a left winger,
+        # then the combined floor tops up to six.
+        floors = [("G", 2), ("C", 3), ("LW", 2), ("RW", 2), ("W", 6),
+                  ("D", 6)]
+        for team in self.teams:
+            ros = team.roster
+            ahl = team.ahl_roster
+            if not isinstance(ahl, list):
+                ahl = team.ahl_roster = []
+
+            def _space():
+                try:
+                    from salary_cap_system import cap_breakdown
+                    return cap_breakdown(team).get("space", 0)
+                except Exception:
+                    return getattr(team, "cap_space", 10 ** 9)
+
+            def _salary(p):
+                c = getattr(p, "contract", None)
+                return int(getattr(c, "salary", 0) or 0)
+
+            def _count(group):
+                if group == "G":
+                    return sum(1 for p in ros if _goalie(p))
+                if group in ("LW", "RW"):
+                    return sum(1 for p in ros if _wing_side(p) == group)
+                return sum(1 for p in ros if _pos_group(p) == group)
+
+            def _make_room():
+                # demote the worst expendable skater to fit a FA
+                # signing -- never a goalie or a center, the scarcest
+                # positions
+                cands = sorted(
+                    [p for p in ros if not _goalie(p)
+                     and _pos_group(p) != "C"], key=_ovr)
+                if not cands:
+                    return False
+                out = cands[0]
+                ros.remove(out)
+                ahl.append(out)
+                return True
+
+            for group, floor in floors:
+                if group in ("LW", "RW"):
+                    # sign the best FA winger on the thin side only --
+                    # no cross-side fallback (the combined W floor tops
+                    # up regardless)
+                    pool = sorted(
+                        [p for p in fa_pools["W"]
+                         if _wing_side(p) == group],
+                        key=_ovr, reverse=True)
+                else:
+                    pool = fa_pools[group]
+                while _count(group) < floor and pool:
+                    if _salary(pool[0]) > _space():
+                        break  # can't afford him; leave it to the GM
+                    if len(ros) >= self.NHL_ROSTER_MAX and not _make_room():
+                        break
+                    signed = pool.pop(0)
+                    # keep the shared W pool in sync for side fills
+                    if group in ("LW", "RW") and signed in fa_pools["W"]:
+                        fa_pools["W"].remove(signed)
+                    ros.append(signed)
+
+class FantasyDraftView(tk.Frame):
+    """Modern interactive fantasy draft as an embedded full-screen view.
+
+    Pass ``app`` for the application object; when omitted, ``parent``
+    doubles as the app (standalone / popup-wrapper use). The draft event
+    flow (picks, auto-draft, sim, completion) is unchanged from the popup
+    version; only the windowing changed.
+    """
+
+    def __init__(self, parent, game_manager, app=None):
         super().__init__(parent)
-        self.parent = parent
+        self.app = app if app is not None else parent
         self.game_manager = game_manager
-        
-        # Set up window with modern styling
-        self.title("Fantasy Draft - Hockey Manager")
-        self.geometry("1600x1000")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(1400, 900)
+
+        # Full-screen view: window chrome lives on the wrapper now.
+        self.configure(background=self.app.BG_COLOR)
         
         # Initialize draft data - collect ALL NHL players properly
         nhl_teams = [team for team in game_manager.league.teams 
@@ -380,8 +669,8 @@ class FantasyDraftWindow(tk.Toplevel):
         self.draft_speed = tk.StringVar(value="Normal")
         
         # Initialize tree maps for player references
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
         self.setup_card_styles()
         self.setup_integrated_ui()
@@ -391,7 +680,15 @@ class FantasyDraftWindow(tk.Toplevel):
         if hasattr(self, 'players_tree'):
             debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
-            
+
+    def close_view(self):
+        """Close this screen via the screen manager, or destroy as fallback."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
     def initial_player_load(self):
         """Load players after UI initialization"""
         debug_print("DEBUG: Performing initial player load...")
@@ -421,29 +718,29 @@ class FantasyDraftWindow(tk.Toplevel):
         
         # Player card label frame style
         style.configure('Card.TLabelframe',
-                       background=self.parent.CONTENT_BG,
+                       background=self.app.CONTENT_BG,
                        borderwidth=2,
                        relief='solid')
         
         style.configure('Card.TLabelframe.Label',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.HEADER_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.HEADER_COLOR,
                        font=('Segoe UI', 12, 'bold'))
         
         # Section label frame for card sections
         style.configure('Section.TLabelframe',
-                       background=self.parent.CONTENT_BG,
+                       background=self.app.CONTENT_BG,
                        borderwidth=1,
                        relief='solid')
         
         style.configure('Section.TLabelframe.Label',
-                       background=self.parent.CONTENT_BG,
-                       foreground=self.parent.TEXT_COLOR,
+                       background=self.app.CONTENT_BG,
+                       foreground=self.app.TEXT_COLOR,
                        font=('Segoe UI', 10, 'bold'))
         
         # Badge styles
         style.configure('Badge.TLabel',
-                       background=self.parent.ACCENT_COLOR,
+                       background=self.app.ACCENT_COLOR,
                        foreground='white',
                        padding=(8, 4),
                        font=('Segoe UI', 9, 'bold'))
@@ -456,7 +753,7 @@ class FantasyDraftWindow(tk.Toplevel):
         
         # Value label for stats
         style.configure('Value.TLabel',
-                       foreground=self.parent.ACCENT_COLOR,
+                       foreground=self.app.ACCENT_COLOR,
                        font=('Segoe UI', 9, 'bold'))
         
     def collect_all_nhl_players(self, teams: List[Team]) -> List[Player]:
@@ -641,10 +938,6 @@ class FantasyDraftWindow(tk.Toplevel):
         init_frame = ttk.Frame(parent, style='Panel.TFrame')
         init_frame.pack(fill=tk.BOTH, expand=True, pady=20)
         
-        # Title
-        title_label = ttk.Label(init_frame, text="Fantasy Draft Setup", 
-                              style='MainTitle.TLabel')
-        title_label.pack(pady=20)
         
         # Draft info
         info_frame = ttk.Frame(init_frame, style='Panel.TFrame')
@@ -688,12 +981,53 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
     def begin_fantasy_draft(self):
         """Begin the fantasy draft and ensure all rosters are cleared"""
         debug_print("DEBUG: Beginning fantasy draft - clearing all team rosters")
+
+        # --- MULTIPLAYER/CHECKPOINTS: pre-draft safety checkpoint ---
+        # Taken BEFORE rosters are wiped, so a mid-draft crash recovers
+        # to an intact league instead of a half-drafted one.
+        try:
+            cpm = getattr(self.game_manager, 'checkpoint_manager', None)
+            if cpm is not None:
+                cpm.checkpoint("Before Fantasy Draft")
+        except Exception as _e:
+            print(f"Pre-draft checkpoint failed (non-fatal): {_e}")
         
         # CRITICAL: Clear ALL team rosters completely
         self.clear_all_team_rosters_completely()
         
         # Mark draft as started
         self.draft_manager.draft_started = True
+
+        # --- MULTIPLAYER/CHECKPOINTS: per-round draft checkpoints ---
+        # Wraps make_pick ONCE so every pick site (human + all AI callers)
+        # is covered without touching them. When a pick completes a round,
+        # the host's checkpoint ring gets a "Fantasy Draft - Round N" entry.
+        try:
+            if not getattr(self.draft_manager, '_checkpoint_wrapped', False):
+                _orig_make_pick = self.draft_manager.make_pick
+                window = self
+
+                def _make_pick_with_checkpoint(player):
+                    prev = window.draft_manager.get_current_pick()
+                    prev_round = (prev.round_num
+                                  if prev is not None else None)
+                    ok = _orig_make_pick(player)
+                    if ok and prev_round is not None:
+                        cur = window.draft_manager.get_current_pick()
+                        new_round = (cur.round_num
+                                     if cur is not None else None)
+                        if new_round != prev_round:
+                            cpm2 = getattr(window.game_manager,
+                                          'checkpoint_manager', None)
+                            if cpm2 is not None:
+                                cpm2.checkpoint(
+                                    f"Fantasy Draft - Round {prev_round}")
+                    return ok
+
+                self.draft_manager.make_pick = _make_pick_with_checkpoint
+                self.draft_manager._checkpoint_wrapped = True
+        except Exception as _e:
+            print(f"Draft checkpoint wrapper failed (non-fatal): {_e}")
         
         # Set fantasy draft as pending in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
@@ -810,7 +1144,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         tree_frame = ttk.Frame(parent, style='Panel.TFrame')
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=20)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=20)
         
         # Double-click to draft
         self.players_tree.bind('<Double-1>', self.on_player_double_click)
@@ -835,7 +1169,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'player': ('Selection', 120)
         }
         
-        self.draft_tree = self.parent._create_treeview(order_frame, order_columns, height=12)
+        self.draft_tree = self.app._create_treeview(order_frame, order_columns, height=12)
         
         # Controls section
         controls_frame = ttk.LabelFrame(parent, text="Draft Controls", style='Panel.TLabelframe')
@@ -917,7 +1251,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'age': ('Age', 60)
         }
         
-        round_tree = self.parent._create_treeview(round_frame, columns, height=20)
+        round_tree = self.app._create_treeview(round_frame, columns, height=20)
         round_tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
         
         # Store references
@@ -946,7 +1280,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         controls_frame.pack(fill=tk.X, padx=15, pady=10)
         
         ttk.Label(controls_frame, text="Select Team:", 
-                 style='TLabel', font=(self.parent.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
+                 style='TLabel', font=(self.app.FONT_FAMILY, 12, 'bold')).pack(side=tk.LEFT)
         
         # Team selector
         self.roster_team_var = tk.StringVar(value="")
@@ -1031,7 +1365,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Create scrollable spotlight content
         self.roster_spotlight_canvas = tk.Canvas(roster_spotlight_frame, 
-                                               bg=self.parent.CONTENT_BG,
+                                               bg=self.app.CONTENT_BG,
                                                highlightthickness=0,
                                                width=280)
         self.roster_spotlight_scrollbar = ttk.Scrollbar(roster_spotlight_frame, orient=tk.VERTICAL, 
@@ -1053,8 +1387,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.show_roster_welcome_card()
         
         # Initialize tree map for this tree
-        if self.roster_display_tree not in self.parent.tree_maps:
-            self.parent.tree_maps[self.roster_display_tree] = {}
+        if self.roster_display_tree not in self.app.tree_maps:
+            self.app.tree_maps[self.roster_display_tree] = {}
         
         # Bottom info
         info_frame = ttk.Frame(rosters_tab, style='Panel.TFrame')
@@ -1159,14 +1493,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Make the pick
         success = self.draft_manager.make_pick(player)
         if success:
-            # Add to appropriate roster
-            if player.overall_rating() >= 70:
-                current_pick.team.roster.append(player)
-            elif player.overall_rating() >= 65:
-                current_pick.team.ahl_roster.append(player)
-            else:
-                current_pick.team.prospects.append(player)
-                
+            # Roster assignment (23-man NHL cap) lives on the manager so
+            # the UI and headless flows share one rule.
+            self.draft_manager.assign_drafted_player(current_pick.team, player)
+
             # Update display
             self.update_display()
             
@@ -1210,11 +1540,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
         title_label = ttk.Label(header_frame, text="Available Players", 
-                               style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                               style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
         self.count_label = ttk.Label(header_frame, text="", 
-                                    style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10))
+                                    style='Info.TLabel', font=(self.app.FONT_FAMILY, 10))
         self.count_label.pack(side=tk.RIGHT)
         
         # Filter frame
@@ -1315,7 +1645,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Draft control label
         controls_label = ttk.Label(right_button_frame, text="Draft Controls:", 
-                                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10, 'bold'))
+                                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10, 'bold'))
         controls_label.pack(pady=(0, 8))
         
         # Button container
@@ -1486,9 +1816,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 ))
                 
                 # Store player reference directly in tree_maps using item_id
-                if not hasattr(self.parent, 'tree_maps'):
-                    self.parent.tree_maps = {}
-                self.parent.tree_maps[item_id] = player
+                if not hasattr(self.app, 'tree_maps'):
+                    self.app.tree_maps = {}
+                self.app.tree_maps[item_id] = player
                 
             except Exception as e:
                 debug_print(f"DEBUG: Error adding player {i}: {e}")
@@ -1515,8 +1845,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             item = selection[0]
             try:
                 # Get player from tree_maps using item ID
-                if hasattr(self.parent, 'tree_maps') and item in self.parent.tree_maps:
-                    self.selected_player = self.parent.tree_maps[item]
+                if hasattr(self.app, 'tree_maps') and item in self.app.tree_maps:
+                    self.selected_player = self.app.tree_maps[item]
                     
                     # Show player card in spotlight area
                     if hasattr(self, 'main_player_card_frame'):
@@ -1619,16 +1949,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             debug_print(f"DEBUG: Draft pick success = {success}")
             
             if success:
-                # Add to appropriate roster based on rating
-                if player.overall_rating() >= 70:
-                    current_pick.team.roster.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} roster")
-                elif player.overall_rating() >= 65:
-                    current_pick.team.ahl_roster.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} AHL roster")
-                else:
-                    current_pick.team.prospects.append(player)
-                    debug_print(f"DEBUG: Added {player.full_name} to {current_pick.team.team_name} prospects")
+                # Roster assignment (23-man NHL cap) lives on the manager.
+                _dest = self.draft_manager.assign_drafted_player(
+                    current_pick.team, player)
+                debug_print(f"DEBUG: Added {player.full_name} to "
+                            f"{current_pick.team.team_name} ({_dest})")
                 
                 # CRITICAL: Immediate UI updates with forced refresh
                 debug_print("DEBUG: ===== STARTING COMPREHENSIVE UI UPDATE =====")
@@ -1711,7 +2036,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
         title_label = ttk.Label(header_frame, text="Fantasy Draft Order", 
-                               style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold'))
+                               style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold'))
         title_label.pack(side=tk.LEFT)
         
         # Current pick info
@@ -1722,7 +2047,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             current_text = "Draft Complete"
             
         self.integrated_current_label = ttk.Label(header_frame, text=current_text, 
-                                                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 12))
+                                                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 12))
         self.integrated_current_label.pack(side=tk.RIGHT)
         
         # Draft order frame
@@ -1834,7 +2159,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             title_content,
             text="Fantasy Draft",
             style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 24, 'bold')
+            font=(self.app.FONT_FAMILY, 24, 'bold')
         ).pack(anchor='w')
         
         # Current pick info
@@ -1848,7 +2173,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             title_content,
             text=pick_text,
             style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 14)
+            font=(self.app.FONT_FAMILY, 14)
         )
         self.current_pick_label.pack(anchor='w', pady=(5, 0))
         
@@ -1865,7 +2190,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             stats_frame,
             text=stats_text,
             style='Subtitle.TLabel',
-            font=(self.parent.FONT_FAMILY, 12)
+            font=(self.app.FONT_FAMILY, 12)
         ).pack(side=tk.RIGHT)
         
         # Subtitle with draft info
@@ -1877,7 +2202,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             subtitle_frame,
             text=draft_info,
             style='Info.TLabel',
-            font=(self.parent.FONT_FAMILY, 11)
+            font=(self.app.FONT_FAMILY, 11)
         ).pack(side=tk.LEFT, padx=(20, 0))
         
         # Draft controls on the right
@@ -1970,7 +2295,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             widget.destroy()
         
         # Create scrollable card
-        canvas = tk.Canvas(self.main_player_card_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(self.main_player_card_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.main_player_card_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -2083,7 +2408,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 restriction_text = f"Trade Restrictions: {', '.join(restrictions)}"
                 restriction_label = ttk.Label(contract_content, text=restriction_text,
                                              style='Info.TLabel', font=('Segoe UI', 10, 'italic'),
-                                             foreground=self.parent.ACCENT_COLOR)
+                                             foreground=self.app.ACCENT_COLOR)
                 restriction_label.pack(anchor='w', pady=(3, 0))
         else:
             default_label = ttk.Label(contract_content, 
@@ -2221,7 +2546,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             widget.destroy()
         
         # Create scrollable card
-        canvas = tk.Canvas(self.main_player_card_frame, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(self.main_player_card_frame, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(self.main_player_card_frame, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -2246,7 +2571,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         draft_status = ttk.Label(draft_header, text="RECENTLY DRAFTED", 
                                 style='Header.TLabel', font=('Segoe UI', 12, 'bold'), 
-                                foreground=self.parent.ACCENT_COLOR)
+                                foreground=self.app.ACCENT_COLOR)
         draft_status.pack()
         
         pick_info = ttk.Label(draft_header, 
@@ -2323,10 +2648,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         header_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
         
         ttk.Label(header_frame, text="Available Players", 
-                 style='Header.TLabel', font=(self.parent.FONT_FAMILY, 16, 'bold')).pack(side=tk.LEFT)
+                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 16, 'bold')).pack(side=tk.LEFT)
         
         self.available_count_label = ttk.Label(header_frame, text="", 
-                                             style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                             style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.available_count_label.pack(side=tk.RIGHT)
         
         # Advanced filter section
@@ -2428,7 +2753,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'potential': ('POT', 50)
         }
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=25)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=25)
         self.players_tree.bind('<Double-1>', self.on_player_select)
         self.players_tree.bind('<Button-1>', self.on_player_click)
         self.players_tree.bind('<Return>', self.on_player_select)
@@ -2450,7 +2775,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Default message
         self.no_selection_label = ttk.Label(self.player_info_frame, 
                                           text="Select a player to view details and draft options",
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.no_selection_label.pack(pady=20)
         
         # Draft action panel
@@ -2492,7 +2817,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Draft status
         self.draft_status_label = ttk.Label(action_content, text="", 
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 10))
         self.draft_status_label.pack(pady=5)
         
     def show_more_players(self):
@@ -2557,7 +2882,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'team': ('Former Team', 120)
         }
         
-        self.players_tree = self.parent._create_treeview(tree_frame, columns, height=25)
+        self.players_tree = self.app._create_treeview(tree_frame, columns, height=25)
         self.players_tree.bind('<Double-1>', self.on_player_select)
         self.players_tree.bind('<Button-1>', self.on_player_click)
         
@@ -2602,7 +2927,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'overall': ('OVR', 60)
         }
         
-        self.recent_picks_tree = self.parent._create_treeview(recent_frame, columns, height=20)
+        self.recent_picks_tree = self.app._create_treeview(recent_frame, columns, height=20)
         
     def setup_team_rosters_tab(self):
         """Set up the team rosters display"""
@@ -2630,7 +2955,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'age': ('Age', 50)
         }
         
-        self.team_roster_tree = self.parent._create_treeview(rosters_frame, columns, height=15)
+        self.team_roster_tree = self.app._create_treeview(rosters_frame, columns, height=15)
         
     def setup_draft_order_tab(self):
         """Set up the draft order display"""
@@ -2646,7 +2971,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'status': ('Status', 100)
         }
         
-        self.draft_order_tree = self.parent._create_treeview(order_frame, columns, height=20)
+        self.draft_order_tree = self.app._create_treeview(order_frame, columns, height=20)
         
         # Populate draft order
         self.populate_draft_order()
@@ -2778,8 +3103,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             return
         
         # Initialize tree_maps if it doesn't exist
-        if not hasattr(self.parent, 'tree_maps'):
-            self.parent.tree_maps = {}
+        if not hasattr(self.app, 'tree_maps'):
+            self.app.tree_maps = {}
         
         # Use dynamic display limit
         display_limit = getattr(self, 'display_limit', 1000)
@@ -2799,7 +3124,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 ))
                 
                 # Store player reference
-                self.parent.tree_maps[item] = player
+                self.app.tree_maps[item] = player
                 
                 # Color coding based on overall rating
                 rating = player.overall_rating()
@@ -2837,8 +3162,8 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         selection = self.players_tree.selection()
         if selection:
             item = selection[0]
-            if item in self.parent.tree_maps:
-                self.selected_player = self.parent.tree_maps[item]
+            if item in self.app.tree_maps:
+                self.selected_player = self.app.tree_maps[item]
                 self.display_selected_player_details()
                 self.draft_button.configure(state='normal')
             else:
@@ -2862,16 +3187,16 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         name_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(name_frame, text=player.full_name, 
-                 style='Header.TLabel', font=(self.parent.FONT_FAMILY, 14, 'bold')).pack()
+                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 14, 'bold')).pack()
         
         info_text = f"{player.primary_position.value} • {player.age} years old • OVR {player.overall_rating()}"
         ttk.Label(name_frame, text=info_text, 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10)).pack()
         
         # Former team
         former_team = getattr(player, 'former_team', 'Free Agent')
         ttk.Label(name_frame, text=f"Former: {former_team}", 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 10)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 10)).pack()
         
         # Key attributes based on position
         attrs_frame = ttk.Frame(self.player_info_frame, style='Panel.TFrame')
@@ -2888,13 +3213,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             attrs_text = f"Shooting: {player.shooting} • Passing: {player.passing} • Skating: {player.skating}"
             
         ttk.Label(attrs_frame, text=attrs_text, 
-                 style='Info.TLabel', font=(self.parent.FONT_FAMILY, 9)).pack()
+                 style='Info.TLabel', font=(self.app.FONT_FAMILY, 9)).pack()
         
         # Contract info if available
         if hasattr(player, 'contract') and player.contract:
             contract_text = f"Salary: ${getattr(player.contract, 'salary', 0):,}"
             ttk.Label(attrs_frame, text=contract_text, 
-                     style='Info.TLabel', font=(self.parent.FONT_FAMILY, 9)).pack()
+                     style='Info.TLabel', font=(self.app.FONT_FAMILY, 9)).pack()
                      
     def clear_player_details(self):
         """Clear player details display"""
@@ -2903,7 +3228,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
         self.no_selection_label = ttk.Label(self.player_info_frame, 
                                           text="Select a player to view details and draft options",
-                                          style='Info.TLabel', font=(self.parent.FONT_FAMILY, 11))
+                                          style='Info.TLabel', font=(self.app.FONT_FAMILY, 11))
         self.no_selection_label.pack(pady=20)
         
     def advance_one_pick(self):
@@ -2955,14 +3280,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
-                    # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 70:
-                        current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 65:
-                        current_pick.team.ahl_roster.append(ai_pick)
-                    else:
-                        current_pick.team.prospects.append(ai_pick)
-                        
+                    # Roster assignment (23-man NHL cap) on the manager.
+                    self.draft_manager.assign_drafted_player(
+                        current_pick.team, ai_pick)
+
                     # CRITICAL: Force immediate draft board update
                     self.update_display()
                     
@@ -3078,14 +3399,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             success = self.draft_manager.make_pick(ai_pick)
             if success:
-                # Add to appropriate roster
-                if ai_pick.overall_rating() >= 70:
-                    current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 65:
-                    current_pick.team.ahl_roster.append(ai_pick)
-                else:
-                    current_pick.team.prospects.append(ai_pick)
-                    
+                # Roster assignment (23-man NHL cap) on the manager.
+                self.draft_manager.assign_drafted_player(
+                    current_pick.team, ai_pick)
+
                 picks_simmed += 1
                 
                 # CRITICAL: Force draft board update every few picks during simulation
@@ -3157,10 +3474,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         total_picks = remaining_picks
         
         # Show progress dialog for long simulation
-        progress_window = tk.Toplevel(self)
+        progress_window = InGamePopup(self)
         progress_window.title("Simulating Draft...")
         progress_window.geometry("400x150")
-        progress_window.configure(background=self.parent.BG_COLOR)
+        progress_window.configure(background=self.app.BG_COLOR)
         progress_window.transient(self)
         progress_window.grab_set()
         
@@ -3205,13 +3522,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             success = self.draft_manager.make_pick(ai_pick)
             if success:
-                # Add to appropriate roster based on rating
-                if ai_pick.overall_rating() >= 70:
-                    current_pick.team.roster.append(ai_pick)
-                elif ai_pick.overall_rating() >= 65:
-                    current_pick.team.ahl_roster.append(ai_pick)
-                else:
-                    current_pick.team.prospects.append(ai_pick)
+                # Roster assignment (23-man NHL cap) on the manager.
+                self.draft_manager.assign_drafted_player(
+                    current_pick.team, ai_pick)
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
@@ -3339,14 +3652,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Make the pick
         success = self.draft_manager.make_pick(self.selected_player)
         if success:
-            # Add player to appropriate roster based on rating
-            if self.selected_player.overall_rating() >= 70:
-                current_pick.team.roster.append(self.selected_player)
-            elif self.selected_player.overall_rating() >= 65:
-                current_pick.team.ahl_roster.append(self.selected_player)
-            else:
-                current_pick.team.prospects.append(self.selected_player)
-                
+            # Roster assignment (23-man NHL cap) lives on the manager.
+            self.draft_manager.assign_drafted_player(
+                current_pick.team, self.selected_player)
+
             self.update_display()
             self.selected_player = None
             self.draft_button.configure(state='disabled')
@@ -3374,14 +3683,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 
                 success = self.draft_manager.make_pick(ai_pick)
                 if success:
-                    # Add to appropriate roster
-                    if ai_pick.overall_rating() >= 70:
-                        current_pick.team.roster.append(ai_pick)
-                    elif ai_pick.overall_rating() >= 65:
-                        current_pick.team.ahl_roster.append(ai_pick)
-                    else:
-                        current_pick.team.prospects.append(ai_pick)
-                        
+                    # Roster assignment (23-man NHL cap) on the manager.
+                    self.draft_manager.assign_drafted_player(
+                        current_pick.team, ai_pick)
+
                     self.update_display()
                     
                     # Continue if still not user's turn
@@ -3399,9 +3704,47 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
 
+        # Roster soundness: 40 rounds of picks must not leave 40-man NHL
+        # rosters. Trim to 23 (best 23 stay), guarantee >= 2 goalies per
+        # club, demote the rest to the AHL.
+        try:
+            self.draft_manager.normalize_post_draft_rosters()
+        except Exception:
+            pass
+
+        # Backstop: no club skates with letters after the draft -- every
+        # roster is letter-less until captains are set at preseason.
+        try:
+            _lg = getattr(self.game_manager, 'league', None)
+            for _t in (getattr(_lg, 'teams', None) or []):
+                for _p in (getattr(_t, 'roster', None) or []):
+                    try:
+                        _p.captaincy = ""
+                        _p.captain_tenure_years = 0
+                        _p.alternate_tenure_years = 0
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Chris's directive: after a fantasy draft, no captains until they
+        # are set at the start of preseason. The backstop above stripped
+        # every letter league-wide; the mandatory picker arms at the first
+        # preseason game day via the phase check in main.py
+        # (_opening_night_captaincy_check -> _require_captaincy_choice for
+        # the human club, auto-repair for AI clubs). Until then the
+        # Continue blocker stays suppressed so the user can advance into
+        # preseason freely -- the flag clears when the phase check runs.
+        try:
+            _gm = getattr(self, 'game_manager', None)
+            if _gm is not None:
+                _gm._fantasy_draft_captaincy_deferred = True
+        except Exception:
+            pass
+
         # Blocker cleared: refresh the dashboard's smart Continue/Next Day label.
         try:
-            dashboard = getattr(self.parent, 'dashboard', None)
+            dashboard = getattr(self.app, 'dashboard', None)
             refresher = getattr(dashboard, 'refresh_continue_button', None)
             if callable(refresher):
                 refresher()
@@ -3413,11 +3756,11 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Update the main game if possible
         try:
-            if hasattr(self.parent, 'update_views'):
-                self.parent.update_views()
+            if hasattr(self.app, 'update_views'):
+                self.app.update_views()
         except:
             pass  # Ignore if update method doesn't exist
-        self.destroy()
+        self.close_view()
         
     def add_draft_completion_message(self):
         """Add a draft completion message to the user's inbox"""
@@ -3880,7 +4223,7 @@ NHL League Office""",
         card_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Card content with scrolling
-        canvas = tk.Canvas(card_main, bg=self.parent.CONTENT_BG, highlightthickness=0)
+        canvas = tk.Canvas(card_main, bg=self.app.CONTENT_BG, highlightthickness=0)
         scrollbar = ttk.Scrollbar(card_main, orient="vertical", command=canvas.yview)
         scrollable_frame = ttk.Frame(canvas, style='Panel.TFrame')
         
@@ -4102,8 +4445,8 @@ NHL League Office""",
             self.roster_display_tree.delete(item)
         
         # Clear tree mapping
-        if self.roster_display_tree in self.parent.tree_maps:
-            self.parent.tree_maps[self.roster_display_tree].clear()
+        if self.roster_display_tree in self.app.tree_maps:
+            self.app.tree_maps[self.roster_display_tree].clear()
         
         if not selected_team_name:
             self.roster_stats_label.config(text="Select a team to view roster")
@@ -4166,9 +4509,9 @@ NHL League Office""",
             ))
             
             # Map item to player for double-click functionality
-            if self.roster_display_tree not in self.parent.tree_maps:
-                self.parent.tree_maps[self.roster_display_tree] = {}
-            self.parent.tree_maps[self.roster_display_tree][item_id] = player
+            if self.roster_display_tree not in self.app.tree_maps:
+                self.app.tree_maps[self.roster_display_tree] = {}
+            self.app.tree_maps[self.roster_display_tree][item_id] = player
         
         # Update stats display
         num_picks = len(team_drafted_players)
@@ -4189,7 +4532,7 @@ NHL League Office""",
         if self.user_team and selected_team_name == self.user_team.team_name:
             self.roster_user_indicator.config(
                 text="Your Team", 
-                foreground=self.parent.ACCENT_COLOR
+                foreground=self.app.ACCENT_COLOR
             )
         else:
             self.roster_user_indicator.config(text="")
@@ -4215,7 +4558,7 @@ NHL League Office""",
         """Show detailed player information when double-clicking roster entry"""
         try:
             item = self.team_roster_tree.selection()[0]
-            player = self.parent.tree_maps[self.team_roster_tree].get(item)
+            player = self.app.tree_maps[self.team_roster_tree].get(item)
             
             if player:
                 # Show player in the main spotlight if we're on the available players tab
@@ -4253,10 +4596,10 @@ NHL League Office""",
             # Update current pick info
             if current_pick.team == self.draft_manager.user_team:
                 pick_text = f"YOUR PICK - Round {current_pick.round_num}, Pick #{current_pick.overall_pick}"
-                self.current_pick_label.configure(foreground=self.parent.ACCENT_COLOR)
+                self.current_pick_label.configure(foreground=self.app.ACCENT_COLOR)
             else:
                 pick_text = f"Round {current_pick.round_num}, Pick #{current_pick.overall_pick} - {current_pick.team.team_name}"
-                self.current_pick_label.configure(foreground=self.parent.TEXT_COLOR)
+                self.current_pick_label.configure(foreground=self.app.TEXT_COLOR)
                 
             self.current_pick_label.configure(text=pick_text)
             
@@ -4273,7 +4616,7 @@ NHL League Office""",
         else:
             # Draft complete
             self.current_pick_label.configure(text="DRAFT COMPLETE", 
-                                            foreground=self.parent.ACCENT_COLOR)
+                                            foreground=self.app.ACCENT_COLOR)
             self.progress_label.configure(text="All picks completed!")
             
     def update_player_list(self):
@@ -4317,11 +4660,11 @@ NHL League Office""",
             ))
             
             # Store player reference
-            if not hasattr(self.parent, 'tree_maps'):
-                self.parent.tree_maps = {}
-            if 'fantasy_draft_players' not in self.parent.tree_maps:
-                self.parent.tree_maps['fantasy_draft_players'] = {}
-            self.parent.tree_maps['fantasy_draft_players'][player_id] = player
+            if not hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps = {}
+            if 'fantasy_draft_players' not in self.app.tree_maps:
+                self.app.tree_maps['fantasy_draft_players'] = {}
+            self.app.tree_maps['fantasy_draft_players'][player_id] = player
             
     def update_draft_order_integrated(self):
         """Update draft order display for integrated interface"""
@@ -4353,7 +4696,7 @@ NHL League Office""",
             ), tags=tags)
             
         # Configure user team pick highlighting
-        self.draft_tree.tag_configure('user_team', background=self.parent.ACCENT_COLOR, 
+        self.draft_tree.tag_configure('user_team', background=self.app.ACCENT_COLOR, 
                                     foreground='white')
 
     def show_roster_welcome_card(self):
@@ -4391,10 +4734,10 @@ NHL League Office""",
                 return
                 
             item_id = selection[0]
-            if (self.roster_display_tree in self.parent.tree_maps and 
-                item_id in self.parent.tree_maps[self.roster_display_tree]):
+            if (self.roster_display_tree in self.app.tree_maps and 
+                item_id in self.app.tree_maps[self.roster_display_tree]):
                 
-                player = self.parent.tree_maps[self.roster_display_tree][item_id]
+                player = self.app.tree_maps[self.roster_display_tree][item_id]
                 self.show_roster_player_card(player)
                 
         except Exception as e:
@@ -4432,7 +4775,7 @@ NHL League Office""",
         
         overall_label = ttk.Label(pos_overall_frame, text=f"Overall: {to_100_scale(player.overall_rating())}", 
                                  style='Info.TLabel', font=('Segoe UI', 11, 'bold'),
-                                 foreground=self.parent.ACCENT_COLOR)
+                                 foreground=self.app.ACCENT_COLOR)
         overall_label.pack(side=tk.RIGHT)
         
         # Basic info section
@@ -4509,7 +4852,7 @@ NHL League Office""",
                 clause_text = f"{', '.join(clauses)} Clause{'s' if len(clauses) > 1 else ''}"
                 clause_label = ttk.Label(contract_frame, text=clause_text,
                                         style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
-                                        foreground=self.parent.ACCENT_COLOR)
+                                        foreground=self.app.ACCENT_COLOR)
                 clause_label.pack(anchor='w')
         else:
             # Default contract
@@ -4522,7 +4865,7 @@ NHL League Office""",
         if draft_info:
             draft_label = ttk.Label(info_frame, text=draft_info,
                                    style='Info.TLabel', font=('Segoe UI', 9, 'italic'),
-                                   foreground=self.parent.ACCENT_COLOR)
+                                   foreground=self.app.ACCENT_COLOR)
             draft_label.pack(anchor='w', pady=(2, 0))
         
         # Key attributes section
@@ -4764,3 +5107,5 @@ NHL League Office""",
     def update_salary_display_integration(self):
         """Ensure salary information is properly displayed in draft interface"""
         debug_print("DEBUG: Salary display integration completed - contracts ready for strategic drafting")
+
+

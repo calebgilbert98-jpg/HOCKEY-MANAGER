@@ -2,11 +2,92 @@
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
 import tkinter as tk
+from popup_system import messagebox, InGamePopup
 from tkinter import ttk
 import json
 import os
+import customtkinter as ctk
 
 from modern_ui import AppColors, AppFonts, AppCard, AppButton
+
+
+def default_settings():
+    """Built-in settings defaults.
+
+    Kept at module level so headless callers (e.g. main.get_settings)
+    can read settings without constructing the SettingsWindow GUI.
+    """
+    return {
+        'game_results': {
+            'show_user_team_only': True,
+            'default_leagues': ['National Hockey League'],
+            'max_games_display': '50',
+            'max_news_display': '10',
+            'default_news_categories': ['Team News', 'League News',
+                                        'Trades', 'Injuries']
+        },
+        'ui_preferences': {
+            'theme': 'Dark (Current)',
+            'font_size': 'Default',
+            'auto_close_settings': False,
+            'remember_window_positions': True
+        },
+        'simulation': {
+            'simulation_speed': 'Fast (Current)',
+            'auto_continue_non_game_days': False,
+            'always_show_daily_results': True,
+            'use_game_viewer': False,
+            'game_viewer_mode': 'Full Game',
+            'draft_class_quality': 'Normal',
+            'scoring_level': 'Low (Current)'
+        },
+        'notifications': {
+            'email_notifications': {
+                'Trade Offers': True,
+                'Contract Expiring Soon': True,
+                'Injury Reports': True,
+                'Player Milestones': False,
+                'League News': False,
+                'Draft Updates': True
+            },
+            'enable_sounds': True,
+            'sound_volume': 'Medium'
+        },
+        'career': {
+            # Muck's flag: user can choose whether the GM can be sacked.
+            # True = board can sack you at 0 confidence (default, classic FM).
+            # False = job is safe; confidence still affects budgets/morale.
+            'gm_can_be_sacked': True,
+        },
+    }
+
+
+def _merge_settings(defaults, loaded):
+    """Recursively merge loaded settings into defaults (in place)."""
+    for key, value in loaded.items():
+        if key in defaults:
+            if isinstance(value, dict) and isinstance(defaults[key], dict):
+                _merge_settings(defaults[key], value)
+            else:
+                defaults[key] = value
+
+
+def load_settings(path=None):
+    """Load settings.json merged over defaults — no GUI involved.
+
+    Used by main.get_settings() so reading settings never constructs
+    (and flashes) a SettingsWindow.
+    """
+    settings_file = path or os.path.join(os.path.dirname(__file__),
+                                         'settings.json')
+    settings = default_settings()
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r') as f:
+                _merge_settings(settings, json.load(f))
+    except Exception as e:
+        print(f"Error loading settings: {e}")
+    return settings
 
 
 class ModernCheck(tk.Frame):
@@ -103,106 +184,93 @@ class SettingsDropdown(ttk.Combobox):
             pass
 
 
-def default_settings():
-    """Build the default settings dict merged with settings.json on disk.
+class SettingsView(ctk.CTkFrame):
+    """Settings & preferences view in the modern dark UI (full-screen)."""
 
-    Widget-free: safe to call without creating any UI. Used by
-    SettingsWindow and by HockeyManagerGUI.get_settings(), which must
-    never instantiate a window just to read defaults (that caused a
-    visible flash of a settings window on first use).
-    """
-    defaults = {
-        'game_results': {
-            'show_user_team_only': True,
-            'default_leagues': ['National Hockey League'],
-            'max_games_display': '50',
-            'max_news_display': '10',
-            'default_news_categories': ['Team News', 'League News',
-                                        'Trades', 'Injuries']
-        },
-        'ui_preferences': {
-            'theme': 'Dark (Current)',
-            'font_size': 'Medium (Current)',
-            'auto_close_settings': False,
-            'remember_window_positions': True
-        },
-        'simulation': {
-            'simulation_speed': 'Fast (Current)',
-            'auto_continue_non_game_days': False,
-            'always_show_daily_results': True,
-            'use_game_viewer': False,
-            'game_viewer_mode': 'Full Game',
-            'draft_class_quality': 'Normal',
-            'scoring_level': 'Low (Current)'
-        },
-        'notifications': {
-            'email_notifications': {
-                'Trade Offers': True,
-                'Contract Expiring Soon': True,
-                'Injury Reports': True,
-                'Player Milestones': False,
-                'League News': False,
-                'Draft Updates': True
-            },
-            'enable_sounds': True,
-            'sound_volume': 'Medium'
-        }
-    }
-
-    def _merge(base, loaded):
-        for key, value in loaded.items():
-            if key in base:
-                if isinstance(value, dict) and isinstance(base[key], dict):
-                    _merge(base[key], value)
-                else:
-                    base[key] = value
-
-    try:
-        settings_file = os.path.join(os.path.dirname(__file__), 'settings.json')
-        if os.path.exists(settings_file):
-            with open(settings_file, 'r') as f:
-                _merge(defaults, json.load(f))
-    except Exception as e:
-        print(f"Error loading settings: {e}")
-    return defaults
-
-
-class SettingsWindow(tk.Toplevel):
-    """Settings & preferences window in the modern dark UI."""
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-
-        self.title("Settings - Hockey Manager")
-        self.geometry("760x620")
-        self.configure(background=AppColors.BG)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the SettingsWindow wrapper
+        self.configure(fg_color=AppColors.BG)
 
         # Settings data
         self.settings = self._load_settings()
-
-        # Make window modal
-        self.transient(parent)
-        self.grab_set()
+        # Unsaved-changes tracking (replaces the old "*"-in-title marker)
+        self._dirty = False
 
         self._create_interface()
         self._load_current_values()
 
-        # Center the window
-        self._center_window()
 
-        # Track window
-        if hasattr(parent, 'open_windows'):
-            parent.open_windows['settings'] = self
+    def _show_banner(self, text, kind="info"):
+        """Show an in-view message banner (replaces messagebox popups)."""
+        colors = {"info": ("#1a3a5c", "#4a9eff"), "error": ("#5c1a1a", "#ff6b6b"),
+                  "warn": ("#5c4a1a", "#ffcc00"), "ok": ("#1a5c2a", "#51cf66")}
+        bg, fg = colors.get(kind, colors["info"])
+        banner = getattr(self, "_banner", None)
+        if banner is None:
+            try:
+                import customtkinter as ctk
+                banner = ctk.CTkLabel(self, text="", fg_color=bg, text_color=fg,
+                                      corner_radius=6)
+                banner.pack(fill="x", padx=12, pady=(8, 0))
+                try:
+                    banner.lower()
+                except Exception:
+                    pass
+                self._banner = banner
+            except Exception:
+                return
+        banner.configure(text=text, fg_color=bg, text_color=fg)
+        # auto-clear after 6s
+        try:
+            after = getattr(self, "_banner_after", None)
+            if after:
+                self.after_cancel(after)
+            self._banner_after = self.after(6000, lambda: banner.configure(text=""))
+        except Exception:
+            pass
 
-    def _center_window(self):
-        """Center the window on screen"""
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    def _ask_confirm(self, text, on_yes, on_no=None):
+        """Show an in-view Yes/No panel (replaces messagebox.askyesno)."""
+        old = getattr(self, "_confirm_panel", None)
+        if old is not None:
+            try: old.destroy()
+            except Exception: pass
+        import customtkinter as ctk
+        panel = ctk.CTkFrame(self, fg_color="#2a2a3a", corner_radius=8)
+        panel.pack(fill="x", padx=12, pady=8)
+        ctk.CTkLabel(panel, text=text, wraplength=520).pack(padx=12, pady=(10, 6))
+        btns = ctk.CTkFrame(panel, fg_color="transparent")
+        btns.pack(pady=(0, 10))
+        def _yes():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            on_yes()
+        def _no():
+            try: panel.destroy()
+            except Exception: pass
+            self._confirm_panel = None
+            if on_no: on_no()
+        ctk.CTkButton(btns, text="Yes", command=_yes, width=90).pack(side="left", padx=6)
+        ctk.CTkButton(btns, text="No", command=_no, width=90).pack(side="left", padx=6)
+        self._confirm_panel = panel
+
+    def close_view(self):
+        """Close this screen, cleaning up the open-windows registry."""
+        try:
+            ow = getattr(self.app, 'open_windows', None)
+            if ow is not None and 'settings' in ow:
+                del ow['settings']
+        except Exception:
+            pass
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout
@@ -221,7 +289,7 @@ class SettingsWindow(tk.Toplevel):
 
         self._tab_frames = {}
         self._tab_holders = {}
-        for key in ("results", "interface", "simulation", "notifications"):
+        for key in ("results", "interface", "simulation", "notifications", "career"):
             holder, content = self._make_scrollable_tab(self._tab_content)
             self._tab_holders[key] = holder
             self._tab_frames[key] = content
@@ -230,6 +298,7 @@ class SettingsWindow(tk.Toplevel):
         self._create_interface_tab(self._tab_frames["interface"])
         self._create_simulation_tab(self._tab_frames["simulation"])
         self._create_notifications_tab(self._tab_frames["notifications"])
+        self._create_career_tab(self._tab_frames["career"])
 
         self._create_footer(main)
         self._select_tab("results")
@@ -237,8 +306,6 @@ class SettingsWindow(tk.Toplevel):
     def _create_header(self, parent):
         header = tk.Frame(parent, bg=AppColors.BG)
         header.pack(fill="x", pady=(0, 12))
-        tk.Label(header, text="Settings", bg=AppColors.BG,
-                 fg=AppColors.TEXT_PRIMARY, font=AppFonts.H1).pack(anchor="w")
         tk.Label(header, text="Customize your Puck Dynasty experience",
                  bg=AppColors.BG, fg=AppColors.TEXT_SECONDARY,
                  font=AppFonts.SMALL).pack(anchor="w", pady=(2, 0))
@@ -250,7 +317,8 @@ class SettingsWindow(tk.Toplevel):
         tabs = [("results", "Game Results"),
                 ("interface", "Interface"),
                 ("simulation", "Simulation"),
-                ("notifications", "Notifications")]
+                ("notifications", "Notifications"),
+                ("career", "Career")]
         for key, label in tabs:
             holder = tk.Frame(bar, bg=AppColors.BG)
             holder.pack(side="left", padx=(0, 6))
@@ -430,7 +498,9 @@ class SettingsWindow(tk.Toplevel):
                    'High Contrast (Coming Soon)'], width=24)
         self.font_size_var = tk.StringVar()
         self._row(theme, "Font size:", self.font_size_var,
-                  ['Small', 'Medium (Current)', 'Large'], width=18)
+                  ['Compact', 'Small', 'Default', 'Large', 'Extra Large'],
+                  width=18)
+        self._caption(theme, "Applies instantly to most windows.")
 
         window = self._section(content, "Window Behavior")
         self.auto_close_var = tk.BooleanVar()
@@ -439,6 +509,12 @@ class SettingsWindow(tk.Toplevel):
         self.remember_windows_var = tk.BooleanVar()
         self._check(window, "Remember window positions and sizes",
                     self.remember_windows_var)
+        self.auto_fit_var = tk.BooleanVar()
+        self._check(window, "Auto-fit text size to window size",
+                    self.auto_fit_var)
+        self._caption(window,
+                      "Shrinks text instead of clipping it when the window "
+                      "is small; grows it on large monitors.")
 
     def _create_simulation_tab(self, content):
         """Game simulation preferences."""
@@ -496,6 +572,19 @@ class SettingsWindow(tk.Toplevel):
         self._row(sound, "Sound volume:", self.sound_volume_var,
                   ['Off', 'Low', 'Medium', 'High'], width=10)
 
+    def _create_career_tab(self, content):
+        """Career / job security preferences."""
+        job = self._section(content, "Job Security")
+        self.gm_can_be_sacked_var = tk.BooleanVar()
+        self._check(job, "Board can sack the GM (job is on the line)",
+                    self.gm_can_be_sacked_var)
+        tk.Label(job,
+                 text=("If off, your job is safe no matter what — board confidence "
+                       "still affects budgets and morale."),
+                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
+                 font=AppFonts.SMALL, wraplength=400,
+                 justify="left").pack(anchor="w", pady=(4, 0))
+
     def _create_footer(self, parent):
         footer = tk.Frame(parent, bg=AppColors.BG)
         footer.pack(fill="x", pady=(4, 0))
@@ -522,10 +611,8 @@ class SettingsWindow(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _load_settings(self):
-        """Load settings from file or create defaults (widget-free)."""
-        return default_settings()
-
-
+        """Load settings from file or create defaults (GUI-free helper)."""
+        return load_settings()
 
     def _load_current_values(self):
         """Load current values into the UI"""
@@ -554,7 +641,15 @@ class SettingsWindow(tk.Toplevel):
 
         self.theme_var.set(ui_prefs.get('theme', 'Dark (Current)'))
         self.font_size_var.set(ui_prefs.get('font_size',
-                                            'Medium (Current)'))
+                                            'Default'))
+        # Migrate legacy tier names (Small / Medium (Current) / Large).
+        try:
+            import ui_scale
+            self.font_size_var.set(
+                ui_scale.normalize_tier_name(self.font_size_var.get()))
+        except Exception:
+            pass
+        self.auto_fit_var.set(ui_prefs.get('auto_fit_ui', False))
         self.auto_close_var.set(ui_prefs.get('auto_close_settings', False))
         self.remember_windows_var.set(
             ui_prefs.get('remember_window_positions', True))
@@ -588,6 +683,11 @@ class SettingsWindow(tk.Toplevel):
         self.sound_volume_var.set(
             notifications.get('sound_volume', 'Medium'))
 
+        # Career
+        career = self.settings.get('career', {})
+        self.gm_can_be_sacked_var.set(
+            career.get('gm_can_be_sacked', True))
+
     def _collect_current_values(self):
         """Collect current values from UI into settings, preserving any
         keys this window doesn't manage (e.g. user_game_mode)."""
@@ -607,6 +707,7 @@ class SettingsWindow(tk.Toplevel):
         self.settings.setdefault('ui_preferences', {}).update({
             'theme': self.theme_var.get(),
             'font_size': self.font_size_var.get(),
+            'auto_fit_ui': self.auto_fit_var.get(),
             'auto_close_settings': self.auto_close_var.get(),
             'remember_window_positions': self.remember_windows_var.get()
         })
@@ -633,10 +734,15 @@ class SettingsWindow(tk.Toplevel):
             'sound_volume': self.sound_volume_var.get()
         })
 
+        # Career
+        self.settings.setdefault('career', {}).update({
+            'gm_can_be_sacked': self.gm_can_be_sacked_var.get(),
+        })
+
     def _notify_parent_of_changes(self):
         """Notify parent of setting changes"""
-        if hasattr(self.parent, 'apply_settings'):
-            self.parent.apply_settings(self.settings)
+        if hasattr(self.app, 'apply_settings'):
+            self.app.apply_settings(self.settings)
 
     # ------------------------------------------------------------------
     # Actions
@@ -644,11 +750,11 @@ class SettingsWindow(tk.Toplevel):
 
     def _mark_changed(self, event=None):
         """Mark that settings have been changed"""
-        self.title("Settings - Hockey Manager *")
+        self._dirty = True
 
     def _reset_to_defaults(self):
         """Reset all settings to defaults"""
-        result = tk.messagebox.askyesno(
+        result = messagebox.askyesno(
             "Reset Settings",
             "Are you sure you want to reset all settings to defaults?\n\n"
             "This cannot be undone.",
@@ -662,7 +768,7 @@ class SettingsWindow(tk.Toplevel):
         """Apply settings without saving to file"""
         self._collect_current_values()
         self._notify_parent_of_changes()
-        tk.messagebox.showinfo(
+        messagebox.showinfo(
             "Settings Applied",
             "Settings have been applied for this session.", parent=self)
 
@@ -679,25 +785,33 @@ class SettingsWindow(tk.Toplevel):
 
             self._notify_parent_of_changes()
 
+            # Apply the font-size + auto-fit choices immediately: the
+            # live font registry resizes open windows in place.
+            try:
+                import ui_scale
+                ui_scale.apply_from_prefs()
+            except Exception:
+                pass
+
             # Show success message
-            tk.messagebox.showinfo(
+            messagebox.showinfo(
                 "Settings Saved",
                 "Settings have been saved successfully.", parent=self)
 
             # Auto-close if enabled
             if self.auto_close_var.get():
-                self.destroy()
+                self.close_view()
             else:
-                self.title("Settings - Hockey Manager")  # Remove * indicator
+                self._dirty = False  # Clear the unsaved-changes indicator
 
         except Exception as e:
-            tk.messagebox.showerror(
+            messagebox.showerror(
                 "Error", f"Failed to save settings:\n{e}", parent=self)
 
     def _cancel(self):
         """Cancel changes and close window"""
-        if self.title().endswith('*'):  # Check if there are unsaved changes
-            result = tk.messagebox.askyesnocancel(
+        if self._dirty:  # Check if there are unsaved changes
+            result = messagebox.askyesnocancel(
                 "Unsaved Changes",
                 "You have unsaved changes. Do you want to save before "
                 "closing?",
@@ -708,15 +822,30 @@ class SettingsWindow(tk.Toplevel):
             elif result is None:  # Cancel
                 return
 
-        self.destroy()
+        self.close_view()
 
     def get_game_results_settings(self):
         """Get current game results settings for external use"""
         return self.settings.get('game_results', {})
 
-    def destroy(self):
-        """Clean up when window is destroyed"""
-        if hasattr(self.parent, 'open_windows') and \
-                'settings' in self.parent.open_windows:
-            del self.parent.open_windows['settings']
-        super().destroy()
+
+class SettingsWindow(InGamePopup):
+    """Popup wrapper around SettingsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent, modal=True)
+        self.title("Settings - Hockey Manager")
+        app = (getattr(parent, 'app', None)
+               or getattr(parent, 'parent', None) or parent)
+        self._view = SettingsView(self, app=app)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)

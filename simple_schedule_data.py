@@ -8,7 +8,7 @@ the core functionality needed for schedule generation.
 """
 
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date
 from typing import Optional, List
 from enum import Enum
 

@@ -3,45 +3,38 @@
 
 import random
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk
+from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
-from ctk_theme import (
-    init_ctk_theme, primary_button, secondary_button, heading,
-    CTkPlayerList,
-    TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM, TEXT_FAINT,
-    GOLD, GREEN, RED,
-)
+from ctk_theme import (init_ctk_theme, primary_button, secondary_button, heading, TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM)
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
-from windows import (RosterWindow, FreeAgencyWindow, TradeWindow, ScoutingWindow, 
-                     DraftWindow, ScheduleWindow, FinancesWindow, NewsWindow, 
-                     GMOptionsWindow, ContractNegotiationWindow, 
-                     TradeBlockWindow, WaiversWindow, SetCaptainsWindow)
-from ui_components import PlayerProfileWindow
+from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, TradeBlockWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView)
 from ui_widgets import PillButton
-from inbox_window import InboxWindow
+# Quick-sim engine + shared lineup helpers (extracted from main.py 2026-09-28;
+# re-exported here so `from main import best_lines` etc. keeps working)
+from quick_sim import AdvancedGameSim, best_lines, flatten_lineup, roll_game_injury
 # Professional Calendar System (Phase 4) - replaces old calendar_window
-from calendar_window import CalendarWindow
-from schedule_engine import ScheduleEngine, ScheduleConfiguration, ScheduleGenerationMode
-from staff_management_window import StaffManagementWindow
-from professional_scouting_window import ProfessionalScoutingWindow
-from modern_scouting_window import ModernScoutingWindow
-from stats_standings_window import StatsStandingsWindow
+from calendar_window import CalendarView
+from staff_management_window import StaffManagementView
+from professional_scouting_window import ProfessionalScoutingView
+from modern_scouting_window import ModernScoutingView
+from stats_standings_window import StatsStandingsView
+from ahl_stats_window import AHLStatsView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
+from draft_generator import age_on_sept15 as _age_on_sept15
 from database_manager import initialize_game_database
-from database_generator import generate_database, get_database_options
+from database_generator import generate_database
 from save_load_system import GameSaveManager
 # Import will be done dynamically in open_player_profile to avoid circular imports
 import threading
 from PIL import Image, ImageTk  # For icons/logos
 
 # Import new modern UI systems
-from ui_theme_system import create_modern_theme, ModernUITheme, ProfessionalWidgets
-from typography_system import TypographySystem, TextStyles
-from team_identity_system import nhl_identity
-from modern_dashboard import ModernDashboard
+from ui_theme_system import (create_modern_theme, ProfessionalWidgets)
+from typography_system import TypographySystem
 
 # Import Trade Deadline Center
 from trade_deadline_center import TradeDeadlineCenter, is_trade_deadline_day
@@ -49,18 +42,19 @@ from event_day_hubs import (DraftDayCentral, FreeAgencyFrenzy, is_draft_day,
                             is_free_agency_day, prompt_event_day)
 
 # Import Phase 1 systems
-from save_load_system import SaveLoadWindow, GameSaveManager
-from playoff_system import PlayoffWindow
+from save_load_system import GameSaveManager
+from playoff_system import PlayoffView
 from atmospheric_dashboard import AtmosphericDashboard
-from visual_identity_system import HockeyAtmosphereSystem
-from smart_data_widgets import PlayerStatsCard, TeamStandingsWidget
 
 # Import Player Development System
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
 
 # Import optional Media System
 from media_system import MediaSystem
-from media_center_window import MediaCenterWindow
+from media_center_window import MediaCenterView
+from morale_window import MoraleView
+from tactics_window import TacticsWindow
+from manager_hub_window import ManagerHubView
 
 # Import Football Manager-style career systems
 import manager_career
@@ -82,6 +76,7 @@ except ImportError:
 try:
     from tooltip import create_tooltip
 except Exception:
+
     def create_tooltip(widget, text, delay=500):
         return None
 
@@ -125,18 +120,23 @@ NHL_ROSTER_SIZE = 23
 AHL_ROSTER_SIZE = 20
 PROSPECT_POOL_SIZE = 15
 GAMES_PER_SIM_DAY = 8 
-SALARY_CAP = 83_500_000
+SALARY_CAP = 104_000_000  # 2026-27 NHL cap (modern day)
 PLAYER_BUDGET = 92_000_000
 START_DATE = date(datetime.now().year, 10, 1)
 
 # --- Game Engine Class ---
 class GameManager:
     """Manages the overall game state, including setup and season progression."""
+
     def __init__(self, league_name="EHM Clone Hockey League"):
         self.league = League(league_name)
         self.league.set_game_manager(self)  # Set reference for database access
         self.user_team = None
         self.startup_settings = None
+        # Item 7: set when the human club still needs its mandatory
+        # captaincy choice but no display exists to ask (headless new-game
+        # setup). The GUI raises the blocker on startup and clears it.
+        self._captaincy_choice_pending = False
 
         # New-game setup options (filled by apply_startup_settings)
         self.fog_of_war = True
@@ -163,6 +163,7 @@ class GameManager:
         # Don't setup game immediately - wait for startup settings
         
     @property
+
     def ai_manager(self):
         """Lazy initialization of AI team manager"""
         if self._ai_manager is None:
@@ -195,6 +196,7 @@ class GameManager:
         return SALARY_CAP
         
     @property
+
     def record_manager(self):
         """Lazy initialization of record manager to avoid blocking startup"""
         if self._record_manager is None:
@@ -245,6 +247,11 @@ class GameManager:
                     generator = DatabaseGenerator(db_config)
                 else:
                     generator = DatabaseGenerator(config)
+                # Fantasy-draft starts are an even playing field: the
+                # generator skips the real-life day-one cap situations so
+                # the draft pool is unshaped (cap compliance is also not
+                # enforced during the draft itself).
+                generator.fantasy_draft_mode = settings.get('fantasy_draft', False)
                 debug_print("DEBUG: DatabaseGenerator created, starting generation...")
                 self.league = generator.generate_comprehensive_database(progress_callback)
                 debug_print("DEBUG: Database generation completed")
@@ -256,6 +263,15 @@ class GameManager:
                 # New-game wizard options (stored for the session)
                 self.fog_of_war = settings.get('fog_of_war', True)
                 self.sim_detail = settings.get('sim_detail', {}) or {}
+                # Playoff seeding format (setup-only; lives on the league so
+                # the bracket and save/load both read one source of truth).
+                try:
+                    _pf = settings.get('playoff_format', 'divisional')
+                    self.league.playoff_format = (
+                        _pf if _pf in ("divisional", "conference")
+                        else "divisional")
+                except Exception:
+                    pass
                 self.user_league = settings.get('user_league', 'NHL')
                 self.gm_name = settings.get('gm_name', 'General Manager')
                 try:
@@ -268,6 +284,50 @@ class GameManager:
                 print("Initializing draft picks for all teams...")
                 self.league.initialize_all_draft_picks()
                 print("Draft picks initialized!")
+
+                # Real-life cap finances: seed each club's actual 2026-27
+                # dead-cap penalties (buyouts + retained salary + bonus
+                # overages), unless the user chose "start without cap
+                # penalties". Only for 2026-27 starts -- the research is
+                # season-specific. Fantasy-draft starts skip the seeding
+                # entirely: the draft assumes cap rules (the $104M ceiling
+                # still applies after) but not cap penalties, so every
+                # club begins on an even playing field.
+                try:
+                    import real_cap_data
+                    season_yr = getattr(self.league, 'season_year', 2026)
+                    if settings.get('start_without_cap_penalties', False):
+                        real_cap_data.clear_dead_cap(self.league)
+                        print("Cap penalties cleared (start without cap penalties).")
+                    elif not real_cap_data.should_seed_dead_cap(season_yr, settings):
+                        print("Cap penalties not seeded for this start "
+                              "(fantasy draft: cap rules apply, penalties don't).")
+                    else:
+                        n = real_cap_data.seed_real_dead_cap(self.league)
+                        print(f"Seeded real-life dead-cap penalties for {n} teams.")
+                except Exception as e:
+                    print(f"Dead-cap seeding skipped: {e}")
+                # Real-life trade protection: stamp actual 2026-27 NTC/NMC/
+                # M-NTC clauses onto matching players (only when the player
+                # is on the listed team -- real-life moves never leak stale
+                # clauses into the game).
+                try:
+                    import real_ntc_data
+                    if getattr(self.league, 'season_year', 2026) == real_ntc_data.SEASON:
+                        n = real_ntc_data.seed_real_clauses(self.league)
+                        print(f"Seeded real-life trade clauses for {n} players.")
+                except Exception as e:
+                    print(f"Trade-clause seeding skipped: {e}")
+                # Day-1 cap guarantee, re-run after dead-cap seeding: real
+                # buyouts/retained salary land after generation and can tip a
+                # borderline roster over the cap (which would fire the
+                # cap-compliance Continue blocker before day one).
+                try:
+                    from database_generator import DatabaseGenerator
+                    DatabaseGenerator._enforce_nhl_cap_compliance(
+                        getattr(self.league, 'teams', []) or [])
+                except Exception as e:
+                    print(f"Cap-compliance pass skipped: {e}")
             
             # Apply comprehensive game settings
             debug_print("DEBUG: Applying game settings...")
@@ -284,6 +344,14 @@ class GameManager:
             if hasattr(self.league, 'generate_schedule'):
                 self.league.generate_schedule()
             
+            # Rivalry lifecycle: seed the regional feuds (Battle of
+            # Alberta, Original Six bad blood, ...) for a brand-new
+            # league. Guarded: existing saves keep their lived-in state.
+            try:
+                self._seed_regional_rivalries()
+            except Exception as e:
+                print(f"Regional rivalry seeding skipped: {e}")
+
             print(f"Database generation complete! {len(self.league.get_all_players())} total players.")
             print(f"Teams with players: {len([t for t in self.league.teams if len(t.roster) > 0])}")
             print(f"Teams with staff: {len([t for t in self.league.teams if len(t.staff) > 0])}")
@@ -440,6 +508,10 @@ class GameManager:
                     break
             if not team_found:
                 print(f"WARNING: Could not find team '{selected_team_name}' in league teams!")
+            else:
+                # Item 7 follow-up: the human club's letters must be the
+                # user's choice, never inherited auto-repair.
+                self._claim_user_team_captaincy(self.user_team)
         else:
             debug_print(f"DEBUG: No team to set - selected_team_name={selected_team_name}, has league={hasattr(self, 'league') and self.league is not None}")
         
@@ -505,7 +577,7 @@ class GameManager:
             for team in self.league.teams:
                 if team.league_name == "National Hockey League":
                     if self.salary_cap_enabled:
-                        team.salary_cap = 83500000  # Standard NHL cap
+                        team.salary_cap = 104000000  # Standard NHL cap (2026-27)
                     else:
                         team.salary_cap = 999999999  # Effectively unlimited
         
@@ -564,18 +636,54 @@ NHL League Office""",
         self.user_team.inbox.add_message(draft_email)
         print(f"Fantasy draft message added to {self.user_team.team_name} inbox")
 
+    def _seed_regional_rivalries(self):
+        """Seed regional rivalries for a brand-new league.
+
+        Guarded so existing saves keep their lived-in state: only runs
+        when the league's rivalry ledger is empty. Idempotent -- the
+        underlying add is merge-by-max, so a double call can't duplicate.
+        """
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        rivs = getattr(league, "rivalries", None)
+        if not isinstance(rivs, list) or rivs:
+            return
+        teams = list(getattr(league, "teams", []) or [])
+        if not teams:
+            return
+        try:
+            from reputation_system import seed_regional_rivalries
+            n = seed_regional_rivalries(rivs, teams)
+            if n:
+                print(f"Seeded {n} regional rivalries.")
+        except Exception:
+            pass
+
     def setup_new_game(self):
         """Initializes a new game world with teams, players, and staff using the comprehensive database system."""
         print("Setting up a new game with comprehensive player database...")
         
         # Initialize the comprehensive database system
         self.database_manager = initialize_game_database(self.league.teams)
+
+        # P-5 is handled at creation time by name_safety (star-surname
+        # filter in the name generators) -- no post-hoc scrub: there is no
+        # real/fictional flag, so a scrub could not tell a generated
+        # "Mikko Rantanen" from the real one.
         
         # Initialize media system
         self.media_system = MediaSystem(self)
         
         # Generate league schedule
         self.league.generate_schedule()
+        # Legacy events: stamp the Winter Classic + Stadium Series onto
+        # chosen regular-season home games (no 83rd game is added).
+        try:
+            import outdoor_games as _og
+            _og.schedule_outdoor_games(self.league)
+        except Exception as e:
+            print(f"⚠️ Outdoor-game scheduling skipped: {e}")
         
         # Initialize all teams with 0 season records for new season start
         print("Initializing clean season records...")
@@ -590,6 +698,32 @@ NHL League Office""",
                 team.goals_against = 0
                 team.games_played = 0
         print("Clean season records initialized for NHL teams")
+
+        # NHL Rule 6.1: every club opens with exactly one captain (never a
+        # goaltender) and two alternates. Leadership is picked, not dealt.
+        # Item 7: the human GM names his own letters -- a mandatory,
+        # non-dismissible chooser replaces auto-repair for the user club.
+        # No display exists yet this early, so _require_captaincy_choice
+        # defers via _captaincy_choice_pending and the app raises the
+        # blocker on startup.
+        for team in self.league.teams:
+            if team.league_name == "National Hockey League":
+                try:
+                    self._opening_night_captaincy_check(
+                        team, getattr(self, "user_team", None))
+                except Exception:
+                    pass
+
+        # Real-life jersey retirement ceremonies, staged in the first
+        # season on the real month/day (Dec 1 / Jan 30 / Feb 24). Absolute
+        # dates anchored to the inaugural season_year, persisted on the
+        # league so the rafters match reality whenever the game is started.
+        try:
+            import immortality as _im_sched
+            self.league.ceremony_schedule = _im_sched.ceremony_schedule_for(
+                getattr(self.league, "season_year", 2026))
+        except Exception:
+            pass
         
         # Set draft prospects from database manager
         self.league.draft_prospects = self.database_manager.draft_eligibles
@@ -608,6 +742,12 @@ NHL League Office""",
         print(f"Free agents available: {len(self.database_manager.get_free_agents())}")
         print(f"International players: {len(self.database_manager.international_players)}")
         print(f"Draft eligible players: {len(self.database_manager.draft_eligibles)}")
+        # Rivalry lifecycle: seed the regional feuds for a brand-new
+        # league. Guarded: existing saves keep their lived-in state.
+        try:
+            self._seed_regional_rivalries()
+        except Exception as e:
+            print(f"Regional rivalry seeding skipped: {e}")
 
     def _generate_players(self, count):
         """
@@ -892,9 +1032,19 @@ NHL League Office""",
         player.contract.salary = salary
         player.contract.years_remaining = years
         
-        # Elite players might get no-trade clauses
-        if ovr >= 82 and age >= 27:
-            player.contract.no_trade_clause = random.random() < 0.4
+        # Trade protection: the same demand model the user negotiates
+        # against (trade_engine.clause_demand_score) -- stars with leverage
+        # get clauses, kids don't, no flat dice roll.
+        import trade_engine as _te
+        _demand = _te.clause_demand_score(player)
+        if random.random() < _demand * 0.85:
+            if ovr >= 86 and random.random() < 0.35:
+                player.contract.no_movement_clause = True
+            else:
+                player.contract.no_trade_clause = True
+                if random.random() < 0.55:
+                    player.contract.modified_ntc_teams = random.choice(
+                        [8, 10, 12, 15, 16, 20])
 
     def _generate_staff(self, count):
         """Generate staff with strategic role distribution for EHM-style management"""
@@ -930,7 +1080,8 @@ NHL League Office""",
             StaffRole.PHYSIOTHERAPIST,
             StaffRole.EQUIPMENT_MANAGER,
             StaffRole.SKATING_COACH,
-            StaffRole.VIDEO_COACH
+            StaffRole.VIDEO_COACH,
+            StaffRole.ANALYTICS_DIRECTOR,
         ]
         
         # Create exact number needed for unique roles (one per team + extras)
@@ -1048,6 +1199,7 @@ NHL League Office""",
         print(f"Free agent staff available: {len(self.league.free_agent_staff)}")
     
     @property
+
     def free_agents(self):
         """Get free agents from the database manager."""
         if hasattr(self, 'database_manager'):
@@ -1146,7 +1298,80 @@ NHL League Office""",
             breakdown_parts.append(f"{other_count} others")
         
         return ", ".join(breakdown_parts)
-    
+
+    def sign_free_agent_staff(self, staff, salary, years, assignment="nhl"):
+        """Hire a free-agent staffer onto the user's team.
+
+        (Previously missing -- the staff contract dialog called this and
+        crashed. Now implemented.) Firing/hiring an Analytics Director
+        refreshes the club's analytics department quality via
+        refresh_analytics_quality(); hiring a pro scout gives the user a
+        new eye with a blank track record to build.
+
+        assignment: "nhl" (default) or "ahl" -- which club the staffer
+        joins. Lets the user hire an AHL GM / AHL coach directly.
+        """
+        try:
+            team = getattr(self, "user_team", None)
+            league = getattr(self, "league", None)
+            if team is None or staff is None:
+                return False
+            assignment = (str(assignment or "nhl").lower()
+                          if str(assignment or "").lower() in ("nhl", "ahl")
+                          else "nhl")
+            # League-wide staff budget: the offer must fit the club's
+            # remaining budget. Applies to every hiring path through here.
+            try:
+                from game_classes import team_can_afford_staff as _afford
+                if not _afford(team, salary):
+                    return False
+            except Exception:
+                pass
+            pool = getattr(league, "free_agent_staff", None)
+            if pool is not None and staff in pool:
+                pool.remove(staff)
+            try:
+                staff.salary = int(salary)
+                staff.contract_years = int(years)
+            except Exception:
+                pass
+            if staff not in list(getattr(team, "staff", []) or []):
+                team.staff.append(staff)
+                # Stamp which club the hire joins (NHL club or AHL affiliate).
+                try:
+                    staff.assignment = assignment
+                except Exception:
+                    pass
+            try:
+                import analytics_scouting as _as
+                _as.refresh_analytics_quality(team)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
+    def release_staff(self, staff):
+        """Release a staffer from the user's team back to the free-agent pool."""
+        try:
+            team = getattr(self, "user_team", None)
+            league = getattr(self, "league", None)
+            if team is None or staff is None:
+                return False
+            if staff in list(getattr(team, "staff", []) or []):
+                team.staff.remove(staff)
+            pool = getattr(league, "free_agent_staff", None)
+            if pool is not None and staff not in pool:
+                pool.append(staff)
+            try:
+                import analytics_scouting as _as
+                _as.refresh_analytics_quality(team)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
+
     def _assign_captaincy(self, team):
         """Assigns captain and alternate captains based on leadership attributes."""
         if not team.roster:
@@ -1165,6 +1390,275 @@ NHL League Office""",
         if len(leaders) > 2:
             leaders[2].captaincy = 'A'
     
+    def _ensure_captaincy(self, team) -> "str | None":
+        """NHL Rule 6.1: every club must have exactly one captain -- and it
+        can't be a goaltender. Idempotent: a valid existing captain is
+        never overwritten, alternates are only topped up to two. Returns
+        the new captain's name when one had to be named, else None."""
+        try:
+            from game_classes import PlayerPosition as _PP
+        except Exception:
+            _PP = None
+        roster = list(getattr(team, "roster", None) or [])
+        if not roster:
+            return None
+
+        def _is_goalie(p):
+            try:
+                return _PP is not None and getattr(p, "primary_position", None) == _PP.GOALIE
+            except Exception:
+                return False
+
+        def _lead(p):
+            try:
+                return int(getattr(p, "leadership", 50) or 50)
+            except Exception:
+                return 50
+
+        def _tenure(p):
+            try:
+                return int(getattr(p, "team_tenure_years", 0) or 0)
+            except Exception:
+                return 0
+
+        # Strip invalid letters first: goalie captains, duplicate Cs.
+        changed = False
+        for p in roster:
+            if getattr(p, "captaincy", "") == "C" and _is_goalie(p):
+                try:
+                    p.captaincy = ""
+                    changed = True
+                except Exception:
+                    pass
+        captains = [p for p in roster if getattr(p, "captaincy", "") == "C"]
+        new_captain = None
+        if len(captains) != 1:
+            for p in captains:
+                try:
+                    p.captaincy = ""
+                except Exception:
+                    pass
+            skaters = [p for p in roster if not _is_goalie(p)]
+            pool = skaters or roster
+
+            def _ovr(p):
+                try:
+                    return int(p.overall_rating())
+                except Exception:
+                    return 0
+
+            pick = max(pool, key=lambda p: (_lead(p), _tenure(p), _ovr(p)))
+            try:
+                pick.captaincy = "C"
+            except Exception:
+                pass
+            new_captain = getattr(pick, "full_name", "A new captain")
+            changed = True
+        # Top up alternates to two among non-captain skaters.
+        try:
+            alternates = [p for p in roster
+                          if getattr(p, "captaincy", "") == "A"]
+            if len(alternates) < 2:
+                cands = sorted(
+                    (p for p in roster
+                     if getattr(p, "captaincy", "") not in ("C", "A")
+                     and not _is_goalie(p)),
+                    key=lambda p: (_lead(p), _tenure(p)), reverse=True)
+                for p in cands[:2 - len(alternates)]:
+                    p.captaincy = "A"
+                    changed = True
+        except Exception:
+            pass
+        if changed:
+            # Item 7 follow-up: stamp letters dealt by auto-repair so the
+            # human club can later be told apart from a human choice.
+            try:
+                team._captaincy_auto_assigned = True
+            except Exception:
+                pass
+        return new_captain
+
+    # --- Item 7: mandatory captaincy user-choice blocker -------------------
+    @staticmethod
+    def _cap_letter_is_goalie(p) -> bool:
+        """NHL Rule 6.1 goalie check shared by the captaincy helpers."""
+        try:
+            from game_classes import PlayerPosition as _PP
+            return getattr(p, "primary_position", None) == _PP.GOALIE
+        except Exception:
+            return False
+
+    def _captaincy_needs_choice(self, team) -> bool:
+        """True when the club does not already wear exactly 1 C + 2 As.
+
+        Goalie-held letters count as invalid (NHL Rule 6.1). Display-free,
+        so headless QA can exercise the firing logic without a display.
+        """
+        roster = list(getattr(team, "roster", None) or [])
+        if not roster:
+            return False
+        caps = [p for p in roster if getattr(p, "captaincy", "") == "C"]
+        alts = [p for p in roster if getattr(p, "captaincy", "") == "A"]
+        if len(caps) != 1 or len(alts) != 2:
+            return True
+        if self._cap_letter_is_goalie(caps[0]):
+            return True
+        return any(self._cap_letter_is_goalie(p) for p in alts)
+
+    def _validate_captaincy_pick(self, team, captain_name,
+                                 alt1_name, alt2_name):
+        """Validate a 1C+2A pick. Returns an error string when the pick is
+        illegal, None when it is legal. Display-free, headless-QA safe."""
+        by_name = {}
+        for p in (getattr(team, "roster", None) or []):
+            by_name.setdefault(getattr(p, "full_name", ""), p)
+        c = (captain_name or "").strip()
+        a1 = (alt1_name or "").strip()
+        a2 = (alt2_name or "").strip()
+        if not c or c not in by_name:
+            return "Choose a captain (C) to continue."
+        if not a1 or a1 not in by_name or not a2 or a2 not in by_name:
+            return "Choose two alternate captains (A) to continue."
+        if c == a1 or c == a2:
+            return ("One player cannot wear both the C and an A \u2014 "
+                    "pick a different alternate.")
+        if a1 == a2:
+            return "Pick two different alternate captains."
+        if self._cap_letter_is_goalie(by_name[c]):
+            return ("NHL Rule 6.1: a goaltender cannot be captain \u2014 "
+                    "choose a skater for the C.")
+        if (self._cap_letter_is_goalie(by_name[a1])
+                or self._cap_letter_is_goalie(by_name[a2])):
+            return ("NHL Rule 6.1: a goaltender cannot wear a letter \u2014 "
+                    "choose skaters for the As.")
+        return None
+
+    def _persist_captaincy_pick(self, team, captain_name,
+                                alt1_name, alt2_name):
+        """Write a validated 1C+2A pick onto the roster's captaincy field,
+        the same by-name way the manual Set Captains tool does."""
+        c = (captain_name or "").strip()
+        a1 = (alt1_name or "").strip()
+        a2 = (alt2_name or "").strip()
+        roster = list(getattr(team, "roster", None) or [])
+        for p in roster:
+            p.captaincy = None
+        for p in roster:
+            name = getattr(p, "full_name", "")
+            if name == c:
+                p.captaincy = "C"
+            elif name == a1 or name == a2:
+                p.captaincy = "A"
+        # A human just chose these letters: never mistake them for
+        # auto-repair later.
+        try:
+            team._captaincy_auto_assigned = False
+        except Exception:
+            pass
+
+    def _opening_night_captaincy_check(self, team, user_team):
+        """One club's opening-night captaincy step. Returns the new
+        captain's name when auto-repair named one (for the news story),
+        else None. Human club without exactly 1 C + 2 As -> the mandatory
+        user-choice blocker; AI clubs keep the auto-repair path. Shared by
+        both _ensure_captaincy call sites so the firing logic is identical.
+        """
+        if team is user_team and self._captaincy_needs_choice(team):
+            self._require_captaincy_choice(team)
+            return None
+        return self._ensure_captaincy(team)
+
+    def _require_captaincy_choice(self, team) -> bool:
+        """Item 7: modal continuation blocker for the human club.
+
+        Raises the non-dismissible captain picker and blocks until the
+        user confirms exactly 1 C + 2 As. Returns True when a valid choice
+        was made and persisted. When no display/popup manager is available
+        (headless new-game setup), arms _captaincy_choice_pending instead
+        so the GUI raises the blocker on startup -- never crashes.
+        """
+        if not self._captaincy_needs_choice(team):
+            self._captaincy_choice_pending = False
+            return True
+        app = getattr(self, "app", None)
+        mgr = getattr(app, "popup_manager", None) if app is not None else None
+        if mgr is None:
+            self._captaincy_choice_pending = True
+            return False
+        try:
+            from windows import MandatoryCaptainsWindow
+            win = MandatoryCaptainsWindow(app, team=team)
+            win.grab_set()
+            win.wait_window()
+        except Exception:
+            self._captaincy_choice_pending = True
+            return False
+        ok = not self._captaincy_needs_choice(team)
+        self._captaincy_choice_pending = not ok
+        if ok:
+            try:
+                caps = [p for p in (getattr(team, "roster", None) or [])
+                        if getattr(p, "captaincy", "") == "C"]
+                if caps:
+                    _story = (
+                        f"\u00a9 {caps[0].full_name} has been named captain of "
+                        f"the {getattr(team, 'team_name', 'club')}.")
+                    # add_news lives on the GUI; the manager only holds it
+                    # via .app.
+                    _add = getattr(getattr(self, "app", None),
+                                   "add_news", None)
+                    if callable(_add):
+                        _add(_story)
+            except Exception:
+                pass
+        return ok
+
+    def _claim_user_team_captaincy(self, team) -> bool:
+        """Item 7 follow-up: whenever the human club is (re)determined, make
+        sure the user -- not auto-repair -- chose its letters.
+
+        New-game setup auto-repairs every club before the user's team is
+        known; without this, the user would silently inherit those letters
+        and never be asked. When the club's letters came from auto-repair
+        (stamped by _ensure_captaincy), strip them and arm the mandatory
+        picker. When the club simply has no valid 1C+2As (a broken save, a
+        scrambled post-fantasy-draft roster, a league that never ran the
+        setup pass), arm the picker too -- the human club is never
+        auto-repaired. A club that already wears a valid, human-chosen
+        1C+2As is left untouched. Returns True when the blocker was armed.
+        """
+        if team is None:
+            return False
+        try:
+            if getattr(team, "_captaincy_auto_assigned", False):
+                for p in (getattr(team, "roster", None) or []):
+                    try:
+                        p.captaincy = None
+                    except Exception:
+                        pass
+                try:
+                    team._captaincy_auto_assigned = False
+                except Exception:
+                    pass
+                self._captaincy_choice_pending = True
+                return True
+            if self._captaincy_needs_choice(team):
+                self._captaincy_choice_pending = True
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _captaincy_blocker_suppressed(self) -> bool:
+        """Display-free: True while the mandatory-captains Continue blocker
+        must stay suppressed. That is the fantasy draft itself (its own
+        blocker covers it) and the post-fantasy-draft deferral window:
+        rosters are letter-less by design until the first preseason game
+        day arms the picker. Headless-QA safe."""
+        if getattr(self, 'pending_fantasy_draft', False):
+            return True
+        return bool(getattr(self, '_fantasy_draft_captaincy_deferred', False))
+
     def set_user_team(self, team_name):
         """Set the user's selected team"""
         # Find the team by name
@@ -1177,6 +1671,10 @@ NHL League Office""",
         if user_team:
             self.user_team = user_team
             print(f"User team set to: {team_name}")
+            # Item 7 follow-up: setup auto-repairs every club before the
+            # user's team is known -- reclaim the human club so the user
+            # picks its captains instead of inheriting auto-repair.
+            self._claim_user_team_captaincy(user_team)
             # Update team colors in UI if the UI is already set up
             if hasattr(self, 'modern_theme') and hasattr(self, 'style'):
                 self._update_team_colors()
@@ -1217,6 +1715,41 @@ NHL League Office""",
                                 if hasattr(self, 'news_log'):
                                     self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
 
+    def _process_suspension_service(self, teams_played=None):
+        """Tick down DoPS suspensions once per GAME PLAYED (not per day).
+
+        Mirrors _process_injury_recovery exactly: only players whose team
+        played today serve a game, and a suspension issued after today's
+        game (suspended_today) starts counting with the next one. At zero
+        the player is eligible again. Never raises.
+        """
+        try:
+            for team in self.league.teams:
+                if teams_played is not None and team.team_name not in teams_played:
+                    continue
+                for player in team.roster:
+                    try:
+                        remaining = getattr(player, 'suspension_games_remaining', 0) or 0
+                        if remaining <= 0:
+                            continue
+                        # Suspended after today's game? Service starts with
+                        # the next game they miss.
+                        if getattr(player, 'suspended_today', False):
+                            player.suspended_today = False
+                            continue
+                        player.suspension_games_remaining = remaining - 1
+                        if player.suspension_games_remaining <= 0:
+                            player.suspension_games_remaining = 0
+                            player.suspension_reason = ""
+                            # Notify if it's the user's team
+                            if hasattr(self, 'user_team') and team == self.user_team:
+                                if hasattr(self, 'news_log'):
+                                    self.news_log.append({'date': self.current_date, 'story': f"✅ {player.first_name} {player.last_name} has served his suspension and is eligible to return."})
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
     def _process_monthly_development(self):
         """Run monthly player development for all players league-wide.
         
@@ -1228,9 +1761,43 @@ NHL League Office""",
         
         notable = []
         for team in self.league.teams:
+            # Assistant coaches: effectiveness drifts with results, mesh and
+            # shelf life (icons exempt -- legacy cemented); the room feels it
+            # through morale. See assistant_coaches.
+            try:
+                import assistant_coaches as _ac
+                _st = (getattr(self.league, "standings", None) or {}).get(
+                    getattr(team, "team_name", ""), {}) or {}
+                _g = ((_st.get("W", 0) or 0) + (_st.get("L", 0) or 0)
+                      + (_st.get("OTL", 0) or 0))
+                _wp = (((_st.get("W", 0) or 0)
+                        + 0.5 * (_st.get("OTL", 0) or 0)) / _g) if _g else None
+                for _line in _ac.assistants_monthly_tick(team, win_pct=_wp):
+                    if team == self.user_team:
+                        notable.append("\U0001f4cb " + _line)
+            except Exception:
+                pass
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
-                    changes = self._dev_engine.process_monthly_development(player)
+                    # team= enables the archetype/system coaching
+                    # dimensions (additive; legacy formula unchanged).
+                    changes = self._dev_engine.process_monthly_development(
+                        player, coach=getattr(team, 'head_coach', None),
+                        team=team)
+                    # Item 8: season star counts nudge development -- young
+                    # players starring break out, starring veterans resist
+                    # decline. Additive wrapper around the engine (its
+                    # internals are untouched); with no stars this is a
+                    # no-op. Merged before the empty-check so a star-only
+                    # month still flows into archetype refresh + news.
+                    try:
+                        from star_development import (
+                            apply_star_monthly_nudge as _star_nudge)
+                        _star_deltas = _star_nudge(player, changes)
+                        for _a, _c in _star_deltas.items():
+                            changes[_a] = changes.get(_a, 0) + _c
+                    except Exception:
+                        pass
                     if not changes:
                         continue
                     # Refresh archetype as attributes develop (e.g. prospect
@@ -1265,241 +1832,13 @@ NHL League Office""",
         if notable:
             print(f"📈 Monthly development: {len(notable)} notable improvements")
 
-def roll_game_injury(team):
-    """Roll a single in-game injury for a team (shared by detailed + batch sims).
-
-    Weighted by injury_proneness and age; skips goalies and already-injured
-    players. Returns the injured Player, or None if nobody was hurt.
-    """
-    import random
-    candidates = []
-    weights = []
-    for p in getattr(team, 'roster', []):
-        if getattr(p, 'is_injured', False):
-            continue
-        pos = getattr(p, 'primary_position', None)
-        if pos and pos.name == 'GOALIE':
-            continue
-        proneness = getattr(p, 'injury_proneness', 10) or 10
-        age = getattr(p, 'age', 25) or 25
-        age_factor = max(0.5, min(2.0, (age - 20) / 10))
-        candidates.append(p)
-        weights.append(proneness * age_factor)
-    if not candidates:
-        return None
-    injured = random.choices(candidates, weights=weights, k=1)[0]
-    # Severity: Minor 1-3 games (60%), Moderate 4-10 (30%), Severe 11-25 (10%)
-    severity_roll = random.random()
-    if severity_roll < 0.6:
-        games_missed = random.randint(1, 3)
-        injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
-    elif severity_roll < 0.9:
-        games_missed = random.randint(4, 10)
-        injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
-    else:
-        games_missed = random.randint(11, 25)
-        injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
-    injured.is_injured = True
-    injured.injury_type = injury_type
-    injured.games_remaining_injured = games_missed
-    injured.last_injury = injury_type
-    injured.injured_today = True  # recovery countdown starts with the NEXT game
-    return injured
-
-def best_lines(team):
-    """Builds the best possible lineup for the given team based on player ratings and positions."""
-    # Injured players can't dress: filter them out (fall back to full group if empty)
-    def _healthy(players):
-        healthy = [p for p in players if not getattr(p, 'is_injured', False)]
-        return healthy if healthy else players
-    # Select top 13 forwards, 8 defensemen, 2 goalies by position and rating
-    forwards = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.CENTER, PlayerPosition.RIGHT_WING]])
-    defensemen = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]])
-    goalies = _healthy([p for p in team.roster if p.primary_position == PlayerPosition.GOALIE])
-
-    # Sort by overall rating
-    forwards = sorted(forwards, key=lambda p: p.overall_rating(), reverse=True)[:13]  # Changed to 13 to ensure line 4 gets players
-    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)[:6]  # 6 for 3 pairs (matches sim rotation + editor)
-    goalies = sorted(goalies, key=lambda p: p.overall_rating(), reverse=True)[:2]
-
-    # Build forward lines
-    fw_lines = []
-    
-    # Keep track of players already assigned to lines
-    assigned_forwards = []
-    
-    # For first line, try to get the best players by position
-    lw1 = next((p for p in forwards if p.primary_position == PlayerPosition.LEFT_WING and p not in assigned_forwards), None)
-    c1 = next((p for p in forwards if p.primary_position == PlayerPosition.CENTER and p not in assigned_forwards), None)
-    rw1 = next((p for p in forwards if p.primary_position == PlayerPosition.RIGHT_WING and p not in assigned_forwards), None)
-    
-    # If we're missing players, fill with best remaining players
-    remaining_for_line1 = [p for p in forwards if p not in [lw1, c1, rw1] and p not in assigned_forwards]
-    if not lw1 and remaining_for_line1:
-        lw1 = remaining_for_line1.pop(0)
-    if not c1 and remaining_for_line1:
-        c1 = remaining_for_line1.pop(0)
-    if not rw1 and remaining_for_line1:
-        rw1 = remaining_for_line1.pop(0)
-    
-    # Mark these players as assigned
-    if lw1: assigned_forwards.append(lw1)
-    if c1: assigned_forwards.append(c1)
-    if rw1: assigned_forwards.append(rw1)
-    fw_lines.append([lw1, c1, rw1])
-    
-    # For the remaining 3 lines, build with best available players
-    for line_num in range(1, 4):
-        line = []
-        for pos_type in [PlayerPosition.LEFT_WING, PlayerPosition.CENTER, PlayerPosition.RIGHT_WING]:
-            # Try to get a natural fit first
-            player = next((p for p in forwards if p.primary_position == pos_type and p not in assigned_forwards), None)
-            
-            # If no natural fit, take best available
-            if not player:
-                remaining = [p for p in forwards if p not in assigned_forwards]
-                if remaining:
-                    player = remaining[0]
-            
-            # Add player to line and mark as assigned
-            if player:
-                line.append(player)
-                assigned_forwards.append(player)
-            else:
-                line.append(None)
-        
-        fw_lines.append(line)
-
-    # Build defense pairs with natural LD/RD if possible
-    def_pairs = []
-    assigned_defense = []
-    
-    # For each pair, try to get a natural LD and RD - 3 pairs to match
-    # the sim's rotation ((clock // 60) % 3) and the lines editor
-    for _ in range(3):
-        ld = next((p for p in defensemen if (p.primary_position == PlayerPosition.LEFT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p not in assigned_defense), None)
-        rd = next((p for p in defensemen if (p.primary_position == PlayerPosition.RIGHT_DEFENSE or p.primary_position == PlayerPosition.DEFENSE) and p != ld and p not in assigned_defense), None)
-        
-        # Mark these players as assigned
-        if ld: assigned_defense.append(ld)
-        if rd: assigned_defense.append(rd)
-        def_pairs.append([ld, rd])
-    
-    # Build Power Play units
-    # Use top offensive forwards and offensive defensemen
-    offensive_forwards = sorted(forwards, key=lambda p: (
-        getattr(p, 'offensive_awareness', 0) * 0.4 + 
-        getattr(p, 'shooting', 0) * 0.3 + 
-        getattr(p, 'passing', 0) * 0.3
-    ), reverse=True)
-    
-    offensive_defensemen = sorted(defensemen, key=lambda p: (
-        getattr(p, 'offensive_awareness', 0) * 0.4 + 
-        getattr(p, 'shooting', 0) * 0.3 + 
-        getattr(p, 'passing', 0) * 0.3
-    ), reverse=True)
-    
-    pp1_forwards = offensive_forwards[:3] if len(offensive_forwards) >= 3 else offensive_forwards + [None] * (3 - len(offensive_forwards))
-    pp2_forwards = offensive_forwards[3:6] if len(offensive_forwards) >= 6 else offensive_forwards[3:] + [None] * (3 - len(offensive_forwards[3:]))
-    
-    pp1_defense = offensive_defensemen[:2] if len(offensive_defensemen) >= 2 else offensive_defensemen + [None] * (2 - len(offensive_defensemen))
-    pp2_defense = offensive_defensemen[2:4] if len(offensive_defensemen) >= 4 else offensive_defensemen[2:] + [None] * (2 - len(offensive_defensemen[2:]))
-    
-    # Build Penalty Kill units
-    # Use defensively strong forwards
-    defensive_forwards = sorted(forwards, key=lambda p: (
-        getattr(p, 'defensive_awareness', 0) * 0.4 + 
-        getattr(p, 'shot_blocking', 0) * 0.3 + 
-        getattr(p, 'work_rate', 0) * 0.3
-    ), reverse=True)
-    
-    defensive_defensemen = sorted(defensemen, key=lambda p: (
-        getattr(p, 'defensive_awareness', 0) * 0.4 + 
-        getattr(p, 'shot_blocking', 0) * 0.4 + 
-        getattr(p, 'checking', 0) * 0.2
-    ), reverse=True)
-    
-    pk1_forwards = defensive_forwards[:2] if len(defensive_forwards) >= 2 else defensive_forwards + [None] * (2 - len(defensive_forwards))
-    pk2_forwards = defensive_forwards[2:4] if len(defensive_forwards) >= 4 else defensive_forwards[2:] + [None] * (2 - len(defensive_forwards[2:]))
-    
-    pk1_defense = defensive_defensemen[:2] if len(defensive_defensemen) >= 2 else defensive_defensemen + [None] * (2 - len(defensive_defensemen))
-    pk2_defense = defensive_defensemen[2:4] if len(defensive_defensemen) >= 4 else defensive_defensemen[2:] + [None] * (2 - len(defensive_defensemen[2:]))
-
-    # Build the complete lineup
-    lines = {
-        'Forwards': fw_lines,
-        'Defense': def_pairs,
-        'Goalies': goalies[:2] if len(goalies) >= 2 else goalies + [None] * (2 - len(goalies)),
-        'PP1': {'Forwards': pp1_forwards, 'Defense': pp1_defense},
-        'PP2': {'Forwards': pp2_forwards, 'Defense': pp2_defense},
-        'PK1': {'Forwards': pk1_forwards, 'Defense': pk1_defense},
-        'PK2': {'Forwards': pk2_forwards, 'Defense': pk2_defense},
-        'Strategies': {
-            'EvenStrength': 'Balanced',
-            'PowerPlay': 'Offensive',
-            'PenaltyKill': 'Defensive',
-            'LeadingBy2+': 'Defensive',
-            'TrailingBy2+': 'Very Offensive',
-            'ForeCheckIntensity': 50,
-            'DefensiveStructure': 'Standard',
-            'Aggression': 50
-        }
-    }
-    return flatten_lineup(lines)
-
-def flatten_lineup(lineup):
-    """Add flat F1_LW..F4_RW / D1_L..D3_R keys the sim reads, from nested lines.
-
-    Editors and best_lines() write nested {'Forwards': [[LW,C,RW]x4],
-    'Defense': [[L,R]xN], 'Goalies': [...]}. GameSim._get_on_ice reads flat
-    keys, so without this the sim silently ignores user lines and dresses
-    best-available-by-overall instead. Idempotent: safe to call repeatedly.
-    """
-    if not isinstance(lineup, dict):
-        return lineup
-    # Clear stale flat keys first: if a slot was emptied or replaced, an old
-    # assignment must not linger and dress the wrong player.
-    import re as _re
-    _flat_pat = _re.compile(r'^[FD]\d+_[LRCW]+$|^G\d+$')
-    for key in list(lineup.keys()):
-        if _flat_pat.match(key):
-            del lineup[key]
-    forwards = lineup.get('Forwards') or []
-    for i, line in enumerate(forwards[:4]):
-        if not line:
-            continue
-        for j, key in enumerate(('LW', 'C', 'RW')):
-            try:
-                player = line[j] if isinstance(line, (list, tuple)) else None
-            except (IndexError, TypeError):
-                player = None
-            if player:
-                lineup[f"F{i + 1}_{key}"] = player
-    defense = lineup.get('Defense') or []
-    for i, pair in enumerate(defense[:4]):
-        if not pair:
-            continue
-        try:
-            ld = pair[0] if isinstance(pair, (list, tuple)) else None
-            rd = pair[1] if isinstance(pair, (list, tuple)) and len(pair) > 1 else None
-        except (IndexError, TypeError):
-            ld = rd = None
-        if ld:
-            lineup[f"D{i + 1}_L"] = ld
-        if rd:
-            lineup[f"D{i + 1}_R"] = rd
-    goalies = lineup.get('Goalies') or []
-    for i, goalie in enumerate(goalies[:2]):
-        if goalie:
-            lineup[f"G{i + 1}"] = goalie
-    return lineup
 
 def launch_game_viewer_with_sim(home_team, away_team):
     """
     Run a full AdvancedGameSim and launch the professional GameViewer with real data
     """
     import tkinter as tk
-    from GAME_VIEWER import RebuiltNHLGameViewer, launch_game_viewer
+    from GAME_VIEWER import launch_game_viewer
     
     print("Starting enhanced hockey simulation...")
     
@@ -1529,1502 +1868,42 @@ def clamp(val, minv, maxv):
 
 # --- Advanced Simulation Engine ---
 
-class LiveHockeySimulation:
-    """Real-time live hockey simulation engine that generates events as they happen"""
-    
-    def __init__(self, home_team="Thunderbirds", away_team="Eagles"):
-        self.home_team = home_team
-        self.away_team = away_team
-        
-        # Live game state
-        self.game_state = {
-            'period': 1,
-            'time_remaining': 1200,  # 20 minutes in seconds
-            'home_score': 0,
-            'away_score': 0,
-            'possession': home_team,
-            'zone': 'neutral',  # defensive, neutral, offensive
-            'game_situation': 'even_strength',  # even_strength, powerplay, penalty_kill
-            'faceoff_location': 'center_ice'
-        }
-        
-        # Live event tracking
-        self.live_events = []
-        self.current_shift_time = 0
-        self.shift_length = random.randint(30, 90)  # Shift length in seconds
-        
-        # Player energy and fatigue
-        self.player_energy = {self.home_team: {}, self.away_team: {}}
-        self._initialize_players()
-        
-        # Live statistics
-        self.live_stats = {
-            'shots': {self.home_team: 0, self.away_team: 0},
-            'hits': {self.home_team: 0, self.away_team: 0},
-            'faceoffs': {self.home_team: 0, self.away_team: 0},
-            'penalties': {self.home_team: 0, self.away_team: 0}
-        }
-        
-        # Real-time callbacks for the viewer
-        self.event_callbacks = []
-        self.state_callbacks = []
-        
-    def _initialize_players(self):
-        """Initialize player rosters with realistic names and stats"""
-        positions = ['C', 'LW', 'RW', 'LD', 'RD', 'G']
-        
-        # Generate realistic hockey player names
-        first_names = ['Connor', 'Nathan', 'Alexander', 'William', 'David', 'Erik', 'Ryan', 'Tyler', 'Brandon', 'Jake', 
-                      'Mitchell', 'Trevor', 'Jonathan', 'Michael', 'Patrick', 'Kyle', 'Zach', 'Matt', 'Justin', 'Sean']
-        last_names = ['Johnson', 'Anderson', 'Williams', 'Brown', 'Wilson', 'Miller', 'Davis', 'Garcia', 'Rodriguez', 'Martinez',
-                     'Lindstrom', 'Karlsson', 'Johansson', 'Petersen', 'Nielsen', 'Hansen', 'Olsen', 'Larsen', 'Andersen', 'Christensen']
-        
-        for team in [self.home_team, self.away_team]:
-            self.player_energy[team] = {}
-            for i in range(20):  # 20 players per team
-                name = f"{random.choice(first_names)} {random.choice(last_names)}"
-                position = positions[i % len(positions)]
-                jersey = i + 1
-                
-                self.player_energy[team][name] = {
-                    'jersey': jersey,
-                    'position': position,
-                    'energy': 100.0,
-                    'skill': random.randint(65, 95),
-                    'on_ice': i < 6,  # First 6 players start on ice
-                    'goals': 0,
-                    'assists': 0,
-                    'shots': 0,
-                    'hits': 0,
-                    'penalties': 0,
-                    'ice_time': 0
-                }
-    
-    def register_event_callback(self, callback):
-        """Register a callback function to receive live events"""
-        self.event_callbacks.append(callback)
-    
-    def register_state_callback(self, callback):
-        """Register a callback function to receive game state updates"""
-        self.state_callbacks.append(callback)
-    
-    def _fire_event(self, event):
-        """Fire an event to all registered callbacks"""
-        self.live_events.append(event)
-        for callback in self.event_callbacks:
-            try:
-                callback(event)
-            except Exception as e:
-                print(f"Error in event callback: {e}")
-    
-    def _fire_state_update(self):
-        """Fire a state update to all registered callbacks"""
-        for callback in self.state_callbacks:
-            try:
-                callback(self.game_state.copy())
-            except Exception as e:
-                print(f"Error in state callback: {e}")
-    
-    def simulate_live_second(self):
-        """Simulate one second of live hockey action"""
-        if self.game_state['time_remaining'] <= 0:
-            return self._handle_period_end()
-        
-        # Decrease time
-        self.game_state['time_remaining'] -= 1
-        self.current_shift_time += 1
-        
-        # Update player ice time
-        self._update_ice_time()
-        
-        # Check for line changes
-        if self.current_shift_time >= self.shift_length:
-            self._handle_line_change()
-        
-        # Generate random events based on game situation
-        event_chance = self._calculate_event_probability()
-        
-        if random.random() < event_chance:
-            event = self._generate_live_event()
-            if event:
-                self._fire_event(event)
-                self._fire_state_update()
-        
-        return True
-    
-    def _calculate_event_probability(self):
-        """Calculate probability of an event happening this second"""
-        base_probability = 0.15  # 15% chance per second
-        
-        # Adjust based on zone
-        if self.game_state['zone'] == 'offensive':
-            base_probability *= 1.8
-        elif self.game_state['zone'] == 'defensive':
-            base_probability *= 1.2
-        
-        # Adjust based on game situation
-        if self.game_state['game_situation'] == 'powerplay':
-            base_probability *= 1.5
-        
-        return min(base_probability, 0.3)  # Cap at 30%
-    
-    def _generate_live_event(self):
-        """Generate a realistic live hockey event"""
-        event_types = ['shot', 'pass', 'hit', 'faceoff', 'turnover', 'save', 'penalty', 'goal']
-        weights = [0.25, 0.20, 0.15, 0.10, 0.12, 0.08, 0.05, 0.05]
-        
-        # Adjust weights based on zone
-        if self.game_state['zone'] == 'offensive':
-            weights[0] *= 2.5  # More shots in offensive zone
-            weights[6] *= 1.5  # More goals in offensive zone
-        
-        event_type = random.choices(event_types, weights=weights)[0]
-        
-        # Get active players for the possessing team
-        possessing_team = self.game_state['possession']
-        active_players = [name for name, data in self.player_energy[possessing_team].items() if data['on_ice']]
-        
-        if not active_players:
-            return None
-        
-        player = random.choice(active_players)
-        
-        # Generate event based on type
-        event = {
-            'type': event_type,
-            'timestamp': 1200 - self.game_state['time_remaining'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'team': possessing_team,
-            'player': player,
-            'zone': self.game_state['zone'],
-            'location': self._generate_location()
-        }
-        
-        # Handle specific event logic
-        if event_type == 'shot':
-            return self._handle_shot_event(event)
-        elif event_type == 'goal':
-            return self._handle_goal_event(event)
-        elif event_type == 'penalty':
-            return self._handle_penalty_event(event)
-        elif event_type == 'faceoff':
-            return self._handle_faceoff_event(event)
-        else:
-            event['description'] = f"{player} - {event_type.title()}"
-            return event
-    
-    def _handle_shot_event(self, event):
-        """Handle a shot event with realistic outcomes"""
-        player = event['player']
-        team = event['team']
-        
-        # Update player stats
-        self.player_energy[team][player]['shots'] += 1
-        self.live_stats['shots'][team] += 1
-        
-        # Determine if it's a goal (realistic NHL shooting percentage ~10%)
-        goal_chance = 0.10
-        
-        if self.game_state['zone'] == 'offensive':
-            goal_chance *= 1.5
-        
-        if random.random() < goal_chance:
-            # It's a goal!
-            return self._convert_shot_to_goal(event)
-        else:
-            # It's a save or miss
-            event['description'] = f"Shot by {player} - SAVED!"
-            event['outcome'] = 'save'
-            return event
-    
-    def _convert_shot_to_goal(self, event):
-        """Convert a shot into a goal"""
-        player = event['player']
-        team = event['team']
-        
-        # Update score
-        if team == self.home_team:
-            self.game_state['home_score'] += 1
-        else:
-            self.game_state['away_score'] += 1
-        
-        # Update player stats
-        self.player_energy[team][player]['goals'] += 1
-        
-        # Possibly add an assist
-        active_players = [name for name, data in self.player_energy[team].items() 
-                         if data['on_ice'] and name != player]
-        if active_players and random.random() < 0.7:  # 70% chance of assist
-            assist_player = random.choice(active_players)
-            self.player_energy[team][assist_player]['assists'] += 1
-            event['assist'] = assist_player
-        
-        event['type'] = 'goal'
-        event['description'] = f"GOAL! {player} scores!"
-        
-        # Reset faceoff to center ice after goal
-        self.game_state['faceoff_location'] = 'center_ice'
-        self.game_state['zone'] = 'neutral'
-        
-        return event
-    
-    def _handle_penalty_event(self, event):
-        """Handle a penalty event"""
-        player = event['player']
-        team = event['team']
-        
-        penalties = ['Tripping', 'Slashing', 'High-sticking', 'Interference', 'Roughing', 'Cross-checking']
-        penalty_type = random.choice(penalties)
-        
-        self.player_energy[team][player]['penalties'] += 1
-        self.live_stats['penalties'][team] += 1
-        
-        event['penalty_type'] = penalty_type
-        event['description'] = f"PENALTY: {player} - {penalty_type} (2:00)"
-        
-        # Change game situation to powerplay/penalty kill
-        if team == self.game_state['possession']:
-            self.game_state['game_situation'] = 'penalty_kill'
-        else:
-            self.game_state['game_situation'] = 'powerplay'
-        
-        return event
-    
-    def _handle_faceoff_event(self, event):
-        """Handle a faceoff event"""
-        # Determine faceoff winner
-        home_center = random.choice([name for name, data in self.player_energy[self.home_team].items() 
-                                   if data['on_ice'] and data['position'] == 'C'])
-        away_center = random.choice([name for name, data in self.player_energy[self.away_team].items() 
-                                   if data['on_ice'] and data['position'] == 'C'])
-        
-        winner = random.choice([self.home_team, self.away_team])
-        winner_player = home_center if winner == self.home_team else away_center
-        
-        self.game_state['possession'] = winner
-        self.live_stats['faceoffs'][winner] += 1
-        
-        event['team'] = winner
-        event['player'] = winner_player
-        event['description'] = f"Faceoff won by {winner_player}"
-        
-        return event
-    
-    def _update_ice_time(self):
-        """Update ice time for all players currently on ice"""
-        for team in [self.home_team, self.away_team]:
-            for player, data in self.player_energy[team].items():
-                if data['on_ice']:
-                    data['ice_time'] += 1
-                    data['energy'] -= 0.1  # Fatigue over time
-    
-    def _handle_line_change(self):
-        """Handle line changes when shift is over"""
-        for team in [self.home_team, self.away_team]:
-            # Bring tired players off ice
-            on_ice_players = [name for name, data in self.player_energy[team].items() if data['on_ice']]
-            off_ice_players = [name for name, data in self.player_energy[team].items() if not data['on_ice']]
-            
-            # Change some players (realistic line change)
-            players_to_change = random.randint(1, 3)
-            for _ in range(min(players_to_change, len(on_ice_players), len(off_ice_players))):
-                # Player coming off
-                off_player = random.choice(on_ice_players)
-                self.player_energy[team][off_player]['on_ice'] = False
-                on_ice_players.remove(off_player)
-                
-                # Player going on
-                on_player = random.choice(off_ice_players)
-                self.player_energy[team][on_player]['on_ice'] = True
-                self.player_energy[team][on_player]['energy'] = min(100, self.player_energy[team][on_player]['energy'] + 20)
-                off_ice_players.remove(on_player)
-        
-        # Reset shift timer
-        self.current_shift_time = 0
-        self.shift_length = random.randint(30, 90)
-        
-        # Fire line change event
-        event = {
-            'type': 'line_change',
-            'timestamp': 1200 - self.game_state['time_remaining'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'description': 'Line change'
-        }
-        self._fire_event(event)
-    
-    def _handle_period_end(self):
-        """Handle end of period"""
-        if self.game_state['period'] < 3:
-            self.game_state['period'] += 1
-            self.game_state['time_remaining'] = 1200  # Reset to 20 minutes
-            
-            # Fire period end event
-            event = {
-                'type': 'period_end',
-                'timestamp': 1200,
-                'period': self.game_state['period'] - 1,
-                'time': '00:00',
-                'description': f"End of Period {self.game_state['period'] - 1}"
-            }
-            self._fire_event(event)
-            
-            return True
-        else:
-            # Game over
-            event = {
-                'type': 'game_end',
-                'timestamp': 1200,
-                'period': 3,
-                'time': '00:00',
-                'description': 'Game Over',
-                'final_score': f"{self.home_team} {self.game_state['home_score']} - {self.away_team} {self.game_state['away_score']}"
-            }
-            self._fire_event(event)
-            return False
-    
-    def _format_game_time(self):
-        """Format remaining time as MM:SS"""
-        minutes = self.game_state['time_remaining'] // 60
-        seconds = self.game_state['time_remaining'] % 60
-        return f"{minutes:02d}:{seconds:02d}"
-    
-    def _generate_location(self):
-        """Generate a random location on the ice"""
-        return {
-            'x': random.randint(10, 90),
-            'y': random.randint(10, 40)
-        }
-    
-    def get_current_stats(self):
-        """Get current game statistics"""
-        home_players = []
-        away_players = []
-        
-        for team, players in self.player_energy.items():
-            player_list = home_players if team == self.home_team else away_players
-            
-            for name, data in players.items():
-                player_list.append({
-                    'name': name,
-                    'jersey': data['jersey'],
-                    'position': data['position'],
-                    'goals': data['goals'],
-                    'assists': data['assists'],
-                    'points': data['goals'] + data['assists'],
-                    'shots': data['shots'],
-                    'penalties': data['penalties'],
-                    'toi': f"{data['ice_time']//60:02d}:{data['ice_time']%60:02d}",
-                    'on_ice': data['on_ice']
-                })
-        
-        return {
-            'home_team': self.home_team,
-            'away_team': self.away_team,
-            'home_score': self.game_state['home_score'],
-            'away_score': self.game_state['away_score'],
-            'period': self.game_state['period'],
-            'time': self._format_game_time(),
-            'home_players': sorted(home_players, key=lambda x: x['points'], reverse=True),
-            'away_players': sorted(away_players, key=lambda x: x['points'], reverse=True),
-            'team_stats': self.live_stats,
-            'events': self.live_events.copy()
-        }
 
-class AdvancedGameSim:
-    """Simulates a hockey game and produces a structured event log for visualization."""
-    def __init__(self, home_team, away_team):
-        self.home_team = home_team
-        self.away_team = away_team
-        # FM team-talk boost: team_name -> multiplier (default 1.0)
-        self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
+def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
+                        elimination_game=False, milestone_home=False,
+                        ceremony=False, outdoor=False, league=None):
+    """Build the crowd state for tonight (arena_atmosphere).
 
-        # Initialize performance cache
-        from performance_optimizations import get_global_cache
-        self.cache = get_global_cache()
-        
-        # Initialize coordinate-based simulation engine
-        from coordinate_simulation import CoordinateSimEngine
-        self.coordinate_engine = CoordinateSimEngine()
-
-        # Defensive: always ensure lineup dict has required keys
-        def ensure_lineup(team):
-            lineup = getattr(team, 'lineup', None)
-            if not lineup or not isinstance(lineup, dict):
-                return best_lines(team)
-            # Defensive: fill missing keys with best_lines
-            keys = ['Forwards', 'Defense', 'Goalies']
-            missing = [k for k in keys if k not in lineup]
-            if missing:
-                base = best_lines(team)
-                for k in missing:
-                    lineup[k] = base[k]
-            return lineup
-
-        self.lineups = {
-            home_team.team_name: ensure_lineup(home_team),
-            away_team.team_name: ensure_lineup(away_team)
-        }
-        self.score = {home_team.team_name: 0, away_team.team_name: 0}
-        self.events = []
-        self.stats = {
-            home_team.team_name: {p.id: {'goals': 0, 'assists': 0, 'shots': 0, 'toi': 0, 'fatigue': 0} for p in home_team.roster},
-            away_team.team_name: {p.id: {'goals': 0, 'assists': 0, 'shots': 0, 'toi': 0, 'fatigue': 0} for p in away_team.roster}
-        }
-        # Ensure stats dict includes all stat keys for each player
-        for team in [home_team, away_team]:
-            for p in team.roster:
-                self.stats[team.team_name][p.id] = {
-                    'goals': 0, 'assists': 0, 'shots': 0, 'saves': 0, 'penalties': 0, 'toi': 0, 'fatigue': 0
-                }
-        self.puck_pos = 'neutral'
-        self.time = 0
-        self.period = 1
-        self.on_ice = {
-            home_team.team_name: {'Forwards': [], 'Defense': [], 'Goalie': None},
-            away_team.team_name: {'Forwards': [], 'Defense': [], 'Goalie': None}
-        }
-        self.pp_team = None
-        self.pk_team = None
-        self.pp_end_time = None  # When the current power play expires (penalty clock)
-        self.puck_x = 100  # X position of puck on ice (center ice)
-        self.puck_y = 42.5  # Y position of puck on ice (center)
-        self.state_history = []  # List to store state after each shift/event
-        self.event_log = []  # Structured event log for visualization
-        
-        # Initialize player positions using coordinate engine
-        home_players = [p for p in home_team.roster]
-        away_players = [p for p in away_team.roster] 
-        self.coordinate_engine.initialize_player_positions(home_players, away_players)
-
-    def set_team_talk_boost(self, team_name: str, multiplier: float):
-        """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
-        self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
-
-    def _select_lines(self, team_name, fatigue=False):
-        lineup = self.lineups[team_name]
-        fw_lines = lineup['Forwards']
-        df_pairs = lineup['Defense']
-        goalies = lineup['Goalies']
-        fw_idx = min(range(len(fw_lines)), key=lambda i: sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0) for p in fw_lines[i] if p))
-        df_idx = min(range(len(df_pairs)), key=lambda i: sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0) for p in df_pairs[i] if p))
-        goalie = goalies[0] if goalies and goalies[0] else None
-        return fw_lines[fw_idx], df_pairs[df_idx], goalie
-
-    def _advance_time(self, seconds):
-        self.time += seconds
-        if self.time >= 1200 * self.period:
-            self.period += 1
-            if self.period > 3 and self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
-                self.period = 4
-                self.time = 3600
-            elif self.period > 4:
-                self.time = 9999
-
-    def _record_state(self):
-        # Collect positions of all on-ice players and puck
-        state = {
-            'home': [
-                {'id': p.id, 'x': p.x, 'y': p.y}
-                for p in self.on_ice[self.home_team.team_name]['Forwards'] + self.on_ice[self.home_team.team_name]['Defense']
-                if p
-            ],
-            'away': [
-                {'id': p.id, 'x': p.x, 'y': p.y}
-                for p in self.on_ice[self.away_team.team_name]['Forwards'] + self.on_ice[self.away_team.team_name]['Defense']
-                if p
-            ],
-            'home_goalie': (
-                {'id': self.on_ice[self.home_team.team_name]['Goalie'].id,
-                 'x': self.on_ice[self.home_team.team_name]['Goalie'].x,
-                 'y': self.on_ice[self.home_team.team_name]['Goalie'].y}
-                if self.on_ice[self.home_team.team_name]['Goalie'] else None
-            ),
-            'away_goalie': (
-                {'id': self.on_ice[self.away_team.team_name]['Goalie'].id,
-                 'x': self.on_ice[self.away_team.team_name]['Goalie'].x,
-                 'y': self.on_ice[self.away_team.team_name]['Goalie'].y}
-                if self.on_ice[self.away_team.team_name]['Goalie'] else None
-            ),
-            'puck': {'x': self.puck_x, 'y': self.puck_y},
-            'time': self.time,
-            'period': self.period
-        }
-        self.state_history.append(state)
-
-    def _simulate_shift(self):
-        # Enhanced shift simulation for realistic hockey flow
-        for team_name in [self.home_team.team_name, self.away_team.team_name]:
-            fw, df, g = self._select_lines(team_name)
-            self.on_ice[team_name]['Forwards'] = fw
-            self.on_ice[team_name]['Defense'] = df
-            self.on_ice[team_name]['Goalie'] = g
-            for idx, p in enumerate(fw + df):
-                if p:
-                    # Defensive: ensure stat keys exist
-                    if p.id not in self.stats[team_name]:
-                        self.stats[team_name][p.id] = {'goals':0,'assists':0,'shots':0,'saves':0,'penalties':0,'toi':0,'fatigue':0}
-                    self.stats[team_name][p.id]['toi'] += 45
-                    self.stats[team_name][p.id]['fatigue'] += 1
-            if g:
-                if g.id not in self.stats[team_name]:
-                    self.stats[team_name][g.id] = {'goals':0,'assists':0,'shots':0,'saves':0,'penalties':0,'toi':0,'fatigue':0}
-                self.stats[team_name][g.id]['toi'] += 45
-        
-        # Enhanced player movement with coordinate-based positioning
-        for team_name in [self.home_team.team_name, self.away_team.team_name]:
-            is_home_team = team_name == self.home_team.team_name
-            
-            for p in self.on_ice[team_name]['Forwards'] + self.on_ice[team_name]['Defense']:
-                if p:
-                    # Get current position from coordinate engine
-                    current_pos = self.coordinate_engine.player_positions.get(p.id, (100, 42.5))
-                    
-                    # Determine target position based on game situation and player role
-                    if hasattr(p, 'primary_position') and p.primary_position:
-                        if 'WING' in str(p.primary_position):
-                            # Wingers move along the boards and cycle
-                            if is_home_team:
-                                target_x = random.randint(120, 180)  # Attacking zone
-                                target_y = random.choice([15, 70]) + random.randint(-8, 8)  # Wing positions
-                            else:
-                                target_x = random.randint(20, 80)   # Defending/neutral zone
-                                target_y = random.choice([15, 70]) + random.randint(-8, 8)
-                        elif 'CENTER' in str(p.primary_position):
-                            # Centers control the middle of the ice
-                            if is_home_team:
-                                target_x = random.randint(110, 170)  # Attacking area
-                            else:
-                                target_x = random.randint(30, 90)   # Defensive area
-                            target_y = 42.5 + random.randint(-15, 15)  # Central corridor
-                        else:  # Defense
-                            # Defensemen stay back unless rushing
-                            rush_chance = 0.15 if random.random() < 0.15 else 0
-                            if is_home_team:
-                                if rush_chance:
-                                    target_x = random.randint(140, 160)  # Offensive rush
-                                else:
-                                    target_x = random.randint(80, 120)   # Stay back
-                            else:
-                                if rush_chance:
-                                    target_x = random.randint(40, 60)    # Offensive rush  
-                                else:
-                                    target_x = random.randint(80, 120)   # Stay back
-                            target_y = 42.5 + random.randint(-20, 20)
-                    else:
-                        # Fallback positioning
-                        target_x = current_pos[0] + random.randint(-15, 15)
-                        target_y = current_pos[1] + random.randint(-8, 8)
-                    
-                    # Ensure target is within rink bounds
-                    target_x = max(5, min(195, target_x))
-                    target_y = max(5, min(80, target_y))
-                    target_pos = (target_x, target_y)
-                    
-                    # Generate realistic movement events
-                    movement_events = self.coordinate_engine.simulate_player_movement(
-                        p.id, target_pos, "skate"
-                    )
-                    
-                    # Add movement events to event log
-                    for event in movement_events:
-                        event['timestamp'] = self.time + event['timestamp']
-                        self.event_log.append(event)
-                    
-                    # Update legacy position tracking for compatibility
-                    p.x, p.y = target_pos
-        
-        # Generate realistic events per shift (reduced from 6-12 to 2-4 for performance)
-        num_events = random.randint(2, 4)  # Reduced event count for better performance
-        for _ in range(num_events):
-            self._simulate_event()
-            # Slightly larger time increments between events
-            self._advance_time(random.randint(8, 15))  # 8-15 seconds between events
-            
-        # Final shift time advancement (remaining time)
-        remaining_time = 45 - (num_events * 10)  # Approximate remaining time
-        if remaining_time > 0:
-            self._advance_time(remaining_time)
-        self._record_state()
-
-    def _simulate_event(self):
-        puck_team_name = self.home_team.team_name if random.random() < 0.5 else self.away_team.team_name
-        opp_team_name = self.away_team.team_name if puck_team_name == self.home_team.team_name else self.home_team.team_name
-        if self.pp_team:
-            puck_team_name = self.pp_team
-            opp_team_name = self.pk_team
-        shooters = [p for p in self.on_ice[puck_team_name]['Forwards'] + self.on_ice[puck_team_name]['Defense'] if p]
-        if not shooters:
-            return
-        shooter = random.choices(shooters, weights=[p.overall_rating() for p in shooters], k=1)[0]
-        goalie = self.on_ice[opp_team_name]['Goalie']
-
-        # --- Enhanced Fatigue System ---
-        fatigue_factor = self._calculate_fatigue_factor(shooter, puck_team_name)
-        
-        # --- Pressure Situations ---
-        pressure_modifier = self._calculate_pressure_modifier(shooter)
-        
-        # --- Position and Formation Factors ---
-        position_factor = self._calculate_position_factor(shooter, puck_team_name)
-        
-        # --- Determine Event Type based on player attributes ---
-        event_type = self._determine_event_type(shooter, shooters, fatigue_factor)
-        
-        if event_type == "SHOT":
-            self._resolve_shot_event(shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters)
-        elif event_type == "PASS":
-            self._resolve_pass_event(shooter, shooters, puck_team_name, opp_team_name, fatigue_factor)
-        elif event_type == "DEKE":
-            self._resolve_deke_event(shooter, puck_team_name, fatigue_factor)
-        elif event_type == "PUCK_BATTLE":
-            self._resolve_puck_battle(shooters, puck_team_name, fatigue_factor)
-        elif event_type == "SCREEN":
-            self._resolve_screen_event(shooter, shooters, puck_team_name)
-        elif event_type == "DEFLECTION":
-            self._resolve_deflection_event(shooter, shooters, goalie, puck_team_name, opp_team_name)
-            
-        # --- Random penalty check with improved logic ---
-        self._check_for_penalty(shooters, puck_team_name, opp_team_name, fatigue_factor)
-        
-        # --- End power play when the 2-minute penalty clock expires ---
-        if self.pp_team and self.pp_end_time and self.time >= self.pp_end_time:
-            self.pp_team = None
-            self.pk_team = None
-            self.pp_end_time = None
-        self._record_state()
-        
-        # Don't advance time here - it's managed in _simulate_shift
-        self._record_state()
-
-
-
-
-
-
-    def _calculate_fatigue_factor(self, player, team_name):
-        """Calculate comprehensive fatigue factor"""
-        player_fatigue = self.stats[team_name][player.id].get('fatigue', 0)
-        endurance = getattr(player, 'endurance', 10)
-        stamina = getattr(player, 'stamina', 10)
-        durability = getattr(player, 'durability', 10)
-        
-        # Better players with high endurance/stamina maintain performance longer
-        fatigue_resistance = (endurance + stamina + durability) / 3
-        fatigue_factor = 1.0 - min(0.6, player_fatigue / max(1, fatigue_resistance))
-        return max(0.4, fatigue_factor)  # Never go below 40% performance
-    
-    def _calculate_pressure_modifier(self, player):
-        """Calculate how player performs under pressure"""
-        pressure_rating = getattr(player, 'pressure_player', 10)
-        composure = getattr(player, 'composure', 10)
-        confidence = getattr(player, 'confidence', 10)
-        determination = getattr(player, 'determination', 10)
-        
-        # Close games and late periods increase pressure
-        score_diff = abs(self.score[self.home_team.team_name] - self.score[self.away_team.team_name])
-        is_late_game = self.period >= 3 and self.time > 3000
-        is_close_game = score_diff <= 1
-        
-        pressure_level = 1.0
-        if is_late_game and is_close_game:
-            pressure_level = 1.3
-        elif is_close_game:
-            pressure_level = 1.1
-            
-        pressure_skill = (pressure_rating + composure + confidence + determination) / 4
-        pressure_modifier = 1.0 + (pressure_skill - 10) * 0.02 * pressure_level
-        return max(0.7, min(1.4, pressure_modifier))
-    
-    def _calculate_position_factor(self, player, team_name):
-        """Calculate positional advantage/disadvantage"""
-        off_the_puck = getattr(player, 'off_the_puck', 10)
-        anticipation = getattr(player, 'anticipation', 10)
-        hockey_iq = getattr(player, 'hockey_iq', 10)
-        
-        # Players with better off-the-puck movement get better opportunities
-        position_skill = (off_the_puck + anticipation + hockey_iq) / 3
-        return 1.0 + (position_skill - 10) * 0.03
-    
-    def _determine_event_type(self, player, shooters, fatigue_factor):
-        """Determine what type of event occurs based on player attributes"""
-        creativity = getattr(player, 'creativity', 10)
-        decision_making = getattr(player, 'decision_making', 10)
-        stickhandling = getattr(player, 'stickhandling', 10)
-        passing = getattr(player, 'passing', 10)
-        
-        # Base probabilities - tuned for realistic NHL game flow
-        # Target: ~70-75 shot attempts from ~225 events per game (~32% shots)
-        # Hockey is mostly passing and puck battles, not constant shooting
-        shot_prob = 0.32
-        pass_prob = 0.40 if len(shooters) > 1 else 0.0
-        deke_prob = 0.08
-        battle_prob = 0.12
-        screen_prob = 0.05
-        deflection_prob = 0.03
-        
-        # Modify based on attributes
-        if creativity > 15:
-            deke_prob *= 1.5
-            pass_prob *= 1.2
-        if decision_making > 15:
-            pass_prob *= 1.3
-        if stickhandling > 15:
-            deke_prob *= 1.4
-        if passing > 15:
-            pass_prob *= 1.3
-            
-        # Fatigue reduces creative plays
-        deke_prob *= fatigue_factor
-        pass_prob *= fatigue_factor
-        
-        # Random selection based on probabilities
-        rand = random.random()
-        if rand < shot_prob:
-            return "SHOT"
-        elif rand < shot_prob + pass_prob:
-            return "PASS"
-        elif rand < shot_prob + pass_prob + deke_prob:
-            return "DEKE"
-        elif rand < shot_prob + pass_prob + deke_prob + battle_prob:
-            return "PUCK_BATTLE"
-        elif rand < shot_prob + pass_prob + deke_prob + battle_prob + screen_prob:
-            return "SCREEN"
-        else:
-            return "DEFLECTION"
-
-    def run(self):
-        # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
-        overtime_limit = 300  # 5 minutes OT (NHL regular season)
-        shootout_rounds = 3  # Initial shootout rounds, then sudden death
-
-        # Fresh game: no stale last-passer carried over from a previous game
-        for _t in (self.home_team, self.away_team):
-            for _p in getattr(_t, 'roster', []) or []:
-                try:
-                    _p.assist_potential = None
-                except Exception:
-                    pass
-
-        # Regulation: 60 minutes
-        while self.time < 3600:
-            self._simulate_shift()
-        
-        # Overtime: sudden death - first goal wins
-        if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
-            ot_start = self.time
-            ot_home_start = self.score[self.home_team.team_name]
-            ot_away_start = self.score[self.away_team.team_name]
-            self.period = 4
-            while (self.time < ot_start + overtime_limit and 
-                   self.score[self.home_team.team_name] == self.score[self.away_team.team_name]):
-                self._simulate_shift()
-                # Sudden death: stop immediately on goal
-                # (The loop condition checks the tie each iteration)
-            
-            # Enforce true sudden death: max 1 goal per team in OT
-            # (A shift might generate multiple goals before the loop checks)
-            home_ot_goals = self.score[self.home_team.team_name] - ot_home_start
-            away_ot_goals = self.score[self.away_team.team_name] - ot_away_start
-            if home_ot_goals > 1:
-                self.score[self.home_team.team_name] = ot_home_start + 1
-            if away_ot_goals > 1:
-                self.score[self.away_team.team_name] = ot_away_start + 1
-        # If still tied after OT, do shootout
-
-        # Defensive: get home/away goalies safely
-        def get_goalie(team, lineup):
-            goalies = lineup.get('Goalies', [])
-            if goalies and goalies[0]:
-                return goalies[0]
-            # Fallback: pick a random goalie from roster
-            candidates = [p for p in team.roster if getattr(p, 'primary_position', None) and p.primary_position.name == "G"]
-            return candidates[0] if candidates else None
-
-        home_goalie = get_goalie(self.home_team, self.lineups[self.home_team.team_name])
-        away_goalie = get_goalie(self.away_team, self.lineups[self.away_team.team_name])
-
-        if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
-            # Shootout: 3 rounds, then sudden-death rounds until winner
-            # NHL rule: shootout winner is credited with +1 goal
-            home_goals = 0
-            away_goals = 0
-            
-            # Get shooters (cycle through forwards if needed for sudden death)
-            home_forwards = [p for line in self.lineups[self.home_team.team_name].get('Forwards', []) for p in line if p]
-            away_forwards = [p for line in self.lineups[self.away_team.team_name].get('Forwards', []) for p in line if p]
-            
-            def shootout_attempt(shooter, goalie, team_name):
-                """Single shootout attempt. Returns True if goal scored."""
-                shot_skill = (
-                    getattr(shooter, 'wristshot', 10) * 0.4 +
-                    getattr(shooter, 'deking', 10) * 0.4 +
-                    getattr(shooter, 'composure', 10) * 0.2
-                )
-                goalie_skill = (
-                    getattr(goalie, 'reflexes', 10) * 0.4 +
-                    getattr(goalie, 'positioning', 10) * 0.3 +
-                    getattr(goalie, 'breakaway_skill', 10) * 0.3
-                ) if goalie else 10
-                
-                success_chance = 0.33 + (shot_skill - goalie_skill) * 0.015
-                if random.random() < min(0.7, max(0.1, success_chance)):
-                    self.events.append({'time': self.time, 'period': 5, 'team': team_name, 'player': shooter, 'event': 'Shootout Goal'})
-                    return True
-                return False
-            
-            # Initial 3 rounds
-            round_num = 0
-            for i in range(shootout_rounds):
-                round_num += 1
-                if i < len(home_forwards):
-                    if shootout_attempt(home_forwards[i], away_goalie, self.home_team.team_name):
-                        home_goals += 1
-                if i < len(away_forwards):
-                    if shootout_attempt(away_forwards[i], home_goalie, self.away_team.team_name):
-                        away_goals += 1
-            
-            # Sudden death rounds if tied (NHL rule)
-            sudden_death_round = 0
-            while home_goals == away_goals and sudden_death_round < 20:  # Safety cap
-                sudden_death_round += 1
-                # Cycle through shooters
-                home_shooter = home_forwards[(shootout_rounds + sudden_death_round - 1) % max(1, len(home_forwards))] if home_forwards else None
-                away_shooter = away_forwards[(shootout_rounds + sudden_death_round - 1) % max(1, len(away_forwards))] if away_forwards else None
-                
-                home_scored = shootout_attempt(home_shooter, away_goalie, self.home_team.team_name) if home_shooter else False
-                away_scored = shootout_attempt(away_shooter, home_goalie, self.away_team.team_name) if away_shooter else False
-                
-                if home_scored:
-                    home_goals += 1
-                if away_scored:
-                    away_goals += 1
-                
-                # In sudden death, if one scores and the other doesn't, it's over
-                # (both scored or both missed = continue)
-                if home_scored != away_scored:
-                    break
-            
-            # Determine winner (no more auto-win for away on tie - sudden death ensures a winner)
-            if home_goals > away_goals:
-                winner, loser = self.home_team, self.away_team
-                # NHL: shootout winner credited with +1 goal
-                self.score[self.home_team.team_name] += 1
-            elif away_goals > home_goals:
-                winner, loser = self.away_team, self.home_team
-                self.score[self.away_team.team_name] += 1
-            else:
-                # Extremely rare: still tied after 20 sudden death rounds
-                # Home team wins coin flip (better than auto-away-win)
-                winner, loser = self.home_team, self.away_team
-                self.score[self.home_team.team_name] += 1
-            
-            scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
-            notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
-            return winner, loser, scores, self.events, notable_events
-        if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
-            winner, loser = self.home_team, self.away_team
-        else:
-            winner, loser = self.away_team, self.home_team
-        scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
-        notable_events = [e for e in self.events if e['event'] == 'Goal']
-        
-        # Gameplay injuries: small chance per game (NHL: ~1 injury per 3-4 games)
-        self._process_gameplay_injuries()
-        
-        return winner, loser, scores, self.events, notable_events
-
-    def _process_gameplay_injuries(self):
-        """Process potential injuries from gameplay.
-        
-        NHL averages roughly 1 man-game lost to injury per 3-4 games.
-        Injury-prone players (high injury_proneness) are more likely to get hurt.
-        """
-        import random
-        
-        # ~13% chance per team per game -> ~25% chance of at least one injury per game
-        # Pick an injury victim from either team's healthy skaters
-        victims = []
-        for team in [self.home_team, self.away_team]:
-            if random.random() > 0.13:
-                continue
-            v = roll_game_injury(team)
-            if v is not None:
-                victims.append((team, v))
-
-        for team, injured in victims:
-            # Log the injury event
-            self.events.append({
-                'time': self.time,
-                'period': self.period,
-                'team': team.team_name,
-                'player': injured,
-                'event': 'Injury',
-                'details': f'{injured.injury_type} ({injured.games_remaining_injured} games)'
-            })
-
-            print(f"🏥 Injury: {injured.first_name} {injured.last_name} - {injured.injury_type} ({injured.games_remaining_injured} games)")
-
-    def _credit_assists(self, shooter, team_name):
-        """Credit primary/secondary assists for a goal.
-
-        Primary goes to the last successful passer to the shooter
-        (tracked as assist_potential when passes complete). Secondary is a
-        random on-ice teammate. Returns (assist_ids, assist_players).
-        """
-        assist_ids, assist_players = [], []
-        team = self.home_team if team_name == self.home_team.team_name else self.away_team
-        by_id = {p.id: p for p in getattr(team, 'roster', [])}
-
-        primary_id = getattr(shooter, 'assist_potential', None)
-        if primary_id and primary_id != shooter.id and primary_id in by_id:
-            assist_ids.append(primary_id)
-            assist_players.append(by_id[primary_id])
-            st = self.stats[team_name].get(primary_id)
-            if st is not None:
-                st['assists'] = st.get('assists', 0) + 1
-        # Never carry a stale passer into the next goal
+    One dict lookup + arithmetic per game -- no per-tick cost. Returns a
+    quiet neutral building on any failure.
+    """
+    try:
+        from arena_atmosphere import pregame_crowd
+        from narrative_ledger import active_ledger
+        # Rivalry-store heat: the grudge-match boost. The ledger path
+        # inside pregame_crowd reads narrative memory; this reads the
+        # rivalry system's intensity (playoff wars, declared hate,
+        # regional bad blood) -- regular-season games get the same heat
+        # the playoff path already passes via series.rivalry_heat.
+        _heat = 0.0
         try:
-            shooter.assist_potential = None
+            from reputation_system import get_rivalry_heat
+            _riv = getattr(league, "rivalries", None) or []
+            _heat = float(get_rivalry_heat(_riv, home_team, away_team)
+                          .get("heat", 0.0) or 0.0)
         except Exception:
-            pass
+            _heat = 0.0
+        return pregame_crowd(
+            home_team, away_team, ledger=active_ledger(),
+            is_playoff=is_playoff, series_game=series_game,
+            elimination_game=elimination_game,
+            milestone_home=milestone_home, ceremony=ceremony,
+            outdoor=outdoor, rivalry_heat=_heat)
+    except Exception:
+        return {"energy": 50.0, "mood": 30.0, "drivers": [],
+                "big_game": False}
 
-        # Secondary assist: another on-ice teammate (~45% of the time)
-        if random.random() < 0.45:
-            on_ice = self.on_ice.get(team_name, {})
-            candidates = [p for p in (on_ice.get('Forwards', []) + on_ice.get('Defense', []))
-                          if p is not None and p.id not in (shooter.id, *assist_ids)]
-            if candidates:
-                second = random.choice(candidates)
-                assist_ids.append(second.id)
-                assist_players.append(second)
-                st = self.stats[team_name].get(second.id)
-                if st is not None:
-                    st['assists'] = st.get('assists', 0) + 1
-        return assist_ids, assist_players
 
-    def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
-        """Enhanced shot resolution using multiple attributes"""
-        # Determine shot type based on position and situation
-        wristshot_val = getattr(shooter, 'wristshot', 10)
-        slapshot_val = getattr(shooter, 'slapshot', 10)
-        one_timer_val = getattr(shooter, 'one_timer', 10)
-        backhand_val = getattr(shooter, 'backhand', 10)
-        
-        # Choose shot type
-        if self.pp_team and random.random() < 0.3:  # More one-timers on PP
-            shooting_base = one_timer_val
-            shot_type = "one-timer"
-        elif shooter.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
-            if random.random() < 0.7:
-                shooting_base = wristshot_val
-                shot_type = "wrist shot"
-            else:
-                shooting_base = backhand_val
-                shot_type = "backhand"
-        elif shooter.primary_position == PlayerPosition.CENTER:
-            shooting_base = wristshot_val * 0.6 + one_timer_val * 0.4
-            shot_type = "wrist shot"
-        else:  # Defense
-            shooting_base = slapshot_val
-            shot_type = "slap shot"
-            
-        # Shooter skill on 1-20 scale (no multiplicative inflation)
-        # Fatigue reduces effectiveness; pressure/position are situational, not skill multipliers
-        shooter_skill = (
-            shooting_base * 0.3 +
-            getattr(shooter, 'shooting_accuracy', 10) * 0.25 +
-            getattr(shooter, 'off_the_puck', 10) * 0.2 +
-            getattr(shooter, 'composure', 10) * 0.15 +
-            getattr(shooter, 'vision', 10) * 0.1
-        ) * fatigue_factor
-
-        # Enhanced goalie attributes
-        goalie_skill = self._calculate_goalie_save_skill(goalie, shot_type) if goalie else 8
-        
-        # NHL-realistic shooting percentage: ~9% base
-        # Each point of skill difference shifts scoring chance by ~0.8%
-        # (Elite 18 vs weak 8 = +8% → ~17% is the realistic ceiling for great chances)
-        skill_diff = shooter_skill - goalie_skill
-        shot_chance = 0.09 + (skill_diff * 0.008)
-        
-        # Team tactics affect shot quality
-        # Get the shooting team's tactics
-        shooting_team = self.home_team if puck_team_name == self.home_team.team_name else self.away_team
-        defending_team = self.away_team if puck_team_name == self.home_team.team_name else self.home_team
-        
-        if self.pp_team:
-            # Power play tactics
-            pp_tactic = getattr(shooting_team, 'tactic_power_play', 'Offensive')
-            if pp_tactic == 'Very Offensive':
-                shot_chance += 0.035  # More aggressive, higher risk/reward
-            elif pp_tactic == 'Offensive':
-                shot_chance += 0.025
-            elif pp_tactic == 'Conservative':
-                shot_chance += 0.005  # Patient, prevent shorthanded goals against
-            else:  # Balanced
-                shot_chance += 0.015
-        elif self.pk_team == puck_team_name:
-            # Shorthanded: PK tactics affect shorthanded chances
-            pk_tactic = getattr(shooting_team, 'tactic_penalty_kill', 'Defensive')
-            if pk_tactic == 'Aggressive':
-                shot_chance += 0.01  # More shorthanded rushes
-            elif pk_tactic == 'Balanced':
-                shot_chance += 0.005
-            elif pk_tactic == 'Very Defensive':
-                shot_chance -= 0.005  # Pure survival mode
-            # Defensive: focus on clearing, fewer shots
-        else:
-            # Even strength tactics
-            es_tactic = getattr(shooting_team, 'tactic_even_strength', 'Balanced')
-            if es_tactic == 'Very Offensive':
-                shot_chance += 0.02  # All-out attack
-            elif es_tactic == 'Offensive':
-                shot_chance += 0.01  # More shots, higher quality chances
-            elif es_tactic == 'Defensive':
-                shot_chance -= 0.008  # Fewer shots, focus on defense
-            elif es_tactic == 'Very Defensive':
-                shot_chance -= 0.014  # Trap hockey
-            
-            # Defending team's tactics affect shot quality against
-            def_tactic = getattr(defending_team, 'tactic_even_strength', 'Balanced')
-            if def_tactic == 'Very Defensive':
-                shot_chance -= 0.012  # Maximum structure
-            elif def_tactic == 'Defensive':
-                shot_chance -= 0.008  # Tight defense reduces quality
-            elif def_tactic == 'Offensive':
-                shot_chance += 0.005  # Aggressive D leaves gaps
-            elif def_tactic == 'Very Offensive':
-                shot_chance += 0.008  # Pinching D, odd-man rushes both ways
-        
-        # Home-ice advantage: small boost for home team (NHL home win ~55%)
-        # +0.5% absolute shooting chance ≈ the observed home edge
-        if puck_team_name == self.home_team.team_name:
-            shot_chance += 0.005
-        
-        # Clamp to realistic NHL range (5% - 15%)
-        shot_chance = max(0.05, min(0.15, shot_chance))
-
-        # FM team-talk / morale boost (set via set_team_talk_boost)
-        shot_chance *= self.team_boost.get(puck_team_name, 1.0)
-        shot_chance = max(0.04, min(0.16, shot_chance))
-
-        # Shot blocking check
-        shot_blocked = self._check_shot_blocking(opp_team_name, fatigue_factor)
-        
-        # Position shooter and determine result
-        shot_start = (shooter.x, shooter.y)
-        duration = random.uniform(1.0, 1.7)
-        
-        if shot_blocked:
-            shot_result = 'BLOCKED'
-        elif random.random() < shot_chance:  # Direct shot chance calculation
-            shot_result = 'GOAL'
-            self.score[puck_team_name] += 1
-            # Update stats
-            self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
-            # Assists: primary = last successful passer to the shooter
-            # (tracked as assist_potential on passes); secondary = a random
-            # on-ice teammate, the way real scoring works.
-            assist_ids, assist_players = self._credit_assists(shooter, puck_team_name)
-            # Add goal event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name,
-                                'player': shooter, 'event': 'Goal', 'assists': assist_players})
-            if self.pp_team == puck_team_name:
-                _strength = 'PP'
-            elif self.pk_team == puck_team_name:
-                _strength = 'SH'
-            else:
-                _strength = 'EV'
-            _in_period = max(0.0, self.time - 1200 * (self.period - 1))
-            self.event_log.append({
-                'timestamp': self.time,
-                'duration': 1.0,
-                'type': 'GOAL_ADVANCED',
-                'details': {
-                    'scorer_id': shooter.id,
-                    'assist_ids': assist_ids,
-                    'goaltender_id': goalie.id if goalie else None,
-                    'goal_type': shot_type,
-                    'period': self.period,
-                    'strength': _strength,
-                    'time_str': f"{int(_in_period // 60)}:{int(_in_period % 60):02d}",
-                }
-            })
-            # PP ends when the PP team scores (NHL rule)
-            if self.pp_team == puck_team_name:
-                self.pp_team = None
-                self.pk_team = None
-                self.pp_end_time = None
-        elif goalie and random.random() < 0.8:
-            shot_result = 'SAVE'
-            if goalie:
-                self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
-            # Add shot/save event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
-        else:
-            shot_result = 'MISS'
-            # Add missed shot event
-            self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
-            
-        # Update shot stats
-        self.stats[puck_team_name][shooter.id]['shots'] = self.stats[puck_team_name][shooter.id].get('shots', 0) + 1
-        
-        # Log event
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': duration,
-            'type': 'SHOT',
-            'details': {
-                'shooter_id': shooter.id,
-                'shot_type': shot_type,
-                'puck_start_pos': shot_start,
-                'result': shot_result
-            }
-        })
-        
-        # Add stoppage if needed
-        if shot_result in ['GOAL', 'SAVE']:
-            self.event_log.append({
-                'timestamp': self.time + duration,
-                'duration': 2.0 if shot_result == 'GOAL' else 1.5,
-                'type': 'STOPPAGE',
-                'details': {
-                    'reason': 'Goal Scored' if shot_result == 'GOAL' else 'Save',
-                    'faceoff_pos': (50, 25)
-                }
-            })
-    
-    def _calculate_goalie_save_skill(self, goalie, shot_type, danger_level=None, distance=None):
-        """Enhanced goalie skill calculation with coordinate-based danger awareness"""
-        if not goalie:
-            return 8.0
-            
-        base_skill = (
-            getattr(goalie, 'goaltending', 10) * 0.4 +
-            getattr(goalie, 'reflexes', 10) * 0.25 +
-            getattr(goalie, 'positioning', 10) * 0.2 +
-            getattr(goalie, 'rebound_control', 10) * 0.1 +
-            getattr(goalie, 'composure', 10) * 0.05
-        )
-        
-        # Danger level adjustments for coordinate-based analysis
-        if danger_level:
-            danger_penalties = {
-                'very_high': -4,  # Very hard saves in high danger
-                'high': -2,       # Moderately difficult
-                'medium': 0,      # Neutral
-                'low': 2          # Easier saves from distance/bad angles
-            }
-            base_skill += danger_penalties.get(danger_level, 0)
-        
-        # Shot type specific adjustments
-        shot_type_modifiers = {
-            'one-timer': -3,      # Quick shots harder to stop
-            'wrist shot': 0,      # Standard
-            'slap shot': 1,       # Easier to see coming
-            'backhand': -1,       # Deceptive
-            'tip': -4,            # Very difficult
-            'deflection': -3      # Hard to react to
-        }
-        base_skill += shot_type_modifiers.get(shot_type, 0)
-        
-        # Distance factor for coordinate analysis
-        if distance:
-            if distance < 15:
-                base_skill -= 2  # Close shots harder
-            elif distance > 35:
-                base_skill += 1  # Long shots easier
-        
-        # Legacy adjustments for compatibility
-        if shot_type == "slap shot":
-            base_skill += getattr(goalie, 'glove_hand', 10) * 0.05
-        elif shot_type == "one-timer":
-            base_skill += getattr(goalie, 'reflexes', 10) * 0.05
-        elif shot_type == "backhand":
-            base_skill += getattr(goalie, 'positioning', 10) * 0.05
-        elif shot_type == "breakaway":
-            base_skill += getattr(goalie, 'breakaway_skill', 10) * 0.1
-            
-        return max(5, base_skill)
-    
-    def _check_shot_blocking_coordinate(self, opp_team_name, shot_details, fatigue_factor):
-        """Enhanced shot blocking with coordinate-based positioning"""
-        defenders = [p for p in self.on_ice[opp_team_name]['Defense'] if p]
-        if not defenders:
-            return False
-            
-        shot_pos = shot_details['puck_start_pos']
-        danger_level = shot_details['danger_level']
-        
-        # Higher chance of blocks in high danger areas (defenders collapse)
-        base_block_chance = {
-            'very_high': 0.25,  # Defenders pack the crease
-            'high': 0.15,       # Active shot blocking in slot
-            'medium': 0.08,     # Some blocking from point
-            'low': 0.03         # Minimal blocking from distance
-        }.get(danger_level, 0.08)
-        
-        # Find closest defender to shot location
-        closest_defender = min(defenders, key=lambda d: (
-            (self.coordinate_engine.player_positions.get(d.id, (d.x, d.y))[0] - shot_pos[0])**2 +
-            (self.coordinate_engine.player_positions.get(d.id, (d.x, d.y))[1] - shot_pos[1])**2
-        ))
-        
-        # Calculate block skill
-        block_skill = (
-            getattr(closest_defender, 'shot_blocking', 10) * 0.5 +
-            getattr(closest_defender, 'defensive_awareness', 10) * 0.3 +
-            getattr(closest_defender, 'aggressiveness', 10) * 0.2
-        ) * fatigue_factor
-        
-        # Distance factor - closer defenders more likely to block
-        defender_pos = self.coordinate_engine.player_positions.get(closest_defender.id, (closest_defender.x, closest_defender.y))
-        distance_to_shot = ((defender_pos[0] - shot_pos[0])**2 + (defender_pos[1] - shot_pos[1])**2)**0.5
-        distance_factor = max(0.3, 1.0 - (distance_to_shot / 30))  # Reduced effectiveness beyond 30 feet
-        
-        final_block_chance = base_block_chance * (block_skill / 15) * distance_factor
-        
-        if random.random() < final_block_chance:
-            self.events.append({
-                'time': self.time, 
-                'period': self.period, 
-                'team': opp_team_name, 
-                'player': closest_defender, 
-                'event': 'Shot Blocked'
-            })
-            return True
-        
-        return False
-
-    def _check_shot_blocking(self, defending_team, fatigue_factor):
-        """Legacy shot blocking method for compatibility"""
-        if random.random() > 0.05:  # Drastically reduced from 0.12 to 0.05 (only 5% block rate)
-            return False
-            
-        defenders = [p for p in self.on_ice[defending_team]['Defense'] if p]
-        if not defenders:
-            return False
-            
-        defender = random.choice(defenders)
-        block_skill = (
-            getattr(defender, 'shot_blocking', 10) * 0.5 +
-            getattr(defender, 'defensive_awareness', 10) * 0.3 +
-            getattr(defender, 'aggressiveness', 10) * 0.2
-        ) * fatigue_factor
-        
-        if block_skill > 15:  # Made it harder to block (was 12, now 15)
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': defending_team, 'player': defender, 
-                'event': 'Shot Blocked'
-            })
-            return True
-        return False
-    
-    def _resolve_pass_event(self, passer, shooters, puck_team_name, opp_team_name, fatigue_factor):
-        """Enhanced pass resolution"""
-        if len(shooters) <= 1:
-            return
-            
-        receiver = random.choice([p for p in shooters if p != passer])
-        
-        # Calculate pass skill
-        pass_skill = (
-            getattr(passer, 'passing_accuracy', 10) * 0.3 +
-            getattr(passer, 'passing_creativity', 10) * 0.25 +
-            getattr(passer, 'vision', 10) * 0.2 +
-            getattr(passer, 'off_the_puck', 10) * 0.15 +
-            getattr(passer, 'hockey_iq', 10) * 0.1
-        ) * fatigue_factor
-        
-        # Defensive pressure
-        defenders = [p for p in self.on_ice[opp_team_name]['Defense'] if p]
-        defender = random.choice(defenders) if defenders else None
-        
-        defense_skill = (
-            getattr(defender, 'pokecheck', 10) * 0.4 +
-            getattr(defender, 'defensive_awareness', 10) * 0.4 +
-            getattr(defender, 'anticipation', 10) * 0.2
-        ) if defender else 10
-        
-        pass_success = pass_skill > defense_skill or random.random() < 0.7
-        
-        # Log pass event
-        puck_start = (passer.x, passer.y)
-        puck_end = (receiver.x, receiver.y)
-        duration = random.uniform(0.7, 1.2)
-        
-        self.event_log.append({
-            'timestamp': self.time,
-            'duration': duration,
-            'type': 'PASS',
-            'details': {
-                'passer_id': passer.id,
-                'receiver_id': receiver.id,
-                'puck_start_pos': puck_start,
-                'puck_end_pos': puck_end,
-                'success': pass_success
-            }
-        })
-        
-        # Move puck
-        if pass_success:
-            self.puck_x, self.puck_y = puck_end
-            # Update assist potential
-            if hasattr(receiver, 'assist_potential'):
-                receiver.assist_potential = passer.id
-        else:
-            if defender:
-                self.puck_x, self.puck_y = defender.x, defender.y
-    
-    def _resolve_deke_event(self, deker, puck_team_name, fatigue_factor):
-        """Resolve deke attempt"""
-        deke_skill = (
-            getattr(deker, 'stickhandling', 10) * 0.4 +
-            getattr(deker, 'agility', 10) * 0.3 +
-            getattr(deker, 'anticipation', 10) * 0.3
-        ) * fatigue_factor
-        
-        if deke_skill > 12:
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': puck_team_name, 'player': deker, 
-                'event': 'Successful Deke'
-            })
-    
-    def _resolve_puck_battle(self, shooters, puck_team_name, fatigue_factor):
-        """Resolve puck battle between teammates"""
-        if len(shooters) < 2:
-            return
-            
-        battlers = random.sample(shooters, 2)
-        p1, p2 = battlers
-        
-        p1_skill = (
-            getattr(p1, 'strength', 10) * 0.25 +
-            getattr(p1, 'aggressiveness', 10) * 0.2 +
-            getattr(p1, 'balance', 10) * 0.2 +
-            getattr(p1, 'work_rate', 10) * 0.2 +
-            getattr(p1, 'loose_puck', 10) * 0.15
-        ) * fatigue_factor
-        
-        p2_skill = (
-            getattr(p2, 'strength', 10) * 0.25 +
-            getattr(p2, 'aggressiveness', 10) * 0.2 +
-            getattr(p2, 'balance', 10) * 0.2 +
-            getattr(p2, 'work_rate', 10) * 0.2 +
-            getattr(p2, 'loose_puck', 10) * 0.15
-        ) * fatigue_factor
-        
-        winner = p1 if p1_skill >= p2_skill else p2
-        self.events.append({
-            'time': self.time, 'period': self.period, 
-            'team': puck_team_name, 'player': winner, 
-            'event': 'Puck Battle Won'
-        })
-    
-    def _resolve_screen_event(self, screener, shooters, puck_team_name):
-        """Resolve screening attempt"""
-        screen_skill = getattr(screener, 'screen_shots', 10)
-        if screen_skill > 13:
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': puck_team_name, 'player': screener, 
-                'event': 'Screen Set'
-            })
-    
-    def _resolve_deflection_event(self, deflector, shooters, goalie, puck_team_name, opp_team_name):
-        """Resolve deflection attempt"""
-        deflection_skill = getattr(deflector, 'deflections', 10)
-        if deflection_skill > 14 and random.random() < 0.3:
-            # Successful deflection increases goal chance
-            goalie_skill = self._calculate_goalie_save_skill(goalie, "deflection") if goalie else 8
-            goal_chance = 0.25 + (deflection_skill - goalie_skill) * 0.01
-            
-            if random.random() < goal_chance:
-                self.score[puck_team_name] += 1
-                self.stats[puck_team_name][deflector.id]['goals'] = self.stats[puck_team_name][deflector.id].get('goals', 0) + 1
-                self.events.append({
-                    'time': self.time, 'period': self.period, 
-                    'team': puck_team_name, 'player': deflector, 
-                    'event': 'Deflection Goal'
-                })
-    
-    def _check_for_penalty(self, players, puck_team_name, opp_team_name, fatigue_factor):
-        """Penalty checking tuned to NHL rates (~3-4 penalties per team per game).
-
-        Called once per game event (~110 events/game), so per-event probability
-        of ~6% yields realistic penalty totals. Player discipline/aggressiveness
-        and fatigue modulate the chance. Sets a real 2-minute penalty clock.
-        """
-        if not players:
-            return
-
-        penalized = random.choice(players)
-        discipline_rating = getattr(penalized, 'discipline', 10)
-        aggressiveness = getattr(penalized, 'aggressiveness', 10)
-
-        # Base ~2.2% per check (~250 checks/game -> ~6-8 penalties/game, NHL rate);
-        # tired/undisciplined/aggressive players foul more
-        base = 0.022 * (2.0 - fatigue_factor)
-        discipline_mod = (10 - discipline_rating) * 0.001
-        aggr_mod = (aggressiveness - 10) * 0.0008
-        penalty_chance = min(0.06, max(0.005, base + discipline_mod + aggr_mod))
-
-        if random.random() >= penalty_chance:
-            return
-
-        self.stats[puck_team_name][penalized.id]['penalties'] = \
-            self.stats[puck_team_name][penalized.id].get('penalties', 0) + 1
-        self.events.append({
-            'time': self.time, 'period': self.period,
-            'team': puck_team_name, 'player': penalized,
-            'event': 'Penalty'
-        })
-        self.pp_team = opp_team_name
-        self.pk_team = puck_team_name
-        # 2-minute minor; on a 5-on-3 the PP lasts until the later expiry
-        new_expiry = self.time + 120
-        self.pp_end_time = new_expiry if not self.pp_end_time else max(self.pp_end_time, new_expiry)
-
-    def get_state(self, step):
-        # Defensive: check bounds
-        if step < 0 or step >= len(self.state_history):
-            return {'players': [], 'puck': {}, 'events': []}
-        state = self.state_history[step]
-        players = []
-        # Home skaters
-        for p in state['home']:
-            player_obj = next((pl for pl in self.home_team.roster if pl.id == p['id']), None)
-            number = player_obj.jersey_number if player_obj else ""
-            players.append({'x': p['x'], 'y': p['y'], 'id': p['id'], 'team': 'home', 'number': number})
-        # Away skaters
-        for p in state['away']:
-            player_obj = next((pl for pl in self.away_team.roster if pl.id == p['id']), None)
-            number = player_obj.jersey_number if player_obj else ""
-            players.append({'x': p['x'], 'y': p['y'], 'id': p['id'], 'team': 'away', 'number': number})
-        # Home goalie
-        if state['home_goalie']:
-            player_obj = next((pl for pl in self.home_team.roster if pl.id == state['home_goalie']['id']), None)
-            number = player_obj.jersey_number if player_obj else ""
-            players.append({'x': state['home_goalie']['x'], 'y': state['home_goalie']['y'], 'id': state['home_goalie']['id'], 'team': 'home', 'number': number})
-        # Away goalie
-        if state['away_goalie']:
-            player_obj = next((pl for pl in self.away_team.roster if pl.id == state['away_goalie']['id']), None)
-            number = player_obj.jersey_number if player_obj else ""
-            players.append({'x': state['away_goalie']['x'], 'y': state['away_goalie']['y'], 'id': state['away_goalie']['id'], 'team': 'away', 'number': number})
-        puck = {'x': state['puck']['x'], 'y': state['puck']['y']}
-        events = []
-        for event in self.events:
-            if event['event'] == 'Goal' and step == event['time'] // 45:
-                events.append(f"Goal by {event['player'].full_name}!")
-        return {
-            'players': players,
-            'puck': puck,
-            'events': events
-        }
 
 # --- Main GUI Application ---
 def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Cancel"):
@@ -3033,7 +1912,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     Returns True when the user confirms, False otherwise.
     """
     result = {'ok': False}
-    dlg = tk.Toplevel(parent)
+    dlg = InGamePopup(parent)
     dlg.title(title)
     dlg.transient(parent)
     dlg.resizable(False, False)
@@ -3087,13 +1966,37 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
     return result['ok']
 
 
+def _mix_hex(a, b, t=0.5):
+    """Blend two hex colors; t=0 -> a, t=1 -> b. Never raises."""
+    try:
+        ha, hb = a.lstrip("#"), b.lstrip("#")
+        ra, ga, ba = (int(ha[i:i + 2], 16) for i in (0, 2, 4))
+        rb, gb, bb = (int(hb[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (
+            int(ra + (rb - ra) * t), int(ga + (gb - ga) * t), int(ba + (bb - ba) * t))
+    except Exception:
+        return a
+
+
+def _player_needs_waivers(player):
+    """Waiver eligibility, shared by the single- and multi-player demotion
+    paths: non-exempt players (25+ or 160+ NHL games) must clear the wire;
+    everyone else can be assigned quietly. Never raises."""
+    try:
+        _games = getattr(player, 'nhl_games_played', 0) or 0
+        _age = getattr(player, 'age', 0) or 0
+        return bool(_age >= 25 or _games >= 160)
+    except Exception:
+        return True
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
     # Modern UI constants
     MODERN_UI_ENABLED = True
 
-    def __init__(self, game_manager):
+    def __init__(self, game_manager, mp_host=None, mp_client=None):
         super().__init__()
 
         # Square window corners: disable Windows 11 rounded-corner chrome so
@@ -3106,6 +2009,15 @@ class HockeyManagerGUI(tk.Tk):
         try:
             from modern_widgets import apply_dark_form_theme
             apply_dark_form_theme(self)
+        except Exception:
+            pass
+
+        # UI scale: honor Settings -> Font size for all modern surfaces,
+        # and auto-fit text to the window size when enabled.
+        try:
+            import ui_scale
+            ui_scale.apply_from_prefs()
+            ui_scale.bind_auto_fit(self)
         except Exception:
             pass
 
@@ -3143,16 +2055,40 @@ class HockeyManagerGUI(tk.Tk):
         self._initialize_phase3_systems()
         
         self.game_manager = game_manager
+        # Back-reference so save/load can re-sync GUI mirrors (user_team,
+        # league, current_date) after a restore rebuilds league objects.
+        try:
+            if game_manager is not None:
+                game_manager.app = self
+        except Exception:
+            pass
         self.league = game_manager.league
         self.user_team = None
         self.is_new_game = True  # Track if this is a new game (no autosave until first manual save)
         self.tree_maps = {}
         self.scouting_assignments = {}
         self.open_windows = {}
-        self.current_date = START_DATE
-        self.game_manager.current_date = self.current_date  # Sync with game_manager for dashboard
+        # Don't clobber a pre-loaded date: a fresh GameManager is always
+        # exactly START_DATE here, so only reset in that case. A manager
+        # restored from a save (headless load-then-build flows) keeps its
+        # date; the GUI mirrors it.
+        _gm_date = getattr(game_manager, 'current_date', None)
+        if _gm_date in (None, START_DATE):
+            self.current_date = START_DATE
+            self.game_manager.current_date = self.current_date  # Sync with game_manager for dashboard
+        else:
+            self.current_date = _gm_date
         self.news_log = [{'date': self.current_date, 'story': "Welcome to the new season!"}]
         self.game_results = []  # Store completed game results for viewing
+        # Derived lookup indexes over game_results (rebuilt lazily; never
+        # pickled -- create_save_data only stores the list itself).
+        # _results_by_date: date -> [results]  (daily results window)
+        # _results_by_matchup: (date, id(home), id(away)) -> result
+        # _results_index_src tracks which list object the indexes were built
+        # from, so a load_game that swaps the list triggers a rebuild.
+        self._results_by_date = {}
+        self._results_by_matchup = {}
+        self._results_index_src = self.game_results
         self.waiver_list = []
         self.trade_block = []
         
@@ -3169,6 +2105,19 @@ class HockeyManagerGUI(tk.Tk):
         self.title("Puck Dynasty - Hockey Manager")
         self.geometry("1400x800")
         self.configure(background=self.BG_COLOR)
+
+        # In-game popup system: every dialog/window renders INSIDE this
+        # window as an overlay card -- no floating OS-level popups.
+        try:
+            from popup_system import register as _register_popups
+            _register_popups(self)
+        except Exception:
+            self.popup_manager = None
+
+        # Item 7: a captaincy choice deferred from headless new-game setup
+        # (no display existed to ask) is raised here as a mandatory,
+        # non-dismissible blocker before the user can continue.
+        self.after_idle(self._raise_captaincy_blocker_if_pending)
         
         # Set application icon
         self._set_application_icon()
@@ -3178,6 +2127,42 @@ class HockeyManagerGUI(tk.Tk):
 
         # Initialize save/load system
         self.save_manager = GameSaveManager(self.game_manager)
+
+        # --- MULTIPLAYER (Phase 1) ---
+        # mp_host: MultiplayerHost when this machine is the authoritative host.
+        # mp_client: MultiplayerClient when this machine joined someone's game.
+        # checkpoint_manager: attached by the launcher/host wiring; ALSO used
+        #   for single-player crash checkpoints (fantasy draft etc.).
+        # When all three are None the game behaves exactly as before.
+        self.mp_host = mp_host
+        self.mp_client = mp_client
+        self.checkpoint_manager = None
+        self._mp_role_ui_done = False
+        # Client ACTION intents that arrive while a snapshot worker is
+        # serializing game state wait here; replayed on "snapshot_done".
+        self._mp_deferred_actions = []
+        # --- MULTIPLAYER (Phase 2): EHM-style advance sync ---
+        # Every active human manager (host included) must ready-up before
+        # the day advances. _mp_host_ready is this machine's vote as host;
+        # _mp_client_ready is this machine's vote as a client. The host's
+        # net layer tracks client votes; all_ready() combines both.
+        # _mp_advance_authorized is True only while the gate is firing the
+        # real advance -- simulate_day() refuses to run in host mode
+        # without it, so every path goes through the ready gate.
+        self._mp_host_ready = False
+        self._mp_client_ready = False
+        self._mp_advance_authorized = False
+        self._mp_gate_pending = False
+        # Human-to-human trade offers awaiting an answer:
+        # offer_id -> {offer, from_team, from_manager, from_client_id,
+        #              partner_team, partner_client_id|None (None = host's team)}
+        self._mp_pending_offers = {}
+        # NTC/NMC waiver prompts awaiting a client's player answer:
+        # waiver_id -> {kind: trade|demote, ...} (trade entries also carry
+        # the proposal snapshot + veto list)
+        self._mp_pending_ntc = {}
+        if self.mp_host is not None or self.mp_client is not None:
+            self.after(400, self._poll_multiplayer)
         
         # Initialize shortlist system
         from shortlist_system import ShortlistManager
@@ -3208,6 +2193,7 @@ class HockeyManagerGUI(tk.Tk):
                     if team.team_name == selected_team_name:
                         user_team_found = team
                         self.game_manager.user_team = team
+                        self.game_manager._claim_user_team_captaincy(team)
                         debug_print(f"DEBUG: Found team from startup_settings (exact): {team.team_name}")
                         break
                 
@@ -3219,6 +2205,7 @@ class HockeyManagerGUI(tk.Tk):
                         if selected_lower in team_lower or team_lower in selected_lower:
                             user_team_found = team
                             self.game_manager.user_team = team
+                            self.game_manager._claim_user_team_captaincy(team)
                             debug_print(f"DEBUG: Found team from startup_settings (partial): {team.team_name}")
                             break
                 
@@ -3226,12 +2213,14 @@ class HockeyManagerGUI(tk.Tk):
                 if not user_team_found and self.league.teams:
                     user_team_found = self.league.teams[0]
                     self.game_manager.user_team = user_team_found
+                    self.game_manager._claim_user_team_captaincy(user_team_found)
                     debug_print(f"DEBUG: Team not found, defaulting to: {user_team_found.team_name}")
         
         if user_team_found:
             # Team already selected from startup window
             self.user_team = user_team_found
             self.user_team.is_user_team = True
+            self._update_team_colors()
             
             # Set GM profile from startup settings
             if hasattr(self.game_manager, 'startup_settings') and self.game_manager.startup_settings:
@@ -3287,7 +2276,7 @@ class HockeyManagerGUI(tk.Tk):
             team_names = [team.team_name for team in self.league.teams]
             
             # Create simple selection window as a Toplevel (child of main window)
-            selection_window = tk.Toplevel(self)
+            selection_window = InGamePopup(self)
             selection_window.title("Select Your Team - Puck Dynasty")
             selection_window.geometry("400x300")
             selection_window.configure(bg='#181818')
@@ -3317,8 +2306,16 @@ class HockeyManagerGUI(tk.Tk):
                                      bg='#2A2A2A', fg='#FFFFFF',
                                      selectbackground='#f85149')
             
-            for team_name in team_names:
+            for _i, team_name in enumerate(team_names):
                 team_listbox.insert(tk.END, team_name)
+                # Team-true row colors so every club is recognizable
+                try:
+                    from team_identity_system import accent_for_team
+                    _bg, _hover, _fg = accent_for_team(team_name)
+                    team_listbox.itemconfig(_i, bg=_bg, fg=_fg,
+                                            selectbackground=_hover)
+                except Exception:
+                    pass
             
             team_listbox.pack(pady=10, padx=20, fill='both', expand=True)
             team_listbox.selection_set(0)  # Select first team by default
@@ -3338,9 +2335,11 @@ class HockeyManagerGUI(tk.Tk):
             def on_cancel():
                 print("Team selection cancelled - exiting...")
                 selection_window.destroy()
-                self.quit()  # Unwind mainloop (game runs nested in launcher's)
-                self.destroy()  # Close the main app too
-                sys.exit()
+                # _quit_app tears the root down without hanging even if a
+                # widget's destroy() raises; sys.exit then skips the rest
+                # of __init__ exactly like before.
+                self._quit_app()
+                sys.exit(0)
             
             button_frame = tk.Frame(selection_window, bg='#181818')
             button_frame.pack(pady=10)
@@ -3364,7 +2363,13 @@ class HockeyManagerGUI(tk.Tk):
                 self.game_manager.user_team = user_team
                 self.user_team = user_team
                 user_team.is_user_team = True
+                # Item 7 follow-up: the user names this club's captains --
+                # reclaim it from setup auto-repair and raise the picker.
+                # (This window runs after the __init__ pending check.)
+                self.game_manager._claim_user_team_captaincy(user_team)
+                self.after_idle(self._raise_captaincy_blocker_if_pending)
                 self.title(f"{user_team.team_name} - Puck Dynasty")
+                self._update_team_colors()
                 
                 # Generate initial emails and continue setup
                 self._finalize_phase2_initialization()
@@ -3383,118 +2388,313 @@ class HockeyManagerGUI(tk.Tk):
                 self.quit()
                 return
             
+    def _rebuild_news_log_from_stories(self):
+        """Rebuild the GUI news feed from the canonical news_stories list.
+
+        news_stories is the save/snapshot copy every manager (including
+        multiplayer clients) receives; the GUI news_log is the local view.
+        """
+        try:
+            from datetime import date as _date
+            stories = getattr(getattr(self, 'game_manager', None),
+                              'news_stories', None) or []
+            rebuilt = []
+            for item in stories:
+                if isinstance(item, dict):
+                    d = item.get('date')
+                    if isinstance(d, str):
+                        try:
+                            d = _date.fromisoformat(d)
+                        except ValueError:
+                            pass
+                    rebuilt.append({'date': d, 'story': item.get('story', '')})
+            self.news_log = rebuilt
+        except Exception:
+            pass
+
     def add_news(self, story):
         """Add a news item to the news log."""
         self.news_log.append({'date': self.current_date, 'story': story})
+        # Mirror into the canonical list that save files and multiplayer
+        # snapshots carry, so every manager sees the same league lore.
+        stories = None
+        try:
+            gm = getattr(self, 'game_manager', None)
+            stories = getattr(gm, 'news_stories', None)
+            if stories is None and gm is not None:
+                gm.news_stories = stories = []
+            if stories is not None:
+                d = self.current_date
+                stories.append({'date': d.isoformat() if hasattr(d, 'isoformat') else d,
+                                'story': story})
+        except Exception:
+            pass
+        # Bound the feed: keep the most recent stories so the log (and the
+        # save file) can't grow unbounded across seasons.
+        try:
+            import headlines as _hl
+            cap = _hl.NEWS_LOG_CAP
+        except Exception:
+            cap = 500
+        if stories is not None and len(stories) > cap:
+            del stories[:len(stories) - cap]
+        if len(self.news_log) > cap:
+            del self.news_log[:len(self.news_log) - cap]
         # Update news window if it's open
         if 'news' in self.open_windows and self.open_windows['news'].winfo_exists():
             self.open_windows['news'].populate_news()
         # Update front page news panel
         self.update_news_panel()
             
+    def _execute_waiver_claim(self, player, claiming_team):
+        """Complete a waiver claim transfer (shared by AI and user wins).
+
+        Removes the player from his original club, adds him to the
+        claiming club, fires the rivalry/dressing-room hooks, resets
+        waiver state, and drops the claimant to the bottom of the waiver
+        priority order (waiver_logic.note_waiver_claim).
+        """
+        original_team = next(
+            (t for t in self.league.teams
+             if t.team_name == player.team_name), None)
+        if original_team:
+            if player in original_team.roster:
+                original_team.remove_player(player)
+            elif hasattr(original_team, 'ahl_roster') and \
+                    player in original_team.ahl_roster:
+                original_team.ahl_roster.remove(player)
+
+        # Add to claiming team
+        claiming_team.add_player(player)
+        player.team_name = claiming_team.team_name
+
+        # A pending user claim beaten by a higher-priority club, or
+        # fulfilled -- either way the pending flag is spent.
+        try:
+            _user_pending = bool(getattr(player, "user_claim_pending", False))
+        except Exception:
+            _user_pending = False
+        try:
+            player.user_claim_pending = False
+        except Exception:
+            pass
+        try:
+            import game_classes as _gc
+            _user_won = bool(_gc.is_human_managed(claiming_team))
+        except Exception:
+            _user_won = bool(getattr(claiming_team, 'is_user_team', False))
+        if _user_pending and not _user_won:
+            try:
+                import waiver_logic as _wl
+                _rank = _wl.waiver_priority_rank(
+                    self.league, claiming_team, self.current_date)
+                self.add_news(
+                    f"Your waiver claim for {player.full_name} was beaten "
+                    f"by {claiming_team.team_name} "
+                    f"(waiver priority #{_rank}).")
+            except Exception:
+                pass
+
+        # Successful claim: the club drops to the bottom of the waiver
+        # priority order (NHL rule -- priority spent).
+        try:
+            import waiver_logic as _wl
+            _wl.note_waiver_claim(self.league, claiming_team)
+        except Exception:
+            pass
+
+        # Rivalry lifecycle: a waiver claim is a transfer -- his
+        # personal beefs follow him; ambient noise stays behind.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None),
+                            "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original_team,
+                     to_team=claiming_team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                claiming_team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+
+        # Reset waiver status
+        player.on_waivers = False
+        player.waiver_days = 0
+
+        # Add to news log
+        self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
+
     def process_waivers(self):
         """Process waiver claims and update waiver days for all players on waivers."""
-        # Process claims by CPU teams (from worst team to best)
-        teams_by_ranking = sorted(self.league.teams, key=lambda t: sum(p.overall_rating() for p in t.roster), reverse=False)
+        # NHL claim order (CBA Art. 13): lowest points percentage first --
+        # previous season's final standings until Nov 1, current standings
+        # after that. A club that claims drops to the bottom of the order.
+        try:
+            import waiver_logic as _wl
+            teams_by_ranking = _wl.waiver_priority_order(
+                self.league, self.current_date)
+        except Exception:
+            teams_by_ranking = list(getattr(self.league, "teams", []) or [])
         
         claimed_players = []
         for player in self.waiver_list:
             if player in claimed_players:
                 continue
-                
-            # Don't process players just placed on waivers
-            if player.waiver_days == 2:
-                player.waiver_days -= 1
+
+            # The 2-day clock ticks in the daily advance (see above); a
+            # player is only eligible for claim processing once it has
+            # fully elapsed. No same-day claims for fresh placements.
+            if player.waiver_days > 0:
                 continue
-                
-            # Last day on waivers, process possible claims
-            if player.waiver_days == 1:
-                # Determine claiming team (if any)
-                claiming_team = None
-                for team in teams_by_ranking:
-                    # Skip player's current team
-                    if team.team_name == player.team_name:
-                        continue
-                        
-                    # Skip user team (user must claim manually)
-                    if team.is_user_team:
-                        continue
-                        
-                    # Check if team is interested (based on player quality and team needs)
-                    if len(team.roster) < 23 and team.cap_space > player.contract.salary:
-                        # Calculate team interest based on player quality vs. team needs
-                        player_rating = player.overall_rating()
-                        position_need = 1.0  # Default need
-                        
-                        # Check position needs
-                        if player.primary_position == PlayerPosition.GOALIE:
-                            goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
-                            if len(goalies) < 2:
-                                position_need = 1.5  # High need for goalies
-                        elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
-                            forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
-                            if len(forwards) < 12:
-                                position_need = 1.3  # Need forwards
-                        else:  # Defensemen
-                            defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
-                            if len(defensemen) < 6:
-                                position_need = 1.3  # Need defensemen
-                                
-                        # Teams are more likely to claim higher-rated players
-                        claim_chance = min(0.9, (player_rating / 100) * position_need)
-                        
-                        if random.random() < claim_chance:
-                            claiming_team = team
-                            break
-                
-                # Process claim if a team is interested
-                if claiming_team:
-                    # Remove from original team
-                    original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                    if original_team:
-                        if player in original_team.roster:
-                            original_team.remove_player(player)
-                        elif hasattr(original_team, 'ahl_roster') and player in original_team.ahl_roster:
-                            original_team.ahl_roster.remove(player)
+
+            # Clock elapsed: process possible claims
+            # Determine claiming team (if any)
+            claiming_team = None
+            for team in teams_by_ranking:
+                # Skip player's current team
+                if team.team_name == player.team_name:
+                    continue
+
+                # The user's club claims only through a submitted pending
+                # claim (WaiversView "Claim" button). Real NHL: claims are
+                # due by noon and processed in priority order, so a
+                # higher-priority rival beats your claim.
+                try:
+                    import game_classes as _gc
+                    _is_user = bool(_gc.is_human_managed(team))
+                except Exception:
+                    _is_user = bool(getattr(team, 'is_user_team', False))
+                if _is_user:
+                    if (getattr(player, "user_claim_pending", False)
+                            and len(team.roster) < 23
+                            and team.cap_space > player.contract.salary):
+                        claiming_team = team
+                        break
+                    continue
                     
-                    # Add to claiming team
-                    claiming_team.add_player(player)
-                    player.team_name = claiming_team.team_name
+                # Check if team is interested (based on player quality and team needs)
+                if len(team.roster) < 23 and team.cap_space > player.contract.salary:
+                    # Calculate team interest based on player quality vs. team needs
+                    player_rating = player.overall_rating()
+                    position_need = 1.0  # Default need
                     
-                    # Reset waiver status
-                    player.on_waivers = False
-                    player.waiver_days = 0
+                    # Check position needs
+                    if player.primary_position == PlayerPosition.GOALIE:
+                        goalies = [p for p in team.roster if p.primary_position == PlayerPosition.GOALIE]
+                        if len(goalies) < 2:
+                            position_need = 1.5  # High need for goalies
+                    elif player.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
+                        forwards = [p for p in team.roster if p.primary_position in [PlayerPosition.CENTER, PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]]
+                        if len(forwards) < 12:
+                            position_need = 1.3  # Need forwards
+                    else:  # Defensemen
+                        defensemen = [p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE]]
+                        if len(defensemen) < 6:
+                            position_need = 1.3  # Need defensemen
+                            
+                    # Teams are more likely to claim higher-rated players
+                    claim_chance = min(0.9, (player_rating / 100) * position_need)
                     
-                    # Add to news log
-                    self.add_news(f"{player.full_name} claimed off waivers by {claiming_team.team_name}.")
-                    
-                    # Mark as claimed
-                    claimed_players.append(player)
-                else:
-                    # Player cleared waivers
-                    player.waiver_days = 0
-                    player.on_waivers = False
-                    
-                    # Add to original team's AHL roster if they're the user team
-                    original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
-                    if original_team and original_team.is_user_team and hasattr(original_team, 'ahl_roster'):
-                        if player in original_team.roster:
-                            original_team.roster.remove(player)
-                        original_team.ahl_roster.append(player)
-                        
-                    self.add_news(f"{player.full_name} cleared waivers.")
+                    if random.random() < claim_chance:
+                        claiming_team = team
+                        break
             
-            # Reduce waiver days for players still on waivers
-            elif player.waiver_days > 0:
-                player.waiver_days -= 1
-        
+            # Process claim if a team is interested
+            if claiming_team:
+                self._execute_waiver_claim(player, claiming_team)
+
+                # Mark as claimed
+                claimed_players.append(player)
+            else:
+                # Player cleared waivers
+                player.waiver_days = 0
+                player.on_waivers = False
+                # A pending user claim that never fired (roster filled or
+                # cap evaporated before processing) lapses quietly.
+                if getattr(player, "user_claim_pending", False):
+                    try:
+                        player.user_claim_pending = False
+                        self.add_news(
+                            f"Your waiver claim for {player.full_name} "
+                            f"lapsed (roster or cap space changed).")
+                    except Exception:
+                        pass
+                
+                # Add to original team's AHL roster on clearance: waiving is
+                # always a demotion move (cap burial or AHL shuttle), for
+                # AI clubs exactly as for the user's. (BUG-019: AI clubs
+                # now use the wire, so this branch fires for them too.)
+                original_team = next((t for t in self.league.teams if t.team_name == player.team_name), None)
+                if original_team and hasattr(original_team, 'ahl_roster'):
+                    if player in original_team.roster:
+                        original_team.roster.remove(player)
+                    # CHL-NHL agreement: a cleared under-20 CHL prospect
+                    # who isn't AHL-eligible (new CBA: 19-year-old
+                    # first-rounders excepted) goes back to junior, not
+                    # the AHL.
+                    try:
+                        import game_classes as _gcw
+                        _to_junior = (
+                            getattr(player, "contract", None) is not None
+                            and _gcw.junior_track_of(player) == "CHL"
+                            and not _gcw.prospect_ahl_eligible(player))
+                    except Exception:
+                        _to_junior = False
+                    if _to_junior:
+                        try:
+                            player.playing_where = \
+                                _gcw.junior_assignment_label(player)
+                        except Exception:
+                            pass
+                        if player not in original_team.prospects:
+                            original_team.prospects.append(player)
+                    else:
+                        original_team.ahl_roster.append(player)
+                        # Jersey number: the drafted prospect wants his
+                        # favorite -- preferred, else second choice, else
+                        # first free legal number in the org pool.
+                        try:
+                            import immortality as _im_arr
+                            _im_arr.assign_arrival_number(
+                                original_team, player,
+                                int(getattr(getattr(self, "league", None),
+                                            "season_year", 2026) or 2026))
+                        except Exception:
+                            pass
+                        # New-CBA paper-transaction rule: the assignment
+                        # stamps the recall gate -- he must play an AHL
+                        # game before he can come back up.
+                        try:
+                            import ahl_system as _ahl_stamp2
+                            _ahl_stamp2.stamp_ahl_assignment(player)
+                        except Exception:
+                            pass
+                else:
+                    _to_junior = False
+                # Clearance is league news regardless of who runs the club.
+                if _to_junior:
+                    self.add_news(
+                        f"{player.full_name} cleared waivers and was "
+                        f"returned to junior.")
+                else:
+                    self.add_news(f"{player.full_name} cleared waivers.")
+
         # Remove claimed players from waiver list
         for player in claimed_players:
             if player in self.waiver_list:
                 self.waiver_list.remove(player)
-                
-        # Remove players who cleared waivers
-        self.waiver_list = [p for p in self.waiver_list if p.on_waivers and p.waiver_days > 0]
+
+        # Remove players who cleared waivers (on_waivers=False now).
+        # Players whose clock hit 0 but who await the next Mon/Thu
+        # processing stay listed -- the shed already ended when the
+        # clock elapsed.
+        self.waiver_list = [p for p in self.waiver_list if p.on_waivers]
         
         # Update any open waiver windows
         if 'waivers' in self.open_windows and self.open_windows['waivers'].winfo_exists():
@@ -3529,6 +2729,34 @@ class HockeyManagerGUI(tk.Tk):
         """Update button colors to match the user's team colors"""
         if hasattr(self, 'user_team') and self.user_team and hasattr(self, 'modern_theme'):
             self.modern_theme.update_team_colors(self.style, self.user_team.team_name)
+        # App-wide accent follows the user's team: every CustomTkinter
+        # widget built after this call (nav pills, primary buttons,
+        # selected states) and the game visualizer wear the team color.
+        try:
+            if getattr(self, 'user_team', None):
+                import ctk_theme
+                from team_identity_system import accent_for_team
+                accent, hover, _text = accent_for_team(self.user_team.team_name)
+                ctk_theme.set_team_accent(accent, hover, _text)
+                # Plain-tkinter dashboard reads modern_ui.AppColors at
+                # build time -- keep it in step (ACCENT_BG is a whisper
+                # of the accent over the window background).
+                from modern_ui import AppColors
+                AppColors.ACCENT = accent
+                AppColors.ACCENT_DIM = hover
+                AppColors.ACCENT_BG = _mix_hex(accent, "#0e0e11", 0.85)
+                # Contrast-safe text colors for the team accent: _text is
+                # readable ON the accent (standings, buttons); the on-dark
+                # variant is the accent itself made readable on dark bgs.
+                AppColors.ACCENT_TEXT = _text
+                from team_identity_system import ensure_text_contrast
+                # The on-dark variant is ensured against the actual whisper
+                # bg it sits on (PillBadge), not pure dark -- the whisper is
+                # a touch lighter and that matters at the margin.
+                AppColors.ACCENT_ON_DARK = ensure_text_contrast(
+                    accent, AppColors.ACCENT_BG)
+        except Exception:
+            pass
 
     def _set_application_icon(self):
         """Set the Puck Dynasty logo as the application icon"""
@@ -3627,6 +2855,20 @@ class HockeyManagerGUI(tk.Tk):
             print(f"⚠️ Error loading UI icons: {e}")
             self.ui_icons = {}
 
+    def _raise_captaincy_blocker_if_pending(self):
+        """Item 7 follow-up: raise the mandatory, non-dismissible captains
+        picker when the game manager armed it. Safe to call from after_idle
+        at any point after the user team is known."""
+        try:
+            gm = getattr(self, "game_manager", None)
+            ut = getattr(gm, "user_team", None) if gm is not None else None
+            if (gm is not None and ut is not None
+                    and getattr(gm, "_captaincy_choice_pending", False)
+                    and gm._captaincy_needs_choice(ut)):
+                gm._require_captaincy_choice(ut)
+        except Exception:
+            pass
+
     def _select_team(self):
         team_names = sorted([t.team_name for t in self.league.teams])
         chosen_team_name = simpledialog.askstring("Team Selection", "Enter the name of the team you want to manage:", initialvalue=random.choice(team_names))
@@ -3635,6 +2877,8 @@ class HockeyManagerGUI(tk.Tk):
             if self.user_team:
                 self.user_team.is_user_team = True
                 self.game_manager.user_team = self.user_team
+                # Item 7 follow-up: human club letters are the user's choice.
+                self.game_manager._claim_user_team_captaincy(self.user_team)
                 self.title(f"{self.user_team.team_name} - Hockey Manager")
                 
                 # Generate initial welcome emails
@@ -3645,7 +2889,21 @@ class HockeyManagerGUI(tk.Tk):
         return False
         
     def _generate_initial_emails(self):
-        """Generate initial emails when starting the game."""
+        """Generate initial emails when starting the game.
+
+        Idempotent: app construction also runs on save/load, so skip when
+        the welcome set is already in the inbox (prevents duplicate
+        triplicates on every load).
+        """
+        try:
+            inbox = getattr(self.user_team, "inbox", None)
+            msgs = list(getattr(inbox, "messages", []) or [])
+            for m in msgs:
+                subj = str(getattr(m, "subject", getattr(m, "title", "")))
+                if subj.startswith("Welcome Aboard,"):
+                    return
+        except Exception:
+            pass
         from game_classes import EmailGenerator
         
         # Add GM hiring announcement email
@@ -3707,6 +2965,12 @@ class HockeyManagerGUI(tk.Tk):
 
     def _create_main_dashboard(self):
         """Creates the main dashboard with enhanced menu bar and modern dashboard system."""
+        # Navigating screens dismisses any open in-game popups (FM behavior).
+        try:
+            if getattr(self, "popup_manager", None) is not None:
+                self.popup_manager.close_all()
+        except Exception:
+            pass
         # Clear any existing content
         for widget in self.winfo_children():
             widget.destroy()
@@ -3714,6 +2978,7 @@ class HockeyManagerGUI(tk.Tk):
         # Create main container with proper layout
         main_container = ttk.Frame(self, style='Panel.TFrame')
         main_container.pack(fill="both", expand=True)
+        self.main_container = main_container
         
         # Configure grid weights for proper expansion
         main_container.grid_rowconfigure(0, weight=0)  # Menu bar - fixed height
@@ -3739,7 +3004,7 @@ class HockeyManagerGUI(tk.Tk):
                     parent=self,
                     game_manager=self.game_manager,
                     user_team=self.user_team,
-                    on_continue=self.simulate_day,
+                    on_continue=self._on_continue_pressed,
                     get_continue_state=self.get_continue_state,
                 )
                 
@@ -3747,6 +3012,9 @@ class HockeyManagerGUI(tk.Tk):
                 dashboard_frame = tk.Frame(main_container, bg=AppColors.BG)
                 dashboard_frame.grid(row=1, column=0, sticky="nsew")
                 self.dashboard.create_dashboard(dashboard_frame)
+                # Full-screen views (e.g. inbox) hide/restore this frame.
+                self._dashboard_frame = dashboard_frame
+                self._dashboard_grid = dict(row=1, column=0, sticky="nsew")
                 
             except Exception as e:
                 print(f"Modern dashboard failed, falling back: {e}")
@@ -3766,6 +3034,10 @@ class HockeyManagerGUI(tk.Tk):
             dashboard_frame = ttk.Frame(main_container, style='Panel.TFrame')
             dashboard_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=10)
             self.dashboard.create_immersive_dashboard(dashboard_frame)
+            # Full-screen views (e.g. inbox) hide/restore this frame.
+            self._dashboard_frame = dashboard_frame
+            self._dashboard_grid = dict(row=1, column=0, sticky="nsew",
+                                        padx=10, pady=10)
         
         # Update dashboard with current data
         self.update_dashboard_data()
@@ -3879,6 +3151,8 @@ class HockeyManagerGUI(tk.Tk):
         # Season Flow Controls and Continue button
         season_controls_frame = ttk.Frame(top_bar, style='TitleBar.TFrame')
         season_controls_frame.pack(side="right", padx=(20, 0))
+        # Kept for the MP host's Force-advance button (Phase 2).
+        self._season_controls_frame = season_controls_frame
         
         # Automated Season Flow button
         from modern_widgets import RoundedButton
@@ -3892,7 +3166,7 @@ class HockeyManagerGUI(tk.Tk):
 
         # Continue button with better styling
         self.continue_btn = RoundedButton(season_controls_frame, text="Continue ▶",
-                                          command=self.simulate_day,
+                                          command=self._on_continue_pressed,
                                           bg=self.ACCENT_COLOR, radius=10,
                                           font=(self.FONT_FAMILY, 12, "bold"),
                                           padx=26, pady=12)
@@ -3922,7 +3196,17 @@ class HockeyManagerGUI(tk.Tk):
         border = tk.Frame(nav_container, bg=border_color, height=1)
         border.pack(fill="x")
         
-        # Left side - Main action buttons (most frequently used)
+        # Far left: back/forward screen navigation
+        nav_hist_frame = tk.Frame(menu_bar, bg=menu_bg)
+        nav_hist_frame.pack(side="left", padx=(2, 6))
+        self._back_btn = self._create_nav_pill(nav_hist_frame, "\u25c0",
+                                               self._nav_back,
+                                               tooltip="Back to previous screen")
+        self._fwd_btn = self._create_nav_pill(nav_hist_frame, "\u25b6",
+                                              self._nav_forward,
+                                              tooltip="Forward to next screen")
+
+        # Left side - ALL menu tabs (never split across sides)
         left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
         left_menu_frame.pack(side="left", fill="x", expand=True)
         
@@ -3953,6 +3237,7 @@ class HockeyManagerGUI(tk.Tk):
             "Scouting": self.open_scouting_management_window,
             "Performance": self.open_performance_monitor,
             "Practice Center": self.open_practice_center,
+            "Training Camp": self.open_training_camp_window,
             "Manager Hub": self.open_manager_hub
         })
         
@@ -3975,12 +3260,12 @@ class HockeyManagerGUI(tk.Tk):
             "Waivers": self.open_waivers_window
         })
         
-        # Right side - Settings and utilities
-        right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        right_menu_frame.pack(side="right")
+        # All remaining tabs continue on the left (single unified menu)
+        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
+        left_menu_frame.pack(side="right")
 
         # Save/Load dropdown
-        self._create_dropdown_menu(right_menu_frame, "Save/Load",
+        self._create_dropdown_menu(left_menu_frame, "Save/Load",
             tooltip="Save/Load: save your game or load a previous save", menu_items={
             "Save Game": self.open_save_window,
             "Load Game": self.open_load_window,
@@ -3988,30 +3273,175 @@ class HockeyManagerGUI(tk.Tk):
         })
 
         # Right menu buttons - temporarily back to text
-        self._create_nav_pill(right_menu_frame, "News",
-                              self.open_news_window, side="right",
+        self._create_nav_pill(left_menu_frame, "News",
+                              self.open_news_window,
                               tooltip="News: the latest stories from around the league")
 
         # Media Center button (optional system)
-        self._create_nav_pill(right_menu_frame, "Media",
-                              self.open_media_center, side="right",
+        self._create_nav_pill(left_menu_frame, "Media",
+                              self.open_media_center,
                               tooltip="Media Center: press conferences and media relations")
 
+        # Morale button (dressing-room health: chemistry, hierarchy, attitudes)
+        self._create_nav_pill(left_menu_frame, "Morale",
+                              self.open_morale_window,
+                              tooltip="Morale: team chemistry, hierarchy, and player attitudes")
+
+        # Dressing Room button (module 03: social groups, talks, cascades)
+        self._create_nav_pill(left_menu_frame, "Dressing Room",
+                              self.open_dressing_room,
+                              tooltip="Dressing Room: hierarchy, social groups, team talks")
+
+        # Analytics Hub button (module 04: xG maps, momentum, entries, lines)
+        self._create_nav_pill(left_menu_frame, "Analytics",
+                              self.open_analytics_hub,
+                              tooltip="Analytics Hub: shot/xG maps, momentum graphs, zone entries, line trends")
+
+        # Tactics button (systems, familiarity, fit -- the whiteboard)
+        self._create_nav_pill(left_menu_frame, "Tactics",
+                              self.open_tactics_window,
+                              tooltip="Tactics: systems, familiarity, roster/coach fit")
+
         # Stats & Standings button
-        self._create_nav_pill(right_menu_frame, "Stats",
-                              self.open_stats_standings_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Stats",
+                              self.open_stats_standings_window,
                               tooltip="Stats: standings, scoring leaders, and team analytics")
-        
+
+        # AHL Stats button (minors only -- separate screen per design)
+        self._create_nav_pill(left_menu_frame, "AHL",
+                              self.open_ahl_stats_window,
+                              tooltip="AHL Stats: top farm performers -- who's cooking on the minors")
+
+        # League History button
+        self._create_nav_pill(left_menu_frame, "History",
+                              self.open_league_history_window,
+                              tooltip="League History: champions, awards, career leaders, Hall of Fame")
+
         # GM Options as standalone button
-        self._create_nav_pill(right_menu_frame, "GM Options",
-                              self.open_gm_options_window, side="right",
+        self._create_nav_pill(left_menu_frame, "GM Options",
+                              self.open_gm_options_window,
                               tooltip="GM Options: trade block, waivers, captains, and extensions")
         
         # Settings as its own button
-        self._create_nav_pill(right_menu_frame, "Settings",
-                              self.open_settings_window, side="right",
+        self._create_nav_pill(left_menu_frame, "Settings",
+                              self.open_settings_window,
                               tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
     
+        # Far right: Next Day button -- always fixed, always visible
+        # (except the visualizer takes over the whole window).
+        next_frame = tk.Frame(menu_bar, bg=menu_bg)
+        next_frame.pack(side="right", padx=(6, 2))
+        self._next_day_btn = self._create_nav_pill(next_frame, "Next Day",
+                                                   self._on_continue_pressed,
+                                                   tooltip="Advance to the next day")
+        self.refresh_next_day_button()
+
+    # ------------------------------------------------------------------
+    # Screen navigation history (back/forward)
+    # ------------------------------------------------------------------
+    def _push_screen_history(self, screen_id):
+        """Record a screen visit for back/forward navigation."""
+        hist = getattr(self, '_screen_history', None)
+        if hist is None:
+            self._screen_history = hist = []
+            self._history_index = -1
+        # Truncate forward history on a new navigation
+        if self._history_index < len(hist) - 1:
+            del hist[self._history_index + 1:]
+        # Avoid duplicate consecutive entries
+        if not hist or hist[-1] != screen_id:
+            hist.append(screen_id)
+            # Cap history length
+            if len(hist) > 50:
+                del hist[0]
+        self._history_index = len(hist) - 1
+        self._update_nav_history_buttons()
+
+    def _update_nav_history_buttons(self):
+        """Enable/disable back/forward buttons based on history position."""
+        try:
+            hist = getattr(self, '_screen_history', []) or []
+            idx = getattr(self, '_history_index', -1)
+            if hasattr(self, '_back_btn'):
+                self._back_btn.configure(state='normal' if idx > 0 else 'disabled')
+            if hasattr(self, '_fwd_btn'):
+                self._fwd_btn.configure(
+                    state='normal' if 0 <= idx < len(hist) - 1 else 'disabled')
+        except Exception:
+            pass
+
+    def _nav_back(self):
+        """Go back to the previous screen."""
+        hist = getattr(self, '_screen_history', []) or []
+        idx = getattr(self, '_history_index', -1)
+        if idx > 0:
+            self._history_index = idx - 1
+            self._open_screen_by_id(hist[idx - 1])
+        self._update_nav_history_buttons()
+
+    def _nav_forward(self):
+        """Go forward to the next screen."""
+        hist = getattr(self, '_screen_history', []) or []
+        idx = getattr(self, '_history_index', -1)
+        if 0 <= idx < len(hist) - 1:
+            self._history_index = idx + 1
+            self._open_screen_by_id(hist[idx + 1])
+        self._update_nav_history_buttons()
+
+    def _open_screen_by_id(self, screen_id):
+        """Re-open a screen from history without pushing a new entry."""
+        # Map screen IDs to their opener methods
+        opener_map = {
+            'dashboard': self.show_dashboard,
+            'inbox': self.open_inbox_window,
+            'roster': self.open_roster_window,
+            'schedule': self.open_schedule_window,
+            'calendar': self.open_calendar_window,
+            'news': self.open_news_window,
+            'finances': self.open_finances_window,
+            'staff': self.open_staff_management_window,
+            'morale': self.open_morale_window,
+            'media': self.open_media_center,
+            'playoffs': self.open_playoffs_window,
+            'development': self.open_development_window,
+            'practice': self.open_practice_center,
+            'tactics': self.open_tactics_window,
+            'stats': self.open_stats_standings_window,
+            'ahl': self.open_ahl_stats_window,
+            'history': self.open_league_history_window,
+            'gm_options': self.open_gm_options_window,
+            'settings': self.open_settings_window,
+            'free_agency': self.open_free_agency_window,
+            'trade': self.open_trade_window,
+            'waivers': self.open_waivers_window,
+            'draft': self.open_draft_day_central,
+        }
+        opener = opener_map.get(screen_id)
+        if opener:
+            # Suppress history push during history navigation
+            self._suppress_history = True
+            try:
+                opener()
+            finally:
+                self._suppress_history = False
+        self._update_nav_history_buttons()
+
+    def refresh_next_day_button(self):
+        """Update the fixed Next Day button label/state from continue state."""
+        try:
+            if self._mp_host_mode() or self._mp_client_mode():
+                # MP ready-state labels are painted by
+                # _mp_refresh_continue_ui (which covers _next_day_btn too).
+                return
+            btn = getattr(self, '_next_day_btn', None)
+            if btn is None or not btn.winfo_exists():
+                return
+            label, blockers = self.get_continue_state()
+            # Show blocker count on the button when blocked
+            text = f"{label} ({len(blockers)})" if blockers else label
+            btn.configure(text=text)
+        except Exception:
+            pass
     def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
         """Create a pill-style navigation button for the top menu bar.
 
@@ -4068,7 +3498,7 @@ class HockeyManagerGUI(tk.Tk):
         # Add menu items with conditional logic
         for item_text, command in menu_items.items():
             # Special handling for Trade Deadline Center - only show on deadline day
-            if "Trade Deadline" in item_text and not is_trade_deadline_day():
+            if "Trade Deadline" in item_text and not self.is_trade_deadline_day():
                 continue  # Skip this menu item if it's not deadline day
             # Draft Day Central - only show on draft days
             if "Draft Day Central" in item_text and not is_draft_day(self.current_date):
@@ -4144,7 +3574,7 @@ class HockeyManagerGUI(tk.Tk):
         if self._qol_modal_open():
             return None
         try:
-            self.simulate_day()
+            self._on_continue_pressed()
         except Exception:
             pass
         return 'break'
@@ -4171,6 +3601,10 @@ class HockeyManagerGUI(tk.Tk):
         while w is not None and id(w) not in seen:
             seen.add(id(w))
             if isinstance(w, tk.Toplevel):
+                target = w
+                break
+            # in-game popup cards live inside the main window now
+            if type(w).__name__ == "InGamePopup":
                 target = w
                 break
             w = getattr(w, 'master', None)
@@ -4246,7 +3680,7 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_qol_cheat_open', False):
             return
         self._qol_cheat_open = True
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Keyboard Shortcuts")
         dlg.transient(self)
         dlg.resizable(False, False)
@@ -4373,6 +3807,7 @@ class HockeyManagerGUI(tk.Tk):
         self.standings_tree.grid(row=1, column=0, sticky='nsew', padx=10, pady=10)  # Use grid instead of pack
         
     # Enhanced EHM-style panel methods
+
     def _create_enhanced_player_focus_panel(self, parent):
         """Enhanced player focus panel with more detailed information and better space usage."""
         panel = self._create_panel(parent, "⭐ Player Spotlight", 0, 0)
@@ -4477,7 +3912,7 @@ class HockeyManagerGUI(tk.Tk):
         
         self.recent_preview_text = tk.Text(messages_frame, height=6, width=20,
                                          bg=self.CONTENT_BG, fg=self.TEXT_COLOR,
-                                         font=(self.FONT_FAMILY, 8), wrap='word',
+                                         font=(self.FONT_FAMILY, 9), wrap='word',
                                          state='disabled', relief='flat', 
                                          borderwidth=0, cursor='arrow')
         self.recent_preview_text.pack(fill='both', expand=True)
@@ -4525,7 +3960,7 @@ class HockeyManagerGUI(tk.Tk):
         # Salary cap
         ttk.Label(details_frame, text="Salary Cap:", style='Info.TLabel', 
                  font=(self.FONT_FAMILY, 8)).grid(row=0, column=1, sticky='w')
-        self.cap_value_label = ttk.Label(details_frame, text="$83.5M", style='PlayerInfo.TLabel', 
+        self.cap_value_label = ttk.Label(details_frame, text="$104M", style='PlayerInfo.TLabel', 
                                        font=(self.FONT_FAMILY, 9, 'bold'))
         self.cap_value_label.grid(row=1, column=1, sticky='w')
         
@@ -4730,7 +4165,7 @@ class HockeyManagerGUI(tk.Tk):
             return
             
         # Create selection dialog
-        selection_window = tk.Toplevel(self)
+        selection_window = InGamePopup(self)
         selection_window.title("Select Player Focus")
         selection_window.configure(background=self.BG_COLOR)
         selection_window.geometry("400x500")
@@ -4935,13 +4370,18 @@ class HockeyManagerGUI(tk.Tk):
             self.send_email_to_user(league_email)
         
         # 6. Trade deadline notifications (based on actual calendar)
-        if self.current_date.month == 3:  # March - trade deadline season
-            trade_deadline = date(self.current_date.year, 3, 8)
-            days_to_deadline = (trade_deadline - self.current_date).days
+        try:
+            from trade_deadline_manager import trade_deadline_date as _tdd
+            _dl = _tdd(getattr(self, "league", None),
+                       deadline_year=self.current_date.year)
+        except Exception:
+            _dl = date(self.current_date.year, 3, 8)
+        if _dl is not None:
+            days_to_deadline = (_dl - self.current_date).days
             if 0 <= days_to_deadline <= 7 and random.random() < 0.5:
                 deadline_email = EmailGenerator.create_league_announcement_email(
                     f"Trade Deadline Alert - {days_to_deadline} Days Remaining",
-                    f"The NHL trade deadline is in {days_to_deadline} days. All trades must be completed by 3:00 PM EST on March 8th.\n\n"
+                    f"The NHL trade deadline is in {days_to_deadline} days. All trades must be completed by 3:00 PM EST on {_dl.strftime('%B %-d')}.\n\n"
                     f"Current roster size: {len(self.user_team.roster)} players\n"
                     f"Salary cap space: ${self.user_team.cap_space:,}"
                 )
@@ -5017,7 +4457,7 @@ class HockeyManagerGUI(tk.Tk):
     
     def _show_email_notification(self, message):
         """Show a popup notification for urgent emails."""
-        notification_window = tk.Toplevel(self)
+        notification_window = InGamePopup(self)
         notification_window.title("New Email")
         notification_window.geometry("400x200")
         notification_window.configure(background=self.BG_COLOR)
@@ -5078,28 +4518,29 @@ class HockeyManagerGUI(tk.Tk):
         future_games = [g for g in user_games if g[0] >= self.current_date][:5]
         
         # Add past games
+        matchup_index = self._results_by_matchup_index()
         for game_date, home, away in past_games:
             opponent = away.team_name if self.user_team == home else f"@ {home.team_name}"
             
-            # Find game result
+            # Find game result: O(1) matchup lookup
+            # (was: full scan of game_results per past game)
             result = ""
-            for game_result in self.game_results:
-                if (game_result['date'] == game_date and 
-                    game_result['home_team'] == home and 
-                    game_result['away_team'] == away):
-                    # Show score from user team perspective (user score first)
-                    if self.user_team == home:
-                        user_score = game_result['home_score']
-                        opp_score = game_result['away_score']
-                    else:
-                        user_score = game_result['away_score']
-                        opp_score = game_result['home_score']
-                    
-                    if game_result['winner'] == self.user_team:
-                        result = f"W {user_score}-{opp_score}"
-                    else:
-                        result = f"L {user_score}-{opp_score}"
-                    break
+            date_key = self._result_date_key(game_date)
+            game_result = matchup_index.get(
+                (date_key, id(home), id(away))) if date_key else None
+            if game_result is not None:
+                # Show score from user team perspective (user score first)
+                if self.user_team == home:
+                    user_score = game_result['home_score']
+                    opp_score = game_result['away_score']
+                else:
+                    user_score = game_result['away_score']
+                    opp_score = game_result['home_score']
+                
+                if game_result['winner'] == self.user_team:
+                    result = f"W {user_score}-{opp_score}"
+                else:
+                    result = f"L {user_score}-{opp_score}"
             
             # If no result found, check if this is because the game hasn't been simulated yet
             if not result:
@@ -5136,7 +4577,7 @@ class HockeyManagerGUI(tk.Tk):
     def update_finances_panel(self):
         _live_cap = self.get_live_cap()
         finance_text = (
-            f"{'Player Budget:':<18}${PLAYER_BUDGET:,}\n"
+            f"{'Player Budget:':<18}${_live_cap:,}\n"
             f"{'Salary Cap:':<18}${_live_cap:,}\n"
             f"{'Total Salaries:':<18}${self.user_team.payroll:,}\n"
             f"{'Cap Space:':<18}${self.user_team.cap_space:,}"
@@ -5228,7 +4669,7 @@ class HockeyManagerGUI(tk.Tk):
         if 'game_results' in self.open_windows and self.open_windows['game_results'].winfo_exists():
             self.open_windows['game_results'].destroy()
             
-        window = tk.Toplevel(self)
+        window = InGamePopup(self)
         window.title(f"Game Results - {game_result['date'].strftime('%B %d, %Y')}")
         window.geometry("1200x800")
         window.configure(bg=self.BG_COLOR)
@@ -5330,10 +4771,10 @@ class HockeyManagerGUI(tk.Tk):
         settings = self.get_settings()
         use_game_viewer = settings.get('simulation', {}).get('use_game_viewer', False)
         if use_game_viewer and 'event_log' in game_result and game_result['event_log']:
-            viewer_btn = tk.Button(action_frame, text="Launch EHM Game Viewer", 
+            viewer_btn = tk.Button(action_frame, text="Launch Game Viewer", 
                                   font=('Segoe UI', 10, 'bold'), bg=self.ACCENT_COLOR, fg='white',
                                   activebackground=self.ACCENT_ACTIVE, relief='flat', padx=20, pady=8,
-                                  command=lambda: self._launch_ehm_replay_viewer(game_result))
+                                  command=lambda: self._launch_standalone_viewer(game_result.get('event_log', [])))
             viewer_btn.pack(side='left')
         
         # Close button
@@ -5714,29 +5155,6 @@ class HockeyManagerGUI(tk.Tk):
         
         return frame
 
-    def _launch_ehm_replay_viewer(self, game_result):
-        """Launch the EHM game viewer for replay viewing."""
-        try:
-            # Use the EHM integration for replay viewing
-            from ehm_integration import EHMReplayViewer
-            
-            # Extract teams and event log from game result
-            home_team = game_result.get('home_team')
-            away_team = game_result.get('away_team')
-            event_log = game_result.get('event_log', [])
-            
-            if not event_log:
-                print("No event log found in game result")
-                return
-                
-            # Launch the EHM replay viewer
-            viewer = EHMReplayViewer(self.root, home_team, away_team, event_log)
-            
-        except Exception as e:
-            print(f"Error launching EHM replay viewer: {e}")
-            # Fallback to old viewer if needed
-            self._launch_standalone_viewer(game_result.get('event_log', []))
-
     def _launch_standalone_viewer(self, event_log):
         """Launch the standalone game viewer window"""
         try:
@@ -5843,7 +5261,7 @@ class HockeyManagerGUI(tk.Tk):
     def _ask_game_mode_dialog(self, home_team, away_team):
         """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
         choice = {'mode': 'quick'}
-        dlg = tk.Toplevel(self)
+        dlg = InGamePopup(self)
         dlg.title("Game Day")
         dlg.configure(bg="#0e0e11")
         dlg.resizable(False, False)
@@ -5972,10 +5390,10 @@ class HockeyManagerGUI(tk.Tk):
             
         except ImportError as e:
             print(f"Error importing season flow UI: {e}")
-            tk.messagebox.showerror("Error", f"Could not load season flow controls: {e}")
+            messagebox.showerror("Error", f"Could not load season flow controls: {e}")
         except Exception as e:
             print(f"Error showing season flow panel: {e}")
-            tk.messagebox.showerror("Error", f"Failed to show season flow panel: {e}")
+            messagebox.showerror("Error", f"Failed to show season flow panel: {e}")
             
     def _hide_season_flow_panel(self):
         """Hide the automated season flow control panel"""
@@ -6004,12 +5422,12 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_performance_monitor(self):
         """Open the performance monitoring window"""
-        if 'performance_monitor' not in self.open_windows or not self.open_windows['performance_monitor'].winfo_exists():
-            from performance_monitor import PerformanceMonitorWindow
-            self.open_windows['performance_monitor'] = PerformanceMonitorWindow(self)
-        self.open_windows['performance_monitor'].focus_set()
+        from performance_monitor import PerformanceMonitorView
+        return self.show_screen("performance_monitor", "Performance Monitor",
+                                PerformanceMonitorView)
         
     # Enhanced panel update methods
+
     def update_enhanced_schedule_panel(self):
         """Update the enhanced schedule panel."""
         if hasattr(self, 'schedule_tree'):
@@ -6028,7 +5446,8 @@ class HockeyManagerGUI(tk.Tk):
                 if game_date is None or home == 'NHL_EVENT':
                     continue
                 if self.user_team in (home, away):
-                    user_games.append((game_date, home, away))
+                    user_games.append((game_date, home, away,
+                                       bool(isinstance(item, dict) and item.get('preseason'))))
             
             # Sort by date
             user_games.sort(key=lambda x: x[0])
@@ -6038,10 +5457,12 @@ class HockeyManagerGUI(tk.Tk):
             future_games = [g for g in user_games if g[0] >= self.current_date][:5]
             
             # Add past games
-            for game_date, home, away in past_games:
+            for game_date, home, away, is_pre in past_games:
                 opponent = away if self.user_team == home else home
                 location = "vs" if self.user_team == home else "@"
                 result = "W 3-2"  # Placeholder result
+                if is_pre:
+                    result += " (Pre)"
                 
                 self.schedule_tree.insert('', 'end', values=(
                     game_date.strftime("%m/%d"),
@@ -6051,7 +5472,7 @@ class HockeyManagerGUI(tk.Tk):
                 ))
             
             # Add future games
-            for game_date, home, away in future_games:
+            for game_date, home, away, is_pre in future_games:
                 opponent = away if self.user_team == home else home
                 location = "vs" if self.user_team == home else "@"
                 
@@ -6059,7 +5480,7 @@ class HockeyManagerGUI(tk.Tk):
                     game_date.strftime("%m/%d"),
                     opponent.team_name,
                     location,
-                    "—"
+                    "Pre" if is_pre else "—"
                 ))
                 
     def update_enhanced_standings_panel(self):
@@ -6309,48 +5730,40 @@ class HockeyManagerGUI(tk.Tk):
             messagebox.showerror("Game Viewer Error", f"Error launching game viewer: {str(e)}")
             print(f"Game viewer error: {e}")
     
-    def launch_ehm_viewer(self):
-        """Launch the EHM-style game with enhanced simulation"""
+    def _cap_compliance_blocker(self):
+        """Return a blocker dict if the NHL roster exceeds the salary cap.
+
+        Uses the central cap accounting (roster salaries + all dead-cap
+        penalties), so the blocker agrees with trade validation and the
+        cap UI -- AI and user see identical numbers.
+        """
+        team = getattr(self, 'user_team', None)
+        if team is None:
+            return None
         try:
-            # Import EHM integration
-            from ehm_integration import EHMGameIntegration
-            
-            # Initialize EHM integration if not already done
-            if not hasattr(self, 'ehm_integration'):
-                self.ehm_integration = EHMGameIntegration(self)
-            
-            # Get teams for the game (use real teams from game manager)
-            teams = list(self.game_manager.league.teams)
-            if len(teams) >= 2:
-                home_team = teams[0]
-                away_team = teams[1]
-            else:
-                # Create sample teams if needed
-                from game_classes import Team
-                home_team = Team("Thunderbirds")
-                away_team = Team("Eagles")
-                
-                # Add sample players
-                from game_classes import Player, PlayerPosition
-                for team in [home_team, away_team]:
-                    for _ in range(25):  # 25 players per team
-                        position = random.choice(list(PlayerPosition))
-                        player = Player(
-                            first_name=random.choice(FIRST_NAMES),
-                            last_name=random.choice(LAST_NAMES),
-                            age=random.randint(18, 35),
-                            primary_position=position
-                        )
-                        team.roster.append(player)
-            
-            # Launch EHM game viewer
-            self.ehm_integration.launch_ehm_game_viewer(home_team, away_team)
-            
-        except Exception as e:
-            messagebox.showerror("EHM Viewer Error", f"Error launching EHM viewer: {str(e)}")
-            print(f"EHM viewer error: {e}")
-            import traceback
-            traceback.print_exc()
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(team)
+        except Exception:
+            return None
+        if not bd["over_cap"]:
+            return None
+        over = -bd["space"]
+        detail = (f"Cap charge ${bd['total']/1e6:.2f}M is ${over/1e6:.2f}M over "
+                  f"the ${bd['cap']/1e6:.2f}M cap "
+                  f"(roster ${bd['roster']/1e6:.2f}M")
+        if bd["dead_cap"]:
+            detail += f" + dead cap ${bd['dead_cap']/1e6:.2f}M"
+        detail += "). Shed salary via trade, waivers, or demotion before advancing."
+        return {
+            'id': 'salary_cap',
+            'title': 'Roster exceeds salary cap',
+            'detail': detail,
+            'action': ('Open Trade Center', self.open_trade_window),
+        }
+
+    def is_over_cap(self):
+        """True when the user's total cap charge exceeds the cap."""
+        return self._cap_compliance_blocker() is not None
 
     def get_continue_state(self):
         """Football Manager-style continue state.
@@ -6377,8 +5790,61 @@ class HockeyManagerGUI(tk.Tk):
                            'advancing the day.'),
                 'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
             })
+        # Salary cap compliance: an over-cap roster must shed salary before
+        # the day can advance (real NHL rule -- rosters must be cap-compliant).
+        try:
+            cap_blocker = self._cap_compliance_blocker()
+            if cap_blocker:
+                blockers.append(cap_blocker)
+        except Exception:
+            pass
+        # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --
+        # chosen by the user, never auto-repaired -- before the day can
+        # advance. The action opens the mandatory picker directly.
+        # Fantasy-draft deferral: after the draft, rosters are letter-less
+        # by design until the first preseason game day arms the picker, so
+        # the blocker stays suppressed for that window.
+        try:
+            if gm is not None and not gm._captaincy_blocker_suppressed():
+                _ut = getattr(gm, 'user_team', None)
+                if _ut is not None and (
+                        getattr(gm, '_captaincy_choice_pending', False)
+                        or gm._captaincy_needs_choice(_ut)):
+                    blockers.append({
+                        'id': 'captaincy_choice',
+                        'title': 'Name your captains',
+                        'detail': ('NHL Rule 6.1: your club needs exactly one '
+                                   'captain (C) and two alternates (A) before '
+                                   'the season can continue.'),
+                        'action': ('Choose Captains',
+                                   lambda: gm._require_captaincy_choice(_ut)),
+                    })
+        except Exception:
+            pass
         if blockers:
             return ("Continue", blockers)
+        # Trade deadline day: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET). Each press advances the clock one
+        # increment -- instant AI answers, league deals, countdown.
+        try:
+            if self.is_trade_deadline_day():
+                from trade_deadline_manager import get_deadline_manager
+                _mgr = get_deadline_manager(self.game_manager)
+                if not _mgr.clock_active(self.current_date):
+                    return ("Deadline Day", [])
+                if not _mgr._clock_store().get('expired'):
+                    return (f"+30m ({_mgr.clock_display()})", [])
+        except Exception:
+            pass
+        # Game-day label: pressing it opens the game-day inbox bundle
+        # (presser + team talk + Watch/Quick choice) instead of simming.
+        try:
+            if (self._career_prompts_allowed()
+                    and not getattr(self, '_game_day_resolution', None)
+                    and self._is_user_game_day()):
+                return ("Game Day", [])
+        except Exception:
+            pass
         return ("Next Day", [])
 
     def _show_continue_blockers(self, blockers):
@@ -6387,14 +5853,23 @@ class HockeyManagerGUI(tk.Tk):
         try:
             from modern_ui import AppColors, AppFonts, AppButton
         except Exception:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showwarning(
                 "Action Required",
                 "\n\n".join(b.get('title', '') + "\n" + b.get('detail', '')
                             for b in blockers))
             return
 
-        dlg = tk.Toplevel(self)
+        # MULTIPLAYER: never mutate game state while a snapshot worker is
+        # serializing it (see MultiplayerHost.broadcast_state_async). The
+        # window is ~1-3s; the next Continue press will go through.
+        if getattr(self, 'mp_host', None) is not None and \
+                self.mp_host.snapshot_busy:
+            self._mp_toast("Syncing with clients — one moment…")
+            return
+
+        # Prevent multiple clicks by disabling button during simulation
+        dlg = InGamePopup(self)
         dlg.title("Action Required")
         dlg.configure(bg=AppColors.BG)
         dlg.transient(self)
@@ -6468,6 +5943,7 @@ class HockeyManagerGUI(tk.Tk):
             return
 
         # Legacy fallback: plain tk.Button-style widgets only.
+        # Prevent multiple clicks by disabling button during simulation
         continue_btn = None
         if hasattr(self, 'continue_btn'):
             continue_btn = self.continue_btn
@@ -6486,13 +5962,316 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
+    # ------------------------------------------------------------------
+    # Trade deadline day: 30-minute game clock (9 AM -> 3 PM ET)
+    # ------------------------------------------------------------------
+
+    def is_trade_deadline_day(self):
+        """Game-date check: is today trade deadline day (derived)?"""
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            return get_deadline_manager(self.game_manager).is_deadline_day(
+                self.current_date)
+        except Exception:
+            return False
+
+    def _maybe_run_deadline_clock_tick(self):
+        """Advance the deadline clock one 30-minute increment instead of a
+        full day sim. Returns True when a tick ran (the day did NOT advance
+        and callers should return), False to continue the normal sim."""
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            mgr = get_deadline_manager(self.game_manager)
+        except Exception:
+            return False
+        if not mgr.is_deadline_day(self.current_date):
+            return False
+        if not mgr.clock_active(self.current_date):
+            mgr.start_clock(self.current_date)
+            # Tentpole prompt at 9 AM, not 3 PM: the event-day hub asks
+            # once whether to open the Trade Deadline Center. (The normal
+            # maintenance pass that fires it only runs after the clock
+            # expires, which would be too late.)
+            try:
+                self._check_for_event_day()
+            except Exception as e:
+                print(f"deadline day event prompt failed (non-fatal): {e}")
+        tick = mgr.advance_clock()
+        # Instant AI answers: any due negotiations resolve right now.
+        try:
+            import trade_negotiation as _tn
+            _tn.process_due_negotiations(self)
+        except Exception as e:
+            print(f"deadline tick negotiation processing failed (non-fatal): {e}")
+        # League-wide dealing for this 30-minute window.
+        try:
+            self._deadline_tick_activity(mgr, tick)
+        except Exception as e:
+            print(f"deadline tick activity failed (non-fatal): {e}")
+        if tick['expired']:
+            # 3 PM: the deadline passes. Lock trading, then let the normal
+            # day flow continue (maintenance, games, date advance).
+            self._close_trade_deadline(mgr)
+            return False
+        # Refresh the dashboard so the countdown + button label update.
+        try:
+            self._refresh_dashboard()
+        except Exception:
+            pass
+        try:
+            dl = self.open_windows.get('trade_deadline')
+            if dl is not None and dl.winfo_exists():
+                dl.refresh()
+        except Exception:
+            pass
+        return True
+
+    def _deadline_tick_activity(self, mgr, tick):
+        """Real AI-vs-AI trades for one 30-minute deadline window, scaled
+        by urgency as 3 PM approaches. Deals execute for real (rosters
+        change) and break as news."""
+        import random
+        import trade_engine as te
+        import trade_storylines as tsl
+        league = getattr(getattr(self, 'game_manager', None), 'league', None) \
+            or getattr(self, 'league', None)
+        if league is None:
+            return
+        user_name = getattr(getattr(self, 'user_team', None), 'team_name', '')
+        teams = [t for t in getattr(league, 'teams', [])
+                 if getattr(t, 'team_name', '') != user_name
+                 and getattr(t, 'league_name', 'National Hockey League')
+                 == 'National Hockey League']
+        if not teams:
+            return
+        prog = mgr.clock_progress()
+        # 0-3 real deals per window, more as the deadline nears.
+        random.shuffle(teams)
+        deals = 0
+        for team in teams:
+            if deals >= 3:
+                break
+            if random.random() > tsl.ai_initiative_odds(self, team) * 0.45:
+                continue
+            if self._try_ai_ai_deadline_deal(team, teams, te, tsl, mgr):
+                deals += 1
+        # Trade-market bidding rounds advance once per deadline tick
+        # (additive; the organic tick cap above is untouched).
+        try:
+            import trade_market
+            trade_market.process_deadline_tick(
+                self, getattr(getattr(self, 'game_manager', None), 'league', None)
+                or getattr(self, 'league', None), mgr)
+        except Exception as e:
+            print(f"Trade market tick error (non-fatal): {e}")
+
+    def _try_ai_ai_deadline_deal(self, initiator, teams, te, tsl, mgr):
+        """One AI-initiated deadline deal. Seller moves a veteran for a
+        pick/prospect; the buyer side goes through the real AI evaluation
+        (ai_consider_trade + situational context). Returns True on a deal."""
+        import random
+        from game_classes import DraftPick
+        iname = getattr(initiator, 'team_name', '')
+        stance = tsl.stance(self, iname)
+        # Pair sellers with buyers; anyone else shops opportunistically.
+        partners = [t for t in teams if t is not initiator]
+        random.shuffle(partners)
+        seller, buyer = None, None
+        if stance == 'seller':
+            seller = initiator
+            buyer = next((t for t in partners
+                          if tsl.stance(self, getattr(t, 'team_name', ''))
+                          in ('buyer', 'bubble')), None)
+        else:
+            buyer = initiator
+            seller = next((t for t in partners
+                           if tsl.stance(self, getattr(t, 'team_name', ''))
+                           == 'seller'), None)
+        if seller is None or buyer is None:
+            return False
+        # Seller's piece: highest-value veteran (30+) on an expiring-ish deal.
+        # Clause-aware: a veteran whose NTC/NMC vetoes the move to this
+        # buyer is skipped unless he'd waive for them (waiver stamped so
+        # the trade preflight honors it).
+        vets = [p for p in getattr(seller, 'roster', [])
+                if getattr(p, 'age', 0) >= 29]
+        if not vets:
+            vets = list(getattr(seller, 'roster', []))
+        if not vets:
+            return False
+        try:
+            vets.sort(key=lambda p: te.player_trade_value(p), reverse=True)
+        except Exception:
+            pass
+        piece = None
+        for _vet in vets:
+            _vetoes = te.trade_vetoes(seller, buyer, [_vet])
+            if not _vetoes:
+                piece = _vet
+                break
+            _ok, _why = te.will_waive_ntc(_vet, seller, buyer)
+            if _ok:
+                try:
+                    _vet.contract.ntc_waiver_for = getattr(
+                        buyer, 'team_name', '')
+                except Exception:
+                    pass
+                piece = _vet
+                break
+            print(f"deadline: {getattr(_vet, 'full_name', '?')} vetoed "
+                  f"a move to {getattr(buyer, 'team_name', '?')} ({_why})")
+        if piece is None:
+            return False
+        # Buyer's payment: a mid-round pick they own, else a prospect.
+        payment = None
+        try:
+            for yr, picks in getattr(buyer, 'draft_picks', {}).items():
+                for pk in picks:
+                    if (isinstance(pk, DraftPick)
+                            and getattr(pk, 'current_team', '')
+                            == getattr(buyer, 'team_name', '')
+                            and pk.round in (2, 3, 4)):
+                        payment = pk
+                        break
+                if payment:
+                    break
+        except Exception:
+            payment = None
+        if payment is None:
+            prospects = [p for p in getattr(buyer, 'roster', [])
+                         if getattr(p, 'age', 99) <= 23]
+            try:
+                prospects.sort(key=lambda p: te.player_trade_value(p))
+            except Exception:
+                pass
+            payment = prospects[0] if prospects else None
+        if payment is None:
+            return False
+        sname = getattr(seller, 'team_name', '')
+        bname = getattr(buyer, 'team_name', '')
+        try:
+            sit = tsl.situational_context(self, buyer, seller)
+            # NOTE: user_assets = what the buyer RECEIVES ([piece]),
+            # partner_assets = what the buyer GIVES ([payment]).
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
+                                        user_team=seller, patience=1.0,
+                                        situational=sit)
+        except TypeError:
+            # Older ai_consider_trade without the situational kwarg
+            resp = te.ai_consider_trade(buyer, [piece], [payment],
+                                        user_team=seller, patience=1.0)
+        except Exception:
+            return False
+        if resp.decision != 'accept':
+            # Deal died: the stamped single-use waiver must not survive it.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            return False
+        try:
+            trade = te.execute_trade(seller, buyer, [piece], [payment],
+                                     date_str=self.current_date.isoformat(),
+                                     league=getattr(self, "league", None))
+        except Exception:
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            return False
+        if getattr(trade, 'summary', '').startswith("BLOCKED:"):
+            # Clause veto at completion -- nothing moved, announce nothing.
+            try:
+                if piece is not None and getattr(piece, "contract", None) \
+                        is not None:
+                    piece.contract.ntc_waiver_for = ""
+            except Exception:
+                pass
+            print(f"deadline deal blocked: {trade.summary}")
+            return False
+        # (Fresh start + steal watch now fire authoritatively inside
+        # trade_engine.execute_trade -- every trade path gets them.)
+        # Break the news: ticker + inbox.
+        pay_label = te.asset_label(payment)
+        piece_label = te.asset_label(piece)
+        story = (f"TRADE: {bname} acquires {piece_label} from {sname} "
+                 f"for {pay_label}.")
+        try:
+            mgr.breaking_news.append({'time': mgr.clock_display(),
+                                      'story': story})
+        except Exception:
+            pass
+        try:
+            from email_generator import EmailGenerator
+            email = EmailGenerator.create_league_announcement_email(
+                f"🚨 Deadline Deal: {piece_label} to {bname}", story)
+            email.is_urgent = True
+            email.priority = 4
+            self.send_email_to_user(email)
+        except Exception:
+            pass
+        try:
+            mgr.deadline_stats['total_trades'] += 1
+            mgr.deadline_stats['players_moved'] += 1
+        except Exception:
+            pass
+        print(f"⏰ {story}")
+        return True
+
+    def _close_trade_deadline(self, mgr):
+        """3 PM: lock trading, announce the freeze, kill the clock."""
+        try:
+            mgr.deadline_passed = True
+        except Exception:
+            pass
+        try:
+            from email_generator import EmailGenerator
+            email = EmailGenerator.create_league_announcement_email(
+                "Trade Deadline Has Passed",
+                "The 3:00 PM ET trade deadline has passed. No further trades "
+                "may be completed this season.\n\n"
+                f"League deals today: "
+                f"{mgr.deadline_stats.get('total_trades', 0)}.")
+            email.is_urgent = True
+            email.priority = 4
+            self.send_email_to_user(email)
+        except Exception:
+            pass
+        print("⏰ Trade deadline passed (3:00 PM ET). Trading locked.")
+
     def simulate_day(self):
         """Completely reworked daily simulation that properly handles all scenarios"""
+        # MULTIPLAYER (Phase 2) advance gate: in host mode the day advances
+        # ONLY through the EHM ready gate (_mp_fire_authorized_advance sets
+        # _mp_advance_authorized). Any other path into here becomes a ready
+        # vote instead. Clients never advance -- they vote via Ready.
+        if getattr(self, 'mp_host', None) is not None \
+                and not getattr(self, '_mp_advance_authorized', False):
+            self._mp_toggle_host_ready()
+            return
+        if getattr(self, 'mp_client', None) is not None \
+                and getattr(self, 'mp_host', None) is None:
+            self._mp_toast("Only the host advances days -- "
+                           "use Ready to vote for the advance.")
+            return
         # BLOCKERS FIRST: pressing tasks (e.g. an active fantasy draft) must
         # be completed before the day advances. Show what is blocking and
         # offer a jump to it -- never silently do nothing.
         _label, blockers = self.get_continue_state()
         if blockers:
+            # A blocker that appeared after the host readied must rescind
+            # the vote -- the day can't advance like this.
+            if getattr(self, '_mp_host_ready', False):
+                self._mp_host_ready = False
+                try:
+                    _payload = self.mp_host.broadcast_advance_status(False)
+                except Exception:
+                    _payload = None
+                self._mp_refresh_continue_ui(_payload)
             self._show_continue_blockers(blockers)
             return
 
@@ -6504,7 +6283,39 @@ class HockeyManagerGUI(tk.Tk):
             return  # Already processing, ignore this click
         self._set_continue_feedback(True, "Starting simulation...")
 
+        # TRADE DEADLINE DAY: the day runs on a 30-minute game clock
+        # (9:00 AM -> 3:00 PM ET) instead of a full-day sim. Each press of
+        # Continue advances the clock one increment: AI GMs answer trade
+        # talks instantly, league deals break, and the countdown ticks
+        # toward the 3 PM close. When the clock expires the day finishes
+        # normally (games sim, date advances).
+        if self._maybe_run_deadline_clock_tick():
+            self._set_continue_feedback(False)
+            # MP: a clock tick IS the gated advance for deadline day -- sync
+            # the clients (trades break on ticks). Ready-cycle reset happens
+            # in _mp_fire_authorized_advance's finally block.
+            if getattr(self, 'mp_host', None) is not None \
+                    and getattr(self, '_mp_advance_authorized', False):
+                self._mp_after_deadline_tick()
+            return
+
+        # Resuming after the game-day inbox bundle: daily maintenance
+        # (scout report, career daily, ...) already ran before the bundle
+        # opened, so skip it -- the day must not double-process.
+        _resuming_after_bundle = bool(getattr(self, '_continue_after_bundle', False))
+        if _resuming_after_bundle:
+            self._continue_after_bundle = False
+
         try:
+            # PLAYOFF PHASE (date-driven): once the bracket is alive, the
+            # date keeps advancing -- each Next Day sims that day's
+            # scheduled playoff games through the bracket. Bracket
+            # controls keep working: either path driving first wins
+            # (exactly-once is enforced in try_play_scheduled_game).
+            if self._playoffs_in_progress():
+                self._simulate_playoff_day()
+                return
+
             # Check for season end by games completed (primary trigger).
             # The date cutoff is only a safety net set AFTER the last scheduled
             # game, since the generated schedule can run past April 15.
@@ -6529,8 +6340,9 @@ class HockeyManagerGUI(tk.Tk):
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
-            self._set_continue_feedback(True, "Processing daily tasks...")
-            self._process_daily_maintenance()
+            if not _resuming_after_bundle:
+                self._set_continue_feedback(True, "Processing daily tasks...")
+                self._process_daily_maintenance()
             
             # Get today's games - OPTIMIZED with early break and caching
             todays_games = []
@@ -6579,6 +6391,11 @@ class HockeyManagerGUI(tk.Tk):
                             # Skip if date is past today
                             if item_date and item_date > self.current_date:
                                 break
+                            # Playoff games live on the schedule for display
+                            # but are simmed through the playoff bracket --
+                            # never double-sim them here.
+                            if item.get('playoff'):
+                                continue
                             # Process if date matches today
                             if item_date == self.current_date and item.get('event_type') != 'NHL_EVENT':
                                 todays_games.append(item)
@@ -6595,6 +6412,90 @@ class HockeyManagerGUI(tk.Tk):
                     oldest_key = min(self._schedule_cache.keys())
                     del self._schedule_cache[oldest_key]
             
+            # Game-day inbox bundle: pre-match presser + team talk +
+            # Watch/Quick choice as one interactive inbox message instead
+            # of modals. When it opens, the day waits for the user's pick.
+            # Preseason exhibitions skip the bundle -- they're quick-simmed
+            # quietly, like the real league treats September hockey.
+            _all_preseason = bool(todays_games) and all(
+                isinstance(g, dict) and g.get('preseason')
+                for g in todays_games)
+            if (not _resuming_after_bundle and not _all_preseason
+                    and self._maybe_open_game_day_bundle(todays_games)):
+                return
+
+            # NHL Rule 6.1, season start: every club must have exactly one
+            # captain (never a goaltender). Runs once per phase -- at the
+            # first preseason game day AND the first regular-season game
+            # day -- so post-fantasy-draft rosters (letter-less by design)
+            # get their captains at the start of preseason, and any
+            # preseason departures are caught on opening night. A valid
+            # existing captain is never overwritten.
+            if todays_games:
+                _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+                _phase = "preseason" if _all_preseason else "regular"
+                if (_sy is not None
+                        and getattr(self, '_captaincy_checked_phase', None)
+                        != (_sy, _phase)):
+                    self._captaincy_checked_phase = (_sy, _phase)
+                    _ut = getattr(self, 'user_team', None)
+                    # Fantasy-draft deferral ends here: the first game day
+                    # of preseason (or the regular season, if preseason was
+                    # skipped) is when captains get set, so the normal
+                    # mandatory-picker rules apply from this point on.
+                    try:
+                        _dgm = getattr(self, 'game_manager', None)
+                        if _dgm is not None:
+                            _dgm._fantasy_draft_captaincy_deferred = False
+                    except Exception:
+                        pass
+                    # NOTE (Item 7): the captaincy helpers live on
+                    # GameManager, but this is a HockeyManagerGUI method --
+                    # the old self._ensure_captaincy call here was dead
+                    # (AttributeError, swallowed by the except below), so
+                    # the opening-night check never ran. Route via the
+                    # game manager to make both paths live.
+                    _gm = getattr(self, 'game_manager', None)
+                    for _t in (getattr(getattr(self, 'league', None),
+                                       'teams', None) or []):
+                        try:
+                            if _gm is not None:
+                                _nc = _gm._opening_night_captaincy_check(
+                                    _t, _ut)
+                            else:
+                                _nc = None
+                            if _nc and _t is _ut:
+                                self.add_news(
+                                    f"© {_nc} has been named captain of the "
+                                    f"{getattr(_t, 'team_name', 'club')}.")
+                        except Exception:
+                            pass
+                    # Numbers finalized with the captaincy: freed favorites
+                    # get claimed unless the player started a legacy with
+                    # his current number. Old saves backfill retired
+                    # numbers first so nothing legal gets repaired away.
+                    try:
+                        import immortality as _im2
+                        for _t in (getattr(getattr(self, 'league', None),
+                                           'teams', None) or []):
+                            try:
+                                if (getattr(_t, 'league_name', '')
+                                        != "National Hockey League"):
+                                    continue
+                                _im2.seed_retired_numbers(_t)
+                                for _sw in _im2.finalize_team_numbers(_t, _sy):
+                                    if _t is _ut and _sw.get("reason") == "favorite":
+                                        _p = _sw.get("player")
+                                        self.add_news(
+                                            f"{getattr(_p, 'full_name', 'A player')} "
+                                            f"switches from No. {_sw.get('old')} to "
+                                            f"No. {_sw.get('new')} -- his favorite "
+                                            f"number freed up.")
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
@@ -6602,6 +6503,11 @@ class HockeyManagerGUI(tk.Tk):
                 # drop the cached team-strength values so sims stay current.
                 if hasattr(self, '_strength_cache'):
                     self._strength_cache.clear()
+                # Milestone watches: one scan per day, pre-game presentation.
+                # Preseason exhibitions don't count toward career milestones.
+                self._milestone_pregame(
+                    [g for g in todays_games
+                     if not (isinstance(g, dict) and g.get('preseason'))])
                 self._process_todays_games(todays_games)
             
             self._set_continue_feedback(True, "Updating injuries...")
@@ -6621,6 +6527,7 @@ class HockeyManagerGUI(tk.Tk):
                     pass
             teams_played.discard(None)
             self.game_manager._process_injury_recovery(teams_played or None)
+            self.game_manager._process_suspension_service(teams_played or None)
             
             self._set_continue_feedback(True, "Processing AI decisions...")
             # Process AI team decisions (trades, signings, etc.)
@@ -6644,12 +6551,157 @@ class HockeyManagerGUI(tk.Tk):
             except Exception as e:
                 # Don't crash the game if AI fails
                 print(f"AI manager error (non-fatal): {e}")
+            # AI trade market (trade_market.py, additive): year-round
+            # listings, bidding rounds, request shopping, trade blocks,
+            # shortlist nudges. Never raises; cheap no-op when idle.
+            try:
+                import trade_market
+                trade_market.process_market(
+                    self, getattr(self, "league", None), self.current_date)
+            except Exception as e:
+                print(f"Trade market error (non-fatal): {e}")
+            # AI signings write their own headlines (signings,
+            # market-setters, contract fallout) -- flush them into the
+            # news feed with today's date.
+            try:
+                _ai_mgr = getattr(getattr(self, "game_manager", None),
+                                  "ai_manager", None)
+                _drain = getattr(_ai_mgr, "drain_pending_news", None)
+                if callable(_drain):
+                    for _story in _drain():
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+            except Exception:
+                pass
             
             # ALWAYS advance date and update UI (whether games existed or not)
+            # Milestones hit today: ledger + four-viewpoint headlines, once
+            # the day's career totals are final.
+            self._milestone_postgame()
             self.current_date += timedelta(days=1)
+
+            # Offer-sheet match windows: a sheet whose 7-day clock ran out
+            # unanswered resolves as a decline -- the player goes to the
+            # offering club at the sheet terms (real CBA rule). Idempotent;
+            # only expired pending sheets are touched.
+            try:
+                import rfa_system as _rfa_os
+                _rfa_os.process_offer_sheet_deadlines(self, self.league)
+            except Exception:
+                pass
+
+            # Real-life jersey retirement ceremonies: the rafters match
+            # reality, on the real month/day of the first season.
+            # Idempotent -- a retired number never re-fires. Old saves
+            # without a schedule get past-dated numbers retired quietly.
+            try:
+                import immortality as _im_cer
+                _league = getattr(self, "league", None)
+                for _ct, _cc in _im_cer.ceremonies_due(
+                        _league, self.current_date):
+                    _story = _im_cer.stage_ceremony(_ct, _cc)
+                    if _story:
+                        self.news_log.append({'date': self.current_date,
+                                              'story': _story})
+                for _note in _im_cer.retire_overdue_ceremonies(
+                        _league, self.current_date):
+                    self.news_log.append({'date': self.current_date,
+                                          'story': _note})
+            except Exception:
+                pass
+            # Stanley Cup awarding recap: fires once, the night the Cup is
+            # won (flag-guarded; save/load safe via the league key).
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+
+            # All-Star weekend: rosters announced 5 days before the game
+            # (fan vote captains + hockey-ops selection, every club
+            # represented); the exhibition itself is presentation-only.
+            # Idempotent per season via league.all_star_rosters.
+            try:
+                import all_star as _as
+                _asg = _as.all_star_game_date(self.league)
+                if _asg is not None and hasattr(_asg, "toordinal"):
+                    _sy = int(getattr(self.league, "season_year", 2026))
+                    _label = f"{_sy}-{str(_sy + 1)[-2:]}"
+                    if self.current_date == _asg - timedelta(days=5):
+                        _rosters = _as.select_all_star_rosters(self.league)
+                        if _rosters:
+                            self.news_log.append({
+                                'date': self.current_date,
+                                'story': _as.announcement_copy(_rosters, _label)})
+                    elif self.current_date == _asg:
+                        _rosters = _as.resolve_rosters(self.league, _label)
+                        if _rosters:
+                            _rng = random.Random(f"allstar-{_label}")
+                            for _title, _who, _div in \
+                                    _as.skills_winners(_rosters, _rng):
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"⚡ Skills Competition -- {_title}: "
+                                             f"{_who} ({_div})."})
+                            _res = _as.play_all_star_game(_rosters, _rng)
+                            if _res:
+                                _champ_coach = (_rosters.get(
+                                    _res['champion'], {}) or {}).get(
+                                        "coach_name")
+                                _coach_bit = (f" {_champ_coach} gets the win "
+                                              f"behind the "
+                                              f"{_res['champion']} bench."
+                                              if _champ_coach else "")
+                                self.news_log.append({
+                                    'date': self.current_date,
+                                    'story': f"🌟 All-Star Game: "
+                                             f"{_res['champion']} take the "
+                                             f"3v3 tournament "
+                                             f"{_res['score']} over "
+                                             f"{_res['finalists'][1]} in the "
+                                             f"final.{_coach_bit}"})
+            except Exception as _ase:
+                print(f"All-Star weekend skipped (non-fatal): {_ase}")
+
+            # Future 1st-round pick slots track the standings (regressed
+            # toward mid-round -- a projection, not a promise).
+            try:
+                import trade_engine as _te_ps
+                _te_ps.project_pick_slots(getattr(self, "league", None))
+            except Exception:
+                pass
+
+            # Trade talks: AI GMs answer due offers/counters via the inbox.
+            # Non-fatal by design -- a negotiation must never break the sim.
+            try:
+                import trade_negotiation as _tn
+                _tn.process_due_negotiations(self)
+            except Exception as _tne:
+                print(f"trade negotiation tick failed (non-fatal): {_tne}")
+
+            # Headline hygiene (cheap, once a day): expire inbox news older
+            # than 7 game-days unless the user saved it or it's a milestone
+            # for their team.
+            try:
+                self.user_team.inbox.prune_expired(self.current_date)
+            except Exception:
+                pass
+
+            # Media engine daily tick: narratives cool, beefs go quiet.
+            try:
+                import media_engine
+                media_engine.media_daily_tick(getattr(self, 'league', None))
+            except Exception:
+                pass
             
             # Clear caches periodically to prevent memory bloat
             if self.current_date.day == 1:  # First day of each month
+                # Part 3: draft-season build-up beat (Jan-Jun, once per
+                # month per year) + rights-lifecycle news flush. Guarded
+                # internally; never breaks the tick.
+                try:
+                    self._post_draft_season_beat()
+                except Exception as _dbe:
+                    print(f"Draft season beat failed (non-fatal): {_dbe}")
                 if hasattr(self, '_schedule_cache'):
                     self._schedule_cache.clear()
                 if hasattr(self, '_strength_cache'):
@@ -6659,6 +6711,28 @@ class HockeyManagerGUI(tk.Tk):
                     self.game_manager._process_monthly_development()
                 except Exception as e:
                     print(f"Player development error (non-fatal): {e}")
+                # Monthly headline check: rare trade requests (risk-model
+                # driven, capped league-wide so it stays rare).
+                try:
+                    import headlines
+                    headlines.monthly_trade_request_check(self)
+                except Exception as e:
+                    print(f"Trade-request check error (non-fatal): {e}")
+                # Cup-ambition stars on sellers agitate monthly (additive;
+                # the check above is untouched).
+                try:
+                    import trade_market
+                    trade_market.ambition_agitation_tick(self)
+                except Exception as e:
+                    print(f"Agitation tick error (non-fatal): {e}")
+                # Monthly NHL awards: Player of the Month / Rookie of the
+                # Month from month splits; banked, announced, baselines
+                # re-stamped.
+                try:
+                    import stars as _stars_mo
+                    _stars_mo.monthly_awards_tick(self)
+                except Exception as e:
+                    print(f"Monthly awards error (non-fatal): {e}")
             
             # Update game_manager's current_date for dashboard synchronization
             self.game_manager.current_date = self.current_date
@@ -6681,12 +6755,2560 @@ class HockeyManagerGUI(tk.Tk):
             
             # Use async update to prevent blocking
             self.after_idle(self.update_all_views)
-            
+
+            # Bound the ever-growing history logs (game_results ~1312/season,
+            # news_log unbounded) so daily scans and save pickles stay O(season).
+            self._trim_history_logs()
+
+            # --- MULTIPLAYER (Phase 1) + CHECKPOINTS ---
+            # Placed at the end of the try block so it runs ONLY on a
+            # successful day advance (the early returns above skip it).
+            # Checkpoint + snapshot run on a WORKER thread via
+            # broadcast_state_async: create_save_data/pickle/gzip over the
+            # ~12k-player league is seconds-scale and must never block the
+            # tkinter main thread. announce_day stays synchronous (tiny).
+            # While the worker runs, snapshot_busy is True: simulate_day
+            # refuses new advances and client actions are deferred, so the
+            # game objects being serialized cannot be mutated mid-flight.
+            # Completion arrives as a "snapshot_done" poll event.
+            try:
+                host = getattr(self, 'mp_host', None)
+                if host is not None:
+                    label = f"Day {self.current_date}"
+                    cpm = getattr(self, 'checkpoint_manager', None)
+                    pre = (lambda: cpm.checkpoint(label)) \
+                        if cpm is not None else None
+                    host.announce_day(str(self.current_date))
+                    if cpm is not None:
+                        host.notify_checkpoint(label, str(self.current_date))
+                    host.broadcast_state_async(label, pre_broadcast=pre)
+            except Exception as _mp_e:
+                print(f"Multiplayer broadcast failed (non-fatal): {_mp_e}")
+
         finally:
             # Restore the Continue button: re-enable clicks, clear the
             # "Processing..." state and re-apply the smart Continue/Next Day
             # label (blockers may have appeared or cleared).
             self._set_continue_feedback(False)
+
+    # --- MULTIPLAYER (Phase 2): EHM-style advance sync -------------------
+    # Eastside Hockey Manager network play: the day advances only when
+    # EVERY active human manager has hit Continue. Each manager's own
+    # Continue blockers (cap compliance, fantasy draft) gate their own
+    # ready vote; the host's blockers gate the actual advance.
+    # Additive over Caleb's Phase-1 netcode: the protocol/host/client
+    # below only ADD messages and ready tracking; the threading model
+    # (network threads never touch game objects) is unchanged.
+
+    def _mp_host_mode(self):
+        return getattr(self, 'mp_host', None) is not None
+
+    def _mp_client_mode(self):
+        return getattr(self, 'mp_client', None) is not None \
+            and getattr(self, 'mp_host', None) is None
+
+    def _on_continue_pressed(self):
+        """Every Continue button / Space shortcut funnels through here."""
+        if self._mp_host_mode():
+            # Host votes; the gate fires the real advance when all ready.
+            self._mp_toggle_host_ready()
+            return
+        if self._mp_client_mode():
+            self._mp_toggle_client_ready()
+            return
+        self.simulate_day()
+
+    def _mp_toggle_host_ready(self):
+        # EHM rule: you can't vote to continue while your own club has
+        # unresolved blockers -- fix them first.
+        if not self._mp_host_ready:
+            _label, blockers = self.get_continue_state()
+            if blockers:
+                self._show_continue_blockers(blockers)
+                return
+        self._mp_host_ready = not self._mp_host_ready
+        self._mp_toast("You are READY for the advance."
+                       if self._mp_host_ready else "You are no longer ready.")
+        self._mp_evaluate_advance_gate("host toggled")
+
+    def _mp_toggle_client_ready(self):
+        client = getattr(self, 'mp_client', None)
+        if client is None:
+            return
+        if not self._mp_client_ready:
+            _label, blockers = self.get_continue_state()
+            if blockers:
+                self._show_continue_blockers(blockers)
+                return
+        self._mp_client_ready = not self._mp_client_ready
+        try:
+            if self._mp_client_ready:
+                client.send_ready()
+                self._mp_toast("Ready sent -- waiting on the other managers.")
+            else:
+                client.send_unready()
+                self._mp_toast("Readiness rescinded.")
+        except Exception as e:
+            self._mp_client_ready = not self._mp_client_ready
+            self._mp_toast(f"Could not reach host: {e}")
+        self._mp_refresh_continue_ui()
+
+    def _mp_evaluate_advance_gate(self, why=""):
+        """Broadcast ADVANCE_STATUS; fire the day's advance when all active
+        managers (host included) are ready. Main thread only."""
+        host = getattr(self, 'mp_host', None)
+        if host is None:
+            return
+        if host.snapshot_busy:
+            # A snapshot worker is serializing: nobody may mutate game
+            # objects. Re-evaluate when it finishes (snapshot_done).
+            self._mp_gate_pending = True
+            try:
+                host.broadcast_advance_status(self._mp_host_ready)
+            except Exception:
+                pass
+            self._mp_refresh_continue_ui()
+            return
+        try:
+            payload = host.broadcast_advance_status(self._mp_host_ready)
+        except Exception as e:
+            print(f"Advance gate broadcast failed (non-fatal): {e}")
+            return
+        self._mp_refresh_continue_ui(payload)
+        if payload.get("all_ready"):
+            self._mp_fire_authorized_advance()
+
+    def _mp_fire_authorized_advance(self):
+        """Run the real day advance exactly once, through the normal
+        simulate_day() path (blockers still apply)."""
+        self._mp_advance_authorized = True
+        # Detect whether the advance was actually consumed: a normal day
+        # moves current_date; a deadline-day tick moves the trade-deadline
+        # clock instead (no announce_day there). A blocker refuses both --
+        # in that case every manager's vote stands and the cycle is NOT
+        # reset (the host just re-readies once the blocker clears).
+        _before_date = getattr(self, 'current_date', None)
+        try:
+            _before_clock = dict(
+                getattr(getattr(self, 'game_manager', None),
+                        'deadline_clock', None) or {})
+        except Exception:
+            _before_clock = {}
+        try:
+            self.simulate_day()
+        finally:
+            self._mp_advance_authorized = False
+            try:
+                _after_clock = dict(
+                    getattr(getattr(self, 'game_manager', None),
+                            'deadline_clock', None) or {})
+            except Exception:
+                _after_clock = {}
+            _consumed = (getattr(self, 'current_date', None) != _before_date
+                         or _after_clock != _before_clock)
+            # New cycle: everyone must ready up again for the next advance.
+            self._mp_host_ready = False
+            self._mp_gate_pending = False
+            if _consumed:
+                # The host's per-client ready set must reset here too --
+                # deadline 30-minute ticks never reach announce_day(), so
+                # without this a client's old vote would linger and the
+                # next tick could fire on the host's vote alone.
+                try:
+                    self.mp_host.reset_advance_cycle()
+                except Exception:
+                    pass
+            try:
+                payload = self.mp_host.broadcast_advance_status(False)
+            except Exception:
+                payload = None
+            self._mp_refresh_continue_ui(payload)
+
+    def _mp_force_advance(self):
+        """Host override for an AFK manager (EHM commissioner continue).
+
+        Skips the ready gate for THIS advance only; blockers still apply.
+        """
+        if not self._mp_host_mode():
+            return
+        from popup_system import messagebox
+        try:
+            ok = messagebox.askyesno(
+                "Force advance",
+                "Advance the day even though not every manager is ready?\n\n"
+                "Unready managers' clubs will simply miss this day's decisions.")
+        except Exception:
+            ok = True
+        if not ok:
+            return
+        self._mp_toast("Host forced the advance.")
+        self._mp_fire_authorized_advance()
+
+    def _mp_refresh_continue_ui(self, payload=None):
+        """Repaint every Continue button for the MP ready state."""
+        try:
+            if self._mp_host_mode():
+                ready = (payload or {}).get("ready_count", 0)
+                needed = (payload or {}).get("needed_count", 0)
+                me = "✓ READY" if self._mp_host_ready else "Ready?"
+                text = f"{me} ({ready}/{needed})" if needed else me
+                tip = ("Click when done for today -- the day advances when "
+                       "every manager is ready.")
+            elif self._mp_client_mode():
+                if payload is not None:
+                    waiting = payload.get("waiting", []) or []
+                    ready = payload.get("ready_count", 0)
+                    needed = payload.get("needed_count", 0)
+                    me = "✓ READY" if self._mp_client_ready else "Ready?"
+                    extra = f" -- waiting: {', '.join(waiting)}" \
+                        if waiting and not self._mp_client_ready else ""
+                    text = f"{me} ({ready}/{needed}){extra}"
+                else:
+                    text = ("✓ READY" if self._mp_client_ready
+                            else "Ready? (vote to advance)")
+                tip = ("Vote to advance the day. The host advances when "
+                       "every manager is ready.")
+            else:
+                self.refresh_next_day_button()
+                return
+            for btn in self._mp_continue_buttons():
+                try:
+                    btn.config(text=text)
+                except Exception:
+                    try:
+                        btn.configure(text=text)
+                    except Exception:
+                        pass
+            try:
+                _qol_add_tooltip(btn, tip)
+            except Exception:
+                pass
+            # NOTE: refresh_next_day_button() is MP-aware and returns early
+            # in MP modes -- the labels above already cover _next_day_btn.
+        except Exception:
+            pass
+
+    def _mp_continue_buttons(self):
+        out = []
+        for btn in (getattr(self, 'continue_btn', None),
+                    getattr(getattr(self, 'dashboard', None),
+                            'continue_btn', None)):
+            if btn is not None and btn not in out:
+                out.append(btn)
+        try:
+            nb = getattr(self, '_next_day_btn', None)
+            if nb is not None and nb not in out:
+                out.append(nb)
+        except Exception:
+            pass
+        return out
+
+    def _mp_after_deadline_tick(self):
+        """Sync clients after an authorized deadline-clock tick.
+
+        No date changes on a tick, so no CONTINUE_DAY -- just the fresh
+        state (trades break on ticks) plus a checkpoint, on the worker
+        thread like the normal end-of-day path.
+        """
+        try:
+            host = self.mp_host
+            label = f"Deadline clock {self.current_date}"
+            cpm = getattr(self, 'checkpoint_manager', None)
+            pre = (lambda: cpm.checkpoint(label)) \
+                if cpm is not None else None
+            host.broadcast_state_async(label, pre_broadcast=pre)
+        except Exception as e:
+            print(f"Multiplayer tick broadcast failed (non-fatal): {e}")
+
+    # --- MULTIPLAYER (Phase 1): main-thread bridge ---------------------
+    # Network threads NEVER touch widgets or game objects. They push plain
+    # events onto host/client queues; _poll_multiplayer drains them here on
+    # the tkinter main thread via after(). This is the only bridge.
+
+    def _poll_multiplayer(self):
+        """Drain multiplayer network events (main thread only)."""
+        try:
+            if not self._mp_role_ui_done:
+                self._apply_multiplayer_role_ui()
+            if self.mp_host is not None:
+                for kind, payload in self.mp_host.poll_events():
+                    self._handle_host_event(kind, payload)
+            if self.mp_client is not None:
+                for kind, payload in self.mp_client.poll_events():
+                    self._handle_client_event(kind, payload)
+        except Exception as e:
+            print(f"Multiplayer poll error (non-fatal): {e}")
+        finally:
+            if self.mp_host is not None or self.mp_client is not None:
+                self.after(250, self._poll_multiplayer)
+
+    def _apply_multiplayer_role_ui(self):
+        """Phase 2: EHM-style ready UI.
+
+        Host: Continue becomes the host's ready vote, plus a small
+        Force-advance override for AFK managers. Client: Continue becomes
+        the Ready/Unready vote (it used to be hard-disabled in Phase 1).
+        Retries until the buttons exist, like before.
+        """
+        if self.mp_client is None and self.mp_host is None:
+            self._mp_role_ui_done = True
+            return
+        try:
+            if self._mp_host_mode():
+                if not self._mp_ensure_force_button():
+                    return  # dashboard not built yet; retry next tick
+                self._mp_refresh_continue_ui()
+            elif self._mp_client_mode():
+                buttons = self._mp_continue_buttons()
+                if not buttons:
+                    return  # not built yet; retry next tick
+                for btn in buttons:
+                    try:
+                        btn.config(state='normal')
+                    except Exception:
+                        pass
+                self._mp_refresh_continue_ui()
+            self._mp_role_ui_done = True
+        except Exception:
+            pass
+
+    def _mp_ensure_force_button(self):
+        """Host-only 'Force advance' override under the Continue button."""
+        if getattr(self, '_mp_force_btn', None) is not None:
+            try:
+                if self._mp_force_btn.winfo_exists():
+                    return True
+            except Exception:
+                pass
+        parent = getattr(self, '_season_controls_frame', None)
+        if parent is None:
+            return False
+        try:
+            if not parent.winfo_exists():
+                return False
+        except Exception:
+            return False
+        try:
+            from modern_widgets import RoundedButton
+            btn = RoundedButton(parent, text="Force advance",
+                                command=self._mp_force_advance,
+                                bg="#8a6d1b", radius=8,
+                                font=(self.FONT_FAMILY, 10, "bold"),
+                                padx=14, pady=6)
+            btn.pack(pady=(0, 5))
+            try:
+                _qol_add_tooltip(
+                    btn, "Host override: advance the day even if some "
+                         "managers aren't ready (for AFK players). "
+                         "Blockers still apply.")
+            except Exception:
+                pass
+            self._mp_force_btn = btn
+            return True
+        except Exception:
+            return False
+
+    def _handle_host_event(self, kind, payload):
+        if kind == "action":
+            # Never apply a client action while a snapshot worker is
+            # serializing: defer until the "snapshot_done" event.
+            if self.mp_host.snapshot_busy:
+                self._mp_deferred_actions.append(payload)
+                return
+            res = self._apply_multiplayer_action(
+                payload.get("action"), payload.get("params", {}),
+                payload.get("manager", "?"))
+            # Phase-2 handlers may return (ok, detail, broadcast): a routed
+            # offer changes no state, so it needs no state broadcast.
+            if isinstance(res, tuple) and len(res) == 3:
+                ok, detail, broadcast = res
+            else:
+                ok, detail, broadcast = res[0], res[1], True
+            try:
+                self.mp_host.resolve_action(
+                    payload.get("client_id"), payload.get("seq", 0),
+                    bool(ok), str(detail),
+                    broadcast=bool(broadcast))
+            except Exception as e:
+                print(f"resolve_action failed (non-fatal): {e}")
+        elif kind == "snapshot_done":
+            # Serialization finished: game objects are mutable again.
+            # Replay any client actions that arrived mid-snapshot.
+            deferred, self._mp_deferred_actions = \
+                self._mp_deferred_actions, []
+            for p in deferred:
+                self._handle_host_event("action", p)
+            # A ready gate that fired mid-snapshot gets its advance now.
+            if getattr(self, '_mp_gate_pending', False):
+                self._mp_gate_pending = False
+                self._mp_evaluate_advance_gate("snapshot done")
+        elif kind == "advance_changed":
+            # A client readied/unreadied, claimed a team, or left: push the
+            # fresh status and fire the advance if everyone is ready.
+            self._mp_evaluate_advance_gate("readiness changed")
+        elif kind == "trade_response":
+            self._mp_resolve_trade_response(payload)
+        elif kind == "ntc_waiver_answer":
+            self._mp_resolve_ntc_answer(payload)
+        elif kind == "team_claimed":
+            team = self._mp_find_team(payload.get("team_id", ""))
+            if team is not None:
+                # A real person runs this club now: the AI must leave it
+                # alone (parity with the local user's is_user_team).
+                team.is_human_managed = True
+            self._mp_toast(
+                f"{payload.get('name', '?')} "
+                f"claimed {payload.get('team_id', '')}")
+        elif kind == "manager_left":
+            team = self._mp_find_team(payload.get("team_id", ""))
+            if team is not None:
+                # Nobody's driving: back to AI control.
+                team.is_human_managed = False
+            # Drop any waiver/trade flows owned by the departed manager --
+            # their one-transaction waivers die with the negotiation.
+            _left_team = payload.get("team_id", "")
+            if _left_team:
+                for _wid in [w for w, p in
+                             self._mp_pending_ntc.items()
+                             if p.get("team_id") == _left_team]:
+                    self._mp_pending_ntc.pop(_wid, None)
+                for _oid in [o for o, p in
+                             self._mp_pending_offers.items()
+                             if p.get("proposer_team_id") == _left_team
+                             or p.get("partner_team_id") == _left_team]:
+                    _prop = self._mp_pending_offers.pop(_oid, None)
+                    if _prop:
+                        self._mp_clear_proposal_waivers(_prop)
+            self._mp_toast(
+                f"{payload.get('name', '?')} left "
+                f"({payload.get('reason', '')})")
+        elif kind == "manager_joined":
+            self._mp_toast(f"{payload.get('name', '?')} joined")
+        elif kind == "chat":
+            self._mp_toast(f"{payload.get('from', '?')}: {payload.get('text', '')}")
+
+    def _handle_client_event(self, kind, payload):
+        if kind == "state_sync":
+            self._apply_multiplayer_snapshot(
+                payload.get("save_bytes", b""), payload.get("label", ""))
+        elif kind == "day_advanced":
+            # New cycle: everyone votes again.
+            self._mp_client_ready = False
+            self._mp_refresh_continue_ui()
+            self._mp_toast(f"Day advanced: {payload.get('game_date', '')}")
+        elif kind == "advance_status":
+            self._mp_refresh_continue_ui(payload)
+        elif kind == "trade_offer":
+            self._mp_show_trade_offer(payload)
+        elif kind == "ntc_waiver_request":
+            self._mp_answer_ntc_request(payload)
+        elif kind == "draft_clock":
+            self._mp_show_draft_clock(payload)
+        elif kind == "action_ack":
+            self._mp_toast(f"Accepted: {payload.get('action', '')} "
+                            f"({payload.get('result', '')})")
+        elif kind == "action_rejected":
+            self._mp_toast(f"Rejected: {payload.get('action', '')} -- "
+                            f"{payload.get('reason', '')}")
+        elif kind == "checkpoint":
+            self._mp_toast(f"Host checkpoint: {payload.get('label', '')}")
+        elif kind == "chat":
+            self._mp_toast(f"{payload.get('from', '?')}: {payload.get('text', '')}")
+        elif kind == "error":
+            self._mp_toast(f"Host: {payload.get('message', '')}")
+        elif kind == "disconnected":
+            from popup_system import messagebox
+            try:
+                messagebox.showerror(
+                    "Disconnected",
+                    f"Lost connection to the host ({payload.get('reason', '')}).\n"
+                    "Your last synced state was kept as a fallback checkpoint.")
+            except Exception:
+                pass
+            self.mp_client = None  # stops the poll loop
+
+    def _mp_find_team(self, team_id):
+        try:
+            for t in self.league.teams:
+                if getattr(t, 'team_name', '') == team_id:
+                    return t
+        except Exception:
+            pass
+        return None
+
+    def _apply_multiplayer_action(self, action, params, manager):
+        """Apply a client's management intent to the canonical state.
+
+        Returns (ok, detail). Runs on the main thread, called from the
+        host's event poll after net_host validated ownership/shape.
+
+        Phase-1 scoping (deliberate):
+        * set_lines / set_tactics stay LOCAL -- lineup state lives in GUI
+          session state (self.lineup) and is not part of the serialized
+          save, so each manager sets their own lines on their own screen.
+        * Roster/cap mutations (signings, trades, call-ups) are the
+          Phase-1b game-logic surface: validated stubs below. Each real
+          handler mutates the host's canonical objects and returns
+          (True, summary) or (False, reason).
+        """
+        team_id = params.get("team_id", "")
+        team = self._mp_find_team(team_id)
+        if team is None:
+            return False, f"unknown team: {team_id}"
+        if action in ("set_lines", "set_tactics"):
+            return False, "lines & tactics are managed locally in Phase 1"
+        if action in ("advise_coach", "unfeature_player", "team_event",
+                      "set_line_control"):
+            return self._apply_morale_action(action, params, team)
+        if action in ("declare_rivalry", "renounce_rivalry"):
+            return self._apply_rivalry_action(action, params, team)
+        if action in ("sign_free_agent", "propose_trade", "release_player",
+                      "send_to_minors", "call_up", "claim_waivers",
+                      "buyout_player", "extend_contract", "hire_staff",
+                      "fire_staff", "assign_scout", "set_practice",
+                      "team_talk", "press_conference", "draft_pick"):
+            # Phase 2: authoritative host execution of the full management
+            # surface. Each handler validates every param against the
+            # canonical Team objects and returns (True, summary) or
+            # (False, reason); some return a (ok, detail, broadcast) triple
+            # when the state didn't change (e.g. an offer that is merely
+            # routed to another human needs no state broadcast).
+            return self._apply_management_action(action, params, team,
+                                                 manager)
+        return False, f"unsupported action: {action}"
+
+    def _apply_management_action(self, action, params, team, manager):
+        """Dispatch a Phase-2 management action to its canonical handler."""
+        handler = {
+            "sign_free_agent": self._mp_sign_free_agent,
+            "release_player": self._mp_release_player,
+            "send_to_minors": self._mp_send_to_minors,
+            "call_up": self._mp_call_up,
+            "return_to_junior": self._mp_return_to_junior,
+            "claim_waivers": self._mp_claim_waivers,
+            "buyout_player": self._mp_buyout_player,
+            "extend_contract": self._mp_extend_contract,
+            "hire_staff": self._mp_hire_staff,
+            "fire_staff": self._mp_fire_staff,
+            "assign_scout": self._mp_assign_scout,
+            "set_practice": self._mp_set_practice,
+            "team_talk": self._mp_team_talk,
+            "press_conference": self._mp_press_conference,
+            "propose_trade": self._mp_propose_trade,
+            "draft_pick": self._mp_draft_pick,
+        }.get(action)
+        if handler is None:
+            return False, f"unsupported action: {action}"
+        try:
+            return handler(params, team, manager)
+        except Exception as e:
+            print(f"MP action {action} failed: {e}")
+            return False, f"{action} failed: {e}"
+
+    # -- Phase 2 management-action helpers (host side) --------------------
+
+    def _mp_team_player(self, team, player_id):
+        """Find a player on a team's roster / AHL / prospects by id."""
+        pid = str(player_id or "")
+        for attr in ("roster", "ahl_roster", "prospects"):
+            for p in getattr(team, attr, None) or []:
+                if str(getattr(p, "id", "")) == pid:
+                    return p
+        return None
+
+    def _mp_team_pick(self, team, pick_id):
+        """Find a draft pick owned by a team by pick id."""
+        pid = str(pick_id or "")
+        try:
+            for picks in (getattr(team, "draft_picks", None) or {}).values():
+                for pk in picks or []:
+                    if str(getattr(pk, "id", "")) == pid:
+                        return pk
+        except Exception:
+            pass
+        return None
+
+    def _mp_find_free_agent(self, player_id):
+        pid = str(player_id or "")
+        try:
+            for p in self.free_agents() or []:
+                if str(getattr(p, "id", "")) == pid:
+                    return p
+        except Exception:
+            pass
+        return None
+
+    def _mp_cap_room(self, team):
+        # Central cap accounting (waiver shed, retention, burial, dead
+        # cap) -- the same number team.cap_space now reports and the
+        # league office enforces.
+        try:
+            _cap_sys = getattr(getattr(self, 'league', None),
+                               'salary_cap_system', None)
+            _live_cap = _cap_sys.current_cap if _cap_sys else SALARY_CAP
+            from salary_cap_system import total_cap_charge as _tcc
+            return max(0, int(_live_cap) - int(_tcc(team)))
+        except Exception:
+            try:
+                return int(getattr(team, "cap_space", 0) or 0)
+            except Exception:
+                return 0
+
+    def _mp_peer_session_for_team(self, team_id):
+        """session_id of the client managing team_id, or None."""
+        try:
+            peer = self.mp_host.find_peer_by_team(team_id)
+            return getattr(peer, "session_id", None)
+        except Exception:
+            return None
+
+    def _mp_is_claimed(self, team):
+        try:
+            import game_classes as _gc
+            if _gc.is_human_managed(team) \
+                    and not bool(getattr(team, "is_user_team", False)):
+                return True
+        except Exception:
+            pass
+        return False
+
+    # -- roster / contract actions (host side) ---------------------------
+
+    def _mp_sign_free_agent(self, params, team, manager):
+        """Sign a free agent: same contract mutation the FA view applies
+        (salary / years / signing bonus / NTC flag on the live contract)."""
+        player = self._mp_find_free_agent(params.get("player_id", ""))
+        if player is None:
+            return False, "That player is no longer a free agent."
+        # Draft lock: draft-eligible players can't be signed as free agents
+        # (shared rule with single-player -- no sidestepping the draft).
+        try:
+            from draft_generator import player_locked_by_draft as _locked
+            if _locked(player):
+                return False, (f"{player.full_name} is draft-eligible and "
+                               f"can't be signed as a free agent.")
+        except Exception:
+            pass
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        # Same rulebook as single-player: league minimum, 20%-of-cap max,
+        # 7-year max for new deals, live-cap budget, draft lock.
+        ok, err = self._validate_contract_terms(player, salary, years,
+                                                extension=False, team=team)
+        if not ok:
+            return False, err
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space."
+        bonus = 0
+        try:
+            bonus = max(0, int(params.get("signing_bonus", 0) or 0))
+        except (TypeError, ValueError):
+            pass
+        ntc = bool(params.get("ntc", False))
+        try:
+            import trade_engine as te
+            if ntc and not te.clause_eligible(player):
+                return False, \
+                    f"{player.full_name} isn't eligible for a no-trade clause."
+        except Exception:
+            pass
+        contract = getattr(player, "contract", None)
+        if contract is None:
+            return False, "That player has no contract to sign."
+        contract.salary = salary
+        contract.years_remaining = years
+        try:
+            contract.signing_bonus = bonus
+        except Exception:
+            pass
+        try:
+            contract.no_trade_clause = bool(ntc)
+        except Exception:
+            pass
+        try:
+            contract.ntc_waiver_for = ""
+        except Exception:
+            pass
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr
+            _te_clr.clear_retention_state(player)
+        except Exception:
+            pass
+        # Market feedback: Caleb's market engine learns from MP signings
+        # exactly like user and AI signings. register_signing keeps only
+        # true market-setters (star + top-5 AAV) as comps, so a bold MP
+        # overpay for a star raises the next star's ask -- offers change
+        # the league. (The human fallout -- overpay verdict, fan beef --
+        # stays on the user/AI paths: the MP path has no agent ask to
+        # score the deal against.)
+        try:
+            _lg_mp = getattr(self, "league", None)
+            _cap_sys_mp = getattr(_lg_mp, "salary_cap_system", None)
+            if _cap_sys_mp is not None:
+                _ppos = getattr(player, "primary_position", "")
+                _ppos_name = (_ppos.value if hasattr(_ppos, "value")
+                              else str(_ppos))
+                try:
+                    from game_classes import to_100_scale as _t100mp
+                    _ovr100mp = int(_t100mp(player.overall_rating()))
+                except Exception:
+                    _ovr100mp = 75
+                if _cap_sys_mp.register_signing(
+                        getattr(player, "full_name", "Unknown"), salary,
+                        _ovr100mp, _ppos_name,
+                        int(getattr(player, "age", 27) or 27),
+                        int(getattr(_lg_mp, "season_year", 0) or 0)):
+                    try:
+                        self.news_log.append({
+                            'date': self.current_date,
+                            'story': (f"{player.full_name}'s ${salary:,} "
+                                      f"deal sets the market -- comparable "
+                                      f"stars will demand more.")})
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        try:
+            fa_pool = self.free_agents() or []
+            if player in fa_pool:
+                fa_pool.remove(player)
+        except Exception:
+            pass
+        team.add_player(player)
+        # Rivalry lifecycle: an MP free-agent signing is a transfer, same
+        # as the single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=None, to_team=team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="signing",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{player.full_name} signed by {team.team_name}: "
+                f"{years} years at ${salary:,}/year.")
+        except Exception:
+            pass
+        return True, f"Signed {player.full_name} ({years}y, ${salary:,}/yr)."
+
+    def _mp_release_player(self, params, team, manager):
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        team.remove_player(player)
+        try:
+            fa_pool = self.free_agents()
+            if fa_pool is None:
+                fa_pool = []
+            if player not in fa_pool:
+                fa_pool.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} released by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Released {player.full_name}."
+
+    def _mp_send_to_minors(self, params, team, manager):
+        """Waive-and-assign: mirrors WaiversView.place_on_waivers().
+
+        An NMC blocks the move without the player's consent -- the host
+        asks the player itself (will_waive_ntc, context="waivers"), exactly
+        like single-player. The client's word is never trusted.
+        """
+        # Waiver window, same as single-player (transaction_windows.py).
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self, "current_date", None))
+            if not _ok:
+                return False, _why
+        except Exception:
+            pass
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if player not in (getattr(team, "roster", None) or []):
+            return False, "Only NHL-roster players go through waivers."
+        try:
+            import trade_engine as te
+            kind, _detail = te.clause_of(player) or (None, "")
+        except Exception:
+            kind = None
+        if kind == "NMC":
+            return self._mp_begin_consent_flow(team, player, manager)
+        return self._mp_demote_player(team, player)
+
+    def _mp_demote_player(self, team, player):
+        """The actual demotion (runs after any NMC consent).
+
+        Mirrors the single-player rulebook exactly: waiver-exempt
+        players (under 25 and under 160 NHL games) are assigned quietly
+        to the AHL; everyone else must clear the wire. The client's word
+        is never trusted -- eligibility is computed host-side.
+        """
+        try:
+            _needs = _player_needs_waivers(player)
+        except Exception:
+            _needs = True
+        if not _needs:
+            # Exempt: quiet demotion, same as single-player.
+            try:
+                (getattr(team, "roster", None) or []).remove(player)
+            except Exception:
+                pass
+            try:
+                _ahl = getattr(team, "ahl_roster", None)
+                if _ahl is None:
+                    _ahl = []
+                    try:
+                        team.ahl_roster = _ahl
+                    except Exception:
+                        pass
+                if player not in _ahl:
+                    _ahl.append(player)
+            except Exception:
+                pass
+            # New-CBA paper-transaction rule: he must play an AHL game
+            # before he can be recalled.
+            try:
+                import ahl_system as _ahl_stamp_mp
+                _ahl_stamp_mp.stamp_ahl_assignment(player)
+            except Exception:
+                pass
+            # Audition over -- the next call-up starts a fresh one.
+            try:
+                player.nhl_audition = None
+            except Exception:
+                pass
+            try:
+                self.add_news(f"{player.full_name} assigned to the AHL by "
+                              f"{team.team_name}.")
+            except Exception:
+                pass
+            return True, (f"{player.full_name} assigned to the AHL "
+                          f"(waiver-exempt).")
+        player.on_waivers = True
+        player.waiver_days = 2
+        try:
+            if player not in self.waiver_list:
+                self.waiver_list.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} placed on waivers by "
+                          f"{team.team_name}.")
+        except Exception:
+            pass
+        return True, f"{player.full_name} placed on waivers."
+
+    def _mp_begin_consent_flow(self, team, player, manager):
+        """Host-side NMC consent for a demotion: stash the intent, ask the
+        client's player via NTC_WAIVER_REQUEST (context="waivers").
+        Returns (True, status, no-broadcast) -- the demotion itself runs
+        when the answer comes back in _mp_resolve_ntc_answer."""
+        import uuid as _uuid
+        waiver_id = _uuid.uuid4().hex[:10]
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id is None:
+            return False, "Could not reach your client."
+        try:
+            import trade_engine as te
+            _kind, detail = te.clause_of(player) or ("NMC", "no-movement")
+        except Exception:
+            detail = "no-movement clause"
+        self._mp_pending_ntc[waiver_id] = {
+            "kind": "demote",
+            "team_id": team.team_name,
+            "manager": manager,
+            "player_id": str(getattr(player, "id", "")),
+            "player_name": getattr(player, "full_name", "player"),
+            "clause": detail,
+        }
+        try:
+            self.mp_host.send_ntc_waiver_request(
+                session_id, waiver_id, str(getattr(player, "id", "")),
+                getattr(player, "full_name", "player"), detail,
+                "the waiver wire", "waivers")
+        except Exception:
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return False, "Could not reach your client."
+        return (True,
+                f"{getattr(player, 'full_name', 'He')} has a no-movement "
+                f"clause -- waiting on his answer.",
+                False)
+
+    def _mp_call_up(self, params, team, manager):
+        """Recall from the AHL: mirrors the waivers-view claim checks."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if player not in (getattr(team, "ahl_roster", None) or []):
+            return False, "That player isn't in the minors."
+        # New-CBA paper-transaction rule (same as single-player): a
+        # freshly assigned player must play at least one AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_gate_mp
+            _block = _ahl_gate_mp.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            return False, _block
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        salary = int(getattr(getattr(player, "contract", None),
+                             "salary", 0) or 0)
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space to recall him."
+        team.ahl_roster.remove(player)
+        team.roster.append(player)
+        # Dressing room: first-time NHL arrival only (guarded inside).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} recalled by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Recalled {player.full_name}."
+
+    def _mp_return_to_junior(self, params, team, manager):
+        """Return a prospect to his junior club: mirrors the single-player
+        'Return to Junior' (RosterView AHL tab -> move_player ahl->prospects).
+
+        Same gate as single-player: only SIGNED junior-aged (under-20)
+        CHL prospects qualify. An ex-college player can never go back
+        once he's signed an NHL deal; anyone else stays with the pro
+        club. The client's word is never trusted -- eligibility is
+        computed host-side.
+        """
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if getattr(player, "contract", None) is None:
+            return False, (f"{player.full_name} isn't signed -- only "
+                            f"signed prospects can be returned to junior.")
+        try:
+            import game_classes as _gc_jr
+            _track = _gc_jr.junior_track_of(player)
+            _jage = int(getattr(player, "age", 20) or 20)
+        except Exception:
+            return False, "Couldn't verify his junior eligibility."
+        if not (_track == "CHL" and _jage < 20):
+            if _track == "NCAA":
+                _why = (f"{player.full_name} signed an NHL contract -- "
+                        f"that ended his NCAA eligibility. He can only "
+                        f"play in the NHL or AHL now, never back in "
+                        f"college.")
+            else:
+                _why = (f"Only junior-aged (under-20) CHL prospects can be "
+                        f"returned to junior. {player.full_name} stays "
+                        f"with the pro club.")
+            return False, _why
+        for _attr in ("roster", "ahl_roster"):
+            try:
+                _lst = getattr(team, _attr, None) or []
+                if player in _lst:
+                    _lst.remove(player)
+            except Exception:
+                pass
+        try:
+            _pros = getattr(team, "prospects", None)
+            if _pros is None:
+                _pros = []
+                try:
+                    team.prospects = _pros
+                except Exception:
+                    pass
+            if player not in _pros:
+                _pros.append(player)
+        except Exception:
+            pass
+        try:
+            player.playing_where = _gc_jr.junior_assignment_label(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} was returned to junior "
+                          f"({player.playing_where}) by {team.team_name}.")
+        except Exception:
+            pass
+        return True, f"{player.full_name} returned to junior."
+
+    def _mp_claim_waivers(self, params, team, manager):
+        """Claim off waivers: mirrors WaiversView.claim_from_waivers()."""
+        pid = str(params.get("player_id", "") or "")
+        player = None
+        try:
+            for p in self.waiver_list or []:
+                if str(getattr(p, "id", "")) == pid:
+                    player = p
+                    break
+        except Exception:
+            pass
+        if player is None:
+            return False, "That player isn't on waivers."
+        if getattr(player, "team_name", "") == team.team_name:
+            return False, "You can't claim your own player."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Roster is full (23)."
+        salary = int(getattr(getattr(player, "contract", None),
+                             "salary", 0) or 0)
+        if salary > self._mp_cap_room(team):
+            return False, "Not enough cap space to claim him."
+        original = self._mp_find_team(getattr(player, "team_name", ""))
+        if original is not None:
+            try:
+                original.remove_player(player)
+            except Exception:
+                pass
+        team.add_player(player)
+        # Rivalry lifecycle: a waiver claim is a transfer, same as the
+        # single-player path -- personal beefs follow the man.
+        try:
+            from reputation_system import on_player_transfer as _opt
+            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+            if isinstance(_rivs, list):
+                _opt(_rivs, player, from_team=original, to_team=team)
+        except Exception:
+            pass
+        # Dressing room: the room reacts to WHO arrives, bounded.
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                team, player, how="waiver claim",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+        try:
+            player.on_waivers = False
+            player.waiver_days = 0
+        except Exception:
+            pass
+        try:
+            if player in self.waiver_list:
+                self.waiver_list.remove(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(f"{player.full_name} claimed off waivers by "
+                          f"{team.team_name}.")
+        except Exception:
+            pass
+        return True, f"Claimed {player.full_name} off waivers."
+
+    def _mp_buyout_player(self, params, team, manager):
+        """Buy out a contract: same cap-hit schedule the buyout view
+        writes (team.buyout_cap_hits), player becomes a free agent."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        # Note: no NMC check here -- matches single-player, where buyouts
+        # don't require the player's consent (only waivers/assignment do).
+        try:
+            import windows as _w
+            # Tuple like the single-player view unpacks it:
+            # (total_cost, annual_hit, buyout_years, rows).
+            _total, annual, byears, rows = _w.buyout_schedule(player)
+        except Exception as e:
+            return False, f"Buyout failed: {e}"
+        annual = int(annual or 0)
+        byears = int(byears or 0)
+        if not rows:
+            return False, "Buyout schedule came back empty."
+        try:
+            season = int(getattr(getattr(self, "league", None),
+                                 "season_year", 2026))
+        except Exception:
+            season = 2026
+        hits = getattr(team, "buyout_cap_hits", None)
+        if hits is None:
+            hits = {}
+            team.buyout_cap_hits = hits
+        for _i, _hit, _s in rows:
+            yr = season + int(_i) - 1
+            hits[yr] = hits.get(yr, 0) + int(_hit)
+        team.remove_player(player)
+        try:
+            fa_pool = self.free_agents()
+            if fa_pool is None:
+                fa_pool = []
+            if player not in fa_pool:
+                fa_pool.append(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{player.full_name} bought out by {team.team_name} "
+                f"(dead cap ${annual:,}/yr x {byears}).")
+        except Exception:
+            pass
+        return True, (f"Bought out {player.full_name} "
+                      f"(dead cap ${annual:,}/yr x {byears}y).")
+
+    def _mp_extend_contract(self, params, team, manager):
+        """Extend / renegotiate a roster player's deal, clauses included."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        contract = getattr(player, "contract", None)
+        if contract is None:
+            return False, "That player has no contract to extend."
+        # Extensions are a final-year privilege, same as single-player:
+        # no mid-deal renegotiations.
+        try:
+            _yrs_left = int(getattr(contract, "years_remaining", 1) or 1)
+        except Exception:
+            _yrs_left = 1
+        if _yrs_left > 1:
+            return False, (f"{player.full_name} has {_yrs_left} years left -- "
+                           f"extensions are for the final year of a deal.")
+        # Shared gates: league minimum, 20%-of-cap max, 8-year max for
+        # extensions, live-cap budget for the raise.
+        ok, err = self._validate_contract_terms(player, salary, years,
+                                                extension=True, team=team)
+        if not ok:
+            return False, err
+        old_salary = int(getattr(contract, "salary", 0) or 0)
+        if salary - old_salary > self._mp_cap_room(team):
+            return False, "Not enough cap space for that raise."
+        kind = str(params.get("clause", "none") or "none").lower()
+        if kind not in ("none", "ntc", "nmc", "mntc"):
+            return False, f"Unknown clause: {params.get('clause')}"
+        # Clear, then re-stamp: apply_clause_to_contract enforces the real
+        # UFA-eligibility bar (a 23-year-old can't take an NMC).
+        try:
+            contract.no_trade_clause = False
+            contract.no_movement_clause = False
+            contract.modified_ntc_teams = 0
+        except Exception:
+            pass
+        if kind != "none":
+            try:
+                import trade_engine as te
+                list_size = 10
+                try:
+                    list_size = int(params.get("clause_teams", 10) or 10)
+                except (TypeError, ValueError):
+                    pass
+                if not te.apply_clause_to_contract(
+                        contract, kind, list_size=list_size, player=player):
+                    return False, (
+                        f"{player.full_name} isn't eligible for that clause.")
+            except Exception as e:
+                return False, f"Clause failed: {e}"
+        contract.salary = salary
+        contract.years_remaining = years
+        try:
+            contract.ntc_waiver_for = ""
+        except Exception:
+            pass
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr2
+            _te_clr2.clear_retention_state(player)
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{player.full_name} extended by {team.team_name}: "
+                f"{years} years at ${salary:,}/year"
+                + (f" ({kind.upper()})" if kind != "none" else "") + ".")
+        except Exception:
+            pass
+        return True, (f"Extended {player.full_name} "
+                      f"({years}y, ${salary:,}/yr"
+                      f"{', ' + kind.upper() if kind != 'none' else ''}).")
+
+    # -- staff / scouting / practice actions (host side) ------------------
+
+    def _mp_hire_staff(self, params, team, manager):
+        """Hire staff: mirrors sign_free_agent_staff() but against the
+        client's club. Resolves all three market sources (free agents,
+        overseas coaches, rival AHL staff) and enforces the same approach
+        rules and staff-budget gate as single-player."""
+        sid = str(params.get("staff_id", "") or "")
+        staffer = None
+        source = None       # 'free_agent' | 'overseas' | 'ahl_poach'
+        employer = None
+        try:
+            league = getattr(self, "league", None)
+            for s in getattr(league, "free_agent_staff", None) or []:
+                if str(getattr(s, "id", "")) == sid:
+                    staffer, source = s, "free_agent"
+                    break
+            if staffer is None:
+                for s in getattr(league, "overseas_staff", None) or []:
+                    if str(getattr(s, "id", "")) == sid:
+                        staffer, source = s, "overseas"
+                        break
+            if staffer is None:
+                for t in getattr(league, "teams", None) or []:
+                    if t is team:
+                        continue
+                    for s in getattr(t, "staff", None) or []:
+                        if (str(getattr(s, "id", "")) == sid
+                                and (getattr(s, "assignment", "nhl")
+                                     or "nhl") == "ahl"):
+                            staffer, source, employer = s, "ahl_poach", t
+                            break
+                    if staffer is not None:
+                        break
+        except Exception:
+            pass
+        if staffer is None:
+            return False, "That staffer isn't available."
+        # Approach rules (real rules): rival AHL coaches are only
+        # approachable in the offseason; rival NHL staff never.
+        if source != "free_agent":
+            try:
+                from game_classes import can_approach_staff as _approach
+                ok, reason = _approach(
+                    staffer, employer, team,
+                    getattr(self, "current_date", None))
+                if not ok:
+                    return False, reason or "That staffer can't be approached."
+            except Exception:
+                pass
+        try:
+            salary = int(params.get("salary", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid contract terms."
+        if salary <= 0 or not 1 <= years <= 5:
+            return False, "Invalid contract terms."
+        try:
+            from game_classes import team_can_afford_staff as _mp_afford
+            if not _mp_afford(team, salary):
+                return False, ("That offer exceeds your club's available "
+                                "staff budget.")
+        except Exception:
+            pass
+        try:
+            staffer.salary = salary
+            staffer.contract_years = years
+            _asg = str(params.get("assignment", "nhl") or "nhl").lower()
+            staffer.assignment = _asg if _asg in ("nhl", "ahl") else "nhl"
+        except Exception:
+            pass
+        # Join the new club first; only leave the old source after the
+        # hire has landed, so a failure can't strand the staffer.
+        hired = False
+        try:
+            roster = getattr(team, "staff", None)
+            if roster is not None and staffer not in roster:
+                roster.append(staffer)
+                hired = True
+            elif roster is not None:
+                hired = True
+        except Exception:
+            pass
+        if not hired:
+            return False, "Couldn't complete the hire."
+        try:
+            league = getattr(self, "league", None)
+            if source == "free_agent":
+                pool = getattr(league, "free_agent_staff", None)
+                if pool is not None and staffer in pool:
+                    pool.remove(staffer)
+            elif source == "overseas":
+                pool = getattr(league, "overseas_staff", None)
+                if pool is not None and staffer in pool:
+                    pool.remove(staffer)
+            elif source == "ahl_poach" and employer is not None:
+                if staffer in (getattr(employer, "staff", None) or []):
+                    employer.staff.remove(staffer)
+        except Exception:
+            pass
+        try:
+            import analytics_scouting as _as
+            _as.refresh_analytics_quality(team)
+        except Exception:
+            pass
+        name = getattr(staffer, "name",
+                       getattr(staffer, "full_name", "staffer"))
+        return True, f"Hired {name} ({years}y, ${salary:,}/yr)."
+
+    def _mp_fire_staff(self, params, team, manager):
+        """Release a staffer back to the pool: mirrors release_staff()."""
+        sid = str(params.get("staff_id", "") or "")
+        staffer = None
+        for s in getattr(team, "staff", None) or []:
+            if str(getattr(s, "id", "")) == sid:
+                staffer = s
+                break
+        if staffer is None:
+            return False, "That staffer isn't on your club."
+        try:
+            team.staff.remove(staffer)
+        except Exception:
+            pass
+        try:
+            pool = getattr(getattr(self, "league", None),
+                           "free_agent_staff", None)
+            if pool is not None and staffer not in pool:
+                pool.append(staffer)
+        except Exception:
+            pass
+        try:
+            import analytics_scouting as _as
+            _as.refresh_analytics_quality(team)
+        except Exception:
+            pass
+        name = getattr(staffer, "name",
+                       getattr(staffer, "full_name", "staffer"))
+        return True, f"Released {name}."
+
+    def _mp_assign_scout(self, params, team, manager):
+        """Assign a scout to a region: same storage the scouting screen
+        writes (game_manager.scout_region_assignments, keyed by scout)."""
+        sid = str(params.get("scout_id", "") or "")
+        region = params.get("region")
+        scout = None
+        try:
+            import scouting as _sc
+        except Exception:
+            return False, "Scouting isn't available."
+        for s in getattr(team, "staff", None) or []:
+            if str(getattr(s, "id", "")) == sid and _sc.is_scout(s):
+                scout = s
+                break
+        if scout is None:
+            return False, "That scout isn't on your staff."
+        if region is not None:
+            # Regions are free-form names; only reject an empty string,
+            # never a real region name.
+            region = str(region).strip() or None
+        try:
+            _sc.set_scout_region(
+                getattr(self, "game_manager", self), scout, region)
+        except Exception as e:
+            return False, f"Assignment failed: {e}"
+        name = getattr(scout, "name", getattr(scout, "full_name", "scout"))
+        return True, (f"{name} assigned to {region}."
+                      if region else f"{name} recalled from assignment.")
+
+    def _mp_set_practice(self, params, team, manager):
+        """Set training programs: writes the same game_manager.
+        training_programs entries the practice window creates."""
+        try:
+            from enhanced_practice_system import (
+                FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM)
+            from datetime import date as _date
+        except Exception:
+            return False, "Practice system isn't available."
+        focus = str(params.get("focus", "") or "").strip()
+        intensity = str(params.get("intensity", "") or "").strip()
+        if focus not in FOCUS_TO_PRACTICE_TYPE:
+            return False, (
+                f"Unknown focus '{focus}'. "
+                f"Valid: {', '.join(sorted(FOCUS_TO_PRACTICE_TYPE))}.")
+        if intensity not in INTENSITY_LABEL_TO_ENUM:
+            return False, (
+                f"Unknown intensity '{intensity}'. "
+                f"Valid: {', '.join(sorted(INTENSITY_LABEL_TO_ENUM))}.")
+        gm = getattr(self, "game_manager", None)
+        if gm is None:
+            return False, "No game manager."
+        if not hasattr(gm, "training_programs") or \
+                gm.training_programs is None:
+            gm.training_programs = {}
+        game_today = getattr(self, "current_date", None) or _date.today()
+        ids = params.get("player_ids") or []
+        if ids:
+            players = [self._mp_team_player(team, pid) for pid in ids]
+            players = [p for p in players if p is not None]
+            if not players:
+                return False, "No matching players on your club."
+        else:
+            players = list(getattr(team, "roster", []) or [])
+        try:
+            for p in players:
+                gm.training_programs[str(getattr(p, "id", ""))] = {
+                    "focus": focus, "intensity": intensity,
+                    "assigned": game_today,
+                    "team": getattr(team, "team_name", ""),
+                }
+        except Exception as e:
+            return False, f"Practice update failed: {e}"
+        return True, (f"Practice set: {focus} / {intensity} "
+                      f"for {len(players)} players.")
+
+    # -- dressing-room actions (host side) --------------------------------
+
+    def _mp_team_talk(self, params, team, manager):
+        """Deliver a team talk: the same give_talk() the coach's whiteboard
+        uses -- same tones, same momentum queue, same outcome tiers."""
+        try:
+            import dressing_room as _dr
+        except Exception:
+            return False, "Dressing room isn't available."
+        tone = str(params.get("tone", "calm") or "calm").lower()
+        if tone not in ("calm", "fired-up", "cautious"):
+            return False, "Tone must be calm, fired-up or cautious."
+        situation = str(params.get("situation", "pregame") or "pregame")
+        if situation not in ("pregame", "intermission"):
+            situation = "pregame"
+        speaker = str(params.get("speaker", "coach") or "coach")
+        if speaker not in ("coach", "captain"):
+            speaker = "coach"
+        score_state = str(params.get("score_state", "tied") or "tied")
+        if score_state not in ("leading", "trailing", "tied"):
+            score_state = "tied"
+        try:
+            rival = bool(params.get("rival", False))
+            streak = int(params.get("streak", 0) or 0)
+        except (TypeError, ValueError):
+            rival, streak = False, 0
+        try:
+            out = _dr.give_talk(
+                team, tone,
+                {"situation": situation, "score_state": score_state,
+                 "rival": rival, "streak": streak},
+                speaker)
+        except Exception as e:
+            return False, f"Team talk failed: {e}"
+        tier = (out or {}).get("tier", "steady") if isinstance(out, dict) \
+            else "steady"
+        return True, f"Team talk delivered ({tone}, {tier})."
+
+    def _mp_press_conference(self, params, team, manager):
+        """Answer the press: the same cascade_on_press() the podium UI
+        triggers -- stance maps straight onto the response choice."""
+        try:
+            import dressing_room as _dr
+        except Exception:
+            return False, "Dressing room isn't available."
+        stance = str(params.get("stance", "professional")
+                     or "professional").lower()
+        valid = ("confident", "supportive", "professional", "diplomatic",
+                 "critical", "dismissive", "controversial")
+        if stance not in valid:
+            return False, f"Stance must be one of: {', '.join(valid)}."
+        topic = str(params.get("topic", "") or "")
+        target = str(params.get("player", "") or "")
+        event = {"topic": topic}
+        if target:
+            event["player"] = target
+        try:
+            lines = _dr.cascade_on_press(team, event, stance)
+        except Exception as e:
+            return False, f"Press conference failed: {e}"
+        head = lines[0] if lines else "The room absorbs it."
+        return True, f"Press conference held ({stance}). {head}"
+
+    # -- human trade negotiation (host side) -------------------------------
+
+    def _mp_propose_trade(self, params, team, manager):
+        """Route a client's trade proposal: validate + resolve assets
+        against canonical state, clear movement-clause waivers (the
+        single-player askyesnocancel flow, over the wire), then send the
+        offer to an AI club, the host's club, or another human's club."""
+        import trade_engine as te
+        partner = self._mp_find_team(params.get("partner_team_id", ""))
+        if partner is None:
+            return False, "Unknown partner team."
+        if partner is team:
+            return False, "You can't trade with yourself."
+        offer = params.get("offer") or {}
+        if not isinstance(offer, dict):
+            return False, "Malformed offer."
+
+        def _ids(key):
+            v = offer.get(key) or []
+            return [str(x) for x in v] if isinstance(v, list) else []
+
+        out_pids, in_pids = _ids("players_out"), _ids("players_in")
+        out_kids, in_kids = _ids("picks_out"), _ids("picks_in")
+        if not out_pids and not out_kids:
+            return False, "You're not offering anything."
+        if not in_pids and not in_kids:
+            return False, "You're not asking for anything."
+        out_players = [self._mp_team_player(team, pid) for pid in out_pids]
+        in_players = [self._mp_team_player(partner, pid) for pid in in_pids]
+        out_picks = [self._mp_team_pick(team, kid) for kid in out_kids]
+        in_picks = [self._mp_team_pick(partner, kid) for kid in in_kids]
+        if any(p is None for p in out_players):
+            return False, "One of your offered players isn't on your roster."
+        if any(p is None for p in in_players):
+            return False, \
+                "One of the requested players isn't on their roster."
+        if any(k is None for k in out_picks):
+            return False, "One of your offered picks isn't yours."
+        if any(k is None for k in in_picks):
+            return False, "One of the requested picks isn't theirs."
+        retention = {}
+        for pid, pct in (offer.get("retention") or {}).items():
+            try:
+                pct = float(pct)
+            except (TypeError, ValueError):
+                return False, "Invalid retention term."
+            if not 0 < pct <= 50:
+                return False, "Retention must be 1-50%."
+            if str(pid) not in out_pids:
+                return False, "Retention on a player you're not moving."
+            retention[str(pid)] = pct
+        protection = {}
+        for kid, prot in (offer.get("pick_protection") or {}).items():
+            if prot not in ("", "top-3", "top-10", "lottery"):
+                return False, f"Unknown pick protection: {prot}."
+            if prot and str(kid) not in out_kids:
+                return False, "Protection on a pick you're not moving."
+            if prot:
+                protection[str(kid)] = prot
+
+        proposal = {
+            "proposer_team_id": team.team_name,
+            "partner_team_id": partner.team_name,
+            "manager": manager,
+            "players_out": out_pids,
+            "players_in": in_pids,
+            "picks_out": out_kids,
+            "picks_in": in_kids,
+            "retention": retention,
+            "pick_protection": protection,
+        }
+        # Movement-clause preflight on the proposer's own players, exactly
+        # like the trade screen's askyesnocancel: ask him / remove him /
+        # cancel. Over the wire this becomes NTC_WAIVER_REQUEST prompts.
+        league = getattr(self, "league", None)
+        try:
+            vetoes = te.trade_vetoes(team, partner, out_players, league)
+        except Exception:
+            vetoes = []
+        if vetoes:
+            return self._mp_begin_waiver_flow(proposal, team, partner,
+                                              vetoes, manager)
+        return self._mp_route_trade_offer(proposal)
+
+    def _mp_begin_waiver_flow(self, proposal, team, partner, vetoes,
+                              manager):
+        """Stash a proposal behind clause-waiver prompts; ask about the
+        first veto now. Returns (True, status, no-broadcast)."""
+        import uuid as _uuid
+        waiver_id = _uuid.uuid4().hex[:10]
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id is None:
+            return False, "Could not reach your client."
+        self._mp_pending_ntc[waiver_id] = {
+            "kind": "trade",
+            "proposal": proposal,
+            "vetoes": [{"player_id": str(getattr(v["player"], "id", "")),
+                        "player_name": getattr(v["player"], "full_name",
+                                               "player"),
+                        "clause": v.get("detail") or v.get("clause", "NTC"),
+                        "dest": partner.team_name}
+                       for v in vetoes],
+            "veto_idx": 0,
+            "team_id": team.team_name,
+            "partner_id": partner.team_name,
+        }
+        return self._mp_send_next_waiver(waiver_id, session_id)
+
+    def _mp_send_next_waiver(self, waiver_id, session_id):
+        pend = self._mp_pending_ntc.get(waiver_id)
+        if pend is None:
+            return False, "Waiver flow expired."
+        vetoes = pend["vetoes"]
+        if pend["veto_idx"] >= len(vetoes):
+            proposal = self._mp_pending_ntc.pop(waiver_id)["proposal"]
+            return self._mp_route_trade_offer(proposal)
+        v = vetoes[pend["veto_idx"]]
+        try:
+            self.mp_host.send_ntc_waiver_request(
+                session_id, waiver_id, v["player_id"], v["player_name"],
+                v["clause"], v["dest"], "trade")
+        except Exception:
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return False, "Could not reach your client."
+        return (True,
+                f"{v['player_name']} has a {v['clause']} -- "
+                f"waiting on your call (ask him / remove / cancel).",
+                False)
+
+    def _mp_resolve_ntc_answer(self, payload):
+        """Host-side NTC_WAIVER_ANSWER: ask/remove/cancel.
+
+        kind="trade": for one veto, then continue the waiver flow or route
+        the (possibly trimmed) proposal.
+        kind="demote": the player's answer to a waiver-exposure request --
+        on "ask"-granted the demotion runs, anything else keeps him on
+        the roster.
+        """
+        import trade_engine as te
+        waiver_id = payload.get("waiver_id", "")
+        choice = payload.get("choice", "cancel")
+        pend = self._mp_pending_ntc.get(waiver_id)
+        if pend is None:
+            return
+        if pend.get("kind", "trade") == "demote":
+            self._mp_resolve_demote_answer(pend, waiver_id, choice)
+            return
+        proposal = pend["proposal"]
+        vetoes = pend["vetoes"]
+        if pend["veto_idx"] >= len(vetoes):
+            self._mp_pending_ntc.pop(waiver_id, None)
+            return
+        v = vetoes[pend["veto_idx"]]
+        team = self._mp_find_team(pend["team_id"])
+        partner = self._mp_find_team(pend["partner_id"])
+        session_id = self._mp_peer_session_for_team(pend["team_id"])
+
+        def _drop(msg):
+            self._mp_pending_ntc.pop(waiver_id, None)
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {proposal['proposer_team_id']} -> "
+                    f"{proposal['partner_team_id']} died: {msg}")
+            except Exception:
+                pass
+
+        if team is None or partner is None:
+            _drop("a club is gone")
+            return
+        if choice == "cancel":
+            _drop(f"{proposal['manager']} cancelled")
+            return
+        if choice == "remove":
+            pid = v["player_id"]
+            if pid in proposal["players_out"]:
+                proposal["players_out"].remove(pid)
+            proposal["retention"].pop(pid, None)
+            if not proposal["players_out"] and not proposal["picks_out"]:
+                _drop("nothing left to offer")
+                return
+            pend["veto_idx"] += 1
+            self._mp_continue_waiver_flow(waiver_id, pend, _drop)
+            return
+        # choice == "ask": the player decides, same roll as single-player.
+        player = self._mp_team_player(team, v["player_id"])
+        if player is None:
+            _drop("player moved clubs mid-negotiation")
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, partner, league)
+        except Exception as e:
+            granted, why = False, str(e)
+        if granted:
+            try:
+                player.contract.ntc_waiver_for = partner.team_name
+            except Exception:
+                pass
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{v['player_name']} waived his {v['clause']} for a move "
+                    f"to {partner.team_name}.")
+            except Exception:
+                pass
+            pend["veto_idx"] += 1
+            self._mp_continue_waiver_flow(waiver_id, pend, _drop)
+        else:
+            _drop(f"{v['player_name']} refused to waive ({why})")
+
+    def _mp_resolve_demote_answer(self, pend, waiver_id, choice):
+        """Resolve a demotion NMC consent: "ask" rolls the player's decision
+        (context="waivers", like single-player); anything else keeps him
+        on the roster. The demotion itself only ever runs here, on the
+        host, after a granted answer."""
+        import trade_engine as te
+        self._mp_pending_ntc.pop(waiver_id, None)
+        team = self._mp_find_team(pend.get("team_id", ""))
+        name = pend.get("player_name", "The player")
+        if team is None:
+            return
+        player = self._mp_team_player(team, pend.get("player_id", ""))
+        if player is None:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} moved clubs while his waiver answer was "
+                    f"pending -- demotion cancelled.")
+            except Exception:
+                pass
+            return
+        if choice != "ask":
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} stays on the roster "
+                    f"({pend.get('manager', 'his GM')} didn't ask him to "
+                    f"waive his {pend.get('clause', 'no-movement clause')}).")
+            except Exception:
+                pass
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, None, league,
+                                             context="waivers")
+        except Exception as e:
+            granted, why = False, str(e)
+        if not granted:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} refused to waive his "
+                    f"{pend.get('clause', 'no-movement clause')} ({why}) -- "
+                    f"he stays on the roster.")
+            except Exception:
+                pass
+            return
+        try:
+            self.mp_host.broadcast_chat(
+                f"{name} agreed to be exposed on waivers ({why}).")
+        except Exception:
+            pass
+        ok, detail = self._mp_demote_player(team, player)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Demotion failed after the waiver was granted: "
+                    f"{detail}")
+            except Exception:
+                pass
+
+    def _mp_continue_waiver_flow(self, waiver_id, pend, _drop):
+        """Advance a waiver flow: next prompt, or route the offer when the
+        last veto is cleared."""
+        session_id = self._mp_peer_session_for_team(pend["team_id"])
+        if not session_id:
+            _drop("lost connection to proposer")
+            return
+        res = self._mp_send_next_waiver(waiver_id, session_id)
+        # _mp_send_next_waiver either queued the next prompt (True, …)
+        # or routed the finished offer; a routing failure kills the flow.
+        ok = res[0] if isinstance(res, tuple) else False
+        if not ok:
+            detail = res[1] if isinstance(res, tuple) and len(res) > 1 \
+                else "routing failed"
+            _drop(detail)
+
+    def _mp_route_trade_offer(self, proposal):
+        """Send a waiver-cleared proposal to its destination: instant AI
+        evaluation, a host popup, or a routed offer to another human.
+        Returns (ok, detail, broadcast)."""
+        import trade_engine as te
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return False, "A club involved is gone.", True
+        # Re-resolve assets against canonical state: rosters may have
+        # moved since the proposal was built (waiver prompts take time).
+        out_players = [self._mp_team_player(team, pid)
+                       for pid in proposal["players_out"]]
+        in_players = [self._mp_team_player(partner, pid)
+                      for pid in proposal["players_in"]]
+        out_picks = [self._mp_team_pick(team, kid)
+                     for kid in proposal["picks_out"]]
+        in_picks = [self._mp_team_pick(partner, kid)
+                    for kid in proposal["picks_in"]]
+        if any(p is None for p in out_players + in_players) or \
+                any(k is None for k in out_picks + in_picks):
+            self._mp_clear_proposal_waivers(proposal)
+            return False, \
+                "An asset changed clubs while you negotiated -- re-propose.", \
+                True
+        proposal["_out_players"] = out_players
+        proposal["_in_players"] = in_players
+        proposal["_out_picks"] = out_picks
+        proposal["_in_picks"] = in_picks
+
+        league = getattr(self, "league", None)
+        partner_session = self._mp_peer_session_for_team(partner.team_name)
+        is_host_team = bool(getattr(partner, "is_user_team", False))
+
+        if partner_session is not None:
+            # Human-to-human: the other manager gets the offer live.
+            import uuid as _uuid
+            offer_id = _uuid.uuid4().hex[:10]
+            self._mp_pending_offers[offer_id] = proposal
+            offer_wire = self._mp_serialize_offer(
+                proposal, out_players, in_players, out_picks, in_picks)
+            try:
+                peer_name = ""
+                try:
+                    peer = self.mp_host.find_peer_by_team(partner.team_name)
+                    peer_name = getattr(peer, "name", "")
+                except Exception:
+                    pass
+                self.mp_host.send_trade_offer(
+                    partner_session, offer_id, team.team_name,
+                    proposal["manager"], offer_wire)
+            except Exception:
+                self._mp_pending_offers.pop(offer_id, None)
+                self._mp_clear_proposal_waivers(proposal)
+                return False, "Could not reach the other manager.", True
+            return (True,
+                    f"Offer sent to {peer_name or partner.team_name} -- "
+                    f"awaiting their answer.",
+                    False)
+        if is_host_team:
+            return self._mp_offer_to_host(proposal, team, partner,
+                                          out_players, in_players,
+                                          out_picks, in_picks)
+        # AI club: clear the partner's movement-clause vetoes the way the
+        # AI deadline flow does (the player decides, same roll), then
+        # evaluate the deal.
+        try:
+            for _v in te.trade_vetoes(partner, team, in_players, league):
+                _p = _v["player"]
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if not _ok:
+                    self._mp_clear_proposal_waivers(proposal)
+                    try:
+                        self.mp_host.broadcast_chat(
+                            f"Trade {team.team_name} -> {partner.team_name} "
+                            f"died: {getattr(_p, 'full_name', 'player')} "
+                            f"refused to waive ({_why}).")
+                    except Exception:
+                        pass
+                    return False, (
+                        f"{getattr(_p, 'full_name', 'A player')} refused "
+                        f"to waive his clause -- deal is dead."), True
+                try:
+                    _p.contract.ntc_waiver_for = team.team_name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            ev = te.evaluate_trade(out_players + out_picks,
+                                   in_players + in_picks,
+                                   user_team=team, partner_team=partner)
+            label = getattr(ev, "label", "")
+        except Exception:
+            label = ""
+        # "You overpay" is from the proposer's perspective -- good for AI.
+        if label in ("Fair deal", "You overpay"):
+            ok, detail = self._mp_execute_mp_trade(proposal)
+            return ok, detail, True
+        self._mp_clear_proposal_waivers(proposal)
+        try:
+            self.mp_host.broadcast_chat(
+                f"Trade {team.team_name} -> {partner.team_name} rejected "
+                f"({label or 'not fair value'}).")
+        except Exception:
+            pass
+        return False, \
+            f"{partner.team_name} rejected the offer ({label or 'value'}).", \
+            True
+
+    def _mp_serialize_offer(self, proposal, out_players, in_players,
+                            out_picks, in_picks):
+        import trade_engine as te
+
+        def _p(p):
+            kind = ""
+            try:
+                kind = (te.clause_of(p) or ("", ""))[0] or ""
+            except Exception:
+                pass
+            pos = getattr(getattr(p, "primary_position", None), "value",
+                          "?")
+            return {"id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": pos,
+                    "ovr": int(getattr(p, "overall", 0) or 0),
+                    "salary": int(getattr(getattr(p, "contract", None),
+                                          "salary", 0) or 0),
+                    "clause": kind}
+
+        def _k(k):
+            return {"id": str(getattr(k, "id", "")),
+                    "desc": (f"{getattr(k, 'year', '?')} "
+                             f"Round {getattr(k, 'round', '?')} "
+                             f"({getattr(k, 'original_team', '')})")}
+
+        return {"players_out": [_p(p) for p in out_players],
+                "players_in": [_p(p) for p in in_players],
+                "picks_out": [_k(k) for k in out_picks],
+                "picks_in": [_k(k) for k in in_picks],
+                "retention": dict(proposal.get("retention") or {}),
+                "pick_protection": dict(proposal.get("pick_protection")
+                                        or {})}
+
+    def _mp_offer_to_host(self, proposal, team, partner, out_players,
+                          in_players, out_picks, in_picks):
+        """The proposal targets the host's own club: ask the host with the
+        same prompt the trade screen uses (waivers first, then accept)."""
+        import trade_engine as te
+        from popup_system import messagebox
+        league = getattr(self, "league", None)
+        # Host's own clause players: single-player askyesnocancel.
+        kept_in = list(in_players)
+        try:
+            for _v in te.trade_vetoes(partner, team, list(in_players),
+                                      league):
+                _p = _v["player"]
+                _pname = getattr(_p, "full_name", "player")
+                _ans = messagebox.askyesnocancel(
+                    "No-trade clause",
+                    f"{_pname} has a {_v.get('detail', 'clause')}.\n\n"
+                    f"Ask him to waive it for a move to {team.team_name}?\n\n"
+                    "Yes = ask him  |  No = remove him from the offer  |  "
+                    "Cancel = stop")
+                if _ans is None:
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, "You cancelled the offer.", True
+                if _ans is False:
+                    kept_in = [p for p in kept_in if p is not _p]
+                    continue
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if _ok:
+                    try:
+                        _p.contract.ntc_waiver_for = team.team_name
+                    except Exception:
+                        pass
+                    messagebox.showinfo("Waiver granted", _why)
+                else:
+                    messagebox.showwarning(
+                        "Waiver refused",
+                        f"{_why}\n\nHe's staying put -- the offer is dead.")
+                    self._mp_clear_proposal_waivers(proposal)
+                    return False, \
+                        f"{_pname} refused to waive -- offer dead.", True
+        except Exception:
+            pass
+        proposal["_in_players"] = kept_in
+        if not kept_in and not in_picks:
+            self._mp_clear_proposal_waivers(proposal)
+            return False, "Nothing left to ask for.", True
+
+        def _names(plist):
+            return ", ".join(getattr(p, "full_name", "?") for p in plist) \
+                or "none"
+
+        def _knames(klist):
+            return ", ".join(
+                f"{getattr(k, 'year', '?')} R{getattr(k, 'round', '?')}"
+                for k in klist) or "none"
+
+        try:
+            accept = messagebox.askyesno(
+                f"Trade offer from {proposal['manager']}",
+                f"{proposal['manager']} ({team.team_name}) offers:\n\n"
+                f"YOU RECEIVE: {_names(out_players)}\n"
+                f"Picks: {_knames(out_picks)}\n\n"
+                f"YOU SEND: {_names(kept_in)}\n"
+                f"Picks: {_knames(in_picks)}\n\n"
+                "Accept this trade?")
+        except Exception:
+            accept = False
+        if not accept:
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"rejected by {partner.team_name}.")
+            except Exception:
+                pass
+            return False, "You rejected the offer.", True
+        ok, detail = self._mp_execute_mp_trade(proposal)
+        return ok, detail, True
+
+    def _mp_execute_mp_trade(self, proposal):
+        """Run a fully-cleared proposal through the canonical trade
+        engine: clause preflight, cap validation, retention, asset moves."""
+        import trade_engine as te
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return False, "A club involved is gone."
+        out_players = proposal.get("_out_players") or [
+            self._mp_team_player(team, pid)
+            for pid in proposal["players_out"]]
+        in_players = proposal.get("_in_players") or [
+            self._mp_team_player(partner, pid)
+            for pid in proposal["players_in"]]
+        out_picks = proposal.get("_out_picks") or [
+            self._mp_team_pick(team, kid) for kid in proposal["picks_out"]]
+        in_picks = proposal.get("_in_picks") or [
+            self._mp_team_pick(partner, kid) for kid in proposal["picks_in"]]
+        if any(p is None for p in out_players + in_players) or \
+                any(k is None for k in out_picks + in_picks):
+            self._mp_clear_proposal_waivers(proposal)
+            return False, "An asset changed clubs -- re-propose."
+        # Pick protection rides on the pick objects themselves.
+        for kid, prot in (proposal.get("pick_protection") or {}).items():
+            for k in out_picks:
+                if str(getattr(k, "id", "")) == str(kid):
+                    try:
+                        k.protection = prot
+                    except Exception:
+                        pass
+        retention = {}
+        for pid, pct in (proposal.get("retention") or {}).items():
+            for p in out_players:
+                if str(getattr(p, "id", "")) == str(pid):
+                    retention[str(getattr(p, "id", ""))] = float(pct)
+        try:
+            date_str = str(getattr(self, "current_date", ""))
+        except Exception:
+            date_str = ""
+        try:
+            result = te.execute_trade(
+                team, partner, out_players + out_picks,
+                in_players + in_picks, date_str=date_str,
+                league=getattr(self, "league", None),
+                board=getattr(self, "board", None),
+                retention=retention or None)
+        except Exception as e:
+            self._mp_clear_proposal_waivers(proposal)
+            return False, f"Trade engine refused: {e}"
+        if isinstance(result, str) and result.startswith("BLOCKED"):
+            self._mp_clear_proposal_waivers(proposal)
+            reason = result[len("BLOCKED:"):].strip() or "league office veto"
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} <-> {partner.team_name} "
+                    f"BLOCKED: {reason}")
+            except Exception:
+                pass
+            return False, f"League office blocked it: {reason}"
+        try:
+            self.mp_host.broadcast_chat(
+                f"TRADE: {team.team_name} <-> {partner.team_name} -- "
+                f"{len(out_players)} players, {len(out_picks)} picks "
+                f"each way. Done deal.")
+        except Exception:
+            pass
+        return True, "Trade completed."
+
+    def _mp_resolve_trade_response(self, payload):
+        """Host-side TRADE_RESPONSE: the other human answered an offer."""
+        import trade_engine as te
+        offer_id = payload.get("offer_id", "")
+        decision = payload.get("decision", "")
+        proposal = self._mp_pending_offers.pop(offer_id, None)
+        if proposal is None:
+            return
+        team = self._mp_find_team(proposal["proposer_team_id"])
+        partner = self._mp_find_team(proposal["partner_team_id"])
+        if team is None or partner is None:
+            return
+        if decision != "accept":
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"rejected by {payload.get('manager', '?')}.")
+            except Exception:
+                pass
+            return
+        # Accepted: the partner's clause players get asked now -- the
+        # partner GM "asks him" by accepting, same roll as single-player.
+        league = getattr(self, "league", None)
+        in_players = [self._mp_team_player(partner, pid)
+                      for pid in proposal["players_in"]]
+        if any(p is None for p in in_players):
+            self._mp_clear_proposal_waivers(proposal)
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} died: "
+                    f"an asset moved clubs.")
+            except Exception:
+                pass
+            return
+        try:
+            for _v in te.trade_vetoes(partner, team, in_players, league):
+                _p = _v["player"]
+                _ok, _why = te.will_waive_ntc(_p, partner, team, league)
+                if not _ok:
+                    self._mp_clear_proposal_waivers(proposal)
+                    try:
+                        self.mp_host.broadcast_chat(
+                            f"Trade {team.team_name} -> {partner.team_name} "
+                            f"died: {getattr(_p, 'full_name', 'player')} "
+                            f"refused to waive ({_why}).")
+                    except Exception:
+                        pass
+                    return
+                try:
+                    _p.contract.ntc_waiver_for = team.team_name
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        proposal["_in_players"] = in_players
+        ok, detail = self._mp_execute_mp_trade(proposal)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Trade {team.team_name} -> {partner.team_name} "
+                    f"failed: {detail}")
+            except Exception:
+                pass
+
+    # -- entry-draft pick clock (host side) --------------------------------
+
+    def _mp_open_draft_clock(self, team, round_num, overall):
+        """Put a claimed team on the draft clock: notify its manager with
+        a shortlist; their draft_pick action answers. 60s, then BPA."""
+        import time as _time
+        import uuid as _uuid
+        clock_id = _uuid.uuid4().hex[:10]
+        try:
+            prospects = sorted(
+                getattr(getattr(self, "league", None),
+                        "draft_prospects", None) or [],
+                key=lambda p: getattr(p, "draft_ranking", 999))[:30]
+        except Exception:
+            prospects = []
+        wire = []
+        for p in prospects:
+            try:
+                wire.append({
+                    "id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": getattr(getattr(p, "primary_position", None),
+                                   "value", "?"),
+                    "ranking": int(getattr(p, "draft_ranking", 0) or 0)})
+            except Exception:
+                continue
+        self._mp_draft_clock = {
+            "clock_id": clock_id, "team_id": team.team_name,
+            "overall": overall, "round_num": round_num,
+            "deadline": _time.time() + 60, "pick_id": None, "done": False,
+        }
+        session_id = self._mp_peer_session_for_team(team.team_name)
+        if session_id:
+            try:
+                self.mp_host.send_draft_clock(
+                    session_id, clock_id, team.team_name, overall,
+                    round_num, wire)
+            except Exception as e:
+                print(f"draft clock send failed: {e}")
+        try:
+            self._mp_toast(
+                f"{team.team_name} on the clock (pick #{overall}) -- "
+                f"waiting on their GM.")
+        except Exception:
+            pass
+
+    def _mp_draft_pick(self, params, team, manager):
+        """Answer the draft clock: validate the prospect is still
+        available; the DraftView's wait loop executes the pick on the
+        main thread."""
+        st = getattr(self, "_mp_draft_clock", None)
+        if not st or st.get("done"):
+            return False, "No pick is waiting on you.", True
+        if st.get("team_id") != team.team_name:
+            return False, "It's not your pick.", True
+        pid = str(params.get("player_id", "") or "")
+        if str(params.get("clock_id", "") or "") \
+                and params.get("clock_id") != st.get("clock_id"):
+            return False, "That clock expired -- wait for the next one.", \
+                True
+        prospect = None
+        try:
+            for p in getattr(getattr(self, "league", None),
+                             "draft_prospects", None) or []:
+                if str(getattr(p, "id", "")) == pid:
+                    prospect = p
+                    break
+        except Exception:
+            pass
+        if prospect is None:
+            return False, "That prospect is already drafted.", True
+        st["pick_id"] = pid
+        return True, \
+            f"Pick registered: {getattr(prospect, 'full_name', '?')}.", False
+
+    def _mp_clear_draft_clock(self):
+        try:
+            self._mp_draft_clock = None
+        except Exception:
+            pass
+
+    def _mp_clear_proposal_waivers(self, proposal):
+        """A dead deal spends nothing: clear one-transaction waivers."""
+        for pid in proposal.get("players_out", []) or []:
+            for tid in (proposal.get("proposer_team_id"),
+                        proposal.get("partner_team_id")):
+                team = self._mp_find_team(tid or "")
+                p = self._mp_team_player(team, pid) if team else None
+                if p is not None:
+                    try:
+                        p.contract.ntc_waiver_for = ""
+                    except Exception:
+                        pass
+
+    # -- morale / coaching-room actions (host side) ----------------------
+
+    def _mp_team_context(self, team):
+        """Host-side equivalent of the Morale window's team context."""
+        ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
+        try:
+            import reputation_system as rs
+            st = (getattr(getattr(self, "league", None), "standings", None)
+                  or {}).get(getattr(team, "team_name", ""), {})
+            w = st.get("W", st.get("Wins", 0))
+            l = st.get("L", st.get("Losses", 0))
+            otl = st.get("OTL", 0)
+            ctx["win_pct"] = w / max(1, w + l + otl)
+            ctx["losing_streak"] = int(st.get("losing_streak", st.get("streak", 0)) or 0)
+            leaders = rs.team_hierarchy(list(getattr(team, "roster", []) or [])
+                                        ).get("Team Leaders", [])
+            if leaders:
+                ctx["room_leadership"] = sum(
+                    getattr(p, "leadership", 50) or 50 for p in leaders) / len(leaders)
+        except Exception:
+            pass
+        return ctx
+
+    def _mp_head_coach(self, team):
+        try:
+            for stf in getattr(team, "staff", []) or []:
+                if "Head Coach" in str(getattr(getattr(stf, "role", None), "value", "")):
+                    return stf
+        except Exception:
+            pass
+        return None
+
+    def _apply_morale_action(self, action, params, team):
+        """Apply a client's morale/coaching-room intent to canonical state.
+
+        Runs on the host's main thread. net_host already verified the client
+        owns team_id; here we validate shapes/values and run the same
+        reputation_system functions the host's own Morale window uses, so a
+        remote GM gets identical behavior. Returns (ok, detail).
+        """
+        import reputation_system as rs
+        coach = self._mp_head_coach(team)
+        if coach is None:
+            return False, "no head coach on staff"
+        roster = list(getattr(team, "roster", []) or [])
+
+        def _find_player(pid):
+            for pl in roster:
+                if str(getattr(pl, "id", "")) == str(pid):
+                    return pl
+            return None
+
+        try:
+            if action == "advise_coach":
+                key = str(params.get("advice_type", ""))
+                if key not in rs.ADVICE_TYPES:
+                    return False, f"unknown advice: {key!r}"
+                target = None
+                if key == "feature_player":
+                    target = _find_player(params.get("target_player_id"))
+                    if target is None:
+                        return False, "player not on your roster"
+                out = rs.advise_coach(coach, key, team, roster,
+                                      target_player=target)
+            elif action == "unfeature_player":
+                pl = _find_player(params.get("player_id"))
+                if pl is None:
+                    return False, "player not on your roster"
+                out = rs.unfeature_player(coach, pl, team)
+            elif action == "team_event":
+                ev = str(params.get("event", ""))
+                fn = {"bag_skate": rs.apply_bag_skate,
+                      "inspiring_speech": rs.apply_inspiring_speech,
+                      "great_practice": rs.apply_great_practice}.get(ev)
+                if fn is None:
+                    return False, f"unknown team event: {ev!r}"
+                out = fn(team, coach, roster)
+            elif action == "set_line_control":
+                holder = str(params.get("holder", ""))
+                if holder not in ("coach", "gm"):
+                    return False, "holder must be coach or gm"
+                approach = str(params.get("approach", "seize"))
+                if approach not in ("discuss", "seize"):
+                    return False, "approach must be discuss or seize"
+                out = rs.set_line_control(team, holder,
+                                          self._mp_team_context(team),
+                                          roster, coach=coach,
+                                          approach=approach)
+            else:
+                return False, f"unsupported action: {action}"
+        except Exception as e:
+            return False, f"action failed: {e}"
+        text = out.get("text", "") if isinstance(out, dict) else ""
+        return True, (text[:300] if text else "done")
+
+    # -- rivalry declarations (host side) --------------------------------
+
+    def _apply_rivalry_action(self, action, params, team):
+        """Apply a client's rivalry declaration/renounce to canonical state.
+
+        The league's rivalry list syncs to every manager via STATE_SYNC, so a
+        declared hate is immediately everyone's problem.
+        """
+        import reputation_system as rs
+        import headlines as hl
+        league = getattr(self, "league", None)
+        if league is None:
+            return False, "no league loaded"
+        target_team = self._mp_find_team(str(params.get("target_team", "")))
+        kind = str(params.get("target_kind", "team"))
+        if kind not in ("team", "coach"):
+            return False, "target_kind must be team or coach"
+        try:
+            if action == "declare_rivalry":
+                rec, label = rs.declare_rivalry_for_gm(league, team,
+                                                       target_team, kind)
+                try:
+                    hl.announce_rivalry_declaration(
+                        self, getattr(team, "team_name", "?"),
+                        getattr(target_team, "team_name", "?"), label, kind)
+                except Exception:
+                    pass
+                return True, (f"Rivalry declared vs {label} "
+                              f"(heat {rec['intensity']:.0f})")
+            ok = rs.renounce_rivalry_for_gm(league, team, target_team, kind)
+            return (True, "Declaration renounced; the hate cools.") if ok else \
+                (False, "no live declaration to renounce")
+        except ValueError as e:
+            return False, str(e)
+        except Exception as e:
+            return False, f"action failed: {e}"
+
+    def _apply_multiplayer_snapshot(self, save_bytes, label=""):
+        """Replace local state with the host's snapshot (main thread)."""
+        import gzip
+        import pickle
+        try:
+            data = pickle.loads(gzip.decompress(save_bytes))
+        except Exception as e:
+            print(f"Snapshot decode failed (non-fatal): {e}")
+            return
+        try:
+            self.save_manager._restore_game_state(data)
+        except Exception as e:
+            print(f"Snapshot restore failed (non-fatal): {e}")
+            return
+        try:
+            # Re-sync GUI mirrors that __init__ seeded from defaults.
+            self.league = self.game_manager.league
+            if hasattr(self.game_manager, 'current_date'):
+                self.current_date = self.game_manager.current_date
+            # Clients view the league through THEIR claimed team.
+            if self.mp_client is not None and getattr(self.mp_client, 'team_id', None):
+                claimed = self._mp_find_team(self.mp_client.team_id)
+                if claimed is not None:
+                    self.game_manager.user_team = claimed
+                    self.user_team = claimed
+            elif hasattr(self.game_manager, 'user_team'):
+                self.user_team = self.game_manager.user_team
+            self._update_team_colors()
+            self.update_all_views()
+            if label:
+                self._rebuild_news_log_from_stories()
+            self._mp_toast(f"Synced: {label}")
+        except Exception as e:
+            print(f"Snapshot view refresh failed (non-fatal): {e}")
+
+    def _mp_toast(self, text):
+        """Small auto-dismissing notification (main thread only)."""
+        print(f"[MP] {text}")
+        try:
+            toast = tk.Toplevel(self)
+            toast.overrideredirect(True)
+            toast.attributes("-topmost", True)
+            x = self.winfo_x() + self.winfo_width() - 340
+            y = self.winfo_y() + 60
+            toast.geometry(f"320x44+{max(x, 0)}+{max(y, 0)}")
+            tk.Label(toast, text=text, bg="#1c2b33", fg="#e8f1f2",
+                     font=("Segoe UI", 10), wraplength=300,
+                     padx=12, pady=10).pack(fill="both", expand=True)
+            toast.after(2500, toast.destroy)
+        except Exception:
+            pass
+
+    # -- client-side multiplayer dialogs ------------------------------------
+
+    def _mp_show_trade_offer(self, payload):
+        """Incoming human-to-human trade offer: Accept / Reject."""
+        from popup_system import messagebox
+        offer_id = payload.get("offer_id", "")
+        from_team = payload.get("from_team", "?")
+        manager = payload.get("manager", "?")
+        offer = payload.get("offer") or {}
+
+        def _p(p):
+            c = f" [{p.get('clause')}]" if p.get("clause") else ""
+            return (f"{p.get('name', '?')} ({p.get('pos', '?')}, "
+                    f"OVR {p.get('ovr', '?')}, "
+                    f"${p.get('salary', 0):,}){c}")
+
+        def _k(k):
+            return k.get("desc", "?")
+
+        lines = [f"{manager} ({from_team}) offers you a trade:",
+                 "",
+                 "YOU RECEIVE:"]
+        for p in offer.get("players_out", []):
+            lines.append(f"  - {_p(p)}")
+        for k in offer.get("picks_out", []):
+            lines.append(f"  - Pick: {_k(k)}")
+        for pid, pct in (offer.get("retention") or {}).items():
+            lines.append(f"    (retains {pct}% on a player)")
+        lines.append("")
+        lines.append("YOU SEND:")
+        for p in offer.get("players_in", []):
+            lines.append(f"  - {_p(p)}")
+        for k in offer.get("picks_in", []):
+            lines.append(f"  - Pick: {_k(k)}")
+        for kid, prot in (offer.get("pick_protection") or {}).items():
+            lines.append(f"    (protection: {prot})")
+        try:
+            accept = messagebox.askyesno(
+                "Trade offer", "\n".join(lines) +
+                "\n\nAccept this trade?")
+        except Exception:
+            accept = False
+        if self.mp_client is None:
+            return
+        try:
+            self.mp_client.send_trade_response(
+                offer_id, "accept" if accept else "reject")
+        except Exception as e:
+            self._mp_toast(f"Trade answer failed: {e}")
+            return
+        self._mp_toast("Trade accepted -- waiting on the league office."
+                       if accept else "Trade offer rejected.")
+
+    def _mp_answer_ntc_request(self, payload):
+        """No-trade/no-movement waiver prompt: same choices as single-player
+        (ask him / remove him / cancel for trades; ask him / keep him for
+        waiver exposure)."""
+        from popup_system import messagebox
+        waiver_id = payload.get("waiver_id", "")
+        player_id = payload.get("player_id", "")
+        name = payload.get("player_name", "A player")
+        clause = payload.get("clause", "clause")
+        dest = payload.get("dest_team", "?")
+        context = payload.get("context", "trade")
+        if context == "waivers":
+            title = "No-movement clause"
+            question = (f"{name} has a {clause}.\n\n"
+                        f"He must approve being exposed on waivers. "
+                        f"Ask him?\n\n"
+                        f"Yes = ask him  |  No = keep him on the roster  |  "
+                        f"Cancel = stop")
+        else:
+            title = "No-trade clause"
+            question = (f"{name} has a {clause}.\n\n"
+                        f"Ask him to waive it for a move to {dest}?\n\n"
+                        f"Yes = ask him  |  No = remove him from the offer  |  "
+                        f"Cancel = stop")
+        try:
+            ans = messagebox.askyesnocancel(title, question)
+        except Exception:
+            ans = None
+        choice = "ask" if ans is True else ("remove" if ans is False
+                                            else "cancel")
+        if self.mp_client is None:
+            return
+        try:
+            self.mp_client.send_ntc_waiver_answer(
+                player_id, choice, waiver_id=waiver_id)
+        except Exception as e:
+            self._mp_toast(f"Waiver answer failed: {e}")
+
+    def _mp_show_draft_clock(self, payload):
+        """You're on the clock: pick a prospect (60s, then auto-pick)."""
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        prospects = payload.get("prospects") or []
+        if not prospects:
+            return
+        win = tk.Toplevel(self)
+        win.title(f"Draft pick #{overall} -- you're on the clock")
+        win.geometry("520x560")
+        win.attributes("-topmost", True)
+        tk.Label(win, text=f"Pick #{overall} (Round {round_num}) -- "
+                           f"your selection",
+                 font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
+        self._mp_draft_answer = {"clock_id": clock_id, "answered": False}
+        state = {"left": 60}
+
+        def _countdown():
+            try:
+                if not win.winfo_exists():
+                    return
+                if self._mp_draft_answer.get("answered"):
+                    return
+                state["left"] -= 1
+                clock_var.set(f"Clock: {max(state['left'], 0)}s")
+                if state["left"] <= 0:
+                    win.destroy()
+                    self._mp_toast("Draft clock expired -- auto-pick.")
+                    return
+                win.after(1000, _countdown)
+            except Exception:
+                pass
+
+        clock_var = tk.StringVar(value="Clock: 60s")
+        tk.Label(win, textvariable=clock_var,
+                 font=("Segoe UI", 11)).pack(pady=(0, 6))
+        frame = tk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        lb = tk.Listbox(frame, font=("Segoe UI", 11), height=18)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+        for p in prospects:
+            lb.insert("end", f"#{p.get('ranking', '?')} "
+                             f"{p.get('name', '?')} ({p.get('pos', '?')})")
+
+        def _draft_selected():
+            try:
+                sel = lb.curselection()
+            except Exception:
+                sel = ()
+            if not sel:
+                return
+            p = prospects[sel[0]]
+            if self._mp_draft_answer.get("answered"):
+                return
+            self._mp_draft_answer["answered"] = True
+            try:
+                self.mp_client.send_action("draft_pick", {
+                    "clock_id": clock_id,
+                    "player_id": p.get("id", "")})
+            except Exception as e:
+                self._mp_toast(f"Draft pick failed: {e}")
+                return
+            win.destroy()
+            self._mp_toast(f"Drafted {p.get('name', '?')}.")
+
+        tk.Button(win, text="DRAFT SELECTED PROSPECT",
+                  font=("Segoe UI", 11, "bold"),
+                  command=_draft_selected).pack(pady=(0, 10))
+        win.after(1000, _countdown)
 
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
@@ -6718,6 +9340,27 @@ class HockeyManagerGUI(tk.Tk):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
 
+        # Narrative ledger clock: one cheap setup per day. Drives callback
+        # cooldowns; season rollover prunes old low-weight events once.
+        try:
+            from narrative_ledger import get_ledger
+            _led = get_ledger(self)
+            _sy = getattr(getattr(self, "league", None), "season_year", None)
+            _day = 0
+            try:
+                _season_start = date(_sy, 10, 1) if _sy else None
+                if _season_start is not None and \
+                        self.current_date >= _season_start:
+                    _day = (self.current_date - _season_start).days
+            except Exception:
+                pass
+            if _sy is not None and _led.season != _sy:
+                _led.advance_season(_sy)
+            else:
+                _led.set_clock(_sy, _day)
+        except Exception:
+            pass
+
         # Event-day hubs: prompt once per year when a tentpole day arrives.
         # (Entry draft is handled daily inside _check_for_event_day; it must
         # NOT be Monday-gated since June 23-25 often contains no Monday.)
@@ -6726,6 +9369,67 @@ class HockeyManagerGUI(tk.Tk):
         # Process trade block offers (once per week) - unchanged
         if self.current_date.weekday() == 0:  # Monday
             self.process_trade_block_offers()
+        # Scout value tips: once a month (1st), not weekly -- tips should
+        # feel like real pro-scouting work, not a daily cheat sheet.
+        if self.current_date.day == 1:
+            self._dispatch_scout_value_tips()
+            # Wave 1 monthly settlement:
+            # - Grade old ledger tips against what happened (scout records).
+            # - Steal/sell watches: only post-trade production validates a
+            #   scout's tip. The tip alone never pays off -- the breakout
+            #   (or the collapse) does. Validated events publish news.
+            # - Market ecology: philosophy drift + leadership-change regress.
+            try:
+                import reputation_system as _rs
+                import analytics_scouting as _as
+                _teams = list(self.league.teams)
+                _date_str = str(self.current_date)
+                _as.grade_tip_ledger(_teams, _date_str)
+                _as.tick_analytics_philosophy(self.league)
+                for _t in _teams:
+                    for _ev in _rs.check_steal_watch(_t, self.league,
+                                                     _date_str):
+                        _news = _ev.get("news")
+                        if _news:
+                            try:
+                                self.add_news(_news)
+                            except Exception:
+                                pass
+                    for _ev in _rs.check_sell_watch(_t, _teams,
+                                                    self.league,
+                                                    _date_str):
+                        _news = _ev.get("news")
+                        if _news:
+                            try:
+                                self.add_news(_news)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            # AI arms race: clubs evaluate, renew and poach scouting staff
+            # twice a season. Reads improve only when the people improve.
+            if self.current_date.month in (1, 7):
+                try:
+                    import analytics_scouting as _as2
+                    _as2.ai_scout_staff_review(
+                        self.league, str(self.current_date))
+                except Exception:
+                    pass
+        # Analytics storylines: mid-month (15th), season-aware, deduped,
+        # significance-gated. The press reads the same numbers the
+        # analytics department does -- but only the loud ones.
+        if self.current_date.day == 15:
+            try:
+                import analytics_scouting as _as
+                _players = []
+                for _t in self.league.teams:
+                    _players.extend(getattr(_t, "roster", []) or [])
+                _as.publish_analytics_storylines(
+                    getattr(self, "media_system", None),
+                    _players, list(self.league.teams),
+                    game_manager=self, limit=3)
+            except Exception:
+                pass
         
         # Process scouting assignments - optimized to run every 3 days instead of daily
         if self.current_date.day % 3 == 0:  # Every 3 days
@@ -6738,8 +9442,54 @@ class HockeyManagerGUI(tk.Tk):
                 pass
         
         # Process waivers - reduced frequency
+        # Waiver clock: exactly 2 calendar days on the wire, as the UI
+        # promises. The clock ticks every day; claim *processing* still
+        # runs Monday/Thursday only.
+        for _wp in list(self.waiver_list):
+            try:
+                if _wp.on_waivers and _wp.waiver_days > 0:
+                    _wp.waiver_days -= 1
+            except Exception:
+                pass
         if self.current_date.weekday() in [0, 3]:  # Monday and Thursday only
             self.process_waivers()
+
+        # Training camp (EHM-style): Sep 12-30, scrimmages every 3rd day
+        # from the 15th, camp report + development bumps at close. Runs
+        # ahead of the early-October camp cuts so the AI cuts by camp
+        # ratings (waiver_logic reads player.camp_avg).
+        try:
+            import training_camp as _tc
+            _tc.run_camp_day(self.league, self.current_date, app=self,
+                             rng=getattr(self, "_rng", None))
+        except Exception:
+            debug_print("Training camp failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+        # AI waiver management (BUG-019): cap casualties, AHL shuttle,
+        # and early-October camp cuts. Runs Mondays after claim
+        # processing; fresh placements enter the wire with a 2-day clock
+        # so there are no same-day claims. Never touches the user's club.
+        if self.current_date.weekday() == 0:  # Monday only
+            try:
+                import waiver_logic as _wl
+                _mdate = self.current_date
+                _camp = (_mdate.month == 10 and _mdate.day <= 7 and int(
+                    getattr(self.league, "_waiver_camp_year", 0) or 0)
+                    != _mdate.year)
+                if _camp:
+                    try:
+                        self.league._waiver_camp_year = _mdate.year
+                    except Exception:
+                        pass
+                _wl.process_ai_waivers(
+                    self.league, app=self,
+                    rng=getattr(self, "_rng", None), camp_cuts=_camp)
+            except Exception:
+                debug_print("AI waivers failed (non-fatal):")
+                import traceback
+                traceback.print_exc()
         
         # Generate daily emails - optimized
         if self.current_date.weekday() == 0:  # Weekly summary instead of daily
@@ -6753,9 +9503,36 @@ class HockeyManagerGUI(tk.Tk):
         if self.current_date.weekday() == 6:  # Sunday - weekly development processing
             self._process_player_development()
             self._process_training_programs()
+            self._process_room_politics_weekly()
 
         # FM-style career systems: board, happiness, youth, press (cheap daily)
         self._process_career_daily()
+
+        # AHL farm stat lines: no AHL game sim exists, so the minors get a
+        # lightweight generated ledger (ahl_system) -- just enough for the
+        # AHL Stats screen to show who's cooking. AHL regular season only
+        # (Oct 1 - Apr 20); never during the NHL playoffs.
+        try:
+            import ahl_system as _ahl
+            _sy = getattr(getattr(self, "league", None), "season_year", None)
+            _in_window = True
+            try:
+                from datetime import date as _d
+                if _sy is not None:
+                    _in_window = (_d(_sy, 10, 1) <= self.current_date
+                                  <= _d(_sy + 1, 4, 20))
+            except Exception:
+                pass
+            _bracket = getattr(getattr(self, "league", None),
+                               "playoff_bracket", None)
+            _playoffs_live = bool(
+                _bracket is not None
+                and getattr(_bracket, "stanley_cup_champion", None) is None
+                and getattr(_bracket, "playoff_series", None))
+            if _in_window and not _playoffs_live:
+                _ahl.simulate_ahl_day(self.league)
+        except Exception:
+            pass
     
     def _process_training_programs(self):
         """Run one weekly session for each active Development-Center program.
@@ -6815,7 +9592,11 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 can, _ = engine.can_practice(player, ptype, intensity)
                 if can:
-                    engine.execute_practice(player, ptype, intensity, 60, 12)
+                    # Team context: the real coaching staff runs the drill
+                    # (who teaches it, archetype affinity, attitude, fit,
+                    # system) instead of a flat trainer number.
+                    engine.execute_practice(player, ptype, intensity, 60, 12,
+                                            team=user_team)
             except Exception:
                 continue
         for pid in expired:
@@ -6825,6 +9606,117 @@ class HockeyManagerGUI(tk.Tk):
         for pid, prog in gm.training_programs.items():
             ACTIVE_TRAINING_PROGRAMS[pid] = prog
 
+    def _process_room_politics_weekly(self):
+        """Weekly room-politics tick (module 03, Wave 2): practice plans are
+        executed, captaincy crises surface, demanding coaches' shelf life
+        ticks. User and AI teams run the same engine; only the choices
+        differ (the GM's vs automated)."""
+        try:
+            import dressing_room as _dr
+            league = getattr(self, "league", None)
+            teams = list(getattr(league, "teams", []) or [])
+            date_str = ""
+            try:
+                date_str = self.current_date.isoformat()
+            except Exception:
+                pass
+            for team in teams:
+                try:
+                    # Multiplayer parity: a club run by a remote human gets
+                    # the user's tick (their stored plan runs; crises are
+                    # flagged for the human's decision), never the AI tick.
+                    _human = _dr.is_user_team(
+                        team, getattr(self, "game_manager", self))
+                    if not _human:
+                        try:
+                            import game_classes as _gc
+                            _human = bool(_gc.is_human_managed(team))
+                        except Exception:
+                            pass
+                    if _human:
+                        _urt = _dr.user_room_politics_tick(
+                            team, date_str=date_str, league=league)
+                        # Coach's leash, surfaced: the human GM decides --
+                        # never an auto-firing. One alert per hot-seat
+                        # episode; the flag clears (and re-arms) in
+                        # coach_hot_seat_check when the seat cools.
+                        try:
+                            _hs = (_urt or {}).get("coach_hot_seat")
+                            if isinstance(_hs, dict) and _hs.get("coach_name"):
+                                _drf = _dr.ensure_dressing_room_fields(team)
+                                if not _drf.get("coach_hot_seat_surfaced"):
+                                    _drf["coach_hot_seat_surfaced"] = True
+                                    self._alert_coach_hot_seat(
+                                        team, _hs, date_str)
+                        except Exception:
+                            pass
+                    else:
+                        _dr.ai_room_politics_tick(
+                            team, date_str=date_str, league=league, app=self)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _alert_coach_hot_seat(self, team, hot, date_str):
+        """Surface the coach hot-seat flag to the human GM: one inbox
+        alert per episode, carrying the coach's own case for staying.
+        The decision stays human -- this only opens the conversation."""
+        try:
+            from headlines import deliver as _deliver
+            from game_classes import EmailMessage
+            coach_name = hot.get("coach_name", "your head coach")
+            pitch = hot.get("pitch") or ""
+            body = (
+                f"{coach_name}'s seat is getting warm. Trust is at "
+                f"{hot.get('trust', '?')}/100 with the club pacing "
+                f"{hot.get('pace', '?')} against a "
+                f"{hot.get('expectation', 'board')} expectation "
+                f"({hot.get('expected', '?')} pts pace)."
+            )
+            if pitch:
+                body += f"\n\nHis case for staying: {pitch}"
+            body += ("\n\nThis is your call, not the board's -- open the "
+                     "Dressing Room to back him, warn him, or make a change.")
+            tname = getattr(team, "team_name", "")
+            _deliver(self, EmailMessage(
+                sender="Owner's office", sender_type="Staff",
+                subject=f"Hot seat: {coach_name}",
+                content=body, category="General",
+                is_important=True, priority=3), involved=(tname,))
+        except Exception:
+            pass
+
+    def _weekly_coaching_mults(self, team, player, attrs, _cache):
+        """Per-attribute coaching multipliers for the weekly all-team
+        development tick. Same practice_breakdown math as practice
+        sessions (drill knowledge, archetype affinity, attitude, fit,
+        system) -- one mechanic for all 32 clubs, user and AI alike.
+        Additive: returns 1.0 for anything it can't price. Never raises.
+        """
+        try:
+            import coach_practice as _cp
+        except Exception:
+            return {}
+        out = {}
+        for attr in attrs:
+            drill = _cp.attribute_drill(attr)
+            if drill is None or not hasattr(player, attr):
+                continue
+            # Keyed by team too: the same player object must never borrow
+            # another club's staff pricing.
+            key = (id(team), id(player), drill)
+            mult = _cache.get(key)
+            if mult is None:
+                try:
+                    mult = float(_cp.practice_breakdown(
+                        team, player, drill).get("total_mult", 1.0))
+                except Exception:
+                    mult = 1.0
+                _cache[key] = mult
+            out[attr] = mult
+        return out
+
     def _process_player_development(self):
         """Process weekly player development for all teams"""
         if not hasattr(self, 'development_engine') or self.development_engine is None:
@@ -6832,6 +9724,9 @@ class HockeyManagerGUI(tk.Tk):
         
         try:
             development_events = []
+            # Per-tick cache: (player, drill) -> coaching multiplier, so
+            # the breakdown is priced once per player per drill.
+            _coach_cache = {}
             
             for team in self.league.teams:
                 for roster_type, roster_list in (('roster', team.roster),
@@ -6868,12 +9763,26 @@ class HockeyManagerGUI(tk.Tk):
                             except Exception:
                                 pass
                             
-                            # Apply development to attributes based on player age and stage
-                            if player.age <= 27:  # Only develop younger players
+                            # Apply development to attributes based on player age and stage.
+                            # The age gates slide with the player's development arc
+                            # (late bloomers develop longer, early peaks decline
+                            # sooner) -- the gates themselves are untouched.
+                            try:
+                                from game_classes import arc_peak_shift as _arc_shift
+                                _shift = _arc_shift(player)
+                            except Exception:
+                                _shift = 0
+                            if player.age <= 27 + _shift:  # Only develop younger players
                                 import random
                                 
                                 # Determine which attributes can develop
                                 developable_attrs = self._get_developable_attributes(player)
+                                # Coaching parity: this club's staff shapes the
+                                # weekly tick exactly the way they shape a
+                                # practice session (same model, all 32 teams).
+                                coach_mults = self._weekly_coaching_mults(
+                                    team, player, developable_attrs,
+                                    _coach_cache)
                                 
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
@@ -6889,7 +9798,8 @@ class HockeyManagerGUI(tk.Tk):
                                         # Check if there's room to grow
                                         if current_val < max_val and current_val < 100:
                                             # Small chance of improvement each week
-                                            improvement_chance = weekly_rate * 0.15
+                                            improvement_chance = (weekly_rate * 0.15
+                                                                  * coach_mults.get(attr, 1.0))
 
                                             if random.random() < improvement_chance:
                                                 new_val = min(current_val + 1, max_val, 100)
@@ -6904,8 +9814,8 @@ class HockeyManagerGUI(tk.Tk):
                                                         'new_value': new_val
                                                     })
                             
-                            # Age-related decline for older players
-                            elif player.age >= 33:
+                            # Age-related decline for older players (arc slides the gate)
+                            elif player.age >= 33 + _shift:
                                 import random
                                 decline_chance = (player.age - 32) * 0.02  # 2% per year over 32
                                 
@@ -6964,6 +9874,284 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             print(f"Error generating weekly email summary: {e}")
 
+    # -- Milestone watches (milestones.py) -----------------------------------
+    def _milestone_pregame(self, todays_games):
+        """One milestone scan per day + pre-game presentation.
+
+        Caches the watch list for the post-game check and the set of teams
+        with a tonight-watch (feeds arena_atmosphere's milestone_home flag).
+        Pre-game news only when a watch is within 2 -- tonight could be the
+        night. Never spams for distant watches.
+        """
+        self._milestone_watches = []
+        self._milestone_watch_teams = set()
+        try:
+            import milestones as _ms
+            from narrative_ledger import active_ledger as _al
+            watches = _ms.scan_watches(getattr(self, "league", None))
+            self._milestone_watches = watches
+            self._milestone_watch_teams = _ms.watch_teams_tonight(watches)
+            if not watches:
+                return
+            _led = _al()
+            _by_team: dict = {}
+            for _w in watches:
+                if _w["remaining"] <= 2:
+                    _by_team.setdefault(_w["team_name"], []).append(_w)
+            if not _by_team:
+                return
+            for game in todays_games or []:
+                try:
+                    if isinstance(game, dict):
+                        home, away = game.get("home_team"), game.get("away_team")
+                    else:
+                        home, away = game[1], game[2]
+                    hn = getattr(home, "team_name", "")
+                    for _w in _by_team.get(hn, []):
+                        _note = _ms.venue_note(_w, home, away, _led)
+                        _suffix = f" ({_note})" if _note else ""
+                        self.add_news(
+                            f"Milestone watch: {_w['player_name']} is "
+                            f"{_w['remaining']} away from his {_w['label']}"
+                            f"{_suffix}.")
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _milestone_postgame(self):
+        """Milestones hit today: ledger event + four-viewpoint headline."""
+        try:
+            import milestones as _ms
+            watches = getattr(self, "_milestone_watches", None) or []
+            self._milestone_watches = []
+            self._milestone_watch_teams = set()
+            if not watches:
+                return
+            for hit in _ms.check_hits(getattr(self, "league", None), watches):
+                _ms.record_milestone_hit(self, hit)
+        except Exception:
+            pass
+
+    # -- Grudge-week presentation --------------------------------------------
+    def _deliver_outdoor_pregame(self, info, home_team, away_team):
+        """Inbox billing card for a Winter Classic / Stadium Series game.
+
+        Fires once per outdoor game (~3/season), so it never spams. Wrapped
+        defensively at every call site.
+        """
+        try:
+            import outdoor_games as _ogd
+            from headlines import deliver_spec as _deliver_spec
+            pres = _ogd.pregame_presentation(info)
+            _deliver_spec(self, {
+                "kind": "outdoor_pregame",
+                "event": info.get("event", "Outdoor Game"),
+                "home": home_team.team_name,
+                "away": away_team.team_name,
+                "venue_line": pres["venue_line"],
+                "alumni_line": pres["alumni_line"],
+                "rivalry_line": pres["rivalry_line"],
+                "involved": (home_team.team_name, away_team.team_name),
+            })
+        except Exception:
+            pass
+
+    def _grudge_week_market(self, game_date, home_team, away_team):
+        """Market a genuine feud as grudge week (sellout talk, loud billing).
+
+        Returns True when marketed; the matchup+date is tracked so the
+        post-game check can call out hollow overhype honestly.
+        """
+        try:
+            from narrative_ledger import get_ledger as _gl
+            _led = _gl(self)
+            _mw = float(_led.memory_weight(home_team.team_name,
+                                           away_team.team_name) or 0.0)
+            if _mw < 60.0:
+                return False
+            _mk = (home_team.team_name, away_team.team_name, str(game_date))
+            _gm = getattr(self, "_grudge_marketed", None)
+            if not isinstance(_gm, set):
+                _gm = set()
+                self._grudge_marketed = _gm
+            _gm.add(_mk)
+            self.add_news(
+                f"Grudge week in "
+                f"{getattr(home_team, 'city', home_team.team_name)}: "
+                f"{away_team.team_name} @ {home_team.team_name} -- "
+                f"the building is sold out and shaking. This one matters.")
+            return True
+        except Exception:
+            return False
+
+    def _narrative_postgame(self, sim_engine, home_team, away_team,
+                              scores, went_ot=False, shootout=False,
+                              roll_incidents=True, deliver_headlines=False,
+                              game_date=None):
+        """Shared post-game narrative hook (narrative_incidents.py).
+
+        Rolls incidents for engines that don't model them live (AdvGS),
+        records game stories for both engines, logs career moments to the
+        players who earned them, and feeds the fight count back onto the
+        sim so the grudge-week grader sees real numbers.
+        Headlines only when deliver_headlines (user-involved games).
+        Never raises; never touches scoring or stats.
+        """
+        try:
+            import narrative_incidents as _ni
+            from narrative_ledger import active_ledger
+            home_score, away_score = scores[0], scores[1]
+            rivalries = getattr(getattr(self, "league", None),
+                                "rivalries", None) or []
+            res = _ni.process_postgame(
+                sim_engine, home_team, away_team,
+                int(home_score), int(away_score),
+                went_ot=bool(went_ot), shootout=bool(shootout),
+                rivalries=rivalries, ledger=active_ledger(),
+                roll_incidents=bool(roll_incidents),
+                game_date=game_date,
+                season_year=getattr(getattr(self, "league", None),
+                                    "season_year", None))
+            if roll_incidents and sim_engine is not None:
+                try:
+                    if not getattr(sim_engine, "_fights_total", 0):
+                        sim_engine._fights_total = int(res.get("fights", 0))
+                except Exception:
+                    pass
+            # Drama layer: turn tonight's incidents into consequences --
+            # rivalry heat, headlines, DoPS fines, room morale, press
+            # hooks. Single consumer per game (fed only by rolled
+            # incidents; GameSim did its own live), so neither engine
+            # can double-fire. Skipped for preseason exhibitions.
+            try:
+                _ut = getattr(self, "user_team", None)
+                _ni.apply_incident_consequences(
+                    self, home_team, away_team,
+                    res.get("incidents"), res.get("incident_details"),
+                    bool(res.get("brawl")), (home_score, away_score),
+                    game_date, _ut, rivalries)
+                # Item 4 (additive): DoPS review for live borderline hits.
+                # Full-detail GameSim games record their hits on the sim
+                # engine (roll_incidents=False above), so the rolled path
+                # never fires on this branch -- each live hit gets the
+                # same suspension-or-fine decision exactly once. Quick-sim
+                # engines never stash hits, so this is a no-op there.
+                _ni.apply_live_dops_reviews(
+                    self, sim_engine, home_team, away_team,
+                    (home_score, away_score), game_date, _ut, rivalries)
+            except Exception:
+                pass
+            if deliver_headlines and res.get("stories"):
+                try:
+                    from headlines import deliver_spec as _deliver_spec
+                    for _st in res["stories"]:
+                        _deliver_spec(self, {
+                            "kind": "game_story",
+                            "story_kind": _st.get("kind", ""),
+                            "text": _st.get("text", ""),
+                            "home": _st.get("home", ""),
+                            "away": _st.get("away", ""),
+                            "involved": _st.get("involved", ()),
+                            # Clutch tag epithet (additive): headlines.py
+                            # colors the story for a tagged subject.
+                            "epithet": _st.get("epithet", ""),
+                        })
+                except Exception:
+                    pass
+            return res
+        except Exception:
+            return {}
+
+    def _grudge_week_grade(self, game_date, home_team, away_team,
+                           home_score, away_score, went_to_ot, fights=0):
+        """Post-game: call out hollow overhype when the game fizzled."""
+        try:
+            _mk = (home_team.team_name, away_team.team_name, str(game_date))
+            _gm = getattr(self, "_grudge_marketed", None)
+            if not (isinstance(_gm, set) and _mk in _gm):
+                return
+            _gm.discard(_mk)
+            _margin = abs(home_score - away_score)
+            if _margin >= 4 and not went_to_ot and fights == 0:
+                self.add_news(
+                    f"All that hype for this? "
+                    f"{away_team.team_name} @ {home_team.team_name} "
+                    f"fizzles {_margin} goals apart -- the fans feel sold "
+                    f"a bill of goods.")
+        except Exception:
+            pass
+
+    # -- Immortality (immortality.py) -----------------------------------------
+    def _offseason_immortality(self):
+        """Retirements, HOF vote, retired numbers, era arguments. One pass."""
+        import immortality as _im
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        year = int(getattr(league, "season_year", 2026) or 2026)
+        hist = getattr(self, "league_history", None)
+
+        # 1. Hang them up.
+        retired = _im.process_retirements(league, year)
+        for snap in retired:
+            try:
+                if _im.career_score(snap) >= 60.0:
+                    self.add_news(
+                        f"{snap['name']} hangs them up: "
+                        f"{snap['games']} games, {snap['points']} points"
+                        f"{', ' + str(snap['wins']) + ' wins' if snap.get('goalie') else ''}. "
+                        f"A career worthy of the Hall conversation.")
+            except Exception:
+                pass
+
+        # 2. Raise the numbers.
+        for snap in retired:
+            try:
+                if not _im.number_worthy(snap):
+                    continue
+                team = next(
+                    (t for t in (getattr(league, "teams", None) or [])
+                     if getattr(t, "team_name", "") == snap.get("team_name")),
+                    None)
+                if team is not None and _im.retire_number(team, snap, year):
+                    self.add_news(
+                        f"{getattr(team, 'team_name', '')} will retire "
+                        f"{snap['name']}'s No. {snap['number']} -- "
+                        f"a pregame ceremony at the next home game.")
+            except Exception:
+                continue
+
+        # 3. The Hall calls (or doesn't).
+        if hist is not None:
+            report = _im.hof_ballot(league, hist, year)
+            for ind in report.get("inducted", []):
+                try:
+                    _years = ind.get("ballot_years", 1)
+                    _arc = (f" -- after {_years} years on the ballot, "
+                            f"the wait is over" if _years > 1 else "")
+                    self.add_news(
+                        f"Hall of Fame: {ind['name']} is in "
+                        f"({ind['votes']}/12 votes){_arc}.")
+                except Exception:
+                    pass
+            for bl in report.get("borderline", []):
+                try:
+                    self.add_news(
+                        f"Hall of Fame debate: {bl['name']} falls short "
+                        f"({bl['votes']}/12) -- the room is split between "
+                        f"the compilers and the peak-value crowd. "
+                        f"Back on the ballot next year.")
+                except Exception:
+                    pass
+
+            # 4. Greatest team ever? Only when there's a real argument.
+            arg = _im.era_argument(hist)
+            if arg is not None:
+                news = _im.era_argument_news(arg)
+                if news:
+                    self.add_news(news)
+
     def _process_todays_games(self, todays_games):
         """Process all games scheduled for today - OPTIMIZED"""
         user_team = getattr(self, 'user_team', None)
@@ -7018,12 +10206,26 @@ class HockeyManagerGUI(tk.Tk):
                     continue  # Skip malformed games silently
             except (IndexError, KeyError, ValueError):
                 continue  # Skip errors silently
+
+            # Preseason exhibitions: quick-simmed quietly -- no viewer, no
+            # team talk, no lore, no board/morale, no stats, no standings.
+            is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
             
             # How should this user game be presented? Quick sim, watch live,
             # or ask the GM each game day. Never ask during bulk sims.
+            # When the game-day inbox bundle resolved the choice, its stored
+            # answers (presser, team talk boost, watch/quick) are used --
+            # no modal popups.
             settings = self.get_settings()
             mode = self._get_user_game_mode()
-            if getattr(self, '_bulk_simming', False):
+            _bundle_res = getattr(self, '_game_day_resolution', None)
+            _bundle_active = (_bundle_res is not None
+                              and _bundle_res.get("date") == self.current_date)
+            if _bundle_active:
+                use_game_viewer = bool(_bundle_res.get("watch"))
+                _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
+                self._game_day_resolution = None  # consume once
+            elif getattr(self, '_bulk_simming', False):
                 use_game_viewer = False
             elif mode == 'watch':
                 use_game_viewer = True
@@ -7031,71 +10233,281 @@ class HockeyManagerGUI(tk.Tk):
                 use_game_viewer = self._ask_game_mode_dialog(home_team, away_team) == 'watch'
             else:
                 use_game_viewer = False
+            if is_preseason:
+                # September hockey is never appointment viewing.
+                use_game_viewer = False
             
+            # Legacy events: Winter Classic / Stadium Series. The stamp rides
+            # on the schedule entry; read it before the sim branches so both
+            # Watch Live and quick sim get the billing + crowd bump.
+            _outdoor_info = None
+            try:
+                import outdoor_games as _ogm
+                _outdoor_info = _ogm.outdoor_info_for(game)
+                if _outdoor_info is not None:
+                    self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                 away_team)
+            except Exception:
+                _outdoor_info = None
+
             if use_game_viewer:
                 # Modern visual play-by-play (rink + live player bubbles).
                 # Modal: returns the standard 6-tuple once watched to the end.
-                result = self._simulate_game_with_pbp_visual(home_team, away_team)
+                result = self._simulate_game_with_pbp_visual(
+                    home_team, away_team, outdoor=_outdoor_info)
                 winner, loser, scores, events, notable_events, sim_engine = result
                 # GameSim already updated player season stats itself; the
                 # event-based stat pass below must be skipped to avoid
                 # double counting.
                 stats_from_events = False
+                # Narrative: GameSim modeled incidents live; record the
+                # night's stories (hat tricks, shutouts, steals) -- the
+                # visualizer's story_worthy() never reached the ledger.
+                # (Quick-sim games get this via the call below with
+                # roll_incidents=True; one call per game only.)
+                try:
+                    _nwent_ot = any(
+                        isinstance(_e, dict) and _e.get('period', 0) > 3
+                        for _e in (notable_events or []))
+                    self._narrative_postgame(
+                        sim_engine, home_team, away_team, scores,
+                        went_ot=_nwent_ot, roll_incidents=False,
+                        deliver_headlines=True, game_date=game_date)
+                except Exception:
+                    pass
             else:
                 # FM-style pre-match team talk (interactive, skipped in bulk sim)
                 opponent = away_team if home_team == self.user_team else home_team
-                talk_boost = self._career_team_talk(opponent)
+                if _bundle_active:
+                    talk_boost = _bundle_talk_boost
+                elif is_preseason:
+                    talk_boost = 1.0  # no dressing-room speeches in September
+                else:
+                    talk_boost = self._career_team_talk(opponent)
+                # Adaptive Rivals: AI scouts the user (quick sim)
+                _qs_adapted = None
+                _qs_plan = []
+                try:
+                    from adaptive_rivals import adapt_for_opponent
+                    if opponent != self.user_team:
+                        _qs_plan = adapt_for_opponent(
+                            opponent, self.user_team,
+                            getattr(self, 'game_results', []))
+                        _qs_adapted = opponent
+                except Exception:
+                    pass
                 # Standard full simulation for user games
-                sim_engine = AdvancedGameSim(home_team, away_team)
+                # Standard full simulation for user games
+                # Narrative ledger: grudge-week presentation. (Skipped for
+                # preseason -- exhibitions build no lore.)
+                if not is_preseason:
+                    # Narrative ledger: grudge-week presentation. One dict lookup
+                    # per game; the inbox card only fires for the user's games or
+                    # genuine league-wide feuds (weight >= 60) so it never spams.
+                    try:
+                        from narrative_ledger import (get_ledger, interpret,
+                                                      incident_short)
+                        from headlines import deliver_spec as _deliver_spec
+                        _led = get_ledger(self)
+                        _cand = _led.callback_candidate(home_team.team_name,
+                                                        away_team.team_name)
+                        if _cand is not None:
+                            _uname = getattr(getattr(self, "user_team", None),
+                                             "team_name", "")
+                            _uinvolved = _uname in (home_team.team_name,
+                                                    away_team.team_name)
+                            if _uinvolved or _cand.get("weight", 0) >= 60:
+                                _facts = _cand.get("facts") or {}
+                                _home = home_team.team_name
+                                _spec = {
+                                    "kind": "grudge_callback",
+                                    "home": _home,
+                                    "away": away_team.team_name,
+                                    "short": incident_short(_facts),
+                                    "first_meeting": not _cand.get("ref_count"),
+                                    "room_line":
+                                        interpret(_cand, "room", _home) or "",
+                                    "fans_line":
+                                        interpret(_cand, "fans", _home) or "",
+                                    "media_line":
+                                        interpret(_cand, "media", _home) or "",
+                                    "league_line":
+                                        interpret(_cand, "league", _home) or "",
+                                    "involved": (home_team.team_name,
+                                                 away_team.team_name),
+                                }
+                                if _deliver_spec(self, _spec):
+                                    _led.mark_referenced(_cand["id"])
+                    except Exception:
+                        pass
+                    self._grudge_week_market(game_date, home_team, away_team)
+                sim_engine = AdvancedGameSim(
+                    home_team, away_team,
+                    atmosphere=_pregame_atmosphere(
+                        home_team, away_team,
+                        league=getattr(self, "league", None),
+                        milestone_home=home_team.team_name in
+                        getattr(self, "_milestone_watch_teams", set()),
+                        ceremony=bool(getattr(home_team, "_pending_ceremony",
+                                              None)),
+                        outdoor=_outdoor_info is not None),
+                    league=getattr(self, "league", None))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                # Pregame ceremony (if one is queued): electric building via
+                # the atmosphere flag above, plus the room's one-game bump.
+                try:
+                    import immortality as _im2
+                    _im2.consume_ceremony(self, home_team, sim_engine)
+                except Exception:
+                    pass
                 winner, loser, scores, events, notable_events = sim_engine.run()
-                # AdvancedGameSim does not touch player season stats.
-                stats_from_events = True
+                # Career service time (waiver-exemption input). Preseason
+                # exhibitions don't count toward the 160-game threshold.
+                try:
+                    self._credit_nhl_games_played(home_team, away_team,
+                                                  preseason=is_preseason)
+                except Exception:
+                    pass
+                # Narrative: the quick-sim never modeled fights/brawls, so
+                # roll them post-game through the shared incident module
+                # (same dice GameSim uses live); record the night's stories
+                # for both engines. Headlines for the user's game only.
+                # Skipped for preseason -- exhibitions build no lore.
+                if not is_preseason:
+                    try:
+                        _nwent_ot = any(
+                            isinstance(_e, dict) and _e.get('period', 0) > 3
+                            for _e in (notable_events or []))
+                        _nshootout = any(
+                            isinstance(_e, dict) and _e.get('event') == 'Shootout Goal'
+                            for _e in (notable_events or []))
+                        self._narrative_postgame(
+                            sim_engine, home_team, away_team, scores,
+                            went_ot=_nwent_ot, shootout=_nshootout,
+                            roll_incidents=True, deliver_headlines=True,
+                            game_date=game_date)
+                    except Exception:
+                        pass
+                # Revert AI tactics + file tactical intel on the user's systems
+                if _qs_adapted is not None:
+                    try:
+                        from adaptive_rivals import revert_adaptation
+                        revert_adaptation(_qs_adapted, _qs_plan)
+                    except Exception:
+                        pass
+                    try:
+                        import tactics as _tx
+                        _uname = self.user_team.team_name
+                        _user_home = home_team == self.user_team
+                        _ugoals = scores[0] if _user_home else scores[1]
+                        _agoals = scores[1] if _user_home else scores[0]
+                        _ushots = sum(
+                            _ps.get('shots', 0)
+                            for _ps in (sim_engine.stats.get(_uname, {})
+                                        or {}).values()
+                            if isinstance(_ps, dict))
+                        _tx.record_tactical_intel(_qs_adapted, self.user_team,
+                                                  _ugoals, _agoals,
+                                                  _ushots or None, None)
+                    except Exception:
+                        pass
+                # AdvancedGameSim does not touch player season stats --
+                # except in preseason, where nobody's stats count.
+                stats_from_events = not is_preseason
 
             # Update league standings and store game result for user team games
+            # (preseason: stored for viewing, standings untouched).
             self._process_single_game_result(game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
-                                             stats_from_events=stats_from_events)
-            # FM-style: board, profile, morale, post-match presser
+                                             stats_from_events=stats_from_events,
+                                             preseason=is_preseason)
+            # Lore: deliver headlines from the watched game (line brawl, ...).
+            # Preseason: no lore, no media circus, no board/morale fallout.
+            if not is_preseason:
+                try:
+                    import headlines
+                    headlines.drain_sim_headlines(self, sim_engine)
+                except Exception:
+                    pass
+            # Legacy events: permanent season memory for outdoor games.
+            if locals().get("_outdoor_info") is not None:
+                try:
+                    import outdoor_games as _ogr
+                    _ogr.record_outdoor_result(self, _outdoor_info,
+                                               scores[0], scores[1])
+                except Exception:
+                    pass
+            # Media engine: post-game interviews, narratives, fines, beefs.
+            # (Not for preseason -- September hockey gets box scores only.)
+            # went_ot is computed up here (it used to be read before
+            # assignment and only survived inside the try/except).
             went_ot = len([e for e in (notable_events or []) if isinstance(e, dict) and e.get('period', 0) > 3]) > 0
-            self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
+            if not is_preseason:
+                try:
+                    import media_engine
+                    _mev = media_engine.cover_game(
+                        getattr(self, 'league', None), home_team, away_team,
+                        winner, loser, scores, went_ot, game_date)
+                    media_engine.route_events(self, _mev, game_date)
+                except Exception:
+                    pass
+            # FM-style: board, profile, morale, post-match presser.
+            # (Not for preseason -- the board doesn't judge exhibitions.)
+            if not is_preseason:
+                self._career_after_user_game(winner, loser, scores, home_team, away_team, went_ot, sim_engine)
         
         # Process other games using batch processing
         if other_games:
             self._simulate_games_batch(other_games)
 
     def _process_single_game_result(self, game_date, home_team, away_team, winner, loser, scores, events, notable_events, sim_engine,
-                                      stats_from_events=True):
+                                      stats_from_events=True, preseason=False):
         """Process a single game result - used for user team games.
 
         stats_from_events: when True (default), player season stats are
             derived from notable_events. Pass False when the sim engine
             (e.g. GameSim) already updated player.stats itself, to avoid
             double counting.
+        preseason: exhibition -- the result is stored for viewing but
+            never touches the standings.
         """
-        # Update league standings (safely)
+        # Update league standings (safely) -- never for preseason.
         home_score, away_score = scores
-        
-        # Ensure teams exist in standings
-        if home_team.team_name not in self.league.standings:
-            self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
-        if away_team.team_name not in self.league.standings:
-            self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+
+        if not preseason:
+            # Ensure teams exist in standings
+            if home_team.team_name not in self.league.standings:
+                self.league.standings[home_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+            if away_team.team_name not in self.league.standings:
+                self.league.standings[away_team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
         
         # Detect if game went to overtime/shootout (for OTL point)
         # NHL rule: loser in OT/SO gets 1 point (OTL)
         went_to_ot = len([e for e in notable_events if e.get('period', 0) > 3]) > 0
-        
-        # Winner gets 2 points
-        self.league.standings[winner.team_name]['W'] += 1
-        self.league.standings[winner.team_name]['Points'] += 2
-        
-        # Loser: OTL point if game went to OT/SO, else regulation loss
-        if went_to_ot:
-            self.league.standings[loser.team_name]['OTL'] += 1
-            self.league.standings[loser.team_name]['Points'] += 1
-        else:
-            self.league.standings[loser.team_name]['L'] += 1
+
+        # Grudge-week report card: marketed hard and fizzled gets called out.
+        try:
+            _ufights = 0
+            if sim_engine is not None:
+                _ufights = int(getattr(sim_engine, "_fights_total", 0) or 0)
+            self._grudge_week_grade(game_date, home_team, away_team,
+                                    home_score, away_score, went_to_ot,
+                                    fights=_ufights)
+        except Exception:
+            pass
+
+        # Winner gets 2 points (regular season only -- preseason
+        # exhibitions never touch the table).
+        if not preseason:
+            self.league.standings[winner.team_name]['W'] += 1
+            self.league.standings[winner.team_name]['Points'] += 2
+
+            # Loser: OTL point if game went to OT/SO, else regulation loss
+            if went_to_ot:
+                self.league.standings[loser.team_name]['OTL'] += 1
+                self.league.standings[loser.team_name]['Points'] += 1
+            else:
+                self.league.standings[loser.team_name]['L'] += 1
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
@@ -7142,8 +10554,18 @@ class HockeyManagerGUI(tk.Tk):
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
         
-        self.game_results.append(game_result)
-        
+        self._record_game_result(game_result)
+
+        # Three stars of the game (NHL media criteria) -- stamped on the
+        # result and recorded onto the players. Preseason names no stars.
+        try:
+            import stars as _stars_mod
+            _stars_mod.record_game_stars(game_result, home_team, away_team,
+                                        preseason=preseason,
+                                        game_date=game_date)
+        except Exception as _se:
+            print(f"Three-stars error (non-fatal): {_se}")
+
         # Generate media events for the game (if media system enabled)
         if hasattr(self, 'media_system') and self.media_system:
             self.media_system.process_game_result(game_result)
@@ -7159,7 +10581,7 @@ class HockeyManagerGUI(tk.Tk):
             # Identify starting goalies for save tracking
             def get_starting_goalie(team):
                 goalies = [p for p in team.roster
-                          if getattr(p, 'primary_position', None) and p.primary_position.name == "G"]
+                          if getattr(p, 'primary_position', None) and p.primary_position.name == "GOALIE"]
                 return goalies[0] if goalies else None
         
             home_goalie = get_starting_goalie(home_team)
@@ -7178,24 +10600,66 @@ class HockeyManagerGUI(tk.Tk):
                     player.stats.goals += 1
                     player.stats.shots += 1
                 
-                    # Assists: up to 2 teammates (NHL: ~70% get 2, ~20% get 1, ~10% unassisted)
+                    # Assists: up to 2 teammates, selected by the SHARED
+                    # attribute-weighted decision (mesh_system.assist_weight)
+                    # -- the same call both engines make. BUG-023: the old
+                    # filter checked .name != "G" but the enum member name is
+                    # "GOALIE" ("G" is the value), so goalies were never
+                    # excluded; and uniform random.sample bypassed the entire
+                    # multi-attribute assist rework for user-team games
+                    # (backup goalie at 8 assists in October S1).
                     team_roster = home_roster if team_name == home_team.team_name else away_roster
                     potential_assisters = [
                         p for p in team_roster.values()
-                        if p.id != player.id 
-                        and getattr(p, 'primary_position', None) 
-                        and p.primary_position.name != "G"
+                        if p.id != player.id
+                        and getattr(p, 'primary_position', None)
+                        and p.primary_position.name != "GOALIE"
                     ]
-                    num_assists = random.choices([2, 1, 0], weights=[0.7, 0.2, 0.1])[0]
-                    if potential_assisters and num_assists > 0:
-                        assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
-                        for assister in assisters:
-                            assister.stats.assists += 1
+                    # P2 (scoring calibration 2026-09-29): trust the sim's
+                    # own attribute-weighted assist ledger when the Goal
+                    # event carries one -- this is the same single source of
+                    # truth the box score uses, so the season log agrees with
+                    # it and star playmakers are no longer diluted by a
+                    # uniform re-roll. Legacy events without an assist ledger
+                    # fall back to the BUG-023 attribute-weighted re-roll
+                    # (never uniform, never goalies) at the P1 rate so the
+                    # user's team credits assists at league intensity.
+                    event_assists = event.get('assists', None)
+                    if event_assists is not None:
+                        for assister in event_assists:
+                            pos_name = getattr(getattr(assister, 'primary_position', None), 'name', '')
+                            if (assister is not None
+                                    and getattr(assister, 'id', None) != player.id
+                                    and pos_name not in ("GOALIE", "G")
+                                    and getattr(assister, 'stats', None) is not None):
+                                assister.stats.assists += 1
+                    else:
+                        num_assists = random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                        if potential_assisters and num_assists > 0:
+                            try:
+                                from mesh_system import assist_weight as _aw_ev
+                                _tm_ev = home_team if team_name == home_team.team_name else away_team
+                                _ws = [max(0.05, _aw_ev(p, player, _tm_ev))
+                                       for p in potential_assisters]
+                                assisters = []
+                                _pool = list(potential_assisters)
+                                _wp = list(_ws)
+                                for _ in range(min(num_assists, len(_pool))):
+                                    _pick = random.choices(_pool, weights=_wp, k=1)[0]
+                                    _i = _pool.index(_pick)
+                                    assisters.append(_pick)
+                                    del _pool[_i]
+                                    del _wp[_i]
+                            except Exception:
+                                assisters = random.sample(potential_assisters, min(num_assists, len(potential_assisters)))
+                            for assister in assisters:
+                                assister.stats.assists += 1
                 
                     # Opposing goalie: shot against (goal counts as shot faced, not a save)
                     opp_goalie = away_goalie if team_name == home_team.team_name else home_goalie
                     if opp_goalie:
                         opp_goalie.stats.shots_against += 1
+                        opp_goalie.stats.goals_against += 1
             
                 elif event_type == 'Shootout Goal':
                     # NHL rule: shootout goals don't count in player stats
@@ -7223,6 +10687,64 @@ class HockeyManagerGUI(tk.Tk):
             for team in [home_team, away_team]:
                 for player in team.roster:
                     player.stats.games_played += 1
+            # Goalie decisions: the events path credits goals/saves above
+            # but not W/L/SO. GameSim and the lightweight path credit them,
+            # so do it here too -- monthly awards and the record book must
+            # see the same numbers on every sim path.
+            if not preseason:
+                for _team, _opp_score, _won in (
+                        (home_team, away_score, winner is home_team),
+                        (away_team, home_score, winner is away_team)):
+                    _g = get_starting_goalie(_team)
+                    if _g is None:
+                        continue
+                    if _won:
+                        _g.stats.wins += 1
+                    else:
+                        _g.stats.losses += 1
+                    if _opp_score == 0:
+                        _g.stats.shutouts += 1
+            # Defensive record: same shared roll as every other sim path --
+            # shutdown defensemen leave a hits/takeaways/blocks trail.
+            try:
+                from game_classes import roll_defensive_game_stats as _rdg
+                for team in [home_team, away_team]:
+                    for player in team.roster:
+                        try:
+                            if getattr(getattr(player, "primary_position",
+                                               None), "name", "") == "GOALIE":
+                                continue
+                            _h, _t, _b = _rdg(player)
+                            player.stats.hits += _h
+                            player.stats.takeaways += _t
+                            player.stats.blocked_shots += _b
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+            # Goalie saves: quick-sim notable_events carry goals only
+            # ('Shot' save events never make the notable list), so derive
+            # saves from the engine's full event log, whose SHOT entries
+            # carry a result. Shootout attempts never log SHOT entries,
+            # so no shootout contamination by construction.
+            try:
+                for _le in getattr(sim_engine, 'event_log', []) or []:
+                    if not isinstance(_le, dict) or _le.get('type') != 'SHOT':
+                        continue
+                    _det = _le.get('details') or {}
+                    if _det.get('result') != 'SAVE':
+                        continue
+                    _shooter = home_roster.get(_det.get('shooter_id'))
+                    _opp = away_goalie if _shooter is not None else home_goalie
+                    if _shooter is None:
+                        _shooter = away_roster.get(_det.get('shooter_id'))
+                        _opp = home_goalie
+                    if _shooter is None or _opp is None:
+                        continue
+                    _opp.stats.saves += 1
+                    _opp.stats.shots_against += 1
+            except Exception:
+                pass
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):
@@ -7241,44 +10763,107 @@ class HockeyManagerGUI(tk.Tk):
             # Generate post-game emails for user team games
             self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
 
+    # --- game_results indexes + history caps ---------------------------
+    # game_results grows by ~1312 entries per 82-game season and used to be
+    # scanned in full on EVERY day advance (plus pickled into every save).
+    # These helpers keep two derived indexes and bound the history size.
+    RESULTS_HISTORY_CAP = 4000   # ~3 seasons of games
+    RESULTS_TRIM_BATCH = 500
+    NEWS_HISTORY_CAP = 1000
+    NEWS_TRIM_BATCH = 200
+
+    @staticmethod
+
+    def _result_date_key(value):
+        """Normalize a result's mixed-format date to a datetime.date."""
+        try:
+            if isinstance(value, datetime):
+                return value.date()
+            if isinstance(value, str):
+                return datetime.strptime(value, '%Y-%m-%d').date()
+            if isinstance(value, date):
+                return value
+        except (ValueError, AttributeError, TypeError):
+            pass
+        return None
+
+    def _record_game_result(self, game_result):
+        """Append a game result and keep the derived indexes in sync."""
+        self.game_results.append(game_result)
+        if self._results_index_src is self.game_results:
+            key = self._result_date_key(game_result.get('date'))
+            if key is not None:
+                self._results_by_date.setdefault(key, []).append(game_result)
+                self._results_by_matchup[
+                    (key, id(game_result.get('home_team')),
+                     id(game_result.get('away_team')))] = game_result
+
+    def _rebuild_result_index(self):
+        """Full rebuild of the derived indexes from the current list."""
+        by_date = {}
+        by_matchup = {}
+        for r in self.game_results:
+            key = self._result_date_key(r.get('date'))
+            if key is None:
+                continue
+            by_date.setdefault(key, []).append(r)
+            by_matchup[(key, id(r.get('home_team')),
+                        id(r.get('away_team')))] = r
+        self._results_by_date = by_date
+        self._results_by_matchup = by_matchup
+        self._results_index_src = self.game_results
+
+    def _results_by_date_index(self):
+        # load_game swaps game_results for a fresh list; rebuild on change.
+        if self._results_index_src is not self.game_results:
+            self._rebuild_result_index()
+        return self._results_by_date
+
+    def _results_by_matchup_index(self):
+        if self._results_index_src is not self.game_results:
+            self._rebuild_result_index()
+        return self._results_by_matchup
+
+    def find_game_result(self, game_date, home_team, away_team):
+        """O(1) lookup of a played game's result for a scheduled matchup.
+
+        Returns the result dict, or None when the game hasn't been played
+        yet (or nothing matches). Replaces the old pattern of scanning the
+        whole game_results list per scheduled game (O(games x results)).
+        """
+        key = self._result_date_key(game_date)
+        if key is None:
+            return None
+        return self._results_by_matchup_index().get(
+            (key, id(home_team), id(away_team)))
+
+    def _trim_history_logs(self):
+        """Bound game_results/news_log so saves and scans stay O(season)."""
+        if len(self.game_results) > \
+                self.RESULTS_HISTORY_CAP + self.RESULTS_TRIM_BATCH:
+            del self.game_results[:self.RESULTS_TRIM_BATCH]
+            self._rebuild_result_index()
+        if len(self.news_log) > self.NEWS_HISTORY_CAP + self.NEWS_TRIM_BATCH:
+            del self.news_log[:self.NEWS_TRIM_BATCH]
+
     def _show_daily_results_window(self):
         """Show the daily game results window after day advance"""
         try:
             # Get today's game results (the day we just simulated, before date advancement)
             simulated_date = self.current_date - timedelta(days=1)
-            today_results = []
-            user_game_result = None
-            
-            # Find games from the simulated date
-            for result in self.game_results:
-                result_date = result['date']
-                
-                # Handle different date formats/types consistently
-                try:
-                    if hasattr(result_date, 'date'):
-                        # If it's a datetime object, extract the date part
-                        result_date = result_date.date()
-                    elif isinstance(result_date, str):
-                        # If it's a string, try to parse it
-                        from datetime import datetime
-                        result_date = datetime.strptime(result_date, '%Y-%m-%d').date()
-                    # If already a date object, use as is
-                    
-                    # Ensure simulated_date is also a date object for comparison
-                    if hasattr(simulated_date, 'date'):
-                        simulated_date_only = simulated_date.date()
-                    else:
-                        simulated_date_only = simulated_date
-                        
-                except (ValueError, AttributeError) as e:
-                    # Skip results with unparseable dates
-                    continue
-                    
-                if result_date == simulated_date_only:
-                    today_results.append(result)
-                    # Check if user team played
-                    if self.user_team in (result['home_team'], result['away_team']):
-                        user_game_result = result
+            if isinstance(simulated_date, datetime):
+                simulated_date_only = simulated_date.date()
+            else:
+                simulated_date_only = simulated_date
+
+            # O(1) date lookup via the derived index (was: full scan of the
+            # entire multi-season game_results list every day).
+            today_results = list(
+                self._results_by_date_index().get(simulated_date_only, []))
+            user_game_result = next(
+                (r for r in today_results
+                 if self.user_team in (r['home_team'], r['away_team'])),
+                None)
             
             # Get league standings
             league_results = []
@@ -7312,25 +10897,23 @@ class HockeyManagerGUI(tk.Tk):
                         highlight = f"{event.get('event')}: {player_name} - Period {event.get('period', 1)}"
                         game_highlights.append(highlight)
             
-            # Show the results window
-            from game_results_window import GameResultsWindow
-            
-            # Package all data into the format GameResultsWindow expects
+            # Show the results as a full-screen view (FM/EHM-style teleport)
+            from game_results_window import GameResultsView
+
+            # Package all data into the format the view expects
             results_data = {
                 'date': self.current_date.strftime("%B %d, %Y"),
                 'user_game_result': user_game_result,
-                'all_games': today_results,  # GameResultsWindow expects 'all_games' not 'today_results'
+                'all_games': today_results,  # the view expects 'all_games' not 'today_results'
                 'league_results': league_results,
-                'news_events': recent_news,  # GameResultsWindow expects 'news_events' not 'recent_news'
+                'news_events': recent_news,  # the view expects 'news_events' not 'recent_news'
                 'game_highlights': game_highlights,
                 'games_played': len(today_results) if today_results else 0,
-                'new_messages_count': 0  # TODO: Calculate actual new message count
             }
             
-            results_window = GameResultsWindow(
-                self,
-                results_data
-            )
+            results_window = self.show_screen(
+                'game_results', 'Game Results', GameResultsView,
+                results_data, fresh=True)
             
         except Exception as e:
             print(f"Error showing daily results: {e}")
@@ -7364,6 +10947,16 @@ class HockeyManagerGUI(tk.Tk):
         if is_draft_day(today):
             held = set(getattr(league, 'draft_held_years', None) or [])
             if year not in held:
+                # Rights lifecycle BEFORE the draft: unsigned CHL prospects
+                # whose rights expire this summer re-enter THIS draft (the
+                # class generator folds league.draft_reentries in). The
+                # end_of_season backstop skips via the per-draft-year guard.
+                try:
+                    league._rollover_draft_rights(reference_year=year)
+                except Exception:
+                    debug_print("Draft-day rights rollover failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
                 try:
                     self._hold_entry_draft(year)
                 except Exception:
@@ -7373,6 +10966,76 @@ class HockeyManagerGUI(tk.Tk):
                 else:
                     held.add(year)
                     league.draft_held_years = sorted(held)
+
+        # Draft lottery: televised reveal on May 8, once per year. Runs the
+        # real-odds lottery, delivers the inbox card (with a watch-the-reveal
+        # action), and applies fan/room reactions for the user's team.
+        try:
+            from draft_lottery import LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY
+            if (today.month, today.day) == (LOTTERY_DAY_MONTH, LOTTERY_DAY_DAY):
+                lotto_held = set(getattr(league, 'lottery_held_years', None) or [])
+                if year not in lotto_held:
+                    try:
+                        self._hold_draft_lottery(year)
+                    except Exception:
+                        debug_print("Draft lottery failed (non-fatal):")
+                        import traceback
+                        traceback.print_exc()
+                    else:
+                        lotto_held.add(year)
+                        league.lottery_held_years = sorted(lotto_held)
+        except Exception:
+            pass
+
+        # International windows: Olympics (rosters announced Feb 9, medals
+        # Feb 22 of Olympic years -- the NHL goes dark Feb 10-24 via the
+        # olympic_break in schedule generation) and World Championship
+        # (May 12), each once per year. Instant lightweight resolution +
+        # inbox card. Catch-up semantics live in the helper so a skipped
+        # date still fires late, idempotently.
+        try:
+            self._daily_international_window(today, year, league)
+        except Exception:
+            debug_print("International window failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+    def _daily_international_window(self, today, year, league) -> None:
+        """Fire the day's international window legs (Olympics announce /
+        resolve, Worlds) with catch-up semantics: a skipped Feb 9, Feb 22
+        or May 12 still fires late. Each leg is idempotent via
+        league.intl_announced / league.intl_held, and medal day self-heals
+        by announcing first when the prep is missing."""
+        from international import (
+            OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY,
+            OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY,
+            WORLDS_MONTH, WORLDS_DAY,
+            is_olympic_year, announce_olympics, resolve_olympics,
+            hold_worlds)
+        _md = (today.month, today.day)
+        _oly = is_olympic_year(year)
+        _ann = (getattr(league, "intl_announced", None) or [])
+        if (_md >= (OLYMPIC_ANNOUNCE_MONTH, OLYMPIC_ANNOUNCE_DAY)
+                and _oly and year not in _ann):
+            _story = announce_olympics(self, year)
+            if _story:
+                self.news_log.append({'date': self.current_date,
+                                      'story': _story})
+        if (_md >= (OLYMPIC_MEDAL_MONTH, OLYMPIC_MEDAL_DAY)
+                and _oly):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "olympics", [])
+            if year not in _held:
+                _res = resolve_olympics(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
+        if _md >= (WORLDS_MONTH, WORLDS_DAY):
+            _held = (getattr(league, "intl_held", None) or {}).get(
+                "worlds", [])
+            if year not in _held:
+                _res = hold_worlds(self, year)
+                if _res:
+                    self._deliver_intl_card(_res)
 
         # Hub prompt: once per (event, year)
         try:
@@ -7399,23 +11062,251 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             debug_print(f"Event-day prompt failed ({event}): {e}")
 
+    def _post_draft_season_beat(self):
+        """Post the monthly draft build-up beat (Jan-Jun), once per month.
+
+        Part 3: season_beats() from draft_stories builds the narrative batch;
+        this hook only delivers it via add_news. Guarded by
+        self._draft_beats_posted {(year, month)} so a month never posts twice
+        (e.g. after a save/load). Also flushes league.rights_news, the
+        rights-lifecycle messages game_classes collects, posting and clearing
+        each string. Every path is wrapped so a missing inbox/news path or
+        missing attrs never crash the daily tick.
+        """
+        try:
+            month = getattr(self.current_date, "month", 0)
+            year = getattr(self.current_date, "year", 0)
+            if month not in (1, 2, 3, 4, 5, 6):
+                return
+            posted = getattr(self, "_draft_beats_posted", None)
+            if posted is None:
+                posted = set()
+                self._draft_beats_posted = posted
+            key = (year, month)
+            if key in posted:
+                return
+            league = getattr(self, "league", None)
+            prospects = list(getattr(league, "draft_prospects", None) or [])
+            if not prospects:
+                return
+            from draft_stories import season_beats
+            for _beat in (season_beats(prospects, year, month) or []):
+                try:
+                    self.add_news(
+                        "%s — %s" % (_beat.get('title', 'Draft'),
+                                     _beat.get('text', '')))
+                except Exception:
+                    pass
+            posted.add(key)
+        except Exception:
+            pass
+        # Rights-lifecycle flush: post + clear any collected messages.
+        try:
+            _league = getattr(self, "league", None)
+            _msgs = list(getattr(_league, "rights_news", None) or [])
+            for _m in _msgs:
+                try:
+                    self.add_news(str(_m))
+                except Exception:
+                    pass
+            try:
+                _live = getattr(_league, "rights_news", None)
+                if _live is not None:
+                    del _live[:]
+            except Exception:
+                pass
+            # Prospect junior/college award headlines (same pattern).
+            try:
+                _pmsgs = list(getattr(_league, "prospect_awards_news", None)
+                              or [])
+                for _m in _pmsgs:
+                    try:
+                        self.add_news("🏆 " + str(_m))
+                    except Exception:
+                        pass
+                _plive = getattr(_league, "prospect_awards_news", None)
+                if _plive is not None:
+                    del _plive[:]
+            except Exception:
+                pass
+            # Rivalry-review verdicts from end_of_season (same pattern).
+            try:
+                _rmsgs = list(getattr(_league, "rivalry_review_news", None)
+                              or [])
+                for _m in _rmsgs:
+                    try:
+                        self.add_news("⚔️ " + str(_m))
+                    except Exception:
+                        pass
+                _rlive = getattr(_league, "rivalry_review_news", None)
+                if _rlive is not None:
+                    del _rlive[:]
+            except Exception:
+                pass
+            # Staff breakthrough headlines (same pattern).
+            try:
+                _bmsgs = list(getattr(_league, "staff_breakthrough_news",
+                                      None) or [])
+                for _m in _bmsgs:
+                    try:
+                        self.add_news("📈 " + str(_m))
+                    except Exception:
+                        pass
+                _blive = getattr(_league, "staff_breakthrough_news", None)
+                if _blive is not None:
+                    del _blive[:]
+            except Exception:
+                pass
+            # ELC slide headlines (same pattern).
+            try:
+                _smsgs = list(getattr(_league, "elc_slide_news", None) or [])
+                for _m in _smsgs:
+                    try:
+                        self.add_news("📝 " + str(_m))
+                    except Exception:
+                        pass
+                _slive = getattr(_league, "elc_slide_news", None)
+                if _slive is not None:
+                    del _slive[:]
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _hold_entry_draft(self, year):
         """Hold the annual entry draft"""
         print(f"🏒 ENTRY DRAFT {year} BEGINS! 🏒")
         
-        # Generate draft prospects if they don't exist
-        if not self.league.draft_prospects:
+        # Generate draft prospects if they don't exist. The class is stamped
+        # with its draft year: if last year's draft never ran (board never
+        # opened), the stale class must NOT be reused for this year's draft.
+        _prospect_year = getattr(self.league, 'draft_prospects_year', None)
+        if not self.league.draft_prospects or _prospect_year != year:
             print("Generating draft prospects...")
             from draft_generator import generate_draft_class
             draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
-            self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)
+            # Undrafted re-entry (real NHL rule): undrafted prospects are
+            # automatically eligible again while still draft-eligible for
+            # the new draft year (NA 18-20, Europeans 18-22 on Sept 15).
+            # Aged-out undrafted players become free agents instead of
+            # re-entering the draft pool.
+            _undrafted = list(getattr(self.league, "undrafted_pool", None) or [])
+            self.league.undrafted_pool = []
+            if _undrafted:
+                try:
+                    from draft_generator import is_draft_eligible as _elig
+                    _fa = getattr(self.league, "free_agents", None)
+                    for _up in _undrafted:
+                        try:
+                            if _elig(getattr(_up, "birth_date", ""),
+                                     getattr(_up, "nationality", ""), year):
+                                _re = getattr(self.league, "draft_reentries",
+                                              None)
+                                if not isinstance(_re, list):
+                                    _re = []
+                                    self.league.draft_reentries = _re
+                                if _up not in _re:
+                                    _re.append(_up)
+                                try:
+                                    _up.draft_reentry = True
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    _up.team_name = "Free Agent"
+                                except Exception:
+                                    pass
+                                # Belt-and-suspenders: an aged-out player is a
+                                # true free agent -- no stale rights stamps or
+                                # re-entry flags may survive on him.
+                                try:
+                                    _up.rights_team = ""
+                                    _up.rights_expiry_year = 0
+                                    _up.rights_type = ""
+                                    _up.camp_invite = False
+                                    _up.draft_reentry = False
+                                    _up.draft_reentry_from = ""
+                                except Exception:
+                                    pass
+                                if isinstance(_fa, list) and \
+                                        _up not in _fa:
+                                    _fa.append(_up)
+                        except Exception:
+                            continue
+                except Exception as _ure:
+                    print(f"Undrafted re-entry processing failed: {_ure}")
+            # draft_year / reentries params land with the draft_worker pass;
+            # only pass what the installed signature accepts so un-patched
+            # generators (and old saves) keep working.
+            _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+            try:
+                import inspect as _inspect
+                _params = _inspect.signature(generate_draft_class).parameters
+                if "draft_year" in _params:
+                    _gen_kwargs["draft_year"] = year
+                if "reentries" in _params:
+                    _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None)
+            except Exception:
+                pass
+            self.league.draft_prospects = generate_draft_class(**_gen_kwargs)
             print(f"Generated {len(self.league.draft_prospects)} draft prospects")
+            self.league.draft_prospects_year = year
+            # Re-entries were folded into the class above; clear so they are
+            # never double-added in a later draft.
+            self.league.draft_reentries = []
+            # Draft Story Engine: assign storylines to top prospects
+            try:
+                from draft_stories import assign_prospect_storylines, deliver_prospect_stories
+                storylines = assign_prospect_storylines(self.league.draft_prospects)
+                # Store on league for draft-day drama (projected ranks)
+                self.league.prospect_storylines = storylines
+                # Projected rank = index in the public consensus order
+                # (draft_ranking), not current overall -- the projection is
+                # about where the prospect is expected to GO.
+                ranked = sorted(self.league.draft_prospects,
+                                key=lambda p: getattr(p, 'draft_ranking', 0),
+                                reverse=True)
+                self.league.prospect_projected_rank = {
+                    id(p): i + 1 for i, p in enumerate(ranked)
+                }
+                deliver_prospect_stories(self, storylines)
+            except Exception as _dse:
+                print(f"Draft storylines failed (non-fatal): {_dse}")
+            # Part 3: headline storylines for the class -- posted as news
+            # items ("title — text"), following the add_news pattern below.
+            # Fully guarded: a missing news path never breaks the draft.
+            try:
+                from draft_stories import assign_headline_storylines as _ahsl
+                for _story in (_ahsl(self.league.draft_prospects, year) or []):
+                    try:
+                        self.add_news(
+                            "%s — %s" % (_story.get('title', 'Draft'),
+                                         _story.get('text', '')))
+                    except Exception:
+                        pass
+            except Exception as _ahse:
+                print(f"Draft headline storylines failed (non-fatal): {_ahse}")
         
         # Ensure draft picks are set up
         self.league.initialize_all_draft_picks()
         
         # Simulate draft lottery for first round
         self.league.simulate_draft_lottery(year)
+
+        # Draft-day market: the lottery set the order, so every GM knows
+        # where they're picking -- the phones light up like the trade
+        # deadline. AI clubs trade up for need fits, and rebuilding clubs
+        # shop veterans to contenders holding late firsts. (Never runs for
+        # fantasy drafts: no trading there, by design.)
+        try:
+            from draft_day_trades import run_draft_day_trading
+            _ddt_deals = run_draft_day_trading(self.league, year, app=self)
+            if _ddt_deals:
+                self.add_news(
+                    f"DRAFT BUZZ: {len(_ddt_deals)} draft-day deal(s) go down "
+                    f"as GMs jockey for position.")
+        except Exception as _dde:
+            print(f"Draft-day trading failed (non-fatal): {_dde}")
         
         # Add news story about the draft
         draft_story = f"The {year} NHL Entry Draft begins today! Teams will select from a pool of {len(self.league.draft_prospects)} eligible prospects over 7 rounds."
@@ -7423,6 +11314,72 @@ class HockeyManagerGUI(tk.Tk):
         # NOTE: no UI is opened here. The draft-day hub prompt (Draft Day
         # Central) follows immediately and its buttons open the draft board,
         # so draft day has a single entry point instead of two popups.
+
+    def _hold_draft_lottery(self, year):
+        """Televised draft lottery (May 8). Real weighted odds, inbox card
+        with a watch-the-reveal action, fan/room reactions for the user."""
+        from draft_lottery import (run_lottery, lottery_reveal_text,
+                                   apply_user_reactions)
+        league = self.league
+        league.initialize_all_draft_picks()
+        rows = run_lottery(league, year)
+        if not rows:
+            return
+        # Stash for the inbox "watch the reveal" action (the inbox reads it
+        # off game_manager).
+        _gm = getattr(self, "game_manager", None) or self
+        _gm._pending_lottery_reveal = {
+            "year": year, "rows": rows, "app": self,
+        }
+        summary = lottery_reveal_text(rows, year)
+        try:
+            from headlines import make_headline, deliver
+            msg = make_headline("lottery_results", self.current_date, year=year,
+                                summary=summary)
+            if msg is not None:
+                deliver(self, msg)
+        except Exception:
+            try:
+                self.add_news(summary)
+            except Exception:
+                pass
+        apply_user_reactions(self, rows)
+        # Ledger memory: the lottery is a league event worth remembering.
+        try:
+            from narrative_ledger import active_ledger
+            led = active_ledger()
+            if led is not None:
+                winner = rows[0]["team"]
+                _dup = any(e.get("kind") == "draft_lottery"
+                           and e.get("facts", {}).get("year") == year
+                           for e in led.events)
+                if not _dup:
+                    led.record(
+                        "draft_lottery", teams=[winner], weight=40,
+                        facts={"year": year, "winner": winner,
+                               "second": rows[1]["team"] if len(rows) > 1 else ""},
+                        text=(f"{winner} won the {year} draft lottery "
+                              f"(#1 overall)."))
+        except Exception:
+            pass
+
+    def _deliver_intl_card(self, res):
+        """Inbox card for a finished international tournament."""
+        try:
+            from headlines import make_headline, deliver
+            from international import result_card_text
+            msg = make_headline("international_results", self.current_date,
+                                title=res.get("title", ""),
+                                year=res.get("year", 0),
+                                summary=result_card_text(res))
+            if msg is not None:
+                deliver(self, msg)
+        except Exception:
+            try:
+                from international import result_card_text
+                self.add_news(result_card_text(res))
+            except Exception:
+                pass
 
     def conduct_fantasy_draft(self):
         """Conduct a fantasy draft by redistributing all players among NHL teams"""
@@ -7656,6 +11613,25 @@ class HockeyManagerGUI(tk.Tk):
         
         print("Phase 3 optimizations applied to main interface!")
 
+    def _credit_nhl_games_played(self, home_team, away_team, preseason=False):
+        """Career NHL GP counter: one credit per rostered player per
+        completed NHL game. This is the service-time half of waiver
+        exemption (age is the other half) -- previously a frozen dice
+        roll, now a number that actually moves with the season.
+        Preseason exhibitions never count (like the real league)."""
+        if preseason:
+            return
+        for _t in (home_team, away_team):
+            try:
+                for _p in list(getattr(_t, "roster", None) or []):
+                    try:
+                        _p.nhl_games_played = int(
+                            getattr(_p, "nhl_games_played", 0) or 0) + 1
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
     def _simulate_games_batch(self, games):
         """Simulate multiple games efficiently using LIGHTWEIGHT batch processing"""
         # Ultra-fast simulation for non-user games
@@ -7673,25 +11649,130 @@ class HockeyManagerGUI(tk.Tk):
                     game_date, home_team, away_team = game[:3]
                 else:
                     continue
+                # Preseason exhibitions: quick-simmed with no footprint --
+                # no stats, no standings, no career GP, no lore.
+                is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
                 
+                # Narrative ledger: grudge-week presentation for non-user games.
+                # One dict lookup per game; only genuine league-wide feuds
+                # (weight >= 60) earn the inbox card. Never blocks the sim.
+                # (Skipped for preseason -- exhibitions build no lore.)
+                if not is_preseason:
+                    try:
+                        from narrative_ledger import (get_ledger, interpret,
+                                                      incident_short)
+                        from headlines import deliver_spec as _deliver_spec
+                        _led = get_ledger(self)
+                        _cand = _led.callback_candidate(home_team.team_name,
+                                                        away_team.team_name)
+                        if _cand is not None and _cand.get("weight", 0) >= 60:
+                            _facts = _cand.get("facts") or {}
+                            _home = home_team.team_name
+                            _spec = {
+                                "kind": "grudge_callback",
+                                "home": _home,
+                                "away": away_team.team_name,
+                                "short": incident_short(_facts),
+                                "first_meeting": not _cand.get("ref_count"),
+                                "room_line":
+                                    interpret(_cand, "room", _home) or "",
+                                "fans_line":
+                                    interpret(_cand, "fans", _home) or "",
+                                "media_line":
+                                    interpret(_cand, "media", _home) or "",
+                                "league_line":
+                                    interpret(_cand, "league", _home) or "",
+                                "involved": (home_team.team_name,
+                                             away_team.team_name),
+                            }
+                            if _deliver_spec(self, _spec):
+                                _led.mark_referenced(_cand["id"])
+                    except Exception:
+                        pass
+
+                # Grudge-week presentation for genuine feuds (sellout talk,
+                # loud-building billing); hollow overhype gets graded post-game.
+                # (Not for preseason.)
+                if not is_preseason:
+                    self._grudge_week_market(game_date, home_team, away_team)
+                # Legacy events: outdoor-game billing (~3/season, no spam).
+                _outdoor_info = None
+                try:
+                    import outdoor_games as _ogb
+                    _outdoor_info = _ogb.outdoor_info_for(game)
+                    if _outdoor_info is not None:
+                        self._deliver_outdoor_pregame(_outdoor_info, home_team,
+                                                     away_team)
+                except Exception:
+                    _outdoor_info = None
+                # Pregame ceremony (news only on the lightweight path).
+                try:
+                    import immortality as _im4
+                    _im4.consume_ceremony(self, home_team, None)
+                except Exception:
+                    pass
+
                 # Per-league sim detail (new-game setup): 'full' leagues get the
                 # event-by-event engine with player stats; everything else
-                # uses the ultra-fast lightweight path.
+                # uses the ultra-fast lightweight path. Preseason always
+                # goes lightweight -- GameSim writes season stats itself and
+                # September hockey counts for nothing.
                 league_key = game.get('league') if isinstance(game, dict) else None
                 full_sim = None
-                if self._league_sim_detail(league_key) == 'full':
+                if self._league_sim_detail(league_key) == 'full' and not is_preseason:
                     winner, loser, scores, went_to_ot, full_sim = \
                         self._simulate_game_full_batch(home_team, away_team)
                 else:
-                    # LIGHTWEIGHT simulation - just calculate winner and score
-                    result = self._simulate_game_lightweight(home_team, away_team)
+                    # LIGHTWEIGHT simulation - just calculate winner and score.
+                    # Preseason suppresses the individual-stat pass: scores
+                    # stand, nobody's season line moves.
+                    result = self._simulate_game_lightweight(home_team, away_team,
+                                                             preseason=is_preseason)
                     winner, loser, scores, went_to_ot = result
 
                 batch_results.append((game_date, home_team, away_team, winner,
                                       loser, scores, went_to_ot, full_sim))
-                
-                # Update standings immediately (no batch delay)
-                self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot)
+
+                # Career service time: every rostered player on both clubs
+                # banks one NHL game (waiver-exemption input). Not in
+                # preseason.
+                try:
+                    self._credit_nhl_games_played(home_team, away_team,
+                                                  preseason=is_preseason)
+                except Exception:
+                    pass
+
+                # Update standings immediately (no batch delay) -- never for
+                # preseason exhibitions.
+                self._update_standings_fast(home_team, away_team, winner, scores, went_to_ot,
+                                            preseason=is_preseason)
+
+                # Legacy events: permanent season memory for outdoor games.
+                if _outdoor_info is not None:
+                    try:
+                        import outdoor_games as _ogr
+                        _ogr.record_outdoor_result(self, _outdoor_info,
+                                                   scores[0], scores[1])
+                    except Exception:
+                        pass
+
+                # Media engine: post-game coverage (cheap, additive).
+                try:
+                    import media_engine
+                    _mev = media_engine.cover_game(
+                        getattr(self, 'league', None), home_team, away_team,
+                        winner, loser, scores, went_to_ot, game_date)
+                    media_engine.route_events(self, _mev, game_date)
+                except Exception:
+                    pass
+
+                # Tactics: rooms learn their systems one game at a time.
+                try:
+                    import tactics as _tx
+                    _tx.tick_tactics_familiarity(home_team)
+                    _tx.tick_tactics_familiarity(away_team)
+                except Exception:
+                    pass
                 
             except Exception as e:
                 print(f"Error in batch simulation: {e}")
@@ -7700,6 +11781,35 @@ class HockeyManagerGUI(tk.Tk):
         # Store minimal game results for performance
         for game_date, home_team, away_team, winner, loser, scores, went_to_ot, full_sim in batch_results:
             home_score, away_score = scores
+
+            # Lore: deliver any headlines the sim collected (line brawls,
+            # ...), including CPU-vs-CPU games.
+            if full_sim is not None:
+                try:
+                    import headlines
+                    headlines.drain_sim_headlines(self, full_sim)
+                except Exception:
+                    pass
+
+            # Narrative: quick-simmed games never modeled fights/brawls, so
+            # roll them post-game through the shared incident module; record
+            # the night's stories for both engines. Headlines only if the
+            # user's team was involved (no league-wide spam).
+            # (Skipped for preseason -- exhibitions build no lore.)
+            _gfights = 0
+            if not is_preseason:
+                try:
+                    _sim_cls = type(full_sim).__name__ if full_sim is not None else ""
+                    _nres = self._narrative_postgame(
+                        full_sim, home_team, away_team, scores,
+                        went_ot=bool(went_to_ot), shootout=False,
+                        roll_incidents=_sim_cls != "GameSim",
+                        deliver_headlines=bool(user_team) and
+                        user_team in (home_team, away_team),
+                        game_date=game_date)
+                    _gfights = int((_nres or {}).get("fights", 0) or 0)
+                except Exception:
+                    _gfights = 0
 
             # Store minimal game result
             game_result = {
@@ -7724,8 +11834,25 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
                 game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
             
-            # Add to game results
-            self.game_results.append(game_result)
+            # Add to game results (keeps the date/matchup indexes in sync)
+            self._record_game_result(game_result)
+
+            # Three stars of the game (regular season only).
+            try:
+                import stars as _stars_mod2
+                _stars_mod2.record_game_stars(
+                    game_result, home_team, away_team,
+                    preseason=is_preseason, game_date=game_date)
+            except Exception as _se2:
+                print(f"Three-stars error (non-fatal): {_se2}")
+
+            # Hollow overhype: marketed as grudge week, delivered a
+            # snoozer -- the marketing wrote checks the game couldn't cash.
+            # (_gfights came from the narrative post-game hook above, which
+            # also stamped _fights_total onto the sim.)
+            self._grudge_week_grade(game_date, home_team, away_team,
+                                    home_score, away_score, went_to_ot,
+                                    fights=_gfights)
             
             # Only generate news for user team games
             if user_team and user_team in (home_team, away_team):
@@ -7789,7 +11916,16 @@ class HockeyManagerGUI(tk.Tk):
         Returns (winner, loser, scores, went_to_ot, sim).
         """
         from simulation import GameSim
-        sim = GameSim(home_team, away_team)
+        from arena_atmosphere import crowd_hype_for_tension
+        _atm = _pregame_atmosphere(
+            home_team, away_team,
+            league=getattr(self, "league", None),
+            milestone_home=home_team.team_name in
+            getattr(self, "_milestone_watch_teams", set()),
+            ceremony=bool(getattr(home_team, "_pending_ceremony", None)))
+        sim = GameSim(home_team, away_team, atmosphere=_atm,
+                      crowd_hype=crowd_hype_for_tension(
+                          _atm.get("energy", 50.0), _atm.get("mood", 30.0)))
         periods = set()
         had_shootout = {'v': False}
 
@@ -7800,12 +11936,21 @@ class HockeyManagerGUI(tk.Tk):
                     had_shootout['v'] = True
 
         sim.pbp_listeners.append(_sniff)
+        # Pregame ceremony (if one is queued).
+        try:
+            import immortality as _im3
+            _im3.consume_ceremony(self, home_team, sim)
+        except Exception:
+            pass
         winner, loser, scores, _game_log, _notable = sim.run()
         went_to_ot = any(p > 3 for p in periods)
         return winner, loser, scores, went_to_ot, sim
 
-    def _simulate_game_lightweight(self, home_team, away_team):
-        """Ultra-fast game simulation with individual player effects and realistic scoring distribution"""
+    def _simulate_game_lightweight(self, home_team, away_team, preseason=False):
+        """Ultra-fast game simulation with individual player effects and realistic scoring distribution.
+
+        preseason: skip the individual season-stat pass -- exhibition
+        scores stand, nobody's season line moves."""
         import random
         
         # Calculate base team strengths
@@ -7821,7 +11966,7 @@ class HockeyManagerGUI(tk.Tk):
         away_strength += away_star_effects['offensive_boost']
         
         # Base goal expectation for NHL-like scoring
-        base_goals = 2.95  # Lowered slightly for more realistic low-scoring games
+        base_goals = 2.70  # Re-anchored 2026-09-29: star-effect tiers moved to the native 1-100 scale, so the league-average defensive_reduction fell; 2.70 holds the ~6.1 goals/game equilibrium
         home_goal_expectation = base_goals + (home_strength - 0.75) * 2.2
         away_goal_expectation = base_goals + (away_strength - 0.75) * 2.2
         
@@ -7848,7 +11993,33 @@ class HockeyManagerGUI(tk.Tk):
         home_goal_expectation += home_own + away_opp
         away_goal_expectation += away_own + home_opp
 
-        # FM-style squad morale modifier (subtle: +/-3%)
+        # Installed NHL systems (tactics.py): layered under the old
+        # sliders. Your attack vs their structure; pace moves total goals;
+        # PP/PK systems nudge season-level expectations (there is no
+        # per-man-advantage state in the lightweight path).
+        try:
+            import tactics as _tx
+            _tx.ensure_team_tactics(home_team)
+            _tx.ensure_team_tactics(away_team)
+            _mm = _tx.matchup_modifiers(home_team, away_team)
+            home_goal_expectation *= _mm["home_goals"] * _mm["pace"]
+            away_goal_expectation *= _mm["away_goals"] * _mm["pace"]
+            home_goal_expectation *= 1.0 + (_mm["home_pp"] - 1.0) * 0.15
+            away_goal_expectation *= 1.0 + (_mm["away_pp"] - 1.0) * 0.15
+        except Exception:
+            pass
+
+        # Situations channel: room + bench + hunger move goal expectation a
+        # few percent either way -- the same factor the detailed engines
+        # (GameSim, AdvancedGameSim) apply per shot. Computed once per team
+        # per game here; applies to every team in the league, user or AI.
+        # (Replaces the old squad-morale modifier, which situations subsumes.)
+        home_goal_expectation *= self._situation_goal_mult(home_team)
+        away_goal_expectation *= self._situation_goal_mult(away_team)
+
+        # FM-style squad confidence: raw morale average nudges expectations
+        # +/-3% (own channel -- situations reads room structure, this reads
+        # the squad's raw confidence level).
         home_goal_expectation *= self._career_morale_modifier(home_team)
         away_goal_expectation *= self._career_morale_modifier(away_team)
         
@@ -7878,9 +12049,61 @@ class HockeyManagerGUI(tk.Tk):
         # Handle ties (NHL: 5-min 3v3 OT, then shootout)
         # Track if game went to OT for OTL point
         went_to_ot = False
+        _drama_ctx = None  # ot_drama context; computed lazily, only when needed
+        def _drama():
+            # Local lazy loader: keeps the fast path fast when the game is
+            # decided in regulation by 2+.
+            nonlocal _drama_ctx
+            if _drama_ctx is None:
+                try:
+                    from ot_drama import ot_context
+                    _drama_ctx = ot_context(
+                        home_team, away_team,
+                        league=getattr(self, "league", None),
+                        atmosphere=_pregame_atmosphere(
+                            home_team, away_team,
+                            league=getattr(self, "league", None)))
+                except Exception:
+                    _drama_ctx = {"ot_mult": 1.0, "home_win_edge": 0.0,
+                                  "drama01": 0.3, "drivers": []}
+            return _drama_ctx
         if home_goals == away_goals:
             went_to_ot = True
-            home_ot_chance = 0.55 + (home_star_effects['clutch_factor'] * 0.1)  # Star players help in OT
+        elif abs(home_goals - away_goals) == 1:
+            # Drama equalizer (ot_drama): pulled goalie / 6-on-5 forces OT
+            # in big games. The equalizer is a real scored goal plus the
+            # ensuing OT winner (~+0.08 GPG league-wide at full drama --
+            # negligible, and inherent to having more OT games at all).
+            # Regulation scoring means are never touched.
+            try:
+                from ot_drama import late_equalizer_roll, LIGHTWEIGHT_ONE_GOAL_SHARE
+                _eq_ctx = _drama()
+                if late_equalizer_roll(
+                        _eq_ctx,
+                        trailing_team_is_home=(home_goals < away_goals),
+                        one_goal_share=LIGHTWEIGHT_ONE_GOAL_SHARE):
+                    went_to_ot = True
+                    _trailing_is_home = home_goals < away_goals
+                    if _trailing_is_home:
+                        home_goals += 1
+                    else:
+                        away_goals += 1
+                    self._ot_equalizer_news(home_team, away_team, _eq_ctx,
+                                            trailing_team_is_home=_trailing_is_home)
+            except Exception:
+                pass
+        if went_to_ot:
+            _ctx = _drama()
+            # Chris 2026-09-29 tuning: dynamic factors decide OT, not a fixed
+            # home handout. Base is a coin flip; clutch counts as
+            # home-minus-away (both rooms' big-game players matter); the
+            # drama edge already nets home vs away morale/situations/crowd.
+            # Hard 60/40 cap either way.
+            clutch_edge = ((home_star_effects['clutch_factor']
+                            - away_star_effects['clutch_factor']) * 0.08)
+            home_ot_chance = (0.50 + clutch_edge
+                              + _ctx.get("home_win_edge", 0.0))
+            home_ot_chance = max(0.40, min(0.60, home_ot_chance))
             if random.random() < home_ot_chance:
                 home_goals += 1
             else:
@@ -7894,8 +12117,10 @@ class HockeyManagerGUI(tk.Tk):
             winner = away_team
             loser = home_team
         
-        # Generate realistic individual player stats
-        self._generate_player_stats(home_team, away_team, home_goals, away_goals)
+        # Generate realistic individual player stats (skipped for
+        # preseason -- exhibitions don't touch season lines).
+        if not preseason:
+            self._generate_player_stats(home_team, away_team, home_goals, away_goals)
 
         # Gameplay injuries (same ~13%/team rate as the detailed sim)
         for team in (home_team, away_team):
@@ -7912,6 +12137,32 @@ class HockeyManagerGUI(tk.Tk):
                         pass
         
         return winner, loser, (home_goals, away_goals), went_to_ot
+
+    def _ot_equalizer_news(self, home_team, away_team, ctx,
+                           trailing_team_is_home=False):
+        """One headline when the drama equalizer forces OT (ot_drama).
+
+        Single hook: uses the existing GameManager -> GUI news path
+        (add_news lives on the GUI; the manager only holds it via .app).
+        No-op headless. Never raises.
+        """
+        try:
+            _drivers = (ctx or {}).get("drivers") or []
+            _flavor = _drivers[0] if _drivers else "Sheer desperation"
+            _trail_team = home_team if trailing_team_is_home else away_team
+            _lead_team = away_team if trailing_team_is_home else home_team
+            _trailing = (getattr(_trail_team, "team_name", "")
+                         or "The visitors")
+            _story = (
+                f"\u00a9 LATE EQUALIZER: {_trailing} pull the goalie and force "
+                f"overtime against {getattr(_lead_team, 'team_name', 'the hosts')} -- "
+                f"{_flavor.lower()} willed it to OT.")
+            _add = getattr(self, "add_news", None) or getattr(
+                getattr(self, "app", None), "add_news", None)
+            if callable(_add):
+                _add(_story)
+        except Exception:
+            pass
     
     def _calculate_team_strength(self, team):
         """Quick team strength calculation for lightweight simulation"""
@@ -7927,9 +12178,12 @@ class HockeyManagerGUI(tk.Tk):
         total_strength = 0
         player_count = 0
 
-        # Injured players don't dress: use healthy skaters (fall back to full
-        # roster if the team is decimated)
-        skaters = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+        # Injured or suspended players don't dress: use available skaters
+        # (fall back to full roster if the team is decimated)
+        skaters = [p for p in team.roster
+                   if not getattr(p, 'is_injured', False)
+                   and not (getattr(p, 'suspension_games_remaining', 0)
+                            or 0)]
         if len(skaters) < 14:
             skaters = list(team.roster)
 
@@ -7994,40 +12248,45 @@ class HockeyManagerGUI(tk.Tk):
                 effects['clutch_factor'] += 0.08
         
         # Elite defensemen reduce opponent scoring and add clutch
+        # (native 1-100 scale: ~84+ is a top-pair NHL defender)
         for defenseman in top_defense:
             rating = defenseman.overall_rating()
-            if rating >= 51:  # Elite defender (Norris level)
+            if rating >= 93:  # Elite defender (Norris level)
                 effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.25
-            elif rating >= 49:  # Very good defender
+            elif rating >= 90:  # Very good defender
                 effects['defensive_reduction'] += 0.15
                 effects['clutch_factor'] += 0.15
-            elif rating >= 46:  # Good defender
+            elif rating >= 87:  # Good defender
                 effects['defensive_reduction'] += 0.08
                 effects['clutch_factor'] += 0.08
-            elif rating >= 43:  # Decent defender
+            elif rating >= 84:  # Decent defender
                 effects['defensive_reduction'] += 0.03
                 effects['clutch_factor'] += 0.03
         
         # Elite goalies have major defensive impact
+        # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
         for goalie in top_goalies:
             rating = goalie.overall_rating()
-            if rating >= 52:  # Elite goalie (Vezina level)
+            if rating >= 95:  # Generational goalie
+                effects['defensive_reduction'] += 0.45
+                effects['clutch_factor'] += 0.3
+            elif rating >= 91:  # Elite goalie (Vezina level)
                 effects['defensive_reduction'] += 0.35
                 effects['clutch_factor'] += 0.3
-            elif rating >= 50:  # Very good goalie
-                effects['defensive_reduction'] += 0.22
+            elif rating >= 88:  # Very good goalie
+                effects['defensive_reduction'] += 0.25
                 effects['clutch_factor'] += 0.2
-            elif rating >= 47:  # Good goalie
-                effects['defensive_reduction'] += 0.12
+            elif rating >= 85:  # Good goalie
+                effects['defensive_reduction'] += 0.15
                 effects['clutch_factor'] += 0.12
-            elif rating >= 44:  # Decent goalie
-                effects['defensive_reduction'] += 0.05
-                effects['clutch_factor'] += 0.05
+            elif rating >= 82:  # Decent goalie
+                effects['defensive_reduction'] += 0.08
+                effects['clutch_factor'] += 0.08
         
         # Cap the effects to prevent unrealistic swings
         effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
-        effects['defensive_reduction'] = min(0.5, effects['defensive_reduction'])
+        effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
         effects['clutch_factor'] = min(1.0, effects['clutch_factor'])
         
         return effects
@@ -8092,7 +12351,12 @@ class HockeyManagerGUI(tk.Tk):
             
             # Distribute goals and assists
             goals_to_distribute = team_goals
-            assists_to_distribute = team_goals * random.randint(1, 2)
+            # P1 (scoring calibration 2026-09-29): NHL-shaped assists per
+            # goal -- 68% two, 30% one, 2% unassisted (A/G ~1.66). The
+            # assister selection below stays ovr-weighted and unchanged.
+            assists_to_distribute = sum(
+                random.choices([2, 1, 0], weights=[0.68, 0.30, 0.02])[0]
+                for _ in range(team_goals))
             
             # Weight players by rating for stat distribution
             weighted_players = []
@@ -8164,6 +12428,20 @@ class HockeyManagerGUI(tk.Tk):
             for player in dressed_skaters:
                 player.stats.games_played += 1
                 self._check_player_records(player)
+
+            # Defensive record: every dressed skater leaves a hits /
+            # takeaways / blocks trail (shutdown defensemen need a
+            # performance record, not just points). Same shared roll as
+            # every other sim path, so evaluator thresholds are uniform.
+            try:
+                from game_classes import roll_defensive_game_stats as _rdg
+                for player in dressed_skaters:
+                    _h, _t, _b = _rdg(player)
+                    player.stats.hits += _h
+                    player.stats.takeaways += _t
+                    player.stats.blocked_shots += _b
+            except Exception:
+                pass
         
         # Goalie stats: shots_against MUST equal opposing team's shots (coherence!)
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
@@ -8181,6 +12459,7 @@ class HockeyManagerGUI(tk.Tk):
             
             starting_goalie.stats.saves += saves
             starting_goalie.stats.shots_against += shots_against
+            starting_goalie.stats.goals_against += opp_goals
             starting_goalie.stats.games_played += 1
             # Note: wins/losses/shutouts tracked elsewhere or via add_game_stats if available
             if hasattr(starting_goalie.stats, 'wins'):
@@ -8279,11 +12558,11 @@ class HockeyManagerGUI(tk.Tk):
         """Show an enhanced record achievement popup"""
         try:
             import tkinter as tk
-            import tkinter.messagebox as msgbox
+            from popup_system import messagebox as msgbox
             from tkinter import ttk
             
             # Create custom achievement window
-            achievement_window = tk.Toplevel(self)
+            achievement_window = InGamePopup(self)
             achievement_window.title("Record Achievement!")
             achievement_window.configure(bg=self.BG_COLOR)
             achievement_window.geometry("500x350")
@@ -8377,13 +12656,18 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             # Fallback to simple messagebox
             try:
-                import tkinter.messagebox as msgbox
+                from popup_system import messagebox as msgbox
                 msgbox.showinfo(title, message + "\n\nCongratulations on this historic achievement!")
             except:
                 pass
     
-    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False):
-        """Fast standings update without complex calculations"""
+    def _update_standings_fast(self, home_team, away_team, winner, scores, went_to_ot=False,
+                               preseason=False):
+        """Fast standings update without complex calculations.
+
+        preseason: exhibitions never touch the table."""
+        if preseason:
+            return
         home_score, away_score = scores
         
         # Ensure teams exist in standings
@@ -8420,7 +12704,13 @@ class HockeyManagerGUI(tk.Tk):
         print(f"Simulation complete! {winner.team_name} {scores[0]} - {loser.team_name} {scores[1]}")
         print(f"Total events generated: {len(sim_engine.event_log)}")
         print(f"Notable events: {len(notable_events)}")
-        
+
+        # Career service time (waiver-exemption input).
+        try:
+            self._credit_nhl_games_played(home_team, away_team)
+        except Exception:
+            pass
+
         # Prepare data for the game viewer
         game_data = {
             'event_log': sim_engine.event_log,
@@ -8452,7 +12742,8 @@ class HockeyManagerGUI(tk.Tk):
         # Return the simulation results INCLUDING the sim_engine
         return winner, loser, scores, events, notable_events, sim_engine
 
-    def _simulate_game_with_pbp_visual(self, home_team, away_team):
+    def _simulate_game_with_pbp_visual(self, home_team, away_team,
+                                       outdoor=None):
         """Run the modern visual play-by-play window modally for a user game.
 
         Opens the live PBP viewer (rink + player bubbles driven by real sim
@@ -8462,6 +12753,26 @@ class HockeyManagerGUI(tk.Tk):
         so the result processes exactly like any other sim.
         """
         from pbp_visual_sim import open_pbp_window
+
+        # Adaptive Rivals: AI scouts the user and adjusts tactics for this game.
+        # Reverts to base identity afterwards.
+        _adapted_team = None
+        _adapted_plan = []
+        try:
+            from adaptive_rivals import adapt_for_opponent
+            user = getattr(self, 'user_team', None)
+            user_name = user.team_name if user else None
+            ai_team = None
+            if home_team.team_name == user_name and away_team.team_name != user_name:
+                ai_team = away_team
+            elif away_team.team_name == user_name and home_team.team_name != user_name:
+                ai_team = home_team
+            if ai_team is not None and user is not None:
+                _adapted_plan = adapt_for_opponent(
+                    ai_team, user, getattr(self, 'game_results', []))
+                _adapted_team = ai_team
+        except Exception:
+            pass
 
         holder = {}
         win_ref = {}
@@ -8473,26 +12784,75 @@ class HockeyManagerGUI(tk.Tk):
                 holder['pbp_events'] = list(win_ref['win'].events)
             except Exception:
                 holder['pbp_events'] = []
+            # Export shot chart to the career store (replayable evidence)
+            try:
+                from shot_charts import ShotChartStore
+                viz = win_ref.get('win')
+                shotmap = getattr(viz, '_shotmap', []) if viz else []
+                if shotmap:
+                    if not getattr(self, 'shot_chart_store', None):
+                        self.shot_chart_store = ShotChartStore()
+                    # Build game dict
+                    gid = f"{home_team.team_name}_{away_team.team_name}_{self.current_date.isoformat()}"
+                    game_dict = {
+                        "game_id": gid,
+                        "date": self.current_date.isoformat(),
+                        "home": home_team.team_name,
+                        "away": away_team.team_name,
+                        "shots": shotmap,  # list of dicts from _record_shotmap
+                    }
+                    self.shot_chart_store.add(game_dict)
+            except Exception:
+                pass  # shot chart export is non-fatal
             # Only allow closing once the final whistle has played
             try:
                 win_ref['win'].protocol("WM_DELETE_WINDOW", win_ref['win'].destroy)
             except Exception:
                 pass
 
-        win = open_pbp_window(self, home_team, away_team, on_complete=_on_done)
+        win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
+                              rivalries=getattr(getattr(self, "league", None),
+                                                "rivalries", []),
+                              user_team=getattr(self, "user_team", None),
+                              outdoor=outdoor)
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
         win.protocol("WM_DELETE_WINDOW", lambda: None)
         # Failsafe: if the sim thread dies without emitting game_end, don't
-        # trap the user forever — allow close after 3 minutes.
-        win.after(180000, lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+        # trap the user forever. Only release the close-block once the sim
+        # thread has actually finished — a healthy game runs ~7+ minutes at
+        # 1x, so a flat 3-minute timer would let the user close mid-game and
+        # we'd process a partial result as final.
+        def _failsafe():
+            try:
+                if getattr(win, 'sim_done', False):
+                    win.protocol("WM_DELETE_WINDOW", win.destroy)
+                    return
+            except Exception:
+                pass
+            try:
+                win.after(60000, _failsafe)
+            except Exception:
+                pass
+        win.after(180000, _failsafe)
+        # Absolute backstop: never trap the user longer than 12 minutes.
+        try:
+            win.after(720000,
+                      lambda: win.protocol("WM_DELETE_WINDOW", win.destroy))
+        except Exception:
+            pass
 
         self.wait_window(win)
 
-        sim = holder.get('sim', getattr(win, 'sim', None))
+        sim = holder.get('sim')
         if sim is None:
-            raise RuntimeError("PBP visual sim did not produce a result")
+            # Closed before the final whistle (backstop) or the sim thread
+            # died: the visual sim is partial/unusable. Fall back to a fast
+            # silent sim so the recorded result is always a valid full game.
+            from simulation import GameSim as _GameSim
+            sim = _GameSim(home_team, away_team)
+            sim.simulate_game()
 
         home_score = getattr(sim, 'home_score', 0)
         away_score = getattr(sim, 'away_score', 0)
@@ -8508,6 +12868,12 @@ class HockeyManagerGUI(tk.Tk):
         events = getattr(sim, 'game_log', []) or []
         notable_events = list(getattr(sim, 'notable_events', []) or [])
 
+        # Career service time (waiver-exemption input).
+        try:
+            self._credit_nhl_games_played(home_team, away_team)
+        except Exception:
+            pass
+
         # GameSim notable events lack period info; derive OT/shootout from the
         # played PBP stream so standings award the OTL point correctly.
         pbp_events = holder.get('pbp_events', [])
@@ -8518,10 +12884,449 @@ class HockeyManagerGUI(tk.Tk):
         if went_to_ot:
             notable_events.append({'period': 5 if had_shootout else 4,
                                    'event': 'overtime'})
+
+        # Adaptive Rivals: revert AI tactics + file tactical intel
+        if _adapted_team is not None:
+            try:
+                from adaptive_rivals import revert_adaptation
+                revert_adaptation(_adapted_team, _adapted_plan)
+            except Exception:
+                pass
+            try:
+                import tactics as _tx
+                _ts = ((getattr(sim, 'team_stats', None) or {})
+                       .get(user_name, {})) or {}
+                _ppg = _ts.get('power_play_goals', 0) or 0
+                _ppo = _ts.get('power_play_opportunities', 0) or 0
+                _pp_pct = (_ppg / _ppo) if _ppo else None
+                _ugoals = (home_score if home_team.team_name == user_name
+                           else away_score)
+                _agoals = (away_score if home_team.team_name == user_name
+                           else home_score)
+                _tx.record_tactical_intel(_adapted_team, user, _ugoals,
+                                          _agoals, _ts.get('shots_on_goal'),
+                                          _pp_pct)
+            except Exception:
+                pass
+
         return winner, loser, scores, events, notable_events, sim
+
+    def _update_player_reputations(self):
+        """End-of-regular-season player reputation update.
+
+        Runs once per season (guarded by _reputation_updated_for_season, since
+        end_of_season can re-fire after the playoffs). Reads p.stats BEFORE
+        league.end_of_season() wipes them -- do not move this call later in
+        the season lifecycle.
+        """
+        if getattr(self, '_reputation_updated_for_season', None) == self.league.season_year:
+            return
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        all_players = [p for t in self.league.teams for p in t.roster]
+        if not all_players:
+            return
+        # Map award display names -> reputation_system award keys
+        awards = self._calculate_season_awards(all_players)
+        award_key_map = {
+            'Hart Trophy (MVP)': 'hart',
+            'Art Ross Trophy (Scoring Leader)': 'art_ross',
+            'Maurice "Rocket" Richard Trophy': 'rocket',
+            'Vezina Trophy (Best Goalie)': 'vezina',
+            'Norris Trophy (Best Defenseman)': 'norris',
+            'Selke Trophy (Defensive Forward)': 'selke',
+            'Lady Byng Trophy (Sportsmanship)': 'lady_byng',
+            'Calder Trophy (Rookie of the Year)': 'calder',
+        }
+        name_to_awards = {}
+        for display, key in award_key_map.items():
+            info = awards.get(display)
+            if info and info.get('name'):
+                name_to_awards.setdefault(info['name'], []).append(key)
+        # League-average points per game (skaters only)
+        skaters = [p for p in all_players
+                   if 'GOALIE' not in getattr(getattr(p, 'primary_position', None), 'name', '')]
+        total_pts = sum(getattr(getattr(p, 'stats', None), 'points', 0) or 0 for p in skaters)
+        total_gp = sum(getattr(getattr(p, 'stats', None), 'games_played', 0) or 0 for p in skaters)
+        league_avg_ppg = (total_pts / total_gp) if total_gp else 0.8
+        for team in self.league.teams:
+            for p in team.roster:
+                pstats = getattr(p, 'stats', None)
+                rs.update_player_reputation(
+                    p,
+                    season_points=getattr(pstats, 'points', 0) or 0,
+                    games_played=getattr(pstats, 'games_played', 0) or 0,
+                    league_avg_ppg=league_avg_ppg,
+                    awards=name_to_awards.get(p.full_name, []),
+                )
+                # Trophy case: bank each season award onto the winner,
+                # labeled by ceremony year (e.g. "2027" for the 2026-27
+                # season). Idempotent -- re-runs never duplicate.
+                for _akey in name_to_awards.get(p.full_name, []):
+                    try:
+                        import accolades as _acc
+                        _acc.bank_accolade(
+                            p, _akey,
+                            str(getattr(self.league, "season_year", 0) + 1))
+                    except Exception:
+                        pass
+        self._reputation_updated_for_season = self.league.season_year
+
+    def _update_offseason_reputations(self):
+        """Offseason rollover: controversy cooldown, staff rep, Cup bonus.
+
+        MUST run before league.end_of_season() -- standings (win%) are wiped
+        by initialize_standings() inside it.
+        """
+        try:
+            import reputation_system as rs
+        except ImportError:
+            return
+        # Resolve the Cup champion from the playoff window, if one was played.
+        champion_name = None
+        bracket = None
+        champ = None
+        try:
+            pw = self.open_windows.get('playoffs')
+            if pw is not None and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is not None:
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion_name = getattr(champ, 'team_name', None)
+        except Exception:
+            pass
+        # League-average scoring pace for the reputation recompute below.
+        league_avg_ppg = 0.8
+        try:
+            _tp = _tg = 0
+            for _t in self.league.teams:
+                for _p in getattr(_t, 'roster', []) or []:
+                    _s = getattr(_p, 'stats', None)
+                    _g = int(getattr(_s, 'games_played', 0) or 0)
+                    if _g > 0:
+                        _tg += _g
+                        _tp += int(getattr(_s, 'goals', 0) or 0) + int(
+                            getattr(_s, 'assists', 0) or 0)
+            if _tg > 0:
+                league_avg_ppg = _tp / _tg
+        except Exception:
+            pass
+        # Jack Adams: most overachieving coach -- the same race the awards
+        # ceremony uses. Matched to a Staff object once, up front.
+        adams_staff = None
+        try:
+            import coach_records as _cr0
+            from awards_race import adams_race as _ar0
+            _race = _ar0(self.league.teams)
+            if _race:
+                adams_staff = _cr0.find_coach(
+                    self.league.teams, _race[0].get("coach"),
+                    _race[0].get("team"))
+        except Exception:
+            pass
+        season_start = f"{self.league.season_year}-09-01"
+        for team in self.league.teams:
+            st = self.league.standings.get(team.team_name, {})
+            w = st.get('W', st.get('Wins', 0))
+            l = st.get('L', st.get('Losses', 0))
+            otl = st.get('OTL', 0)
+            win_pct = w / max(1, w + l + otl)
+            is_champ = champion_name is not None and team.team_name == champion_name
+            # Playoff result for the record book + playoff-success reputation.
+            # 4 = Cup, 3 = lost Final, 2 = lost Division Finals, 1 = lost
+            # earlier, 0 = missed.
+            playoff_rounds_won = 0
+            playoff_result = "Missed playoffs"
+            try:
+                import coach_records as _crp
+                playoff_result = _crp.playoff_result_for_team(
+                    team, bracket, champ)
+                playoff_rounds_won = {
+                    "Won Stanley Cup": 4, "Lost Stanley Cup Final": 3,
+                    "Lost Division Finals": 2, "Lost Division Semifinals": 1,
+                }.get(playoff_result, 0)
+            except Exception:
+                pass
+            try:
+                import accolades as _acc
+                import coach_records as _crr
+                _syr = getattr(self.league, "season_year", 0)
+                _slabel = _crr.season_label(_syr)
+                # Trophy-case year labels banked this season: ceremony year
+                # ("2027") for the awards show, season label ("2026-27")
+                # for the Cup/Smythe. Both count as "this season".
+                _season_labels = {str(_syr + 1), _slabel}
+            except Exception:
+                _season_labels = set()
+            # Captaincy growth: the room's regime figure for mentorship
+            # (best letter-wearer's leadership). Computed once per team,
+            # before any leadership moves, so every learner sees the same
+            # number regardless of roster order.
+            _cg_mentor_lead = None
+            try:
+                for _cap in team.roster:
+                    if getattr(_cap, "captaincy", "") in ("C", "A"):
+                        _cl = float(getattr(_cap, "leadership", 0) or 0)
+                        _cg_mentor_lead = max(_cl, _cg_mentor_lead or 0)
+            except Exception:
+                pass
+            for p in team.roster:
+                incidents = sum(
+                    1 for e in getattr(p, 'controversy_history', []) or []
+                    if isinstance(e, dict) and e.get('date', '') >= season_start
+                )
+                rs.decay_controversy(p, incidents_this_season=incidents,
+                                     team=team,
+                                     coach=getattr(team, 'head_coach', None),
+                                     win_pct=win_pct)
+                if is_champ:
+                    rs.award_championship(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0)
+                            or 0))  # +8, ratchet-safe, season-idempotent
+                    # The captain who lifts the Cup banks a little extra
+                    # standing -- leading a champion is the signature
+                    # leadership credential.
+                    try:
+                        import captaincy_growth as _cg1
+                        _cg1.cup_captain_rep_bonus(
+                            p, is_champ=is_champ,
+                            season_year=int(
+                                getattr(self.league, "season_year", 0)
+                                or 0))
+                    except Exception:
+                        pass
+                    # Trophy case: bank the Cup on every champion-roster
+                    # player, labeled by season (e.g. "2026-27").
+                    # Idempotent -- re-runs never duplicate.
+                    try:
+                        import accolades as _acc
+                        _syr = getattr(self.league, "season_year", 0)
+                        if _acc.bank_accolade(
+                                p, "stanley_cup",
+                                f"{_syr}-{str(_syr + 1)[-2:]}"):
+                            # Legacy counter: career Cups. Idempotent via
+                            # bank_accolade's True-on-new-add return, so
+                            # immortality snapshots see the real total.
+                            p.stanley_cups = int(
+                                getattr(p, "stanley_cups", 0) or 0) + 1
+                    except Exception:
+                        pass
+                # Playoff success builds reputation for every playoff team,
+                # scaled by round. Recomputed from the trophy case (single
+                # source of truth) so the Conn Smythe stacks with
+                # regular-season awards instead of overwriting them.
+                # Ratchet-safe: reputation never decreases.
+                if playoff_rounds_won > 0:
+                    try:
+                        _awards = [
+                            e.get("award")
+                            for e in getattr(p, 'career_accolades', []) or []
+                            if isinstance(e, dict)
+                            and str(e.get("year")) in _season_labels]
+                        _ps = getattr(p, 'stats', None)
+                        rs.update_player_reputation(
+                            p,
+                            season_points=int(
+                                getattr(_ps, 'goals', 0) or 0) + int(
+                                getattr(_ps, 'assists', 0) or 0),
+                            games_played=int(
+                                getattr(_ps, 'games_played', 0) or 0),
+                            league_avg_ppg=league_avg_ppg,
+                            awards=_awards,
+                            playoff_rounds_won=playoff_rounds_won)
+                    except Exception:
+                        pass
+                # Captaincy forges leaders: tenure + team results + personal
+                # impact grow leadership (the Toews/Crosby arc). Additive --
+                # the development engine is never touched. Season-stamped
+                # inside the module, so re-runs are safe.
+                try:
+                    import captaincy_growth as _cg2
+                    _cg_res = _cg2.apply_captaincy_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        league_avg_ppg=league_avg_ppg)
+                    _cg_story = _cg_res.get("milestone_story")
+                    if _cg_story:
+                        # add_news lives on the GUI; the manager only holds
+                        # it via .app.
+                        _cg_add = getattr(getattr(self, "app", None),
+                                          "add_news", None)
+                        if callable(_cg_add):
+                            _cg_add(_cg_story)
+                    # The Yzerman effect: young letter-less players absorb
+                    # leadership from an elite, winning room.
+                    _cg2.apply_mentorship_growth(
+                        p,
+                        season_year=int(
+                            getattr(self.league, "season_year", 0) or 0),
+                        win_pct=win_pct,
+                        playoff_rounds_won=playoff_rounds_won,
+                        is_champ=is_champ,
+                        best_letter_leadership=_cg_mentor_lead)
+                    # Legendary captain: the completed Toews/Crosby/Yzerman
+                    # arc. Stamped once (flags + team icon status); the
+                    # story fires exactly once.
+                    try:
+                        _cg_syr = int(
+                            getattr(self.league, "season_year", 0) or 0)
+                    except Exception:
+                        _cg_syr = 0
+                    if _cg2.stamp_legendary_captain(
+                            p, getattr(team, "team_name", "") or "",
+                            season_year=_cg_syr):
+                        _cg_add2 = getattr(getattr(self, "app", None),
+                                           "add_news", None)
+                        if callable(_cg_add2):
+                            _cg_nm = getattr(p, "full_name", None) \
+                                or "The captain"
+                            _cg_tn = getattr(team, "team_name", "") \
+                                or "the franchise"
+                            _cg_add2(
+                                f"\u00a9 {_cg_nm} has completed the "
+                                f"captain's arc: a LEGENDARY CAPTAIN, the "
+                                f"face of {_cg_tn}.")
+                except Exception:
+                    pass
+            for s in getattr(team, 'staff', []) or []:
+                is_adams = adams_staff is not None and s is adams_staff
+                # +12 for a Cup on the 0-100 career scale; +8 for a Jack
+                # Adams; win% moves the rest.
+                rs.update_staff_reputation(s, team_win_pct=win_pct,
+                                           championships=1 if is_champ else 0,
+                                           jack_adams=is_adams)
+                # Year-by-year coaching record (head coaches AND assistants):
+                # the hiring/firing evidence on the staff card Record tab.
+                # Idempotent per (season, team).
+                try:
+                    import coach_records as _cr2
+                    import accolades as _acc2
+                    if _cr2.is_coaching_role(s):
+                        _syr2 = getattr(self.league, "season_year", 0)
+                        _slabel2 = _cr2.season_label(_syr2)
+                        _cr2.record_staff_season(
+                            s, _slabel2, team.team_name, w, l, otl,
+                            playoff_result, jack_adams=is_adams)
+                        if is_adams:
+                            _acc2.bank_accolade(s, "jack_adams", _slabel2)
+                        if is_champ:
+                            _acc2.bank_accolade(s, "stanley_cup", _slabel2)
+                except Exception:
+                    pass
+                # Another year with the club: the shelf-life clock ticks.
+                try:
+                    s.years_with_team = (getattr(s, 'years_with_team', 0) or 0) + 1
+                except Exception:
+                    pass
+                # Coach volatility: losing humbles, a new sweater reforms.
+                rs.decay_controversy(s, team=team, win_pct=win_pct)
+                # Coach influence: recent success builds it, losing burns it.
+                rs.develop_coach_influence(s, win_pct=win_pct, is_champ=is_champ,
+                                           roster=team.roster)
+            # Stash team results for the staff breakthrough roll: it runs
+            # inside league.end_of_season(), after the standings are wiped,
+            # so the season's shape has to be captured here. One-shot cache
+            # -- the rollover consumes and clears it.
+            try:
+                _src = getattr(self.league, "_staff_results_cache", None)
+                if not isinstance(_src, dict):
+                    _src = {}
+                    self.league._staff_results_cache = _src
+                _src[team.team_name] = {
+                    "w": w, "l": l, "otl": otl, "win_pct": win_pct,
+                    "playoff": playoff_result, "champ": bool(is_champ),
+                    "adams_id": getattr(adams_staff, "id", None),
+                }
+            except Exception:
+                pass
+            # Roster churn snapshot for next season's situations factor
+            # (gelling vs battle-tested core). Once per team per offseason.
+            try:
+                rs.snapshot_roster_churn(team)
+            except Exception:
+                pass
+
+    def _ai_offseason_captaincy_changes(self):
+        """AI torch-passing (captaincy_change.py). Rare, conservative, and
+        resolved with the same assess/apply logic the human GM faces."""
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            return
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        user_team = getattr(self, "user_team", None)
+        try:
+            date_str = self.current_date.isoformat()
+        except Exception:
+            date_str = ""
+        for team in (getattr(league, "teams", None) or []):
+            try:
+                if team is user_team:
+                    continue
+                if getattr(team, "league_name", "") != "National Hockey League":
+                    continue
+                report = _cc.ai_consider_captaincy_change(
+                    team, league, date_str=date_str)
+                if not report:
+                    continue
+                for line in (report.get("news") or []):
+                    try:
+                        self.add_news(line)
+                    except Exception:
+                        pass
+            except Exception:
+                continue
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
+        # Guard: the season-end flow must only fire ONCE per season. Without
+        # this, every Continue press after the playoffs start re-shows the
+        # season summary / playoff prompt, and there is no path from a
+        # completed playoff bracket to the offseason (soft-lock).
+        season_year = getattr(getattr(self, 'league', None), 'season_year', None)
+        if getattr(self, '_season_end_handled_year', None) == season_year:
+            if self._playoffs_complete():
+                self._start_offseason()
+            elif getattr(self, '_bulk_simming', False):
+                # Bulk sim: drive the bracket to completion automatically.
+                self.open_playoffs_window()
+                w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+                try:
+                    if w is not None and w.winfo_exists():
+                        if not getattr(w, 'playoff_bracket', None):
+                            w._generate_bracket()
+                        w._simulate_all_playoffs()
+                        # Cup decided in bulk: send the awarding recap now.
+                        try:
+                            self._maybe_send_cup_recap()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                if self._playoffs_complete():
+                    self._start_offseason()
+            else:
+                # Playoffs still in progress: focus the bracket, don't re-prompt.
+                self.open_playoffs_window()
+            return
+        self._season_end_handled_year = season_year
+
+        # Bank regular-season reputations before anything else touches stats.
+        # (Has its own once-per-season guard; safe under the re-entry guard above.)
+        self._update_player_reputations()
         # Show season summary first (skip the modal dialog when bulk simming)
         if not getattr(self, '_bulk_simming', False):
             self._show_season_summary()
@@ -8532,19 +13337,216 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_bulk_simming', False):
             result = True  # bulk sims auto-start playoffs, matching test behavior
         else:
-            result = messagebox.askyesno("Playoffs", "Start the Stanley Cup Playoffs?")
+            result = messagebox.askyesno(
+                "Playoffs",
+                "Play through the Stanley Cup Playoffs?\n\n"
+                "Yes: open the bracket and sim it yourself.\n"
+                "No: quick-sim the tournament to crown a champion.")
         if result:
             self.open_playoffs_window()
         else:
-            # Skip directly to offseason
+            # Declined the interactive bracket: the tournament still
+            # happens -- quick-sim it headless so the season always crowns
+            # a champion, then roll to the offseason.
+            self._quick_sim_playoffs_headless()
             self._start_offseason()
+
+    def _quick_sim_playoffs_headless(self):
+        """Sim the entire playoff tournament without opening the window.
+
+        Used when the user declines the interactive playoffs at season's
+        end: every season still decides a Stanley Cup champion.
+        """
+        try:
+            from playoff_system import PlayoffBracket
+            league = getattr(self, 'league', None)
+            if league is None:
+                return
+            bracket = getattr(league, 'playoff_bracket', None)
+            try:
+                _has = bracket is not None and any(
+                    bracket.playoff_series.get(r)
+                    for r in PlayoffBracket.ROUND_ORDER)
+            except Exception:
+                _has = False
+            if not _has:
+                bracket = PlayoffBracket(league)
+                bracket.generate_playoff_bracket()
+                try:
+                    league.playoff_bracket = bracket
+                except Exception:
+                    pass
+            for round_name in PlayoffBracket.ROUND_ORDER:
+                try:
+                    current = bracket.playoff_series.get(round_name) or []
+                except Exception:
+                    current = []
+                for series in current:
+                    while not getattr(series, 'is_complete', True):
+                        bracket.simulate_playoff_game(series)
+                bracket.advance_to_next_round(round_name)
+            try:
+                self._maybe_send_cup_recap()
+            except Exception:
+                pass
+        except Exception:
+            pass
             
+    def _playoffs_in_progress(self) -> bool:
+        """True while a generated bracket is alive and uncrowned.
+
+        The regular season is complete AND league.playoff_bracket holds
+        a real (non-projection) bracket with no champion yet. Mid-season
+        projections never reach league.playoff_bracket, and the
+        season-complete check excludes them anyway.
+        """
+        try:
+            if not self._check_season_complete():
+                return False
+            league = getattr(self, 'league', None)
+            bracket = getattr(league, 'playoff_bracket', None)
+            if bracket is None \
+                    or bool(getattr(bracket, 'is_projection', False)):
+                return False
+            if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _simulate_playoff_day(self):
+        """Advance one playoff day through the date-driven path.
+
+        Sims today's scheduled playoff games via the bracket
+        (exactly-once: entries the bracket controls already played are
+        skipped), advances finished rounds, and crowns the champion.
+        No regular-season machinery (maintenance, AI decisions, the
+        game-day bundle) runs during the tournament -- the bracket owns
+        those weeks, and both playoff paths stay equivalent.
+        """
+        try:
+            self._set_continue_feedback(True, "Simulating playoff games...")
+        except Exception:
+            pass
+        try:
+            league = getattr(self, 'league', None)
+            bracket = getattr(league, 'playoff_bracket', None)
+            if bracket is None:
+                return
+            # Restored brackets lose their app pointer on save/load --
+            # re-point it so stars/ledger read the right date.
+            if getattr(bracket, 'app', None) is None:
+                try:
+                    bracket.app = self
+                except Exception:
+                    pass
+            today = getattr(self, 'current_date', None)
+            for entry in list(getattr(league, 'schedule', None) or []):
+                if not isinstance(entry, dict) or not entry.get('playoff'):
+                    continue
+                if entry.get('date') != today:
+                    continue
+                try:
+                    bracket.try_play_scheduled_game(
+                        entry.get('series_id'), entry.get('series_game'))
+                except Exception:
+                    continue
+            # A finished round publishes the next one (dynamic start:
+            # REST_DAYS after the last completed series). Idempotent --
+            # safe if the bracket window already advanced it. Only try
+            # when every series in the current round is actually done,
+            # so incomplete days stay quiet.
+            try:
+                _cur = getattr(bracket, 'current_round', '')
+                _series = (getattr(bracket, 'playoff_series', {})
+                           or {}).get(_cur) or []
+                if _series and all(
+                        getattr(s, 'is_complete', False) for s in _series):
+                    bracket.advance_to_next_round(_cur)
+            except Exception:
+                pass
+            # Champion crowned -> Cup recap, then the offseason. The Cup
+            # is never skipped: no offseason before a champion.
+            if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                try:
+                    self._maybe_send_cup_recap()
+                except Exception:
+                    pass
+                try:
+                    self._start_offseason()
+                except Exception:
+                    pass
+                return
+            try:
+                self.current_date += timedelta(days=1)
+            except Exception:
+                pass
+            try:
+                self.game_manager.current_date = self.current_date
+            except Exception:
+                pass
+            try:
+                if hasattr(self, 'dashboard') and hasattr(
+                        self.dashboard, 'refresh_dashboard'):
+                    self.dashboard.refresh_dashboard()
+            except Exception:
+                pass
+            try:
+                self.after_idle(self.update_all_views)
+            except Exception:
+                pass
+        finally:
+            try:
+                self._set_continue_feedback(False)
+            except Exception:
+                pass
+
+    def _playoffs_complete(self) -> bool:
+        """True once a Stanley Cup champion has been decided."""
+        try:
+            w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            if w is not None and w.winfo_exists():
+                bracket = getattr(w, 'playoff_bracket', None)
+                if bracket is not None and getattr(bracket, 'stanley_cup_champion', None):
+                    return True
+            lb = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if lb is not None and getattr(lb, 'stanley_cup_champion', None):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _maybe_send_cup_recap(self) -> bool:
+        """Send the Stanley Cup awarding recap to the inbox, once.
+
+        Fires the night the bracket crowns a champion: winners, Conn Smythe,
+        the Cup's first two carriers, the heroes, and the coach's victory
+        interview. Flag-guarded on the league (save/load safe)."""
+        try:
+            league = getattr(self, "league", None)
+            bracket = getattr(league, "playoff_bracket", None)
+            champ = getattr(bracket, "stanley_cup_champion", None)
+            if champ is None or league is None:
+                return False
+            key = f"{getattr(league, 'season_year', '?')}:{getattr(champ, 'team_name', '?')}"
+            if getattr(league, "cup_recap_sent", None) == key:
+                return False
+            import immortality as _im_recap
+            story = _im_recap.build_cup_recap(champ, bracket, league)
+            if story:
+                self.news_log.append({'date': self.current_date,
+                                      'story': story})
+            league.cup_recap_sent = key
+            return True
+        except Exception:
+            return False
+
     def _show_season_summary(self):
         """Display end of season summary with stats and awards."""
         season_str = f"{self.league.season_year}-{self.league.season_year + 1}"
         
         # Create a summary window
-        summary_window = tk.Toplevel(self)
+        summary_window = InGamePopup(self)
         summary_window.title(f"{season_str} Season Summary")
         summary_window.geometry("900x700")
         summary_window.configure(background=self.BG_COLOR)
@@ -8619,85 +13621,168 @@ class HockeyManagerGUI(tk.Tk):
             row += 1
             
     def _calculate_season_awards(self, all_players):
-        """Calculate award winners based on season performance."""
+        """Calculate award winners using the awards_race voting model.
+
+        The same rankings the user sees in the Award Races tab decide the
+        actual trophies -- no more display-vs-reality split. Each race
+        mirrors real voting history (Hart: points + team success, Norris:
+        modern offense-first D voting, Vezina: SV%/GAA/wins + GSAx, etc.).
+        """
         awards = {}
-        
-        # Filter out players without stats
-        players_with_stats = [p for p in all_players if hasattr(p, 'stats') and p.stats]
-        skaters = [p for p in players_with_stats if p.primary_position.name != 'GOALIE']
-        goalies = [p for p in players_with_stats if p.primary_position.name == 'GOALIE']
-        
-        # Hart Trophy - MVP
-        if skaters:
-            mvp = max(skaters, key=lambda p: getattr(p.stats, 'points', 0) + p.overall_rating() * 0.5)
-            awards['Hart Trophy (MVP)'] = {
-                'name': mvp.full_name,
-                'team': getattr(mvp, 'team_name', 'Unknown'),
-                'stats': f"{getattr(mvp.stats, 'points', 0)} pts"
-            }
+        try:
+            import awards_race as ar
+        except ImportError:
+            return awards
+
+        players = [p for p in (all_players or []) if p is not None]
+        teams = list(getattr(getattr(self, "league", None), "teams", []) or [])
+
+        # Authoritative team strength map for Hart voting (from standings,
+        # not player.team_name which may be stale).
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (pts / (2 * gp)) if gp else 0.5
+        # Authoritative player -> team map from roster membership. The
+        # roster is the truth; player.team_name is just a label.
+        roster_map = ar.roster_team_map(teams)
+
+        def _info(entry):
+            """Normalize a race entry to the {name, team, stats} contract."""
+            if not entry:
+                return None
+            p = entry.get("player")
+            if p is None:
+                # Team-level award (Jennings, Adams)
+                return {"name": entry.get("team") or entry.get("coach") or "?",
+                        "team": entry.get("team", "?"),
+                        "stats": ""} if entry else None
+            name = getattr(p, "full_name", getattr(p, "name", "?"))
+            try:
+                _pid = int(getattr(p, "id", -1) or -1)
+            except Exception:
+                _pid = -1
+            team = roster_map.get(_pid) or getattr(p, "team_name", "Unknown") or "Unknown"
+            return {"name": name, "team": team, "stats": ""}
+
+        def _top(race, award_name=None):
+            try:
+                r = race()
+                top = r[0] if r else None
+                # Rivalry lifecycle: a photo-finish award race gets
+                # personal -- but only when at least one man has the
+                # personality to take it personally (record_award_race
+                # gates on base_controversy / fiery temperament).
+                # Top two within 5% on the race's own score reads as a
+                # genuinely contested vote. Runaways don't make enemies.
+                # Additive: rivalries only.
+                if award_name and r and len(r) >= 2:
+                    try:
+                        s1 = float(r[0].get("score", 0) or 0)
+                        s2 = float(r[1].get("score", 0) or 0)
+                        if s1 > 0 and (s1 - s2) / s1 < 0.05:
+                            p1, p2 = r[0].get("player"), r[1].get("player")
+                            if p1 is not None and p2 is not None \
+                                    and p1 is not p2:
+                                from reputation_system import \
+                                    record_award_race as _rar
+                                _rivs = getattr(
+                                    getattr(self, "league", None),
+                                    "rivalries", None)
+                                if isinstance(_rivs, list):
+                                    _rar(_rivs, p1, p2, award_name)
+                    except Exception:
+                        pass
+                return top
+            except Exception:
+                return None
+
+        # Hart Trophy - MVP (points + team success)
+        e = _top(lambda: ar.hart_race(players, team_pct,
+                                   roster_map=roster_map), "Hart Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
+        awards["Hart Trophy (MVP)"] = info
+
+        # Art Ross - pure points
+        e = _top(lambda: ar.art_ross_race(players), "Art Ross Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = (f"{getattr(p, 'goals', 0)}G "
+                             f"{getattr(p, 'assists', 0)}A = {e['points']} pts")
+        awards["Art Ross Trophy (Scoring Leader)"] = info
+
+        # Rocket Richard - pure goals
+        e = _top(lambda: ar.rocket_race(players), "Rocket Richard Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['goals']} goals"
+        # Canonical: one identifier, one display label. The real trophy
+        # is the Maurice "Rocket" Richard Trophy -- no duplicates.
+        awards['Maurice "Rocket" Richard Trophy'] = info
+
+        # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
+        e = _top(lambda: ar.vezina_race(players), "Vezina Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            sv = getattr(p, "saves", 0) / max(1, getattr(p, "shots_against", 0) or 1)
+            info["stats"] = f".{int(sv * 1000)} SV%, {getattr(p, 'wins', 0)}W"
+        awards["Vezina Trophy (Best Goalie)"] = info
+
+        # Norris - best defenseman (modern offense-first voting)
+        e = _top(lambda: ar.norris_race(players), "Norris Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts"
+        awards["Norris Trophy (Best Defenseman)"] = info
+
+        # Selke - best defensive forward
+        e = _top(lambda: ar.selke_race(players), "Selke Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['score']:.1f} defensive score"
+        awards["Selke Trophy (Defensive Forward)"] = info
+
+        # Lady Byng - skill + sportsmanship (points discounted by PIM)
+        e = _top(lambda: ar.byng_race(players), "Lady Byng Trophy")
+        info = _info(e)
+        if info:
+            p = e["player"]
+            info["stats"] = f"{e['points']} pts, {getattr(p, 'pim', 0)} PIM"
+        awards["Lady Byng Trophy (Sportsmanship)"] = info
+
+        # Calder - rookie of the year (NHL rookie eligibility)
+        _syr = ar.calder_season_year(getattr(self, "current_date", None))
+        e = _top(lambda: ar.calder_race(players, season_year=_syr), "Calder Trophy")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts (rookie)"
+        awards["Calder Trophy (Rookie of the Year)"] = info
+
+        # Jennings - fewest team goals against
+        e = _top(lambda: ar.jennings_race(teams))
+        if e:
+            awards["Jennings Trophy (Fewest GA)"] = {
+                "name": e["team"], "team": e["team"],
+                "stats": f"{e['goals_against']} GA"}
         else:
-            awards['Hart Trophy (MVP)'] = None
-            
-        # Art Ross Trophy - Scoring Leader
-        if skaters:
-            scoring_leader = max(skaters, key=lambda p: getattr(p.stats, 'points', 0))
-            awards['Art Ross Trophy (Scoring Leader)'] = {
-                'name': scoring_leader.full_name,
-                'team': getattr(scoring_leader, 'team_name', 'Unknown'),
-                'stats': f"{getattr(scoring_leader.stats, 'goals', 0)}G {getattr(scoring_leader.stats, 'assists', 0)}A = {getattr(scoring_leader.stats, 'points', 0)} pts"
-            }
+            awards["Jennings Trophy (Fewest GA)"] = None
+
+        # Jack Adams - most overachieving coach
+        e = _top(lambda: ar.adams_race(teams))
+        if e:
+            awards["Jack Adams (Best Coach)"] = {
+                "name": e["coach"], "team": e["team"],
+                "stats": f"+{e['score']:.3f} vs expectation"}
         else:
-            awards['Art Ross Trophy (Scoring Leader)'] = None
-            
-        # Rocket Richard Trophy - Goal Leader
-        if skaters:
-            goal_leader = max(skaters, key=lambda p: getattr(p.stats, 'goals', 0))
-            awards['Rocket Richard Trophy (Goal Leader)'] = {
-                'name': goal_leader.full_name,
-                'team': getattr(goal_leader, 'team_name', 'Unknown'),
-                'stats': f"{getattr(goal_leader.stats, 'goals', 0)} goals"
-            }
-        else:
-            awards['Rocket Richard Trophy (Goal Leader)'] = None
-            
-        # Vezina Trophy - Best Goalie
-        if goalies:
-            best_goalie = max(goalies, key=lambda p: getattr(p.stats, 'save_percentage', 0) if hasattr(p.stats, 'save_percentage') else p.overall_rating())
-            sv_pct = getattr(best_goalie.stats, 'save_percentage', 0)
-            awards['Vezina Trophy (Best Goalie)'] = {
-                'name': best_goalie.full_name,
-                'team': getattr(best_goalie, 'team_name', 'Unknown'),
-                'stats': f".{int(sv_pct * 1000) if sv_pct > 0 else 'N/A'} SV%"
-            }
-        else:
-            awards['Vezina Trophy (Best Goalie)'] = None
-            
-        # Norris Trophy - Best Defenseman
-        defensemen = [p for p in skaters if 'DEFENSE' in p.primary_position.name]
-        if defensemen:
-            best_dman = max(defensemen, key=lambda p: getattr(p.stats, 'points', 0) + p.overall_rating() * 0.3)
-            awards['Norris Trophy (Best Defenseman)'] = {
-                'name': best_dman.full_name,
-                'team': getattr(best_dman, 'team_name', 'Unknown'),
-                'stats': f"{getattr(best_dman.stats, 'points', 0)} pts"
-            }
-        else:
-            awards['Norris Trophy (Best Defenseman)'] = None
-            
-        # Calder Trophy - Rookie of the Year (age <= 24 and first year)
-        rookies = [p for p in skaters if p.age <= 24]
-        if rookies:
-            best_rookie = max(rookies, key=lambda p: getattr(p.stats, 'points', 0))
-            awards['Calder Trophy (Rookie of the Year)'] = {
-                'name': best_rookie.full_name,
-                'team': getattr(best_rookie, 'team_name', 'Unknown'),
-                'stats': f"{getattr(best_rookie.stats, 'points', 0)} pts"
-            }
-        else:
-            awards['Calder Trophy (Rookie of the Year)'] = None
-            
+            awards["Jack Adams (Best Coach)"] = None
+
         return awards
-    
+
     def _create_leaders_section(self, parent):
         """Create league leaders section."""
         ttk.Label(parent, text="League Statistical Leaders", 
@@ -8791,11 +13876,292 @@ class HockeyManagerGUI(tk.Tk):
                 ttk.Label(parent, text=f"  {player.full_name}: {g}G {a}A = {pts} pts", 
                          style='TLabel').pack(anchor='w', padx=20)
     
+    def _guarantee_offseason_tentpoles(self):
+        """Run the draft lottery + entry draft when the calendar skipped them.
+
+        The lottery (May 8) and entry draft (June 23-25) are date-triggered in
+        _check_for_event_day, but _start_offseason jumps straight from the Cup
+        to July 1 -- so in every path that completes the playoffs those dates
+        are never simulated and the lottery + draft would be silently skipped
+        (no prospects would ever enter the league). Run them here when the
+        date-based path didn't; the per-year guards (lottery_held_years /
+        draft_held_years) make this a no-op otherwise. Dates are set first so
+        headlines, inbox cards and news land on the right day.
+        """
+        try:
+            league = self.league
+            draft_year = self.current_date.year  # e.g. 2027 for the 2026-27 season
+            # 1. Lottery -- fully automatic, no user input needed.
+            lotto_done = set(getattr(league, 'lottery_held_years', None) or [])
+            if draft_year not in lotto_done:
+                self.current_date = date(draft_year, 5, 8)
+                try:
+                    self._hold_draft_lottery(draft_year)
+                except Exception:
+                    debug_print("Tentpole lottery failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'lottery_held_years', None) or [])
+                    held.add(draft_year)
+                    league.lottery_held_years = sorted(held)
+            # 2. Entry draft -- setup (class, lottery order, news, storylines).
+            # Skip entirely when the year's picks were already conducted
+            # (interactive war room): regenerating the class would orphan
+            # the drafted prospects and the conductor is idempotent anyway.
+            draft_done = set(getattr(league, 'draft_held_years', None) or [])
+            conducted = set(
+                getattr(league, 'draft_conducted_years', None) or [])
+            if draft_year not in draft_done and draft_year not in conducted:
+                self.current_date = date(draft_year, 6, 24)
+                try:
+                    self._hold_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole draft setup failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+                else:
+                    held = set(getattr(league, 'draft_held_years', None) or [])
+                    held.add(draft_year)
+                    league.draft_held_years = sorted(held)
+                # 3. Conduct the picks. Headless auto-draft mirrors the draft
+                # board's AI logic (ai_make_pick) for every club.
+                # Design follow-up: interactive per-pick drafting via Draft Day
+                # Central instead of auto-conducting the user's picks.
+                try:
+                    self._auto_conduct_entry_draft(draft_year)
+                except Exception:
+                    debug_print("Tentpole auto-draft failed (non-fatal):")
+                    import traceback
+                    traceback.print_exc()
+        except Exception:
+            debug_print("Offseason tentpole guarantee failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
+    def _auto_conduct_entry_draft(self, draft_year):
+        """Headless full entry draft: every pick made with the draft board's
+        AI selection logic (no UI). Prospects go to team prospect pools.
+
+        Delegates to draft_night.conduct_entry_draft -- the ONE headless
+        conductor, shared with the automated season flow. The war room's
+        _do_ai_pick uses the same ai_select_prospect, so all three paths
+        pick identically.
+        """
+        try:
+            from draft_night import conduct_entry_draft
+            picks = conduct_entry_draft(self.league, draft_year, app=self)
+            if picks:
+                print(f"Auto-draft complete: {len(picks)} picks made.",
+                      flush=True)
+        except Exception:
+            debug_print("Tentpole auto-draft failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+
     def _start_offseason(self):
         """Start the offseason phase."""
+        # Cup recap backstop: if the champion was decided outside the daily
+        # loop (bulk sims), the inbox still gets the awarding story. Once.
+        try:
+            self._maybe_send_cup_recap()
+        except Exception:
+            pass
+        # Controversy cooldown + staff rep + Cup bonus. Reads standings before
+        # league.end_of_season() wipes them.
+        self._update_offseason_reputations()
+        # Captaincy torch-passing (captaincy_change.py): AI clubs rarely
+        # and conservatively hand the C to a plainly worthier successor.
+        # Same assess/apply logic the human GM faces -- no free lunch.
+        try:
+            self._ai_offseason_captaincy_changes()
+        except Exception:
+            pass
+        # League Memory: record the completed season (champion, awards,
+        # standings) before league.end_of_season() wipes the stats.
+        try:
+            self._record_season_to_history()
+        except Exception:
+            pass
+        # Board season review (manager_career.BoardSystem.season_review):
+        # the year-end reckoning -- expectation vs reality, confidence
+        # delta, and the season rollover (honeymoon decay, patience
+        # erosion, counter resets). Must run before league.end_of_season()
+        # wipes the standings and stats it reads. Previously this method
+        # had no caller, so every season played as "year 1" forever.
+        try:
+            self._offseason_board_review()
+        except Exception:
+            pass
+        # Immortality (immortality.py): retirements, HOF ballot, retired
+        # numbers, era arguments. Runs on recorded career totals, before
+        # league.end_of_season() wipes the stats. Purely additive.
+        try:
+            self._offseason_immortality()
+        except Exception:
+            pass
+        # Copycat league: AI teams steal the Cup champion's systems.
+        # (Familiarity cost included -- copying isn't free.)
+        try:
+            import tactics as _tx
+            _CAT_LABEL = {"pp": "power play", "pk": "penalty kill",
+                          "ozone": "offensive-zone system",
+                          "forecheck": "forecheck",
+                          "dzone": "defensive-zone coverage"}
+            for _tn, _cat, _sys, _lore in _tx.offseason_copycat(
+                    getattr(self, 'league', None)):
+                _sysname = _tx.CATALOGS.get(_cat, {}).get(_sys, {}).get(
+                    "name", _sys)
+                _lorebit = f" — {_lore}" if _lore else ""
+                self.add_news(
+                    f"Copycat league: {_tn} install the {_sysname} "
+                    f"{_CAT_LABEL.get(_cat, 'system')} after watching the "
+                    f"champions win with it{_lorebit}.")
+        except Exception:
+            pass
+        # Buyout window (June 15-30, real NHL timing): AI GMs clear dead
+        # weight; the user's candidates arrive as an interactive inbox
+        # message (same pattern as RFA qualifying). The stamped date moves
+        # INTO the window -- previously the July-1 jump skipped June 15-30
+        # entirely, so the transaction_windows gate meant nobody (user or
+        # AI) could ever execute a buyout. Runs before the draft (June
+        # 23-25), matching the real calendar order.
+        try:
+            self.current_date = date(self.league.season_year + 1, 6, 15)
+        except Exception:
+            pass
+        try:
+            import buyout_window as _bw
+            _bw_summary = _bw.process_buyout_window(
+                self.league, app=self, rng=getattr(self, "_rng", None)) or {}
+            _n_bought = len(_bw_summary.get("ai_buyouts") or [])
+            if _n_bought:
+                self.add_news(
+                    f"Buyout window (June 15-30): {_n_bought} player"
+                    f"{'s' if _n_bought != 1 else ''} bought out "
+                    f"league-wide.")
+        except Exception:
+            debug_print("Buyout window failed (non-fatal):")
+            import traceback
+            traceback.print_exc()
+        # Tentpole guarantee: the draft lottery (May 8) and entry draft
+        # (June 23-25) are date-triggered, but the July-1 jump below would
+        # otherwise skip them every season. Run them now when missed; the
+        # per-year guards make it a no-op when the date path already ran.
+        # Must precede league.end_of_season(), which wipes the standings the
+        # draft order is built from.
+        self._guarantee_offseason_tentpoles()
         # Age players and reset stats
         self.league.end_of_season()
 
+        # Draft rights lifecycle: end_of_season() (game_classes) collected
+        # re-entry / UFA / retirement / warning messages on league.rights_news.
+        # Flush them to the inbox here (the monthly Jan-Jun beat hook would
+        # otherwise hold July's rights news until January).
+        try:
+            _rn = list(getattr(self.league, "rights_news", None) or [])
+            for _msg in _rn:
+                try:
+                    self.add_news(str(_msg))
+                except Exception:
+                    pass
+            if _rn:
+                self.league.rights_news = []
+        except Exception:
+            pass
+        # Prospect junior/college award headlines from end_of_season.
+        try:
+            _pn = list(getattr(self.league, "prospect_awards_news", None)
+                       or [])
+            for _msg in _pn:
+                try:
+                    self.add_news("🏆 " + str(_msg))
+                except Exception:
+                    pass
+            if _pn:
+                self.league.prospect_awards_news = []
+        except Exception:
+            pass
+        # Rivalry-review verdicts from end_of_season.
+        try:
+            _rn = list(getattr(self.league, "rivalry_review_news", None)
+                       or [])
+            for _msg in _rn:
+                try:
+                    self.add_news("⚔️ " + str(_msg))
+                except Exception:
+                    pass
+            if _rn:
+                self.league.rivalry_review_news = []
+        except Exception:
+            pass
+        # Staff breakthrough headlines from end_of_season.
+        try:
+            _bn = list(getattr(self.league, "staff_breakthrough_news", None)
+                       or [])
+            for _msg in _bn:
+                try:
+                    self.add_news("📈 " + str(_msg))
+                except Exception:
+                    pass
+            if _bn:
+                self.league.staff_breakthrough_news = []
+        except Exception:
+            pass
+        # ELC slide headlines from end_of_season (CBA 9.1(d)).
+        try:
+            _sn = list(getattr(self.league, "elc_slide_news", None) or [])
+            for _msg in _sn:
+                try:
+                    self.add_news("📝 " + str(_msg))
+                except Exception:
+                    pass
+            if _sn:
+                self.league.elc_slide_news = []
+        except Exception:
+            pass
+
+        # Restricted free agency (rfa_system.py): qualifying offers at the
+        # real CBA minimums, rare AI offer sheets with real pick
+        # compensation, and salary arbitration at real-life-calibrated filing
+        # rates. AI clubs are processed end-to-end; the user's qualifying
+        # decisions arrive as an interactive inbox message. Runs after
+        # end_of_season() expired the contracts above.
+        try:
+            import player_decision as _pd
+            _pd.seed_league_decision_fields(self.league)
+        except Exception:
+            pass
+        try:
+            import rfa_system as _rfa
+            _rfa_summary = _rfa.process_rfa_offseason(
+                self.league, app=self, rng=getattr(self, "_rng", None))
+            if _rfa_summary.get("arbitration_awards"):
+                self.add_news(
+                    f"Arbitration tracker: "
+                    f"{_rfa_summary['arbitration_filings']} filed, "
+                    f"{len(_rfa_summary['arbitration_awards'])} resolved.")
+        except Exception:
+            pass
+
+        # BUG-015: generate the new season's slate. generate_schedule() was
+        # only ever called on new-career paths, so after the first rollover
+        # the league had zero scheduled games -- season 2+ never started
+        # (standings frozen at 0-0-0, the season-end safety net had no last
+        # date to key on). Real NHL timing: the schedule drops in late June,
+        # i.e. right here, before the July-1 jump. The template cache makes
+        # the rebuild cheap; generation is deterministic per season_year so
+        # a re-run is idempotent.
+        try:
+            self.league.generate_schedule()
+            try:
+                import outdoor_games as _og
+                _og.schedule_outdoor_games(self.league)
+            except Exception:
+                pass
+        except Exception:
+            import traceback
+            traceback.print_exc()
         # A new schedule was generated: drop cached season dates/games so the
         # season-end safety net in simulate_day recomputes from the new slate
         # instead of the previous season's.
@@ -8806,8 +14172,62 @@ class HockeyManagerGUI(tk.Tk):
             self._strength_cache.clear()
 
         # Generate new draft class (quality from settings: Weak/Normal/Strong/Generational)
+        # The upcoming entry draft is held in June of next calendar year; stamp
+        # the class with that year and fold in this summer's rights re-entries
+        # (unsigned CHL prospects re-entering the draft). The class is
+        # regenerated for real on draft day in _hold_entry_draft, which clears
+        # league.draft_reentries after consuming them -- so this call must NOT
+        # clear the list.
         draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
-        self.league.draft_prospects = generate_draft_class(num_prospects=224, quality=draft_quality)  # 7 rounds × 32 teams = 224 players
+        from draft_generator import generate_draft_class
+        _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+        try:
+            import inspect as _inspect
+            _params = _inspect.signature(generate_draft_class).parameters
+            if "draft_year" in _params:
+                _gen_kwargs["draft_year"] = self.league.season_year + 1
+            if "reentries" in _params:
+                _gen_kwargs["reentries"] = getattr(self.league, "draft_reentries", None) or []
+        except Exception:
+            pass
+        self.league.draft_prospects = generate_draft_class(**_gen_kwargs)  # 7 rounds × 32 teams = 224 players
+
+        # Undrafted European free agents: a thin yearly batch (4-8, ~5) of
+        # older Euro-league players appended to the FA pool. Mostly AHL/tweener
+        # material with usually 0-1 plausible NHL gamble; true impact talent at
+        # ~10%/offseason, never scheduled. The AI sees them as ordinary free
+        # agents. Runs once per real offseason, before the July-1 jump
+        # (guarded by league._euro_fa_year -- a second pass for the same
+        # offseason would append a duplicate batch).
+        try:
+            from euro_free_agents import run_euro_free_agency
+            _efa_year = self.league.season_year
+            if getattr(self.league, "_euro_fa_year", None) != _efa_year:
+                _efa_summary = run_euro_free_agency(
+                    self.league, _efa_year, app=self) or {}
+                if _efa_summary.get("added"):
+                    self.league._euro_fa_year = _efa_year
+        except Exception:
+            pass
+
+        # Post-draft "steal of the draft" retrospective: late-round picks whose
+        # displayed stock has exploded since draft day get their retrospective
+        # now, once per player, rather than pre-draft hype they never had.
+        try:
+            from draft_stories import steal_retrospective
+            for _story in (steal_retrospective(self.league) or [])[:2]:
+                self.add_news(
+                    f"{_story.get('title', 'Draft')} — {_story.get('text', '')}")
+        except Exception:
+            pass
+
+        # Reset the deadline manager's per-season state so last year's
+        # trade activity doesn't leak into the new season's intel panel.
+        try:
+            from trade_deadline_manager import get_deadline_manager
+            get_deadline_manager(getattr(self, 'game_manager', None)).reset_for_new_season()
+        except Exception:
+            pass
         
         # Update the current date to offseason
         self.current_date = date(self.league.season_year, 7, 1)  # Jump to July 1st (Free Agency)
@@ -8820,7 +14240,374 @@ class HockeyManagerGUI(tk.Tk):
                            "• Free agency is now open")
         
         self.update_all_views()
-        
+
+    def _user_playoff_result(self):
+        """(made_playoffs, rounds_won, won_cup) for the user's club.
+
+        Walks the playoff bracket the same way _record_season_to_history
+        does. Defensive: any missing piece -> (False, 0, False).
+        """
+        try:
+            user = getattr(getattr(self, 'user_team', None), 'team_name', None)
+            if not user:
+                return False, 0, False
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') \
+                    and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None),
+                                  'playoff_bracket', None)
+            if bracket is None:
+                return False, 0, False
+            made, rounds = False, 0
+            for series_list in (getattr(bracket, 'playoff_series', {})
+                                or {}).values():
+                for s in series_list or []:
+                    t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                    t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                    if user not in (t1, t2):
+                        continue
+                    made = True
+                    if getattr(getattr(s, 'winner', None),
+                               'team_name', None) == user:
+                        rounds += 1
+            champ = getattr(bracket, 'stanley_cup_champion', None)
+            won_cup = getattr(champ, 'team_name', None) == user
+            return made, rounds, won_cup
+        except Exception:
+            return False, 0, False
+
+    def _offseason_board_review(self):
+        """Year-end board reckoning + season rollover (BUG-011 fix).
+
+        Gives BoardSystem.season_review() the first real caller it has
+        ever had, then stashes the facts on the app for the season-review
+        inbox card (season_review.py builds the full story: big moments,
+        standouts, prospects, the four-corner season score).
+        """
+        career = getattr(self, 'career', None)
+        board = getattr(career, 'board', None)
+        if board is None or not hasattr(board, 'season_review'):
+            return
+        made, rounds, cup = self._user_playoff_result()
+        headline, body, delta = board.season_review(made, rounds, cup)
+        self._season_review_board = {
+            "headline": headline, "body": body, "delta": delta,
+            "made_playoffs": made, "playoff_rounds_won": rounds,
+            "won_cup": cup,
+            "expectation": getattr(board, 'expectation', None),
+            "confidence": getattr(board, 'confidence', None),
+            "season_number": getattr(board, 'season_number', None),
+        }
+        try:
+            self.add_news(f"Board season review: {headline} "
+                          f"(confidence {board.confidence}/100).")
+        except Exception:
+            pass
+        # The season-review card: big moments, standouts/tough-go, story of
+        # the year, prospect pipeline report, four-corner season score --
+        # delivered to the inbox. Must run before league.end_of_season()
+        # wipes the per-season stats it reads. Guarded: a card bug must
+        # never break the season rollover.
+        try:
+            from season_review import deliver_season_review
+            deliver_season_review(self)
+        except Exception:
+            pass
+
+    def _record_season_to_history(self):
+        """Record the completed season to League Memory.
+
+        Called from _start_offseason after the champion is resolved but
+        before league.end_of_season() wipes stats. Purely additive —
+        records outcomes, never changes them.
+        """
+        from league_history import LeagueHistory
+        # Get or create the history object on the career
+        hist = getattr(self, 'league_history', None)
+        if hist is None:
+            hist = LeagueHistory()
+            self.league_history = hist
+
+        year = getattr(getattr(self, 'league', None), 'season_year', 2026)
+
+        # Champion, runner-up, series score from the playoff bracket
+        champion = None
+        runner_up = None
+        series_score = None
+        try:
+            pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
+            bracket = None
+            if pw is not None and hasattr(pw, 'winfo_exists') and pw.winfo_exists():
+                bracket = getattr(pw, 'playoff_bracket', None)
+            if bracket is None:
+                bracket = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
+            if bracket is not None:
+                champ = getattr(bracket, 'stanley_cup_champion', None)
+                champion = getattr(champ, 'team_name', None)
+                # Final series for runner-up and score
+                finals = (getattr(bracket, 'playoff_series', {}) or {}).get(
+                    'stanley_cup_final', [])
+                if finals:
+                    s = finals[0]
+                    winner = getattr(s, 'winner', None)
+                    if winner is not None:
+                        wname = getattr(winner, 'team_name', None)
+                        # Runner-up is the other team
+                        t1 = getattr(getattr(s, 'team1', None), 'team_name', None)
+                        t2 = getattr(getattr(s, 'team2', None), 'team_name', None)
+                        runner_up = t2 if wname == t1 else t1
+                        ww = s.team1_wins if wname == t1 else s.team2_wins
+                        lw = s.team2_wins if wname == t1 else s.team1_wins
+                        series_score = f"{ww}-{lw}"
+        except Exception:
+            pass
+
+        # Awards (calculate from current stats before wipe)
+        awards = {}
+        try:
+            all_players = []
+            for team in self.league.teams:
+                all_players.extend(team.roster)
+            raw_awards = self._calculate_season_awards(all_players)
+            # Normalize to {award_name: player_name}
+            for award_name, winner in raw_awards.items():
+                if winner is not None:
+                    if isinstance(winner, dict):
+                        awards[str(award_name)] = winner.get('name', '?')
+                    else:
+                        awards[str(award_name)] = getattr(
+                            winner, 'full_name', getattr(winner, 'name', str(winner)))
+        except Exception:
+            pass
+
+        # Conn Smythe: decided at Cup-win time and stashed on the bracket
+        # (playoff_system._decide_conn_smythe) -- the awards calculator only
+        # covers the regular season, so inject it here for the history book.
+        try:
+            smythe_name = getattr(bracket, "conn_smythe_name", None)
+            if smythe_name:
+                awards["Conn Smythe"] = smythe_name
+        except Exception:
+            pass
+
+        # Presidents' Trophy: best regular-season record
+        presidents = None
+        standings_snapshot = []
+        try:
+            best_pts = -1
+            for team in self.league.teams:
+                st = self.league.standings.get(team.team_name, {})
+                w = st.get('W', st.get('Wins', 0))
+                l = st.get('L', st.get('Losses', 0))
+                otl = st.get('OTL', 0)
+                pts = w * 2 + otl
+                if pts > best_pts:
+                    best_pts = pts
+                    presidents = team.team_name
+                standings_snapshot.append({
+                    "team": team.team_name,
+                    "w": w, "l": l, "otl": otl, "pts": pts,
+                })
+            # Sort by points and keep ALL 32 clubs with their final rank --
+            # history should remember a 29th-place finish, not just the
+            # playoff field.
+            standings_snapshot.sort(key=lambda x: x["pts"], reverse=True)
+            for _rank, _row in enumerate(standings_snapshot, 1):
+                _row["rank"] = _rank
+        except Exception:
+            pass
+
+        # Conn Smythe: from awards if present, else None
+        conn_smythe = awards.get("Conn Smythe")
+
+        hist.record_season(
+            year=year,
+            champion=champion,
+            runner_up=runner_up,
+            series_score=series_score,
+            presidents_trophy=presidents,
+            conn_smythe=conn_smythe,
+            awards=awards,
+            standings_snapshot=standings_snapshot,
+        )
+
+        # Franchise records: fold each team's season into the record book.
+        # Runs before end_of_season() wipes per-season stats.
+        try:
+            season_label = f"{year}-{str(year + 1)[-2:]}"
+            for team in self.league.teams:
+                hist.franchise_records.update_from_season(team, season_label)
+                try:
+                    _streak = int(getattr(team, "longest_win_streak", 0) or 0)
+                    if _streak >= 3:
+                        hist.franchise_records.record_streak(
+                            team.team_name, "win", _streak, season_label)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _dispatch_scout_value_tips(self):
+        """Monthly pro-scout value reads -- for the USER and every AI GM.
+
+        Even playing field: every team's Head Scout / Professional Scouts
+        file their reads on the 1st. The user gets reads in the news feed;
+        AI teams store theirs on the team object where their trade logic
+        reads them (see trade_engine.scout_adjusted_value).
+
+        Whether a read is RIGHT depends directly on that scout's
+        judging_player_ability -- elite scouts spot real value, bad scouts
+        chase ghosts. Same rules for silicon and flesh.
+
+        Wave 1 (information asymmetry):
+        - Every read is filed in the team's tip ledger via
+          record_tip_call() and graded later against what actually
+          happened -- the scout's track record, not hidden JPA, is what
+          the user sees.
+        - Design law: reads show evidence, uncertainty, provenance and
+          the person responsible. Never "buy low" / "sell high".
+        """
+        try:
+            import analytics_scouting as scout_mod
+            import random as _r
+        except ImportError:
+            return
+        try:
+            league = self.league
+            teams = list(getattr(league, "teams", []) or [])
+            if not teams:
+                return
+            try:
+                from game_classes import StaffRole
+                pro_roles = {StaffRole.HEAD_SCOUT, StaffRole.PROFESSIONAL_SCOUT}
+            except Exception:
+                pro_roles = set()
+            all_players = []
+            for t in teams:
+                all_players.extend(getattr(t, "roster", []) or [])
+            if not all_players:
+                return
+            # Prospects get the same analytics treatment: every club's
+            # farm pool is scanned for standouts, so underlying farm
+            # numbers (not just pedigree) move prospect trade value.
+            all_prospects = []
+            for t in teams:
+                all_prospects.extend(getattr(t, "prospects", []) or [])
+            # Signed minor-leaguers: same light farm metrics as the
+            # prospects, labeled AHL so the scout card reads honestly.
+            # This is the gem-finder for the farm -- cheap NHLe /
+            # expectation / plus-minus reads, not NHL-grade shot
+            # tracking, so the monthly pass stays fast.
+            all_ahl = []
+            for t in teams:
+                all_ahl.extend(getattr(t, "ahl_roster", []) or [])
+            date_str = str(getattr(self, "current_date",
+                                   __import__("datetime").date.today()))
+            for team in teams:
+                scout_mod.ensure_analytics_fields(team)
+                staff = list(getattr(team, "staff", []) or [])
+                scouts = [s for s in staff
+                          if getattr(s, "role", None) in pro_roles] if pro_roles else []
+                if not scouts:
+                    continue
+                # Fresh sheet each month; stale reads don't linger.
+                team.scout_buy_tips = {}
+                team.scout_sell_tips = {}
+                for s in scouts:
+                    scout_mod.ensure_analytics_fields(s)
+                    # Tip cadence scales with the scout's eye (1-20 scale).
+                    jpa20 = scout_mod._scout_jpa(s)
+                    tip_chance = 0.20 + 0.50 * (jpa20 - 1) / 19.0
+                    if _r.random() > tip_chance:
+                        continue
+                    buy_tips = scout_mod.scout_value_tips(
+                        s, all_players, teams,
+                        user_team=team, limit=2)
+                    sell_tips = scout_mod.scout_sell_high_tips(
+                        s, team, limit=2)
+                    # Prospect reads ride the same rails: filed into the
+                    # buy-tip book, graded by the same ledger, priced by
+                    # scout_adjusted_value(), and printed to the user's
+                    # news feed below. Analytics matter for the kids too.
+                    prospect_tips = []
+                    if all_prospects:
+                        try:
+                            prospect_tips = scout_mod.scout_prospect_tips(
+                                s, all_prospects, user_team=team, limit=2)
+                        except Exception:
+                            prospect_tips = []
+                    ahl_tips = []
+                    if all_ahl:
+                        try:
+                            ahl_tips = scout_mod.scout_prospect_tips(
+                                s, all_ahl, user_team=team, limit=2,
+                                kind="AHL")
+                        except Exception:
+                            ahl_tips = []
+                    buy_tips = (list(buy_tips) + list(prospect_tips)
+                                + list(ahl_tips))
+                    # File every read in the ledger: the scout's call is
+                    # graded against what happens later. This is what
+                    # builds (or exposes) track records.
+                    for tip in buy_tips:
+                        try:
+                            scout_mod.record_tip_call(
+                                s, team, "buy", tip["player"], date_str,
+                                reason=tip.get("reason", ""))
+                        except Exception:
+                            pass
+                    for tip in sell_tips:
+                        try:
+                            scout_mod.record_tip_call(
+                                s, team, "sell", tip["player"], date_str,
+                                reason=tip.get("reason", ""))
+                        except Exception:
+                            pass
+                    # Tips are private to the club whose scout filed them --
+                    # filed where the trade engine reads them, and shown on
+                    # the scout's own staff card (open reads). They are
+                    # NEVER broadcast in the news feed: no league-wide
+                    # "hey look what someone found". The news feed carries
+                    # performance headlines (hat tricks, shutouts); scout
+                    # reads are your staff's private reports to you.
+                    bt = getattr(team, "scout_buy_tips", None)
+                    if bt is None:
+                        team.scout_buy_tips = bt = {}
+                    st = getattr(team, "scout_sell_tips", None)
+                    if st is None:
+                        team.scout_sell_tips = st = {}
+                    for tip in buy_tips:
+                        p = tip["player"]
+                        pid = getattr(p, "id", id(p))
+                        bt[pid] = {"jpa": tip["scout_jpa"],
+                                   "correct": tip["correct"],
+                                   "scout": tip["scout"],
+                                   "scout_id": getattr(s, "id", ""),
+                                   "name": tip.get("name", "?"),
+                                   "pteam": tip.get("team", "?"),
+                                   "kind": tip.get("kind", ""),
+                                   "reason": tip.get("reason", ""),
+                                   "risks": list(tip.get("risks", "") or []),
+                                   "confidence": tip.get("confidence", "")}
+                    for tip in sell_tips:
+                        p = tip["player"]
+                        pid = getattr(p, "id", id(p))
+                        st[pid] = {"jpa": tip["scout_jpa"],
+                                   "correct": tip["correct"],
+                                   "scout": tip["scout"],
+                                   "scout_id": getattr(s, "id", ""),
+                                   "name": tip.get("name", "?"),
+                                   "kind": tip.get("kind", ""),
+                                   "reason": tip.get("reason", ""),
+                                   "risks": list(tip.get("risks", "") or []),
+                                   "confidence": tip.get("confidence", "")}
+        except Exception:
+            pass
+
+
     def process_trade_block_offers(self):
         """Process trade offers for players on the trade block."""
         if not self.trade_block:
@@ -9065,10 +14852,16 @@ class HockeyManagerGUI(tk.Tk):
         return None
     
     def present_trade_offers(self, offers):
-        """Present trade offers to the user and process their response."""
+        """Route AI trade offers to the inbox as negotiable proposals.
+
+        FM24/EHM-style: no blocking modal. Each offer becomes a live
+        negotiation the user can accept, decline, or counter on their own
+        time -- closing everything in between answers nothing.
+        """
         if not offers:
             return
-            
+        import trade_negotiation as tn
+
         # Group offers by player
         offers_by_player = {}
         for offer in offers:
@@ -9076,52 +14869,48 @@ class HockeyManagerGUI(tk.Tk):
             if player not in offers_by_player:
                 offers_by_player[player] = []
             offers_by_player[player].append(offer)
-        
-        # Prepare a detailed message for each player
-        message = "Trade offers received:\n\n"
-        
-        for player, player_offers in offers_by_player.items():
-            message += f"For {player.full_name} ({player.primary_position.name}, OVR: {player.overall_rating()}):\n"
-            
-            for i, offer in enumerate(player_offers, 1):
-                team = offer['team']
-                package = offer['offer']
-                
-                message += f"  Offer {i} from {team.team_name}:\n"
-                for offered_player in package:
-                    message += f"    - {offered_player.full_name} ({offered_player.primary_position.name}, OVR: {offered_player.overall_rating()})\n"
-                
-                message += "\n"
-        
+
         # Add to news log
         self.news_log.append({
             'date': self.current_date,
             'story': f"Trade offers received for {len(offers_by_player)} player(s) on your trade block."
         })
-        
-        # Show notification to user
-        messagebox.showinfo("Trade Offers Received", message)
+
+        # One live negotiation per offer, delivered to the inbox
+        for player, player_offers in offers_by_player.items():
+            for offer in player_offers:
+                try:
+                    tn.incoming_offer(self, offer['team'],
+                                      offer['offer'], player_wanted=player)
+                except Exception as e:
+                    print(f"incoming trade offer failed (non-fatal): {e}")
     
     def open_roster_window(self):
-        if 'roster' not in self.open_windows or not self.open_windows['roster'].winfo_exists():
-            self.open_windows['roster'] = RosterWindow(self)
-        self.open_windows['roster'].focus_set()
+        return self.show_screen('roster', 'Roster', RosterView)
 
     def open_free_agency_window(self):
-        if 'free_agency' not in self.open_windows or not self.open_windows['free_agency'].winfo_exists():
-            self.open_windows['free_agency'] = FreeAgencyWindow(self)
-        self.open_windows['free_agency'].focus_set()
+        return self.show_screen('free_agency', 'Free Agency', FreeAgencyView)
 
-    def open_trade_window(self):
-        if 'trade' not in self.open_windows or not self.open_windows['trade'].winfo_exists():
-            self.open_windows['trade'] = TradeWindow(self)
+    def open_trade_window(self, preset=None):
+        if ('trade' not in self.open_windows
+                or not self.open_windows['trade'].winfo_exists()
+                or preset):
+            # A preset (negotiation counter, player-menu proposal) always
+            # opens a fresh workbench so the terms are exactly what was asked.
+            try:
+                old = self.open_windows.get('trade')
+                if old is not None and old.winfo_exists():
+                    old.destroy()
+            except Exception:
+                pass
+            self.open_windows['trade'] = TradeWindow(self, preset=preset)
         self.open_windows['trade'].focus_set()
 
     def open_trade_deadline_center(self):
         """Open the Trade Deadline Center - only available on trade deadline day"""
-        if not is_trade_deadline_day():
-            messagebox.showinfo("Trade Deadline Center", 
-                              "The Trade Deadline Center is only available on Trade Deadline Day (March 8th).\n\n"
+        if not self.is_trade_deadline_day():
+            messagebox.showinfo("Trade Deadline Center",
+                              "The Trade Deadline Center is only available on Trade Deadline Day.\n\n"
                               "Check back when the deadline approaches!")
             return
             
@@ -9131,20 +14920,18 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_draft_day_central(self):
         """Open Draft Day Central - the draft-day event hub"""
-        if 'draft_central' not in self.open_windows or not self.open_windows['draft_central'].winfo_exists():
-            self.open_windows['draft_central'] = DraftDayCentral(self, self.game_manager)
-        self.open_windows['draft_central'].focus_set()
+        self.show_screen("draft_central", "Draft Day Central", DraftDayCentral,
+                         self.game_manager)
 
     def open_free_agency_frenzy(self):
         """Open Free Agent Frenzy - the July 1 event hub"""
-        if 'fa_frenzy' not in self.open_windows or not self.open_windows['fa_frenzy'].winfo_exists():
-            self.open_windows['fa_frenzy'] = FreeAgencyFrenzy(self, self.game_manager)
-        self.open_windows['fa_frenzy'].focus_set()
+        self.show_screen("fa_frenzy", "Free Agent Frenzy", FreeAgencyFrenzy,
+                         self.game_manager)
 
     def open_fantasy_draft_window(self):
         """Open the Fantasy Draft window."""
         try:
-            from fantasy_draft import FantasyDraftWindow
+            from fantasy_draft import FantasyDraftView
             
             # Check if fantasy draft is available or needed
             if not hasattr(self.game_manager, 'pending_fantasy_draft') or not self.game_manager.pending_fantasy_draft:
@@ -9152,9 +14939,8 @@ class HockeyManagerGUI(tk.Tk):
                                   "Fantasy draft is only available when starting a new game with the fantasy draft option enabled.")
                 return
                 
-            if 'fantasy_draft' not in self.open_windows or not self.open_windows['fantasy_draft'].winfo_exists():
-                self.open_windows['fantasy_draft'] = FantasyDraftWindow(self, self.game_manager)
-            self.open_windows['fantasy_draft'].focus_set()
+            self.show_screen("fantasy_draft", "Fantasy Draft", FantasyDraftView,
+                             self.game_manager)
         except Exception as e:
             print(f"Error opening fantasy draft window: {e}")
             import traceback
@@ -9162,81 +14948,378 @@ class HockeyManagerGUI(tk.Tk):
             messagebox.showerror("Error", f"Could not open fantasy draft window: {e}")
 
     def open_scouting_window(self):
-        if 'scouting' not in self.open_windows or not self.open_windows['scouting'].winfo_exists():
-            self.open_windows['scouting'] = ScoutingWindow(self)
-        self.open_windows['scouting'].focus_set()
-    
+        return self.show_screen('scouting', 'Scouting', ScoutingView)
+
     def open_scouting_management_window(self):
-        if 'scouting' not in self.open_windows or not self.open_windows['scouting'].winfo_exists():
-            try:
-                from modern_scouting_window import ModernScoutingWindow
-                self.open_windows['scouting'] = ModernScoutingWindow(self)
-            except Exception:
-                self.open_windows['scouting'] = ProfessionalScoutingWindow(self)
-        self.open_windows['scouting'].focus_set()
-    
+        try:
+            from modern_scouting_window import ModernScoutingView
+            return self.show_screen('scouting', 'Scouting', ModernScoutingView)
+        except Exception:
+            from professional_scouting_window import ProfessionalScoutingView
+            return self.show_screen('scouting', 'Scouting', ProfessionalScoutingView)
+
     def open_staff_management_window(self):
-        if 'staff_management' not in self.open_windows or not self.open_windows['staff_management'].winfo_exists():
-            self.open_windows['staff_management'] = StaffManagementWindow(self)
-        self.open_windows['staff_management'].focus_set()
-        
+        return self.show_screen('staff_management', 'Staff', StaffManagementView)
+
     def open_draft_window(self):
-        if 'draft' not in self.open_windows or not self.open_windows['draft'].winfo_exists():
-            self.open_windows['draft'] = DraftWindow(self)
-        self.open_windows['draft'].focus_set()
+        return self.show_screen('draft', 'NHL Draft', DraftView)
 
     def open_schedule_window(self):
-        if 'schedule' not in self.open_windows or not self.open_windows['schedule'].winfo_exists():
-            self.open_windows['schedule'] = ScheduleWindow(self)
-        self.open_windows['schedule'].focus_set()
+        return self.show_screen('schedule', 'Schedule', ScheduleView)
 
     def open_finances_window(self):
-        if 'finances' not in self.open_windows or not self.open_windows['finances'].winfo_exists():
-            self.open_windows['finances'] = FinancesWindow(self)
-        self.open_windows['finances'].focus_set()
-    
+        return self.show_screen('finances', 'Finances', FinancesView)
+
     def open_news_window(self):
-        if 'news' not in self.open_windows or not self.open_windows['news'].winfo_exists():
-            self.open_windows['news'] = NewsWindow(self)
-        self.open_windows['news'].focus_set()
-    
+        return self.show_screen('news', 'News', NewsView)
+
     def open_media_center(self):
         """Open the optional Media & Press Conference Center"""
-        if 'media_center' not in self.open_windows or not self.open_windows['media_center'].winfo_exists():
-            self.open_windows['media_center'] = MediaCenterWindow(self)
-        self.open_windows['media_center'].focus_set()
-        
+        return self.show_screen('media_center', 'Media Center', MediaCenterView)
+
+    def open_morale_window(self):
+        """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
+        return self.show_screen('morale', 'Team Morale', MoraleView)
+
+    def open_dressing_room(self):
+        """Open the Dressing Room screen (module 03: hierarchy, social
+        groups, team talks, room feed)."""
+        from dressing_room import DressingRoomView
+        return self.show_screen('dressing_room', 'Dressing Room',
+                                DressingRoomView)
+
+    def open_analytics_hub(self):
+        """Open the Analytics Hub screen (module 04: shot/xG maps,
+        momentum graphs, zone-entry maps, line trends, Ask the analyst).
+        The player-card Analytics tabs are preserved untouched."""
+        from analytics_hub import AnalyticsHubView
+        return self.show_screen('analytics_hub', 'Analytics Hub',
+                                AnalyticsHubView)
+
+    def open_tactics_window(self):
+        """Open the Team Tactics screen (systems, familiarity, fit)."""
+        return self.show_screen('tactics', 'Tactics', TacticsView)
+
     def open_stats_standings_window(self, focus_tab=None):
         """Open the comprehensive Stats and Standings window with optional tab focus."""
-        if 'stats_standings' not in self.open_windows or not self.open_windows['stats_standings'].winfo_exists():
-            self.open_windows['stats_standings'] = StatsStandingsWindow(self)
-            
-        window = self.open_windows['stats_standings']
-        window.focus_set()
-        window.lift()
-        
-        # Set focus to specific tab if requested
+        window = self.show_screen('stats_standings', 'Stats & Standings', StatsStandingsView)
         if focus_tab:
             window.set_focus_tab(focus_tab)
-    
+        return window
+
+    def open_ahl_stats_window(self):
+        """Open the AHL Stats screen (minors only -- separate from NHL numbers)."""
+        return self.show_screen('ahl_stats', 'AHL Stats', AHLStatsView)
+
+    def open_league_history_window(self):
+        """Open the League History window (champions, awards, leaders, HOF)."""
+        self.show_screen("league_history", "League History", LeagueHistoryView,
+                         self)
+
+    def open_shot_chart_viewer(self, game_id=None, team_name=None, player_id=None):
+        """Open the shot chart viewer for a game, team, or player."""
+        from shot_charts import ShotChartStore
+        store = getattr(self, 'shot_chart_store', None)
+        if store is None:
+            store = ShotChartStore()
+            self.shot_chart_store = store
+
+        shots = []
+        title = "Shot Chart"
+        home_name, away_name = "", ""
+
+        if game_id:
+            game = store.get(game_id)
+            if game:
+                shots = game.get("shots", [])
+                home_name = game.get("home", "")
+                away_name = game.get("away", "")
+                title = f"Shot Chart: {away_name} @ {home_name} ({game.get('date', '')})"
+        elif team_name:
+            shots = store.aggregate_team_shots(team_name, last_n=5)
+            title = f"Shot Chart: {team_name} (last 5 games)"
+            home_name = team_name
+        elif player_id:
+            shots = store.for_player(player_id)
+            title = f"Shot Chart: Player"
+
+        if not shots:
+            from tkinter import messagebox
+            messagebox.showinfo("Shot Chart", "No shot data available yet. "
+                              "Watch a game live to capture its shot chart.")
+            return
+
+        self.show_screen("shot_chart", title, ShotChartViewerView,
+                         self, shots, title=title,
+                         home_name=home_name, away_name=away_name)
+
     def open_records_window(self):
         """Open the NHL Records in the Stats window."""
         # Open stats window focused on records tab instead of separate window
         self.open_stats_standings_window(focus_tab='records')
         
-    def open_tactics_window(self):
-        """Open the tactics screen (E1)."""
-        try:
-            from tactics_screen import open_tactics
-            open_tactics(self, self.user_team)
-        except Exception as e:
-            print(f"Tactics window failed: {e}")
+    # ---------------- full-screen view system (FM/EHM-style teleport) ----------------
 
-    def open_inbox_window(self):
-        """Open the Email Inbox window."""
-        if 'inbox' not in self.open_windows or not self.open_windows['inbox'].winfo_exists():
-            self.open_windows['inbox'] = InboxWindow(self)
-        self.open_windows['inbox'].focus_set()
+    # Screen cache: bounded LRU of recently visited full-screen views.
+    # Menu jumps re-show the cached widget tree (with data refreshed) instead
+    # of rebuilding hundreds of CTk widgets from scratch. Only screens with
+    # a verified re-entrant refresh method are cached; everything else
+    # rebuilds exactly as before. Keyed by screen_id; the view class is
+    # checked on hit (some ids, e.g. 'scouting', map to multiple classes).
+    _SCREEN_CACHE_SIZE = 3
+    _SCREEN_CACHE_REFRESH = {
+        'roster': 'update_views',
+        'free_agency': 'update_views',
+        'inbox': '_populate_inbox',
+        'schedule': 'update_views',
+        'news': 'populate_news',
+    }
+
+    def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
+        """Teleport to a full-screen view instead of opening a popup card.
+
+        Replaces the dashboard (or the current screen) with a slim nav bar
+        (‹ Dashboard + screen title) above the embedded view. The menu bar
+        stays visible so navigation never strands the user. The view is
+        registered in open_windows under screen_id so existing refresh code
+        (update_all_views etc.) keeps working unchanged.
+
+        Recently visited screens are cached (see _SCREEN_CACHE_REFRESH):
+        jumping back re-shows the live widget tree with data refreshed
+        instead of rebuilding it. Pass fresh=True to rebuild the view even
+        when it is already showing (for screens constructed with new data
+        each time, like game results).
+        """
+        import customtkinter as ctk
+        fresh = kwargs.pop('fresh', False)
+        cur = getattr(self, '_current_screen', None)
+        if (not fresh and cur is not None and cur['id'] == screen_id
+                and cur['holder'].winfo_exists()):
+            try:
+                cur['view'].focus_set()
+            except Exception:
+                pass
+            return cur['view']
+        # Cache hit: re-show the live view instead of rebuilding it.
+        # Refresh re-populates data into the existing widgets; if the
+        # refresh fails for any reason we fall through and rebuild fresh.
+        if not fresh and not args and not kwargs:
+            hit = self._get_cached_screen(screen_id, view_cls)
+            if hit is not None:
+                holder, view = hit
+                self._teardown_screen()
+                holder.grid(row=1, column=0, sticky='nsew')
+                if self._refresh_cached_view(screen_id, view):
+                    try:
+                        self.refresh_screen_navbar()
+                    except Exception:
+                        pass
+                    self._current_screen = {'id': screen_id, 'holder': holder,
+                                           'view': view}
+                    self.open_windows[screen_id] = view
+                    if not getattr(self, '_suppress_history', False):
+                        self._push_screen_history(screen_id)
+                    try:
+                        view.focus_set()
+                    except Exception:
+                        pass
+                    return view
+                # Refresh failed: drop the stale copy and build fresh below.
+                try:
+                    holder.destroy()
+                except Exception:
+                    pass
+        self._teardown_screen()
+        if (hasattr(self, '_dashboard_frame')
+                and self._dashboard_frame.winfo_exists()):
+            self._dashboard_frame.grid_forget()
+        holder = ctk.CTkFrame(self.main_container, fg_color=BG)
+        holder.grid(row=1, column=0, sticky='nsew')
+        holder.grid_rowconfigure(1, weight=1)
+        holder.grid_columnconfigure(0, weight=1)
+        navbar = ctk.CTkFrame(holder, fg_color=CARD, corner_radius=0, height=44)
+        navbar.grid(row=0, column=0, sticky='ew')
+        secondary_button(navbar, text="\u2039 Dashboard",
+                         command=self.show_dashboard,
+                         width=130, height=30).pack(side='left', padx=12, pady=7)
+        heading(navbar, title, size=16).pack(side='left', padx=8)
+        chips_fn = getattr(self, "_navbar_session_chips", None)
+        if callable(chips_fn):
+            chips_fn(navbar, screen_id)
+        view = view_cls(holder, app=self, *args, **kwargs)
+        view._close_screen = self.show_dashboard
+        view.grid(row=1, column=0, sticky='nsew')
+        self._current_screen = {'id': screen_id, 'holder': holder, 'view': view}
+        self.open_windows[screen_id] = view
+        if not getattr(self, '_suppress_history', False):
+            self._push_screen_history(screen_id)
+        try:
+            view.focus_set()
+        except Exception:
+            pass
+        return view
+
+    def _navbar_session_chips(self, navbar, current_id):
+        """Resume chips for in-progress negotiations (jump away, jump back)."""
+        try:
+            sessions = getattr(self, "negotiation_sessions", None) or {}
+            if not sessions:
+                return
+            chips = ctk.CTkFrame(navbar, fg_color="transparent")
+            chips._session_chips = True
+            chips.pack(side='right', padx=12)
+            ctk.CTkLabel(chips, text="Resume:",
+                         font=(FONT_FAMILY, 11), text_color=MUTED).pack(
+                             side='left', padx=(0, 6))
+            for key, sess in list(sessions.items()):
+                player = sess.get("player")
+                name = getattr(player, "full_name", "?").split()[-1]
+                label = f"\u25b6 {name}"
+                cur_view = (getattr(self, "_current_screen", None) or {}).get("view")
+                cur_player = getattr(cur_view, "player", None)
+                if cur_player is player:
+                    continue
+                secondary_button(
+                    chips, text=label, width=110, height=28,
+                    command=lambda p=player, e=sess.get("is_extension", False):
+                        self.open_contract_negotiation_window(p, is_extension=e)
+                ).pack(side='left', padx=3)
+        except Exception:
+            pass
+
+    def refresh_screen_navbar(self):
+        """Rebuild the session chips on the current screen's navbar."""
+        cur = getattr(self, "_current_screen", None)
+        if not cur:
+            return
+        holder = cur.get("holder")
+        if holder is None or not holder.winfo_exists():
+            return
+        try:
+            navbar = holder.grid_slaves(row=0, column=0)[0]
+            for child in list(navbar.winfo_children()):
+                # keep the back button and title; rebuild only the chip tray
+                if getattr(child, "_session_chips", False):
+                    child.destroy()
+            self._navbar_session_chips(navbar, cur.get("id"))
+        except Exception:
+            pass
+
+    def _get_cached_screen(self, screen_id, view_cls):
+        """Pop a cached (screen_id -> (holder, view)) entry, or None.
+
+        Validates the holder still exists and the view is the requested
+        class; anything stale is destroyed and treated as a miss.
+        """
+        cache = getattr(self, '_screen_cache', None)
+        if not cache or screen_id not in cache:
+            return None
+        holder, view = cache.pop(screen_id)
+        try:
+            ok = (holder.winfo_exists()
+                  and isinstance(view, view_cls)
+                  and screen_id in self._SCREEN_CACHE_REFRESH)
+        except Exception:
+            ok = False
+        if not ok:
+            try:
+                holder.destroy()
+            except Exception:
+                pass
+            return None
+        return holder, view
+
+    def _refresh_cached_view(self, screen_id, view):
+        """Re-populate a cached view's data. Returns True on success.
+
+        Every cached screen has a verified re-entrant refresh method
+        (clear-then-fill). Any failure returns False so the caller rebuilds
+        fresh -- a stale screen is never shown.
+        """
+        meth_name = self._SCREEN_CACHE_REFRESH.get(screen_id)
+        try:
+            meth = getattr(view, meth_name, None)
+            if not callable(meth):
+                return False
+            meth()
+            return True
+        except Exception:
+            return False
+
+    def _teardown_screen(self):
+        """Park the current full-screen view, if any.
+
+        Cacheable screens are stashed (hidden, not destroyed) in the bounded
+        LRU so jumping back is instant; anything else is destroyed as before.
+        Evicted entries are destroyed to cap memory.
+        """
+        cur = getattr(self, '_current_screen', None)
+        self._current_screen = None
+        if cur is None:
+            return
+        try:
+            if (cur['id'] in self.open_windows
+                    and self.open_windows[cur['id']] is cur['view']):
+                del self.open_windows[cur['id']]
+        except Exception:
+            pass
+        cacheable = (cur['id'] in self._SCREEN_CACHE_REFRESH
+                     and not getattr(cur['view'], '_never_cache', False))
+        if cacheable:
+            try:
+                if cur['holder'].winfo_exists():
+                    cur['holder'].grid_forget()
+                    cache = getattr(self, '_screen_cache', None)
+                    if cache is None:
+                        self._screen_cache = cache = {}
+                    # Refresh insertion order for LRU semantics.
+                    cache.pop(cur['id'], None)
+                    cache[cur['id']] = (cur['holder'], cur['view'])
+                    while len(cache) > self._SCREEN_CACHE_SIZE:
+                        _old_id = next(iter(cache))
+                        _holder, _view = cache.pop(_old_id)
+                        try:
+                            _holder.destroy()
+                        except Exception:
+                            pass
+                    return
+            except Exception:
+                pass
+        try:
+            if cur['holder'].winfo_exists():
+                cur['holder'].destroy()
+        except Exception:
+            pass
+
+    def show_dashboard(self):
+        """Leave the current full-screen view and restore the dashboard."""
+        self._teardown_screen()
+        if not getattr(self, '_suppress_history', False):
+            self._push_screen_history('dashboard')
+        if hasattr(self, '_dashboard_frame'):
+            try:
+                self._dashboard_frame.grid(**self._dashboard_grid)
+            except Exception:
+                pass
+            try:
+                self.update_dashboard_data()
+            except Exception:
+                pass
+
+    def open_inbox_window(self, focus_message_id=None):
+        """Show the inbox as a full-screen view (EHM-style), not a popup."""
+        from inbox_window import InboxView
+        view = self.show_screen('inbox', 'Inbox', InboxView)
+        if focus_message_id:
+            try:
+                view.focus_message(focus_message_id)
+            except Exception:
+                pass
+        return view
+
+    def close_inbox_screen(self):
+        """Leave the full-screen inbox and restore the dashboard."""
+        self.show_dashboard()
         
     def _get_inbox_button_text(self):
         """Get the text for the inbox button with unread count."""
@@ -9260,6 +15343,7 @@ class HockeyManagerGUI(tk.Tk):
     # Football Manager-style career systems
     # ------------------------------------------------------------------
     @property
+
     def career(self):
         """Lazy FM-style career state, stored on the GameManager so it survives."""
         gm = self.game_manager
@@ -9267,14 +15351,17 @@ class HockeyManagerGUI(tk.Tk):
         if career is None:
             career = manager_career.CareerState()
             gm.career = career
+        # Apply the "GM can be sacked" setting (Muck's flag)
+        try:
+            can_sack = self.get_settings().get('career', {}).get('gm_can_be_sacked', True)
+            career.board.can_be_sacked = bool(can_sack)
+        except Exception:
+            pass
         return career
 
     def open_manager_hub(self):
         """Open the FM-style Manager Hub window."""
-        from manager_hub_window import ManagerHubWindow
-        if "manager_hub" not in self.open_windows or not self.open_windows["manager_hub"].winfo_exists():
-            self.open_windows["manager_hub"] = ManagerHubWindow(self)
-        self.open_windows["manager_hub"].focus_set()
+        return self.show_screen('manager_hub', 'Manager Hub', ManagerHubView)
 
     def _career_prompts_allowed(self) -> bool:
         """Interactive prompts only for manual day-by-day play."""
@@ -9294,6 +15381,11 @@ class HockeyManagerGUI(tk.Tk):
                 career.career_start_date = self.current_date.isoformat()
                 strength = self._career_team_strength(team)
                 career.board.auto_expectation(strength)
+                ages = [getattr(p, "age", 27) or 27
+                        for p in (getattr(team, "roster", []) or [])]
+                avg_age = sum(ages) / len(ages) if ages else 27.0
+                career.board.on_hired(strength, avg_age,
+                                      self.current_date.isoformat())
                 exp = manager_career.EXPECTATIONS[career.board.expectation]
                 from game_classes import EmailMessage
                 self.send_email_to_user(EmailMessage(
@@ -9302,9 +15394,16 @@ class HockeyManagerGUI(tk.Tk):
                     content=(f"Welcome to {team.team_name}.\n\n"
                              f"The board's expectation this season is: {exp['label']}.\n"
                              f"{exp['description']}\n\n"
+                             f"Your owner: {career.board.owner.label}.\n"
                              f"Board confidence starts at {career.board.confidence}/100. "
-                             f"Results, signings and your media handling will move it. "
-                             f"If it hits zero, you're gone."),
+                             f"The board reviews progress monthly — it judges trends, "
+                             f"not single games. If things go badly, you can request "
+                             f"a meeting with the owner from the Manager Hub to ask "
+                             f"for patience. In your first season the board won't "
+                             f"pull the plug over a bumpy year -- barring a genuine "
+                             f"disaster, confidence floors at 1 and you'll get an "
+                             f"owner meeting instead. From year two on, if "
+                             f"confidence hits zero, you're gone."),
                     date_sent=self.current_date, category="General",
                     is_important=True))
             # 2. Weekly update: happiness, concerns, training effects
@@ -9313,8 +15412,6 @@ class HockeyManagerGUI(tk.Tk):
             # 3. Monthly board review (first Monday of month)
             if self.current_date.weekday() == 0 and self.current_date.day <= 7:
                 self._career_board_review()
-            # 4. Youth intake cycle
-            self._career_youth_check()
             # 5. Matchday: scout report + pre-match presser
             self._career_matchday_pre()
         except Exception as e:
@@ -9335,14 +15432,32 @@ class HockeyManagerGUI(tk.Tk):
         b = self.career.board
         return b.season_wins + b.season_losses + b.season_otl
 
+    def _situation_goal_mult(self, team) -> float:
+        """Quick-sim goal-expectation multiplier from the situations factor
+        (room state, coaching buy-in, youth hunger). Same 0.92-1.08 range the
+        detailed engines use; computed once per team per game. Never raises.
+        """
+        try:
+            from reputation_system import situations_factor as _sf
+            return float(_sf(team, {}).get("xg_mult", 1.0))
+        except Exception:
+            return 1.0
+
     def _career_morale_modifier(self, team) -> float:
-        """Subtle goal-expectation modifier from squad morale (0.97-1.03)."""
+        """FM-style squad-confidence modifier from average morale (0.97-1.03).
+
+        Native 1-100 morale: 70 is neutral, each point moves expectations
+        0.1% -- the original +/-3% intent, rescaled from the old 1-10 math.
+        Own channel next to the situations factor: situations reads room
+        structure, bench buy-in and hunger counts; this reads the squad's
+        raw confidence level. Applied only in the lightweight quick-sim.
+        """
         try:
             roster = getattr(team, "roster", []) or []
             if not roster:
                 return 1.0
-            avg = sum((getattr(p, "morale", 7) or 7) for p in roster) / len(roster)
-            return 1.0 + (avg - 7) * 0.01
+            avg = sum((getattr(p, "morale", 70) or 70) for p in roster) / len(roster)
+            return max(0.97, min(1.03, 1.0 + (avg - 70) * 0.001))
         except Exception:
             return 1.0
 
@@ -9357,12 +15472,28 @@ class HockeyManagerGUI(tk.Tk):
                 noteworthy.extend(manager_career.update_player_happiness(p, team_games))
             except Exception:
                 continue
+        # Farm confidence: AHL production -> morale / attitude / call-up
+        # buzz, once a week (ahl_system.weekly_farm_confidence). The morale
+        # moves feed the existing call-up readiness "Confidence right now"
+        # term and the happiness chain downstream; notes go to the inbox.
+        try:
+            import ahl_system
+            _league = getattr(self.game_manager, "league", None)
+            if _league is not None:
+                for _note in ahl_system.weekly_farm_confidence(
+                        _league, user_team=team):
+                    try:
+                        self.send_email_to_user(_note)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         # Training effects: morale + injury risk
         fx = self.career.training.weekly_effects()
         if fx["morale_delta"]:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if fx["morale_delta"] > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if fx["morale_delta"] > 0 else -5)))
         import random as _r
         if _r.random() < 0.02 * fx["injury_risk_mult"]:
             candidates = [p for p in (getattr(team, "roster", []) or [])
@@ -9429,17 +15560,46 @@ class HockeyManagerGUI(tk.Tk):
             return
         points = b.season_wins * 2 + b.season_otl
         pct = points / (games * 2)
-        headline, body = b.monthly_review(pct)
+        headline, body = b.monthly_review(pct, self.current_date.isoformat())
+        # GM stature: the board gives a respected GM a longer leash and a
+        # clown GM a shorter one. Drift only (+/-2/mo); results dominate.
+        try:
+            import reputation_system as _rs
+            _drift = _rs.gm_board_drift(b, self.user_team)
+            if _drift:
+                body += (f" The board also notes your standing around the "
+                         f"league ({'growing' if _drift > 0 else 'slipping'}).")
+        except Exception:
+            pass
         self.send_email_to_user(EmailMessage(
             sender="Board of Directors", sender_type="Owner",
             subject=headline, content=body, date_sent=self.current_date,
             category="General", is_important=b.confidence < 30))
+        # Restless board: nudge the GM that they can ask the owner for time.
+        if (b.confidence < 40
+                and not b._on_or_after(self.current_date.isoformat(),
+                                       b.patience_cooldown_until)):
+            self.send_email_to_user(EmailMessage(
+                sender="Board of Directors", sender_type="Owner",
+                subject="The walls are closing in",
+                content=("Confidence in your project is fading. If you need "
+                         "time to get things together, you can request a "
+                         "meeting with the owner from the Manager Hub and ask "
+                         "for patience — but choose the moment wisely. A "
+                         "refused request makes the next two months harder."),
+                date_sent=self.current_date, category="General",
+                is_important=True))
         if b.sacked:
             self._career_handle_sack()
 
     def _career_handle_sack(self):
         """Board has lost patience: game-over flow."""
-        from tkinter import messagebox
+        from popup_system import messagebox
+        # Fire once: without this the dialog + news spam on every subsequent
+        # game day / monthly review for the rest of the save.
+        if getattr(self.career, 'sack_announced', False):
+            return
+        self.career.sack_announced = True
         self.add_news("🚨 BREAKING: The board has sacked the manager.")
         messagebox.showwarning(
             "Sacked",
@@ -9448,54 +15608,6 @@ class HockeyManagerGUI(tk.Tk):
             "from the main menu.")
         # Disable further prompts; user can keep browsing but career is over
         self.career.prompts_enabled = False
-
-    def _career_youth_check(self):
-        """April preview + July 1 academy intake."""
-        from game_classes import EmailMessage, Player, PlayerPosition
-        career = self.career
-        year = self.current_date.year
-        # Preview in April
-        if self.current_date.month == 4 and self.current_date.day == 1 \
-                and career.intake_preview_sent != year:
-            career.intake_preview_sent = year
-            self.send_email_to_user(EmailMessage(
-                sender="Head of Academy", sender_type="Staff",
-                subject="Youth intake preview",
-                content=("Our scouts are excited about this summer's academy class. "
-                         "Expect 3-6 graduates in July — a couple could push for "
-                         "first-team minutes within a year."),
-                date_sent=self.current_date, category="Scouting"))
-        # Intake on July 1
-        if self.current_date.month == 7 and self.current_date.day == 1 \
-                and career.last_intake_year != year:
-            career.last_intake_year = year
-            import random as _r
-            prospects = manager_career.generate_youth_intake(
-                self.user_team.team_name, _r.randint(3, 6))
-            pos_map = {"C": PlayerPosition.CENTER, "LW": PlayerPosition.LEFT_WING,
-                       "RW": PlayerPosition.RIGHT_WING, "D": PlayerPosition.DEFENSE,
-                       "G": PlayerPosition.GOALIE}
-            added = []
-            if not hasattr(self.user_team, "prospects") or self.user_team.prospects is None:
-                self.user_team.prospects = []
-            for pr in prospects:
-                p = Player(pr["first_name"], pr["last_name"], pr["age"],
-                           pos_map.get(pr["position"], PlayerPosition.CENTER))
-                p.potential = pr["potential"]
-                p.squad_status = "Prospect"
-                p.happiness = 80
-                self.user_team.prospects.append(p)
-                added.append(f"{pr['first_name']} {pr['last_name']} ({pr['position']}, POT {pr['potential']})")
-            career.youth_history.append({"year": year, "prospects": prospects})
-            self.send_email_to_user(EmailMessage(
-                sender="Head of Academy", sender_type="Staff",
-                subject=f"Academy intake {year}: {len(added)} graduates",
-                content=("The new academy class has graduated:\n\n" +
-                         "\n".join("• " + a for a in added) +
-                         "\n\nThey've been added to your prospects list."),
-                date_sent=self.current_date, category="Scouting",
-                is_important=True))
-            self.add_news(f"🌱 Academy intake: {len(added)} prospects graduate.")
 
     def _career_user_game_today(self):
         """Return (home_team, away_team) if the user plays today, else None."""
@@ -9573,32 +15685,198 @@ class HockeyManagerGUI(tk.Tk):
         lines += ["• " + w for w in report["weaknesses"]]
         lines.append("Tactical advice:")
         lines += ["• " + a for a in report["tactical_advice"]]
+        # Adaptive Rivals: has the opponent scouted your systems and
+        # installed a hockey answer for tonight?
+        try:
+            from adaptive_rivals import adaptation_report_lines
+            _adapt_lines = adaptation_report_lines(
+                opponent, self.user_team, getattr(self, 'game_results', []))
+            if _adapt_lines:
+                lines.append("")
+                lines.append("Their answer to your systems:")
+                lines += ["• " + _l for _l in _adapt_lines]
+        except Exception:
+            pass
         self.send_email_to_user(EmailMessage(
             sender="Chief Scout", sender_type="Scout",
             subject=f"Opposition report: {report['team']}",
             content="\n".join(lines), date_sent=self.current_date,
             category="Scouting"))
-        # Pre-match presser (interactive full-page press conference)
-        if not self._career_prompts_allowed():
-            return
-        from press_conference_page import PressConferencePage
+        # Pre-match presser now lives in the game-day inbox bundle
+        # (delivered when Continue is pressed) -- no modal popup here.
+
+    # ------------------------------------------------------------------
+    # Game-day inbox bundle: pre-match presser + team talk + Watch Live /
+    # Quick Sim choice delivered as ONE interactive inbox message instead
+    # of the old modal chain (presser popup, game-mode popup, team-talk
+    # popup). Post-match pressers arrive the same way. The gameplay
+    # events themselves are unchanged -- only the delivery moved.
+    # ------------------------------------------------------------------
+
+    def _is_user_game_day(self) -> bool:
+        """Cached check: does the user team play today?"""
+        try:
+            today = getattr(self, 'current_date', None)
+            if getattr(self, '_user_game_day_cache_date', None) == today:
+                return bool(getattr(self, '_user_game_day_cache', False))
+            val = self._career_user_game_today() is not None
+            self._user_game_day_cache = val
+            self._user_game_day_cache_date = today
+            return val
+        except Exception:
+            return False
+
+    def _game_day_bundle_id(self, game_date) -> str:
+        return f"game_day_{game_date.isoformat()}"
+
+    def _find_game_day_bundle(self, game_date):
+        """Return today's game-day bundle message if already delivered."""
+        bid = self._game_day_bundle_id(game_date)
+        try:
+            messages = self.user_team.inbox.messages
+        except Exception:
+            messages = []
+        for m in messages or []:
+            if (getattr(m, 'action_type', None) == 'game_day'
+                    and (getattr(m, 'action_data', None) or {}).get('bundle_id') == bid):
+                return m
+        return None
+
+    def _build_game_day_bundle(self, home, away):
+        """Create the interactive game-day inbox message."""
+        from game_classes import EmailMessage
+        opponent = away if home == self.user_team else home
         form_word = self._career_form_word()
-        ctx = {"form_word": form_word,
-               "opp": report["team"], "opp_word": report["danger_level"].lower()}
-        questions = manager_career.build_prematch_presser(self.user_team, opponent, ctx)
-        page_ctx = self._press_page_context(
-            kind="pre", opponent=opponent,
-            ticker=[
-                f"{self.user_team.team_name} host {report['team']} tonight",
-                f"Scout report: {report['team']} rated {report['danger_level']}",
-                f"{self.user_team.team_name} form: {form_word}",
-            ],
-            continue_text="Head to the rink  \u2192",
-        )
-        page = PressConferencePage(self, questions,
-                                   title="Pre-Game Press Conference",
-                                   context=page_ctx)
-        self._career_apply_press_answers(page.chosen, "pre-match")
+        report = manager_career.generate_opposition_report(
+            opponent, self.league.standings)
+        ctx = {"form_word": form_word, "opp": report["team"],
+               "opp_word": report["danger_level"].lower()}
+        questions = manager_career.build_prematch_presser(
+            self.user_team, opponent, ctx)
+        my_strength = self._career_team_strength(self.user_team)
+        opp_strength = self._career_team_strength(opponent)
+        situation = ("favorite" if my_strength > opp_strength + 5 else
+                     ("underdog" if opp_strength > my_strength + 5 else "even"))
+        talk_ctx = {"situation": situation,
+                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
+        talk_options = manager_career.get_team_talk_options("prematch", talk_ctx)
+        home_name = getattr(home, 'team_name', str(home))
+        away_name = getattr(away, 'team_name', str(away))
+        return EmailMessage(
+            sender="Game Day Central", sender_type="League",
+            subject=f"GAME DAY: {away_name} @ {home_name}",
+            content=(f"It's game day -- {away_name} visit {home_name}.\n\n"
+                     "Handle your media duties and rally the dressing room "
+                     "below, then choose how to play tonight's game."),
+            date_sent=self.current_date, category="Media",
+            is_urgent=True, is_important=True, requires_response=True,
+            priority=4, action_type="game_day",
+            action_data={
+                "bundle_id": self._game_day_bundle_id(self.current_date),
+                "game_date": self.current_date.isoformat(),
+                "home": home_name, "away": away_name,
+                "presser": questions,
+                "presser_answered": [False] * len(questions),
+                "talk_options": talk_options,
+                "talk_context": talk_ctx,
+                "talk_chosen": None,
+                "talk_boost": 1.0,
+            })
+
+    def _maybe_open_game_day_bundle(self, todays_games) -> bool:
+        """Deliver/open the game-day bundle instead of simming.
+
+        Returns True when the day should NOT advance yet (the inbox is
+        now driving); the Watch/Quick buttons resume via _resolve_game_day.
+        """
+        if not self._career_prompts_allowed():
+            return False
+        if getattr(self, '_game_day_resolution', None):
+            return False  # already resolved; let the sim run
+        matchup = self._career_user_game_today()
+        if not matchup:
+            return False
+        msg = self._find_game_day_bundle(self.current_date)
+        if msg is None:
+            home, away = matchup
+            msg = self._build_game_day_bundle(home, away)
+            self.send_email_to_user(msg)
+        self._set_continue_feedback(False)
+        self.open_inbox_window(focus_message_id=msg.id)
+        return True
+
+    def _answer_bundle_presser(self, message, q_index: int, ans_index: int) -> str:
+        """Inbox callback: answer one pre-match presser question."""
+        try:
+            data = message.action_data or {}
+            ans = data["presser"][q_index]["answers"][ans_index]
+            self._career_apply_press_answers([ans], "pre-match")
+            answered = data.get("presser_answered") or []
+            if 0 <= q_index < len(answered):
+                answered[q_index] = True
+            reaction = ans.get("reaction", "")
+            data.setdefault("presser_reactions", {})[q_index] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Bundle presser answer error (non-fatal): {e}")
+            return ""
+
+    def _answer_bundle_team_talk(self, message, opt_index: int) -> str:
+        """Inbox callback: deliver the pre-match team talk."""
+        try:
+            data = message.action_data or {}
+            opt = data["talk_options"][opt_index]
+            reaction, boost = manager_career.apply_team_talk(
+                self.user_team, opt, data.get("talk_context") or {})
+            data["talk_chosen"] = opt_index
+            data["talk_boost"] = float(boost)
+            data["talk_reaction"] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Bundle team talk error (non-fatal): {e}")
+            return ""
+
+    def _resolve_game_day(self, watch: bool):
+        """Inbox callback: Watch Live / Quick Sim picked. Close the inbox
+        and run the day with the bundle's collected choices."""
+        try:
+            msg = self._find_game_day_bundle(self.current_date)
+            talk_boost = 1.0
+            if msg is not None:
+                talk_boost = float((msg.action_data or {}).get("talk_boost", 1.0) or 1.0)
+                msg.action_done = True
+            self._game_day_resolution = {
+                "watch": bool(watch), "talk_boost": talk_boost,
+                "date": self.current_date,
+            }
+            try:
+                w = self.open_windows.get('inbox')
+                if w is not None and w.winfo_exists():
+                    w.destroy()
+            except Exception:
+                pass
+            self._continue_after_bundle = True
+            self._on_continue_pressed()
+        except Exception as e:
+            print(f"Game-day resolve error (non-fatal): {e}")
+
+    def _answer_postmatch_presser(self, message, q_index: int, ans_index: int) -> str:
+        """Inbox callback: answer one post-match presser question."""
+        try:
+            data = message.action_data or {}
+            ans = data["questions"][q_index]["answers"][ans_index]
+            self._career_apply_press_answers([ans], data.get("kind", "post-match"))
+            answered = data.get("answered") or []
+            if 0 <= q_index < len(answered):
+                answered[q_index] = True
+            if answered and all(answered):
+                message.action_done = True
+            reaction = ans.get("reaction", "")
+            data.setdefault("reactions", {})[q_index] = reaction
+            return reaction
+        except Exception as e:
+            print(f"Post-match presser answer error (non-fatal): {e}")
+            return ""
 
     def _career_form_word(self) -> str:
         b = self.career.board
@@ -9621,10 +15899,11 @@ class HockeyManagerGUI(tk.Tk):
         total_board = sum(a.get("board_effect", 0) for a in answers)
         if total_morale:
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
-                p.morale = max(1, min(10, m + (1 if total_morale > 0 else -1)))
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m + (5 if total_morale > 0 else -5)))
         if total_board:
-            self.career.board.confidence = max(0, min(100, self.career.board.confidence + total_board))
+            self.career.board.apply_press_board_effect(
+                total_board, self.current_date.isoformat())
         summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
         self.career.press_history.append(
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
@@ -9660,49 +15939,59 @@ class HockeyManagerGUI(tk.Tk):
             opp_strength = self._career_team_strength(opp)
             was_favorite = my_strength >= opp_strength
 
-            delta = self.career.board.record_result(user_won, went_ot, was_favorite)
+            delta = self.career.board.record_result(
+                user_won, went_ot, was_favorite,
+                today_iso=self.current_date.isoformat())
             self.career.profile.record_result(user_won, went_ot, is_playoff=False)
+
+            # Board crisis (8-game skid, disastrous start): surface it as news.
+            if self.career.board.last_crisis:
+                self.add_news("🏛️ " + self.career.board.last_crisis)
 
             # Dressing room mood swing
             for p in (getattr(team, "roster", []) or []):
-                m = getattr(p, "morale", 7) or 7
+                m = getattr(p, "morale", 70) or 70
                 h = getattr(p, "happiness", 70) or 70
                 if user_won:
-                    p.morale = min(10, m + 1)
+                    p.morale = min(100, m + 5)
                     p.happiness = min(100, h + 3)
                 else:
-                    p.morale = max(1, m - 1)
+                    p.morale = max(1, m - 5)
                     p.happiness = max(0, h - 3)
 
             if self.career.board.sacked:
                 self._career_handle_sack()
                 return
 
-            # Post-match presser (interactive full-page press conference)
+            # Post-match presser -> interactive inbox message (no modal).
+            # The press waits in the inbox; answers apply morale/board
+            # effects exactly as the old popup did.
             if self._career_prompts_allowed():
-                from press_conference_page import PressConferencePage
+                from game_classes import EmailMessage
                 hs, aws = scores
                 score_str = f"{hs}-{aws}"
                 star = self._career_star_of_game(sim_engine, team)
-                ctx = {"n": "a few"}
+                ctx = {"n": "a few",
+                       "drama": getattr(team, "_recent_drama", None)}
                 questions = manager_career.build_postmatch_presser(
                     team, opp, user_won, went_ot, score_str, star, ctx)
-                result_word = "win" if user_won else "loss"
-                page_ctx = self._press_page_context(
-                    kind="post", opponent=opp,
-                    ticker=[
-                        f"Final: {team.team_name} {score_str} {opp.team_name}",
-                        f"{star} named star of the game" if star else "",
-                        f"{team.team_name} take the {result_word}",
-                    ],
-                    continue_text="Back to the office  \u2192",
-                    score_str=score_str, result_word=result_word,
-                )
-                page = PressConferencePage(
-                    self, questions,
-                    title="Post-Game Press Conference",
-                    context=page_ctx)
-                self._career_apply_press_answers(page.chosen, "post-match")
+                if questions:
+                    opp_name = getattr(opp, 'team_name', 'the opposition')
+                    self.send_email_to_user(EmailMessage(
+                        sender="Media Relations", sender_type="Media",
+                        subject=f"Post-match presser: {score_str} vs {opp_name}",
+                        content=(f"Final: {score_str}. The press wants a word. "
+                                 "Answer below -- your words move the dressing "
+                                 "room and the board."),
+                        date_sent=self.current_date, category="Media",
+                        requires_response=True, priority=3,
+                        action_type="postmatch_presser",
+                        action_data={
+                            "game_date": self.current_date.isoformat(),
+                            "questions": questions,
+                            "answered": [False] * len(questions),
+                            "kind": "post-match",
+                        }))
         except Exception as e:
             print(f"Career post-game error (non-fatal): {e}")
 
@@ -9730,25 +16019,37 @@ class HockeyManagerGUI(tk.Tk):
     
     def open_save_window(self):
         """Open the Save Game window."""
-        if 'save_game' not in self.open_windows or not self.open_windows['save_game'].winfo_exists():
-            self.open_windows['save_game'] = SaveLoadWindow(self, mode='save')
-        self.open_windows['save_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("save_game", "Save Game", SaveLoadView, mode='save')
         
     def open_load_window(self):
         """Open the Load Game window."""
-        if 'load_game' not in self.open_windows or not self.open_windows['load_game'].winfo_exists():
-            self.open_windows['load_game'] = SaveLoadWindow(self, mode='load')
-        self.open_windows['load_game'].focus_set()
+        from save_load_system import SaveLoadView
+        self.show_screen("load_game", "Load Game", SaveLoadView, mode='load')
         
     def open_playoffs_window(self):
         """Open the NHL Playoffs window."""
-        if 'playoffs' not in self.open_windows or not self.open_windows['playoffs'].winfo_exists():
-            self.open_windows['playoffs'] = PlayoffWindow(self)
-        self.open_windows['playoffs'].focus_set()
-        
+        return self.show_screen('playoffs', 'Playoffs', PlayoffView)
+
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
+        # Belt-and-braces: _restore_game_state rebuilds league teams as new
+        # objects, so re-point the GUI mirrors seeded at boot. (load_game
+        # already syncs these; this covers any path that restores state
+        # without going through it.)
+        try:
+            _gm = self.game_manager
+            for _attr in ('league', 'user_team', 'current_date'):
+                _v = getattr(_gm, _attr, None)
+                if _v is not None:
+                    try:
+                        setattr(self, _attr, _v)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        self._rebuild_news_log_from_stories()
         print("Game loaded from save - autosave enabled")
         
     def on_game_saved(self):
@@ -9768,7 +16069,11 @@ class HockeyManagerGUI(tk.Tk):
     def setup_autosave(self):
         """Set up automatic saving system - only for existing saves, not new games."""
         if not hasattr(self, 'save_manager'):
-            self.save_manager = GameSaveManager(self)
+            # NB: pass the game manager, not the GUI -- GameSaveManager
+            # serializes game_manager.league / inbox / career. Passing the
+            # GUI silently produced degraded autosaves (empty inbox/news).
+            gm = getattr(self, 'game_manager', None) or self
+            self.save_manager = GameSaveManager(gm)
         
         # Only enable autosave if this is not a new game
         if getattr(self, 'is_new_game', True):
@@ -9789,23 +16094,75 @@ class HockeyManagerGUI(tk.Tk):
         """Set up the window close protocol to prompt for saving"""
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
     
-    def _exit_app(self):
-        """Quit the Tk mainloop and destroy the root window.
 
-        The game runs its mainloop nested inside the launcher's mainloop
-        (two Tk roots). destroy() alone does NOT unwind the nested mainloop,
-        which left the process running invisibly after the window closed
-        until killed in Task Manager. quit() ends this root's mainloop so
-        the launcher can finish shutting down cleanly.
+    def _open_save_screen_for_exit(self):
+        """Show the save screen; exit the app if the save completes."""
+        from save_load_system import SaveLoadView
+
+        def _on_save_done(result):
+            if result.get('saved'):
+                # Defer teardown so the view can finish closing first
+                self.after(100, self._quit_app)
+            # cancelled: user stays in game; screen already closed itself
+
+        self.show_screen("save_game", "Save Game", SaveLoadView,
+                         mode='save', on_done=_on_save_done)
+
+    def _quit_app(self):
+        """Terminate the application unconditionally.
+
+        A bare ``self.destroy()`` is not enough: if any widget's
+        Python-side ``destroy()`` raises mid-teardown (seen in the wild
+        with a half-constructed customtkinter button whose ``__init__``
+        never set ``_font``), the exception aborts the root teardown,
+        the Tcl interpreter stays alive, and the process never exits --
+        the "game doesn't close" hang. So: try the polite destroy, check
+        whether the root actually went away, fall back to a Tcl-level
+        destroy that bypasses Python ``destroy()`` overrides, then quit
+        the mainloop. A watchdog guarantees the process is gone either
+        way (clean-shutdown bookkeeping runs first so the launcher does
+        not mistake this for a crash).
         """
-        try:
-            self.quit()
-        except Exception:
-            pass
         try:
             self.destroy()
         except Exception:
             pass
+        try:
+            alive = bool(self.winfo_exists())
+        except Exception:
+            alive = False
+        if alive:
+            try:
+                # Tcl-level teardown: bypasses Python destroy() overrides
+                # that can raise on half-built widgets.
+                self.tk.call("destroy", self._w)
+            except Exception:
+                pass
+            try:
+                alive = bool(self.winfo_exists())
+            except Exception:
+                alive = False
+        try:
+            self.quit()
+        except Exception:
+            pass
+        if alive:
+            # Last resort: the interpreter is still up. The user asked to
+            # quit and nothing is unsaved on any path that reaches here.
+            try:
+                self.after(1200, self._emergency_exit)
+            except Exception:
+                self._emergency_exit()
+
+    def _emergency_exit(self):
+        """Final guarantee that the process terminates on quit."""
+        try:
+            from checkpoint_manager import mark_clean_shutdown
+            mark_clean_shutdown()
+        except Exception:
+            pass
+        import os
+        os._exit(0)
 
     def on_closing(self):
         """Handle application closing with enhanced save prompt"""
@@ -9821,40 +16178,15 @@ class HockeyManagerGUI(tk.Tk):
                 icon='question'
             )
             
-            if response is True:  # Yes - show enhanced save dialog
+            if response is True:  # Yes - show enhanced save screen
                 try:
-                    # Open the enhanced save window
-                    from save_load_system import SaveLoadWindow
-                    save_window = SaveLoadWindow(self, mode='save')
-                    
-                    # Wait for the save window to close with timeout protection
-                    try:
-                        self.wait_window(save_window)
-                    except tk.TclError:
-                        # Handle case where window was already destroyed
-                        pass
-                    
-                    # Check result and close appropriately
-                    if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                        # Save was successful, safe to exit
-                        self._exit_app()
-                    elif hasattr(save_window, 'was_cancelled') and save_window.was_cancelled:
-                        # User cancelled, remain in game
-                        pass
-                    else:
-                        # Unclear state, ask user
-                        if messagebox.askyesno("Exit Confirmation", "Save dialog closed unexpectedly. Exit anyway?"):
-                            self._exit_app()
-                    
+                    self._open_save_screen_for_exit()
                 except Exception as e:
-                    messagebox.showerror("Save Error", f"Failed to open save dialog: {str(e)}")
-                    # Ask if they still want to exit
-                    if messagebox.askyesno("Exit Anyway?", "Save dialog failed. Do you still want to exit?"):
-                        self._exit_app()
+                    messagebox.showerror("Save Error", f"Failed to open save screen: {str(e)}")
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self._exit_app()
+                    self._quit_app()
             # Cancel - do nothing, return to game
         else:
             # For existing saves, offer quick save option
@@ -9874,71 +16206,61 @@ class HockeyManagerGUI(tk.Tk):
                         success = self.save_manager.save_game(compress=True)
                         if success:
                             messagebox.showinfo("Game Saved", "Your progress has been saved!")
-                            self._exit_app()
+                            self._quit_app()
                         else:
-                            # If quick save fails, offer enhanced save dialog
+                            # If quick save fails, offer enhanced save screen
                             if messagebox.askyesno("Quick Save Failed", "Quick save failed. Open save dialog instead?"):
-                                from save_load_system import SaveLoadWindow
-                                save_window = SaveLoadWindow(self, mode='save')
-                                try:
-                                    self.wait_window(save_window)
-                                except tk.TclError:
-                                    pass
-                                if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                                    self._exit_app()
+                                self._open_save_screen_for_exit()
                     else:
-                        # No save manager, show enhanced save dialog
-                        from save_load_system import SaveLoadWindow
-                        save_window = SaveLoadWindow(self, mode='save')
-                        try:
-                            self.wait_window(save_window)
-                        except tk.TclError:
-                            pass
-                        if hasattr(save_window, 'save_completed') and save_window.save_completed:
-                            self._exit_app()
+                        # No save manager, show enhanced save screen
+                        self._open_save_screen_for_exit()
                             
                 except Exception as e:
                     messagebox.showerror("Save Error", f"Failed to save: {str(e)}")
                     if messagebox.askyesno("Exit Anyway?", "Save failed. Do you still want to exit?"):
-                        self._exit_app()
+                        self._quit_app()
                         
             elif response is False:  # No - exit without saving
                 if messagebox.askyesno("Confirm Exit", "Are you sure you want to exit without saving?"):
-                    self._exit_app()
+                    self._quit_app()
             # Cancel - do nothing, return to game
             
     def open_calendar_window(self):
         """Open the Season Calendar window."""
-        if 'calendar' not in self.open_windows or not self.open_windows['calendar'].winfo_exists():
-            self.open_windows['calendar'] = CalendarWindow(self)
-        self.open_windows['calendar'].focus_set()
+        return self.show_screen('calendar', 'Calendar', CalendarView)
 
     def open_gm_options_window(self):
-        if 'gm_options' not in self.open_windows or not self.open_windows['gm_options'].winfo_exists():
-            self.open_windows['gm_options'] = GMOptionsWindow(self)
-        self.open_windows['gm_options'].focus_set()
-        
+        return self.show_screen('gm_options', 'GM Options', GMOptionsView)
+
     def open_settings_window(self):
         """Open the comprehensive settings window."""
-        if 'settings' not in self.open_windows or not self.open_windows['settings'].winfo_exists():
-            from settings_window import SettingsWindow
-            self.open_windows['settings'] = SettingsWindow(self)
-        self.open_windows['settings'].focus_set()
+        from settings_window import SettingsView
+        self.show_screen("settings", "Settings", SettingsView)
         
     def apply_settings(self, settings):
         """Apply settings changes from the settings window."""
         self.user_settings = settings
-        print(f"Settings applied: {settings}")
-        # TODO: Apply specific settings to relevant components
+        # Live-apply the UI font tier so Apply-without-save behaves like Save
+        # (SettingsView only calls ui_scale on save). Every other setting is
+        # read lazily through get_settings() at its point of use, so storing
+        # the dict here is sufficient.
+        try:
+            import ui_scale
+            tier = (settings or {}).get('ui_preferences', {}).get('font_size')
+            if tier:
+                ui_scale.set_tier(tier)
+        except Exception:
+            pass
         
     def get_settings(self):
-        """Get current user settings or defaults (never creates a window)."""
+        """Get current user settings or defaults (never builds a window)."""
         if not hasattr(self, 'user_settings'):
-            # Widget-free defaults: instantiating SettingsWindow here used
-            # to flash a visible window for ~0.08s on first use.
+            # Load default settings if not already loaded. Reads
+            # settings.json directly -- constructing a SettingsWindow here
+            # used to flash a GUI and break headless/test use.
             try:
-                from settings_window import default_settings
-                self.user_settings = default_settings()
+                from settings_window import load_settings
+                self.user_settings = load_settings()
             except Exception:
                 # Fallback to basic defaults
                 self.user_settings = {
@@ -9953,52 +16275,49 @@ class HockeyManagerGUI(tk.Tk):
         return self.user_settings
         
     def open_edit_lines_window(self):
-        if 'edit_lines' not in self.open_windows or not self.open_windows['edit_lines'].winfo_exists():
-            # Use the clean, simple EditLinesWindow from main.py instead of the complex one
-            self.open_windows['edit_lines'] = CleanEditLinesWindow(self)
-        self.open_windows['edit_lines'].focus_set()
+        self.show_screen("edit_lines", "Edit Lines", CleanEditLinesView)
 
-    def open_tactics_window(self):
-        """Open the team tactics editor (even strength / PP / PK / matching)."""
-        if 'tactics' not in self.open_windows or not self.open_windows['tactics'].winfo_exists():
-            self.open_windows['tactics'] = TacticsWindow(self)
-        self.open_windows['tactics'].focus_set()
-        
     def open_development_window(self):
         """Open the Player Development window."""
-        if 'development' not in self.open_windows or not self.open_windows['development'].winfo_exists():
-            from player_development_window_professional import PlayerDevelopmentWindowProfessional
-            self.open_windows['development'] = PlayerDevelopmentWindowProfessional(self)
-        self.open_windows['development'].focus_set()
-    
+        from player_development_window_professional import PlayerDevelopmentViewProfessional
+        return self.show_screen('development', 'Player Development', PlayerDevelopmentViewProfessional)
+
     def open_development_overview(self):
         """Open the Development Overview window."""
         self.open_development_window()
     
     def open_practice_center(self):
         """Open the Practice Center window for active roster players."""
-        if 'practice_center' not in self.open_windows or not self.open_windows['practice_center'].winfo_exists():
-            from enhanced_practice_system import PracticeCenterWindow
-            self.open_windows['practice_center'] = PracticeCenterWindow(self)
-        self.open_windows['practice_center'].focus_set()
-        
+        from enhanced_practice_system import PracticeCenterView
+        return self.show_screen('practice_center', 'Practice Center', PracticeCenterView)
+
     def open_trade_block_window(self):
         """Open the Trade Block management window."""
         if 'trade_block' not in self.open_windows or not self.open_windows['trade_block'].winfo_exists():
             self.open_windows['trade_block'] = TradeBlockWindow(self)
         self.open_windows['trade_block'].focus_set()
+
+    def open_offer_sheet_window(self):
+        """Open the Offer Sheet window (sign a rival RFA). BUG-020."""
+        if 'offer_sheet' not in self.open_windows or not self.open_windows['offer_sheet'].winfo_exists():
+            from offer_sheet_ui import OfferSheetWindow
+            self.open_windows['offer_sheet'] = OfferSheetWindow(self)
+        self.open_windows['offer_sheet'].focus_set()
         
     def open_contract_extensions_window(self):
-        """Open the Contract Extensions window."""
-        if 'contract_extensions' not in self.open_windows or not self.open_windows['contract_extensions'].winfo_exists():
-            self.open_windows['contract_extensions'] = ContractExtensionsWindow(self)
-        self.open_windows['contract_extensions'].focus_set()
+        """Open the Contract Extensions screen (full-screen jump)."""
+        self.show_screen('contract_extensions', 'Contract Extensions',
+                         ContractExtensionsView)
 
     def open_waivers_window(self):
         """Open the Waivers management window."""
-        if 'waivers' not in self.open_windows or not self.open_windows['waivers'].winfo_exists():
-            self.open_windows['waivers'] = WaiversWindow(self)
-        self.open_windows['waivers'].focus_set()
+        return self.show_screen('waivers', 'Waivers', WaiversView)
+
+    def open_training_camp_window(self):
+        """Open the Training Camp report (camp ratings + scrimmages)."""
+        from training_camp_ui import TrainingCampWindow
+        return self.show_screen('training_camp', 'Training Camp',
+                               TrainingCampWindow)
 
     def open_set_captains_window(self):
         """Open the Set Captains window."""
@@ -10189,71 +16508,399 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_player_profile(self, player):
         """
-        Opens the player profile window with detailed player information.
-        
+        Opens the player profile as a full screen in the main instance.
+
+        The card lives in the main window (via show_screen) instead of a
+        popup. If the screen path fails, falls back to the modern popup
+        card. Never raises to the caller: a click that produces nothing
+        is worse than a click that explains itself.
+
         Args:
             player: The player object to display
         """
-        # Use modern profile by default (clean, card-based)
-        # Set use_modern_profile=False to revert to the classic detailed view
-        use_modern_profile = True
-        
-        if use_modern_profile:
-            try:
-                from modern_profile import PlayerProfile
-                PlayerProfile(self, player)
-                return
-            except Exception as e:
-                print(f"Modern profile failed, falling back: {e}")
-        
-        report = self.user_team.scouting_reports.get(player.id)
-        is_scouted = report is not None
-        
-        # Fallback to the standard player profile window
-        PlayerProfileWindow(self, player, is_scouted, report)
+        screen_error = None
+        try:
+            team = getattr(self, "user_team", None)
+            reports = getattr(team, "scouting_reports", None) or {}
+            report = reports.get(getattr(player, "id", None))
+            is_scouted = report is not None
+
+            from ui_components import PlayerProfileView
+            # fresh=True: a different player must rebuild, never reuse the
+            # cached view of whoever was showing before.
+            return self.show_screen("player_profile", f"Profile: {player.full_name}",
+                                    PlayerProfileView, player, is_scouted, report,
+                                    fresh=True)
+        except Exception as e:
+            screen_error = e
+            print(f"Player profile screen failed, falling back to popup: {e}")
+
+        try:
+            from modern_profile import PlayerProfile
+            PlayerProfile(self, player)
+            return
+        except Exception as e:
+            print(f"Player profile popup fallback failed: {e}")
+
+        try:
+            from popup_system import messagebox
+            messagebox.showerror(
+                "Player Profile",
+                f"Could not open the profile for "
+                f"{getattr(player, 'full_name', 'this player')}.\n\n"
+                f"Details: {screen_error}")
+        except Exception:
+            pass
+        return None
         
     def send_to_ahl(self, player):
+        # Real NHL: demoting a veteran isn't a quiet roster move -- it's
+        # waivers, and an NMC blocks it without the player's consent. The
+        # waiver wire is not optional (MP already enforces this; SP now
+        # matches so both paths share one rulebook).
+        import trade_engine as _te
+        try:
+            _kind, _detail = _te.clause_of(player) or (None, "")
+        except Exception:
+            _kind, _detail = None, ""
+        if _kind == "NMC":
+            _ask = messagebox.askyesno(
+                "No-movement clause",
+                f"{player.full_name} has a {_detail}.\n\n"
+                "He must approve the demotion. Ask him?")
+            if not _ask:
+                return
+            _lg = getattr(getattr(self, 'game_manager', None),
+                          'league', None) or getattr(self, 'league', None)
+            _ok, _why = _te.will_waive_ntc(
+                player, self.user_team, None, _lg, context="waivers")
+            if not _ok:
+                messagebox.showwarning(
+                    "Demotion refused",
+                    f"{_why}\n\nHe's staying on the roster.")
+                return
+        # Waiver eligibility: non-exempt players (25+ or 160+ NHL games)
+        # must clear the wire -- no quiet burial of veterans. Shared with
+        # the multiplayer demotion path so both use one rulebook.
+        if _player_needs_waivers(player):
+            player.on_waivers = True
+            player.waiver_days = 2
+            try:
+                if player not in self.waiver_list:
+                    self.waiver_list.append(player)
+            except Exception:
+                pass
+            try:
+                self.add_news(f"{player.full_name} placed on waivers by "
+                              f"{self.user_team.team_name}.")
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Placed on Waivers",
+                f"{player.full_name} isn't waiver-exempt -- he can't be "
+                f"quietly sent down. He's on the wire for 2 days and other "
+                f"clubs may claim him. His cap hit is temporarily shed "
+                f"until waivers clear.")
+            self.update_all_views()
+            return
+        # Exempt: quiet demotion, as before.
         self.user_team.roster.remove(player)
         self.user_team.ahl_roster.append(player)
+        # New-CBA paper-transaction rule: he must play an AHL game before
+        # he can be recalled.
+        try:
+            import ahl_system as _ahl_stamp
+            _ahl_stamp.stamp_ahl_assignment(player)
+        except Exception:
+            pass
+        # Audition over -- the next call-up starts a fresh one.
+        try:
+            player.nhl_audition = None
+        except Exception:
+            pass
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
+        # New-CBA paper-transaction rule: a freshly assigned player must
+        # play at least one AHL game before he can be recalled.
+        try:
+            import ahl_system as _ahl_gate
+            _block = _ahl_gate.ahl_recall_block_reason(player)
+        except Exception:
+            _block = None
+        if _block:
+            messagebox.showwarning("Recall blocked (new CBA)", _block)
+            return
         self.user_team.ahl_roster.remove(player)
         self.user_team.roster.append(player)
+        # Dressing room: a first-time NHL arrival shakes the room --
+        # the room reacts to WHO he is (blue-chip hype vs depth plug).
+        # Re-callups are guarded inside (first appearance per team only).
+        try:
+            import dressing_room as _dr_arr
+            _dr_arr.cascade_on_arrival(
+                self.user_team, player, how="callup",
+                date_str=str(getattr(self, "current_date", "")))
+        except Exception:
+            pass
+        # Stamp the audition baseline: production from this point on is his
+        # live NHL audition -- situational readiness reacts to it within days.
+        try:
+            player.nhl_audition = {
+                "goals": getattr(player, "goals", 0) or 0,
+                "assists": getattr(player, "assists", 0) or 0,
+                "games_played": getattr(player, "games_played", 0) or 0,
+            }
+        except Exception:
+            player.nhl_audition = None
         self.update_all_views()
         
-    def open_contract_negotiation_window(self, player, is_extension=False):
-        if 'contract' not in self.open_windows or not self.open_windows['contract'].winfo_exists():
-            self.open_windows['contract'] = ContractNegotiationWindow(self, player, is_extension)
-        self.open_windows['contract'].focus_set()
+    def open_contract_negotiation_window(self, player, is_extension=False,
+                                         is_elc=False):
+        # Extension window (real NHL: extensions only in the final year of
+        # a deal). One rulebook in transaction_windows.py. ELC signings are
+        # not extensions -- they go through unimpeded.
+        if is_extension and not is_elc:
+            try:
+                import transaction_windows as _tw
+                _ok, _why = _tw.check_window(
+                    "extension", getattr(self, "current_date", None),
+                    ctx={"player": player})
+                if not _ok:
+                    messagebox.showinfo("Extension", _why)
+                    return
+            except Exception:
+                pass
+        from windows import ContractNegotiationView
+        if is_elc:
+            title = (f"Entry-Level Contract: "
+                     f"{getattr(player, 'full_name', 'Player')}")
+        else:
+            title = f"Contract: {getattr(player, 'full_name', 'Player')}"
+        self.show_screen('contract_negotiation', title,
+                         ContractNegotiationView, player, is_extension,
+                         is_elc=is_elc)
 
-    def handle_contract_offer(self, person, extension=False):
-        # NHL contract rules (cap-relative: uses the live league cap):
-        min_salary = 750_000
+    def handle_elc_offer(self, player, salary, signing_bonus=0,
+                         performance_bonus=0):
+        """Negotiated ELC signing with an unsigned rights-held prospect.
+
+        Validates the ELC band (base inside [floor, ceiling], signing
+        bonus <= 10% of base, performance bonus <= $1M/yr), runs the
+        prospect handshake (accept / counter / reject), and on acceptance
+        finalizes through the league's canonical ELC path: contract with
+        bonuses, rights consumed, assigned to junior/AHL by eligibility.
+
+        Returns {verdict, counter, note}. "counter" carries the agent's
+        number for one-click acceptance in the view.
+        """
+        import salary_cap_system as _scs
+        league = getattr(self, 'league', None)
+        team = getattr(self, 'user_team', None)
+        try:
+            season = getattr(league, 'season_year', None)
+        except Exception:
+            season = None
+        # Guard: only the user's unsigned rights-held prospect.
+        try:
+            _own = (getattr(player, 'contract', None) is None
+                    and (getattr(player, 'rights_team', '') or '')
+                    == getattr(team, 'team_name', ''))
+        except Exception:
+            _own = False
+        if not _own or league is None or team is None:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "He isn't your unsigned prospect."}
+        try:
+            age = int(getattr(player, 'age', 20) or 20)
+        except Exception:
+            age = 20
+        # CBA 9.2: ELC term and eligibility use the player's age on
+        # September 15 of the signing year, not his current age.
+        try:
+            _s15 = _age_on_sept15(getattr(player, 'birth_date', ''), season)
+        except Exception:
+            _s15 = None
+        _elc_age = _s15 if _s15 is not None else age
+        floor, ceil, years = _scs.elc_band(_elc_age, season)
+        if years <= 0:
+            return {"verdict": "invalid", "counter": None,
+                    "note": ("He isn't ELC-eligible: at 25+, the Entry "
+                             "Level System no longer applies (new CBA -- "
+                             "the old European 25-27 exception is gone). "
+                             "Sign him to a standard contract instead.")}
+        try:
+            salary = int(salary)
+            signing_bonus = int(signing_bonus or 0)
+            performance_bonus = int(performance_bonus or 0)
+        except Exception:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "Bonuses must be numbers."}
+        max_signing = int(round(salary * _scs.ELC_SIGNING_BONUS_PCT))
+        if not (floor <= salary <= ceil):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"ELC base must sit inside the band "
+                             f"${floor:,} - ${ceil:,}/yr.")}
+        if not (0 <= signing_bonus <= max_signing):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Signing bonus is capped at 10% of base "
+                             f"(${max_signing:,}/yr).")}
+        if not (0 <= performance_bonus <= _scs.ELC_PERF_BONUS_MAX):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Performance bonus is capped at "
+                             f"${_scs.ELC_PERF_BONUS_MAX:,}/yr.")}
+        # 9.3(a): base salary + signing bonus (+ games-played bonuses,
+        # not modeled) may not exceed the max annual compensation.
+        # Schedule-A performance bonuses are capped separately.
+        if salary + signing_bonus > _scs.elc_max_annual_comp(season):
+            return {"verdict": "invalid", "counter": None,
+                    "note": (f"Base + signing bonus may not exceed the ELC "
+                             f"max of "
+                             f"${_scs.elc_max_annual_comp(season):,}/yr.")}
+        ask = _scs.elc_prospect_ask(player, season)
+        res = _scs.elc_handshake(ask, salary, signing_bonus,
+                                 performance_bonus)
+        if res["verdict"] != "accepted":
+            return res
+        try:
+            ok = bool(league.finalize_elc_signing(
+                team, player, salary, years, signing_bonus,
+                performance_bonus))
+        except Exception:
+            ok = False
+        if not ok:
+            return {"verdict": "invalid", "counter": None,
+                    "note": "The signing couldn't be completed."}
+        try:
+            self.add_news(
+                f"{player.full_name} signs an entry-level contract with "
+                f"{getattr(team, 'team_name', 'the club')} "
+                f"(${salary:,}/yr x {years} yrs, ${signing_bonus:,} signing "
+                f"bonus, ${performance_bonus:,}/yr in performance bonuses).")
+        except Exception:
+            pass
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return {"verdict": "accepted", "counter": None,
+                "note": (f"Signed: ${salary:,}/yr x {years} yrs "
+                         f"(+${signing_bonus:,} SB, "
+                         f"+${performance_bonus:,}/yr perf). He'll report to "
+                         f"{getattr(player, 'playing_where', 'the minors')}.")}
+
+    def _validate_contract_terms(self, person, salary, years, extension=False,
+                                   team=None):
+        """Shared signing gates for every contract path (offer window,
+        inbox counter-accept, MP). Returns (ok, error_message).
+
+        One rulebook: new-CBA league-minimum salary (season-aware:
+        $850k in 2026-27 rising to $1M by 2029-30), 20%-of-live-cap
+        maximum, 7/6-year max term (new CBA: 7 to re-sign, 6 externally),
+        live-cap budget check on CENTRAL cap accounting (not the stale
+        Team.payroll / $92M PLAYER_BUDGET constant, which blocked legal
+        spending up to the real cap), and the draft-eligibility lock.
+        Existing contracts are grandfathered -- the minimum and term
+        limits gate NEW deals only.
+        """
+        try:
+            from salary_cap_system import league_minimum_salary as _min_fn
+            _sy = getattr(getattr(self, 'league', None), 'season_year', None)
+            min_salary = _min_fn(_sy)
+        except Exception:
+            min_salary = 775_000
         _cap_sys = getattr(getattr(self, 'league', None),
                            'salary_cap_system', None)
         _live_cap = _cap_sys.current_cap if _cap_sys else SALARY_CAP
         max_salary = int(0.20 * _live_cap)
-        max_years = 8 if extension else 7
+        try:
+            from salary_cap_system import max_contract_term as _mct
+            max_years = _mct(extension)
+        except Exception:
+            max_years = 7 if extension else 6
+        _team = team if team is not None else getattr(self, "user_team", None)
 
+        try:
+            salary = int(salary)
+        except Exception:
+            return False, "Invalid salary."
+        try:
+            years = int(years)
+        except Exception:
+            return False, "Invalid term."
+
+        if salary < min_salary:
+            return False, f"Minimum salary is ${min_salary:,}."
+        if salary > max_salary:
+            return False, f"Maximum salary is ${max_salary:,}."
+        if years < 1 or years > max_years:
+            return False, f"Maximum contract length is {max_years} years."
+
+        # Budget check on the central cap charge (waiver shed, retention,
+        # burial, dead cap all accounted). Extensions replace the player's
+        # existing hit rather than stacking on top of it.
+        try:
+            from salary_cap_system import total_cap_charge as _tcc
+            _charge = int(_tcc(_team)) if _team is not None else 0
+            if extension:
+                _cur = getattr(getattr(person, "contract", None),
+                               "salary", 0) or 0
+                _charge -= int(_cur)
+            if _charge + salary > _live_cap:
+                return False, ("This contract would put the club over "
+                               f"the ${_live_cap:,} salary cap.")
+        except Exception:
+            pass
+
+        # Draft lock: a draft-eligible player can't be signed as a free
+        # agent -- that would sidestep the draft. Extensions (already under
+        # club control) are unaffected.
+        if not extension:
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(person):
+                    return False, (
+                        f"{getattr(person, 'full_name', 'This player')} is "
+                        f"eligible for the upcoming NHL Entry Draft and "
+                        f"can't be signed as a free agent. Draft him -- "
+                        f"don't sidestep the rules.")
+            except Exception:
+                pass
+        return True, ""
+
+    def handle_contract_offer(self, person, extension=False, notify="popup"):
+        # NHL contract rules (cap-relative: uses the live league cap):
+        # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
+        # inbox message; counter-offers become interactive), "quiet" (no
+        # notification -- bulk callers send one digest themselves).
         # Defensive: ensure salary and contract_years attributes exist
-        salary = getattr(person, "salary", getattr(person.contract, "salary", min_salary))
-        years = getattr(person, "contract_years", getattr(person.contract, "years_remaining", 1))
+        salary = getattr(person, "salary",
+                         getattr(getattr(person, "contract", None),
+                                 "salary", 750_000))
+        years = getattr(person, "contract_years",
+                        getattr(getattr(person, "contract", None),
+                                "years_remaining", 1))
         person.salary = salary
         person.contract_years = years
 
-        if salary < min_salary:
-            messagebox.showerror("Error", f"Minimum salary is ${min_salary:,}.")
+        ok, err = self._validate_contract_terms(
+            person, salary, years, extension=extension)
+        if not ok:
+            messagebox.showerror("Error", err)
             return False
-        if salary > max_salary:
-            messagebox.showerror("Error", f"Maximum salary is ${max_salary:,}.")
-            return False
-        if years > max_years:
-            messagebox.showerror("Error", f"Maximum contract length is {max_years} years.")
-            return False
-        if self.user_team.payroll + salary > PLAYER_BUDGET:
-            messagebox.showerror("Error", "This contract would exceed the player budget.")
-            return False
+
+        # Trade protection on the table: a clause the player wants is worth
+        # money to him, so the *effective* offer is salary + clause value.
+        # Shared valuation with the AI (trade_engine), not a user-only perk.
+        import trade_engine as te
+        _clause_kind = getattr(person, "offered_clause_kind", "none") or "none"
+        _clause_size = getattr(person, "offered_clause_list_size", 10) or 10
+        _demand = te.clause_demand_score(
+            person, getattr(self, "user_team", None),
+            getattr(self, "league", None))
+        _clause_val = te.clause_annual_value(person, _clause_kind) \
+            if _demand > 0.25 else 0
+        _effective_salary = salary + _clause_val
 
         # If extension, use current salary and offer +X years
         if extension:
@@ -10266,22 +16913,49 @@ class HockeyManagerGUI(tk.Tk):
                     max_salary = value * 1.2
                     return min_salary <= salary <= max_salary and years >= 1
                 person.negotiate_contract = negotiate_contract
-            accepted = person.negotiate_contract(salary, 2)
+            accepted = person.negotiate_contract(_effective_salary, years)
             if accepted:
-                person.contract_years = 2
+                person.contract_years = years
                 person.salary = salary
+                # A new SPC starts with no retained salary: the old deal's
+                # discount and two-club history die with it (the retaining
+                # club's ledger entry survives independently, per CBA).
+                try:
+                    te.clear_retention_state(person)
+                except Exception:
+                    pass
                 if hasattr(person, "contract"):
                     person.contract.salary = salary
-                    person.contract.years_remaining = 2
+                    person.contract.years_remaining = years
+                    te.apply_clause_to_contract(person.contract, _clause_kind,
+                                                _clause_size, player=person)
+            self._notify_contract_result("accepted" if accepted else "rejected",
+                                         person, salary, years, salary, extension,
+                                         notify)
+            self._clear_offered_clause(person)
             return accepted
 
         # Cap-relative asking price: base demand as % of cap, scaled by
         # the live cap and any market-setter premium (the McDavid effect).
-        _ovr = person.overall_rating()  # native 1-100 scale
-        _ovr100 = int(_ovr)
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        _live_cap = self.get_live_cap()
+        _ovr = person.overall_rating()
+        try:
+            from game_classes import to_100_scale
+            _ovr100 = int(to_100_scale(_ovr))
+        except Exception:
+            _ovr100 = int(_ovr * 2)
         _pos = getattr(person, "primary_position", "")
         _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
-        _base_pct = (_ovr * 100_000) / 83_500_000  # ~0.12% per OVR point
+        try:
+            _on_elc = bool(getattr(getattr(person, "contract", None),
+                                  "entry_level", False))
+        except Exception:
+            _on_elc = False
+        from salary_cap_system import base_ask_dollars as _bad2
+        _base_pct = _bad2(_ovr100, getattr(person, "age", 27),
+                          _on_elc, _pos_name) / _live_cap
         if _cap_sys is not None:
             _season = getattr(getattr(self, 'league', None), 'season_year', 0)
             asking_price = _cap_sys.demand_for(
@@ -10290,47 +16964,487 @@ class HockeyManagerGUI(tk.Tk):
         else:
             asking_price = int(_base_pct * _live_cap)
         asking_price = max(asking_price, 750_000)
-        
-        if person.salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
-            messagebox.showinfo("Contract Accepted", f"{person.full_name} has accepted your contract offer!")
-            person.contract.salary = person.salary
-            person.contract.years_remaining = person.contract_years
-            # Track market-setting contracts (star + top-5 AAV)
+
+        # A player who badly wants protection and isn't getting it charges
+        # for the missing clause.
+        if _demand >= 0.65 and _clause_kind == "none":
+            asking_price = int(asking_price * 1.08)
+
+        if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
+            self._finalize_contract_signing(person, person.salary,
+                                            person.contract_years,
+                                            asking_price, extension)
+            self._notify_contract_result("accepted", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify,
+                                         clause_kind=_clause_kind,
+                                         clause_list_size=_clause_size)
+            self._clear_offered_clause(person)
+            return True
+        elif _effective_salary >= asking_price * 0.7: # Counter-offers if between 70-90%
+            # The clause offer travels WITH the counter: capture the staged
+            # terms into the inbox action and clear them here, so they stay
+            # single-use and can't leak into an unrelated later deal.
+            _ck, _cs = _clause_kind, _clause_size
+            self._clear_offered_clause(person)
+            self._notify_contract_result("counter", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify,
+                                         clause_kind=_ck,
+                                         clause_list_size=_cs)
+            return False
+        else: # Rejects if below 70%
+            self._notify_contract_result("rejected", person, person.salary,
+                                         person.contract_years, asking_price,
+                                         extension, notify)
+            self._clear_offered_clause(person)
+            return False
+
+    def _clear_offered_clause(self, person):
+        """Staged clause terms are single-use: never leak into a later deal."""
+        for _attr in ("offered_clause_kind", "offered_clause_list_size"):
             try:
-                if _cap_sys is not None:
-                    _season = getattr(getattr(self, 'league', None),
-                                      'season_year', 0)
-                    _set_market = _cap_sys.register_signing(
-                        person.full_name, person.salary, _ovr100,
-                        _pos_name, getattr(person, "age", 27), _season)
-                    if _set_market:
-                        self.news_log.append({
-                            'date': self.current_date,
-                            'story': (f"{person.full_name}'s "
-                                      f"${person.salary:,} deal sets the market "
-                                      f"-- comparable stars will demand more.")})
+                if hasattr(person, _attr):
+                    delattr(person, _attr)
             except Exception:
                 pass
-            if not extension:
+
+    def _finalize_contract_signing(self, person, salary, years, asking_price,
+                                   extension):
+        """Apply an agreed contract: cap records, market tracking, news,
+        media, roster moves. Shared by the negotiation window and the
+        inbox counter-offer accept button."""
+        person.salary = salary
+        person.contract_years = years
+        # A new SPC starts with no retained salary: the old deal's discount
+        # and two-club history die with it (the retaining club's ledger
+        # entry survives independently, per CBA).
+        try:
+            import trade_engine as _te_clr3
+            _te_clr3.clear_retention_state(person)
+        except Exception:
+            pass
+        _contract = getattr(person, "contract", None)
+        if _contract is not None:
+            _contract.salary = salary
+            _contract.years_remaining = years
+            # Trade protection negotiated at the table lands on the deal.
+            import trade_engine as _te2
+            _te2.apply_clause_to_contract(
+                _contract,
+                getattr(person, "offered_clause_kind", "none") or "none",
+                getattr(person, "offered_clause_list_size", 10) or 10,
+                player=person)
+        _cap_sys = getattr(getattr(self, 'league', None),
+                           'salary_cap_system', None)
+        # Track market-setting contracts (star + top-5 AAV)
+        _set_market = False
+        try:
+            _ovr = person.overall_rating()
+            try:
+                from game_classes import to_100_scale
+                _ovr100 = int(to_100_scale(_ovr))
+            except Exception:
+                _ovr100 = int(_ovr * 2)
+            _pos = getattr(person, "primary_position", "")
+            _pos_name = _pos.value if hasattr(_pos, "value") else str(_pos)
+            if _cap_sys is not None:
+                _season = getattr(getattr(self, 'league', None), 'season_year', 0)
+                _set_market = _cap_sys.register_signing(
+                    person.full_name, salary, _ovr100,
+                    _pos_name, getattr(person, "age", 27), _season)
+                if _set_market:
+                    self.news_log.append({
+                        'date': self.current_date,
+                        'story': (f"{person.full_name}'s "
+                                  f"${salary:,} deal sets the market "
+                                  f"-- comparable stars will demand more.")})
+        except Exception:
+            pass
+        # Contract-decision fallout: overpay verdict, fan beef, GM rep,
+        # and GM-GM heat when the deal resets the market. The salary
+        # engine itself (SalaryCapSystem) is untouched.
+        try:
+            from reputation_system import evaluate_contract_decision
+            _cd = evaluate_contract_decision(
+                person, salary, asking_price,
+                team=self.user_team, league=self.league,
+                market_setter=bool(_set_market))
+            if _cd.get("story"):
+                self.news_log.append({'date': self.current_date,
+                                      'story': _cd["story"]})
+        except Exception:
+            pass
+        if not extension:
+            try:
                 self.league.free_agents.remove(person)
-                self.user_team.add_player(person, "roster")
-            self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {person.contract_years}-year contract."})
-            
-            # Generate media event for signing (if media system enabled)
-            if hasattr(self, 'media_system') and self.media_system:
-                contract_type = 'extension' if extension else 'signing'
-                self.media_system.process_signing(person, self.user_team, contract_type, person.salary, person.contract_years)
-            
+            except Exception:
+                pass
+            self.user_team.add_player(person, "roster")
+            # Rivalry lifecycle: a free-agent signing is a transfer -- his
+            # personal beefs follow him to the new room; ambient noise he
+            # merely encouraged stays behind. Same chokepoint as trades.
+            try:
+                from reputation_system import on_player_transfer as _opt
+                _rivs = getattr(getattr(self, "league", None), "rivalries", None)
+                if isinstance(_rivs, list):
+                    _opt(_rivs, person, from_team=None, to_team=self.user_team)
+            except Exception:
+                pass
+            # Dressing room: a new face in the room -- the room reacts to
+            # WHO he is (blue-chip hype, veteran gravity), bounded.
+            try:
+                import dressing_room as _dr_arr
+                _dr_arr.cascade_on_arrival(
+                    self.user_team, person, how="signing",
+                    date_str=str(getattr(self, "current_date", "")))
+            except Exception:
+                pass
+        self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
+
+        # Generate media event for signing (if media system enabled)
+        if hasattr(self, 'media_system') and self.media_system:
+            contract_type = 'extension' if extension else 'signing'
+            self.media_system.process_signing(person, self.user_team, contract_type, salary, years)
+
+        self.update_all_views()
+
+    def _notify_contract_result(self, kind, person, salary, years,
+                                asking_price, extension, notify="popup",
+                                clause_kind="none", clause_list_size=10):
+        """Route a contract result to a legacy popup, the inbox, or nowhere.
+
+        kind: "accepted" | "counter" | "rejected".
+        """
+        name = getattr(person, "full_name",
+                       getattr(person, "name", "The player"))
+        if notify == "quiet":
+            return
+        if notify == "inbox":
+            self._inbox_contract_result(kind, person, name, salary, years,
+                                        asking_price, extension,
+                                        clause_kind=clause_kind,
+                                        clause_list_size=clause_list_size)
+            return
+        # legacy popup behaviour
+        if kind == "accepted":
+            messagebox.showinfo("Contract Accepted",
+                                f"{name} has accepted your contract offer!")
+        elif kind == "counter":
+            try:
+                import trade_engine as _te4
+                _ct = _te4.clause_offer_label(clause_kind, clause_list_size) \
+                    if (clause_kind or "none") != "none" else ""
+            except Exception:
+                _ct = ""
+            _still = (f" Your {_ct} offer is still on the table."
+                      if _ct else "")
+            messagebox.showinfo("Counter Offer",
+                                f"{name} has rejected your offer, but is willing "
+                                f"to sign for ${asking_price:,} per year.{_still}")
+        else:
+            messagebox.showerror("Contract Rejected",
+                                 f"{name} has rejected your contract offer.")
+
+    def _inbox_contract_result(self, kind, person, name, salary, years,
+                               asking_price, extension, clause_kind="none",
+                               clause_list_size=10, reject_note=None):
+        """FM24/EHM-style: contract news lands in the inbox. Counter-offers
+        arrive as interactive messages (accept / new offer / walk away).
+
+        clause_kind/size travel with a counter so the trade protection the
+        user offered is still on the table when the inbox accept lands.
+        reject_note overrides the rejected text (e.g. league-office veto)."""
+        from game_classes import EmailMessage
+        import trade_engine as _te3
+        pid = getattr(person, "id", None)
+        base = dict(sender="Agent", sender_type="Agent",
+                    date_sent=date.today(), category="Contracts",
+                    related_player_id=pid, priority=3, is_important=True)
+        _clause_txt = _te3.clause_offer_label(clause_kind, clause_list_size) \
+            if (clause_kind or "none") != "none" else ""
+        if kind == "accepted":
+            term = "extension" if extension else "contract"
+            _prot = (f" It carries {_clause_txt}."
+                     if _clause_txt else "")
+            msg = EmailMessage(
+                subject=f"Signed: {name}",
+                content=(f"{name} has agreed to terms: "
+                         f"${salary:,} per year over {years} year(s).{_prot}\n\n"
+                         f"The {term} is finalized and the paperwork is filed "
+                         f"with the league office."),
+                **base)
+        elif kind == "rejected":
+            _rej_text = (reject_note or
+                         (f"{name} has rejected your offer of "
+                          f"${salary:,} per year outright and is not "
+                          f"countering at this time.\n\n"
+                          f"His camp feels the number needs to be "
+                          f"significantly higher before talks resume."))
+            msg = EmailMessage(
+                subject=f"Talks break down: {name}",
+                content=_rej_text,
+                **base)
+        else:  # counter -- interactive
+            _still = (f" Your {_clause_txt} offer is still on the table."
+                      if _clause_txt else "")
+            msg = EmailMessage(
+                subject=f"Counter-offer: {name}",
+                content=(f"{name}'s camp has rejected your offer of "
+                         f"${salary:,} per year, but they are willing to "
+                         f"sign for ${asking_price:,} per year over "
+                         f"{years} year(s).{_still}\n\n"
+                         f"Respond below -- the offer waits for you."),
+                requires_response=True,
+                action_type="contract_counter",
+                action_data={"player_id": pid, "player_name": name,
+                             "asking_price": int(asking_price),
+                             "years": int(years),
+                             "is_extension": bool(extension),
+                             "clause_kind": clause_kind or "none",
+                             "clause_list_size": int(clause_list_size or 10)},
+                **base)
+        self.send_email_to_user(msg)
+
+    def _find_inbox_player(self, data):
+        """Locate a player referenced by an inbox action (id, then name)."""
+        pid = (data or {}).get("player_id")
+        name = (data or {}).get("player_name")
+        league = getattr(self, "league", None)
+        pools = []
+        try:
+            for t in (getattr(league, "teams", []) or []):
+                pools.append(list(getattr(t, "roster", []) or []))
+            pools.append(list(getattr(league, "free_agents", []) or []))
+        except Exception:
+            pass
+        for pool in pools:
+            for p in pool:
+                if pid and getattr(p, "id", None) == pid:
+                    return p
+        if name:
+            for pool in pools:
+                for p in pool:
+                    if getattr(p, "full_name", "") == name:
+                        return p
+        return None
+
+    def accept_contract_counter(self, message):
+        """Inbox action: accept the agent's counter-offer as-is."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        if person is None:
+            message.action_done = True
+            return False
+        asking = data.get("asking_price", 0)
+        years = data.get("years", 1)
+        extension = data.get("is_extension", False)
+        # The counter travels through the same gates as a fresh offer:
+        # an agent can't smuggle in a sub-minimum, over-max, over-term,
+        # over-cap, or draft-sidestepping deal via the inbox.
+        ok, err = self._validate_contract_terms(person, asking, years,
+                                                extension=bool(extension))
+        if not ok:
+            self._inbox_contract_result(
+                "rejected", person,
+                getattr(person, "full_name", "The player"),
+                asking, years, asking, extension,
+                clause_kind="none", clause_list_size=10,
+                reject_note=(
+                    f"The league office rejected {getattr(person, 'full_name', 'the player')}'s "
+                    f"counter-offer of ${int(asking):,} x {int(years)} year(s): {err}\n\n"
+                    f"Illegal terms can't be filed -- his camp will need to come back "
+                    f"with a compliant number."))
+            message.action_done = True
+            return False
+        # The clause the user offered travels with the counter: re-stage it
+        # so the signed deal carries the protection, then clear (single-use).
+        person.offered_clause_kind = data.get("clause_kind", "none") or "none"
+        try:
+            person.offered_clause_list_size = int(
+                data.get("clause_list_size", 10) or 10)
+        except Exception:
+            person.offered_clause_list_size = 10
+        self._finalize_contract_signing(person, asking, years, asking,
+                                        extension)
+        self._inbox_contract_result("accepted", person,
+                                    getattr(person, "full_name", "The player"),
+                                    asking, years, asking, extension,
+                                    clause_kind=person.offered_clause_kind,
+                                    clause_list_size=
+                                    person.offered_clause_list_size)
+        self._clear_offered_clause(person)
+        message.action_done = True
+        return True
+
+    # ----- RFA inbox actions (rfa_system) -----
+    def apply_rfa_qualifying_decision(self, message, player_id, qualify):
+        """Inbox action: extend or decline a qualifying offer for one RFA."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_qualifying_decision(
+            self, self.league, self.user_team, player_id, bool(qualify))
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(qualify)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
             self.update_all_views()
-        elif person.salary >= asking_price * 0.7: # Counter-offers if between 70-90%
-            messagebox.showinfo("Counter Offer", f"{person.full_name} has rejected your offer, but is willing to sign for ${asking_price:,} per year.")
-        else: # Rejects if below 70%
-            messagebox.showerror("Contract Rejected", f"{person.full_name} has rejected your contract offer.")
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    # ----- Buyout window inbox actions (buyout_window) -----
+    def apply_buyout_decision(self, message, player_id, buyout):
+        """Inbox action: buy out (or keep) one flagged contract.
+
+        The message itself is the June 15-30 window authorization, so --
+        like the RFA actions -- this does NOT re-check the calendar gate
+        in transaction_windows (the user may resolve it after July 1).
+        """
+        import buyout_window as _bw
+        data = message.action_data or {}
+        ok = False
+        if buyout:
+            person = self._find_inbox_player({"player_id": player_id})
+            team = getattr(self, "user_team", None)
+            if person is not None and team is not None \
+                    and person in (getattr(team, "roster", None) or []):
+                try:
+                    season_year = int(data.get("season_year") or
+                                     getattr(self.league, "season_year", 2026)
+                                     or 2026)
+                    total, annual, byears, _rows = _bw.execute_buyout(
+                        self.league, team, person,
+                        season_year=season_year)
+                    ok = True
+                    try:
+                        self.add_news(
+                            f"✂️ You bought out "
+                            f"{getattr(person, 'full_name', 'a player')} "
+                            f"(${int(total):,} over {int(byears)} years).")
+                    except Exception:
+                        pass
+                except Exception:
+                    ok = False
+            else:
+                ok = False
+        else:
+            ok = True  # "Keep" is always a valid decision
+        decided = data.get("decided", {}) or {}
+        decided[str(player_id)] = bool(buyout)
+        data["decided"] = decided
+        message.action_data = data
+        cards = data.get("cards", []) or []
+        if len(decided) >= len(cards):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
+
+    def apply_offer_sheet_match_decision(self, message, match):
+        """Inbox action: match an offer sheet or take the pick compensation."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_match(
+            self, self.league, data.get("player_id"), bool(match))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_offer_sheet_trade_alt_decision(self, message, accept):
+        """Inbox action: accept the sign-and-trade package or take the
+        pick compensation on a declined offer sheet."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        res = _rfa.apply_offer_sheet_trade_alt(
+            self, self.league, data.get("player_id"), bool(accept))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def apply_arbitration_walkaway_decision(self, message, walk_away):
+        """Inbox action: walk away from an arbitration award (48h window)."""
+        import rfa_system as _rfa
+        data = message.action_data or {}
+        aav = int(data.get("award_aav", 0) or 0)
+        term = int(data.get("term_years", 1) or 1)
+        player_id = data.get("player_id")
+        if not walk_away:
+            # Accept: sign at the awarded terms.
+            person = self._find_inbox_player(data)
+            if person is not None:
+                c = getattr(person, "contract", None)
+                if c is not None:
+                    c.salary = aav
+                    c.years_remaining = term
+        res = _rfa.apply_walk_away(
+            self, self.league, self.user_team, player_id, bool(walk_away))
+        if res.get("ok"):
+            message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return bool(res.get("ok"))
+
+    def reopen_contract_negotiation(self, message):
+        """Inbox action: open a fresh negotiation window for the player."""
+        data = message.action_data or {}
+        person = self._find_inbox_player(data)
+        message.action_done = True
+        if person is None:
+            return
+        self.open_contract_negotiation_window(
+            person, is_extension=bool(data.get("is_extension", False)))
 
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)
         if new_number:
+            # Retired numbers stay retired -- the rafters are not negotiable.
+            try:
+                import immortality as _im
+                from game_classes import PlayerPosition as _PP
+                _team = getattr(self, "user_team", None)
+                _goalie = getattr(player, "primary_position", None) == _PP.GOALIE
+                if not _im.number_selectable(_team, new_number, _goalie):
+                    if _team is not None and _im.is_number_retired(_team, new_number):
+                        messagebox.showwarning(
+                            "Retired Number",
+                            f"No. {new_number} is retired by "
+                            f"{_team.team_name} -- pick another.")
+                    elif (not _goalie
+                          and int(new_number) in _im.SKATER_BARRED_NUMBERS):
+                        messagebox.showwarning(
+                            "Goalie Number",
+                            f"No. {new_number} is reserved for goaltenders -- "
+                            f"pick another.")
+                    else:
+                        messagebox.showwarning(
+                            "Number Taken",
+                            f"No. {new_number} is unavailable -- pick another.")
+                    return
+            except Exception:
+                pass
             player.jersey_number = new_number
+            try:
+                player.jersey_number_since = int(
+                    getattr(getattr(self, "league", None), "season_year", 2026))
+            except Exception:
+                pass
             self.update_all_views()
 
     def set_best_lines(self):
@@ -10344,32 +17458,68 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
-class CleanEditLinesWindow(ctk.CTkToplevel):
-    """Clean, simple, and intuitive line editor with proper contrast and readability.
+class CleanEditLinesView(ctk.CTkFrame):
+    """Clean, simple, and intuitive line editor with proper contrast and readability"""
+    
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.configure(fg_color=self.app.BG_COLOR)
+        self._close_screen = None  # set by show_screen() or wrapper
 
-    CustomTkinter rebuild: rounded cards, CTkTabview tabs, CTkScrollableFrame
-    roster with rich draggable player cards, pill drop zones. Drag-and-drop,
-    chemistry, best-lines auto-fill, validation, face thumbnails, and saving
-    are all preserved from the ttk version.
-    """
+        # Sleeper-inspired palette for the line editor
+        self.C_BG = '#0e0e11'
+        self.C_CARD = '#16161a'
+        self.C_CARD2 = '#1c1c21'
+        self.C_BORDER = '#26262b'
+        self.C_ACCENT = '#00ceb8'
+        self.C_TEXT = '#f2f2f3'
+        self.C_SEC = '#a1a1aa'
+        self.C_TER = '#6b6b74'
+        self.C_AMBER = '#e8b34b'
+        self.C_RED = '#e07a7a'
+        self.C_GREEN = '#7ed492'
 
-    DROP_BG = '#1c1c21'
-    DROP_HOVER = '#14332f'
-    ASSIGNED_BG = '#14332f'
-    FACE_BG = '#2b2b31'
+        # Make text more readable with better contrast
+        self.LABEL_BG = self.app.CONTENT_BG  # Dark background for labels
+        self.ENTRY_BG = '#FFFFFF'  # White background for input fields
+        self.ENTRY_FG = '#000000'  # Black text on white background
+        self.LABEL_FG = self.app.TEXT_COLOR  # Light text on dark background
 
-    def __init__(self, parent):
-        init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Edit Lines")
-        self.geometry("1000x700")
-        self.configure(fg_color=BG)
-        self.resizable(True, True)
+        # Configure custom style for perfect readability
+        self.style = ttk.Style()
+        self.style.configure('Clean.TCombobox',
+                            fieldbackground='white',
+                            background='white',
+                            foreground='black',
+                            borderwidth=1,
+                            relief='solid',
+                            selectbackground='#4CAF50',
+                            selectforeground='white',
+                            font=(self.app.FONT_FAMILY, 10))
 
-        # Drag and drop state
-        self.drag_data = {"item": None, "source": None}
-        self.player_widgets = {}  # Track all player display widgets
+        # Modern styling
+        self.style.configure('Modern.TFrame',
+                            background='#f8f9fa',
+                            relief='flat',
+                            borderwidth=0)
+
+        self.style.configure('Card.TFrame',
+                            background='white',
+                            relief='solid',
+                            borderwidth=1)
+
+        self.style.configure('Header.TLabel',
+                            background='#343a40',
+                            foreground='white',
+                            font=(self.app.FONT_FAMILY, 12, 'bold'),
+                            padding=10)
+
+        # Point-click selection state (replaces drag and drop)
+        self._selection = None  # {'player': Player, 'from_zone': zone|None}
+        self.player_widgets = {}  # player.id -> {'outer','card','dot','assigned_position'}
+        self._roster_filter = "ALL"
+        self._view_prefs = self._load_view_prefs()
 
         # Generated face thumbnails: window-level cache keeps PhotoImages
         # alive (avoids Tk garbage-collection blanking) and a lazy queue
@@ -10378,18 +17528,18 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         self._pending_faces = []
 
         # Initialize lineup data
-        self.lineup = getattr(parent.user_team, "lineup", None)
+        self.lineup = getattr(self.app.user_team, "lineup", None)
         if not self.lineup:
-            self.lineup = best_lines(parent.user_team)
-        parent.user_team.lineup = self.lineup
+            self.lineup = best_lines(self.app.user_team)
+        self.app.user_team.lineup = self.lineup
 
         # Get players organized by position
-        self.forwards = [p for p in parent.user_team.roster
-                         if p.primary_position.name in ['LEFT_WING', 'CENTER', 'RIGHT_WING']]
-        self.defensemen = [p for p in parent.user_team.roster
-                           if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']]
-        self.goalies = [p for p in parent.user_team.roster
-                        if p.primary_position.name == 'GOALIE']
+        self.forwards = [p for p in self.app.user_team.roster
+                        if p.primary_position.name in ['LEFT_WING', 'CENTER', 'RIGHT_WING']]
+        self.defensemen = [p for p in self.app.user_team.roster
+                          if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE']]
+        self.goalies = [p for p in self.app.user_team.roster
+                       if p.primary_position.name == 'GOALIE']
 
         # Sort by overall rating
         self.forwards.sort(key=lambda p: p.overall_rating(), reverse=True)
@@ -10403,26 +17553,51 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         # Fill in face thumbnails lazily so the window opens instantly.
         self.after(60, self._pump_face_queue)
 
-    # ------------------------------------------------------------------
-    # Face thumbnails (unchanged logic)
-    # ------------------------------------------------------------------
-    def _face_photo(self, player, size=48):
-        """Return a cached PhotoImage face thumbnail for a player.
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
-        Returns None when face generation is unavailable; never raises.
+    def _face_photo(self, player, size=48):
+        """Return a cached circular-masked PhotoImage face thumbnail.
+
+        Sleeper-style round avatars with a soft ring; falls back to the
+        square photo when PIL masking is unavailable. Never raises.
         """
         try:
             pid = getattr(player, 'id', None) or id(player)
         except Exception:
             pid = id(player)
-        key = (pid, size)
+        key = (pid, size, 'circ')
         if key not in self._face_photos:
             photo = None
             try:
-                from player_faces import get_face_photo
-                photo = get_face_photo(player, size=size)
+                from player_faces import generate_face_image
+                from PIL import Image, ImageDraw, ImageTk
+                img = generate_face_image(player, size=size)
+                if img is not None:
+                    img = img.convert('RGBA').resize((size, size), Image.LANCZOS)
+                    mask = Image.new('L', (size, size), 0)
+                    ImageDraw.Draw(mask).ellipse([1, 1, size - 1, size - 1],
+                                                 fill=255)
+                    img.putalpha(mask)
+                    ring = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+                    ImageDraw.Draw(ring).ellipse(
+                        [1, 1, size - 1, size - 1],
+                        outline=(46, 46, 53, 255), width=2)
+                    img = Image.alpha_composite(img, ring)
+                    photo = ImageTk.PhotoImage(img, master=self)
             except Exception:
                 photo = None
+            if photo is None:
+                try:
+                    from player_faces import get_face_photo
+                    photo = get_face_photo(player, size=size)
+                except Exception:
+                    photo = None
             self._face_photos[key] = photo
         return self._face_photos[key]
 
@@ -10450,7 +17625,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         continue
                     photo = self._face_photo(player, size)
                     if photo is not None:
-                        label.configure(image=photo)
+                        label.config(image=photo)
                         label.image = photo
                 except Exception:
                     pass
@@ -10458,270 +17633,770 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                 self.after(25, self._pump_face_queue)
         except Exception:
             pass
-
-    @staticmethod
-    def _ovr_color(ovr):
-        return CTkPlayerList._ovr_color(ovr)
-
+    
     # ------------------------------------------------------------------
-    # Layout
+    # Sleeper-style team strip + roster panel (point-click, no tabs)
     # ------------------------------------------------------------------
-    def create_clean_interface(self):
-        """Create a clean, easy-to-read interface."""
-        ff = self.parent.FONT_FAMILY
-
-        # Header
-        header_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=0, height=80)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
-
-        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
-        header_content.pack(expand=True, fill='both', padx=20, pady=15)
-
-        ctk.CTkLabel(header_content, text="Line Editor",
-                      font=(ff, 18, 'bold'), text_color=TEXT).pack(side=tk.LEFT)
-
-        header_buttons = ctk.CTkFrame(header_content, fg_color="transparent")
-        header_buttons.pack(side=tk.RIGHT)
-
-        self.create_modern_button(header_buttons, "Auto Best Lines",
-                                  self.auto_populate_best_lines,
-                                  bg='#00ceb8', hover_bg='#00a894')
-        self.create_modern_button(header_buttons, "Save Lines",
-                                  self.save_lines_with_feedback,
-                                  bg='#00ceb8', hover_bg='#00a894')
-        self.create_modern_button(header_buttons, "Reset", self.reset_lines,
-                                  bg='#1e1e24', hover_bg='#2e2e38')
-
-        ctk.CTkLabel(header_content,
-                      text="Drag players from the roster to positions \u2022 Auto-assign or manually build your lines",
-                      font=(ff, 10), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(20, 0))
-
-        # Team overview card
-        stats_card = ctk.CTkFrame(self, fg_color=BG)
-        stats_card.pack(fill=tk.X, padx=20, pady=10)
-        self.create_team_overview(stats_card)
-
-        # Main content: roster panel | line tabs (grid replaces PanedWindow)
-        content_frame = ctk.CTkFrame(self, fg_color=BG)
-        content_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 20))
-        content_frame.grid_columnconfigure(0, weight=1)
-        content_frame.grid_columnconfigure(1, weight=3)
-        content_frame.grid_rowconfigure(0, weight=1)
-
-        # Left side - Player roster panel
-        self.create_roster_panel(content_frame)
-
-        # Right side - Line editing tabs
-        self.notebook = ctk.CTkTabview(content_frame, fg_color=PANEL, corner_radius=10)
-        self.notebook.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        for tab_name in ("Forwards", "Defense", "Goalies", "Special Teams"):
-            self.notebook.add(tab_name)
-
-        # Create tabs
-        self.create_forwards_tab()
-        self.create_defense_tab()
-        self.create_goalies_tab()
-        self.create_special_teams_tab()
 
     def create_team_overview(self, parent_frame):
-        """Create a quick team overview with key stats."""
-        ff = self.parent.FONT_FAMILY
-        card = ctk.CTkFrame(parent_frame, fg_color=PANEL, corner_radius=10)
-        card.pack(fill=tk.X, pady=5)
+        """Slim Sleeper-style stat strip: team avg / top line / roster size."""
+        strip = tk.Frame(parent_frame, bg=self.C_CARD)
+        strip.pack(fill=tk.X, padx=20, pady=(0, 12))
+        tk.Frame(strip, bg='#2e2e36', height=1).pack(fill='x', side='top')
+        inner = tk.Frame(strip, bg=self.C_CARD)
+        inner.pack(fill=tk.X, padx=16, pady=10)
+        tk.Frame(strip, bg='#08080a', height=2).pack(fill='x', side='bottom')
 
-        ctk.CTkLabel(card, text="Team Overview", font=(ff, 11, 'bold'),
-                      text_color=TEXT, anchor="w").pack(anchor="w", padx=14, pady=(10, 2))
+        total = len(self.app.user_team.roster)
+        avg = (sum(p.overall_rating() for p in self.app.user_team.roster)
+               / max(total, 1))
+        top = 0.0
+        if self.lineup and self.lineup.get('Forwards') and self.lineup['Forwards'][0]:
+            tl = [p for p in self.lineup['Forwards'][0] if p is not None]
+            if tl:
+                top = sum(p.overall_rating() for p in tl) / len(tl)
 
-        # Calculate team stats
-        total_players = len(self.parent.user_team.roster)
-        avg_rating = sum(p.overall_rating() for p in self.parent.user_team.roster) / max(total_players, 1)
+        for label, val in (("TEAM AVG", f"{avg:.1f}"),
+                           ("TOP LINE", f"{top:.1f}" if top else "--"),
+                           ("ROSTER", str(total))):
+            cell = tk.Frame(inner, bg=self.C_CARD)
+            cell.pack(side=tk.LEFT, padx=(0, 36))
+            tk.Label(cell, text=label, bg=self.C_CARD, fg=self.C_TER,
+                     font=self._font(10, 'bold')).pack(anchor='w')
+            tk.Label(cell, text=val, bg=self.C_CARD, fg=self.C_TEXT,
+                     font=self._font(18, 'bold')).pack(anchor='w')
 
-        # Top line rating
-        if self.lineup and 'Forwards' in self.lineup and self.lineup['Forwards']:
-            top_line = [p for p in self.lineup['Forwards'][0] if p is not None]
-            top_line_rating = sum(p.overall_rating() for p in top_line) / max(len(top_line), 1) if top_line else 0
-        else:
-            top_line_rating = 0
+    def _make_scrollable(self, parent):
+        """Canvas+scrollbar boilerplate. Returns the inner content frame."""
+        canvas = tk.Canvas(parent, bg=self.C_BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=self.C_BG)
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-        info_frame = ctk.CTkFrame(card, fg_color="transparent")
-        info_frame.pack(fill=tk.X, padx=14, pady=(0, 10))
+        def _conf(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfig(win_id, width=event.width)
 
-        ctk.CTkLabel(info_frame, text=f"Team Avg: {avg_rating:.1f}",
-                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(0, 20))
-        ctk.CTkLabel(info_frame, text=f"Top Line: {top_line_rating:.1f}",
-                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT, padx=(0, 20))
-        ctk.CTkLabel(info_frame, text=f"Roster Size: {total_players}",
-                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.LEFT)
+        canvas.bind('<Configure>', _conf)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _wheel(event):
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        inner.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
+        inner.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        return inner
 
     def create_roster_panel(self, parent):
-        """Create the draggable player roster panel (gridded, replaces PanedWindow pane)."""
-        ff = self.parent.FONT_FAMILY
-        roster_frame = ctk.CTkFrame(parent, fg_color=BG)
-        roster_frame.grid(row=0, column=0, sticky="nsew")
+        """Left roster panel: search + position chips + click-to-select rows."""
+        panel = tk.Frame(parent, bg=self.C_BG, width=340)
+        panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 16))
+        panel.pack_propagate(False)
 
-        # Header
-        header_frame = ctk.CTkFrame(roster_frame, fg_color=PANEL, corner_radius=10, height=50)
-        header_frame.pack(fill=tk.X)
-        header_frame.pack_propagate(False)
+        hdr = tk.Frame(panel, bg=self.C_BG)
+        hdr.pack(fill='x', pady=(0, 6))
+        tk.Label(hdr, text="Roster", bg=self.C_BG, fg=self.C_TEXT,
+                 font=self._font(15, 'bold')).pack(side='left')
+        self._sel_hint = tk.Label(hdr, text="", bg=self.C_BG, fg=self.C_ACCENT,
+                                  font=self._font(9))
+        self._sel_hint.pack(side='left', padx=(10, 0))
 
-        header_content = ctk.CTkFrame(header_frame, fg_color="transparent")
-        header_content.pack(expand=True, fill='both', padx=15, pady=10)
+        self._search_var = tk.StringVar()
+        search = tk.Entry(panel, textvariable=self._search_var, bg=self.C_CARD2,
+                          fg=self.C_TEXT, insertbackground=self.C_TEXT, relief='flat',
+                          font=self._font(10))
+        search.pack(fill='x', pady=(0, 8), ipady=7)
+        self._search_var.trace_add('write', lambda *a: self._debounced_search())
+        self._search_after = None
 
-        ctk.CTkLabel(header_content, text="Active Roster",
-                      font=(ff, 14, 'bold'), text_color=TEXT).pack(side=tk.LEFT)
-        ctk.CTkLabel(header_content, text="Drag to Assign",
-                      font=(ff, 9), text_color=TEXT_DIM).pack(side=tk.RIGHT)
-
-        # Position tabs
-        roster_tabs = ctk.CTkTabview(roster_frame, fg_color=BG, corner_radius=10)
-        roster_tabs.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        for tab_name in ("Forwards", "Defense", "Goalies"):
-            roster_tabs.add(tab_name)
-
-        self.create_forwards_roster_tab(roster_tabs)
-        self.create_defense_roster_tab(roster_tabs)
-        self.create_goalies_roster_tab(roster_tabs)
-
-    def create_forwards_roster_tab(self, tabview):
-        """Create draggable forwards roster."""
-        scroll = ctk.CTkScrollableFrame(tabview.tab("Forwards"), fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
-        for player in self.forwards:
-            self.create_draggable_player_widget(scroll, player, "forward")
-
-    def create_defense_roster_tab(self, tabview):
-        """Create draggable defense roster."""
-        scroll = ctk.CTkScrollableFrame(tabview.tab("Defense"), fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
-        for player in self.defensemen:
-            self.create_draggable_player_widget(scroll, player, "defense")
-
-    def create_goalies_roster_tab(self, tabview):
-        """Create draggable goalies roster."""
-        scroll = ctk.CTkScrollableFrame(tabview.tab("Goalies"), fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
-        for player in self.goalies:
-            self.create_draggable_player_widget(scroll, player, "goalie")
-
-    def create_draggable_player_widget(self, parent, player, position_type):
-        """Create a draggable player card with face, name, rating, archetype."""
-        ff = self.parent.FONT_FAMILY
-
-        card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
-        card.pack(fill=tk.X, pady=3, padx=8)
+        chips = tk.Frame(panel, bg=self.C_BG)
+        chips.pack(fill='x', pady=(0, 8))
+        self._chips_frame = chips
+        self._chip_btns = {}
+        for key, label in (("ALL", "All"), ("F", "Forwards"),
+                           ("D", "Defense"), ("G", "Goalies")):
+            b = tk.Label(chips, text=label, bg=self.C_CARD2, fg=self.C_SEC,
+                         font=self._font(10, 'bold'),
+                         padx=12, pady=6, cursor='hand2')
+            b.bind('<Button-1>', lambda e, k=key: self._set_roster_filter(k))
+            self._chip_btns[key] = b
+        self._set_roster_filter("ALL", rebuild=False)
+        self._layout_chips()
+        # Reflow the chip row when the window resizes or the text scale
+        # changes: 4-across when they fit, 2x2 when they don't, so text
+        # never clips at large font tiers or narrow windows.
+        chips.bind("<Configure>",
+                   lambda e: self._layout_chips(_from_resize=True), add="+")
         try:
-            card.configure(cursor="hand2")
+            from ui_scale import on_scale_change
+            on_scale_change(self._layout_chips)
         except Exception:
             pass
 
-        # Generated face thumbnail on the left (filled in lazily so the
-        # editor opens instantly; the blank reserves the exact space).
-        face_label = ctk.CTkLabel(card, text="", fg_color=self.FACE_BG, corner_radius=6,
-                                  image=self._face_blank(48), width=48, height=48)
-        face_label.pack(side=tk.LEFT, padx=(8, 4), pady=8)
-        self._pending_faces.append((player, face_label, 48))
+        list_wrap = tk.Frame(panel, bg=self.C_BG)
+        list_wrap.pack(fill='both', expand=True)
+        self._roster_inner = self._make_scrollable(list_wrap)
+        self._rebuild_roster_list()
 
-        # Bind drag events on the card + face
-        for widget in [card, face_label]:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, card))
-            widget.bind('<B1-Motion>', self.on_drag)
-            widget.bind('<ButtonRelease-1>', self.end_drag)
+    def _layout_chips(self, _from_resize=False):
+        """Reflow roster filter chips: 4-across when they fit, else 2x2.
 
-        # Player info
-        info_frame = ctk.CTkFrame(card, fg_color="transparent")
-        info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12), pady=8)
-
-        # Top row - Name and OVR
-        top_row = ctk.CTkFrame(info_frame, fg_color="transparent")
-        top_row.pack(fill=tk.X)
-
-        name_label = ctk.CTkLabel(top_row, text=player.full_name,
-                                  font=(ff, 10, 'bold'), text_color=TEXT, anchor='w')
-        name_label.pack(side=tk.LEFT)
-
-        ovr = player.overall_rating()
-        rating_label = ctk.CTkLabel(top_row, text=str(ovr),
-                                    font=(ff, 10, 'bold'),
-                                    text_color=self._ovr_color(ovr), anchor='e')
-        rating_label.pack(side=tk.RIGHT)
-
-        # Middle row - Position and condition
-        middle_row = ctk.CTkFrame(info_frame, fg_color="transparent")
-        middle_row.pack(fill=tk.X, pady=(4, 0))
-
+        Called on window resizes and text-scale changes so chip labels
+        never clip at large font tiers or narrow widths.
+        """
         try:
-            pos_name = player.primary_position.name.replace("_", " ").title()
+            frame = self._chips_frame
+            avail = frame.winfo_width()
+            if _from_resize:
+                # Height-only changes (from our own repacking) must not loop.
+                last = getattr(self, "_chips_w", None)
+                if last is not None and abs(avail - last) < 2:
+                    return
+                self._chips_w = avail
+            btns = list(self._chip_btns.values())
+            if avail < 50:
+                per_row = 4  # not laid out yet; default single row
+            else:
+                need = sum(b.winfo_reqwidth() for b in btns) + 6 * 3
+                per_row = 4 if need <= avail else 2
+            for rf in getattr(self, "_chip_rows", []):
+                try:
+                    rf.pack_forget()
+                    rf.destroy()
+                except Exception:
+                    pass
+            self._chip_rows = []
+            for i in range(0, len(btns), per_row):
+                rf = tk.Frame(frame, bg=self.C_BG)
+                rf.pack(fill='x', pady=(6, 0) if i else 0)
+                self._chip_rows.append(rf)
+                for b in btns[i:i + per_row]:
+                    b.pack(in_=rf, side='left', padx=(0, 6))
         except Exception:
-            pos_name = ""
-        pos_label = ctk.CTkLabel(middle_row, text=pos_name,
-                                 font=(ff, 8), text_color=TEXT_DIM, anchor='w')
-        pos_label.pack(side=tk.LEFT)
+            pass
 
-        condition = getattr(player, 'condition', 100)
-        condition_label = ctk.CTkLabel(middle_row, text=f"{condition}%",
-                                       font=(ff, 8, 'bold'), text_color=TEXT_DIM,
-                                       fg_color=BG, corner_radius=6)
-        condition_label.pack(side=tk.RIGHT, padx=4)
+    def _debounced_search(self):
+        """Rebuild the roster list 180ms after the last keystroke."""
+        if getattr(self, '_search_after', None):
+            try:
+                self.after_cancel(self._search_after)
+            except Exception:
+                pass
+        self._search_after = self.after(180, self._rebuild_roster_list)
 
-        # Bottom row - Archetype and stats
-        bottom_row = ctk.CTkFrame(info_frame, fg_color="transparent")
-        bottom_row.pack(fill=tk.X, pady=(2, 0))
+    def _set_roster_filter(self, key, rebuild=True):
+        self._roster_filter = key
+        for k, b in self._chip_btns.items():
+            if k == key:
+                b.config(bg=self.C_ACCENT, fg='#06231f')
+            else:
+                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+        if rebuild:
+            self._rebuild_roster_list()
 
+    def _player_group(self, player):
+        pos = player.primary_position.name
+        if pos == 'GOALIE':
+            return 'G'
+        if pos in ('LEFT_DEFENSE', 'RIGHT_DEFENSE', 'DEFENSE'):
+            return 'D'
+        return 'F'
+
+    def _pos_short(self, player):
+        mapping = {'LEFT_WING': 'LW', 'CENTER': 'C', 'RIGHT_WING': 'RW',
+                   'LEFT_DEFENSE': 'LD', 'RIGHT_DEFENSE': 'RD',
+                   'DEFENSE': 'D', 'GOALIE': 'G'}
+        return mapping.get(player.primary_position.name,
+                           player.primary_position.name[:2])
+
+    def _rebuild_roster_list(self):
+        # Preserve assignment tracking across rebuilds.
+        old = self.player_widgets
+        self.player_widgets = {}
+        for widget in self._roster_inner.winfo_children():
+            widget.destroy()
+
+        q = self._search_var.get().strip().lower()
+        filt = self._roster_filter
+        players = list(self.forwards) + list(self.defensemen) + list(self.goalies)
+        if filt != "ALL":
+            players = [p for p in players if self._player_group(p) == filt]
+        if q:
+            players = [p for p in players if q in p.full_name.lower()]
+        players.sort(key=lambda p: p.overall_rating(), reverse=True)
+
+        for player in players:
+            self.create_player_row(self._roster_inner, player,
+                                   old.get(getattr(player, 'id', None), {}))
+        # Keep assignment tracking for players hidden by the current
+        # search/filter so their dots survive the next rebuild.
+        for pid, info in old.items():
+            if pid not in self.player_widgets:
+                self.player_widgets[pid] = info
+        self._refresh_selection_visuals()
+
+    def create_player_row(self, parent, player, prev_info):
+        """Sleeper-style player row: face, name + pos pill, big OVR. Click to select."""
+        outer = tk.Frame(parent, bg=self.C_BG)
+        outer.pack(fill='x', pady=3)
+        card = tk.Frame(outer, bg=self.C_CARD)
+        card.pack(fill='x', padx=2, pady=2)
+
+        blank_key = ('blank', 40)
+        blank = self._face_photos.get(blank_key)
+        if blank is None:
+            blank = self._face_blank(40)
+            if blank is not None:
+                self._face_photos[blank_key] = blank
+        face = tk.Label(card, bg=self.C_CARD, bd=0, image=blank)
+        face.image = blank
+        face.pack(side='left', padx=(8, 4), pady=8)
+        self._pending_faces.append((player, face, 40))
+
+        info = tk.Frame(card, bg=self.C_CARD)
+        info.pack(side='left', fill='y', expand=True, pady=8)
+        name_l = tk.Label(info, text=player.full_name, bg=self.C_CARD, fg=self.C_TEXT,
+                          font=self._font(10, 'bold'), anchor='w')
+        name_l.pack(anchor='w')
+        sub = tk.Frame(info, bg=self.C_CARD)
+        sub.pack(anchor='w', pady=(3, 0))
+        pos_l = tk.Label(sub, text=self._pos_short(player), bg=self.C_CARD2,
+                         fg=self.C_SEC, font=self._font(8, 'bold'),
+                         padx=6, pady=2)
+        pos_l.pack(side='left')
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "\u2014"
-        arch_label = ctk.CTkLabel(bottom_row, text=f"Archetype: {arch}",
-                                 font=(ff, 8, 'bold'), text_color=GOLD, anchor='w')
-        arch_label.pack(side=tk.LEFT)
+            arch = ""
+        arch_l = tk.Label(sub, text=arch, bg=self.C_CARD, fg=self.C_TER,
+                          font=self._font(8))
+        arch_l.pack(side='left', padx=(6, 0))
 
-        stats_label = None
-        if hasattr(player, 'stats'):
-            goals = getattr(player.stats, 'goals', 0)
-            assists = getattr(player.stats, 'assists', 0)
-            stats_label = ctk.CTkLabel(bottom_row, text=f"  {goals}G  {assists}A",
-                                       font=(ff, 8), text_color=TEXT_DIM, anchor='w')
-            stats_label.pack(side=tk.LEFT)
+        right = tk.Frame(card, bg=self.C_CARD)
+        right.pack(side='right', padx=(4, 10))
+        ovr_l = tk.Label(right, text=str(player.overall_rating()), bg=self.C_CARD,
+                         fg=self.C_TEXT, font=self._font(18, 'bold'))
+        ovr_l.pack(anchor='e')
+        cond = getattr(player, 'condition', 100)
+        cond_l = tk.Label(right, text=f"{cond}%", bg=self.C_CARD, fg=self.C_TER,
+                          font=self._font(8))
+        cond_l.pack(anchor='e')
 
-        # Store reference for tracking
-        self.player_widgets[player.id] = {
-            'widget': card,
-            'player': player,
-            'position_type': position_type,
-            'assigned_position': None
+        dot = tk.Label(card, text="\u25cf", bg=self.C_CARD, fg=self.C_CARD,
+                       font=self._font(8))
+        dot.pack(side='right', padx=(0, 2))
+
+        bound = [outer, card, face, info, name_l, sub, pos_l, arch_l,
+                 right, ovr_l, cond_l]
+        for w in bound:
+            w.bind('<Button-1>', lambda e, p=player: self._on_row_click(p))
+            w.bind('<Enter>', lambda e, c=card: c.config(bg=self.C_CARD2))
+            w.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD))
+
+        pid = getattr(player, 'id', None)
+        self.player_widgets[pid] = {
+            'outer': outer, 'card': card, 'dot': dot,
+            'assigned_position': (prev_info or {}).get('assigned_position'),
         }
 
-        # Bind drag events to all child widgets
-        drag_widgets = [info_frame, top_row, middle_row, name_label, rating_label,
-                        pos_label, condition_label, bottom_row, arch_label]
-        if stats_label is not None:
-            drag_widgets.append(stats_label)
-        for widget in drag_widgets:
-            widget.bind('<Button-1>', lambda e: self.start_drag(e, player, card))
-            widget.bind('<B1-Motion>', self.on_drag)
-            widget.bind('<ButtonRelease-1>', self.end_drag)
+    def _on_row_click(self, player):
+        sel = self._selection
+        if sel and sel['player'] is player and sel['from_zone'] is None:
+            self._clear_selection()
+            return
+        self._selection = {'player': player, 'from_zone': None}
+        self._refresh_selection_visuals()
+        if hasattr(self, '_sel_hint'):
+            self._sel_hint.config(text=f"Selected: {player.full_name} \u2192 click a slot")
 
-    def create_modern_button(self, parent, text, command, bg='#00ceb8', hover_bg='#00a894'):
-        """Create a modern styled button (CTk)."""
-        if bg == '#00ceb8':
-            button = primary_button(parent, text, command=command)
-        else:
-            button = secondary_button(parent, text, command=command)
-        button.pack(side=tk.LEFT, padx=(0, 10))
+    def _on_matchup_change(self, kind, idx, value):
+        """Persist a 'match to line' dropdown choice onto the team."""
+        try:
+            team = self.app.user_team
+            prefs = getattr(team, 'line_matchups', None)
+            if not isinstance(prefs, dict):
+                prefs = {"F": [None] * 4, "D": [None] * 3}
+                team.line_matchups = prefs
+            n = 4 if kind == 'F' else 3
+            lst = prefs.get(kind)
+            if not isinstance(lst, list) or len(lst) < n:
+                lst = [None] * n
+                prefs[kind] = lst
+            if value.startswith("Opp Line"):
+                lst[idx] = int(value.rsplit(" ", 1)[1])
+            else:
+                lst[idx] = None
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Main layout: slim header, roster panel, unit-switched line area
+    # ------------------------------------------------------------------
+    def _font(self, size, weight=""):
+        """Scale-aware font for this editor (honors Settings -> Font size).
+
+        Returns a live tkinter Font registered with ui_scale: changing
+        the tier resizes open-editor text in place.
+        """
+        fam = getattr(getattr(self, "app", None), "FONT_FAMILY", None) \
+            or getattr(getattr(self, "parent", None), "FONT_FAMILY", "Segoe UI")
+        try:
+            from ui_scale import font as _mkfont
+            return _mkfont(fam, size, weight)
+        except Exception:
+            return (fam, size, weight) if weight else (fam, size)
+
+    def create_clean_interface(self):
+        """Sleeper/FM24-style line editor: everything visible, point-click."""
+        # ---- header ----
+        header = tk.Frame(self, bg=self.C_BG)
+        header.pack(fill=tk.X)
+        tk.Frame(header, bg=self.C_BORDER, height=1).pack(side='bottom', fill='x')
+        tk.Label(header, text="Lines", bg=self.C_BG, fg=self.C_TEXT,
+                 font=self._font(18, 'bold')).pack(
+                     side='left', padx=20, pady=14)
+
+        # Unit segmented control (replaces the 4-tab notebook)
+        seg = tk.Frame(header, bg=self.C_CARD2)
+        seg.pack(side='left', padx=28, pady=10)
+        self._unit_btns = {}
+        for key, label in (("ES", "Even Strength"), ("PP", "Power Play"),
+                           ("PK", "Penalty Kill")):
+            b = tk.Label(seg, text=label, bg=self.C_CARD2, fg=self.C_SEC,
+                         font=self._font(11, 'bold'),
+                         padx=18, pady=8, cursor='hand2')
+            b.pack(side='left', padx=2, pady=2)
+            b.bind('<Button-1>', lambda e, k=key: self.switch_unit(k))
+            self._unit_btns[key] = b
+
+        # Right-side actions
+        actions = tk.Frame(header, bg=self.C_BG)
+        actions.pack(side='right', padx=20)
+        self.create_modern_button(actions, "View", self._open_view_menu,
+                                  kind='ghost')
+        self.create_modern_button(actions, "Auto Best",
+                                  self.auto_populate_best_lines, kind='secondary')
+        self.create_modern_button(actions, "Reset", self.reset_lines,
+                                  kind='ghost')
+        self.create_modern_button(actions, "Save Lines",
+                                  self.save_lines_with_feedback, kind='primary')
+
+        # ---- team strip ----
+        self.create_team_overview(self)
+
+        # ---- body ----
+        body = tk.Frame(self, bg=self.C_BG)
+        body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 8))
+
+        self.create_roster_panel(body)
+
+        unit_wrap = tk.Frame(body, bg=self.C_BG)
+        unit_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_unit_views(unit_wrap)
+        self._paint_unit_buttons()
+
+        # ---- footer ----
+        footer = tk.Frame(self, bg=self.C_BG)
+        footer.pack(fill=tk.X, side='bottom', padx=20, pady=(0, 12))
+        self._footer_hint = tk.Label(
+            footer,
+            text=("Click a player, then a slot to assign  \u00b7  "
+                  "Click a slotted player to move him  \u00b7  "
+                  "Double-click a slot (or \u00d7) to clear  \u00b7  Esc cancels"),
+            bg=self.C_BG, fg=self.C_TER, font=self._font(9))
+        self._footer_hint.pack(side='left')
+        self._footer_warn = tk.Label(footer, text="", bg=self.C_BG,
+                                     fg=self.C_AMBER,
+                                     font=self._font(9, 'bold'))
+        self._footer_warn.pack(side='right')
+        # Wrap the hint instead of letting it force the window's minimum
+        # width at large font tiers: base it on the *window* width (not the
+        # footer's own width, which is already inflated when overflowing),
+        # reserving room for the warning label.
+        def _wrap_hint(_e=None):
+            try:
+                win_w = self.winfo_toplevel().winfo_width()
+                if win_w < 50:
+                    return
+                self._footer_hint.config(wraplength=max(200, win_w - 260))
+            except Exception:
+                pass
+        footer.bind("<Configure>", _wrap_hint, add="+")
+        self.after_idle(_wrap_hint)
+
+        self.bind('<Escape>', lambda e: self._clear_selection())
+
+    def create_modern_button(self, parent, text, command, kind='primary'):
+        """Sleeper-style button: primary teal / secondary elevated / ghost."""
+        styles = {
+            'primary':   {'bg': self.C_ACCENT, 'fg': '#06231f', 'hover': '#3adcc9'},
+            'secondary': {'bg': self.C_CARD2, 'fg': self.C_TEXT, 'hover': '#2b2b31'},
+            'ghost':     {'bg': self.C_BG, 'fg': self.C_SEC, 'hover': self.C_CARD2},
+        }
+        st = styles.get(kind, styles['primary'])
+        button = tk.Button(parent, text=text, command=command,
+                           bg=st['bg'], fg=st['fg'], border=0, relief='flat',
+                           font=self._font(10, 'bold'),
+                           padx=16, pady=8, cursor='hand2')
+        button.pack(side=tk.LEFT, padx=(0, 8))
+        button.bind('<Enter>', lambda e: button.config(bg=st['hover']))
+        button.bind('<Leave>', lambda e: button.config(bg=st['bg']))
         return button
 
     # ------------------------------------------------------------------
-    # Best lines / save / notifications
+    # Unit views (all zones are built up-front; switchers show one group)
     # ------------------------------------------------------------------
+
+    def _build_unit_views(self, parent):
+        self._unit_frames = {}
+        self._rating_bigs = []     # big-numeral rating labels (view pref)
+        self._icetime_labels = []  # ice-time hint labels (view pref)
+        self._chem_labels = []     # chemistry detail labels (view pref)
+        self.forward_vars = []
+        self.defense_vars = []
+        self.goalie_vars = []
+        self.powerplay_vars = []
+        self.penalty_kill_vars = []
+        self.forward_rating_labels = {}
+        self.forward_rating_big = {}
+        self.defense_rating_labels = {}
+        self.defense_rating_big = {}
+        self.pp_rating_big = {}
+        self.pk_rating_big = {}
+
+        self._unit_frames["ES"] = self._build_es_view(parent)
+        self._unit_frames["PP"] = self._build_pp_view(parent)
+        self._unit_frames["PK"] = self._build_pk_view(parent)
+        self._current_unit = "ES"
+        self._unit_frames["ES"].pack(fill='both', expand=True)
+        self._apply_view_prefs()
+        # Zones now exist: drop any partial cache built during roster setup.
+        self._zone_cache = None
+
+    def _paint_unit_buttons(self):
+        for key, b in self._unit_btns.items():
+            if key == self._current_unit:
+                b.config(bg=self.C_ACCENT, fg='#06231f')
+            else:
+                b.config(bg=self.C_CARD2, fg=self.C_SEC)
+
+    def switch_unit(self, unit):
+        if unit == getattr(self, '_current_unit', None):
+            return
+        self._unit_frames[self._current_unit].pack_forget()
+        self._unit_frames[unit].pack(fill='both', expand=True)
+        self._current_unit = unit
+        self._paint_unit_buttons()
+        self._clear_selection()
+
+    def _unit_card(self, parent, kicker):
+        """Sleeper card for a line/pair/unit. Returns (body, big, detail, ice).
+
+        3D texture: 1px top highlight + 2px bottom shadow make the card
+        read as raised above the background, Sleeper-style.
+        """
+        card = tk.Frame(parent, bg=self.C_CARD)
+        card.pack(fill=tk.X, pady=(0, 12), padx=2)
+        tk.Frame(card, bg='#2e2e36', height=1).pack(fill='x', side='top')
+        top = tk.Frame(card, bg=self.C_CARD)
+        top.pack(fill='x', padx=16, pady=(12, 0))
+        kicker_l = tk.Label(top, text=kicker, bg=self.C_CARD, fg=self.C_TER,
+                            font=self._font(11, 'bold'))
+        kicker_l.pack(side='left')
+        card._kicker = kicker_l
+        big = tk.Label(top, text="--", bg=self.C_CARD, fg=self.C_TEXT,
+                       font=self._font(26, 'bold'))
+        big.pack(side='right')
+        big._pk = {'side': 'right'}
+        self._rating_bigs.append(big)
+        detail = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_SEC,
+                          font=self._font(9))
+        detail.pack(anchor='w', padx=16)
+        detail._pk = {'anchor': 'w', 'padx': 16}
+        self._chem_labels.append(detail)
+        ice = tk.Label(card, text="", bg=self.C_CARD, fg=self.C_TER,
+                       font=self._font(9, 'italic'))
+        ice.pack(anchor='w', padx=16, pady=(0, 4))
+        ice._pk = {'anchor': 'w', 'padx': 16, 'pady': (0, 4)}
+        self._icetime_labels.append(ice)
+        body = tk.Frame(card, bg=self.C_CARD)
+        body.pack(fill='x', padx=12, pady=(4, 14))
+        tk.Frame(card, bg='#08080a', height=2).pack(fill='x', side='bottom')
+        return body, big, detail, ice
+
+    def _build_es_view(self, parent):
+        """One scroll: forwards, defense, goalies. Each group gets an
+        FM24-style full-width selector bar with a dropdown (Line 1-4 /
+        Pair 1-3); one card shows at a time below it. All zones are
+        built up-front so save/load/auto-populate keep working."""
+        frame = tk.Frame(parent, bg=self.C_BG)
+        inner = self._make_scrollable(frame)
+
+        # ---- Forwards (own group frame: swapping the visible card can never
+        # reorder the sections -- forwards stay on top, always) ----
+        self._fwd_group = tk.Frame(inner, bg=self.C_BG)
+        self._fwd_group.pack(fill='x')
+        self._fwd_selector_mb = self._section_selector(
+            self._fwd_group, "FORWARD LINES", 'F')
+        self._fwd_cards = []
+        es_ice = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
+        for i in range(4):
+            body, big, detail, ice = self._unit_card(
+                self._fwd_group,
+                f"LINE {i+1} \u00b7 {self.get_line_type_name(i).upper()}")
+            self.forward_rating_big[i] = big
+            self.forward_rating_labels[i] = detail
+            ice.config(text=f"Suggested ice time: {es_ice[i]}")
+            slots = []
+            for j, pos in enumerate(("LW", "C", "RW")):
+                slot = self.create_slot(body, f"forward_line_{i}_pos_{j}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                slots.append(slot)
+            self.forward_vars.append(slots)
+            card = body.master
+            self._fwd_cards.append(card)
+            if i != 0:
+                card.pack_forget()
+        self._fwd_shown = 0
+        self._sync_selector_text('F')
+        self._sync_match_dropdown('F')
+
+        # ---- Defense (own group frame: locked between forwards and goalies) ----
+        self._def_group = tk.Frame(inner, bg=self.C_BG)
+        self._def_group.pack(fill='x')
+        self._def_selector_mb = self._section_selector(
+            self._def_group, "DEFENSE PAIRINGS", 'D')
+        self._def_cards = []
+        d_ice = ["24-28 min", "20-24 min", "16-20 min"]
+        for i in range(3):
+            body, big, detail, ice = self._unit_card(
+                self._def_group,
+                f"PAIR {i+1} \u00b7 {self.get_defense_pair_name(i).upper()}")
+            self.defense_rating_big[i] = big
+            self.defense_rating_labels[i] = detail
+            ice.config(text=f"Suggested ice time: {d_ice[i]}")
+            slots = []
+            for j, pos in enumerate(("LD", "RD")):
+                slot = self.create_slot(body, f"defense_pair_{i}_pos_{j}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                slots.append(slot)
+            self.defense_vars.append(slots)
+            card = body.master
+            self._def_cards.append(card)
+            if i != 0:
+                card.pack_forget()
+        self._def_shown = 0
+        self._sync_selector_text('D')
+        self._sync_match_dropdown('D')
+
+        # ---- Goalies (own group frame: locked at the bottom, never moves) ----
+        self._goalie_group = tk.Frame(inner, bg=self.C_BG)
+        self._goalie_group.pack(fill='x')
+        self._section_selector(self._goalie_group, "GOALIES", None)
+        body, big, detail, ice = self._unit_card(self._goalie_group, "GOALIES")
+        body.master._kicker.pack_forget()  # bar already titles this card
+        for w in (big, detail, ice):
+            w.pack_forget()
+            w._force_hidden = True
+        for i, role in enumerate(("Starter", "Backup")):
+            slot = self.create_slot(body, f"goalie_role_{i}", role)
+            slot.pack(side='left', fill='both', expand=True, padx=4)
+            self.goalie_vars.append(slot)
+        return frame
+
+    def _section_selector(self, parent, title, kind):
+        """FM24-style full-width selector bar: section title + dropdown.
+
+        kind 'F'/'D' attaches a Line/Pair dropdown; None renders a
+        static title bar (goalies). Returns the Menubutton or None.
+        """
+        bar = tk.Frame(parent, bg=self.C_CARD2)
+        bar.pack(fill='x', padx=2, pady=(0, 6))
+        tk.Frame(bar, bg='#2e2e36', height=1).pack(fill='x', side='top')
+        row = tk.Frame(bar, bg=self.C_CARD2)
+        row.pack(fill='x', padx=12, pady=8)
+        tk.Label(row, text=title, bg=self.C_CARD2, fg=self.C_TER,
+                 font=self._font(10, 'bold')).pack(side='left')
+        mb = None
+        if kind:
+            wrap = tk.Frame(row, bg='#3a3a42')
+            wrap.pack(side='left', padx=(12, 0))
+            mb = tk.Menubutton(
+                wrap, text="", bg=self.C_BG, fg=self.C_TEXT,
+                activebackground='#2b2b31', activeforeground=self.C_ACCENT,
+                font=self._font(10, 'bold'),
+                relief='flat', bd=0, padx=12, pady=5, cursor='hand2',
+                indicatoron=0)
+            mb.pack(padx=1, pady=1)
+            menu = tk.Menu(mb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
+                           activebackground=self.C_ACCENT,
+                           activeforeground='#06231f',
+                           font=self._font(10))
+            menu.config(postcommand=lambda m=menu,
+                        k=kind: self._refresh_unit_menu(m, k))
+            mb.config(menu=menu)
+            # Tiny matchup dropdown on the opposite side: which opponent
+            # forward line the SHOWN line/pair wants to face at home.
+            # Synced on every line/pair switch.
+            mwrap = tk.Frame(row, bg='#3a3a42')
+            mwrap.pack(side='right')
+            mmb = tk.Menubutton(
+                mwrap, text="vs Auto \u25be", bg=self.C_BG, fg=self.C_SEC,
+                activebackground='#2b2b31', activeforeground=self.C_ACCENT,
+                font=self._font(9),
+                relief='flat', bd=0, padx=8, pady=4, cursor='hand2',
+                indicatoron=0)
+            mmb.pack(padx=1, pady=1)
+            mmenu = tk.Menu(mmb, tearoff=0, bg=self.C_CARD2, fg=self.C_TEXT,
+                            activebackground=self.C_ACCENT,
+                            activeforeground='#06231f',
+                            font=self._font(10))
+            mmenu.config(postcommand=lambda m=mmenu,
+                         k=kind: self._refresh_match_menu(m, k))
+            mmb.config(menu=mmenu)
+            if kind == 'F':
+                self._fwd_match_mb = mmb
+            else:
+                self._def_match_mb = mmb
+        tk.Frame(bar, bg='#08080a', height=2).pack(fill='x', side='bottom')
+        return mb
+
+    def _sync_selector_text(self, kind):
+        """Update the selector dropdown button to the shown line/pair."""
+        if kind == 'F':
+            i = self._fwd_shown
+            self._fwd_selector_mb.config(
+                text=f"Line {i+1} \u00b7 "
+                     f"{self.get_line_type_name(i).title()} \u25be")
+        else:
+            i = self._def_shown
+            self._def_selector_mb.config(
+                text=f"Pair {i+1} \u00b7 "
+                     f"{self.get_defense_pair_name(i).title()} \u25be")
+
+    def _refresh_unit_menu(self, menu, kind):
+        """Rebuild the Line 1-4 / Pair 1-3 dropdown with live ratings."""
+        if kind == 'F':
+            n, shown = 4, self._fwd_shown
+            title, bigs, switch = ('Line', self.forward_rating_big,
+                                   self.show_forward_line)
+        else:
+            n, shown = 3, self._def_shown
+            title, bigs, switch = ('Pair', self.defense_rating_big,
+                                   self.show_defense_pair)
+        menu.delete(0, 'end')
+        self._menu_var = tk.IntVar(value=shown)
+        for i in range(n):
+            r = bigs[i].cget('text')
+            label = f"{title} {i+1}" + (f"  \u00b7  {r}" if r != '--' else "")
+            menu.add_radiobutton(label=label, variable=self._menu_var,
+                                 value=i, command=lambda i=i: switch(i))
+
+    def _match_pref(self, kind, idx):
+        """Current matchup pref (1-4) or None for team line idx."""
+        try:
+            prefs = getattr(self.app.user_team, 'line_matchups', None) or {}
+            cur = (prefs.get(kind) or [])[idx]
+            return cur if isinstance(cur, int) and 1 <= cur <= 4 else None
+        except Exception:
+            return None
+
+    def _sync_match_dropdown(self, kind):
+        """Sync the tiny 'vs' dropdown to the currently shown line/pair."""
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        cur = self._match_pref(kind, shown)
+        mb = self._fwd_match_mb if kind == 'F' else self._def_match_mb
+        mb.config(text=f"vs {('Opp ' + str(cur)) if cur else 'Auto'} \u25be")
+
+    def _refresh_match_menu(self, menu, kind):
+        """Rebuild the tiny matchup menu for the shown line/pair."""
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        cur = self._match_pref(kind, shown)
+        menu.delete(0, 'end')
+        var = tk.IntVar(value=cur or 0)
+        menu.add_radiobutton(
+            label="Auto (coach decides)", variable=var, value=0,
+            command=lambda: self._set_match_and_sync(kind, None))
+        for n in range(1, 5):
+            menu.add_radiobutton(
+                label=f"Opp Line {n}", variable=var, value=n,
+                command=lambda n=n: self._set_match_and_sync(kind, n))
+
+    def _set_match_and_sync(self, kind, value):
+        shown = self._fwd_shown if kind == 'F' else self._def_shown
+        self._on_matchup_change(
+            kind, shown,
+            f"Opp Line {value}" if value else "Auto")
+        self._sync_match_dropdown(kind)
+
+    def show_forward_line(self, i):
+        """Swap the visible forward-line card (selector dropdown)."""
+        if i == self._fwd_shown:
+            return
+        self._fwd_cards[self._fwd_shown].pack_forget()
+        self._fwd_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
+        self._fwd_shown = i
+        self._sync_selector_text('F')
+        self._sync_match_dropdown('F')
+        self._clear_selection()
+
+    def show_defense_pair(self, i):
+        """Swap the visible defense-pair card (selector dropdown)."""
+        if i == self._def_shown:
+            return
+        self._def_cards[self._def_shown].pack_forget()
+        self._def_cards[i].pack(fill=tk.X, pady=(0, 12), padx=2)
+        self._def_shown = i
+        self._sync_selector_text('D')
+        self._sync_match_dropdown('D')
+        self._clear_selection()
+
+    def _build_pp_view(self, parent):
+        frame = tk.Frame(parent, bg=self.C_BG)
+        inner = self._make_scrollable(frame)
+        for i in range(2):
+            body, big, detail, ice = self._unit_card(inner, f"POWER PLAY {i+1}")
+            self.pp_rating_big[i] = big
+            for w in (detail, ice):
+                w.pack_forget()
+                w._force_hidden = True
+            unit_slots = []
+            for pos in ("LW", "C", "RW", "LD", "RD"):
+                slot = self.create_slot(body, f"powerplay_{i}_{pos}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                unit_slots.append(slot)
+            self.powerplay_vars.append(unit_slots)
+        return frame
+
+    def _build_pk_view(self, parent):
+        frame = tk.Frame(parent, bg=self.C_BG)
+        inner = self._make_scrollable(frame)
+        for i in range(2):
+            body, big, detail, ice = self._unit_card(inner, f"PENALTY KILL {i+1}")
+            self.pk_rating_big[i] = big
+            for w in (detail, ice):
+                w.pack_forget()
+                w._force_hidden = True
+            unit_slots = []
+            for pos in ("LW", "RW", "LD", "RD"):
+                slot = self.create_slot(body, f"penalty_kill_{i}_{pos}", pos)
+                slot.pack(side='left', fill='both', expand=True, padx=4)
+                unit_slots.append(slot)
+            self.penalty_kill_vars.append(unit_slots)
+        return frame
+
     def auto_populate_best_lines(self):
         """Automatically populate all lines with the best available players"""
         # Clear all current assignments
         self.clear_all_assignments()
-
+        
         # Get best lineup using the existing algorithm
-        best_lineup = best_lines(self.parent.user_team)
-
+        best_lineup = best_lines(self.app.user_team)
+        
         # Populate forward lines
         forward_lines = best_lineup.get('Forwards', [])
         for line_idx, line in enumerate(forward_lines[:4]):  # Max 4 lines
@@ -10732,7 +18407,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         drop_zone = self.find_drop_zone_by_id(zone_id)
                         if drop_zone:
                             self.assign_player_to_zone(player, drop_zone)
-
+        
         # Populate defense pairs
         defense_pairs = best_lineup.get('Defense', [])
         for pair_idx, pair in enumerate(defense_pairs[:3]):  # Max 3 pairs
@@ -10743,7 +18418,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         drop_zone = self.find_drop_zone_by_id(zone_id)
                         if drop_zone:
                             self.assign_player_to_zone(player, drop_zone)
-
+        
         # Populate goalies
         goalies_list = best_lineup.get('Goalies', [])
         for role_idx, player in enumerate(goalies_list[:2]):  # Max 2 goalies
@@ -10752,12 +18427,12 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                 drop_zone = self.find_drop_zone_by_id(zone_id)
                 if drop_zone:
                     self.assign_player_to_zone(player, drop_zone)
-
+        
         # Populate Power Play units
         for pp_unit in range(2):  # PP1 and PP2
             pp_key = f'PP{pp_unit + 1}'
             pp_data = best_lineup.get(pp_key, {})
-
+            
             # PP Forwards (LW, C, RW)
             pp_forwards = pp_data.get('Forwards', [])
             position_names = ['LW', 'C', 'RW']
@@ -10767,7 +18442,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-
+            
             # PP Defense (LD, RD)
             pp_defense = pp_data.get('Defense', [])
             defense_names = ['LD', 'RD']
@@ -10777,12 +18452,12 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-
+        
         # Populate Penalty Kill units
         for pk_unit in range(2):  # PK1 and PK2
             pk_key = f'PK{pk_unit + 1}'
             pk_data = best_lineup.get(pk_key, {})
-
+            
             # PK Forwards (LW, RW - only 2 forwards in PK)
             pk_forwards = pk_data.get('Forwards', [])
             forward_names = ['LW', 'RW']
@@ -10792,7 +18467,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-
+            
             # PK Defense (LD, RD)
             pk_defense = pk_data.get('Defense', [])
             defense_names = ['LD', 'RD']
@@ -10802,90 +18477,100 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     drop_zone = self.find_drop_zone_by_id(zone_id)
                     if drop_zone:
                         self.assign_player_to_zone(player, drop_zone)
-
+        
         # Show success message
-        self.show_modern_notification("Best Lines Set",
-                                      "Your optimal lineup with special teams has been automatically configured!",
-                                      "success")
-
+        self.show_modern_notification("✅ Best Lines Set", "Your optimal lineup with special teams has been automatically configured!", "success")
+        
         # Refresh visual indicators
         self.refresh_roster_panel()
-
+    
     def save_lines_with_feedback(self):
         """Save the current lineup with user feedback"""
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
-            self.parent.user_team.lineup = flatten_lineup(self.lineup)
-
+            self.app.user_team.lineup = flatten_lineup(self.lineup)
+            
             # Show success notification
-            self.show_modern_notification("Lines Saved",
-                                          "Your lineup has been saved successfully!",
-                                          "success")
-
+            self.show_modern_notification("💾 Lines Saved", "Your lineup has been saved successfully!", "success")
+            
         except Exception as e:
             # Show error notification
-            self.show_modern_notification("Save Failed",
-                                          f"Error saving lineup: {str(e)}", "error")
-
+            self.show_modern_notification("❌ Save Failed", f"Error saving lineup: {str(e)}", "error")
+    
     def show_modern_notification(self, title, message, notification_type="info"):
-        """Show a modern notification popup (CTk, no emoji)."""
-        ff = self.parent.FONT_FAMILY
-        notification = ctk.CTkToplevel(self)
+        """Show a modern notification popup"""
+        # Create notification window
+        notification = InGamePopup(self)
         notification.title(title)
-        notification.geometry("360x180")
-        notification.configure(fg_color=PANEL)
+        notification.geometry("350x150")
+        notification.configure(bg='#16161a')
         notification.resizable(False, False)
-
+        
         # Center the notification
         notification.transient(self)
         notification.grab_set()
-
-        # Accent color based on type (dark theme)
-        accents = {
-            "success": GREEN,
-            "error": RED,
-            "info": TEAL,
+        
+        # Color scheme based on type (dark theme)
+        colors = {
+            "success": {"bg": "#1d2b22", "border": "#3fb950", "icon": "✅"},
+            "error": {"bg": "#2b1d1f", "border": "#00ceb8", "icon": "❌"},
+            "info": {"bg": "#1b2630", "border": "#17a2b8", "icon": "ℹ️"}
         }
-        accent = accents.get(notification_type, TEAL)
-
-        accent_bar = ctk.CTkFrame(notification, fg_color=accent, corner_radius=0, height=6)
-        accent_bar.pack(fill=tk.X)
-
-        ctk.CTkLabel(notification, text=title, font=(ff, 13, 'bold'),
-                      text_color=TEXT).pack(pady=(16, 6))
-        ctk.CTkLabel(notification, text=message, font=(ff, 10),
-                      text_color=TEXT_DIM, wraplength=300,
-                      justify="center").pack(padx=16)
-
-        secondary_button(notification, "OK",
-                         command=notification.destroy).pack(pady=14)
-
+        
+        color_scheme = colors.get(notification_type, colors["info"])
+        
+        # Header
+        header_frame = tk.Frame(notification, bg=color_scheme["border"], height=40)
+        header_frame.pack(fill=tk.X)
+        header_frame.pack_propagate(False)
+        
+        header_content = tk.Frame(header_frame, bg=color_scheme["border"])
+        header_content.pack(expand=True, fill='both', padx=15, pady=8)
+        
+        tk.Label(header_content, text=f"{color_scheme['icon']} {title}", 
+                bg=color_scheme["border"], fg='white',
+                font=self._font(12, 'bold')).pack(side=tk.LEFT)
+        
+        # Content
+        content_frame = tk.Frame(notification, bg=color_scheme["bg"])
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=15)
+        
+        tk.Label(content_frame, text=message, bg=color_scheme["bg"], fg='#ffffff',
+                font=self._font(10), wraplength=300).pack()
+        
+        # OK button
+        button_frame = tk.Frame(content_frame, bg=color_scheme["bg"])
+        button_frame.pack(pady=(15, 0))
+        
+        ok_button = tk.Button(button_frame, text="OK", command=notification.destroy,
+                             bg=color_scheme["border"], fg='white', border=0, relief='flat',
+                             font=self._font(10, 'bold'),
+                             padx=20, pady=5, cursor='hand2')
+        ok_button.pack()
+        
         # Auto-close after 3 seconds
         notification.after(3000, notification.destroy)
-
-    # ------------------------------------------------------------------
-    # Drop-zone plumbing (logic unchanged; widget calls adapted to CTk)
-    # ------------------------------------------------------------------
+    
     def clear_all_assignments(self):
         """Clear all player assignments from all drop zones"""
         for widget in self.winfo_children():
             self.clear_assignments_recursive(widget)
-
+        
         # Reset player widget tracking
         for player_id, widget_info in self.player_widgets.items():
             widget_info['assigned_position'] = None
-
+    
     def clear_assignments_recursive(self, widget):
         """Recursively clear all assignments"""
         if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
             if widget.assigned_player:
                 self.clear_drop_zone(widget, widget.zone_id)
-
+        
         # Check children
         for child in widget.winfo_children():
             self.clear_assignments_recursive(child)
-
+    
     def find_drop_zone_by_id(self, zone_id):
         """Find a drop zone by its ID"""
         for widget in self.winfo_children():
@@ -10893,142 +18578,19 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             if found:
                 return found
         return None
-
+    
     def find_drop_zone_by_id_recursive(self, widget, zone_id):
         """Recursively find a drop zone by ID"""
         if hasattr(widget, 'zone_id') and widget.zone_id == zone_id:
             return widget
-
+        
         # Check children
         for child in widget.winfo_children():
             found = self.find_drop_zone_by_id_recursive(child, zone_id)
             if found:
                 return found
         return None
-
-    # ------------------------------------------------------------------
-    # Line tabs
-    # ------------------------------------------------------------------
-    def _line_tab_scroll(self, tab_name):
-        """Scrollable container inside a line tab."""
-        return ctk.CTkScrollableFrame(self.notebook.tab(tab_name), fg_color="transparent")
-
-    def create_forwards_tab(self):
-        """Create the forwards tab with horizontal LW-C-RW layout and scrolling"""
-        ff = self.parent.FONT_FAMILY
-        scroll = self._line_tab_scroll("Forwards")
-        scroll.pack(fill="both", expand=True)
-
-        self.forward_vars = []
-        ice_times = ["22-25 min", "18-22 min", "12-16 min", "8-12 min"]
-
-        for i in range(4):
-            # Line card with header
-            line_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
-            line_card.pack(fill=tk.X, pady=(0, 10), padx=4)
-
-            header = ctk.CTkFrame(line_card, fg_color="transparent")
-            header.pack(fill=tk.X, padx=15, pady=(12, 4))
-            ctk.CTkLabel(header, text=f"Line {i+1} - {self.get_line_type_name(i)}",
-                          font=(ff, 12, 'bold'), text_color=TEXT,
-                          anchor="w").pack(side=tk.LEFT)
-
-            # Line rating display (updated when players are selected)
-            rating_label = ctk.CTkLabel(header, text="Line Rating: --",
-                                        font=(ff, 9, 'bold'), text_color=TEXT_DIM,
-                                        anchor="e")
-            rating_label.pack(side=tk.RIGHT)
-            if not hasattr(self, 'forward_rating_labels'):
-                self.forward_rating_labels = {}
-            self.forward_rating_labels[i] = rating_label
-
-            ctk.CTkLabel(line_card, text=f"Suggested Ice Time: {ice_times[i]}",
-                          font=(ff, 9, 'italic'), text_color=TEXT_FAINT,
-                          anchor="w").pack(anchor="w", padx=15, pady=(0, 6))
-
-            # Horizontal position layout: LW - C - RW
-            positions_frame = ctk.CTkFrame(line_card, fg_color="transparent")
-            positions_frame.pack(fill=tk.X, padx=10, pady=(0, 12))
-
-            positions = ["Left Wing", "Center", "Right Wing"]
-            line_vars = []
-
-            for j, position in enumerate(positions):
-                # Create position column
-                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-
-                # Position label
-                ctk.CTkLabel(pos_column, text=position,
-                              font=(ff, 10, 'bold'), text_color=TEXT_DIM,
-                              anchor="w").pack(anchor="w", pady=(0, 5))
-
-                # Drop zone for player
-                drop_zone = self.create_drop_zone(pos_column, f"forward_line_{i}_pos_{j}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-
-                line_vars.append(drop_zone)
-
-            self.forward_vars.append(line_vars)
-
-    def create_defense_tab(self):
-        """Create the defense tab with horizontal LD-RD layout and scrolling"""
-        ff = self.parent.FONT_FAMILY
-        scroll = self._line_tab_scroll("Defense")
-        scroll.pack(fill="both", expand=True)
-
-        self.defense_vars = []
-        ice_times = ["24-28 min", "20-24 min", "16-20 min"]
-
-        for i in range(3):
-            # Pair card with header
-            pair_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
-            pair_card.pack(fill=tk.X, pady=(0, 10), padx=4)
-
-            header = ctk.CTkFrame(pair_card, fg_color="transparent")
-            header.pack(fill=tk.X, padx=15, pady=(12, 4))
-            ctk.CTkLabel(header, text=f"Defense Pair {i+1} - {self.get_defense_pair_name(i)}",
-                          font=(ff, 12, 'bold'), text_color=TEXT,
-                          anchor="w").pack(side=tk.LEFT)
-
-            # Pair rating display
-            rating_label = ctk.CTkLabel(header, text="Pair Rating: --",
-                                        font=(ff, 9, 'bold'), text_color=TEXT_DIM,
-                                        anchor="e")
-            rating_label.pack(side=tk.RIGHT)
-            if not hasattr(self, 'defense_rating_labels'):
-                self.defense_rating_labels = {}
-            self.defense_rating_labels[i] = rating_label
-
-            ctk.CTkLabel(pair_card, text=f"Suggested Ice Time: {ice_times[i]}",
-                          font=(ff, 9, 'italic'), text_color=TEXT_FAINT,
-                          anchor="w").pack(anchor="w", padx=15, pady=(0, 6))
-
-            # Horizontal position layout: LD - RD
-            positions_frame = ctk.CTkFrame(pair_card, fg_color="transparent")
-            positions_frame.pack(fill=tk.X, padx=10, pady=(0, 12))
-
-            positions = ["Left Defense", "Right Defense"]
-            pair_vars = []
-
-            for j, position in enumerate(positions):
-                # Create position column
-                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-
-                # Position label
-                ctk.CTkLabel(pos_column, text=position,
-                              font=(ff, 10, 'bold'), text_color=TEXT_DIM,
-                              anchor="w").pack(anchor="w", pady=(0, 5))
-
-                # Drop zone for player
-                drop_zone = self.create_drop_zone(pos_column, f"defense_pair_{i}_pos_{j}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=20)
-
-                pair_vars.append(drop_zone)
-
-            self.defense_vars.append(pair_vars)
-
+    
     def get_line_type_name(self, line_index):
         """Get descriptive name for each line"""
         line_types = ["Top Line", "Second Line", "Third Line", "Fourth Line"]
@@ -11062,121 +18624,165 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         except Exception:
             return 0.0
 
-    def create_drop_zone(self, parent, zone_id):
-        """Create a drop zone for players"""
-        ff = self.parent.FONT_FAMILY
-        drop_frame = ctk.CTkFrame(parent, fg_color=self.DROP_BG, corner_radius=10, height=70)
-        drop_frame.pack_propagate(False)  # Maintain size
+    
+    # ------------------------------------------------------------------
+    # Slots + point-click selection (replaces drag and drop)
+    # ------------------------------------------------------------------
 
-        # Subtle placeholder
-        placeholder = ctk.CTkLabel(drop_frame, text="Drop Player Here",
-                                   font=(ff, 9), text_color=TEXT_FAINT)
-        placeholder.pack(expand=True, fill='both', padx=10, pady=10)
+    def create_slot(self, parent, zone_id, pos_label):
+        """A line slot. Click a selected player, then the slot, to assign."""
+        outer = tk.Frame(parent, bg=self.C_BORDER)
+        inner = tk.Frame(outer, bg=self.C_CARD)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+        # 3D edge: 1px top highlight survives content re-renders.
+        edge = tk.Frame(inner, bg='#2e2e36', height=1)
+        edge.pack(fill='x', side='top')
+        edge._is_edge = True
+        outer.zone_id = zone_id
+        outer.assigned_player = None
+        outer._inner = inner
+        outer._pos_label = pos_label
+        self._render_slot_empty(outer)
+        return outer
 
-        # Bind drop events and hover effects
-        for widget in [drop_frame, placeholder]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_frame, zone_id))
-            widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_frame))
-            widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_frame))
+    def _clear_slot_inner(self, inner):
+        """Destroy slot content widgets but keep the 3D edge highlight."""
+        for w in inner.winfo_children():
+            if getattr(w, '_is_edge', False):
+                continue
+            w.destroy()
 
-        # Store zone info
-        drop_frame.zone_id = zone_id
-        drop_frame.assigned_player = None
-        drop_frame.placeholder = placeholder
-        drop_frame.original_bg = self.DROP_BG
+    def _render_slot_empty(self, slot):
+        inner = slot._inner
+        self._clear_slot_inner(inner)
+        ph = tk.Frame(inner, bg=self.C_CARD)
+        ph.pack(fill='both', expand=True)
+        pos_l = tk.Label(ph, text=slot._pos_label, bg=self.C_CARD, fg=self.C_TER,
+                         font=self._font(12, 'bold'))
+        pos_l.pack(expand=True, pady=(14, 0))
+        emp_l = tk.Label(ph, text="Empty", bg=self.C_CARD, fg=self.C_TER,
+                         font=self._font(8))
+        emp_l.pack(expand=True, pady=(0, 14))
+        for w in (ph, pos_l, emp_l):
+            w.bind('<Button-1>', lambda e, s=slot: self._on_slot_click(s))
+            w.bind('<Enter>', lambda e, s=slot: self._on_slot_hover(s, True))
+            w.bind('<Leave>', lambda e, s=slot: self._on_slot_hover(s, False))
+        inner.bind('<Button-1>', lambda e, s=slot: self._on_slot_click(s))
 
-        return drop_frame
+    def _on_slot_hover(self, slot, entering):
+        if (self._selection and self._selection['player'] is not None
+                and slot.assigned_player is None):
+            slot.config(bg=self.C_ACCENT if entering else self.C_BORDER)
 
-    def on_drop_zone_enter(self, drop_zone):
-        """Handle mouse entering drop zone during drag"""
-        if self.drag_data["item"] and not drop_zone.assigned_player:
-            drop_zone.configure(fg_color=self.DROP_HOVER)  # Teal highlight
-
-    def on_drop_zone_leave(self, drop_zone):
-        """Handle mouse leaving drop zone"""
-        if not drop_zone.assigned_player:
-            drop_zone.configure(fg_color=drop_zone.original_bg)
-
-    def start_drag(self, event, player, widget):
-        """Start dragging a player"""
-        self.drag_data["item"] = player
-        self.drag_data["source"] = widget
-        widget.configure(border_width=2, border_color=TEAL)
-        try:
-            self.configure(cursor='plus')
-        except Exception:
-            pass
-
-    def on_drag(self, event):
-        """Handle drag motion"""
-        if self.drag_data["item"]:
-            # Update cursor position
-            pass
-
-    def end_drag(self, event):
-        """Handle end of drag - check for drop targets"""
-        if not self.drag_data["item"]:
+    def _on_slot_click(self, slot):
+        sel = self._selection
+        if sel is None or sel['player'] is None:
+            # No selection: pick up the slotted player for a move/swap.
+            if slot.assigned_player is not None:
+                self._selection = {'player': slot.assigned_player,
+                                   'from_zone': slot}
+                self._refresh_selection_visuals()
+                if hasattr(self, '_sel_hint'):
+                    self._sel_hint.config(
+                        text=f"Moving: {slot.assigned_player.full_name} \u2192 click a slot")
             return
 
-        # Reset source widget appearance
-        if self.drag_data["source"]:
+        player = sel['player']
+        src = sel['from_zone']
+        if src is slot:
+            self._clear_selection()
+            return
+
+        # Hard compatibility (goalies only in net, skaters never in net).
+        position_type = slot.zone_id.split('_')[0]
+        if not self.is_position_compatible(player, position_type):
+            messagebox.showwarning(
+                "Invalid Position",
+                f"{player.full_name} cannot be assigned to this position type.")
+            return
+
+        if slot.assigned_player is None:
+            self.clear_player_assignments(player)
+            self.assign_player_to_zone(player, slot)
+        else:
+            other = slot.assigned_player
+            if other is player:
+                self._clear_selection()
+                return
+            if src is not None:
+                # Swap the two slotted players.
+                self.clear_drop_zone(src, src.zone_id)
+                self.clear_drop_zone(slot, slot.zone_id)
+                self.assign_player_to_zone(player, slot)
+                self.assign_player_to_zone(other, src)
+            else:
+                # Replace: the displaced player returns to the pool.
+                self.clear_player_assignments(player)
+                self.clear_drop_zone(slot, slot.zone_id)
+                self.assign_player_to_zone(player, slot)
+        self._clear_selection()
+        self.refresh_roster_panel()
+
+    def _on_slot_double_click(self, slot):
+        self.clear_drop_zone(slot, slot.zone_id)
+        if self._selection and self._selection.get('from_zone') is slot:
+            self._clear_selection()
+        self.refresh_roster_panel()
+
+    def _clear_selection(self):
+        self._selection = None
+        self._refresh_selection_visuals()
+        if hasattr(self, '_sel_hint'):
+            self._sel_hint.config(text="")
+
+    def _refresh_selection_visuals(self):
+        sel = self._selection
+        sel_player = sel['player'] if sel else None
+        sel_zone = sel['from_zone'] if sel else None
+        sel_pid = getattr(sel_player, 'id', None) if sel_player else None
+        for pid, info in self.player_widgets.items():
             try:
-                self.drag_data["source"].configure(border_width=0)
+                info['outer'].config(
+                    bg=self.C_ACCENT if (sel_pid is not None and pid == sel_pid
+                                         and sel_zone is None)
+                    else self.C_BG)
             except Exception:
                 pass
+        for zone in self._all_zones():
+            try:
+                zone.config(bg=self.C_ACCENT if zone is sel_zone else self.C_BORDER)
+            except Exception:
+                pass
+
+    def _slot_expected_pos(self, zone_id):
+        """Expected primary_position name for a zone, or None."""
+        parts = zone_id.split('_')
         try:
-            self.configure(cursor='')
-        except Exception:
+            if zone_id.startswith('forward_line_') and len(parts) >= 5:
+                return ('LEFT_WING', 'CENTER', 'RIGHT_WING')[int(parts[4])]
+            if zone_id.startswith('defense_pair_') and len(parts) >= 5:
+                return ('LEFT_DEFENSE', 'RIGHT_DEFENSE')[int(parts[4])]
+            if zone_id.startswith('goalie_role_'):
+                return 'GOALIE'
+            if zone_id.startswith('powerplay_') and len(parts) >= 3:
+                return {'LW': 'LEFT_WING', 'C': 'CENTER', 'RW': 'RIGHT_WING',
+                        'LD': 'LEFT_DEFENSE', 'RD': 'RIGHT_DEFENSE'}.get(parts[2])
+            if zone_id.startswith('penalty_kill_') and len(parts) >= 4:
+                return {'LW': 'LEFT_WING', 'RW': 'RIGHT_WING',
+                        'LD': 'LEFT_DEFENSE', 'RD': 'RIGHT_DEFENSE'}.get(parts[3])
+        except (ValueError, IndexError):
             pass
-
-        # Find drop target under cursor
-        x, y = event.widget.winfo_pointerx(), event.widget.winfo_pointery()
-        target = self.winfo_containing(x, y)
-
-        if target:
-            drop_zone = self.find_drop_zone_parent(target)
-            if drop_zone:
-                self.handle_drop(self.drag_data["item"], drop_zone)
-
-        # Clear drag data
-        self.drag_data = {"item": None, "source": None}
-
-    def find_drop_zone_parent(self, widget):
-        """Find the drop zone parent of a widget"""
-        current = widget
-        while current:
-            if hasattr(current, 'zone_id'):
-                return current
-            current = current.master
         return None
 
-    def handle_drop(self, player, drop_zone):
-        """Handle dropping a player on a drop zone"""
-        if not drop_zone or not hasattr(drop_zone, 'zone_id'):
-            return
-
-        # Check if player is compatible with this position
-        zone_parts = drop_zone.zone_id.split('_')
-        if len(zone_parts) >= 2:
-            position_type = zone_parts[0]  # 'forward', 'defense', 'goalie'
-
-            # Validate position compatibility
-            if not self.is_position_compatible(player, position_type):
-                # Show error message
-                messagebox.showwarning("Invalid Position",
-                                       f"{player.full_name} cannot be assigned to this position type.")
-                return
-
-        # Clear any existing assignment for this player
-        self.clear_player_assignments(player)
-
-        # Assign player to this drop zone
-        self.assign_player_to_zone(player, drop_zone)
-
-        # Update line ratings if it's a forward line
-        if 'forward_line' in drop_zone.zone_id:
-            line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
-            self.update_line_rating_for_drop_zones(line_idx)
+    def _is_off_position(self, player, zone_id):
+        expected = self._slot_expected_pos(zone_id)
+        if not expected:
+            return False
+        actual = player.primary_position.name
+        if actual == 'GOALIE' or expected == 'GOALIE':
+            return actual != expected
+        fam = lambda p: 'F' if p in ('LEFT_WING', 'CENTER', 'RIGHT_WING') else 'D'
+        return fam(actual) != fam(expected)
 
     def is_position_compatible(self, player, position_type):
         """Check if player can play this position type"""
@@ -11194,93 +18800,93 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         return position_type in ["forward", "defense", "powerplay", "penalty_kill"]
 
     def clear_player_assignments(self, player):
-        """Clear any existing assignments for this player"""
-        # Update player widget tracking
-        if player.id in self.player_widgets:
-            self.player_widgets[player.id]['assigned_position'] = None
-
-        # Find and clear any drop zones containing this player
-        for widget in self.winfo_children():
-            self.clear_player_from_zones_recursive(widget, player)
-
-    def clear_player_from_zones_recursive(self, widget, player):
-        """Recursively clear player from drop zones"""
-        if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
-            if widget.assigned_player and widget.assigned_player.id == player.id:
-                self.clear_drop_zone(widget, widget.zone_id)
-
-        # Check children
-        for child in widget.winfo_children():
-            self.clear_player_from_zones_recursive(child, player)
+        """Clear any existing slot assignments for this player."""
+        pid = getattr(player, 'id', None)
+        if pid in self.player_widgets:
+            self.player_widgets[pid]['assigned_position'] = None
+        for zone in self._all_zones():
+            if (getattr(zone, 'assigned_player', None) is not None
+                    and zone.assigned_player.id == pid):
+                self.clear_drop_zone(zone, zone.zone_id)
 
     def assign_player_to_zone(self, player, drop_zone):
-        """Assign a player to a drop zone"""
-        ff = self.parent.FONT_FAMILY
-        # Clear the drop zone first
-        for widget in drop_zone.winfo_children():
-            widget.destroy()
+        """Assign a player to a slot (Sleeper-style filled card)."""
+        inner = drop_zone._inner
+        self._clear_slot_inner(inner)
 
-        # Assigned player card
-        card_frame = ctk.CTkFrame(drop_zone, fg_color=self.FACE_BG, corner_radius=8)
-        card_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        card = tk.Frame(inner, bg=self.C_CARD2)
+        card.pack(fill='both', expand=True, padx=4, pady=4)
 
-        info_frame = ctk.CTkFrame(card_frame, fg_color="transparent")
-        info_frame.pack(expand=True, fill='both', padx=8, pady=6)
+        face = tk.Label(card, bg=self.C_CARD2, bd=0)
+        photo = self._face_photo(player, 36)
+        if photo is None:
+            photo = self._face_blank(36)
+        if photo is not None:
+            face.config(image=photo)
+            face.image = photo
+        face.pack(side='left', padx=(6, 4), pady=6)
 
-        # Generated face thumbnail beside the name (single player, cached).
-        dz_face = ctk.CTkLabel(info_frame, text="", fg_color=self.FACE_BG,
-                               width=40, height=40, corner_radius=6)
-        dz_photo = self._face_photo(player, 40)
-        if dz_photo is None:
-            dz_photo = self._face_blank(40)
-        if dz_photo is not None:
-            dz_face.configure(image=dz_photo)
-            dz_face.image = dz_photo
-        dz_face.pack(side=tk.LEFT, padx=(0, 8))
-
-        text_col = ctk.CTkFrame(info_frame, fg_color="transparent")
-        text_col.pack(side=tk.LEFT, expand=True, fill='y')
-
-        name_label = ctk.CTkLabel(text_col, text=player.full_name,
-                                  font=(ff, 9, 'bold'), text_color=TEXT, anchor='w')
-        name_label.pack(anchor='w')
-
-        rating_label = ctk.CTkLabel(text_col, text=f"{to_100_scale(player.overall_rating())}",
-                                    font=(ff, 8), text_color=TEXT_DIM, anchor='w')
-        rating_label.pack(anchor='w')
-
+        mid = tk.Frame(card, bg=self.C_CARD2)
+        mid.pack(side='left', fill='y', expand=True, pady=6)
+        name_l = tk.Label(mid, text=player.full_name, bg=self.C_CARD2,
+                          fg=self.C_TEXT, font=self._font(10, 'bold'),
+                          anchor='w')
+        name_l.pack(anchor='w')
+        sub = tk.Frame(mid, bg=self.C_CARD2)
+        sub.pack(anchor='w', pady=(2, 0))
         try:
             arch = get_archetype(player)
         except Exception:
-            arch = "\u2014"
-        arch_label = ctk.CTkLabel(info_frame, text=arch,
-                                  font=(ff, 7, 'bold'), text_color=GOLD, anchor='w')
-        arch_label.pack(side=tk.LEFT, padx=(8, 0))
+            arch = ""
+        arch_l = tk.Label(sub, text=arch, bg=self.C_CARD2, fg=self.C_TER,
+                          font=self._font(8))
+        arch_l.pack(side='left')
+        if self._is_off_position(player, drop_zone.zone_id):
+            off_l = tk.Label(sub, text="OFF POS", bg='#3a2c14', fg=self.C_AMBER,
+                             font=self._font(7, 'bold'),
+                             padx=5, pady=1)
+            off_l.pack(side='left', padx=(6, 0))
 
-        # Bind click to clear with hover feedback
-        for widget in [card_frame, info_frame, name_label, rating_label, arch_label,
-                       dz_face, text_col]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, drop_zone.zone_id))
-            widget.bind('<Enter>', lambda e: card_frame.configure(fg_color=TEAL))
-            widget.bind('<Leave>', lambda e: card_frame.configure(fg_color=self.FACE_BG))
+        ovr_l = tk.Label(card, text=str(to_100_scale(player.overall_rating())),
+                         bg=self.C_CARD2, fg=self.C_TEXT,
+                         font=self._font(16, 'bold'))
+        ovr_l.pack(side='right', padx=(4, 8))
+
+        clear_l = tk.Label(card, text="\u00d7", bg=self.C_CARD2, fg=self.C_TER,
+                           font=self._font(12, 'bold'),
+                           cursor='hand2', padx=4)
+        clear_l.pack(side='right', anchor='n')
+        clear_l.bind('<Button-1>',
+                     lambda e, s=drop_zone: self._on_slot_double_click(s))
+        clear_l.bind('<Enter>', lambda e: clear_l.config(fg=self.C_RED))
+        clear_l.bind('<Leave>', lambda e: clear_l.config(fg=self.C_TER))
+
+        bound = [card, face, mid, name_l, sub, arch_l, ovr_l]
+        for widget in bound:
+            widget.bind('<Button-1>', lambda e, s=drop_zone: self._on_slot_click(s))
+            widget.bind('<Double-Button-1>',
+                        lambda e, s=drop_zone: self._on_slot_double_click(s))
+            widget.bind('<Enter>', lambda e, c=card: c.config(bg='#232328'))
+            widget.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD2))
 
         # Store assignment
         drop_zone.assigned_player = player
-        if player.id in self.player_widgets:
-            self.player_widgets[player.id]['assigned_position'] = drop_zone.zone_id
+        pid = getattr(player, 'id', None)
+        if pid in self.player_widgets:
+            self.player_widgets[pid]['assigned_position'] = drop_zone.zone_id
         try:
             self._refresh_ratings_for_zone(drop_zone.zone_id)
         except AttributeError:
             pass
+        self.refresh_roster_panel()
 
     def clear_drop_zone(self, drop_zone, zone_id):
-        """Clear a drop zone"""
-        ff = self.parent.FONT_FAMILY
-        # Clear assigned player
+        """Clear a slot back to its empty placeholder."""
         if hasattr(drop_zone, 'assigned_player'):
             player = drop_zone.assigned_player
-            if player and player.id in self.player_widgets:
-                self.player_widgets[player.id]['assigned_position'] = None
+            pid = getattr(player, 'id', None) if player else None
+            if pid and pid in self.player_widgets:
+                self.player_widgets[pid]['assigned_position'] = None
 
         drop_zone.assigned_player = None
         try:
@@ -11288,159 +18894,156 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
         except AttributeError:
             pass
 
-        # Clear widgets
-        for widget in drop_zone.winfo_children():
-            widget.destroy()
-
-        # Restore subtle placeholder
-        placeholder = ctk.CTkLabel(drop_zone, text="Drop Player Here",
-                                   font=(ff, 9), text_color=TEXT_FAINT)
-        placeholder.pack(expand=True, fill='both', padx=10, pady=10)
-
-        # Rebind events
-        for widget in [placeholder]:
-            widget.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
-            widget.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
-            widget.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
-        drop_zone.bind('<Button-1>', lambda e: self.clear_drop_zone(drop_zone, zone_id))
-        drop_zone.bind('<Enter>', lambda e: self.on_drop_zone_enter(drop_zone))
-        drop_zone.bind('<Leave>', lambda e: self.on_drop_zone_leave(drop_zone))
-
-        drop_zone.placeholder = placeholder
-
-        # Update line ratings if it's a forward line
-        if 'forward_line' in zone_id:
-            zone_parts = zone_id.split('_')
-            line_idx = int(zone_parts[2]) if len(zone_parts) > 2 else 0
-            self.update_line_rating_for_drop_zones(line_idx)
+        self._render_slot_empty(drop_zone)
+        self.refresh_roster_panel()
 
     def update_line_rating_for_drop_zones(self, line_index):
-        """Update line rating for drop zone based lines."""
+        """Update line rating: big numeral + clickable chemistry detail."""
         if line_index >= len(self.forward_vars):
             return
-        players = [getattr(dz, 'assigned_player', None) for dz in self.forward_vars[line_index]]
+        players = [getattr(dz, 'assigned_player', None)
+                   for dz in self.forward_vars[line_index]]
         players = [p for p in players if p is not None]
+        big = getattr(self, 'forward_rating_big', {}).get(line_index)
         label = getattr(self, 'forward_rating_labels', {}).get(line_index)
-        if label is None:
+        if big is None or label is None:
             return
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            sign = "+" if chem >= 0 else ""
-            label.configure(text=f"Line Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
-            # Store for the breakdown popup; (re)bind click
+            big.config(text=f"{avg:.1f}")
+            label.config(text=f"Chemistry {chem:+g}  \u00b7  click for details")
             label._chem_players = list(players)
             label._chem_title = f"Line {line_index + 1} Chemistry"
-            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
-            try:
-                label.configure(cursor="hand2")
-            except Exception:
-                pass
+            label.bind("<Button-1>",
+                       lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.config(cursor="hand2")
         else:
-            label.configure(text="Line Rating: --")
+            big.config(text="--")
+            label.config(text="No players assigned")
             label.unbind("<Button-1>")
-            try:
-                label.configure(cursor="")
-            except Exception:
-                pass
+            label.config(cursor="")
 
     def update_pair_rating_for_drop_zones(self, pair_index):
-        """Update pair rating for drop zone based defense pairs."""
+        """Update pair rating: big numeral + clickable chemistry detail."""
         if pair_index >= len(self.defense_vars):
             return
-        players = [getattr(dz, 'assigned_player', None) for dz in self.defense_vars[pair_index]]
+        players = [getattr(dz, 'assigned_player', None)
+                   for dz in self.defense_vars[pair_index]]
         players = [p for p in players if p is not None]
+        big = getattr(self, 'defense_rating_big', {}).get(pair_index)
         label = getattr(self, 'defense_rating_labels', {}).get(pair_index)
-        if label is None:
+        if big is None or label is None:
             return
         if players:
             avg = sum(p.overall_rating() for p in players) / len(players)
             chem = self.calculate_chemistry_bonus(players)
-            sign = "+" if chem >= 0 else ""
-            label.configure(text=f"Pair Rating: {avg:.1f}   |   Chemistry: {sign}{chem:g}  (click for details)")
+            big.config(text=f"{avg:.1f}")
+            label.config(text=f"Chemistry {chem:+g}  \u00b7  click for details")
             label._chem_players = list(players)
             label._chem_title = f"Defense Pair {pair_index + 1} Chemistry"
-            label.bind("<Button-1>", lambda e, l=label: self.show_chemistry_breakdown(l))
-            try:
-                label.configure(cursor="hand2")
-            except Exception:
-                pass
+            label.bind("<Button-1>",
+                       lambda e, l=label: self.show_chemistry_breakdown(l))
+            label.config(cursor="hand2")
         else:
-            label.configure(text="Pair Rating: --")
+            big.config(text="--")
+            label.config(text="No players assigned")
             label.unbind("<Button-1>")
-            try:
-                label.configure(cursor="")
-            except Exception:
-                pass
+            label.config(cursor="")
+
+    def _update_st_unit_ratings(self, prefix):
+        """Average-OVR big numeral for PP/PK units."""
+        if prefix == 'PP':
+            var_sets, bigs = self.powerplay_vars, self.pp_rating_big
+        else:
+            var_sets, bigs = self.penalty_kill_vars, self.pk_rating_big
+        for i, slots in enumerate(var_sets):
+            players = [getattr(dz, 'assigned_player', None) for dz in slots]
+            players = [p for p in players if p is not None]
+            big = bigs.get(i)
+            if big is None:
+                continue
+            if players:
+                avg = sum(p.overall_rating() for p in players) / len(players)
+                big.config(text=f"{avg:.1f}")
+            else:
+                big.config(text="--")
 
     def show_chemistry_breakdown(self, label):
         """Popup explaining exactly what drives a line/pair's chemistry."""
-        ff = self.parent.FONT_FAMILY
         players = getattr(label, "_chem_players", [])
         title = getattr(label, "_chem_title", "Chemistry")
         total, drivers = line_chemistry_report(players)
 
-        popup = ctk.CTkToplevel(self)
+        popup = InGamePopup(self)
         popup.title(title)
-        popup.geometry("460x400")
-        popup.configure(fg_color=PANEL)
+        popup.geometry("460x380")
+        popup.configure(bg="#16161a")
         popup.transient(self)
 
-        header = ctk.CTkFrame(popup, fg_color="transparent")
+        header = tk.Frame(popup, bg="#16161a")
         header.pack(fill="x", padx=16, pady=(16, 8))
-        ctk.CTkLabel(header, text=title, font=(ff, 13, "bold"),
-                      text_color=TEXT, anchor="w").pack(anchor="w")
+        tk.Label(header, text=title, bg="#16161a", fg="white",
+                 font=self._font(13, 'bold')).pack(anchor="w")
         sign = "+" if total >= 0 else ""
-        color = GREEN if total >= 0 else RED
-        ctk.CTkLabel(header, text=f"Total chemistry: {sign}{total:g}",
-                      font=(ff, 11, "bold"), text_color=color,
-                      anchor="w").pack(anchor="w", pady=(4, 0))
-        ctk.CTkLabel(header, text="Archetype pairings drive chemistry. "
-                     "Complementary styles boost it; duplicate roles clash.",
-                     font=(ff, 9), text_color=TEXT_DIM, wraplength=420,
-                     justify="left", anchor="w").pack(anchor="w", pady=(4, 0))
+        color = "#3fb950" if total >= 0 else "#00ceb8"
+        tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#16161a",
+                 fg=color, font=self._font(11, 'bold')).pack(anchor="w", pady=(4, 0))
+        tk.Label(header, text="Archetype pairings drive chemistry. "
+                 "Complementary styles boost it; duplicate roles clash.",
+                 bg="#16161a", fg="#adb5bd",
+                 font=self._font(9), wraplength=420,
+                 justify="left").pack(anchor="w", pady=(4, 0))
 
-        body_frame = ctk.CTkScrollableFrame(popup, fg_color="transparent")
-        body_frame.pack(fill="both", expand=True, padx=16, pady=8)
+        body = tk.Frame(popup, bg="#16161a")
+        body.pack(fill="both", expand=True, padx=16, pady=8)
         if not drivers:
-            ctk.CTkLabel(body_frame, text="No strong archetype relationships on this unit.\n"
-                         "Chemistry is neutral.",
-                         font=(ff, 10), text_color=TEXT_DIM,
-                         anchor="w", justify="left").pack(anchor="w")
+            tk.Label(body, text="No strong archetype relationships on this unit.\n"
+                     "Chemistry is neutral.",
+                     bg="#16161a", fg="#adb5bd",
+                     font=self._font(10)).pack(anchor="w")
         for text, value in drivers:
-            row = ctk.CTkFrame(body_frame, fg_color="transparent")
+            row = tk.Frame(body, bg="#16161a")
             row.pack(fill="x", pady=3)
-            dot_color = GREEN if value > 0 else RED
-            dot = tk.Canvas(row, width=10, height=10, bg=PANEL,
+            dot_color = "#3fb950" if value > 0 else "#00ceb8"
+            dot = tk.Canvas(row, width=10, height=10, bg="#16161a",
                             highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
             dot.pack(side="left", padx=(0, 8))
-            ctk.CTkLabel(row, text=text, font=(ff, 9), text_color=TEXT,
-                         wraplength=380, justify="left",
-                         anchor="w").pack(side="left", fill="x", expand=True)
+            tk.Label(row, text=text, bg="#16161a", fg="white",
+                     font=self._font(9), wraplength=400,
+                     justify="left", anchor="w").pack(side="left", fill="x", expand=True)
 
         # Archetype legend for the unit's players
-        legend = ctk.CTkFrame(popup, fg_color="transparent")
+        legend = tk.Frame(popup, bg="#16161a")
         legend.pack(fill="x", padx=16, pady=(8, 16))
-        ctk.CTkLabel(legend, text="Archetypes on this unit:",
-                      font=(ff, 9, "bold"), text_color=TEXT_DIM,
-                      anchor="w").pack(anchor="w")
+        tk.Label(legend, text="Archetypes on this unit:", bg="#16161a",
+                 fg="#adb5bd", font=self._font(9, 'bold')).pack(anchor="w")
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
-            ctk.CTkLabel(legend, text=f"\u2022 {p.full_name}: {arch}" + (f" \u2014 {strength}" if strength else ""),
-                         font=(ff, 9), text_color=TEXT, wraplength=420,
-                         justify="left", anchor="w").pack(anchor="w")
+            tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
+                     bg="#16161a", fg="white",
+                     font=self._font(9), wraplength=420,
+                     justify="left", anchor="w").pack(anchor="w")
 
     def _refresh_ratings_for_zone(self, zone_id):
-        """Refresh line/pair rating labels affected by a drop-zone change."""
+        """Refresh line/pair/unit rating labels affected by a slot change."""
         try:
             parts = zone_id.split("_")
             if zone_id.startswith("forward_line_"):
                 self.update_line_rating_for_drop_zones(int(parts[2]))
             elif zone_id.startswith("defense_pair_"):
                 self.update_pair_rating_for_drop_zones(int(parts[2]))
+            elif zone_id.startswith("powerplay_"):
+                self._update_st_unit_ratings("PP")
+            elif zone_id.startswith("penalty_kill_"):
+                self._update_st_unit_ratings("PK")
         except (ValueError, IndexError, AttributeError):
+            pass
+        try:
+            self._update_footer_warnings()
+        except AttributeError:
             pass
 
     def refresh_all_line_ratings(self):
@@ -11449,20 +19052,16 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             self.update_line_rating_for_drop_zones(i)
         for i in range(len(getattr(self, 'defense_vars', []))):
             self.update_pair_rating_for_drop_zones(i)
-
+    
     def refresh_roster_panel(self):
-        """Refresh the roster panel to show current assignments"""
-        # Update visual indicators on player widgets to show assignments
-        for player_id, widget_info in self.player_widgets.items():
-            widget = widget_info['widget']
-            assigned_pos = widget_info['assigned_position']
-
-            if assigned_pos:
-                # Tint to show assigned
-                widget.configure(fg_color=self.ASSIGNED_BG)
-            else:
-                # Reset to unassigned appearance
-                widget.configure(fg_color=CARD)
+        """Refresh roster rows: teal dot on assigned players."""
+        for pid, info in self.player_widgets.items():
+            assigned = info.get('assigned_position')
+            try:
+                info['dot'].config(fg=self.C_ACCENT if assigned else self.C_CARD)
+                info['card'].config(bg=self.C_CARD2 if assigned else self.C_CARD)
+            except Exception:
+                pass
 
     def extract_lineup_from_drop_zones(self):
         """Extract the current lineup from all drop zones"""
@@ -11473,18 +19072,18 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             'PowerPlay': [None] * 2,
             'PenaltyKill': [None] * 2
         }
-
+        
         # Walk through all widgets to find drop zones
         self.extract_assignments_recursive(self, lineup)
-
+        
         return lineup
-
+    
     def extract_assignments_recursive(self, widget, lineup):
         """Recursively extract assignments from drop zones"""
         if hasattr(widget, 'zone_id') and hasattr(widget, 'assigned_player'):
             zone_id = widget.zone_id
             player = widget.assigned_player
-
+            
             if player and zone_id:
                 # Parse zone ID and assign to appropriate lineup position
                 if 'forward_line' in zone_id:
@@ -11499,7 +19098,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                                 lineup['Forwards'][line_idx][pos_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-
+                
                 elif 'defense_pair' in zone_id:
                     parts = zone_id.split('_')
                     if len(parts) >= 5:
@@ -11512,7 +19111,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                                 lineup['Defense'][pair_idx][pos_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-
+                
                 elif 'goalie_role' in zone_id:
                     parts = zone_id.split('_')
                     if len(parts) >= 3:
@@ -11522,7 +19121,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                                 lineup['Goalies'][role_idx] = player
                         except ValueError:
                             pass  # Skip invalid zone IDs
-
+                
                 elif 'powerplay' in zone_id:
                     # Handle powerplay zones: powerplay_0_LW, powerplay_1_C, etc.
                     parts = zone_id.split('_')
@@ -11530,14 +19129,14 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         try:
                             pp_unit = int(parts[1])  # 0 or 1
                             position = parts[2]  # LW, C, RW, LD, RD
-
+                            
                             if pp_unit < 2:
                                 if not lineup['PowerPlay'][pp_unit]:
                                     lineup['PowerPlay'][pp_unit] = {}
                                 lineup['PowerPlay'][pp_unit][position] = player
                         except (ValueError, IndexError):
                             pass  # Skip invalid zone IDs
-
+                
                 elif 'penalty_kill' in zone_id:
                     # Handle penalty kill zones: penalty_kill_0_LW, penalty_kill_1_RD, etc.
                     parts = zone_id.split('_')
@@ -11545,125 +19144,155 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         try:
                             pk_unit = int(parts[2])  # 0 or 1
                             position = parts[3]  # LW, RW, LD, RD
-
+                            
                             if pk_unit < 2:
                                 if not lineup['PenaltyKill'][pk_unit]:
                                     lineup['PenaltyKill'][pk_unit] = {}
                                 lineup['PenaltyKill'][pk_unit][position] = player
                         except (ValueError, IndexError):
                             pass  # Skip invalid zone IDs
-
+        
         # Check children
         for child in widget.winfo_children():
             self.extract_assignments_recursive(child, lineup)
+    
+    # ------------------------------------------------------------------
+    # View preferences (persisted), footer warnings, zone helpers
+    # ------------------------------------------------------------------
 
-    def create_goalies_tab(self):
-        """Create the goalies tab with clean, readable layout"""
-        ff = self.parent.FONT_FAMILY
-        tab = self.notebook.tab("Goalies")
+    def _prefs_path(self):
+        import os
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            'settings.json')
 
-        self.goalie_vars = []
-        roles = ["Starting Goalie", "Backup Goalie"]
+    def _load_view_prefs(self):
+        prefs = {'show_ratings': True, 'show_icetime': True,
+                 'show_chemistry': True}
+        try:
+            import json, os
+            path = self._prefs_path()
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+                saved = (data.get('ui_preferences') or {}).get('lines_view') or {}
+                for k in prefs:
+                    if k in saved:
+                        prefs[k] = bool(saved[k])
+        except Exception:
+            pass
+        return prefs
 
-        for i, role in enumerate(roles):
-            # Goalie card
-            goalie_card = ctk.CTkFrame(tab, fg_color=CARD, corner_radius=10)
-            goalie_card.pack(fill=tk.X, pady=(0, 15), padx=4)
+    def _save_view_prefs(self):
+        try:
+            import json, os
+            path = self._prefs_path()
+            data = {}
+            if os.path.exists(path):
+                with open(path) as f:
+                    data = json.load(f)
+            ui = data.get('ui_preferences')
+            if not isinstance(ui, dict):
+                ui = {}
+                data['ui_preferences'] = ui
+            ui['lines_view'] = dict(self._view_prefs)
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
 
-            ctk.CTkLabel(goalie_card, text=role, font=(ff, 12, 'bold'),
-                          text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
+    def _open_view_menu(self):
+        pop = InGamePopup(self)
+        pop.title("View")
+        pop.configure(bg=self.C_CARD)
+        pop.resizable(False, False)
+        pop.transient(self)
+        try:
+            x = self.winfo_rootx() + self.winfo_width() - 280
+            y = self.winfo_rooty() + 70
+            pop.geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+        tk.Label(pop, text="Show in this editor", bg=self.C_CARD, fg=self.C_TEXT,
+                 font=self._font(11, 'bold')).pack(
+                     anchor='w', padx=16, pady=(14, 6))
+        for key, label in (('show_ratings', 'Line ratings'),
+                           ('show_icetime', 'Ice-time hints'),
+                           ('show_chemistry', 'Chemistry details')):
+            var = tk.BooleanVar(value=self._view_prefs[key])
+            cb = tk.Checkbutton(pop, text=label, variable=var, bg=self.C_CARD,
+                                fg=self.C_TEXT, selectcolor=self.C_CARD2,
+                                activebackground=self.C_CARD,
+                                activeforeground=self.C_TEXT,
+                                font=self._font(10), anchor='w',
+                                command=lambda k=key, v=var: self._toggle_pref(k, v))
+            cb.pack(anchor='w', padx=16, pady=4, fill='x')
+        tk.Frame(pop, bg=self.C_CARD, height=10).pack()
 
-            # Create drop zone instead of combobox
-            drop_zone = self.create_drop_zone(goalie_card, f"goalie_role_{i}")
-            drop_zone.pack(pady=(0, 12), padx=10, fill=tk.X)
+    def _toggle_pref(self, key, var):
+        self._view_prefs[key] = bool(var.get())
+        self._save_view_prefs()
+        self._apply_view_prefs()
 
-            self.goalie_vars.append(drop_zone)
+    def _apply_view_prefs(self):
+        p = self._view_prefs
+        for w in getattr(self, '_rating_bigs', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_ratings']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
+        for w in getattr(self, '_icetime_labels', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_icetime']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
+        for w in getattr(self, '_chem_labels', []):
+            if getattr(w, '_force_hidden', False):
+                continue
+            if p['show_chemistry']:
+                w.pack(**w._pk)
+            else:
+                w.pack_forget()
 
-    def create_special_teams_tab(self):
-        """Create the special teams tab with horizontal layouts and scrolling"""
-        ff = self.parent.FONT_FAMILY
-        scroll = self._line_tab_scroll("Special Teams")
-        scroll.pack(fill="both", expand=True)
+    def _all_zones(self):
+        # Zones are built once and never destroyed (only their inner
+        # content re-renders), so the flat list is cached.
+        if getattr(self, '_zone_cache', None) is None:
+            zones = []
+            for group in (getattr(self, 'forward_vars', []),
+                          getattr(self, 'defense_vars', [])):
+                zones.extend(s for row in group for s in row)
+            zones.extend(getattr(self, 'goalie_vars', []))
+            for group in (getattr(self, 'powerplay_vars', []),
+                          getattr(self, 'penalty_kill_vars', [])):
+                zones.extend(s for row in group for s in row)
+            self._zone_cache = zones
+        return self._zone_cache
 
-        # Power Play section
-        pp_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
-        pp_card.pack(fill=tk.X, pady=(0, 15), padx=4)
-        ctk.CTkLabel(pp_card, text="Power Play Units", font=(ff, 12, 'bold'),
-                      text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
-
-        self.powerplay_vars = []
-
-        for i in range(2):  # PP1 and PP2
-            unit_card = ctk.CTkFrame(pp_card, fg_color=PANEL, corner_radius=8)
-            unit_card.pack(fill=tk.X, padx=10, pady=5)
-            ctk.CTkLabel(unit_card, text=f"Power Play {i+1}", font=(ff, 10, 'bold'),
-                          text_color=TEXT_DIM, anchor="w").pack(anchor="w", padx=12, pady=(8, 4))
-
-            # Horizontal layout: LW - C - RW - LD - RD
-            positions_frame = ctk.CTkFrame(unit_card, fg_color="transparent")
-            positions_frame.pack(fill=tk.X, padx=6, pady=(0, 10))
-
-            unit_vars = []
-            positions = ["LW", "C", "RW", "LD", "RD"]
-            position_names = ["Left Wing", "Center", "Right Wing", "Left Defense", "Right Defense"]
-
-            for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
-                # Create position column
-                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-
-                # Position label
-                ctk.CTkLabel(pos_column, text=pos_name,
-                              font=(ff, 9, 'bold'), text_color=TEXT_DIM,
-                              anchor="w").pack(anchor="w", pady=(0, 5))
-
-                # Drop zone for special teams
-                drop_zone = self.create_drop_zone(pos_column, f"powerplay_{i}_{pos}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-
-                unit_vars.append(drop_zone)
-
-            self.powerplay_vars.append(unit_vars)
-
-        # Penalty Kill section
-        pk_card = ctk.CTkFrame(scroll, fg_color=CARD, corner_radius=10)
-        pk_card.pack(fill=tk.X, pady=(0, 10), padx=4)
-        ctk.CTkLabel(pk_card, text="Penalty Kill Units", font=(ff, 12, 'bold'),
-                      text_color=TEXT, anchor="w").pack(anchor="w", padx=15, pady=(12, 6))
-
-        self.penalty_kill_vars = []
-
-        for i in range(2):  # PK1 and PK2
-            unit_card = ctk.CTkFrame(pk_card, fg_color=PANEL, corner_radius=8)
-            unit_card.pack(fill=tk.X, padx=10, pady=5)
-            ctk.CTkLabel(unit_card, text=f"Penalty Kill {i+1}", font=(ff, 10, 'bold'),
-                          text_color=TEXT_DIM, anchor="w").pack(anchor="w", padx=12, pady=(8, 4))
-
-            # Horizontal layout: LW - RW - LD - RD (4-man PK unit)
-            positions_frame = ctk.CTkFrame(unit_card, fg_color="transparent")
-            positions_frame.pack(fill=tk.X, padx=6, pady=(0, 10))
-
-            unit_vars = []
-            positions = ["LW", "RW", "LD", "RD"]  # 4-man PK unit
-            position_names = ["Left Wing", "Right Wing", "Left Defense", "Right Defense"]
-
-            for j, (pos, pos_name) in enumerate(zip(positions, position_names)):
-                # Create position column
-                pos_column = ctk.CTkFrame(positions_frame, fg_color="transparent")
-                pos_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-
-                # Position label
-                ctk.CTkLabel(pos_column, text=pos_name,
-                              font=(ff, 9, 'bold'), text_color=TEXT_DIM,
-                              anchor="w").pack(anchor="w", pady=(0, 5))
-
-                # Create drop zone for penalty kill
-                drop_zone = self.create_drop_zone(pos_column, f"penalty_kill_{i}_{pos}")
-                drop_zone.pack(fill=tk.BOTH, expand=True, ipady=15)
-
-                unit_vars.append(drop_zone)
-
-            self.penalty_kill_vars.append(unit_vars)
+    def _update_footer_warnings(self):
+        if not hasattr(self, '_footer_warn'):
+            return
+        off_pos = 0
+        empty_es = 0
+        for zone in self._all_zones():
+            zid = getattr(zone, 'zone_id', '')
+            player = getattr(zone, 'assigned_player', None)
+            if player is None:
+                if zid.startswith(('forward_line_', 'defense_pair_',
+                                   'goalie_role_')):
+                    empty_es += 1
+            elif self._is_off_position(player, zid):
+                off_pos += 1
+        parts = []
+        if off_pos:
+            parts.append(f"{off_pos} off-position")
+        if empty_es:
+            parts.append(f"{empty_es} empty slots")
+        self._footer_warn.config(
+            text=("  \u26a0 " + " \u00b7 ".join(parts)) if parts else "")
 
     def load_current_lineup(self):
         """Load the current lineup into the drop zones"""
@@ -11676,7 +19305,7 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     if j < len(current_line) and current_line[j]:
                         player = current_line[j]
                         self.assign_player_to_zone(player, drop_zone)
-
+        
         # Load defense
         defense_pairs = self.lineup.get('Defense', [[None]*2 for _ in range(3)])
         for i, pair_vars in enumerate(self.defense_vars):
@@ -11686,14 +19315,14 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     if j < len(current_pair) and current_pair[j]:
                         player = current_pair[j]
                         self.assign_player_to_zone(player, drop_zone)
-
+        
         # Load goalies
         goalies_list = self.lineup.get('Goalies', [None, None])
         for i, drop_zone in enumerate(self.goalie_vars):
             if i < len(goalies_list) and goalies_list[i]:
                 player = goalies_list[i]
                 self.assign_player_to_zone(player, drop_zone)
-
+        
         # Load special teams
         # Load Power Play units
         for pp_unit in range(2):
@@ -11701,14 +19330,14 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
             pp_data = self.lineup.get(pp_key, {})
             if pp_unit < len(self.powerplay_vars):
                 unit_vars = self.powerplay_vars[pp_unit]
-
+                
                 # Load PP forwards (LW, C, RW)
                 pp_forwards = pp_data.get('Forwards', [])
                 for pos_idx in range(min(3, len(unit_vars))):
                     if pos_idx < len(pp_forwards) and pp_forwards[pos_idx]:
                         player = pp_forwards[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[pos_idx])
-
+                
                 # Load PP defense (LD, RD)
                 pp_defense = pp_data.get('Defense', [])
                 for pos_idx in range(min(2, len(pp_defense))):
@@ -11716,21 +19345,21 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     if defense_idx < len(unit_vars) and pp_defense[pos_idx]:
                         player = pp_defense[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[defense_idx])
-
+        
         # Load Penalty Kill units
         for pk_unit in range(2):
             pk_key = f'PK{pk_unit + 1}'
             pk_data = self.lineup.get(pk_key, {})
             if pk_unit < len(self.penalty_kill_vars):
                 unit_vars = self.penalty_kill_vars[pk_unit]
-
+                
                 # Load PK forwards (LW, RW)
                 pk_forwards = pk_data.get('Forwards', [])
                 for pos_idx in range(min(2, len(pk_forwards), len(unit_vars))):
                     if pk_forwards[pos_idx]:
                         player = pk_forwards[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[pos_idx])
-
+                
                 # Load PK defense (LD, RD)
                 pk_defense = pk_data.get('Defense', [])
                 for pos_idx in range(min(2, len(pk_defense))):
@@ -11738,48 +19367,48 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     if defense_idx < len(unit_vars) and pk_defense[pos_idx]:
                         player = pk_defense[pos_idx]
                         self.assign_player_to_zone(player, unit_vars[defense_idx])
-
+    
     def auto_set_best(self):
         """Automatically set the best possible lines"""
         self.auto_populate_best_lines()
         messagebox.showinfo("Lines Set", "Your best players have been automatically assigned to lines!")
-
+    
     def reset_lines(self):
         """Reset all lines to empty"""
         self.clear_all_assignments()
         messagebox.showinfo("Reset", "All lines have been cleared!")
-
+    
     def save_and_close(self):
         """Save the current lineup and close the window"""
         # Extract player selections and save to lineup
         self.save_lineup_from_interface()
-        self.parent.user_team.lineup = self.lineup
+        self.app.user_team.lineup = self.lineup
         messagebox.showinfo("Saved", "Your lines have been saved!")
         self.destroy()
-
+    
     def save_lineup_from_interface(self):
         """Extract player selections from drop zones and save to lineup structure"""
         # Extract from drop zones instead of comboboxes
         new_lineup = self.extract_lineup_from_drop_zones()
-
+        
         # Convert to the expected format
         forward_lines = []
         for i in range(4):
             line = new_lineup['Forwards'][i] if new_lineup['Forwards'][i] else [None, None, None]
             forward_lines.append(line)
-
+        
         defense_pairs = []
         for i in range(3):
             pair = new_lineup['Defense'][i] if new_lineup['Defense'][i] else [None, None]
             defense_pairs.append(pair)
-
+        
         goalies_list = new_lineup['Goalies']
-
+        
         # Update lineup structure
         self.lineup['Forwards'] = forward_lines
         self.lineup['Defense'] = defense_pairs
         self.lineup['Goalies'] = goalies_list
-
+        
         # Handle special teams
         if 'PowerPlay' in new_lineup and new_lineup['PowerPlay']:
             for i, pp_unit in enumerate(new_lineup['PowerPlay']):
@@ -11787,29 +19416,29 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     pp_key = f'PP{i + 1}'
                     if pp_key not in self.lineup:
                         self.lineup[pp_key] = {'Forwards': [], 'Defense': []}
-
+                    
                     # Convert position dict to lists
                     pp_forwards = [
                         pp_unit.get('LW'),
-                        pp_unit.get('C'),
+                        pp_unit.get('C'), 
                         pp_unit.get('RW')
                     ]
                     pp_defense = [
                         pp_unit.get('LD'),
                         pp_unit.get('RD')
                     ]
-
+                    
                     self.lineup[pp_key]['Forwards'] = pp_forwards
                     self.lineup[pp_key]['Defense'] = pp_defense
-
+        
         if 'PenaltyKill' in new_lineup and new_lineup['PenaltyKill']:
             for i, pk_unit in enumerate(new_lineup['PenaltyKill']):
                 if pk_unit:
                     pk_key = f'PK{i + 1}'
                     if pk_key not in self.lineup:
                         self.lineup[pk_key] = {'Forwards': [], 'Defense': []}
-
-                    # Convert position dict to lists
+                    
+                    # Convert position dict to lists  
                     pk_forwards = [
                         pk_unit.get('LW'),
                         pk_unit.get('RW')
@@ -11818,51 +19447,48 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                         pk_unit.get('LD'),
                         pk_unit.get('RD')
                     ]
-
+                    
                     self.lineup[pk_key]['Forwards'] = pk_forwards
                     self.lineup[pk_key]['Defense'] = pk_defense
-
+    
     def show_line_analytics(self):
         """Show detailed analytics for current line combinations"""
-        ff = self.parent.FONT_FAMILY
-        analytics_window = ctk.CTkToplevel(self)
+        analytics_window = InGamePopup(self)
         analytics_window.title("Line Analytics")
         analytics_window.geometry("800x600")
-        analytics_window.configure(fg_color=BG)
-        analytics_window.transient(self)
-
-        heading(analytics_window, "Line Performance Analytics", size=16).pack(pady=(16, 8))
-
-        # Create tabview for different analytics
-        analytics_tabs = ctk.CTkTabview(analytics_window, fg_color=PANEL, corner_radius=10)
-        analytics_tabs.pack(fill='both', expand=True, padx=16, pady=(0, 16))
-        analytics_tabs.add("Forward Lines")
-        analytics_tabs.add("Team Overview")
-
+        analytics_window.configure(bg=self.app.BG_COLOR)
+        
+        main_frame = ttk.Frame(analytics_window, style='Panel.TFrame', padding=15)
+        main_frame.pack(fill='both', expand=True)
+        
+        # Title
+        ttk.Label(main_frame, text="Line Performance Analytics", 
+                 style='Title.TLabel', font=self._font(16, 'bold')).pack(pady=(0, 15))
+        
+        # Create notebook for different analytics
+        analytics_notebook = ttk.Notebook(main_frame, style='TNotebook')
+        analytics_notebook.pack(fill='both', expand=True)
+        
         # Forward lines analysis
-        forward_tab = analytics_tabs.tab("Forward Lines")
-        forward_scroll = ctk.CTkScrollableFrame(forward_tab, fg_color="transparent")
-        forward_scroll.pack(fill="both", expand=True)
-
+        forward_frame = ttk.Frame(analytics_notebook, style='Panel.TFrame', padding=10)
+        analytics_notebook.add(forward_frame, text="Forward Lines")
+        
         # Analyze each forward line
         for i, line_vars in enumerate(self.forward_vars):
-            line_card = ctk.CTkFrame(forward_scroll, fg_color=CARD, corner_radius=10)
-            line_card.pack(fill='x', pady=5, padx=4)
-
-            ctk.CTkLabel(line_card, text=f"Line {i+1} Analysis",
-                          font=(ff, 11, 'bold'), text_color=TEXT,
-                          anchor="w").pack(anchor="w", padx=12, pady=(10, 4))
+            line_analysis_frame = ttk.LabelFrame(forward_frame, text=f"Line {i+1} Analysis",
+                                               padding=10, style='TLabelframe')
+            line_analysis_frame.pack(fill='x', pady=5)
 
             # Get players in this line (drop zones carry assigned_player)
             players = [getattr(dz, 'assigned_player', None) for dz in line_vars]
             players = [p for p in players if p is not None]
-
+            
             if players:
                 # Calculate analytics
                 avg_rating = sum(p.overall_rating() for p in players) / len(players)
                 avg_age = sum(p.age for p in players) / len(players)
                 chemistry = self.calculate_chemistry_bonus(players)
-
+                
                 # Display analytics
                 analytics_text = (
                     f"Players: {', '.join(p.full_name for p in players)}\n"
@@ -11871,28 +19497,27 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                     f"Chemistry Bonus: +{chemistry:.1f}\n"
                     f"Final Line Rating: {avg_rating + chemistry:.1f}\n"
                 )
-
+                
                 # Add individual player stats if available
                 if hasattr(players[0], 'stats'):
                     total_goals = sum(getattr(p.stats, 'goals', 0) for p in players)
                     total_assists = sum(getattr(p.stats, 'assists', 0) for p in players)
                     analytics_text += f"Combined: {total_goals}G {total_assists}A"
-
-                text_widget = ctk.CTkTextbox(line_card, height=130,
-                                             fg_color=BG, text_color=TEXT,
-                                             font=(ff, 9), corner_radius=8)
-                text_widget.pack(fill='x', padx=12, pady=(0, 10))
+                
+                text_widget = tk.Text(line_analysis_frame, height=6, width=70, 
+                                    bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                    font=self._font(9))
+                text_widget.pack(fill='x')
                 text_widget.insert('1.0', analytics_text)
-                text_widget.configure(state='disabled')
+                text_widget.config(state='disabled')
             else:
-                ctk.CTkLabel(line_card, text="No players assigned to this line",
-                              font=(ff, 9), text_color=TEXT_DIM).pack(padx=12, pady=(0, 10))
-
+                ttk.Label(line_analysis_frame, text="No players assigned to this line", 
+                         style='TLabel').pack()
+        
         # Team overview
-        overview_tab = analytics_tabs.tab("Team Overview")
-        overview_scroll = ctk.CTkScrollableFrame(overview_tab, fg_color="transparent")
-        overview_scroll.pack(fill="both", expand=True)
-
+        overview_frame = ttk.Frame(analytics_notebook, style='Panel.TFrame', padding=10)
+        analytics_notebook.add(overview_frame, text="Team Overview")
+        
         # Calculate team-wide stats
         all_assigned_players = []
         for line_vars in self.forward_vars:
@@ -11900,31 +19525,33 @@ class CleanEditLinesWindow(ctk.CTkToplevel):
                 player = getattr(dz, 'assigned_player', None)
                 if player and player not in all_assigned_players:
                     all_assigned_players.append(player)
-
+        
         if all_assigned_players:
             team_avg_rating = sum(p.overall_rating() for p in all_assigned_players) / len(all_assigned_players)
             team_avg_age = sum(p.age for p in all_assigned_players) / len(all_assigned_players)
-
+            
             team_stats = (
                 f"Forwards Assigned: {len(all_assigned_players)}/{len(self.forwards)}\n"
                 f"Average Rating: {team_avg_rating:.1f}\n"
                 f"Average Age: {team_avg_age:.1f}\n"
                 f"Unassigned Players: {len(self.forwards) - len(all_assigned_players)}\n"
             )
-
+            
             if len(self.forwards) - len(all_assigned_players) > 0:
                 unassigned = [p for p in self.forwards if p not in all_assigned_players]
                 unassigned_names = [f"{p.full_name} ({p.overall_rating()})" for p in unassigned[:5]]
                 team_stats += f"Top Unassigned: {', '.join(unassigned_names)}"
-
-            team_text_widget = ctk.CTkTextbox(overview_scroll, height=200,
-                                              fg_color=CARD, text_color=TEXT,
-                                              font=(ff, 10), corner_radius=8)
-            team_text_widget.pack(fill='both', expand=True, padx=4, pady=4)
+            
+            team_text_widget = tk.Text(overview_frame, height=10, width=70,
+                                     bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
+                                     font=self._font(10))
+            team_text_widget.pack(fill='both', expand=True)
             team_text_widget.insert('1.0', team_stats)
-            team_text_widget.configure(state='disabled')
-class TacticsWindow(tk.Toplevel):
-    """Team tactics editor with pill selectors.
+            team_text_widget.config(state='disabled')
+
+
+class TacticsView(tk.Frame):
+    """Team tactics editor as an embeddable view (FM/EHM-style screen).
 
     Even-strength style, power-play approach, penalty-kill approach and line
     matching all write straight to the team object and feed the sim engine
@@ -11958,12 +19585,11 @@ class TacticsWindow(tk.Toplevel):
     _ES_DEFENSE = {'Very Defensive': 0.92, 'Defensive': 0.96, 'Balanced': 1.0,
                    'Offensive': 1.03, 'Very Offensive': 1.06}
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.team = parent.user_team
-        self.title(f"Team Tactics — {self.team.team_name}")
-        self.geometry("660x780")
+    def __init__(self, parent, app=None):
+        tk.Frame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the TacticsWindow wrapper
+        self.team = self.app.user_team
         bg = getattr(parent, 'CONTENT_BG', '#0e0e11')
         self.configure(bg=bg)
 
@@ -11974,13 +19600,30 @@ class TacticsWindow(tk.Toplevel):
 
         header = tk.Frame(self, bg=bg)
         header.pack(fill='x', padx=20, pady=(16, 4))
-        tk.Label(header, text="Team Tactics", bg=bg, fg=fg,
-                 font=(font, 16, 'bold')).pack(side='left')
         tk.Label(header, text="Your game plan shapes sim results in every situation.",
                  bg=bg, fg=muted, font=(font, 10)).pack(side='left', padx=(12, 0))
 
+        # Tab strip: Systems | Practice (the weekly planner lives here,
+        # in the tactics bucket, per the Wave 2 roadmap).
+        tabrow = tk.Frame(self, bg=bg)
+        tabrow.pack(fill='x', padx=20, pady=(4, 0))
+        self._tab_buttons = {}
+        for tab in ("Systems", "Practice"):
+            btn = PillButton(
+                tabrow, text=tab, bg=bg, font=(font, 10, 'bold'),
+                command=lambda t=tab: self._switch_tactic_tab(t))
+            btn.pack(side='left', padx=(0, 8))
+            self._tab_buttons[tab] = btn
+
         body = tk.Frame(self, bg=bg)
         body.pack(fill='both', expand=True, padx=20, pady=8)
+        body._is_systems_body = True
+
+        self._practice_frame = tk.Frame(self, bg=bg)
+        # packed on demand by _switch_tactic_tab
+        self._build_practice_tab(self._practice_frame, bg, font, fg, muted,
+                                 accent)
+        self._switch_tactic_tab("Systems")
 
         self.pill_buttons = {}  # attr -> {value: button}
         for title, attr, default, values, hint in self.TACTIC_GROUPS:
@@ -12013,12 +19656,21 @@ class TacticsWindow(tk.Toplevel):
 
         footer = tk.Frame(self, bg=bg)
         footer.pack(fill='x', padx=20, pady=(8, 16))
+        self._footer = footer
         done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
                               fg='white', selected_bg='#00ceb8',
                               selected_fg='white', hover_bg='#00a894',
-                              padx=28, pady=8, command=self.destroy)
+                              padx=28, pady=8, command=self.close_view)
         done_btn.pack(side='right')
         done_btn.set_selected(True)  # Done is always in its active visual state
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     def _select(self, attr, value):
         setattr(self.team, attr, value)
@@ -12082,11 +19734,243 @@ class TacticsWindow(tk.Toplevel):
         ]
         self.impact_label.configure(text="\n".join(lines))
 
+    # -- Practice tab (weekly planner, Wave 2) ---------------------------
+    def _switch_tactic_tab(self, tab):
+        for name, btn in self._tab_buttons.items():
+            btn.set_selected(name == tab)
+        footer = getattr(self, "_footer", None)
+        if tab == "Practice":
+            # hide systems body, show practice frame before the footer
+            for child in list(self.pack_slaves()):
+                if getattr(child, "_is_systems_body", False):
+                    child.pack_forget()
+            kw = dict(fill='both', expand=True, padx=20, pady=8)
+            if footer is not None:
+                kw["before"] = footer
+            self._practice_frame.pack(**kw)
+        else:
+            self._practice_frame.pack_forget()
+            for child in list(self.pack_slaves()):
+                if getattr(child, "_is_systems_body", False):
+                    kw = dict(fill='both', expand=True, padx=20, pady=8)
+                    if footer is not None:
+                        kw["before"] = footer
+                    child.pack(**kw)
 
-class TradeBlockWindow(tk.Toplevel):
+    def _build_practice_tab(self, frame, bg, font, fg, muted, accent):
+        import dressing_room as _dr
+        self._practice_focus = tk.StringVar(value="systems")
+        self._practice_intensity = tk.StringVar(value="moderate")
+        self._bag_var = tk.BooleanVar(value=False)
+
+        # Restore the stored plan, if any.
+        try:
+            plan = _dr.ensure_dressing_room_fields(self.team).get(
+                "practice_plan") or {}
+            if plan.get("focus") in _dr.PRACTICE_FOCI:
+                self._practice_focus.set(plan["focus"])
+            if plan.get("intensity") in _dr.PRACTICE_INTENSITIES:
+                self._practice_intensity.set(plan["intensity"])
+            self._bag_var.set(bool(plan.get("bag_skate", False)))
+        except Exception:
+            pass
+
+        tk.Label(frame, text="Weekly Practice Planner", bg=bg, fg=fg,
+                 font=(font, 13, 'bold')).pack(anchor='w', pady=(10, 0))
+        tk.Label(frame,
+                 text="Set the week's focus. The plan repeats every Sunday "
+                      "until you change it. Short-term gains cost room "
+                      "politics -- the receipt says who paid.",
+                 bg=bg, fg=muted, font=(font, 9), wraplength=640,
+                 justify='left').pack(anchor='w')
+
+        try:
+            coach = _dr._room_head_coach(self.team)
+            cname = getattr(coach, "name",
+                            getattr(coach, "full_name", "No head coach"))
+            axis = _dr.coach_demanding_axis(coach)
+            ax_label = ("Demanding" if axis >= 0.7 else "Players' coach"
+                        if axis <= 0.3 else "Balanced")
+            tk.Label(frame, text=f"Head coach: {cname} ({ax_label})",
+                     bg=bg, fg=fg, font=(font, 10, 'bold')).pack(
+                         anchor='w', pady=(8, 0))
+        except Exception:
+            pass
+
+        tk.Label(frame, text="Focus", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        frow = tk.Frame(frame, bg=bg)
+        frow.pack(anchor='w')
+        self._focus_pills = {}
+        for key, spec in _dr.PRACTICE_FOCI.items():
+            btn = PillButton(
+                frow, text=spec["label"], bg=bg, font=(font, 10, 'bold'),
+                command=lambda k=key: self._pick_practice_focus(k))
+            btn.pack(side='left', padx=(0, 8))
+            self._focus_pills[key] = btn
+        self._focus_hint = tk.Label(frame, text="", bg=bg, fg=muted,
+                                    font=(font, 9))
+        self._focus_hint.pack(anchor='w', pady=(2, 0))
+
+        tk.Label(frame, text="Intensity", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        irow = tk.Frame(frame, bg=bg)
+        irow.pack(anchor='w')
+        self._intensity_pills = {}
+        for key, spec in _dr.PRACTICE_INTENSITIES.items():
+            btn = PillButton(
+                irow, text=spec["label"], bg=bg, font=(font, 10, 'bold'),
+                command=lambda k=key: self._pick_practice_intensity(k))
+            btn.pack(side='left', padx=(0, 8))
+            self._intensity_pills[key] = btn
+
+        bag = tk.Checkbutton(frame, text="Bag skate (punishment skate)",
+                             bg=bg, fg=fg, selectcolor=bg, activebackground=bg,
+                             font=(font, 10, 'bold'), variable=self._bag_var)
+        bag.pack(anchor='w', pady=(8, 0))
+        tk.Label(frame,
+                 text="May stop a slide now (+2% one-game compete edge). "
+                      "Repeated punishment erodes trust and recovery -- "
+                      "every skate is logged.",
+                 bg=bg, fg=muted, font=(font, 9), wraplength=640,
+                 justify='left').pack(anchor='w')
+
+        tk.Label(frame, text="Assistants on this session", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        self._assistant_label = tk.Label(frame, text="", bg=bg, fg=muted,
+                                         font=(font, 9), justify='left')
+        self._assistant_label.pack(anchor='w')
+
+        tk.Label(frame, text="Last week's receipt", bg=bg, fg=fg,
+                 font=(font, 11, 'bold')).pack(anchor='w', pady=(8, 2))
+        self._receipt_label = tk.Label(frame, text="", bg=bg, fg=muted,
+                                       font=(font, 9), justify='left',
+                                       wraplength=680)
+        self._receipt_label.pack(anchor='w')
+
+        set_btn = PillButton(frame, text="Set & Run This Week", bg=bg,
+                             font=(font, 11, 'bold'), fg='white',
+                             selected_bg='#00ceb8', selected_fg='white',
+                             hover_bg='#00a894', padx=24, pady=8,
+                             command=self._save_practice_plan)
+        set_btn.pack(anchor='w', pady=(12, 0))
+        set_btn.set_selected(True)
+        self._plan_status = tk.Label(frame, text="", bg=bg, fg=accent,
+                                     font=(font, 9))
+        self._plan_status.pack(anchor='w', pady=(4, 0))
+        self._refresh_practice_tab()
+
+    def _pick_practice_focus(self, key):
+        self._practice_focus.set(key)
+        self._refresh_practice_tab()
+
+    def _pick_practice_intensity(self, key):
+        self._practice_intensity.set(key)
+        self._refresh_practice_tab()
+
+    def _refresh_practice_tab(self):
+        import dressing_room as _dr
+        focus = self._practice_focus.get()
+        for key, btn in self._focus_pills.items():
+            btn.set_selected(key == focus)
+        self._focus_hint.configure(
+            text=_dr.PRACTICE_FOCI.get(focus, {}).get("hint", ""))
+        intensity = self._practice_intensity.get()
+        for key, btn in self._intensity_pills.items():
+            btn.set_selected(key == intensity)
+        try:
+            matched = _dr.assistant_session_match(self.team, focus)
+            if matched:
+                lines = [f"{m['name']} ({m['specialty']}, {m['prowess']:.0f})"
+                         + (" -- session match" if m["matched"] else "")
+                         for m in matched]
+            else:
+                lines = ["No assistants on staff."]
+            self._assistant_label.configure(text="\n".join(lines))
+        except Exception:
+            pass
+        try:
+            receipts = _dr.ensure_dressing_room_fields(
+                self.team).get("practice_receipts", [])
+            if receipts:
+                r = receipts[-1]
+                goal = r.get("goal", "")
+                met = r.get("goal_met")
+                met_txt = ("goal met" if met else
+                           "goal missed" if met is False else "goal pending")
+                paid = ", ".join(f"{n} ({d:+})"
+                                 for n, d in (r.get("paid") or [])[:3])
+                self._receipt_label.configure(
+                    text=f"{r.get('date', '')} {r.get('focus', '')} / "
+                         f"{r.get('intensity', '')}: {goal} -- {met_txt}."
+                         + (f" Paid: {paid}." if paid else ""))
+            else:
+                self._receipt_label.configure(text="No practices logged yet.")
+        except Exception:
+            pass
+
+    def _save_practice_plan(self):
+        import dressing_room as _dr
+        focus = self._practice_focus.get()
+        intensity = self._practice_intensity.get()
+        bag = bool(self._bag_var.get())
+        try:
+            date_str = ""
+            app = self.app
+            if hasattr(app, "current_date"):
+                try:
+                    date_str = app.current_date.isoformat()
+                except Exception:
+                    pass
+            if _dr._practice_already_ran(self.team, date_str):
+                # This week's session already ran (button or Sunday tick):
+                # store the selection for future Sundays without piling a
+                # second session onto the room.
+                _dr.ensure_dressing_room_fields(self.team)[
+                    "practice_plan"] = {"focus": focus,
+                                       "intensity": intensity,
+                                       "bag_skate": bag}
+                self._plan_status.configure(
+                    text="Plan saved for the next session. This week's "
+                         "practice already ran.")
+            else:
+                rec = _dr.run_weekly_practice(
+                    self.team, focus=focus, intensity=intensity, bag_skate=bag,
+                    approved_by="GM", date_str=date_str)
+                eff = rec.get("effectiveness", 0)
+                self._plan_status.configure(
+                    text=f"Week set: {rec.get('focus')} / {rec.get('intensity')} "
+                         f"(effectiveness {eff}). Repeats Sundays until changed.")
+        except Exception as e:
+            self._plan_status.configure(text=f"Couldn't set plan: {e}")
+        self._refresh_practice_tab()
+
+
+class TacticsWindow(InGamePopup):
+    """Popup wrapper around TacticsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("Team Tactics")
+        self._view = TacticsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+
+class TradeBlockWindow(InGamePopup):
     """
     Enhanced Trade Block window with filtering, sorting, bulk actions, context menu, and summary.
     """
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
@@ -12107,7 +19991,6 @@ class TradeBlockWindow(tk.Toplevel):
         # --- Title bar ---
         title_bar = ttk.Frame(self, style='TitleBar.TFrame')
         title_bar.pack(fill="x")
-        ttk.Label(title_bar, text="Manage Trade Block", style='Title.TLabel', padding=(10, 8)).pack(side="left")
         # Team logo (placeholder)
         logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=parent.TITLE_BAR_COLOR, highlightthickness=0)
         logo_canvas.pack(side="right", padx=8)
@@ -12362,7 +20245,7 @@ class TradeBlockWindow(tk.Toplevel):
             messagebox.showinfo("Shop Player", "No players selected.")
             return
             
-        shop_window = tk.Toplevel(self)
+        shop_window = InGamePopup(self)
         shop_window.title("Shop Players")
         shop_window.geometry("700x500")
         shop_window.configure(bg=self.parent.BG_COLOR)
@@ -12584,7 +20467,7 @@ class TradeBlockWindow(tk.Toplevel):
         return interested
 
     def _update_summary(self):
-        block = self.parent.trade_block
+        block = self.app.trade_block
         n_block = len(block)
         avg_ovr = int(sum(p.overall_rating() for p in block) / n_block) if n_block else 0
         cap_freed = sum(p.contract.salary for p in block if p.contract.years_remaining > 0)
@@ -12592,12 +20475,12 @@ class TradeBlockWindow(tk.Toplevel):
 
     def simulate_trade_offers(self):
         """Manually trigger trade offers for players on the trade block."""
-        if not self.parent.trade_block:
+        if not self.app.trade_block:
             messagebox.showinfo("No Players on Block", "Add players to the trade block first.")
             return
         
         # Call the parent's method to process trade block offers
-        self.parent.process_trade_block_offers()
+        self.app.process_trade_block_offers()
         
         # Update the view
         self._populate_tree()
@@ -12605,15 +20488,15 @@ class TradeBlockWindow(tk.Toplevel):
     def update_views(self):
         self._populate_tree()
         
-class ContractExtensionsWindow(tk.Toplevel):
+class ContractExtensionsView(ctk.CTkFrame):
     """Window for handling contract extensions."""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Contract Extensions")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(1000, 600)
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the ContractExtensionsWindow wrapper
+        parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        self.configure(fg_color=parent.BG_COLOR)
         
         # Ensure global constants are accessible
         global SALARY_CAP
@@ -12629,17 +20512,10 @@ class ContractExtensionsWindow(tk.Toplevel):
         main_frame = ttk.Frame(self, style='Dark.TFrame', padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Title and description
+        # Description
         header_frame = ttk.Frame(main_frame, style='TitleBar.TFrame', padding=(10, 5))
         header_frame.pack(fill=tk.X, pady=(0, 10))
         
-        title_label = ttk.Label(
-            header_frame, 
-            text="CONTRACT EXTENSIONS", 
-            style='Title.TLabel',
-            font=(self.parent.FONT_FAMILY, 16, 'bold')
-        )
-        title_label.pack(side=tk.LEFT)
         
         desc_label = ttk.Label(
             header_frame, 
@@ -12655,7 +20531,7 @@ class ContractExtensionsWindow(tk.Toplevel):
         # Use the live league cap (grows each season)
         current_payroll = self.get_current_payroll()
         projected_space = self.get_projected_cap_space()
-        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        _live = self.app.get_live_cap() if hasattr(self.app, 'get_live_cap') else SALARY_CAP
         cap_info_text = f"Salary Cap: ${_live:,}  |  Current Payroll: ${current_payroll:,}  |  Projected Space: ${projected_space:,}"
         cap_info = ttk.Label(team_frame, text=cap_info_text, style='Info.TLabel')
         cap_info.pack()
@@ -12689,7 +20565,7 @@ class ContractExtensionsWindow(tk.Toplevel):
         
         # Configure columns and headings
         for i, (col, (text, width)) in enumerate(columns.items()):
-            self.tree.heading(col, text=text, command=lambda c=col: self.parent._sort_treeview_generic(self.tree, c, False))
+            self.tree.heading(col, text=text, command=lambda c=col: self.app._sort_treeview_generic(self.tree, c, False))
             self.tree.column(col, width=width, anchor=tk.W if col == 'name' else tk.CENTER)
         
         # Populate the treeview
@@ -12733,7 +20609,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             button_frame, 
             text="Close", 
             style='TButton',
-            command=self.destroy
+            command=self.close_view
         )
         self.close_button.pack(side=tk.RIGHT, padx=5)
         
@@ -12743,12 +20619,11 @@ class ContractExtensionsWindow(tk.Toplevel):
         height = self.winfo_height()
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
         
     def get_eligible_players(self):
         """Get all players with one year left on their contract."""
         eligible = []
-        team = self.parent.game_manager.user_team
+        team = self.app.game_manager.user_team
         
         # Find players with 1 year left on contract
         for player in team.roster:
@@ -12765,7 +20640,7 @@ class ContractExtensionsWindow(tk.Toplevel):
     def get_current_payroll(self):
         """Calculate the current team payroll."""
         payroll = 0
-        for player in self.parent.game_manager.user_team.roster:
+        for player in self.app.game_manager.user_team.roster:
             salary = getattr(player, "salary", getattr(player.contract, "salary", 0))
             payroll += salary
         return payroll
@@ -12782,19 +20657,19 @@ class ContractExtensionsWindow(tk.Toplevel):
         )
         
         # Use the live league cap
-        _live = self.parent.get_live_cap() if hasattr(self.parent, 'get_live_cap') else SALARY_CAP
+        _live = self.app.get_live_cap() if hasattr(self.app, 'get_live_cap') else SALARY_CAP
         return _live - (current_payroll - expiring_salary)
     
     def calculate_market_value(self, player):
         """Calculate the market value of a player.
 
-        Cap-relative: the base (ovr * 100k at the $83.5M baseline) is
+        Cap-relative: the base (ovr * 100k) is
         expressed as a cap % and repriced against the live cap, so market
         values rise as the cap grows.
         """
         from salary_cap_system import DEFAULT_CAP
-        _live = self.parent.get_live_cap() if hasattr(
-            self.parent, 'get_live_cap') else DEFAULT_CAP
+        _live = self.app.get_live_cap() if hasattr(
+            self.app, 'get_live_cap') else DEFAULT_CAP
         # Base value determined by overall rating, scaled to live cap
         base_value = player.overall_rating() * 100000 * (_live / DEFAULT_CAP)
         
@@ -12866,7 +20741,7 @@ class ContractExtensionsWindow(tk.Toplevel):
             
             # Determine morale status for display
             morale_str = ""
-            if player.morale >= 15:
+            if player.morale >= 75:
                 morale_str = "Very Happy"
                 morale_tag = "high_morale"
             elif player.morale >= 10:
@@ -12923,11 +20798,11 @@ class ContractExtensionsWindow(tk.Toplevel):
             return
         
         # Create context menu
-        context_menu = tk.Menu(self, tearoff=0, bg=self.parent.CONTENT_BG, fg=self.parent.TEXT_COLOR)
+        context_menu = tk.Menu(self, tearoff=0, bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR)
         context_menu.add_command(label=f"Negotiate with {player.full_name}", 
                                 command=lambda: self.negotiate_with_player(player))
         context_menu.add_command(label="View Player Profile", 
-                                command=lambda: self.parent.open_player_profile(player))
+                                command=lambda: self.app.open_player_profile(player))
         
         # Display the menu
         try:
@@ -12935,23 +20810,35 @@ class ContractExtensionsWindow(tk.Toplevel):
         finally:
             context_menu.grab_release()
     
+    def _say(self, text):
+        """Show a status message in-view (no popup)."""
+        if not hasattr(self, "_status_var"):
+            self._status_var = tk.StringVar(master=self, value="")
+            ttk.Label(self, textvariable=self._status_var,
+                      style="Secondary.TLabel",
+                      wraplength=720).pack(anchor="w", padx=10, pady=(0, 6))
+        self._status_var.set(text)
+
     def negotiate_with_player(self, player):
-        """Open negotiation window for a specific player."""
+        """Jump to the extension-negotiation screen for a specific player."""
         # Calculate market value
         market_value = self.calculate_market_value(player)
-        
+
         # Maximum contract length - NHL rules allow 8 years for your own players
         max_years = 8
-        
-        # Create negotiation window
-        negotiation_window = ContractNegotiationWindow(self.parent, player, market_value, max_years)
-        self.parent.open_windows['extension_negotiation'] = negotiation_window
-    
+
+        # Full-screen jump (was: broken ContractNegotiationWindow call with
+        # a market_value/max_years signature it never accepted)
+        self.app.show_screen("extension_negotiation",
+                             f"Extension: {player.full_name}",
+                             ExtensionNegotiationView, player, market_value,
+                             max_years)
+
     def negotiate_selected(self):
         """Negotiate with selected player(s)."""
         selected_items = self.tree.selection()
         if not selected_items:
-            messagebox.showinfo("No Selection", "Please select at least one player to negotiate with.")
+            self._say("Please select at least one player to negotiate with.")
             return
             
         results = []
@@ -12964,12 +20851,17 @@ class ContractExtensionsWindow(tk.Toplevel):
                 player.contract_years = 2  # Default offer for extension
                 
                 # Negotiate
-                accepted = self.parent.handle_contract_offer(player, extension=True)
+                accepted = self.app.handle_contract_offer(player, extension=True, notify="quiet")
                 results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.app.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -12989,12 +20881,17 @@ class ContractExtensionsWindow(tk.Toplevel):
             player.contract_years = 2  # Default offer for extension
             
             # Negotiate
-            accepted = self.parent.handle_contract_offer(player, extension=True)
+            accepted = self.app.handle_contract_offer(player, extension=True, notify="quiet")
             results.append(f"{player.full_name}: {'Accepted' if accepted else 'Rejected'}")
         
-        # Show results
-        msg = "Extension Results:\n" + "\n".join(results)
-        messagebox.showinfo("Negotiation Results", msg)
+        # One inbox digest instead of a popup per player (FM24 style)
+        from game_classes import EmailMessage
+        self.app.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Extension Results",
+            content="Extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
         
         # Refresh the view after negotiations
         self.eligible_players = self.get_eligible_players()
@@ -13002,10 +20899,10 @@ class ContractExtensionsWindow(tk.Toplevel):
         
     def show_contract_features_help(self):
         """Show help information about the enhanced contract features."""
-        help_window = tk.Toplevel(self)
+        help_window = InGamePopup(self)
         help_window.title("NHL-Style Contract Features")
         help_window.geometry("700x500")
-        help_window.configure(background=self.parent.BG_COLOR)
+        help_window.configure(background=self.app.BG_COLOR)
         
         main_frame = ttk.Frame(help_window, style='Panel.TFrame', padding=15)
         main_frame.pack(fill='both', expand=True, padx=10, pady=10)
@@ -13013,12 +20910,12 @@ class ContractExtensionsWindow(tk.Toplevel):
         # Title
         ttk.Label(main_frame, 
                  text="NHL-Style Contract Features", 
-                 font=(self.parent.FONT_FAMILY, 16, 'bold'),
+                 font=(self.app.FONT_FAMILY, 16, 'bold'),
                  style='Header.TLabel').pack(anchor='w', pady=(0, 10))
         
         # Help text
-        help_text = tk.Text(main_frame, wrap='word', bg=self.parent.CONTENT_BG, 
-                           fg=self.parent.TEXT_COLOR, font=(self.parent.FONT_FAMILY, 10))
+        help_text = tk.Text(main_frame, wrap='word', bg=self.app.CONTENT_BG, 
+                           fg=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 10))
         help_text.pack(fill='both', expand=True, padx=5, pady=5)
         
         # Add scrollbar
@@ -13080,597 +20977,42 @@ estimated likelihood of the player accepting your offer.
             if player:
                 self.negotiate_with_player(player)
 
-class ExtensionNegotiationWindow(tk.Toplevel):
-    """Window for negotiating contract extensions with a player."""
-    
-    def __init__(self, parent, player, market_value=None):
-        super().__init__(parent)
-        self.parent = parent
-        self.player = player
-        
-        # Calculate market value if not provided
-        self.market_value = market_value or self.calculate_market_value(player)
-        
-        # Configure window
-        self.title(f"Contract Extension - {player.full_name}")
-        self.configure(background=parent.BG_COLOR)
-        self.minsize(800, 600)
-        
-        # Create main container with modern styling
-        main_frame = ttk.Frame(self, style='Dark.TFrame', padding=15)
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        # Header with player name
-        header_frame = ttk.Frame(main_frame, style='TitleBar.TFrame', padding=(10, 8))
-        header_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            header_frame, 
-            text=f"CONTRACT EXTENSION: {player.full_name.upper()}", 
-            style='Title.TLabel',
-            font=(parent.FONT_FAMILY, 16, 'bold')
-        ).pack(anchor=tk.W)
-                  
-        # Two column layout with a divider
-        content_frame = ttk.Frame(main_frame, style='Dark.TFrame')
-        content_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-        
-        # Left column - Player info
-        left_col = ttk.Frame(content_frame, style='Panel.TFrame', padding=15)
-        left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        # Vertical separator
-        separator = ttk.Separator(content_frame, orient='vertical')
-        separator.pack(side=tk.LEFT, fill=tk.Y, padx=15)
-        
-        # Right column - Contract offer
-        right_col = ttk.Frame(content_frame, style='Panel.TFrame', padding=15)
-        right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        
-        # --- PLAYER INFO (LEFT COLUMN) ---
-        
-        # Player header with visual styling
-        player_header = ttk.Frame(left_col, style='SubHeader.TFrame', padding=(5, 3))
-        player_header.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            player_header, 
-            text="PLAYER INFORMATION", 
-            style='SubTitle.TLabel',
-            font=(parent.FONT_FAMILY, 12, 'bold')
-        ).pack(anchor=tk.W)
-        
-        # Player display with jersey number and info
-        player_display = ttk.Frame(left_col, style='Dark.TFrame')
-        player_display.pack(fill=tk.X, pady=(0, 15))
-        
-        # Jersey number as visual element
-        jersey_frame = ttk.Frame(player_display, style='Dark.TFrame', width=80, height=80)
-        jersey_frame.grid(row=0, column=0, rowspan=3, padx=(0, 15), pady=5)
-        jersey_frame.pack_propagate(False)
-        
-        # Background circle for jersey number
-        jersey_circle = ttk.Frame(jersey_frame, style='Dark.TFrame')
-        jersey_circle.pack(expand=True)
-        jersey_circle.configure(width=60, height=60)
-        
-        jersey_label = ttk.Label(
-            jersey_circle, 
-            text=f"{player.jersey_number}", 
-            font=(parent.FONT_FAMILY, 24, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        )
-        jersey_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Player name and info
-        ttk.Label(
-            player_display, 
-            text=player.full_name, 
-            font=(parent.FONT_FAMILY, 14, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).grid(row=0, column=1, sticky=tk.W)
-        
-        position_age = f"{player.primary_position.name} | Age: {player.age}"
-        ttk.Label(
-            player_display, 
-            text=position_age, 
-            font=(parent.FONT_FAMILY, 12),
-            foreground=parent.TEXT_COLOR
-        ).grid(row=1, column=1, sticky=tk.W)
-        
-        # Status based on morale
-        status_text = "Very Happy" if player.morale >= 15 else \
-                     "Satisfied" if player.morale >= 10 else \
-                     "Concerned" if player.morale >= 5 else "Unhappy"
-                     
-        status_color = "#4CAF50" if player.morale >= 15 else \
-                      "#8BC34A" if player.morale >= 10 else \
-                      "#d29922" if player.morale >= 5 else "#f85149"
-        
-        ttk.Label(
-            player_display, 
-            text=f"Status: {status_text}", 
-            font=(parent.FONT_FAMILY, 12),
-            foreground=status_color
-        ).grid(row=2, column=1, sticky=tk.W)
-        
-        # Player attributes
-        attributes_frame = ttk.Frame(left_col, style='Panel.TFrame', padding=10)
-        attributes_frame.pack(fill=tk.X, pady=10)
-        attributes_frame.configure(relief='solid', borderwidth=1)
-        
-        # Title for attributes section
-        ttk.Label(
-            attributes_frame, 
-            text="KEY ATTRIBUTES", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Attributes grid for better alignment
-        attr_grid = ttk.Frame(attributes_frame, style='Dark.TFrame')
-        attr_grid.pack(fill=tk.X)
-        
-        # Rating display with visual styling
-        ttk.Label(attr_grid, text="Overall:", style='Info.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
-        
-        rating_value = ttk.Frame(attr_grid, style='Dark.TFrame', width=50, height=26)
-        rating_value.grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
-        rating_value.pack_propagate(False)
-        
-        ovr_bg_color = "#1A9B00" if player.overall_rating() >= 80 else \
-                      "#4CAF50" if player.overall_rating() >= 78 else \
-                      "#8BC34A" if player.overall_rating() >= 74 else \
-                      "#d29922" if player.overall_rating() >= 70 else "#FF9800"
-        
-        rating_label = ttk.Label(
-            rating_value,
-            text=f"{to_100_scale(player.overall_rating())}", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground="#FFFFFF",
-            background=ovr_bg_color
-        )
-        rating_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Potential with visual styling
-        ttk.Label(attr_grid, text="Potential:", style='Info.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
-        
-        pot_value = ttk.Frame(attr_grid, style='Dark.TFrame', width=50, height=26)
-        pot_value.grid(row=1, column=1, sticky=tk.W, pady=5, padx=10)
-        pot_value.pack_propagate(False)
-        
-        pot_bg_color = "#1A9B00" if player.potential_grade in ['A+', 'A'] else \
-                      "#4CAF50" if player.potential_grade in ['A-', 'B+'] else \
-                      "#8BC34A" if player.potential_grade in ['B', 'B-'] else \
-                      "#d29922" if player.potential_grade in ['C+', 'C'] else "#FF9800"
-        
-        pot_label = ttk.Label(
-            pot_value,
-            text=player.potential_grade, 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground="#FFFFFF",
-            background=pot_bg_color
-        )
-        pot_label.place(relx=0.5, rely=0.5, anchor='center')
-        
-        # Current contract details
-        contract_frame = ttk.Frame(left_col, style='Panel.TFrame', padding=10)
-        contract_frame.pack(fill=tk.X, pady=10)
-        contract_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            contract_frame, 
-            text="CURRENT CONTRACT", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Contract details grid
-        contract_grid = ttk.Frame(contract_frame, style='Dark.TFrame')
-        contract_grid.pack(fill=tk.X)
-        
-        current_salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
-        years_left = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 0))
-        
-        ttk.Label(contract_grid, text="Salary:", style='Info.TLabel').grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Label(
-            contract_grid, 
-            text=f"${current_salary:,}", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        ).grid(row=0, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        ttk.Label(contract_grid, text="Years Remaining:", style='Info.TLabel').grid(row=1, column=0, sticky=tk.W, pady=5)
-        ttk.Label(
-            contract_grid, 
-            text=str(years_left), 
-            font=(parent.FONT_FAMILY, 12)
-        ).grid(row=1, column=1, sticky=tk.W, pady=5, padx=10)
-        
-        # --- CONTRACT OFFER (RIGHT COLUMN) ---
-        
-        # Offer header
-        offer_header = ttk.Frame(right_col, style='SubHeader.TFrame', padding=(5, 3))
-        offer_header.pack(fill=tk.X, pady=(0, 15))
-        
-        ttk.Label(
-            offer_header, 
-            text="CONTRACT OFFER", 
-            style='SubTitle.TLabel',
-            font=(parent.FONT_FAMILY, 12, 'bold')
-        ).pack(anchor=tk.W)
-        
-        # Market value display with accent styling
-        market_frame = ttk.Frame(right_col, style='TitleBar.TFrame', padding=10)
-        market_frame.pack(fill=tk.X, pady=10)
-        market_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            market_frame, 
-            text="ESTIMATED MARKET VALUE", 
-            font=(parent.FONT_FAMILY, 11, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W)
-        
-        ttk.Label(
-            market_frame, 
-            text=f"${self.market_value:,}", 
-            font=(parent.FONT_FAMILY, 16, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        ).pack(anchor=tk.W, pady=5)
-        
-        # Player interest display
-        interest_level = "Very Interested" if player.morale >= 15 else \
-                        "Interested" if player.morale >= 10 else \
-                        "Somewhat Interested" if player.morale >= 5 else "Not Interested"
-                        
-        interest_color = "#4CAF50" if player.morale >= 15 else \
-                        "#8BC34A" if player.morale >= 10 else \
-                        "#d29922" if player.morale >= 5 else "#f85149"
-                        
-        interest_text = f"Player Interest: {interest_level}"
-        
-        interest_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        interest_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(
-            interest_frame, 
-            text=interest_text, 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=interest_color
-        ).pack(anchor=tk.W)
-        
-        # Rules info
-        rules_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        rules_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(
-            rules_frame, 
-            text="NHL Contract Rules", 
-            font=(parent.FONT_FAMILY, 11, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W)
-        
-        ttk.Label(
-            rules_frame, 
-            text="• Maximum 8 years for own players\n• Minimum salary: $750,000\n• All contracts are guaranteed", 
-            style='Info.TLabel',
-            justify=tk.LEFT
-        ).pack(anchor=tk.W, pady=5)
-        
-        # Offer inputs section
-        inputs_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        inputs_frame.pack(fill=tk.X, pady=10)
-        inputs_frame.configure(relief='solid', borderwidth=1)
-        
-        ttk.Label(
-            inputs_frame, 
-            text="YOUR OFFER", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        ).pack(anchor=tk.W, pady=(0, 10))
-        
-        # Salary input with visual enhancements
-        salary_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        salary_label_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            salary_label_frame, 
-            text="Salary Per Year:", 
-            font=(parent.FONT_FAMILY, 11),
-            foreground=parent.TEXT_COLOR
-        ).pack(anchor=tk.W)
-        
-        # Input with dollar sign
-        salary_input_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        salary_input_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(
-            salary_input_frame, 
-            text="$", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.TEXT_COLOR
-        ).pack(side=tk.LEFT)
-        
-        # Default to market value
-        self.salary_var = tk.StringVar(master=self, value=f"{self.market_value:,}")
-        salary_entry = ttk.Entry(salary_input_frame, textvariable=self.salary_var, width=15, font=(parent.FONT_FAMILY, 12))
-        salary_entry.pack(side=tk.LEFT, padx=5)
-        
-        # Salary guideline
-        min_salary = max(750000, int(self.market_value * 0.8))
-        max_salary = int(self.market_value * 1.2)
-        
-        guideline_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        guideline_frame.pack(fill=tk.X, pady=5)
-        
-        ttk.Label(
-            guideline_frame, 
-            text=f"Recommended Range: ${min_salary:,} to ${max_salary:,}",
-            font=(parent.FONT_FAMILY, 10),
-            foreground="#AAAAAA"
-        ).pack(anchor=tk.W)
-        
-        # Contract term with slider
-        term_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 10, 0, 0))
-        term_label_frame.pack(fill=tk.X)
-        
-        ttk.Label(
-            term_label_frame, 
-            text="Contract Length:", 
-            font=(parent.FONT_FAMILY, 11),
-            foreground=parent.TEXT_COLOR
-        ).pack(anchor=tk.W)
-        
-        # Max 8 years per NHL rules for extending own players
-        max_years = 8
-        
-        self.years_var = tk.IntVar(master=self, value=2)
-        years_scale_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 5))
-        years_scale_frame.pack(fill=tk.X)
-        
-        years_scale = ttk.Scale(
-            years_scale_frame, 
-            from_=1, 
-            to=max_years, 
-            variable=self.years_var,
-            orient=tk.HORIZONTAL
-        )
-        years_scale.pack(fill=tk.X)
-        
-        # Year labels below slider
-        years_label_frame = ttk.Frame(inputs_frame, style='Dark.TFrame')
-        years_label_frame.pack(fill=tk.X, pady=5)
-        
-        # Create tick marks for each year
-        for year in range(1, max_years + 1):
-            year_percent = (year - 1) / (max_years - 1)
-            year_frame = ttk.Frame(years_label_frame, style='Dark.TFrame')
-            year_frame.place(relx=year_percent, rely=0, anchor=tk.N)
-            
-            ttk.Label(
-                year_frame, 
-                text=str(year), 
-                font=(parent.FONT_FAMILY, 9),
-                foreground="#AAAAAA"
-            ).pack()
-        
-        # Current selected years display
-        selected_years_frame = ttk.Frame(inputs_frame, style='Dark.TFrame', padding=(0, 5))
-        selected_years_frame.pack(fill=tk.X)
-        
-        years_display = ttk.Label(
-            selected_years_frame, 
-            text="2 Years", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.ACCENT_COLOR
-        )
-        years_display.pack(anchor=tk.CENTER)
-        
-        # Update year display when slider changes
-        def update_years_display(*args):
-            years = self.years_var.get()
-            years_display.configure(text=f"{years} {'Year' if years == 1 else 'Years'}")
-            
-        self.years_var.trace_add("write", update_years_display)
-        
-        # Total contract value
-        total_frame = ttk.Frame(right_col, style='Panel.TFrame', padding=10)
-        total_frame.pack(fill=tk.X, pady=10)
-        
-        self.total_value_label = ttk.Label(
-            total_frame, 
-            text="Total Contract: $0", 
-            font=(parent.FONT_FAMILY, 12, 'bold'),
-            foreground=parent.HEADER_COLOR
-        )
-        self.total_value_label.pack(anchor=tk.W)
-        
-        # Update total when values change
-        def update_total(*args):
-            try:
-                salary_str = self.salary_var.get().replace(',', '')
-                salary = int(salary_str)
-                years = self.years_var.get()
-                total = salary * years
-                self.total_value_label.configure(text=f"Total Contract: ${total:,}")
-            except ValueError:
-                self.total_value_label.configure(text="Total Contract: $0")
-                
-        self.salary_var.trace_add("write", update_total)
-        self.years_var.trace_add("write", update_total)
-        
-        # Trigger initial update
-        update_total()
-        
-        # Action buttons
-        buttons_frame = ttk.Frame(main_frame, style='Dark.TFrame', padding=(0, 15, 0, 0))
-        buttons_frame.pack(fill=tk.X)
-        
-        submit_btn = ttk.Button(
-            buttons_frame, 
-            text="Submit Offer", 
-            style='Accent.TButton',
-            command=self.submit_offer
-        )
-        submit_btn.pack(side=tk.RIGHT, padx=5)
-        
-        cancel_btn = ttk.Button(
-            buttons_frame, 
-            text="Cancel", 
-            style='Secondary.TButton',
-            command=self.destroy
-        )
-        cancel_btn.pack(side=tk.RIGHT, padx=5)
-        
-        # Center window on screen
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f'{width}x{height}+{x}+{y}')
-        
-    def calculate_market_value(self, player):
-        """Calculate the player's market value based on attributes."""
-        # Base value determined by overall rating
-        base_value = player.overall_rating() * 100000
-        
-        # Age modifier - players in their prime (23-29) get premium
-        age_modifier = 1.0
-        if 23 <= player.age <= 29:
-            age_modifier = 1.2
-        elif player.age >= 30:
-            # Declining value with age
-            age_modifier = max(0.5, 1.0 - ((player.age - 30) * 0.05))
-        
-        # Position modifier - centers and first-line defensemen get premium
-        position_modifier = 1.0
-        if player.primary_position.name == 'C':
-            position_modifier = 1.15
-        elif player.primary_position.name in ['LD', 'RD']:
-            position_modifier = 1.1
-        elif player.primary_position.name == 'G':
-            # Goalies have different value curve
-            position_modifier = 1.0 if player.overall_rating() >= 80 else 0.9
-        
-        # Potential modifier for young players
-        potential_modifier = 1.0
-        if player.age <= 25:
-            potential_map = {'A+': 1.5, 'A': 1.4, 'B+': 1.3, 'B': 1.2, 'C+': 1.1}
-            grade = player.potential_grade
-            potential_modifier = potential_map.get(grade, 1.0)
-        
-        # Calculate final market value
-        market_value = base_value * age_modifier * position_modifier * potential_modifier
-        
-        # Round to nearest $50,000 for clean numbers
-        market_value = round(market_value / 50000) * 50000
-        
-        # Minimum NHL salary
-        min_salary = 750000
-        
-        return max(min_salary, int(market_value))
-                  
-    def submit_offer(self):
-        """Process the contract extension offer."""
-        try:
-            # Parse the salary value, removing commas
-            salary_str = self.salary_var.get().replace(',', '')
-            salary = int(salary_str)
-            years = self.years_var.get()
-            
-            # Input validation
-            if salary < 750000:
-                messagebox.showerror("Invalid Salary", "Salary must be at least $750,000 (league minimum).")
-                return
-                
-            if years < 1 or years > 8:
-                messagebox.showerror("Invalid Term", "Contract term must be between 1 and 8 years.")
-                return
-            
-            # Set the values on the player object first
-            self.player.salary = salary
-            self.player.contract_years = years
-            
-            # Determine if player accepts based on how fair the offer is
-            fair_value = self.market_value
-            offer_percent = salary / fair_value
-            
-            # Base acceptance chance
-            accept_chance = 0.5
-            
-            # Adjust based on offer vs market value
-            if offer_percent >= 1.1:  # Great offer
-                accept_chance = 0.9
-            elif offer_percent >= 1.0:  # Fair offer
-                accept_chance = 0.7
-            elif offer_percent >= 0.9:  # Slightly under market
-                accept_chance = 0.5
-            elif offer_percent >= 0.8:  # Under market
-                accept_chance = 0.3
-            else:  # Way under market
-                accept_chance = 0.1
-                
-            # Adjust based on player morale
-            if self.player.morale >= 15:  # Very happy
-                accept_chance += 0.2
-            elif self.player.morale >= 10:  # Happy
-                accept_chance += 0.1
-            elif self.player.morale < 5:  # Unhappy
-                accept_chance -= 0.2
-                
-            # Cap at 0.95 - always a small chance to reject
-            accept_chance = min(0.95, accept_chance)
-            
-            # Determine if accepted
-            accepted = random.random() < accept_chance
-            
-            # Apply the result
-            if accepted:
-                # Update contract details
-                self.player.contract.salary = salary
-                self.player.contract.years_remaining = years
-                
-                # Set extension flag to avoid free agency
-                self.player.contract.is_extended = True
-                
-                # Adjust morale based on quality of deal
-                if offer_percent >= 1.1:
-                    self.player.morale = min(20, self.player.morale + 2)
-                elif offer_percent >= 1.0:
-                    self.player.morale = min(20, self.player.morale + 1)
-                
-                messagebox.showinfo(
-                    "Contract Accepted", 
-                    f"{self.player.full_name} has accepted your extension offer for ${salary:,} over {years} years."
-                )
-            else:
-                # Determine counter offer if rejected
-                counter_salary = max(int(fair_value * 1.05), salary + 250000)
-                counter_salary = round(counter_salary / 50000) * 50000  # Round to nearest 50k
-                
-                # Adjust morale down slightly for rejection
-                self.player.morale = max(1, self.player.morale - 1)
-                
-                message = f"{self.player.full_name} has rejected your extension offer for ${salary:,} over {years} years.\n\n"
-                message += f"Agent: \"We were hoping for something closer to ${counter_salary:,} per year.\""
-                
-                messagebox.showinfo("Contract Rejected", message)
-            
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
             self.destroy()
-            
-            # Refresh any open contract extension windows
-            for window_name, window in self.parent.open_windows.items():
-                if isinstance(window, ContractExtensionsWindow) and window.winfo_exists():
-                    window.eligible_players = window.get_eligible_players()
-                    window._populate_tree()
-                    
-        except ValueError:
-            messagebox.showerror("Invalid Input", "Please enter a valid number for salary.")
 
-class GMOptionsWindow(ctk.CTkToplevel):
-    """GM Options - executive management tools.
+class ContractExtensionsWindow(InGamePopup):
+    """Popup wrapper around ContractExtensionsView (backward compatibility).
+
+    New code should embed ContractExtensionsView as a full-screen view via
+    HockeyManagerGUI.show_screen() instead of opening this card.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self._view = ContractExtensionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
+# NOTE: main.py's old ExtensionNegotiationWindow was dead code (no callers;
+# the live implementation is windows.ExtensionNegotiationView). It is kept as
+# a re-exported alias so any dynamic reference still resolves.
+ExtensionNegotiationWindow = _WindowsExtensionNegotiationWindow
+class GMOptionsView(ctk.CTkFrame):
+    """GM Options - executive management tools, as an embeddable view.
 
     CustomTkinter rebuild: charcoal background, rounded section cards,
     teal-accented buttons, CTkSegmentedButton for the game-presentation
@@ -13680,14 +21022,12 @@ class GMOptionsWindow(ctk.CTkToplevel):
     open_windows registration pattern used by the caller.
     """
 
-    def __init__(self, parent):
+    def __init__(self, parent, app=None):
         init_ctk_theme()
-        super().__init__(parent)
-        self.parent = parent
-        self.title("GM Options")
-        self.geometry("520x760")
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen() or the GMOptionsWindow wrapper
         self.configure(fg_color=BG)
-        self.resizable(True, True)
 
         # Header - plain chrome, not a card
         header = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
@@ -13703,7 +21043,7 @@ class GMOptionsWindow(ctk.CTkToplevel):
 
         self._build_section(content, "Player Management", [
             ("Player Shortlist", self.open_shortlist_window),
-            ("Set Captains", parent.open_set_captains_window),
+            ("Set Captains", self.app.open_set_captains_window),
         ])
         self._build_section(content, "Executive Actions", [
             ("GM Dashboard", self.open_gm_dashboard),
@@ -13712,18 +21052,27 @@ class GMOptionsWindow(ctk.CTkToplevel):
         ])
         self._build_section(content, "Quick Actions", [
             ("Auto-Negotiate Extensions", self.auto_negotiate_extensions),
-            ("Check Inbox", parent.open_inbox_window),
+            ("Check Inbox", self.app.open_inbox_window),
         ])
         self._build_presentation_section(content)
 
         # Close - primary pill pinned at the bottom
         footer = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         footer.pack(fill="x", padx=24, pady=(0, 18))
-        primary_button(footer, "Close", command=self.destroy).pack(fill="x")
+        primary_button(footer, "Close", command=self.close_view).pack(fill="x")
+
+    def close_view(self):
+        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
 
     # ------------------------------------------------------------------
     # Layout helpers
     # ------------------------------------------------------------------
+
     def _build_section(self, parent, title, buttons):
         """Rounded card with a heading and full-width action buttons."""
         card = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
@@ -13745,10 +21094,10 @@ class GMOptionsWindow(ctk.CTkToplevel):
         heading(card, "Your games:", size=11, text_color=TEXT_DIM).pack(
             anchor="w", padx=16)
 
-        labels = [lbl for lbl, _ in self.parent.GAME_MODE_LABELS]
-        current = self.parent._get_user_game_mode()
+        labels = [lbl for lbl, _ in self.app.GAME_MODE_LABELS]
+        current = self.app._get_user_game_mode()
         initial_label = next(
-            (lbl for lbl, key in self.parent.GAME_MODE_LABELS if key == current),
+            (lbl for lbl, key in self.app.GAME_MODE_LABELS if key == current),
             labels[0])
         self._mode_seg = ctk.CTkSegmentedButton(
             card, values=labels, command=self._on_mode_pick,
@@ -13768,27 +21117,26 @@ class GMOptionsWindow(ctk.CTkToplevel):
     # ------------------------------------------------------------------
     # Actions (logic unchanged from the ttk version)
     # ------------------------------------------------------------------
+
     def _on_mode_pick(self, label):
-        key = next((k for lbl, k in self.parent.GAME_MODE_LABELS if lbl == label),
+        key = next((k for lbl, k in self.app.GAME_MODE_LABELS if lbl == label),
                    'ask')
-        self.parent._set_user_game_mode(key)
+        self.app._set_user_game_mode(key)
 
     def open_shortlist_window(self):
         """Open the player shortlist management window"""
-        from shortlist_system import ShortlistWindow
-        if 'shortlist' not in self.parent.open_windows or not self.parent.open_windows['shortlist'].winfo_exists():
-            self.parent.open_windows['shortlist'] = ShortlistWindow(self.parent)
-        self.parent.open_windows['shortlist'].focus_set()
+        from shortlist_system import ShortlistView
+        self.app.show_screen("shortlist", "Shortlist", ShortlistView)
 
     def open_gm_dashboard(self):
         """Open GM dashboard with key team metrics"""
-        from windows import GMDashboardWindow
-        GMDashboardWindow(self.parent)
+        from windows import GMDashboardView
+        self.app.show_screen("gm_dashboard", "GM Dashboard", GMDashboardView)
 
     def open_team_analytics(self):
         """Open advanced team analytics"""
-        from windows import TeamAnalyticsWindow
-        TeamAnalyticsWindow(self.parent)
+        from windows import TeamAnalyticsView
+        self.app.show_screen("team_analytics", "Team Analytics", TeamAnalyticsView)
 
     def open_season_goals(self):
         """Open season goals and objectives"""
@@ -13798,7 +21146,7 @@ class GMOptionsWindow(ctk.CTkToplevel):
     def auto_negotiate_extensions(self):
         """Auto-negotiate contract extensions with expiring players"""
         expiring = []
-        team = self.parent.user_team
+        team = self.app.user_team
 
         # Find players with 1 year left on contract
         for player in team.roster + team.ahl_roster:
@@ -13836,11 +21184,37 @@ class GMOptionsWindow(ctk.CTkToplevel):
                 years = getattr(person, "contract_years", 1)
             person.salary = salary
             person.contract_years = years
-            accepted = self.parent.handle_contract_offer(person, extension=True)
+            accepted = self.app.handle_contract_offer(person, extension=True, notify="quiet")
             results.append(f"{getattr(person, 'full_name', getattr(person, 'name', 'Unknown'))}: {'Accepted' if accepted else 'Rejected'}")
 
-        msg = "Auto-Negotiation Results:\n" + "\n".join(results)
-        messagebox.showinfo("Extension Results", msg)
+        # One inbox digest instead of a popup (FM24 style)
+        from game_classes import EmailMessage
+        self.app.send_email_to_user(EmailMessage(
+            sender="System", sender_type="System", date_sent=date.today(),
+            category="Contracts", priority=2,
+            subject="Auto-Negotiation Results",
+            content="Automatic extension negotiations complete:\n" + "\n".join(
+                f"\u2022 {r}" for r in results)))
+
+class GMOptionsWindow(InGamePopup):
+    """Popup wrapper around GMOptionsView (backward compatibility)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.title("GM Options")
+        self._view = GMOptionsView(self, app=parent)
+        self._view._close_screen = self.destroy
+        self._view.pack(fill="both", expand=True)
+
+    def __getattr__(self, name):
+        view = self.__dict__.get("_view")
+        if view is not None:
+            try:
+                return getattr(view, name)
+            except AttributeError:
+                pass
+        return InGamePopup.__getattr__(self, name)
+
 
 def test_enhanced_simulation():
     """Test the enhanced simulation and game viewer integration"""
@@ -14007,7 +21381,7 @@ def main():
         print("Critical error launching Hockey Manager:", e)
         traceback.print_exc()
         try:
-            from tkinter import messagebox
+            from popup_system import messagebox
             messagebox.showerror("Critical Launch Error", f"Failed to start Hockey Manager:\n{str(e)}")
         except:
             pass
@@ -14029,7 +21403,7 @@ def _launch_with_imported_league(config):
     Puck Dynasty League. Runs the same post-generation setup as
     GameManager.apply_startup_settings (draft picks, settings, schedule).
     """
-    from tkinter import messagebox
+    from popup_system import messagebox
     try:
         print("Starting Puck Dynasty with imported rosters...")
         settings = {
@@ -14096,7 +21470,7 @@ def _launch_with_wizard():
     Returns True if a game was launched, False if the user cancelled.
     """
     import tkinter as tk
-    from tkinter import messagebox
+    from popup_system import messagebox
     from new_game_setup import open_setup_wizard, build_database_config
 
     holder = {}
@@ -14126,6 +21500,7 @@ def _launch_with_wizard():
             'gm_name': config['gm_name'],
             'fog_of_war': config['fog_of_war'],
             'sim_detail': config['sim_detail'],
+            'playoff_format': config.get('playoff_format', 'divisional'),
         }
         gm = GameManager()
         gm.apply_startup_settings(settings)
@@ -14148,7 +21523,597 @@ def _launch_with_wizard():
         return False
 
 
+class LeagueHistoryView(ctk.CTkFrame):
+    """League History: Champions, Awards, Career Leaders, Hall of Fame.
+
+    Reads from the career's LeagueHistory archive (populated at season end
+    via _record_season_to_history). Non-modal card.
+    """
+
+    def __init__(self, parent, game_manager, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.game_manager = game_manager
+        self._close_screen = None  # set by show_screen() or wrapper
+        self.content = ctk.CTkFrame(self)
+        self.content.pack(fill="both", expand=True)
+        self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _history(self):
+        from league_history import LeagueHistory
+        h = getattr(self.game_manager, 'league_history', None)
+        if h is None:
+            h = LeagueHistory()
+            self.game_manager.league_history = h
+        return h
+
+    def _build(self):
+        import tkinter as tk
+        from tkinter import ttk
+        h = self._history()
+
+        # Note for fresh careers
+        if not h.seasons:
+            first = getattr(h, 'first_season_year', None)
+            note = ("No completed seasons yet. History begins with the "
+                    "current season.")
+            ttk.Label(self.content, text=note, font=('Arial', 10, 'italic')).pack(pady=10)
+
+        notebook = ttk.Notebook(self.content)
+        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+
+        # Champions tab
+        champ_frame = ttk.Frame(notebook)
+        notebook.add(champ_frame, text="Champions")
+        self._build_champions(champ_frame, h)
+
+        # Awards tab
+        awards_frame = ttk.Frame(notebook)
+        notebook.add(awards_frame, text="Awards")
+        self._build_awards(awards_frame, h)
+
+        # Career Leaders tab
+        leaders_frame = ttk.Frame(notebook)
+        notebook.add(leaders_frame, text="Career Leaders")
+        self._build_leaders(leaders_frame, h)
+
+        # Hall of Fame tab
+        hof_frame = ttk.Frame(notebook)
+        notebook.add(hof_frame, text="Hall of Fame")
+        self._build_hof(hof_frame, h)
+
+        # Advanced Stats tab
+        adv_frame = ttk.Frame(notebook)
+        notebook.add(adv_frame, text="Advanced Stats")
+        self._build_advanced(adv_frame, h)
+
+        # Franchise Records tab
+        fr_frame = ttk.Frame(notebook)
+        notebook.add(fr_frame, text="Franchise Records")
+        self._build_franchise_records(fr_frame, h)
+
+        # Season Reviews tab (end-of-season cards, newest first)
+        sr_frame = ttk.Frame(notebook)
+        notebook.add(sr_frame, text="Season Reviews")
+        self._build_season_reviews(sr_frame)
+
+    def _build_season_reviews(self, parent):
+        """Archived end-of-season review cards, per club's own history.
+
+        Every NHL club keeps its own cards on team.season_reviews (written
+        at deliver_season_review() each offseason); pick a club, pick a
+        season, read the card. Defaults to the user's club, newest first.
+        """
+        import tkinter as tk
+        from tkinter import ttk
+
+        gm = self.game_manager
+        clubs = [t for t in (list(getattr(gm, "teams", []) or []) +
+                             list(getattr(gm, "league_teams", []) or []))
+                 if getattr(t, "league_name", "") == "National Hockey League"]
+        names = sorted({getattr(t, "team_name", "?") for t in clubs})
+        user_name = getattr(getattr(gm, "user_team", None), "team_name", "")
+
+        top = ttk.Frame(parent)
+        top.pack(fill='x', padx=10, pady=(10, 4))
+        ttk.Label(top, text="Club:", font=('Arial', 10, 'bold')).pack(side='left')
+        team_var = tk.StringVar(value=user_name if user_name in names
+                                else (names[0] if names else ""))
+        team_combo = ttk.Combobox(top, textvariable=team_var, values=names,
+                                  state='readonly', width=28)
+        team_combo.pack(side='left', padx=8)
+        season_var = tk.StringVar()
+        season_combo = ttk.Combobox(top, textvariable=season_var,
+                                    state='readonly', width=22)
+        season_combo.pack(side='left', padx=8)
+
+        body = ttk.Frame(parent)
+        body.pack(fill='both', expand=True, padx=10, pady=(0, 10))
+        text = tk.Text(body, wrap='word', font=('Courier', 9), state='disabled')
+        scroll = ttk.Scrollbar(body, orient='vertical', command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+
+        def _team(name):
+            for t in clubs:
+                if getattr(t, "team_name", "") == name:
+                    return t
+            return None
+
+        def _render(_event=None):
+            archive = dict(getattr(_team(team_var.get()),
+                                   "season_reviews", None) or {})
+            years = sorted(archive.keys(), reverse=True)
+            labels = [f"{archive[y].get('label', y)} ({y})" for y in years]
+            season_combo["values"] = labels
+            if labels and season_var.get() not in labels:
+                season_var.set(labels[0])
+            text.configure(state='normal')
+            text.delete('1.0', 'end')
+            if not years:
+                text.insert('end', "No season reviews archived for this club yet. "
+                                  "They appear here at the end of each season.")
+            else:
+                try:
+                    year = years[labels.index(season_var.get())]
+                except ValueError:
+                    year = years[0]
+                text.insert('end', "\n".join(
+                    archive[year].get("lines", [])))
+            text.configure(state='disabled')
+
+        team_combo.bind("<<ComboboxSelected>>", _render)
+        season_combo.bind("<<ComboboxSelected>>", _render)
+        _render()
+
+    def _build_advanced(self, parent, h):
+        """Team advanced metrics + league leaders in advanced categories."""
+        import tkinter as tk
+        from tkinter import ttk
+        from advanced_metrics import team_advanced, league_leaders_advanced, GLOSSARY
+
+        gm = self.game_manager
+        teams = list(getattr(gm, "teams", []) or getattr(gm, "league_teams", []))
+
+        # Team advanced table
+        ttk.Label(parent, text="Team Advanced Metrics (5v5 process)",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        ttk.Label(parent,
+                  text="Modeled estimates from attributes and production -- not tracking data. "
+                       "Hover a column header for what each metric is (and isn't).",
+                  font=('Arial', 8, 'italic')).pack(anchor='w', padx=10, pady=(0, 4))
+        cols = ["Team", "CF%", "FF%", "xGF%", "GF%", "PDO", "PP%", "PK%", "SRS"]
+        tree = ttk.Treeview(parent, columns=cols, show='headings', height=12)
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=80 if c != "Team" else 170, anchor='center' if c != "Team" else 'w')
+        for t in teams:
+            try:
+                m = team_advanced(t)
+                tree.insert('', 'end', values=(
+                    getattr(t, "team_name", "?"), m.cf_pct, m.ff_pct, m.xgf_pct,
+                    m.gf_pct, f"{m.pdo:.3f}", m.pp_pct, m.pk_pct, m.srs))
+            except Exception:
+                continue
+        tree.pack(fill='x', padx=10, pady=5)
+
+        # League leaders in advanced categories
+        ttk.Label(parent, text="League Leaders — Advanced",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(10, 4))
+        players = []
+        for t in teams:
+            players += list(getattr(t, "roster", []) or [])
+        cats = [("ixG", "ixg"), ("xGF%", "xgf_pct"), ("Corsi%", "cf_pct"),
+                ("PDO", "pdo"), ("P/60", "p_per60"), ("Game Score", "game_score"),
+                ("GSAx", "gsax")]
+        cat_frame = ttk.Frame(parent)
+        cat_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        for i, (label, cat) in enumerate(cats):
+            col = ttk.Frame(cat_frame)
+            col.pack(side='left', fill='both', expand=True, padx=4)
+            hdr = ttk.Label(col, text=label, font=('Arial', 9, 'bold'))
+            hdr.pack(anchor='w')
+            tip = GLOSSARY.get(label, "")
+            if tip:
+                hdr.bind("<Enter>", lambda e, t=tip: self._show_tip(e, t))
+            try:
+                leaders = league_leaders_advanced(players, cat, limit=5)
+            except Exception:
+                leaders = []
+            for j, r in enumerate(leaders):
+                v = r["value"]
+                vs = f"{v:.1f}" if isinstance(v, float) and cat != "pdo" else (
+                    f"{v:.3f}" if cat == "pdo" else str(v))
+                ttk.Label(col, text=f"{j+1}. {r['name']} ({vs})",
+                          font=('Arial', 8)).pack(anchor='w')
+
+    def _show_tip(self, event, text):
+        try:
+            from tkinter import Toplevel, Label
+            tip = Toplevel()
+            tip.wm_overrideredirect(True)
+            tip.geometry(f"+{event.x_root+10}+{event.y_root+10}")
+            Label(tip, text=text, wraplength=280, justify='left',
+                  background="#ffffe0", relief='solid', borderwidth=1,
+                  font=('Arial', 8)).pack()
+            def _close(_e=None):
+                try: tip.destroy()
+                except Exception: pass
+            event.widget.bind("<Leave>", _close, add='+')
+            tip.after(4000, _close)
+        except Exception:
+            pass
+
+    def _build_franchise_records(self, parent, h):
+        """Franchise record book: pick a team, see its all-time records."""
+        import tkinter as tk
+        from tkinter import ttk
+        fr = getattr(h, "franchise_records", None)
+        if fr is None:
+            ttk.Label(parent, text="Franchise records not yet tracked.").pack(pady=20)
+            return
+        teams = fr.all_teams()
+        gm = self.game_manager
+        if not teams:
+            # Offer all league teams so the view isn't empty
+            teams = sorted({getattr(t, "team_name", "?")
+                            for t in (list(getattr(gm, "teams", []) or []) +
+                                      list(getattr(gm, "league_teams", []) or []))})
+
+        top = ttk.Frame(parent)
+        top.pack(fill='x', padx=10, pady=10)
+        ttk.Label(top, text="Franchise:", font=('Arial', 10, 'bold')).pack(side='left')
+        team_var = tk.StringVar(value=teams[0] if teams else "")
+        combo = ttk.Combobox(top, textvariable=team_var, values=teams,
+                             state='readonly', width=30)
+        combo.pack(side='left', padx=8)
+
+        body = ttk.Frame(parent)
+        body.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def _fmt_value(cat, v):
+            if cat in ("save_pct",):
+                return f"{v:.3f}"
+            if isinstance(v, float):
+                return f"{v:.1f}" if v % 1 else str(int(v))
+            return str(v)
+
+        def _refresh(*_a):
+            for w in body.winfo_children():
+                w.destroy()
+            tn = team_var.get()
+            sections = [
+                ("Skater — Career Franchise Records", fr.get_career_records(tn),
+                 {"games": "Most games", "goals": "Most goals", "assists": "Most assists",
+                  "points": "Most points", "pim": "Most PIM", "shots": "Most shots"}),
+                ("Skater — Single-Season Records", fr.get_season_records(tn),
+                 {"goals": "Most goals", "assists": "Most assists", "points": "Most points",
+                  "shots": "Most shots", "pim": "Most PIM"}),
+            ]
+            gr = fr.get_goalie_records(tn)
+            sections.append(("Goalie — Career Records", gr["career"],
+                             {"games": "Most appearances", "wins": "Most wins",
+                              "shutouts": "Most shutouts", "saves": "Most saves"}))
+            sections.append(("Goalie — Single-Season Records", gr["season"],
+                             {"wins": "Most wins", "shutouts": "Most shutouts",
+                              "save_pct": "Best SV%"}))
+            sections.append(("Team — Season & Streak Records", fr.get_team_records(tn),
+                             {"points": "Most points", "wins": "Most wins",
+                              "goals_for": "Most goals for",
+                              "goals_against": "Fewest goals against",
+                              "goal_differential": "Best differential",
+                              "streak_win": "Longest win streak",
+                              "streak_unbeaten": "Longest unbeaten streak"}))
+            for title, recs, labels in sections:
+                ttk.Label(body, text=title, font=('Arial', 10, 'bold')).pack(anchor='w', pady=(8, 2))
+                if not recs:
+                    ttk.Label(body, text="No records yet — they begin with the current season.",
+                              font=('Arial', 9, 'italic')).pack(anchor='w', padx=10)
+                    continue
+                for cat, label in labels.items():
+                    r = recs.get(cat)
+                    if not r:
+                        continue
+                    who = r.get("player", r.get("team_name", ""))
+                    season = r.get("season", "")
+                    val = _fmt_value(cat, r.get("value", 0))
+                    line = f"{label}: {who} — {val}" + (f" ({season})" if season and who else "")
+                    ttk.Label(body, text=line, font=('Arial', 9)).pack(anchor='w', padx=10)
+
+        combo.bind("<<ComboboxSelected>>", _refresh)
+        _refresh()
+
+    def _build_champions(self, parent, h):
+        import tkinter as tk
+        from tkinter import ttk
+        champs = h.champions_list()
+        if not champs:
+            ttk.Label(parent, text="No champions recorded yet.").pack(pady=20)
+            return
+        # Header
+        header = ttk.Frame(parent)
+        header.pack(fill='x', padx=10, pady=(10, 5))
+        for col, txt in [("Year", 8), ("Champion", 25), ("Defeated", 25),
+                         ("Series", 10), ("Presidents'", 20)]:
+            ttk.Label(header, text=txt, font=('Arial', 9, 'bold'),
+                      width=col).pack(side='left', padx=2)
+        # Rows
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        scrollable = ttk.Frame(canvas)
+        scrollable.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=5)
+        scrollbar.pack(side='right', fill='y', padx=(0, 10), pady=5)
+        for s in champs:
+            row = ttk.Frame(scrollable)
+            row.pack(fill='x', pady=2)
+            year = s.get('year', '?')
+            champ = s.get('champion', '?') or '?'
+            runner = s.get('runner_up', '?') or '?'
+            score = s.get('series_score', '') or ''
+            pres = s.get('presidents_trophy', '') or ''
+            # Champion in bold with a trophy marker
+            ttk.Label(row, text=str(year), width=8).pack(side='left', padx=2)
+            ttk.Label(row, text=f"🏆 {champ}", font=('Arial', 9, 'bold'),
+                      width=25).pack(side='left', padx=2)
+            ttk.Label(row, text=runner, width=25).pack(side='left', padx=2)
+            ttk.Label(row, text=score, width=10).pack(side='left', padx=2)
+            ttk.Label(row, text=pres, width=20).pack(side='left', padx=2)
+
+    def _build_awards(self, parent, h):
+        from tkinter import ttk
+        if not h.seasons:
+            ttk.Label(parent, text="No awards recorded yet.").pack(pady=20)
+            return
+        # Year selector
+        ctrl = ttk.Frame(parent)
+        ctrl.pack(fill='x', padx=10, pady=10)
+        ttk.Label(ctrl, text="Season:").pack(side='left', padx=5)
+        years = sorted([s['year'] for s in h.seasons], reverse=True)
+        year_var = tk.StringVar(value=str(years[0]))
+        combo = ttk.Combobox(ctrl, textvariable=year_var,
+                             values=[str(y) for y in years],
+                             state='readonly', width=10)
+        combo.pack(side='left', padx=5)
+        # Awards display
+        awards_box = ttk.Frame(parent)
+        awards_box.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def refresh(*args):
+            for w in awards_box.winfo_children():
+                w.destroy()
+            yr = int(year_var.get())
+            season = h.get_season(yr)
+            if not season:
+                return
+            awards = season.get('awards', {})
+            # Conn Smythe is stored separately
+            if season.get('conn_smythe'):
+                awards = dict(awards)
+                awards['Conn Smythe'] = season['conn_smythe']
+            if not awards:
+                ttk.Label(awards_box, text="No awards recorded for this season.").pack(pady=10)
+                return
+            for award_name in sorted(awards.keys()):
+                row = ttk.Frame(awards_box)
+                row.pack(fill='x', pady=3, padx=5)
+                ttk.Label(row, text=award_name + ":", font=('Arial', 10, 'bold'),
+                          width=22, anchor='e').pack(side='left', padx=5)
+                ttk.Label(row, text=awards[award_name],
+                          font=('Arial', 10)).pack(side='left', padx=5)
+
+        year_var.trace('w', refresh)
+        refresh()
+
+    def _build_leaders(self, parent, h):
+        from tkinter import ttk
+        # Category selector
+        ctrl = ttk.Frame(parent)
+        ctrl.pack(fill='x', padx=10, pady=10)
+        ttk.Label(ctrl, text="Category:").pack(side='left', padx=5)
+        cats = ["points", "goals", "assists", "wins", "shutouts", "save_pct"]
+        cat_var = tk.StringVar(value="points")
+        combo = ttk.Combobox(ctrl, textvariable=cat_var, values=cats,
+                             state='readonly', width=12)
+        combo.pack(side='left', padx=5)
+        # Leaders display
+        leaders_box = ttk.Frame(parent)
+        leaders_box.pack(fill='both', expand=True, padx=10, pady=5)
+
+        def refresh(*args):
+            for w in leaders_box.winfo_children():
+                w.destroy()
+            from league_history import LeagueHistory
+            # Gather all players
+            players = []
+            try:
+                for team in self.game_manager.league.teams:
+                    players.extend(team.roster)
+            except Exception:
+                pass
+            leaders = LeagueHistory.career_leaders(
+                players, cat_var.get(), limit=25)
+            if not leaders:
+                ttk.Label(leaders_box, text="No leaders yet.").pack(pady=10)
+                return
+            # Header
+            hdr = ttk.Frame(leaders_box)
+            hdr.pack(fill='x', pady=(0, 5))
+            ttk.Label(hdr, text="#", width=4, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="Player", width=28, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="Team", width=20, font=('Arial', 9, 'bold')).pack(side='left')
+            ttk.Label(hdr, text="GP", width=8, font=('Arial', 9, 'bold')).pack(side='left')
+            val_label = "SV%" if cat_var.get() == "save_pct" else cat_var.get().upper()
+            ttk.Label(hdr, text=val_label, width=10, font=('Arial', 9, 'bold')).pack(side='left')
+            for i, ld in enumerate(leaders, 1):
+                row = ttk.Frame(leaders_box)
+                row.pack(fill='x', pady=1)
+                ttk.Label(row, text=str(i), width=4).pack(side='left')
+                ttk.Label(row, text=ld['name'], width=28).pack(side='left')
+                ttk.Label(row, text=ld['team'] or '', width=20).pack(side='left')
+                ttk.Label(row, text=str(ld['games']), width=8).pack(side='left')
+                v = ld['value']
+                vstr = f"{v:.3f}" if cat_var.get() == "save_pct" else str(int(v))
+                ttk.Label(row, text=vstr, width=10).pack(side='left')
+
+        cat_var.trace('w', refresh)
+        refresh()
+
+    def _build_hof(self, parent, h):
+        import tkinter as tk
+        from tkinter import ttk
+        if not h.hall_of_fame:
+            msg = ("No Hall of Famers yet.\n\nPlayers are inducted at retirement "
+                   "when they clear the bar:\n• 1000+ points / 500+ goals (skaters)\n"
+                   "• 300+ wins (goalies)\n• Icon-level reputation")
+            ttk.Label(parent, text=msg, justify='left').pack(pady=20, padx=20)
+            return
+        canvas = tk.Canvas(parent)
+        scrollbar = ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
+        scrollable = ttk.Frame(canvas)
+        scrollable.bind("<Configure>",
+                        lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scrollable, anchor='nw')
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side='left', fill='both', expand=True, padx=(10, 0), pady=10)
+        scrollbar.pack(side='right', fill='y', padx=(0, 10), pady=10)
+        for ind in sorted(h.hall_of_fame,
+                          key=lambda x: x.get('year_inducted', 0), reverse=True):
+            card = ttk.Frame(scrollable, relief='groove', borderwidth=1)
+            card.pack(fill='x', pady=5, padx=5)
+            name = ind.get('name', '?')
+            pos = ind.get('position', '')
+            yr = ind.get('year_inducted', '?')
+            ttk.Label(card, text=f"{name} ({pos})",
+                      font=('Arial', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
+            ttk.Label(card, text=f"Inducted {yr}",
+                      font=('Arial', 9, 'italic')).pack(anchor='w', padx=10)
+            # Career line
+            if 'GOALIE' in pos.upper():
+                line = (f"{ind.get('games', 0)} GP, {ind.get('wins', 0)} W, "
+                        f"{ind.get('shutouts', 0)} SO")
+            else:
+                line = (f"{ind.get('games', 0)} GP, {ind.get('goals', 0)} G, "
+                        f"{ind.get('assists', 0)} A, {ind.get('points', 0)} Pts")
+            ttk.Label(card, text=line).pack(anchor='w', padx=10, pady=2)
+            cups = ind.get('cups', 0)
+            if cups:
+                ttk.Label(card, text=f"🏆 {cups}× Stanley Cup",
+                          font=('Arial', 9)).pack(anchor='w', padx=10, pady=(0, 8))
+
+
+class ShotChartViewerView(ctk.CTkFrame):
+    """View a saved shot chart: rink with shot locations by result.
+
+    Can show a single game, a team's last-N aggregate, or a player's shots.
+    """
+
+    def __init__(self, parent, game_manager, shots, title="Shot Chart",
+                 home_name="", away_name="", app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.game_manager = game_manager
+        self.shots = shots or []
+        self.home_name = home_name
+        self.away_name = away_name
+        self._close_screen = None  # set by show_screen() or wrapper
+        self._build()
+
+    def close_view(self):
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _build(self):
+        import tkinter as tk
+        # Legend
+        legend = tk.Frame(self.content, bg='#0a0a0c')
+        legend.pack(fill='x', padx=10, pady=5)
+        items = [
+            ("✕ Goal", "#00ff9d"),
+            ("● Save", "#4a9eff"),
+            ("▲ Block", "#8a8f9c"),
+            ("○ Miss", "#c9ced8"),
+        ]
+        for txt, col in items:
+            lbl = tk.Label(legend, text=txt, fg=col, bg='#0a0a0c',
+                           font=('Arial', 9, 'bold'))
+            lbl.pack(side='left', padx=10)
+        # Count summary
+        counts = {}
+        for s in self.shots:
+            key = (s.get('side', '?'), s.get('result', '?'))
+            counts[key] = counts.get(key, 0) + 1
+        total_home = sum(v for (side, _), v in counts.items() if side == 'home')
+        total_away = sum(v for (side, _), v in counts.items() if side == 'away')
+        summary = f"{self.home_name}: {total_home} shots   {self.away_name}: {total_away} shots"
+        tk.Label(legend, text=summary, fg='white', bg='#0a0a0c',
+                 font=('Arial', 9)).pack(side='right', padx=10)
+        # Rink canvas
+        self.canvas = tk.Canvas(self.content, bg='#0a0a0c',
+                                width=760, height=480,
+                                highlightthickness=0)
+        self.canvas.pack(fill='both', expand=True, padx=10, pady=5)
+        # Draw rink outline (simplified)
+        self._draw_rink()
+        # Draw shots using shared helper
+        try:
+            from shot_charts import draw_shotmap
+            # Simple coordinate transform: rink is 200x85 ft, canvas 760x480
+            # Center the rink
+            def X(x):
+                return 20 + (x + 100) * (720 / 200)
+            def Y(y):
+                return 20 + (y + 42.5) * (440 / 85)
+            draw_shotmap(self.canvas, self.shots, X, Y)
+        except Exception as e:
+            tk.Label(self.content, text=f"Error drawing chart: {e}",
+                     fg='red', bg='#0a0a0c').pack()
+
+    def _draw_rink(self):
+        c = self.canvas
+        # Simplified rink: rounded rect + center line + faceoff circles
+        # Rink bounds in canvas coords (matching X/Y above)
+        x0, y0 = 20, 20
+        x1, y1 = 740, 460
+        c.create_rectangle(x0, y0, x1, y1, outline='#2a2d36', width=2)
+        # Center line
+        cx = (x0 + x1) / 2
+        c.create_line(cx, y0, cx, y1, fill='#2a2d36', width=1)
+        # Center circle
+        c.create_oval(cx - 30, (y0 + y1)/2 - 30, cx + 30, (y0 + y1)/2 + 30,
+                      outline='#2a2d36', width=1)
+        # Goals (simple)
+        c.create_rectangle(x0 - 8, (y0 + y1)/2 - 15, x0, (y0 + y1)/2 + 15,
+                           outline='#ff4444', width=2)
+        c.create_rectangle(x1, (y0 + y1)/2 - 15, x1 + 8, (y0 + y1)/2 + 15,
+                           outline='#ff4444', width=2)
+
+
 # --- Main execution
+# ---------------------------------------------------------------------------
+# Legacy popup wrappers for converted views (backward compatibility)
+# ---------------------------------------------------------------------------
+
+
+
+
+
+
+
 if __name__ == "__main__":
     import sys
 

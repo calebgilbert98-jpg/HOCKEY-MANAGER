@@ -25,7 +25,38 @@ GREEN = "#3fb950"
 RED = "#e74c3c"
 BLUE = "#58a6ff"
 
+# Readable text color for the current accent (dark on gold/teal, white on
+# navy/red). set_team_accent() keeps it in sync with TEAL.
+ACCENT_TEXT = BG
+
 _THEME_APPLIED = False
+
+
+def _darken_hex(hex_color, factor=0.85):
+    """Scale a hex color toward black by factor (0..1). Never raises."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        return "#%02x%02x%02x" % (int(r * factor), int(g * factor), int(b * factor))
+    except Exception:
+        return hex_color
+
+
+def set_team_accent(accent, hover=None, text=None):
+    """Re-theme UI accents to a team's colors.
+
+    Mutates TEAL/TEAL_HOVER/TEAL_DARK/ACCENT_TEXT. Widget helpers in this
+    module read those globals at call time, so everything built after this
+    call -- nav pills, primary buttons, selected states -- wears the team
+    color. Safe to call repeatedly; pass no args to restore legacy teal.
+    """
+    global TEAL, TEAL_HOVER, TEAL_DARK, ACCENT_TEXT
+    TEAL = accent or "#00ceb8"
+    TEAL_HOVER = hover or _darken_hex(TEAL, 0.85)
+    TEAL_DARK = _darken_hex(TEAL, 0.7)
+    ACCENT_TEXT = text or BG
+
+
 
 
 def _theme_path():
@@ -58,10 +89,10 @@ def init_ctk_theme():
 
 
 def primary_button(parent, text, command=None, **kw):
-    """Teal primary CTkButton."""
+    """Teal primary CTkButton (follows the team accent once themed)."""
     kw.setdefault("fg_color", TEAL)
     kw.setdefault("hover_color", TEAL_HOVER)
-    kw.setdefault("text_color", BG)
+    kw.setdefault("text_color", ACCENT_TEXT)
     kw.setdefault("corner_radius", 8)
     kw.setdefault("font", ("Segoe UI", 12, "bold"))
     return ctk.CTkButton(parent, text=text, command=command, **kw)
@@ -78,12 +109,19 @@ def secondary_button(parent, text, command=None, **kw):
 
 
 def heading(parent, text, size=18, **kw):
+    # Route through ui_scale so Settings -> Font size actually works.
+    if "font" not in kw:
+        from ui_scale import scaled
+        size = scaled(size)
     kw.setdefault("font", ("Segoe UI", size, "bold"))
     kw.setdefault("text_color", TEXT)
     return ctk.CTkLabel(parent, text=text, **kw)
 
 
 def body(parent, text, size=12, dim=False, **kw):
+    if "font" not in kw:
+        from ui_scale import scaled
+        size = scaled(size)
     kw.setdefault("font", ("Segoe UI", size))
     kw.setdefault("text_color", TEXT_DIM if dim else TEXT)
     return ctk.CTkLabel(parent, text=text, **kw)
@@ -108,14 +146,18 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
         self._rows = []          # (frame, player)
         self._selected = None
         self._selected_frame = None
+        self._badge_fn = None    # optional: badge_fn(player) -> (text, color)
+        # Optional: on_right_click(event, player) -- EHM/FM24 player menu.
+        self.on_right_click = None
 
-    def set_players(self, players):
+    def set_players(self, players, badge_fn=None):
         for frame, _ in self._rows:
             frame.destroy()
         self._rows = []
         self._players = list(players)
         self._selected = None
         self._selected_frame = None
+        self._badge_fn = badge_fn
         for p in self._players:
             self._add_row(p)
 
@@ -133,13 +175,20 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
             pos = player.primary_position.name.replace("_", " ").title()
         except Exception:
             pass
+        try:
+            _age = getattr(player, "age", None)
+            _age_txt = f" \u00b7 {int(_age)}" \
+                if _age is not None else ""
+        except Exception:
+            _age_txt = ""
 
         name_lbl = ctk.CTkLabel(row, text=name, font=("Segoe UI", 12),
                                 text_color=TEXT, anchor="w")
         name_lbl.pack(side="left", padx=(8, 4), pady=6)
-        if pos:
-            pos_lbl = ctk.CTkLabel(row, text=pos, font=("Segoe UI", 10),
-                                   text_color=TEXT_FAINT, anchor="w", width=90)
+        if pos or _age_txt:
+            pos_lbl = ctk.CTkLabel(row, text=f"{pos}{_age_txt}",
+                                   font=("Segoe UI", 10),
+                                   text_color=TEXT_FAINT, anchor="w", width=118)
             pos_lbl.pack(side="left", padx=4)
 
         ovr_color = self._ovr_color(ovr)
@@ -147,11 +196,40 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
                                text_color=ovr_color, width=36, anchor="e")
         ovr_lbl.pack(side="right", padx=8)
 
-        for w in (row, name_lbl, ovr_lbl):
+        # Optional value badge (trade screen: the other GM's valuation).
+        badge_lbl = None
+        if self._badge_fn is not None:
+            try:
+                _badge = self._badge_fn(player)
+            except Exception:
+                _badge = None
+            if _badge:
+                try:
+                    _btext, _bcolor = _badge[0], _badge[1]
+                except Exception:
+                    _btext, _bcolor = None, None
+                if _btext:
+                    badge_lbl = ctk.CTkLabel(
+                        row, text=str(_btext), font=("Segoe UI", 9, "bold"),
+                        text_color=_bcolor or TEXT_DIM, anchor="e", width=170)
+                    badge_lbl.pack(side="right", padx=(4, 2))
+
+        _bind = [w for w in (row, name_lbl, ovr_lbl, badge_lbl) if w is not None]
+        for w in _bind:
             w.bind("<Button-1>", lambda e, f=row, pl=player: self._select(f, pl))
             w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
             w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+            w.bind("<Button-3>", lambda e, pl=player: self._fire_right_click(e, pl))
+            w.bind("<Shift-F10>", lambda e, pl=player: self._fire_right_click(e, pl))
         self._rows.append((row, player))
+
+    def _fire_right_click(self, event, player):
+        cb = getattr(self, "on_right_click", None)
+        if callable(cb):
+            try:
+                cb(event, player)
+            except Exception:
+                pass
 
     @staticmethod
     def _ovr_color(ovr):

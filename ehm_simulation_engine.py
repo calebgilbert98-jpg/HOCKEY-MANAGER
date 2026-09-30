@@ -4,11 +4,10 @@ Phase 2: Sophisticated Decision Chain System
 """
 
 import random
-import math
 from typing import Dict, List, Tuple, Optional, Any
 from enum import Enum
 from dataclasses import dataclass
-from enhanced_player_system import EnhancedPlayer, PersonalityType
+from enhanced_player_system import EnhancedPlayer
 
 class GameSituation(Enum):
     EVEN_STRENGTH = "even_strength"
