@@ -488,6 +488,11 @@ class PBPVisualSim(InGamePopup):
     PASS_SPEED_FTGS = 16.0    # pass glide speed
     SHOT_SPEED_FTGS = 24.0    # shot speed
     LOOSE_SPEED_FTGS = 6.0    # takeaway / rebound / scatter slide speed
+    # Settle glide (puck -> new carrier's stick): MUST outrun every skater
+    # (10 ft/gs, 17 rushing). The old settle reused LOOSE speed (6 ft/gs),
+    # so a skating receiver outran the puck, all 3 retries whiffed, and
+    # _award_carrier gave up and snapped the puck cross-ice -- the teleport.
+    SETTLE_SPEED_FTGS = 20.0  # firm slide, in the pass/shot family
     # Event types that move the puck or stop play: a flight must land
     # before the next one of these fires, so the puck visibly rests on a
     # stick between touches instead of living permanently mid-flight
@@ -500,6 +505,7 @@ class PBPVisualSim(InGamePopup):
     MIN_PASS_GS = 1.0
     MIN_SHOT_GS = 1.0
     MIN_LOOSE_GS = 1.2
+    MIN_SETTLE_GS = 0.3  # settle hops are short and quick, never a slow crawl
     SHOOTOUT_FLIGHT_GS = 2.5
     GOALIE_SPEED = 14.0  # legacy real-time constant (kept for reference)
     CEREMONY_SPEED = 6.0  # faceoff glide to the dot: slow and deliberate
@@ -510,6 +516,9 @@ class PBPVisualSim(InGamePopup):
     _FO_LINEUP = 0.6
     _FO_SET = 0.3
     _FO_DROP = 0.3
+    # linesman carries the puck to the dot no faster than this (ft per
+    # wall-second): a brisk glide that never pops, whatever the distance.
+    _FO_PUCK_SPEED = 75.0
     _FO_TOTAL = _FO_WHISTLE + _FO_LINEUP + _FO_SET + _FO_DROP
 
     def __init__(self, parent, sim, home_team, away_team,
@@ -652,6 +661,7 @@ class PBPVisualSim(InGamePopup):
         self.puck_target = None       # sim-authored puck destination (eased)
         self._pass_arrival = None     # pass event awaiting flight landing
         self._settle_carrier = None    # carrier to award when a settle glide lands
+        self._settle_retries = 0      # settle-flight relaunches (capped at 3)
         self._takeaway_arrival = None  # carrier dot id awaiting glide landing
         self._shootout_pending = None # shootout attempt awaiting flight landing
         self._battle_winner = None
@@ -2799,6 +2809,10 @@ class PBPVisualSim(InGamePopup):
         return self._flight_gs(x0, y0, x1, y1, self.LOOSE_SPEED_FTGS,
                                self.MIN_LOOSE_GS)
 
+    def _settle_flight_gs(self, x0, y0, x1, y1):
+        return self._flight_gs(x0, y0, x1, y1, self.SETTLE_SPEED_FTGS,
+                               self.MIN_SETTLE_GS)
+
     def _award_carrier(self, carrier_dot_id):
         """Give the puck to a carrier without snapping: if his dot has
         skated away from the puck's current spot, glide it to his stick
@@ -2818,8 +2832,8 @@ class PBPVisualSim(InGamePopup):
             self._settle_retries += 1
             self._launch_flight(self.puck["x"], self.puck["y"],
                                 d["x"] + 1.5, d["y"] + 1.5,
-                                self._loose_flight_gs(self.puck["x"], self.puck["y"],
-                                                      d["x"], d["y"]),
+                                self._settle_flight_gs(self.puck["x"], self.puck["y"],
+                                                       d["x"], d["y"]),
                                 "settle")
             self._settle_carrier = d["id"]
         else:
@@ -3223,15 +3237,21 @@ class PBPVisualSim(InGamePopup):
                     d["ceremony_glide"] = True
             c["phase"] = "lineup"
         elif c["phase"] == "lineup":
-            # linesman carries the puck to the dot
-            k = min(1.0, (el - t_whistle) / t_lineup)
-            fx, fy = c["puck_from"]
-            self.puck["x"] = fx + (c["dx"] - fx) * k
-            self.puck["y"] = fy + (c["dy"] - fy) * k
-            if el >= t_whistle + t_lineup:
+            # linesman carries the puck to the dot at a capped skate speed,
+            # holding the phase until it arrives. The old time-fixed glide
+            # (0.6 units no matter the distance) streaked the puck 13+ ft
+            # per tick when the whistle blew 80 ft from the dot -- a teleport.
+            _px, _py = self.puck["x"], self.puck["y"]
+            _pdist = math.hypot(c["dx"] - _px, c["dy"] - _py)
+            _pstep = self._FO_PUCK_SPEED * self.TICK_DT
+            if _pdist <= _pstep:
+                self.puck["x"], self.puck["y"] = c["dx"], c["dy"]
                 c["phase"] = "set"
                 for d in self.dots.values():
                     d["ceremony_glide"] = False
+            elif _pdist > 0:
+                self.puck["x"] = _px + (c["dx"] - _px) / _pdist * _pstep
+                self.puck["y"] = _py + (c["dy"] - _py) / _pdist * _pstep
         elif c["phase"] == "set":
             if el >= t_whistle + t_lineup + t_set:
                 c["phase"] = "drop"
@@ -3625,6 +3645,10 @@ class PBPVisualSim(InGamePopup):
         self.canvas.itemconfig(self._replay_dot, state="normal")
         self.canvas.itemconfig(self._replay_text, state="normal")
         self._feed(f"REPLAY: {label}", tag="info")
+        # Broadcast transition: a brief flash masks the rewind snap. Without
+        # it, 12 dots + puck jumping 20+ seconds back in time reads as a
+        # teleport glitch, not a replay.
+        self._flash_until = self._now() + 0.25
         return True
 
     def _step_replay(self):
@@ -3657,6 +3681,8 @@ class PBPVisualSim(InGamePopup):
             self._move_dot(d, d["tx"], d["ty"])
         self.hold_until = 0
         self._update_scoreboard()
+        # Broadcast transition: mask the snap back to live action.
+        self._flash_until = self._now() + 0.25
         # a goal's on-ice celebration was waiting for the replay
         if getattr(self, "_celly_pending", None):
             shooter, att_home = self._celly_pending
@@ -3671,7 +3697,9 @@ class PBPVisualSim(InGamePopup):
             return
         if getattr(self, "_no_replay_once", False):
             return
-        frames = self._recent_frames(80)
+        # 40 frames (~10 game-seconds) covers the scoring play; 80 was
+        # rewinding 20+ seconds, making the rewind snap look like a glitch.
+        frames = self._recent_frames(40)
         self._start_replay(frames, self._goal_text(ev))
 
     def _save_highlight(self, ev, kind, label=None):
@@ -5136,6 +5164,17 @@ class PBPVisualSim(InGamePopup):
 
         # puck flight animation (game-clock: spans real game time, so the
         # puck glides touch-to-touch and is never preempted by the next event)
+        #
+        # game-seconds elapsed this tick: the same clock the flights run on.
+        # Frozen while paused so a mid-glide puck holds still like everything
+        # else.
+        if self.playing and not self._faceoff_ceremony:
+            _eff = self._auto_speed() if self.auto_pace else self.speed
+            if self.detail_mode == "text":
+                _eff = max(_eff, 1.0) * 25.0
+            _dt_gs = self.TICK_DT * _eff * self.GAME_RATE
+        else:
+            _dt_gs = 0.0
         if self.puck_flight:
             # Watchdog: a flight living too long (wall clock) is stuck --
             # force-clear it so event consumption (and game_end) can't block
@@ -5152,61 +5191,94 @@ class PBPVisualSim(InGamePopup):
                 self.pending_outcome = None
         if self.puck_flight:
             x0, y0, x1, y1, g0, g1, tag = self.puck_flight
-            k = min(1.0, (self.playhead - g0) / max(0.001, g1 - g0))
-            # Constant velocity: a real puck glides on ice at steady pace.
-            # (Ease-out made every flight decelerate into its target like
-            # the puck was magnet-drawn -- the "on a string" look.)
-            self.puck["x"] = x0 + (x1 - x0) * k
-            self.puck["y"] = y0 + (y1 - y0) * k
-            if k >= 1.0:
-                self.puck_flight = None
-                cut = self._flight_cut_short
-                self._flight_cut_short = False
-                if cut:
-                    # Truncated flight: the sim's next touch arrived before
-                    # the puck could physically get there. It stops where
-                    # it is -- no arrival handoff (the receiver never got
-                    # it), no scatter. The imminent next event claims the
-                    # puck from exactly this spot.
-                    pass
-                elif self.pending_outcome is not None:
-                    oc = self.pending_outcome
-                    self.pending_outcome = None
-                    if self._post_ping and oc.get("type") == "missed_shot":
-                        self._post_ping = False
-                        self._apply_outcome(oc)
-                        self._deflect_off_post(oc)
-                    else:
-                        self._apply_outcome(oc)
-                        # puck ends: goal -> stays in the net (the flight
-                        # aimed it inside the mouth); save -> rebound off
-                        # the goalie; block -> loose off the blocker;
-                        # aimed wide miss -> already loose, no extra glide.
-                        self._scatter_puck(oc)
-                elif getattr(self, "_pass_arrival", None):
-                    pa = self._pass_arrival
-                    self._pass_arrival = None
-                    rd = self._dot_by_player(pa.get("receiver") if pa.get("completed")
-                                             else pa.get("interceptor"))
-                    self._award_carrier(rd["id"] if rd else None)
-                elif getattr(self, "_shootout_pending", None):
-                    so = self._shootout_pending
-                    self._shootout_pending = None
-                    self._apply_shootout(so)
-                    self._scatter_puck(so)
-                elif getattr(self, "_takeaway_arrival", None):
-                    # takeaway glide landed: the new carrier has it on his stick
-                    ta = self._takeaway_arrival
-                    self._takeaway_arrival = None
-                    self._settle_retries = 0
-                    self._award_carrier(ta)
-                elif tag == "settle" and getattr(self, "_settle_carrier", None):
-                    # settle glide landed: puck should be on the receiver's
-                    # stick; if he kept skating, settle again (converges: the
-                    # receiver is skating to the puck, not away from it)
-                    sc = self._settle_carrier
+            if tag == "settle" and _dt_gs > 0:
+                # Homing glide: re-aim at the receiver's LIVE position every
+                # tick instead of flying to where he was at launch. A fixed
+                # endpoint let a skating receiver outrun the puck, burning
+                # all 3 settle retries and ending in a cross-ice snap.
+                _sd = (self.dots.get(self._settle_carrier)
+                       if getattr(self, "_settle_carrier", None) else None)
+                if _sd is None:
+                    # receiver's dot vanished (line change cleared him):
+                    # drop the glide; the next event claims the puck here.
+                    self.puck_flight = None
                     self._settle_carrier = None
-                    self._award_carrier(sc)
+                    self._settle_retries = 0
+                    self._flight_cut_short = False
+                else:
+                    _dx = _sd["x"] - self.puck["x"]
+                    _dy = _sd["y"] - self.puck["y"]
+                    _dist = math.hypot(_dx, _dy)
+                    _step = self.SETTLE_SPEED_FTGS * _dt_gs
+                    if _dist <= max(_step, 0.6):
+                        # arrived: settle-landing handoff (gap ~0, so
+                        # _award_carrier takes it immediately, no retry)
+                        self.puck["x"], self.puck["y"] = _sd["x"], _sd["y"]
+                        self.puck_flight = None
+                        _sc = self._settle_carrier
+                        self._settle_carrier = None
+                        self._settle_retries = 0
+                        self._flight_cut_short = False
+                        self._award_carrier(_sc)
+                    elif _dist > 0:
+                        self.puck["x"] += _dx / _dist * _step
+                        self.puck["y"] += _dy / _dist * _step
+            else:
+                k = min(1.0, (self.playhead - g0) / max(0.001, g1 - g0))
+                # Constant velocity: a real puck glides on ice at steady pace.
+                # (Ease-out made every flight decelerate into its target like
+                # the puck was magnet-drawn -- the "on a string" look.)
+                self.puck["x"] = x0 + (x1 - x0) * k
+                self.puck["y"] = y0 + (y1 - y0) * k
+                if k >= 1.0:
+                    self.puck_flight = None
+                    cut = self._flight_cut_short
+                    self._flight_cut_short = False
+                    if cut:
+                        # Truncated flight: the sim's next touch arrived before
+                        # the puck could physically get there. It stops where
+                        # it is -- no arrival handoff (the receiver never got
+                        # it), no scatter. The imminent next event claims the
+                        # puck from exactly this spot.
+                        pass
+                    elif self.pending_outcome is not None:
+                        oc = self.pending_outcome
+                        self.pending_outcome = None
+                        if self._post_ping and oc.get("type") == "missed_shot":
+                            self._post_ping = False
+                            self._apply_outcome(oc)
+                            self._deflect_off_post(oc)
+                        else:
+                            self._apply_outcome(oc)
+                            # puck ends: goal -> stays in the net (the flight
+                            # aimed it inside the mouth); save -> rebound off
+                            # the goalie; block -> loose off the blocker;
+                            # aimed wide miss -> already loose, no extra glide.
+                            self._scatter_puck(oc)
+                    elif getattr(self, "_pass_arrival", None):
+                        pa = self._pass_arrival
+                        self._pass_arrival = None
+                        rd = self._dot_by_player(pa.get("receiver") if pa.get("completed")
+                                                 else pa.get("interceptor"))
+                        self._award_carrier(rd["id"] if rd else None)
+                    elif getattr(self, "_shootout_pending", None):
+                        so = self._shootout_pending
+                        self._shootout_pending = None
+                        self._apply_shootout(so)
+                        self._scatter_puck(so)
+                    elif getattr(self, "_takeaway_arrival", None):
+                        # takeaway glide landed: the new carrier has it on his stick
+                        ta = self._takeaway_arrival
+                        self._takeaway_arrival = None
+                        self._settle_retries = 0
+                        self._award_carrier(ta)
+                    elif tag == "settle" and getattr(self, "_settle_carrier", None):
+                        # Backstop: settle flights normally land via the
+                        # homing branch above; if one ever lands here, award
+                        # through the same path.
+                        sc = self._settle_carrier
+                        self._settle_carrier = None
+                        self._award_carrier(sc)
 
         # broadcast replay takes over all dot/puck motion
         if self._replay:
@@ -5379,7 +5451,10 @@ class PBPVisualSim(InGamePopup):
 
             # puck rides on the carrier's stick (no laggy easing behind him);
             # a loose puck glides quickly to its target spot.
-            if not self.puck_flight:
+            # (Not during the faceoff ceremony: the puck belongs to the
+            # linesman until the drop -- gluing it to the winner early both
+            # pops visually and hands him the puck before the draw.)
+            if not self.puck_flight and not self._faceoff_ceremony:
                 if self.carrier_id and self.carrier_id in self.dots:
                     c = self.dots[self.carrier_id]
                     if math.hypot(self.puck["x"] - c["x"],
