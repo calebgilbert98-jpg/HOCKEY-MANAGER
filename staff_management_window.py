@@ -1053,37 +1053,46 @@ class StaffManagementView(ctk.CTkFrame):
     def negotiate_selected_staff(self):
         """Negotiate contracts with selected staff members.
 
-        Each negotiation is a sequential modal dialog; results reflect what
-        actually happened instead of assuming failure.
+        Gating Phase 2: the sequential modal dialogs are a chained series
+        of non-modal negotiation screens. Results still reflect what
+        actually happened; one inbox digest lands at the end.
         """
         if not self.selected_staff:
             messagebox.showwarning("No Selection", "Please select staff members to negotiate contracts.")
             return
 
         selected_staff_list = [s for s in self.get_current_team_staff() if s.id in self.selected_staff]
-        results = []
+        self._negotiate_chain(list(selected_staff_list), [])
 
-        for staff in selected_staff_list:
-            if self.open_contract_negotiation(staff, is_hiring=False):
-                results.append(f"{staff.full_name}: agreement reached")
-            else:
-                results.append(f"{staff.full_name}: no agreement")
+    def _negotiate_chain(self, remaining, results):
+        """Open the next renegotiation screen; the digest lands when the
+        chain completes."""
+        if not remaining:
+            if results:
+                # One inbox digest instead of a popup (FM24/EHM style).
+                try:
+                    from game_classes import EmailMessage
+                    from datetime import date
+                    self.app.send_email_to_user(EmailMessage(
+                        sender="System", sender_type="System",
+                        date_sent=date.today(), category="Contracts", priority=2,
+                        subject="Staff Negotiation Results",
+                        content="Contract negotiations complete:\n" + "\n".join(
+                            f"• {r}" for r in results)))
+                except Exception:
+                    pass
+            self.update_current_staff_view()
+            return
+        staff = remaining[0]
 
-        if results:
-            # One inbox digest instead of a popup (FM24/EHM style).
-            try:
-                from game_classes import EmailMessage
-                from datetime import date
-                self.app.send_email_to_user(EmailMessage(
-                    sender="System", sender_type="System",
-                    date_sent=date.today(), category="Contracts", priority=2,
-                    subject="Staff Negotiation Results",
-                    content="Contract negotiations complete:\n" + "\n".join(
-                        f"• {r}" for r in results)))
-            except Exception:
-                pass
+        def _one_done(accepted, _staff=staff):
+            results.append(
+                f"{_staff.full_name}: "
+                f"{'agreement reached' if accepted else 'no agreement'}")
+            self._negotiate_chain(remaining[1:], results)
 
-        self.update_current_staff_view()
+        self.open_contract_negotiation(staff, is_hiring=False,
+                                       on_done=_one_done)
 
     def reassign_selected_staff(self):
         """Reassign roles for selected staff members."""
@@ -1677,8 +1686,13 @@ class StaffManagementView(ctk.CTkFrame):
                          anchor="w").pack(anchor="w", padx=8, pady=2)
 
     def _negotiate_current_staff(self, staff: Staff, details_window):
-        """Negotiate with a current staffer from the details window (modal, honest result)."""
-        if self.open_contract_negotiation(staff, is_hiring=False):
+        """Negotiate with a current staffer from the details window.
+
+        Gating Phase 2: non-modal screen; the result arrives via on_done.
+        """
+        def _on_done(accepted):
+            if not accepted:
+                return
             # Result lands in the inbox (FM24/EHM style), not a popup.
             try:
                 from game_classes import EmailMessage
@@ -1691,8 +1705,14 @@ class StaffManagementView(ctk.CTkFrame):
                              f"({staff.role.value}).")))
             except Exception:
                 pass
-            details_window.destroy()
+            try:
+                details_window.destroy()
+            except Exception:
+                pass
             self.update_views()
+
+        self.open_contract_negotiation(staff, is_hiring=False,
+                                       on_done=_on_done)
 
     def format_staff_attributes(self, staff: Staff) -> str:
         """Format staff attributes for display."""
@@ -1733,163 +1753,41 @@ class StaffManagementView(ctk.CTkFrame):
 
         return attr_text
 
-    def open_contract_negotiation(self, staff: Staff, is_hiring: bool = False):
-        """Open a modal contract negotiation window.
+    def open_contract_negotiation(self, staff: Staff, is_hiring: bool = False,
+                                    on_done=None):
+        """Route staff contract negotiation to the StaffContractView screen.
 
-        Returns True when both sides reach an agreement, False otherwise
-        (rejected offer or cancelled). The caller owns all follow-up
-        messaging and view refreshes.
+        Gating Phase 2: the modal InGamePopup (grab_set + wait_window) is
+        gone. The negotiation is a non-modal screen shift; the outcome
+        arrives via on_done(accepted: bool) -- True on agreement, False on
+        cancel/dismiss. is_hiring=True runs the hire flow; is_hiring=False
+        renegotiates an existing staffer's terms (same mechanics as the
+        old dialog: demands + offer + staff.negotiate_contract roll).
+        Half-typed offers live in app.pending_sessions (Tier B,
+        write-through) so navigating away never loses them.
         """
-        ct = self._ct
-        nego_window = InGamePopup(self)
-        nego_window.title(f"Contract Negotiation - {staff.full_name}")
-        nego_window.configure(fg_color=ct['BG'])
-        nego_window.geometry("500x470")
-        nego_window.transient(self)
-
-        # Result flag read after the modal loop exits
-        nego_window._accepted = False
-
-        # Main frame
-        main_frame = ctk.CTkFrame(nego_window, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=18, pady=18)
-
-        # Staff info
-        self._heading(main_frame,
-                      text=f"Negotiating with {staff.full_name}",
-                      size=14).pack(anchor="w", pady=(0, 2))
-        ctk.CTkLabel(main_frame, text=staff.role.value,
-                     font=self._sfont(11), text_color=ct['TEAL']).pack(
-                         anchor="w", pady=(0, 14))
-
-        # Current demands
-        demands_inner = self._dialog_card(main_frame, "Current Demands")
-        self._info_label(demands_inner, f"Asking Salary: ${staff.salary:,}")
-        self._info_label(demands_inner, f"Contract Length: {staff.contract_years} years")
-
-        # Offer frame
-        offer_inner = self._dialog_card(main_frame, "Your Offer")
-        offer_grid = ctk.CTkFrame(offer_inner, fg_color="transparent")
-        offer_grid.pack(anchor="w")
-
-        ctk.CTkLabel(offer_grid, text="Salary:",
-                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
-                         row=0, column=0, padx=5, pady=5, sticky='w')
-        salary_entry = ctk.CTkEntry(
-            offer_grid, width=150, fg_color=ct['BG'],
-            border_color=ct['BORDER'], text_color=ct['TEXT'])
-        salary_entry.insert(0, str(staff.salary))
-        salary_entry.grid(row=0, column=1, padx=5, pady=5)
-
-        ctk.CTkLabel(offer_grid, text="Years:",
-                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
-                         row=1, column=0, padx=5, pady=5, sticky='w')
-        years_entry = ctk.CTkEntry(
-            offer_grid, width=150, fg_color=ct['BG'],
-            border_color=ct['BORDER'], text_color=ct['TEXT'])
-        years_entry.insert(0, str(staff.contract_years))
-        years_entry.grid(row=1, column=1, padx=5, pady=5)
-
-        # Result label
-        result_label = ctk.CTkLabel(main_frame, text="",
-                                    font=self._sfont(10),
-                                    text_color=ct['TEXT_DIM'],
-                                    wraplength=440, justify="left")
-        result_label.pack(fill="x", pady=(0, 12))
-
-        # Buttons
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x")
-
-        def make_offer():
+        from windows import StaffContractView
+        app = getattr(self, "app", None)
+        if app is None or not hasattr(app, "show_screen"):
+            # Headless/legacy fallback: keep the old honesty contract.
             try:
-                offered_salary = int(salary_entry.get())
-                offered_years = int(years_entry.get())
-            except ValueError:
-                messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
-                return
-
-            if offered_salary <= 0 or not 1 <= offered_years <= 5:
-                messagebox.showerror("Invalid Input", "Salary must be positive and the term 1-5 years.")
-                return
-
-            if staff.negotiate_contract(offered_salary, offered_years):
-                result_label.configure(text="Offer Accepted!", text_color=ct['GREEN'])
-
-                if is_hiring:
-                    # Add to team with role validation
-                    user_team = self._get_user_team()
-                    if user_team:
-                        # Check for unique role violations before hiring
-                        if Staff.is_unique_role(staff.role):
-                            existing_with_role = [s for s in user_team.staff if s.role == staff.role]
-                            if existing_with_role:
-                                messagebox.showerror(
-                                    "Role Conflict",
-                                    f"Team already has a {staff.role.value}: {existing_with_role[0].full_name}.\n"
-                                    f"You must reassign or release the existing {staff.role.value} first.")
-                                return
-
-                        staff.salary = offered_salary
-                        staff.contract_years = offered_years
-                        user_team.staff.append(staff)
-                        try:
-                            import assistant_coaches as _ac
-                            _app = getattr(self, "app", None) or getattr(
-                                self, "master", None)
-                            _ac.on_assistant_hired(user_team, staff, app=_app)
-                        except Exception:
-                            pass
-                        # New head coach, new whiteboard: he installs HIS
-                        # systems (unless the GM owns tactics).
-                        try:
-                            _role = str(getattr(getattr(staff, "role", None),
-                                                "value", ""))
-                            if "Head Coach" in _role:
-                                import tactics as _tx
-                                _app = getattr(self, "app", None) or getattr(
-                                    self, "master", None)
-                                if _tx.get_tactics_control(user_team) == "coach":
-                                    installed = _tx.install_coach_systems(
-                                        user_team, staff, reason="hired")
-                                    if installed and _app is not None:
-                                        _cname = (f"{getattr(staff, 'first_name', '')} "
-                                                  f"{getattr(staff, 'last_name', '')}").strip()
-                                        _bits = ", ".join(
-                                            f"{c}: {k.replace('_', ' ')}"
-                                            for c, k in installed.items())
-                                        try:
-                                            _app.add_news(
-                                                f"{_cname} is installing his systems "
-                                                f"({len(installed)} changes: {_bits}). "
-                                                f"The room starts learning -- familiarity reset.")
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            pass
-                        if staff in self.available_staff:
-                            self.available_staff.remove(staff)
-                else:
-                    # Update existing contract
-                    staff.salary = offered_salary
-                    staff.contract_years = offered_years
-
-                nego_window._accepted = True
-                nego_window.destroy()
-            else:
-                result_label.configure(text="Offer Rejected. Try adjusting your offer.",
-                                       text_color=ct['RED'])
-
-        self._primary_button(button_frame, text="Make Offer", command=make_offer,
-                             width=130, height=36).pack(side="left", padx=5)
-        self._secondary_button(button_frame, text="Cancel",
-                               command=nego_window.destroy,
-                               width=110, height=36).pack(side="right", padx=5)
-
-        # Modal: block until the window closes, then report the outcome
-        nego_window.grab_set()
-        self.wait_window(nego_window)
-        return bool(getattr(nego_window, "_accepted", False))
+                from popup_system import messagebox
+                messagebox.showwarning(
+                    "Negotiation unavailable",
+                    "Staff contract negotiation needs the app screen host.")
+            except Exception:
+                pass
+            if callable(on_done):
+                try:
+                    on_done(False)
+                except Exception:
+                    pass
+            return None
+        title = (f"Contract Offer - {staff.full_name}" if is_hiring
+                 else f"Contract Negotiation - {staff.full_name}")
+        return app.show_screen("staff_contract", title, StaffContractView,
+                               staff, fresh=True, hire_source="free_agent",
+                               renegotiate=not is_hiring, on_done=on_done)
 
     def release_staff_action(self, staff: Staff, details_window=None):
         """Perform staff release action."""
@@ -1909,12 +1807,22 @@ class StaffManagementView(ctk.CTkFrame):
                 self.update_views()
 
     def make_staff_offer_action(self, staff: Staff, details_window=None):
-        """Make offer to a hiring candidate (modal negotiation, honest result)."""
+        """Make offer to a hiring candidate.
+
+        Gating Phase 2: routes to the StaffContractView screen; the hire
+        result arrives via on_done.
+        """
         if details_window:
             details_window.destroy()
-        if self.open_contract_negotiation(staff, is_hiring=True):
-            messagebox.showinfo("Success", f"{staff.full_name} has been hired!")
-            self.update_views()
+
+        def _on_done(accepted):
+            if accepted:
+                messagebox.showinfo("Success",
+                                    f"{staff.full_name} has been hired!")
+                self.update_views()
+
+        self.open_contract_negotiation(staff, is_hiring=True,
+                                       on_done=_on_done)
 
     def categorize_staff(self, staff_list):
         """Categorize staff by their roles for filtering."""
