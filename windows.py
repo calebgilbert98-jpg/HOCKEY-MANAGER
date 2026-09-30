@@ -7847,12 +7847,75 @@ class DraftView(ctk.CTkFrame):
             if resp.decision == 'counter':
                 extra = resp.want_added + resp.will_add
                 detail = "; ".join(self.te.asset_label(a) for a in extra)
-                if not messagebox.askyesno("Counter-offer",
-                                           f"{resp.message}\n\nAccept?"):
-                    return
-                _done = self._execute_pick_swap(
-                    j, user_pick, partner_pick,
-                    resp.want_added, resp.will_add)
+                # Gating T2-Phase 2: the counter is a question card, not a
+                # blocking dialog. Dismiss = safe default (decline).
+                from popup_system import (ask_card, cards_available,
+                                          get_pending_session,
+                                          register_pending_item,
+                                          unregister_pending_item, RESUMABLE)
+                _sess_id = f"pick_swap:{id(dlg)}"
+                _sess = get_pending_session(self.app, _sess_id)
+                _sess["kind"] = "pick_swap"
+                _did = "counter"
+                _item_id = f"q:{_sess_id}:{_did}"
+                _title = f"Pick-swap counter \u2014 answer"
+                _pdetail = (f"Counter on the pick swap (#{overall + 1}): "
+                            "accept or decline.")
+                _screen_id = None
+                try:
+                    _screen_id = (getattr(self.app, "_current_screen", None)
+                                  or {}).get("id")
+                except Exception:
+                    pass
+
+                def _counter_answer(ans, _sess_id=_sess_id,
+                                    _item_id=_item_id):
+                    try:
+                        unregister_pending_item(self.app, _item_id)
+                    except Exception:
+                        pass
+                    try:
+                        if (isinstance(
+                                getattr(self.app, "pending_sessions", None),
+                                dict)):
+                            self.app.pending_sessions.pop(_sess_id, None)
+                    except Exception:
+                        pass
+                    if not ans:
+                        return
+                    _done = self._execute_pick_swap(
+                        j, user_pick, partner_pick,
+                        resp.want_added, resp.will_add)
+                    if not _done:
+                        return  # legality preflight blocked it
+                    dlg.destroy()
+                    messagebox.showinfo("Trade Complete",
+                                        "Pick swap completed.")
+                    self.process_draft_pick()
+
+                if not cards_available(self):
+                    # Headless: legacy blocking path, identical branches.
+                    _counter_answer(messagebox.askyesno(
+                        "Counter-offer", f"{resp.message}\n\nAccept?"))
+                else:
+                    register_pending_item(
+                        self.app, _item_id, kind=RESUMABLE, title=_title,
+                        detail=_pdetail, screen_id=_screen_id)
+                    ask_card(self, "Counter-offer",
+                             f"{resp.message}\n\nAccept the counter?",
+                             [("Accept", True, "primary"),
+                              ("Decline", False, "secondary")],
+                             on_answer=_counter_answer,
+                             default_on_dismiss=False,
+                             session_id=_sess_id, dialog_id=_did)
+                    try:
+                        _sess["dialogs"][_did]["registry"] = {
+                            "item_id": _item_id, "kind": RESUMABLE,
+                            "title": _title, "detail": _pdetail,
+                            "screen_id": _screen_id}
+                    except Exception:
+                        pass
+                return
             else:
                 _done = self._execute_pick_swap(
                     j, user_pick, partner_pick, [], [])
