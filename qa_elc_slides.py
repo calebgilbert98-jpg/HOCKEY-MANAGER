@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: ELC slide rule (CBA 9.1(d)) + League-Year max comp + minor salary.
 
 Covers: the slide predicate (18/19, <10 NHL GP, double-slide requires the

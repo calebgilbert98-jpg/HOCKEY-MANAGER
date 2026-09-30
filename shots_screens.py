@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Screenshots of representative full-screen views at a target resolution.
 
 Mimics main.show_screen(): a slim navbar (‹ Dashboard + title) above the

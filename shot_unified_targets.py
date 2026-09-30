@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Screenshot: unified Targets tab (one surface, no duplicate entries).
 
 Usage: xvfb-run -a -s "-screen 0 1680x1050x24" python3 shot_unified_targets.py

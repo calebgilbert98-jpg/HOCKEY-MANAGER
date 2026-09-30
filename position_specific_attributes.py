@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # position_specific_attributes.py
 # This file contains the updated Player class with position-specific attributes
 

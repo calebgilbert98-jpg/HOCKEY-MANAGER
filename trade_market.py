@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """trade_market.py -- AI trade market: listings, bidding wars, trade blocks,
 trade-request shopping, and the scouting shortlist.
 
@@ -52,6 +53,7 @@ DEAL_COOLDOWN_RAMP_DAYS = 7        # per-team initiate cooldown, ramp
 MAX_ACTIVE_LISTINGS_BASELINE = 2   # per team, outside the ramp
 MAX_ACTIVE_LISTINGS_RAMP = 3       # per team, inside the ramp
 MAX_OPEN_LISTINGS_LEAGUE_BASELINE = 12
+_RUMOR_SEED_SALT = 0x10b980  # decorrelates rumor batches from trade batches
 MAX_OPEN_LISTINGS_LEAGUE_RAMP = 24
 BIDDING_WINDOW_BASELINE_DAYS = 7
 BIDDING_WINDOW_RAMP_DAYS = 4

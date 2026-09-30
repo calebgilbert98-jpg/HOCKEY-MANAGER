@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Analytics Hub (module 04).
 
 Recording layer (shot/entry logs, per-game persistence), the xG

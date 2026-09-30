@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: international windows (international.py + wiring).
 
 Uses lightweight fakes for players/teams/league so the suite runs in

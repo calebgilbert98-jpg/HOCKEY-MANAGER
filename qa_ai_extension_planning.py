@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: AI extension planning -- franchise pieces, forward book, GM dynamics.
 
 Run: python3 qa_ai_extension_planning.py

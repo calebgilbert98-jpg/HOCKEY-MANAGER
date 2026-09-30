@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: fan hate -- betrayals the fanbase doesn't forgive.
 
 - Award races now spark at intensity 10 (much less base).

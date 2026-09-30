@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_factor_parity.py -- factor-level parity: lightweight vs AdvancedGameSim.
 
 Beyond aggregate distributions: perturb ONE factor at a time on deep-copied

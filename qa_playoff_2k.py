@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: 2K-style mirrored bracket + LEAGUE TENSION gauge + bad blood.
 
 Run with DISPLAY=:99 (Xvfb). Builds a real PlayoffBracket through the

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Canonical NHL team list for Puck Dynasty.
 
 Extracted from the launcher's team data. Used as a fallback when a full

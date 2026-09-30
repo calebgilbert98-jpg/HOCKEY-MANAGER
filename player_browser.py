@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Standalone Player Browser for Fantasy Draft
 Simple, reliable player display system that guarantees player visibility

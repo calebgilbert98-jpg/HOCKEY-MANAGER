@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # windows.py
 # Contains the classes for all the major pop-up windows in the application.
 

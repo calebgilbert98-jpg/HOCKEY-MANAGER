@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Item 8: season star counts feed monthly player development.
 
 Wraps (never modifies) the PlayerDevelopmentEngine at its call site in

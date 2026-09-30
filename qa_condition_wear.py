@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA/probe: W3 condition / wear-and-tear / attribute wiring.
 
 Proves, without a full season:

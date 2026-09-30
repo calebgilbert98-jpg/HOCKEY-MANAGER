@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Integration: the real GameManager._update_offseason_reputations() wires
 captaincy growth, Cup-captain reputation, and mentorship correctly.
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # modern_widgets.py
 # Rounded, modern Tkinter widgets: soft buttons, cards and pill badges.
 # Tkinter's stock tk.Button / LabelFrame look sharp and dated; these

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Real NHL franchise records seed data for Puck Dynasty.
 
 Researched 2026-09-28 from Hockey Reference team pages, QuantHockey team

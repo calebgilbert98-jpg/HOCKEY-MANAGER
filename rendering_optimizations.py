@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # Phase 3: Rendering Optimizations
 # Advanced rendering and visual performance improvements
 

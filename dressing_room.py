@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Dressing-room dynamics (module 03): morale as a social system.
 
 Turns morale from a number into a social system that creates stories,

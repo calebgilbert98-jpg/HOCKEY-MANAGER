@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scouting profile manager dialog for Puck Dynasty.
 
 Browse the pre-built archetype profiles, and create / edit / delete your own

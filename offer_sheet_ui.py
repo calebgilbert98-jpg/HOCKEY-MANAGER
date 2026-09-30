@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Offer-sheet UI (BUG-020): the user-facing half of the offer-sheet system.
 
 The engine was already complete -- AI offer sheets run in the July RFA

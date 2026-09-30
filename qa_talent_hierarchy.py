@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """B1 talent-hierarchy regression + measurement harness.
 
 DIAGNOSIS (2026-09-29, pre-composites):

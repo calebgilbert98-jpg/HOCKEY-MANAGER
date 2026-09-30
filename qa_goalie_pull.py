@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for goalie-pull / 6-on-5 timing (goalie_pull.py + wiring). Headless."""
 import sys
 import types

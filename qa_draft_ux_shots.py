@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Screenshots + accessibility QA for the draft UX backlog (8 items).
 
 Run: xvfb-run -a -s "-screen 0 1680x1050x24" python3 qa_draft_ux_shots.py

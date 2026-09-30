@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless screenshots for the staff-market work.
 
 Run: xvfb-run -a -s "-screen 0 1680x1050x24" python3 qa_staff_market_shots.py

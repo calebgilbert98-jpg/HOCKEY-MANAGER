@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: MP host-only gate on playoff bracket mutations.
 
 - Client mode: Generate / Simulate Round / Simulate All are blocked with a

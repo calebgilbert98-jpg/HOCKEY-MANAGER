@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: post-fantasy-draft captaincy deferral.
 
 Chris's directive: after a fantasy draft, NO captains until they are set

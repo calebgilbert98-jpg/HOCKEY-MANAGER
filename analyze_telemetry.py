@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Analyze Puck Dynasty beta telemetry against NHL benchmarks.
 
 Reads telemetry/games.jsonl (one JSON record per simulated game, written

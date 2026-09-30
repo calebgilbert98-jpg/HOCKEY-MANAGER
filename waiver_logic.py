@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """AI waiver management (BUG-019).
 
 The waiver wire had a working claim pipeline but no supply: AI GMs never

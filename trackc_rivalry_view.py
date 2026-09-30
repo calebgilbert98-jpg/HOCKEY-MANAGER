@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #4 -- Rivalry dashboard.
 
 Rivalries drive incidents, heat and the physical/discipline channels of the

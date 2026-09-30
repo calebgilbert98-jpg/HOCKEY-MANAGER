@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Game box score — drill-down view for any completed game.
 
 Opened from the daily results window (double-click / Box Score button) and

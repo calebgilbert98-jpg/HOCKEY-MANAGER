@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: voluntary captaincy changes.
 
 - Fantasy draft picks strip letters (no two-C rosters).

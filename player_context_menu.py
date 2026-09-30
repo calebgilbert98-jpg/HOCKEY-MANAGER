@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Universal Player Context Menu System
 Provides consistent right-click player interactions across all windows

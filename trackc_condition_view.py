@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #2 -- Roster-wide condition / fatigue view.
 
 Rest decisions are a daily loop, but fatigue is only visible one card at a

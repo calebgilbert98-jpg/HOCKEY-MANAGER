@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: RFA / offer-sheet / arbitration at the real-life standard.
 
 Run: python3 qa_rfa_arbitration.py

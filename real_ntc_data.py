@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Real-world NHL no-trade / no-movement clause data for 2026-27.
 
 Every entry is a (player_name, team_name, clause, list_size, approved_list)

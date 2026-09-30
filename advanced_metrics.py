@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Advanced hockey metrics model for Puck Dynasty.
 
 Computes NHL-style advanced statistics (Corsi%, Fenwick%, xG%, PDO, zone

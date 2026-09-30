@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless QA: AHL farm confidence -> morale / attitude / call-up buzz.
 
 Covers ahl_system.weekly_farm_confidence: prospect cooking surge (+4,

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: parity engine -- cross-game form, coach/player corrective forces,
 target-on-back, trap games, engine hooks. Headless.
 Run: python3 qa_parity.py"""

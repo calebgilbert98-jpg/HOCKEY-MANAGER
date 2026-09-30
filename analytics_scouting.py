@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Analytics scouting for Puck Dynasty: the "right guy, wrong situation" puzzle.
 
 The analytics department sees through surface stats to process: expected

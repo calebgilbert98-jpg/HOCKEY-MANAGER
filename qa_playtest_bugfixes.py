@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for the 2026-09-28 playtest bug report (broken-mechanics.pdf).
 
 Covers the production findings actioned in code:

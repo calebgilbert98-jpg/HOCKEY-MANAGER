@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # reputation_system.py
 # Player & personnel reputation system for Puck Dynasty.
 #
@@ -50,6 +51,7 @@ CONTROVERSY_WEIGHTS = {
 
 # Clean-season cooldown: controversy drifts back toward baseline by this much
 CONTROVERSY_DECAY_PER_CLEAN_SEASON = 4
+_pd_legacy_hook = None  # reserved: legacy headline hook (unused)
 
 # Reputation tier labels for UI
 REPUTATION_TIERS = [

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """OT drama: which games reach overtime and who wins it, shaped by the room.
 
 Chris's five factors -- game intensity, player/coach morale and situational

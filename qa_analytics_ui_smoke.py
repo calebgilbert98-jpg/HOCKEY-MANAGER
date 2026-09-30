@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """UI smoke test: modern player profile Analytics tab (department lens +
 scout insights). Follows the qa_ui_accessibility.py pattern (InGamePopup
 cards, mss full-monitor crop). Screenshots at 1600x900 for review."""

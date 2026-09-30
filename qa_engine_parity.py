@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Cross-engine chance-grading parity (2026-09-28, per Muck).
 
 Muck's standing rule: quick-sim (AdvancedGameSim) and GameSim must not

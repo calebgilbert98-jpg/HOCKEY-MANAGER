@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: team-color text/background pairs meet WCAG AA (4.5:1).
 
 Covers every place team colors meet text: standings Team column, team

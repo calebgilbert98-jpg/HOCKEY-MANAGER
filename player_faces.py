@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # player_faces.py
 # Video-game quality player portraits (stylized, not photorealistic).
 # Layered rendering: base shapes -> soft shading -> features -> highlights.

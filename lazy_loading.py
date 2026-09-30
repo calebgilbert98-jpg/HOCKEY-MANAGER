@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Lazy loading system for Hockey Manager
 Implements on-demand loading of data to reduce memory usage and improve startup times

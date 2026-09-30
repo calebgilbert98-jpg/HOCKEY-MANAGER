@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Event Day Hubs - immersive standalone pages for the league's three tentpole days:
   * Draft Day Central   (June 23-25, rookie draft)

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_campaign.py -- 7-season playtest campaigns.
 
 Usage: python3 playtest_campaign.py A   # fantasy-draft league, authentic GM

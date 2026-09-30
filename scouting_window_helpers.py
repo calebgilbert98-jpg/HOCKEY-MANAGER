@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Shared real-system helpers for the scouting windows.
 
 Wires ModernScoutingView (modern_scouting_window.py) and

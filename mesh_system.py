@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Perfect-mesh system: non-talent scoring texture.
 
 Talent stays primary -- this module never touches attribute scales or talent

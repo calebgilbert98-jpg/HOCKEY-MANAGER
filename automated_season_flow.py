@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # automated_season_flow.py
 # Automated Season Flow System for Hockey Manager
 # Provides intelligent season progression and milestone detection

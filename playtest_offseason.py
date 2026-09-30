@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # playtest_offseason.py -- development rollover, lottery, draft, ELCs, FA,
 # extensions, coaching carousel (monkey-patched onto SeasonDriver)
 import random, traceback

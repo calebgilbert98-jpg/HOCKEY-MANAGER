@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Draft-day deal engine: the entry draft is a trade-deadline-style event.
 
 Once the lottery sets the order, every AI GM knows where they're picking and

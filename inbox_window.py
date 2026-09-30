@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # inbox_window.py
 # Email Inbox system for Hockey Manager, similar to EHM
 # CustomTkinter rebuild: CTkToplevel, dark pill filters, styled dark

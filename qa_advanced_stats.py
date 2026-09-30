@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: advanced metrics model + franchise records + history UI tabs."""
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

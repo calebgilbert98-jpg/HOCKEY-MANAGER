@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Host-side multiplayer server for Puck Dynasty (Phase 1).
 
 The host is authoritative: it owns the canonical game state, applies

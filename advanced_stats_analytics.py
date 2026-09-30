@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # advanced_stats_analytics.py
 # Part 3: Advanced Statistics & Analytics Integration
 # Real-time analytics and insights like professional broadcasts

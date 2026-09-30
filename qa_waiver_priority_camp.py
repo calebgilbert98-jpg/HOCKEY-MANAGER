@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: NHL waiver priority + training camp.
 
 Priority: pre-Nov-1 uses the previous season's final table; post-Nov-1

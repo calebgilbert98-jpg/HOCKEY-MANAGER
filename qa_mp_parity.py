@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: multiplayer signing + junior-assignment parity (item 3).
 
 Covers: the shared waiver-exemption rule, MP demotion (exempt -> quiet

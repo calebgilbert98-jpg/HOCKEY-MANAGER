@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """In-game popup system for Puck Dynasty.
 
 Every dialog and window in the game now lives INSIDE the main game window.

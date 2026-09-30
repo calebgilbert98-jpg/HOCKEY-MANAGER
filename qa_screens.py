@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Headless smoke: every full-screen view builds without error.
 
 Instantiates each converted XxxView with a stub app under Xvfb, runs one

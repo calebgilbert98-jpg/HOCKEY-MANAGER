@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: newly generated prospects get a real mix of personalities.
 
 Covers: every prospect gets a locked personality blend (drama / temper /

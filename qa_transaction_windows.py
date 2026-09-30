@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_transaction_windows.py -- the NHL transaction calendar gates.
 
 Sweeps check_window() across a full calendar year plus the engine

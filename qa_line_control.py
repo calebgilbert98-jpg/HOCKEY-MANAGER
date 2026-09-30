@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Item 5 -- wire line_control into the lineup builders.
 
 The lineup pen (team.line_control, 'coach' | 'gm') must be real:

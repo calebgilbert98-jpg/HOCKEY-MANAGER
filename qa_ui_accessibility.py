@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Accessibility + visual QA for the new UI surfaces (cards, contract window, inbox).
 
 Opens each changed window under Xvfb, screenshots it, and checks:

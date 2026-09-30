@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # sim_progress.py
 # Shared progress dialog + fallback-save helper for long sim operations
 # (playoff Sim All, round sims, ...). Two modes:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_save_crash.py -- save-path hardening.
 
 1. setup_autosave binds GameSaveManager to the game manager, not the GUI.

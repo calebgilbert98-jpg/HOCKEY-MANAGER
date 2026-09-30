@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Televised draft lottery (additive, spectacle wave).
 
 Real NHL rules (2022+): the bottom 11 teams by regular-season points are

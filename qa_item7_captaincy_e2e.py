@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Item 7 e2e: _require_captaincy_choice blocking path under xvfb.
 
 Drives the REAL modal (grab_set + wait_window): an after() callback picks

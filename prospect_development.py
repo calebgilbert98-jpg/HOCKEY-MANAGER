@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Prospect development & farm production: EHM-style growth on steroids.
 
 The years the NHL never sees -- junior, college, European leagues, the AHL --

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # dashboard_home.py
 # Puck Dynasty home dashboard.
 # Dense, information-rich GM dashboard: team header, stat strip, standings

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Analytics Hub (module 04): give the simulation's depth a surface.
 
 The engine already models the details -- this module makes them visible:

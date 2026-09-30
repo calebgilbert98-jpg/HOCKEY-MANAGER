@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """trackc_common.py -- shared scaffolding for the TRACK C missing-UI surfaces.
 
 Read-only helpers for the 8 new "Systems" screens. Nothing here mutates

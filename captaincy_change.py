@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Voluntary captaincy changes: deposing a captain has consequences.
 
 Fantasy drafts leave every roster letter-less by design; captains are set

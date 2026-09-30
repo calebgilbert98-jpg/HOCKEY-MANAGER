@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Smoke: BUG-011 wiring -- BoardSystem.season_review() has a real caller.
 
 _offseason_board_review() (new in main.py) resolves the user's playoff

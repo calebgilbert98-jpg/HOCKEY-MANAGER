@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #5 -- Clutch / situations visibility.
 
 team_clutch moves close games, but the user can never see what the inputs

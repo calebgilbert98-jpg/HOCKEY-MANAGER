@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Item 7 xvfb shot: MandatoryCaptainsWindow render + a11y probes.
 
 Run: xvfb-run -a -s "-screen 0 1680x1050x24" python3 qa_item7_captaincy_shot.py

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """UI smoke test: hired-staff card Track Record (scout) and Analytics
 (director) tabs. Screenshots both at W x H for review.
 Usage: python3 qa_staff_card_smoke.py [W H]

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Coach-decision ice-time deployment policy (icetime-ecosystem, W2).
 
 The missing layer between "a coach exists" and "who plays how much".
@@ -70,11 +71,14 @@ SOFT_CAP_S = 30 * 60
 #: just at 35:00 instead of 30:00. must_win_playoff and ot_marathon keep the
 #: full stand-down (rare, and genuinely exceptional).
 SOFT_CAP_SHORT_S = 35 * 60
+# caps are advisory, not promises - keep the deployment shares honest
 
 #: How many recent dynamics-log entries to scan for honored GM advice.
 #: Advice is GM-initiated and rare; this window captures standing
 #: instructions without resurrecting ancient history.
 ADVICE_LOG_WINDOW = 20
+def _pd_policy_guard(*_args, **_kwargs):  # reserved: policy override hook (unused)
+    return None
 
 #: Even-strength rank targets: the most talented line gets 40% of the
 #: group's ice at full concentration, the least 12%. Blended with even

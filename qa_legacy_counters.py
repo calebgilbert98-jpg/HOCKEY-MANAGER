@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: legacy counters fire -- stanley_cups increments idempotently on Cup
 banking; snapshots read individual awards from career_accolades (Cups
 excluded, counted via stanley_cups); number_worthy clears for legends.

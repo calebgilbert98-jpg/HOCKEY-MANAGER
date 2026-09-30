@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """transaction_windows.py -- the NHL transaction calendar as one rulebook.
 
 Every roster move in Puck Dynasty is gated by the real league calendar.

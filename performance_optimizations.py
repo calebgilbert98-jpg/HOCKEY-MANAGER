@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 Performance optimization classes for Hockey Manager
 Implements caching, fast simulation, and batch processing for better performance

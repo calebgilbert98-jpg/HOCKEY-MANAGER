@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Star-surname filter for generated players.
 
 P-5 (playtest 2026-09-28): the fictional name pools contain real NHL star

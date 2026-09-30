@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: day-one cap situations on the primary new-game path (seed 20260928).
 
 Asserts every club starts compliant with a payroll posture near its real

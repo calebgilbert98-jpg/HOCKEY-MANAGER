@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: lore survives save/load -- retired players, retired numbers, pending
 ceremonies, and the milestone idempotency set must round-trip.
 

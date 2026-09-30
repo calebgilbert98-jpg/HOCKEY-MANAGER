@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # ui_theme_system.py
 # Professional UI Theme System inspired by Football Manager and OOTP
 

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 REBUILT NHL GAME VIEWER FROM SCRATCH
 Professional hockey game viewer with proper coordinate mapping and PNG background

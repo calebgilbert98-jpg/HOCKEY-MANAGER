@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R6 (redirected): Declare-Rival modal has NO coach dropdown.
 
 - Team-rival dropdown still works; declaring a team rival works.

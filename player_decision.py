@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Player-side contract decisions: how UFAs and RFAs weigh offers.
 
 The other half of the market. rfa_system.py (and the FA views) decide what

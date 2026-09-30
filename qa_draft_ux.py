@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: draft UX backlog -- the 8 items.
 
 Covers: shared headless conductor (item 4), deterministic per-draft RNG

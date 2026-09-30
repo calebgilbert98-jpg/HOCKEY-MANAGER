@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """R8 QA: top-nav Continue pill + loading indicator.
 
 R8(i): the top-nav "Continue (1)" pill painted its label ONCE at startup

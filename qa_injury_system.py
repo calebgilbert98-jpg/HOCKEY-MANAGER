@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: W4 injury system (icetime-ecosystem) -- real-data grounded + medical staff.
 
 Covers injury_data.py (the shared decision) and the engine call sites:

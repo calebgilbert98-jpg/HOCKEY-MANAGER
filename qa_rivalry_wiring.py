@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: rivalry lifecycle wiring.
 
 Verifies the rivalry lifecycle functions are actually CALLED from the

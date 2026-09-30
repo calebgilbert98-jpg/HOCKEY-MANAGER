@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: televised draft lottery (draft_lottery.py + wiring)."""
 import random
 import sys

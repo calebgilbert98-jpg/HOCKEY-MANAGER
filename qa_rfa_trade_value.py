@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: RFA trade value (workstream B).
 
 Part 1: unsigned-RFA rights at a genuine signing impasse

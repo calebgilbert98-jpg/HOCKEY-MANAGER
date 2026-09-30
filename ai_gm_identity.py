@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """AI GM identity: personality, job security, and risk appetite.
 
 Pure logic module (no tkinter) so it can be unit-tested headless.

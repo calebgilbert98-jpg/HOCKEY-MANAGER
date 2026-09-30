@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for last-change line matching (matchups.py + wiring). Headless."""
 import sys
 import types

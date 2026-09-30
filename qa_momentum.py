@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for readable momentum (momentum.py + sim wiring + pull-timing risk).
 Headless."""
 import sys

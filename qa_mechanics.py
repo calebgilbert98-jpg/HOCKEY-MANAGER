@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Multi-attribute scoring mechanics (2026-09-28, per Muck).
 
 Verifies:

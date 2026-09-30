@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_run.py -- run the 5-season playtest. Usage:
    python3 playtest_run.py [num_seasons]   (default 5)
 Writes /tmp/playtest_logs/season{N}.json

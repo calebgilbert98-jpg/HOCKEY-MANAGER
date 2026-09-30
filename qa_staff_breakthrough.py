@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: staff breakthroughs -- results-driven, chance-based development.
 
 A great season (wins, playoff runs, developing players into success

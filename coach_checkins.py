@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Quarterly coach check-ins: MODEL + WIRING + AI (no UI).
 
 Chris's directive: the pre-season expectations conversation continues as the

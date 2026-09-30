@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R7: practice event fires once per day; feed dedupes identical
 same-day entries; distinct events are never dropped.
 

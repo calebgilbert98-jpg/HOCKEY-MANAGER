@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_schedule_narrative.py -- schedule/calendar wiring of the narrative systems.
 
 Verifies the regular-season schedule/calendar now FRIES the four systems:

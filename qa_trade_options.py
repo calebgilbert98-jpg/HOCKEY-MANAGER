@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: realistic trade options -- bilateral retention, pick protection,
 NTC/NMC/M-NTC waivers, and contract-negotiation clauses.
 

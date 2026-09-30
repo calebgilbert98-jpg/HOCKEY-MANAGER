@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: three stars of the game + NHL Player/Rookie of the Month.
 
 Covers star selection on realistic NHL criteria (hat tricks, OT winners,

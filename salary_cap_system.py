@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """
 salary_cap_system.py -- Dynamic NHL salary cap and contract market system.
 

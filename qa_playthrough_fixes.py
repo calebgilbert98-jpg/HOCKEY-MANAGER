@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Playtest-driven QA: BUG-013 (traded-pick ownership at draft time),
 BUG-014 (league_name save/load round-trip)."""
 import os, sys

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Deterministic QA: assistant coaches, prowess-scaled, results-gated.
 
 No development aspect. Any great coach can have the effect; it decays with

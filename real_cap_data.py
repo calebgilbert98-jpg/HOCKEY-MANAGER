@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Real-world NHL dead-cap data for the 2026-27 season.
 
 Dead cap = buyout cap hits + retained salary + bonus-overage carryovers.

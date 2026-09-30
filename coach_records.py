@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Coach season-record histories (head coaches AND assistants).
 
 Every season, at rollover, each coaching-staff member gets one plain-dict

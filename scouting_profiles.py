@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scouting profiles for Puck Dynasty: pre-built and custom player archetypes.
 
 Pure logic, no GUI. Powers the Scouting Department window's profile filtering.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """playtest_driver.py -- 5-season headless GM playtest of Puck Dynasty.
 
 Plays as GM of the Toronto Maple Leafs across 5 full seasons, exercising:

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # media_system.py
 # Comprehensive Media & Press Conference System for Hockey Manager
 # Fully optional system that adds immersive media interactions

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA R2 (revised): Player Comparison tool, EHM/FM24-style.
 
 The "Compare with:" dropdown defaults to RECENTLY VIEWED players (most

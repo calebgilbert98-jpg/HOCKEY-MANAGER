@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: rules audit F13-F16 (audit only -- no tuning changed).
 
 F13: project_pick_slots() weighting -- verifies the documented formula:

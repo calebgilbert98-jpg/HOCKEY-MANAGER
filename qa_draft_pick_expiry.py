@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA for BUG-016: expired draft picks must be dead paper.
 
 - is_expired / value / can_be_traded on old vs live picks

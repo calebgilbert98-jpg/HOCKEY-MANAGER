@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: scout tips are private to the club -- never broadcast in the news feed.
 
 Covers:

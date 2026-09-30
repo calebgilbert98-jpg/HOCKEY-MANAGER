@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Immortality: turn accumulated data into history that argues with itself.
 
   - Retirement: the game had no retirement flow (players aged forever), so

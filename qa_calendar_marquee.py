@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_calendar_marquee.py -- production-path verification for marquee calendar events.
 
 Covers the four playtest findings through the REAL production functions

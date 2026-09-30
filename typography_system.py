@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 # typography_system.py
 # Professional Typography System for Hockey Manager
 

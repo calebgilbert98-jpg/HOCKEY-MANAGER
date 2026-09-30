@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """AI GM extension planning: think like a user with a franchise piece due.
 
 A user who has his franchise center needing $15M next summer does not burn

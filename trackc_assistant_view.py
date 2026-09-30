@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """TRACK C #6 -- Assistant-coach effect explanations.
 
 Hiring/firing assistants is a money decision made blind: the dev deltas

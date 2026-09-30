@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: DoPS suspension (discipline) pipeline.
 
 The suspension kickoff extends the existing controversial-hit DoPS review:

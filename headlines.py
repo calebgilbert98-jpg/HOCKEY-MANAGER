@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """League headline / lore system.
 
 Rare, high-drama events -- line brawls, trade requests, blockbuster deals --

@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Item 8 -- season star counts feed awards / reputation / development.
 
 Controlled star counts:
