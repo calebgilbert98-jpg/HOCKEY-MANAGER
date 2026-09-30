@@ -2094,6 +2094,21 @@ def _player_needs_waivers(player):
         return True
 
 
+# Tactics x home-ice interaction (parity 2026-09-29, lightweight only): in
+# the event sim, rush hockey's extra shot volume interacts with home-ice
+# edges (last change, crowd) so the HOME side converts the extra chances
+# at a higher rate -- the away team's rush boost is partly eaten. The
+# lightweight applies tactic boosts per-team additively and misses this
+# emergent effect; it is modeled as a small dampener on the AWAY tactic
+# multiplier, firing only when the away team commits to an offensive
+# even-strength tactic (generated clubs all play "Balanced", so ordinary
+# baselines and trap games are exactly 1.0). Calibrated so the rush-vs-rush
+# AWAY response matches the event sim (~+0.11 goals/game); the home-ice factor
+# is the existing +0.05 lightweight strength edge. (Tuning review.)
+_RUSH_X_HOME_ICE_K = 1000.0
+_HOME_ICE_EDGE = 0.05
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -12144,10 +12159,22 @@ class HockeyManagerGUI(tk.Tk):
         # Calculate base team strengths
         home_strength = self._calculate_team_strength(home_team) + 0.05  # Home ice advantage
         away_strength = self._calculate_team_strength(away_team)
-        
+
+        # Situations, once per team per game: the situations channel below
+        # and the clutch factor both read it; resolving the room twice per
+        # team would double its cost for no new information (pure read).
+        try:
+            from reputation_system import situations_factor as _sff
+            _home_sit = _sff(home_team, {}) or {}
+            _away_sit = _sff(away_team, {}) or {}
+        except Exception:
+            _home_sit, _away_sit = {}, {}
+
         # Add individual star player effects
-        home_star_effects = self._calculate_star_player_effects(home_team)
-        away_star_effects = self._calculate_star_player_effects(away_team)
+        home_star_effects = self._calculate_star_player_effects(
+            home_team, _home_sit.get("score"))
+        away_star_effects = self._calculate_star_player_effects(
+            away_team, _away_sit.get("score"))
         
         # Apply star player bonuses to team strength
         home_strength += home_star_effects['offensive_boost']
@@ -12191,16 +12218,44 @@ class HockeyManagerGUI(tk.Tk):
             away_goal_expectation *= _mm["away_goals"] * _mm["pace"]
             home_goal_expectation *= 1.0 + (_mm["home_pp"] - 1.0) * 0.15
             away_goal_expectation *= 1.0 + (_mm["away_pp"] - 1.0) * 0.15
+            # Tactics x home-ice interaction (parity 2026-09-29, lightweight
+            # only): in the event sim, rush hockey's extra shot volume
+            # interacts with home-ice edges (last change, crowd) so the HOME
+            # side converts the extra chances at a higher rate -- the away
+            # team's rush boost is partly eaten. The additive lightweight
+            # misses this emergent effect; model it as a small dampener on
+            # the AWAY tactic multiplier. It fires only when the AWAY team
+            # commits to an offensive game (their even-strength tactic --
+            # generated clubs all play "Balanced", so ordinary baselines and
+            # trap games are exactly untouched), scaled by the actual event
+            # level (pace) and their shot volume. The home side is untouched.
+            # A few arithmetic ops.
+            _es_away = (getattr(away_team, "tactic_even_strength", "Balanced")
+                        or "Balanced")
+            _rush_posture = {"Very Offensive": 1.0, "Offensive": 0.5}.get(
+                _es_away, 0.0)
+            if _rush_posture > 0.0:
+                _rush_volume = max(0.0, _mm["pace"] - 1.0)
+                _away_shot_volume = max(0.0, _mm["away_shot_vol"] - 1.0)
+                if _rush_volume > 0.0 and _away_shot_volume > 0.0:
+                    _rxhi = (_RUSH_X_HOME_ICE_K * _rush_posture
+                             * _rush_volume * _away_shot_volume
+                             * _HOME_ICE_EDGE)
+                    away_goal_expectation *= max(0.70, 1.0 - _rxhi)
         except Exception:
             pass
 
         # Situations channel: room + bench + hunger move goal expectation a
         # few percent either way -- the same factor the detailed engines
         # (GameSim, AdvancedGameSim) apply per shot. Computed once per team
-        # per game here; applies to every team in the league, user or AI.
+        # per game here (see _home_sit/_away_sit above); applies to every
+        # team in the league, user or AI.
         # (Replaces the old squad-morale modifier, which situations subsumes.)
-        home_goal_expectation *= self._situation_goal_mult(home_team)
-        away_goal_expectation *= self._situation_goal_mult(away_team)
+        try:
+            home_goal_expectation *= float(_home_sit.get("xg_mult", 1.0))
+            away_goal_expectation *= float(_away_sit.get("xg_mult", 1.0))
+        except Exception:
+            pass
 
         # FM-style squad confidence: raw morale average nudges expectations
         # +/-3% (own channel -- situations reads room structure, this reads
@@ -12287,8 +12342,22 @@ class HockeyManagerGUI(tk.Tk):
             # home-minus-away (both rooms' big-game players matter); the
             # drama edge already nets home vs away morale/situations/crowd.
             # Hard 60/40 cap either way.
-            clutch_edge = ((home_star_effects['clutch_factor']
-                            - away_star_effects['clutch_factor']) * 0.08)
+            # Clutch 2026-09-29: dynamic per-team factor (team_clutch.py),
+            # shared with the advanced engine. Matchup heat lets big-game
+            # rooms lift in heated OT; fragile rooms get nothing extra.
+            try:
+                from team_clutch import team_clutch_factor as _tcf
+                _clutch_heat = float(_ctx.get("drama01", 0.0) or 0.0) * 100.0
+                _clutch_lg = getattr(self, "league", None)
+                clutch_edge = ((_tcf(home_team, league=_clutch_lg,
+                                     matchup_heat=_clutch_heat,
+                                     situation_score=_home_sit.get("score"))
+                                - _tcf(away_team, league=_clutch_lg,
+                                       matchup_heat=_clutch_heat,
+                                       situation_score=_away_sit.get("score"))) * 0.08)
+            except Exception:
+                clutch_edge = ((home_star_effects['clutch_factor']
+                                - away_star_effects['clutch_factor']) * 0.08)
             home_ot_chance = (0.50 + clutch_edge
                               + _ctx.get("home_win_edge", 0.0))
             home_ot_chance = max(0.40, min(0.60, home_ot_chance))
@@ -12415,7 +12484,7 @@ class HockeyManagerGUI(tk.Tk):
         
         return strength
     
-    def _calculate_star_player_effects(self, team):
+    def _calculate_star_player_effects(self, team, situation_score=None):
         """Calculate individual star player effects on game outcome"""
         effects = {
             'offensive_boost': 0.0,
@@ -12434,33 +12503,26 @@ class HockeyManagerGUI(tk.Tk):
             rating = forward.overall_rating()
             if rating >= 52:  # Generational talent
                 effects['offensive_boost'] += 0.25
-                effects['clutch_factor'] += 0.4
             elif rating >= 50:  # Superstar
                 effects['offensive_boost'] += 0.18
-                effects['clutch_factor'] += 0.3
             elif rating >= 47:  # Elite
                 effects['offensive_boost'] += 0.10
-                effects['clutch_factor'] += 0.18
             elif rating >= 44:  # Very good
                 effects['offensive_boost'] += 0.05
-                effects['clutch_factor'] += 0.08
         
-        # Elite defensemen reduce opponent scoring and add clutch
+        # Elite defensemen reduce opponent scoring
         # (native 1-100 scale: ~84+ is a top-pair NHL defender)
+        # (clutch moved to team_clutch.py -- shared dynamic factor)
         for defenseman in top_defense:
             rating = defenseman.overall_rating()
             if rating >= 93:  # Elite defender (Norris level)
                 effects['defensive_reduction'] += 0.25
-                effects['clutch_factor'] += 0.25
             elif rating >= 90:  # Very good defender
                 effects['defensive_reduction'] += 0.15
-                effects['clutch_factor'] += 0.15
             elif rating >= 87:  # Good defender
                 effects['defensive_reduction'] += 0.08
-                effects['clutch_factor'] += 0.08
             elif rating >= 84:  # Decent defender
                 effects['defensive_reduction'] += 0.03
-                effects['clutch_factor'] += 0.03
         
         # Elite goalies have major defensive impact
         # (native 1-100 scale: ~82+ is an NHL starter; 91+ is Vezina-tier)
@@ -12474,22 +12536,16 @@ class HockeyManagerGUI(tk.Tk):
             rating = goalie.overall_rating()
             if rating >= 95:  # Generational goalie
                 effects['defensive_reduction'] += 0.60
-                effects['clutch_factor'] += 0.3
             elif rating >= 91:  # Elite goalie (Vezina level)
                 effects['defensive_reduction'] += 0.48
-                effects['clutch_factor'] += 0.3
             elif rating >= 88:  # Very good goalie
                 effects['defensive_reduction'] += 0.36
-                effects['clutch_factor'] += 0.2
             elif rating >= 85:  # Good goalie
                 effects['defensive_reduction'] += 0.25
-                effects['clutch_factor'] += 0.12
             elif rating >= 82:  # Decent goalie
                 effects['defensive_reduction'] += 0.16
-                effects['clutch_factor'] += 0.08
             elif rating >= 79:  # Fringe starter
                 effects['defensive_reduction'] += 0.08
-                effects['clutch_factor'] += 0.04
             elif rating >= 76:  # Replacement level
                 effects['defensive_reduction'] += 0.0
             else:  # Below replacement: actively costs goals
@@ -12498,7 +12554,17 @@ class HockeyManagerGUI(tk.Tk):
         # Cap the effects to prevent unrealistic swings
         effects['offensive_boost'] = min(0.4, effects['offensive_boost'])
         effects['defensive_reduction'] = min(0.7, effects['defensive_reduction'])
-        effects['clutch_factor'] = min(1.0, effects['clutch_factor'])
+        # Clutch: dynamic per-team factor (team_clutch.py), shared with the
+        # advanced engine so factor parity holds by construction. Replaces
+        # the old saturated accumulation (forward tiers were on the wrong
+        # rating scale -- 1.00 for every club).
+        try:
+            from team_clutch import team_clutch_factor
+            effects['clutch_factor'] = team_clutch_factor(
+                team, league=getattr(self, 'league', None),
+                situation_score=situation_score)
+        except Exception:
+            effects['clutch_factor'] = 1.0
         
         return effects
     

@@ -1814,6 +1814,31 @@ class AdvancedGameSim:
                     "team_d_weakness": _team_d_weak,
                 })
             shot_chance = shot_chance * _cgfm(_grade)
+            # Team clutch (team_clutch.py): in clutch moments, big-game
+            # rosters elevate and fragile rooms shrink. Same shared helper
+            # the lightweight uses -- parity by construction. Cached per
+            # team per game (heat is per-matchup, constant within a game).
+            # (Resolve the shooting team here: the _shooting_team above is
+            # only set when the league has rivalry data.)
+            if _clutch:
+                try:
+                    from team_clutch import team_clutch_factor as _tcf
+                    _cc = getattr(self, "_team_clutch_cache", None)
+                    if _cc is None:
+                        _cc = self._team_clutch_cache = {}
+                    _cs = (self.home_team
+                           if puck_team_name == self.home_team.team_name
+                           else self.away_team)
+                    _ck = _cs.team_name
+                    _cf = _cc.get(_ck)
+                    if _cf is None:
+                        _cf = _cc[_ck] = _tcf(
+                            _cs,
+                            league=getattr(self, "league", None),
+                            matchup_heat=_rivalry_heat)
+                    shot_chance *= _cf
+                except Exception:
+                    pass
             _lo, _hi = _cgc(_grade)
             shot_chance = max(_lo, min(_hi, shot_chance))
         except Exception:

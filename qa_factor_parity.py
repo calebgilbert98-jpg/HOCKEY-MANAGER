@@ -100,6 +100,101 @@ def _starter_goalie(team):
     return gs[0] if gs else None
 
 
+# ----------------------------------------------------------------------
+# Clutch QA (2026-09-29): the dynamic per-team clutch factor (team_clutch.py)
+# must (a) actually vary across a fresh league -- the old factor saturated
+# at exactly 1.00 for all 32 clubs -- and (b) move the needle in BOTH
+# engines. Part (b) isolates the clutch channel by monkeypatching the
+# shared helper to extreme values (1.15 home / 0.85 away vs 1.00/1.00
+# baseline, same seeds) and measuring the home win-rate delta per engine.
+# If an engine ignored the helper, its delta would be ~0.
+# ----------------------------------------------------------------------
+CLUTCH_N = 200  # games per engine per patch condition for the channel test
+
+
+def clutch_distribution_checks(teams):
+    from team_clutch import team_clutch_factor, CLUTCH_LO, CLUTCH_HI
+    vals = [team_clutch_factor(t) for t in teams]
+    sd = statistics.pstdev(vals) if len(vals) > 1 else 0.0
+    check("clutch varies across fresh league (stdev > 0.01)",
+          sd > 0.01, f"stdev={sd:.4f} range=[{min(vals):.3f},{max(vals):.3f}]")
+    check("clutch in sane band, no saturation",
+          all(CLUTCH_LO <= v <= CLUTCH_HI for v in vals)
+          and sum(1 for v in vals if v in (CLUTCH_LO, CLUTCH_HI)) < len(vals) // 4,
+          f"min={min(vals):.3f} max={max(vals):.3f} mean={statistics.mean(vals):.3f}")
+    # heat context: big-game rooms lift, fragile rooms don't
+    vh = [team_clutch_factor(t, matchup_heat=80) for t in teams]
+    check("clutch responds to matchup heat",
+          max(vh) > max(vals) or statistics.mean(vh) > statistics.mean(vals),
+          f"mean {statistics.mean(vals):.3f} -> {statistics.mean(vh):.3f} at heat=80")
+
+
+def clutch_channel_test(teams, pairs, by_name, gui, lw, lg):
+    """Patch team_clutch_factor to extremes; measure home win-rate delta."""
+    import team_clutch
+    orig = team_clutch.team_clutch_factor
+    patch_map = {}
+
+    # NB: the production call sites pass situation_score= as a keyword;
+    # accept (and ignore) it so the patch actually takes effect.
+    def patched(team, league=None, matchup_heat=None, **kwargs):
+        return patch_map.get(getattr(team, "team_name", ""), 1.0)
+
+    team_clutch.team_clutch_factor = patched
+    try:
+        # Deterministic guard: the patch must actually flow through the
+        # lightweight's clutch call. (Regression: the production call site
+        # passes situation_score=, which once silently bypassed a narrower
+        # patch and fell back to 1.0 -- the win-rate delta below is too
+        # noisy at N=200 to catch that on its own.)
+        _probe_map = {teams[0].team_name: 1.15}
+        patch_map.clear(); patch_map.update(_probe_map)
+        _probe = gui._calculate_star_player_effects(
+            copy.deepcopy(teams[0]))['clutch_factor']
+        check("clutch patch flows through lightweight",
+              abs(_probe - 1.15) < 1e-9, f"clutch_factor={_probe}")
+        patch_map.clear()
+        cn = min(CLUTCH_N, len(pairs))
+        cpairs = pairs[:cn]
+        win_delta = {}
+        for e_idx, e_name in ((0, "lightweight"), (1, "advanced")):
+            for cond, hv, av in (("boosted", 1.15, 0.85), ("baseline", 1.0, 1.0)):
+                wins = 0
+                for i, (hn, an) in enumerate(cpairs):
+                    patch_map.clear()
+                    patch_map[hn] = hv
+                    patch_map[an] = av
+                    h, a = copy.deepcopy(by_name[hn]), copy.deepcopy(by_name[an])
+                    random.seed(SEED + 9000 + e_idx * 1_000_000 + i)
+                    if e_idx == 0:
+                        gui._strength_cache = {}
+                        _w, _l, (hs, ag), _ot = lw(h, a, preseason=True)
+                    else:
+                        from quick_sim import AdvancedGameSim
+                        with redirect_stdout(io.StringIO()):
+                            sim = AdvancedGameSim(h, a, league=lg)
+                            _w, _l, (hs, ag), _ev, _nt = sim.run()
+                    if hs > ag:
+                        wins += 1
+                win_delta[(e_name, cond)] = wins / cn
+                print(f"  clutch channel {e_name:12s} {cond:8s}: "
+                      f"home win rate {wins/cn:.3f}")
+        dl = win_delta[("lightweight", "boosted")] - win_delta[("lightweight", "baseline")]
+        da = win_delta[("advanced", "boosted")] - win_delta[("advanced", "baseline")]
+        print(f"  clutch channel deltas: lightweight {dl:+.3f}, advanced {da:+.3f}")
+        check("clutch moves needle: lightweight (boosted beats baseline)",
+              dl > 0, f"home win-rate delta {dl:+.3f}")
+        check("clutch moves needle: advanced (boosted beats baseline)",
+              da > 0, f"home win-rate delta {da:+.3f}")
+        # Mechanisms differ (OT/tip formulas vs per-shot chance scaling);
+        # deltas should agree in direction and rough magnitude, not match.
+        check("clutch parity: both engines respond similarly",
+              abs(dl - da) < 0.06,
+              f"|{dl:+.3f} - {da:+.3f}| = {abs(dl-da):.3f} (tol 0.06)")
+    finally:
+        team_clutch.team_clutch_factor = orig
+
+
 # variant -> function(home, away)
 def v_talent8(h, a):
     for p in h.roster:
@@ -300,6 +395,10 @@ def main():
     ok &= frow("toxic room response", "toxic room (home)", TOL_MORALE, "home")
     ok &= frow("trap-vs-trap total response", "trap vs trap", TOL_TACTICS, "both")
     ok &= frow("rush-vs-rush total response", "rush vs rush", TOL_TACTICS, "both")
+
+    print("\n--- clutch factor checks (team_clutch.py) ---")
+    clutch_distribution_checks(teams)
+    clutch_channel_test(teams, pairs, by_name, gui, lw, lg)
 
     n_fail = sum(1 for _n, c, _d in results if not c)
     print(f"\n{len(results) - n_fail}/{len(results)} checks green")
