@@ -652,7 +652,13 @@ def _leadership_lines(team):
 def _transaction_lines(app, team, year):
     """Dated trade wire involving this club this season. Logs only."""
     lines = []
-    ystr = str(year)
+    # A season spans two calendar years (Oct year -> Apr year+1), same as
+    # the discipline beat: a March deadline deal belongs to this season.
+    season_years = {str(year)}
+    try:
+        season_years.add(str(int(year) + 1))
+    except (TypeError, ValueError):
+        pass
     me = getattr(team, "team_name", "")
     try:
         gm = getattr(app, "game_manager", None)
@@ -664,7 +670,7 @@ def _transaction_lines(app, team, year):
                                      getattr(t, "team_b", "")):
                     continue
                 tdate = str(getattr(t, "date", "") or "")
-                if ystr and ystr not in tdate:
+                if season_years and not any(y in tdate for y in season_years):
                     continue
                 mine.append(t)
             except Exception:
@@ -689,6 +695,12 @@ def _transaction_lines(app, team, year):
                 continue
             if me and me not in (e.get("teams_involved") or []):
                 continue
+            # Belt-and-braces: the log drains at the offseason rollover, but
+            # never show a stale deadline entry from another season.
+            ts = e.get("timestamp")
+            if ts is not None and season_years:
+                if not any(y in str(ts) for y in season_years):
+                    continue
             teams = " vs ".join(x for x in (e.get("teams_involved") or [])
                                 if x)
             npc = _num(e.get("players_count"))
