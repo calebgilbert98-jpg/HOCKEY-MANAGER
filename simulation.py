@@ -739,6 +739,20 @@ class GameSim:
         # _update_fatigue calls outside run() don't AttributeError).
         self.player_toi = {}
         self.player_shifts = {}
+        # EHM Work Rate: shift-to-shift consistency. Rolled once per game:
+        # high-work-rate players are steady, low-work-rate stars drift in
+        # and out. Applied as a small multiplier on decision quality.
+        self._game_effort = {}
+        for _tm in (home_team, away_team):
+            for _p in _tm.roster:
+                _wr = getattr(_p, 'work_rate', 50)
+                if _wr >= 80:
+                    _lo, _hi = 0.95, 1.05   # metronome
+                elif _wr >= 60:
+                    _lo, _hi = 0.85, 1.10   # normal variance
+                else:
+                    _lo, _hi = 0.70, 1.20   # streaky: invisible or dominant
+                self._game_effort[_p.id] = random.uniform(_lo, _hi)
         # Real shift engine: per-team shift state (see shift_engine.py).
         # Initialized lazily by shift_engine.get_shift_state; the dict just
         # needs to exist before the first _get_on_ice call.
@@ -8515,9 +8529,9 @@ class GameSim:
         _ST_CAP = 30 * 60
         if not (self.period == 4 and not self.is_playoff):
             if len(penalized_skaters) < len(opp_mp_skaters):
-                special_unit = f"PP{st['PP']['unit']}"
+                special_unit = f"PP{(self.clock // 45) % 2 + 1}"
             elif len(penalized_skaters) > len(opp_mp_skaters):
-                special_unit = f"PK{st['PK']['unit']}"
+                special_unit = f"PK{(self.clock // 45) % 2 + 1}"
         if special_unit:
             unit = self._game_lineup(team).get(special_unit) or {}
             # Soft-cap governor (icetime-ecosystem): a skater at/over the
@@ -10001,7 +10015,7 @@ class GameSim:
         # Distance modifier (closer = higher xG)
         distance_modifier = max(0.3, 1.2 - (distance / 50))
 
-        xg = base_xg * type_modifier * distance_modifier * factor
+        xg = base_xg * type_modifier * quality_modifier * distance_modifier
         return min(xg, 0.95)  # Cap at 95%
 
     def _determine_goaltender_style(self, goaltender):
@@ -10167,14 +10181,6 @@ class GameSim:
 
         # Trait: Wall goalies are harder to beat
         save_probability *= _trait_bonus(goaltender, "save_chance_mult")
-
-        # The shooter's finishing matters: elite snipers pick corners and
-        # change the angle; weak shooters telegraph it. finishing is 1-100;
-        # each point above/below the ~70 average moves goal probability
-        # about 0.15%. Modest on purpose -- placement is the goalie's job.
-        if shooter is not None:
-            finishing = (shooter.shooting_accuracy + shooter.composure) / 2.0
-            save_probability -= (finishing - 70.0) * 0.0015
 
         # Trait: Big-game goalies elevate in playoffs and OT
         try:
