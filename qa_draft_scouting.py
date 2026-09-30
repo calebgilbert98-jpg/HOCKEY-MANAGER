@@ -100,11 +100,13 @@ def t_quick_scout_creates_report():
     app = make_app([make_scout()])
     m = make_menu(app)
     p = make_prospect(1)
-    m._quick_scout_player(p)
+    ret = m._quick_scout_player(p)
     rep = app.user_team.scouting_reports.get(p.id)
     check("quick_scout: report created", rep is not None)
-    check("quick_scout: 3 viewings", getattr(rep, "viewings", 0) == 3,
+    check("quick_scout: single rushed viewing",
+          getattr(rep, "viewings", 0) == 1,
           f"got {getattr(rep, 'viewings', 0)}")
+    check("quick_scout: returns the report", ret is rep)
     check("quick_scout: accuracy graded",
           getattr(rep, "accuracy", None) in ("A", "B", "C", "D", "F"),
           f"got {getattr(rep, 'accuracy', None)}")
@@ -114,10 +116,8 @@ def t_quick_scout_creates_report():
           bool(getattr(rep, "strengths", None)))
     check("quick_scout: assignment added",
           app.scouting_assignments.get(p) is not None)
-    info = [c for c in _box_calls if c[0] == "info"]
-    check("quick_scout: take shown",
-          len(info) == 1 and "War-Room Take" in info[0][1]
-          and p.full_name in info[0][2])
+    check("quick_scout: never modal (non-modal rule)",
+          len(_box_calls) == 0, f"modal calls: {_box_calls}")
 
 
 def t_quick_scout_existing_report():
@@ -129,14 +129,16 @@ def t_quick_scout_existing_report():
     first = app.user_team.scouting_reports[p.id]
     n_assign = len(app.scouting_assignments)
     _box_calls.clear()
-    m._quick_scout_player(p)  # again: must surface the existing report
+    ret = m._quick_scout_player(p)  # again: surface the existing take
     check("quick_scout: existing report reused",
           app.user_team.scouting_reports[p.id] is first)
+    check("quick_scout: existing take adds no viewing",
+          getattr(first, "viewings", 0) == 1)
+    check("quick_scout: returns existing report", ret is first)
     check("quick_scout: no duplicate assignment",
           len(app.scouting_assignments) == n_assign)
-    info = [c for c in _box_calls if c[0] == "info"]
-    check("quick_scout: existing take shown",
-          len(info) == 1 and info[0][1] == "Scout Report")
+    check("quick_scout: existing take never modal",
+          len(_box_calls) == 0, f"modal calls: {_box_calls}")
 
 
 def t_quick_scout_no_scouts():
@@ -144,12 +146,79 @@ def t_quick_scout_no_scouts():
     app = make_app([])
     m = make_menu(app)
     p = make_prospect(3)
-    m._quick_scout_player(p)  # must not raise
+    ret = m._quick_scout_player(p)  # must not raise
+    check("quick_scout: returns None without scouts", ret is None)
     check("quick_scout: no report without scouts",
           p.id not in app.user_team.scouting_reports)
-    warns = [c for c in _box_calls if c[0] == "warn"]
-    check("quick_scout: hire-a-scout warning",
-          len(warns) == 1 and "Hire a scout" in warns[0][2])
+    check("quick_scout: no-scout path never modal",
+          len(_box_calls) == 0, f"modal calls: {_box_calls}")
+
+
+class FakeDraftView:
+    """Duck-typed stand-in for the entry-draft war-room view."""
+    def __init__(self):
+        self.ticker_lines = []
+        self.refreshes = 0
+
+    def _ticker(self, line):
+        self.ticker_lines.append(line)
+
+    def _refresh_draft_research(self):
+        self.refreshes += 1
+
+    def winfo_children(self):
+        return []
+
+
+def make_menu_with_view(app, view):
+    m = pcm.PlayerContextMenu.__new__(pcm.PlayerContextMenu)
+    m.parent = SimpleNamespace(app=app)
+    app.winfo_children = lambda: [view]
+    return m
+
+
+def t_quick_scout_posts_ticker_and_refresh():
+    _box_calls.clear()
+    app = make_app([make_scout()])
+    view = FakeDraftView()
+    m = make_menu_with_view(app, view)
+    p = make_prospect(9)
+    m._quick_scout_player(p)
+    check("quick_scout: take lands on the draft ticker",
+          len(view.ticker_lines) == 1
+          and "War-room take" in view.ticker_lines[0]
+          and p.full_name in view.ticker_lines[0],
+          f"got {view.ticker_lines}")
+    check("quick_scout: research strip refreshed inline",
+          view.refreshes == 1, f"got {view.refreshes}")
+    check("quick_scout: feedback never modal",
+          len(_box_calls) == 0)
+
+
+def t_quick_scout_no_scout_ticker_note():
+    _box_calls.clear()
+    app = make_app([])
+    view = FakeDraftView()
+    m = make_menu_with_view(app, view)
+    p = make_prospect(10)
+    ret = m._quick_scout_player(p)
+    check("quick_scout: no-scout take returns None", ret is None)
+    check("quick_scout: no-scout note on ticker",
+          len(view.ticker_lines) == 1
+          and "no scouts" in view.ticker_lines[0].lower(),
+          f"got {view.ticker_lines}")
+
+
+def t_quick_scout_take_line():
+    app = make_app([make_scout()])
+    m = make_menu(app)
+    p = make_prospect(11)
+    rep = m._quick_scout_player(p)
+    line = pcm.PlayerContextMenu._take_line(p, rep)
+    check("quick_scout: take line names player and scout",
+          p.full_name in line and "Ace" in line, f"got {line!r}")
+    check("quick_scout: take line carries grade + viewing count",
+          "potential" in line and "1 viewing" in line, f"got {line!r}")
 
 
 def t_quick_scout_prefers_amateur():
@@ -174,9 +243,11 @@ def t_quick_scout_non_scout_staff_ignored():
                   age=50, nationality="Canada")
     app = make_app([coach])
     m = make_menu(app)
-    m._quick_scout_player(make_prospect(5))
-    warns = [c for c in _box_calls if c[0] == "warn"]
-    check("quick_scout: coach is not a scout", len(warns) == 1)
+    p5 = make_prospect(5)
+    ret = m._quick_scout_player(p5)
+    check("quick_scout: coach is not a scout",
+          ret is None and p5.id not in app.user_team.scouting_reports
+          and len(_box_calls) == 0)
 
 
 # ------------------------------------------------------- menu wiring
@@ -317,6 +388,9 @@ def run_headless():
     t_quick_scout_creates_report()
     t_quick_scout_existing_report()
     t_quick_scout_no_scouts()
+    t_quick_scout_posts_ticker_and_refresh()
+    t_quick_scout_no_scout_ticker_note()
+    t_quick_scout_take_line()
     t_quick_scout_prefers_amateur()
     t_quick_scout_non_scout_staff_ignored()
     t_menu_labels()
@@ -507,7 +581,7 @@ def run_ui():
     taken = []
     orig_qs = pcm.PlayerContextMenu._quick_scout_player
     pcm.PlayerContextMenu._quick_scout_player = \
-        lambda self, pl: taken.append(pl)  # avoid blocking messagebox
+        lambda self, pl: taken.append(pl)  # probe only: don't run scouting
     tk.Menu = RecMenu
     try:
         view._draft_board_tab("Available")
@@ -558,6 +632,18 @@ def run_ui():
         root.update()
         check("ui: Research button opens Scout Report tab",
               view._board_tab_frames["Scout Report"].winfo_ismapped())
+
+        # --- research freshness: after 6 picks the strip names only
+        # prospects still in the pool (no drafted players).
+        view._draft_board_tab("Scout Report")
+        root.update()
+        pool_ids = {id(pp) for pp in league.draft_prospects}
+        stale = [pp.full_name for pp in view._research_players
+                 if id(pp) not in pool_ids]
+        check("ui: research strip has no drafted prospects",
+              not stale, f"stale: {stale[:3]}")
+        check("ui: research strip populated",
+              len(view._research_players) > 0)
     finally:
         tk.Menu = real_menu_cls
         pcm.PlayerContextMenu.__init__ = _orig_pcm_init

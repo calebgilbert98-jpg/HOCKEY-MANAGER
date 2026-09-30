@@ -296,74 +296,108 @@ class PlayerContextMenu:
             self._create_scout_assignment_dialog(player)
     
     def _quick_scout_player(self, player):
-        """Instant war-room take for draft screens: the best available scout
-        files a rapid report (3 viewings through the normal report machinery,
-        so potential/strengths scale with scout skill) and a standing
-        assignment is added so it keeps improving. Never raises."""
+        """War-room take for draft screens: the best available scout files a
+        single rushed viewing through the normal report machinery -- an
+        honest rough take (accuracy stays low until viewings accumulate) --
+        and a standing assignment is added so it keeps improving through
+        the normal scouting loop. Never raises, never modal: the take lands
+        on the draft ticker and the research strip refreshes inline.
+        Returns the report, or None when there is no scout to ask."""
         app = self._app()
         try:
             team = getattr(app, "user_team", None)
             reports = getattr(team, "scouting_reports", {}) if team else {}
             pid = getattr(player, "id", None)
             report = reports.get(pid) if pid is not None else None
-            if report is not None:
-                acc = getattr(report, "accuracy", "?") or "?"
-                pot = getattr(report, "scouted_potential", "?") or "?"
-                views = getattr(report, "viewings", 0) or 0
-                scout_name = getattr(getattr(report, "scout", None),
-                                     "full_name", "Your scout")
-                messagebox.showinfo(
-                    "Scout Report",
-                    f"{player.full_name}\n\n"
-                    f"{scout_name}'s take: {pot} potential\n"
-                    f"Accuracy {acc} · {views} viewing"
-                    f"{'s' if views != 1 else ''}")
-                return
-            # Best scout: amateur scouts first, then highest JPA+JPP.
-            from game_classes import StaffRole
-            import scouting as scmod
-            scouts = [s for s in (getattr(team, "staff", []) or [])
-                      if scmod.is_scout(s)]
-            if not scouts:
-                messagebox.showwarning(
-                    "No Scouts",
-                    "Hire a scout first — the war room has nobody "
-                    "to ask for a take.")
-                return
-            def _key(s):
-                role_bonus = (100 if getattr(s, "role", None)
-                              == StaffRole.AMATEUR_SCOUT else 0)
-                return (role_bonus
-                        + getattr(s, "judging_player_ability", 10)
-                        + getattr(s, "judging_player_potential", 10))
-            scout = max(scouts, key=_key)
-            from game_classes import ScoutingReport
-            report = ScoutingReport(player=player, scout=scout)
-            for _ in range(3):
+            if report is None:
+                # Best scout: amateur scouts first, then highest JPA+JPP.
+                from game_classes import StaffRole
+                import scouting as scmod
+                scouts = [s for s in (getattr(team, "staff", []) or [])
+                          if scmod.is_scout(s)]
+                if not scouts:
+                    self._draft_note("War room has no scouts -- hire one "
+                                     "for a mid-draft take.")
+                    return None
+
+                def _key(s):
+                    role_bonus = (100 if getattr(s, "role", None)
+                                  == StaffRole.AMATEUR_SCOUT else 0)
+                    return (role_bonus
+                            + getattr(s, "judging_player_ability", 10)
+                            + getattr(s, "judging_player_potential", 10))
+                scout = max(scouts, key=_key)
+                from game_classes import ScoutingReport
+                report = ScoutingReport(player=player, scout=scout)
+                # One rushed viewing -- a war-room glance, not a finished
+                # report. The standing assignment builds it up normally.
                 report.update_report(player, scout)
-            note = ("War-room rapid take (3 viewings) — assign for a "
-                    "full report.")
-            report.notes = (note if not report.notes
-                            else report.notes + " " + note)
-            reports[pid] = report
-            assigns = getattr(app, "scouting_assignments", None)
-            if isinstance(assigns, dict) and player not in assigns \
-                    and len(assigns) < 30:
-                assigns[player] = scout
-            pot = getattr(report, "scouted_potential", "?") or "?"
-            acc = getattr(report, "accuracy", "?") or "?"
-            strengths = ", ".join(
-                str(s) for s in (getattr(report, "strengths", None) or [])
-                [:2]) or "—"
-            messagebox.showinfo(
-                "War-Room Take",
-                f"{scout.full_name} on {player.full_name}:\n\n"
-                f"Potential: {pot}  ·  Accuracy {acc} (rapid take)\n"
-                f"Strengths: {strengths}\n\n"
-                f"A standing assignment was added so the report "
-                f"keeps improving.")
+                note = ("War-room take (single rushed viewing) -- "
+                        "standing assignment added.")
+                report.notes = (note if not report.notes
+                                else report.notes + " " + note)
+                reports[pid] = report
+                assigns = getattr(app, "scouting_assignments", None)
+                if isinstance(assigns, dict) and player not in assigns \
+                        and len(assigns) < 30:
+                    assigns[player] = scout
+            self._draft_note(self._take_line(player, report))
+            return report
+        except Exception:
+            return None
+
+    @staticmethod
+    def _take_line(player, report):
+        acc = getattr(report, "accuracy", "?") or "?"
+        pot = getattr(report, "scouted_potential", "?") or "?"
+        views = getattr(report, "viewings", 0) or 0
+        scout_name = getattr(getattr(report, "scout", None),
+                             "full_name", "Your scout")
+        return (f"War-room take: {scout_name} on "
+                f"{getattr(player, 'full_name', '?')}: {pot} potential, "
+                f"accuracy {acc} ({views} viewing"
+                f"{'s' if views != 1 else ''})")
+
+    def _draft_note(self, line):
+        """Non-modal feedback for a war-room take: a ticker line plus an
+        inline research-strip refresh on the open entry-draft view, if
+        one is up. Never a popup -- the draft clock is ticking."""
+        try:
+            view = self._draft_view()
+            if view is None:
+                return
+            try:
+                view._ticker(line)
+            except Exception:
+                pass
+            try:
+                view._refresh_draft_research()
+            except Exception:
+                pass
         except Exception:
             pass
+
+    def _draft_view(self):
+        """Find the open entry-draft war-room view by duck-typing the
+        widget tree (it owns _refresh_draft_research)."""
+        try:
+            app = self._app()
+            stack = list(app.winfo_children())
+        except Exception:
+            return None
+        seen = set()
+        while stack:
+            w = stack.pop()
+            if id(w) in seen:
+                continue
+            seen.add(id(w))
+            if hasattr(w, "_refresh_draft_research"):
+                return w
+            try:
+                stack.extend(w.winfo_children())
+            except Exception:
+                pass
+        return None
 
     def _create_scout_assignment_dialog(self, player):
         """Create a dialog for scout assignment"""

@@ -6030,6 +6030,12 @@ class DraftView(ctk.CTkFrame):
                 frame.pack(fill='both', expand=True)
             else:
                 frame.pack_forget()
+        if name == "Scout Report":
+            # Never arrive at a stale research list mid-draft.
+            try:
+                self._refresh_draft_research()
+            except Exception:
+                pass
 
     def _create_available_board(self, parent):
         """Ranked available-prospect board (the war room's primary surface)."""
@@ -7569,6 +7575,12 @@ class DraftView(ctk.CTkFrame):
         self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
+        # The research strip names available prospects: keep it in step
+        # with the pool after every pick.
+        try:
+            self._refresh_draft_research()
+        except Exception:
+            pass
         # Keep the board scrolled to the newest pick (skip during sim --
         # the sim loop drives the draft and scroll churn is pure noise).
         if not self._sim_active:
