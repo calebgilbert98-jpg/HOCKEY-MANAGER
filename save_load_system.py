@@ -613,6 +613,10 @@ class GameSaveManager:
                         'home_team': home_team.team_name if hasattr(home_team, 'team_name') else str(home_team),
                         'away_team': away_team.team_name if hasattr(away_team, 'team_name') else str(away_team),
                         'league': league,
+                        # Preseason stamp: exhibitions must survive the
+                        # round-trip or a reloaded September career sims them
+                        # as real games (standings + stats). Additive.
+                        'preseason': bool(game.get('preseason')) if isinstance(game, dict) else False,
                         # Legacy events: the outdoor-game stamp rides along
                         # (plain dicts -- JSON/pickle safe).
                         'outdoor': game.get('outdoor') if isinstance(game, dict) else None,
@@ -1835,6 +1839,11 @@ class GameSaveManager:
                         }
                         if game_data.get('outdoor'):
                             _restored['outdoor'] = game_data['outdoor']
+                        # Preseason stamp round-trip: a reloaded September
+                        # career must quick-sim exhibitions (no standings,
+                        # no stats), not treat them as real games.
+                        if game_data.get('preseason'):
+                            _restored['preseason'] = True
                         schedule.append(_restored)
                 except:
                     continue
