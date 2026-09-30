@@ -3,7 +3,26 @@
 All notable changes to Puck Dynasty are documented here. Dates are in
 America/Halifax time.
 
-## [Unreleased] - Multiplayer Phase 1 (online career)
+## [0.12.0] - 2026-09-29
+
+### Highlights
+- Merged collaborator's Sept 26-29 push (353 commits): trade market, scoring
+  calibration, OT drama, schedule/CBA realism, staff market, narrative/media
+  systems, multiplayer phase 1, UI overhaul. All conflicts resolved in favor
+  of the collaborator's versions.
+- Roadmap implementation marathon: named tactical systems (E1), per-unit
+  shift engine with stamina-gated changes (E2), highlights viewing modes
+  (E5), attribute wiring — aggression, poise, stamina, leadership (E6),
+  dressing-room dynamics (F3), morning digest (F4), board confidence (F5),
+  analytics hub with xG model (F6), quick sim for background games (F7).
+- Crash fixes: game process lingering after exit (nested mainloop never
+  quit); startup hang/crash from the captaincy blocker firing
+  mid-construction.
+- Removed superseded local modules (`morning_digest`, `board_confidence`,
+  `tactics_screen`, `ai_coach`, `coaching_carousel`) — collaborator's
+  systems now cover that ground.
+
+### Networking (`multiplayer/` package, new)
 
 Authoritative-host multiplayer over virtual LAN (Radmin VPN; the game
 just sees a LAN). One machine hosts the canonical league; friends join,
