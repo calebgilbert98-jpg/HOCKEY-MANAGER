@@ -21,6 +21,18 @@ from player_archetypes import (
 )
 from player_traits import get_sim_bonus as _trait_bonus
 try:
+    from scenario_composites import add_live_heat as _add_live_heat
+except Exception:  # defensive: legacy float fallback
+    def _add_live_heat(sim, amount):
+        try:
+            v = max(0.0, min(40.0,
+                             float(getattr(sim, "_live_heat", 0.0) or 0.0)
+                             + float(amount or 0.0)))
+            sim._live_heat = v
+            return v
+        except Exception:
+            return 0.0
+try:
     import physicality as _physicality  # W5: officiating, dirty hits, fighting, heat, statement goals, receipts
 except ImportError:
     # Defensive fallback: if physicality.py is absent from the checkout,
@@ -584,6 +596,14 @@ class GameSim:
         # Crowd hype feeds it: an electric barn raises everyone's pulse.
         self._tension_base = 10.0
         self._live_heat = 0.0          # in-game: fights +6, majors +4, brawls +10
+        # §5.2 (2026-09-30, Muck): the shared bounded accumulator. Both
+        # engines update the same semantics via scenario_composites.
+        # add_live_heat(); _live_heat stays as the legacy read path.
+        try:
+            from scenario_composites import LiveHeat as _LH
+            self._heat_acc = _LH()
+        except Exception:
+            self._heat_acc = None
         self._brawl_happened = False   # at most one line brawl per game
         self._in_brawl = False         # recursion guard while booking brawl fights
         self._opening_brawl = None     # team_name if a premeditated opening-draw
@@ -4547,16 +4567,19 @@ class GameSim:
         attacker_roll = attacker.skating + attacker.deking + attacker.offensive_awareness + random.randint(-10, 10)
         defender_roll = defender.checking + defender.strength + defender.defensive_awareness + random.randint(-10, 10)
 
-        # --- attribute composites (additive, bounded) ---
-        # Skating vs defensive_play on the 1v1 rush: mobility to beat the
-        # checker, the defensive toolkit to break it up. Rails [0.95, 1.05]
-        # and [0.94, 1.06]; the base rolls above are never retuned.
+        # --- scenario battle (2026-09-30, §6 rule 2) ---
+        # The rush_chance scenario REPLACES the separate skating /
+        # defensive_play single-composite hooks — the battle (skating /
+        # chance_creation / finishing vs defensive_play / goalie_save)
+        # already contains them. Never stack; one scenario per event.
+        # (No goalie in a 1v1 — the defense side rates goalie_save at
+        # baseline, correctly weakening it.)
         try:
-            from attribute_composites import apply_amplifier as _ac_rush
-            attacker_roll = _ac_rush(attacker_roll, attacker, "skating",
-                                    sim=self, team=attacking_team)
-            defender_roll = _ac_rush(defender_roll, defender, "defensive_play",
-                                    sim=self, team=defending_team)
+            from scenario_composites import apply_scenario as _asc_rush
+            attacker_roll = _asc_rush(attacker_roll, [attacker],
+                                      [defender], "rush_chance", sim=self,
+                                      off_team=attacking_team,
+                                      def_team=defending_team)
         except Exception:
             pass
 
@@ -5067,28 +5090,8 @@ class GameSim:
             except Exception:
                 _crowd_edge = 0.0
             # -- schemed-against superstars (2026-09-30, Muck) ----------
-            # Same shared decision as quick-sim (mesh_system.
-            # schemed_against_contest_delta): the defending TEAM shades an
-            # elite/generational threat -- his grade-A looks tighten, his
-            # linemates skate into the freed ice. Signed contest delta,
-            # grade-A creation only, never finishing. One decision, two
-            # fidelities.
-            try:
-                from mesh_system import (schemed_against_contest_delta
-                                         as _sacd2)
-                try:
-                    _onice_a = self._on_ice_skaters(attacking_team)
-                except Exception:
-                    try:
-                        _onice_a = self._get_on_ice(attacking_team)
-                    except Exception:
-                        _onice_a = []
-                _a_unit = [p for p in (_onice_a or []) if p is not None]
-                _d_unit = [p for p in (_onice_d or []) if p is not None]
-                _contest = max(0.0, min(1.0, _contest + _sacd2(
-                    shooter, _a_unit, _d_unit, _loc)))
-            except Exception:
-                pass
+            # (moved to _resolve_shot_on_goal: the factor applies to the
+            # goal probability there, alongside the other shared tilts.)
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,
@@ -5722,6 +5725,39 @@ class GameSim:
         except Exception:
             pass
 
+        # Schemed-against superstars (2026-09-30, Muck): the scenario
+        # battle (scenario_composites.schemed_factor_for_shooter) — the
+        # defending TEAM shades an elite/generational threat. One factor
+        # per chance, never stacked. Same shared decision quick-sim calls.
+        try:
+            from scenario_composites import (schemed_factor_for_shooter
+                                             as _sffs2)
+            try:
+                _onice_a = self._on_ice_skaters(attacking_team)
+            except Exception:
+                try:
+                    _onice_a = self._get_on_ice(attacking_team)
+                except Exception:
+                    _onice_a = []
+            try:
+                _onice_d = self._on_ice_skaters(defending_team)
+            except Exception:
+                try:
+                    _onice_d = self._get_on_ice(defending_team)
+                except Exception:
+                    _onice_d = []
+            _a_unit = [p for p in (_onice_a or []) if p is not None]
+            _d_unit = [p for p in (_onice_d or []) if p is not None]
+            _loc_s = getattr(location, "name", str(location)).lower()
+            _schemed_f2 = _sffs2(shooter, _a_unit, _d_unit, _loc_s,
+                                 sim=self, off_team=attacking_team,
+                                 def_team=defending_team)
+            if _schemed_f2 != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _schemed_f2
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
         # Defensive contest 2026-09-28 (shared decision, one decision two
         # fidelities): on-ice defenders contest via blocks/gap/angles/sticks.
         try:
@@ -5743,13 +5779,31 @@ class GameSim:
         # [0.97, 1.03] on both sides (the goalie side is inverted: a better
         # save composite lowers goal probability). Applied on goal_prob like
         # the tilt/contest blocks above; existing weights never retuned.
+        #
+        # Breakaway supersession (2026-09-30, §6 rule 2): on a breakaway,
+        # the scenario battle REPLACES these single-composite hooks — the
+        # breakaway scenario (skating/finishing/chance_creation vs
+        # goalie_save) already contains finishing and goalie_save. Never
+        # stack; one scenario per event.
         try:
             from attribute_composites import apply_amplifier as _ac_fin
-            _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter, "finishing",
-                           sim=self, team=attacking_team)
-            if not empty_net:
-                _fgp = _ac_fin(_fgp, goalie, "goalie_save", sim=self,
-                               team=defending_team, invert=True)
+            _is_break = False
+            try:
+                _is_break = (shot_type == ShotType.BREAKAWAY)
+            except Exception:
+                pass
+            if _is_break:
+                from scenario_composites import apply_scenario as _asc_br
+                _fgp = _asc_br(1.0 - adjusted_save_prob, [shooter],
+                               [goalie], "breakaway", sim=self,
+                               off_team=attacking_team,
+                               def_team=defending_team)
+            else:
+                _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter,
+                               "finishing", sim=self, team=attacking_team)
+                if not empty_net:
+                    _fgp = _ac_fin(_fgp, goalie, "goalie_save", sim=self,
+                                   team=defending_team, invert=True)
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, _fgp))
         except Exception:
             pass
@@ -6096,7 +6150,7 @@ class GameSim:
                 goalie, shooter, quality, distance if distance is not None else 25.0, _sctx)
             _seff = _imp.save_effects(save_impact)
             if _seff["heat"]:
-                self._live_heat = min(40.0, self._live_heat + _seff["heat"])
+                _add_live_heat(self, _seff["heat"])
             _story = _imp.story_worthy(save_impact, goalie, _sctx)
             if save_impact == 2 and _story and defending_team is not None \
                     and _seff["momentum"]:
@@ -6980,7 +7034,7 @@ class GameSim:
         if resp and resp.get("responds"):
             self._retaliation_mod = max(self._retaliation_mod,
                                         resp.get("retaliation_mod", 1.0))
-            self._live_heat = min(40.0, self._live_heat + resp.get("tension_delta", 0) / 2.0)
+            _add_live_heat(self, resp.get("tension_delta", 0) / 2.0)
             self._log_event(resp.get("story", ""), "COACH")
 
     def _init_situations(self):
@@ -7128,7 +7182,7 @@ class GameSim:
             self._emit_pbp("brawl", pairs=[(h.full_name, a.full_name) for h, a in pairs],
                            home_team=self.home_team.team_name,
                            away_team=self.away_team.team_name)
-            self._live_heat = min(40.0, self._live_heat + 10.0)
+            _add_live_heat(self, 10.0)
             # Lore: a line brawl is headline news everywhere it happens.
             # Spec only -- the caller builds/delivers via headlines.py.
             try:
@@ -7248,7 +7302,7 @@ class GameSim:
                     _heat_add = 8.0
             except Exception:
                 pass
-            self._live_heat = min(40.0, self._live_heat + _heat_add)
+            _add_live_heat(self, _heat_add)
             self._maybe_brawl("fight")
 
     def _book_misconduct(self, player, team):
@@ -7303,7 +7357,7 @@ class GameSim:
         # A non-fighting major is a flashpoint: heat rises, and in a heated
         # game it can be the spark a line brawl needs.
         if name != "Fighting" and penalty_length == 5 and not self._in_brawl:
-            self._live_heat = min(40.0, self._live_heat + 4.0)
+            _add_live_heat(self, 4.0)
             self._maybe_brawl("major")
 
         # Occasional 10-minute misconduct tacked onto a minor (no extra manpower loss)
@@ -9758,7 +9812,7 @@ class GameSim:
             import impact_system as _imp
             _heff = _imp.hit_effects(impact, hitting_player)
             if _heff["heat"]:
-                self._live_heat = min(40.0, self._live_heat + _heff["heat"])
+                _add_live_heat(self, _heff["heat"])
             if impact == 2 and _heff["momentum"] and hitting_team is not None:
                 _hctx = _imp.build_context(self, hitting_player, hitting_team)
                 if _imp.story_worthy(impact, hitting_player, _hctx):

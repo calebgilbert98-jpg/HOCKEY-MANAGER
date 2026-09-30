@@ -477,6 +477,27 @@ class AdvancedGameSim:
         # league.rivalries and is otherwise always 0 in headless use.
         # Default None = today's behavior exactly.
         self.league = league
+        # §5.1 (2026-09-30, Muck): converge on ONE rivalry mechanism. The
+        # shared circumstance_shift read resolves sim.rivalries — expose it
+        # here from the league passthrough (the same source the mesh path
+        # reads), so both engines feel rivalry in the physical/discipline
+        # channel identically. The mesh game_ctx["rivalry_heat"] path feeds
+        # chance VOLUME (a different, pre-existing effect) — not double-
+        # counted, left exactly as specced per §5.3.
+        try:
+            self.rivalries = list(getattr(league, "rivalries", None) or [])
+        except Exception:
+            self.rivalries = []
+        # §5.2 (2026-09-30, Muck): the shared bounded in-game heat
+        # accumulator. Quick-sim has no fights/brawls, so heat builds from
+        # penalties (a chippy game boils the same way) — same 0-40 scale
+        # and semantics as GameSim via scenario_composites.add_live_heat.
+        try:
+            from scenario_composites import LiveHeat as _LHq
+            self._heat_acc = _LHq()
+        except Exception:
+            self._heat_acc = None
+        self._live_heat = 0.0  # legacy read path (add_live_heat fallback)
         # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
         # team_name), same shape as GameSim's, for line-combination
         # analytics.
@@ -1980,15 +2001,14 @@ class AdvancedGameSim:
             except Exception:
                 _crowd_edge = 0.0
             # -- schemed-against superstars (2026-09-30, Muck) ----------
-            # The shared decision (mesh_system.schemed_against_contest_
-            # delta): when an elite/generational threat is on the ice, the
-            # defending TEAM shades coverage -- his grade-A looks tighten,
-            # his linemates skate into the freed ice. Signed contest delta,
-            # net ~zero; grade-A creation only, never finishing. One
+            # AS a scenario battle (scenario_composites.schemed_factor_for_
+            # shooter): the defending TEAM shades an elite/generational
+            # threat — his grade-A looks tighten, his linemates skate into
+            # the freed ice. One factor per chance, never stacked. One
             # decision, two fidelities (GameSim calls the same helper).
             try:
-                from mesh_system import (schemed_against_contest_delta
-                                         as _sacd)
+                from scenario_composites import (schemed_factor_for_shooter
+                                                 as _sffs)
                 _d_unit = [d for d in _defenders]
                 try:
                     _d_fwds = ((self.on_ice.get(_def_team.team_name, {})
@@ -1996,10 +2016,11 @@ class AdvancedGameSim:
                     _d_unit += [f for f in _d_fwds if f]
                 except Exception:
                     pass
-                _contest01 = max(0.0, min(1.0, _contest01 + _sacd(
-                    shooter, shooters, _d_unit, _loc)))
+                _schemed_f = _sffs(shooter, shooters, _d_unit, _loc,
+                                   sim=self, off_team=puck_team_name,
+                                   def_team=opp_team_name)
             except Exception:
-                pass
+                _schemed_f = 1.0
             # -- roll ---------------------------------------------------
             _grade = _rcg(
                 _loc, _contest01, shooter,
@@ -2021,6 +2042,25 @@ class AdvancedGameSim:
                     "team_d_weakness": _team_d_weak,
                 })
             shot_chance = shot_chance * _cgfm(_grade)
+            # Schemed-against factor (scenario battle): applied to the
+            # grade-A chance, never to finishing. Multiplicative, bounded.
+            try:
+                if _schemed_f != 1.0:
+                    shot_chance *= _schemed_f
+            except Exception:
+                pass
+            # Breakaway scenario (§6): on a clean breakaway, the battle is
+            # shooter (skating/finishing/chance_creation) vs goalie alone.
+            # No overlapping single-composite hooks here — clean add.
+            try:
+                if _loc == "breakaway":
+                    from scenario_composites import apply_scenario as _asc_qb
+                    shot_chance = _asc_qb(shot_chance, [shooter], [goalie],
+                                          "breakaway", sim=self,
+                                          off_team=puck_team_name,
+                                          def_team=opp_team_name)
+            except Exception:
+                pass
             # Team clutch (team_clutch.py): in clutch moments, big-game
             # rosters elevate and fragile rooms shrink. Same shared helper
             # the lightweight uses -- parity by construction. Cached per
@@ -3036,6 +3076,13 @@ class AdvancedGameSim:
             'team': puck_team_name, 'player': penalized,
             'event': 'Penalty'
         })
+        # §5.2: chippy games boil over — feed the shared heat accumulator
+        # (penalties are quick-sim's physical proxy; +2 each, cap 40).
+        try:
+            from scenario_composites import add_live_heat as _alh_q
+            _alh_q(self, 2.0)
+        except Exception:
+            pass
         self.pp_team = opp_team_name
         self.pk_team = puck_team_name
         # 2-minute minor; on a 5-on-3 the PP lasts until the later expiry
