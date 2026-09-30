@@ -430,6 +430,25 @@ class PlayerProfile(InGamePopup):
                     inj_pill.pack(side="left", padx=(8, 0))
             except Exception:
                 pass
+            # Within-line differentiation (leverage): heater/cold indicator
+            # pill next to the condition pill. Reads mesh_form (the same
+            # streak-form input leverage_score uses): >= 0.5 is a genuine
+            # hot hand, <= -0.5 is ice cold. Defensive: never raises.
+            try:
+                _form = float(getattr(self.player, "mesh_form", 0) or 0)
+                _form01 = _form / 100.0 if abs(_form) > 1.0 else _form
+                if _form01 >= 0.5:
+                    _heat_pill = PillBadge(pills, text="🔥 Hot hand",
+                                           bg=AppColors.BG_ELEVATED,
+                                           fg="#ff9e4a")
+                    _heat_pill.pack(side="left", padx=(8, 0))
+                elif _form01 <= -0.5:
+                    _cold_pill = PillBadge(pills, text="❄ Cold",
+                                           bg=AppColors.BG_ELEVATED,
+                                           fg="#7aa2f7")
+                    _cold_pill.pack(side="left", padx=(8, 0))
+            except Exception:
+                pass
         except:
             pass
 

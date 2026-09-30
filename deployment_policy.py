@@ -1411,3 +1411,214 @@ def pick_weighted_line(shares: List[float], n: int,
         return random.choices(range(1, n + 1), weights=w, k=1)[0]
     except Exception:
         return random.randint(1, n)
+
+
+# ---------------------------------------------------------------------------
+# WITHIN-LINE DIFFERENTIATION ("leverage score") -- 2026-09-29
+#
+# Ice time is two separate quantities:
+#   * QUANTITY -- how many minutes a player skates. Governed by
+#     _player_deployment_score() + deployment_weights(), hard-clamped to
+#     [0.95, 1.05] of the raw table weight. Talent hierarchy intact.
+#   * QUALITY -- how PREMIUM those minutes are: offensive-zone starts,
+#     soft matchups, clutch shifts, the best power-play seconds.
+#
+# leverage_score() answers the quality question. A heater does not get MORE
+# ice -- he gets BETTER ice: more OZ draws, the mismatch against the other
+# team's 4th line, the 6-on-5 shift with the goalie pulled. League scoring
+# totals never move: this is pure redistribution of premium minutes WITHIN
+# a team's minutes.
+#
+# Because leverage never changes WHO plays, it may swing harder than the
+# quantity clamp: [0.80, 1.30]. A max heater gets +30% premium-shift weight;
+# an ice-cold slumper gets -20% (sheltered from premium minutes).
+# ---------------------------------------------------------------------------
+
+#: Master kill-switch for within-line differentiation. The shift-engine hooks
+#: all consult this: with it off, every hook falls back to the pre-leverage
+#: behavior (plain deployment-share weighting). Old saves are unaffected
+#: either way -- leverage only reads per-game state.
+LEVERAGE_ENABLED = True
+
+#: Hard bounds on the leverage multiplier.
+_LEVERAGE_LO = 0.80
+_LEVERAGE_HI = 1.30
+
+#: Style amplitude on the leverage DEVIATION from 1.0. A players' coach rides
+#: the hot hand hard; a drill sergeant barely differentiates -- same player,
+#: same streak, different coach, different leverage. Mirrors the philosophy
+#: of _STYLE_FACTOR_W (style modulates how strongly each factor bites).
+_LEVERAGE_AMPLITUDE = {
+    "drill_sergeant": 0.5,
+    "tactician": 0.8,
+    "developer": 1.0,
+    "balanced": 1.0,
+    "motivator": 1.2,
+    "players_coach": 1.3,
+}
+
+#: Narrative throttle: one feed line per (team, key, line) per game.
+def log_leverage(sim: Any, team: Any, key: str, text: str) -> None:
+    """Log a leverage decision to the deployment log + broadcast feed.
+
+    Throttled to one line per (team, key) per game so the feed reads like a
+    broadcast ("riding the hot hand") rather than a telemetry dump.
+    """
+    try:
+        if not LEVERAGE_ENABLED:
+            return
+        logged = getattr(sim, "_leverage_logged", None)
+        if logged is None:
+            sim._leverage_logged = logged = set()
+        k = (getattr(team, "team_name", "?"), key)
+        if k in logged:
+            return
+        logged.add(k)
+        _log_deployment(sim, team, {"event": "leverage", "key": key,
+                                   "text": text})
+    except Exception:
+        pass
+
+
+def leverage_score(player: Any, coach: Any = None,
+                   style_key: Optional[str] = None,
+                   team: Any = None) -> float:
+    """How PREMIUM should this player's shifts be? (within-line differentiation)
+
+    Same input family as _player_deployment_score() -- heater/streak form
+    (mesh_form), morale, coach trust/relationships, coach philosophy -- but a
+    SEPARATE decision: this never touches quantity (minutes), only quality
+    (which minutes).
+
+    Returns a multiplier centered on 1.0, clamped to [0.80, 1.30]:
+
+    * heater (form01 > 0.5): up to +30%, scaled by coach adaptability
+      (the hot hand rides; stubborn coaches resist it).
+    * slump (form01 < -0.5): down to -20% (cold players get sheltered).
+    * morale: 0.90 + 0.20 * morale01 -- confident players get the big draws.
+    * relationships (coach fit + coach_bonds): trusted players get leverage.
+    * style: every component deviation is scaled through _STYLE_FACTOR_W
+      (recency / relationships / morale factors), then the total deviation
+      from 1.0 is scaled by _LEVERAGE_AMPLITUDE for the coach's philosophy.
+
+    Never raises: returns 1.0 (neutral) on any failure.
+    """
+    try:
+        skey = style_key or _safe_coach_style(coach).get("key") or "balanced"
+        recency_w = _adapt_recency_mult(coach)
+        form01 = _norm_form01(player)
+        comps: List[tuple] = []
+
+        # Heater: genuine hot streaks earn premium shifts. The adaptability
+        # scale keeps stubborn coaches from chasing noise.
+        heat01 = max(0.0, min(1.0, (form01 - 0.5) / 0.5))
+        if heat01 > 0.0:
+            comps.append(("recency", 1.0 + 0.30 * heat01 * recency_w))
+        # Slump: ice-cold players get sheltered from premium minutes.
+        cold01 = max(0.0, min(1.0, (-form01 - 0.5) / 0.5))
+        if cold01 > 0.0:
+            comps.append(("recency", 1.0 - 0.20 * cold01 * recency_w))
+        # Morale: confidence gets the big draws.
+        morale01 = max(0.0, min(1.0, _attr100(player, "morale", 70) / 100.0))
+        comps.append(("morale", 0.90 + 0.20 * morale01))
+
+        if coach is not None:
+            # Relationships under the morale blanket: trusted players get
+            # the premium minutes. Coach bonds (the personal click) add on.
+            fit = _safe_coach_fit(coach, player)
+            fit_m = 1.0 + (0.10 if fit >= 0.0 else 0.15) * fit
+            comps.append(("relationships", fit_m))
+            bonds = getattr(player, "coach_bonds", None) or {}
+            try:
+                has_bond = getattr(coach, "id", None) in bonds
+            except Exception:
+                has_bond = False
+            if has_bond:
+                comps.append(("relationships", 1.10))
+
+        lev = 1.0
+        for factor, m in comps:
+            lev *= _style_factor_mult(m, skey, factor)
+        amp = _LEVERAGE_AMPLITUDE.get(skey, 1.0)
+        lev = 1.0 + (lev - 1.0) * amp
+        return max(_LEVERAGE_LO, min(_LEVERAGE_HI, lev))
+    except Exception:
+        return 1.0
+
+
+def line_leverage(sim: Any, team: Any, kind: str, idx: int) -> float:
+    """Mean leverage multiplier of a unit's skaters (1.0 = neutral).
+
+    kind in {"F", "D"}; idx is 1-based. Used by the shift engine to weight
+    OZ-start allocation, mismatch exploitation, and clutch-shift picks.
+    """
+    try:
+        lineup = _game_lineup_for(sim, team)
+        players = [p for p in _unit_players(lineup, kind, idx)
+                   if not _is_goalie(p)]
+        if not players:
+            return 1.0
+        coach = _head_coach_for(team)
+        vals = [leverage_score(p, coach, team=team) for p in players]
+        return sum(vals) / max(1, len(vals))
+    except Exception:
+        return 1.0
+
+
+def line_leverage_leader(sim: Any, team: Any, kind: str,
+                         idx: int) -> Optional[Any]:
+    """Highest-leverage skater on a unit (for narrative lines); None if none."""
+    try:
+        lineup = _game_lineup_for(sim, team)
+        players = [p for p in _unit_players(lineup, kind, idx)
+                   if not _is_goalie(p)]
+        if not players:
+            return None
+        coach = _head_coach_for(team)
+        return max(players, key=lambda p: leverage_score(p, coach, team=team))
+    except Exception:
+        return None
+
+
+def line_trust(sim: Any, team: Any, kind: str, idx: int) -> float:
+    """Mean DEFENSIVE trust of a unit's skaters: 0.80..1.20.
+
+    Defensive awareness + discipline: trusted defensive types soak D-zone
+    draws and protect-lead shifts. The defensive counterpart to line_leverage
+    (leverage is about offensive premium minutes; trust is about defensive
+    responsibility).
+    """
+    try:
+        lineup = _game_lineup_for(sim, team)
+        players = [p for p in _unit_players(lineup, kind, idx)
+                   if not _is_goalie(p)]
+        if not players:
+            return 1.0
+        vals = []
+        for p in players:
+            da = _attr100(p, "defensive_awareness", 50)
+            di = _attr100(p, "discipline", 50)
+            vals.append(0.80 + 0.40 * ((da + di) / 200.0))
+        return sum(vals) / max(1, len(vals))
+    except Exception:
+        return 1.0
+
+
+# ---------------------------------------------------------------------------
+# PP micro-rotation -- OPEN ITEM (2026-09-29)
+#
+# Within PP1/PP2, leverage SHOULD decide who stays the full 2 minutes vs who
+# rotates early (the hot unit overlaps). There is deliberately NO hook here
+# yet: PP units are dressed by the clock alternation PP{(clock//45)%2+1} in
+# simulation._get_on_ice (the sim/lineup region), and the TOI-credit functions
+# above mirror that alternation exactly (the 2026-09-29 ee16b37 lesson: the
+# dressing source of truth and the credit source of truth must move together).
+#
+# The safe design when the sim owner takes this on: a shared helper here,
+# e.g. pp_overlap_skater(sim, team) -> Optional[player], consulted by BOTH
+# the _get_on_ice dressing filter (keep the outgoing unit's highest-leverage
+# skater dressed for the first 45s of the incoming unit's window) AND the
+# _special_teams_state-based credit functions above (credit him to the unit
+# he is actually skating with). One decision, two consumers -- never a
+# dressing change without the matching credit change.
+# ---------------------------------------------------------------------------
