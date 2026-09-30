@@ -3690,8 +3690,15 @@ class HockeyManagerGUI(tk.Tk):
                 x = dropdown_btn.winfo_rootx()
                 y = dropdown_btn.winfo_rooty() + dropdown_btn.winfo_height()
                 dropdown_menu.post(x, y)
-            except:
-                pass
+            except Exception as e:
+                # Honest failure: the menu couldn't be posted (usually a
+                # torn-down widget) -- say so instead of swallowing it.
+                try:
+                    messagebox.showwarning(
+                        "Navigation",
+                        "That menu couldn't be opened. Try again.")
+                except Exception:
+                    pass
 
         dropdown_btn.configure(command=show_dropdown)
 
@@ -4378,6 +4385,9 @@ class HockeyManagerGUI(tk.Tk):
                 self.current_focus_player = selected_player
                 self.update_enhanced_player_focus_panel()
                 selection_window.destroy()
+            else:
+                messagebox.showwarning("No Player Selected",
+                                       "Select a player first.")
         
         def cancel_selection():
             selection_window.destroy()
@@ -4815,6 +4825,68 @@ class HockeyManagerGUI(tk.Tk):
         
         return ratings
 
+    def _snapshot_game_toi_fatigue(self, sim_engine, home_team, away_team):
+        """Per-game TOI (seconds) + fatigue snapshots from the sim that ran
+        the game, for the game-results player-stats tab.
+
+        Integration read only: quick-sim stats ({team_name: {pid: {...}}}),
+        GameSim's player_toi_seconds / player_fatigue / goaltender_fatigue
+        ledgers (energy is 0-100 remaining, so fatigue = 100 - energy).
+        Missing data stays missing -- the tab renders 'N/A' for it.
+        """
+        toi, fatigue = {}, {}
+        sim = sim_engine
+        # Quick-sim / AdvancedGameSim per-player stats
+        try:
+            stats = getattr(sim, 'stats', None) or {}
+            for team in (home_team, away_team):
+                pmap = stats.get(getattr(team, 'team_name', None), {}) or {}
+                for pid, st in pmap.items():
+                    if not isinstance(st, dict):
+                        continue
+                    if st.get('toi'):
+                        toi[pid] = float(st.get('toi') or 0)
+                    if st.get('fatigue'):
+                        fatigue[pid] = float(st.get('fatigue') or 0)
+        except Exception:
+            pass
+        # GameSim ledgers
+        try:
+            for pid, sec in (getattr(sim, 'player_toi_seconds', None)
+                             or {}).items():
+                if sec:
+                    toi[pid] = float(sec)
+        except Exception:
+            pass
+        try:
+            _pf = getattr(sim, 'player_fatigue', None) or {}
+            _gf = getattr(sim, 'goaltender_fatigue', None) or {}
+            for pid, energy in list(_pf.items()) + list(_gf.items()):
+                fatigue[pid] = max(0.0, 100.0 - float(energy or 0))
+        except Exception:
+            pass
+        # Dressed goalies skate the whole game (mirrors the post-game wear
+        # read): only fill in when the ledger has no entry.
+        try:
+            _gsec = float(getattr(sim, '_w3_game_seconds', 0.0) or 0.0)
+            if _gsec > 0:
+                for team in (home_team, away_team):
+                    for p in getattr(team, 'roster', []) or []:
+                        if getattr(p, 'primary_position', None) is PlayerPosition.GOALIE:
+                            toi.setdefault(getattr(p, 'id', None), _gsec)
+        except Exception:
+            pass
+        return toi, fatigue
+
+    @staticmethod
+    def _format_toi(seconds):
+        """TOI seconds -> 'M:SS' for the player-stats tab."""
+        try:
+            total = int(round(float(seconds)))
+        except Exception:
+            return "N/A"
+        return f"{total // 60}:{total % 60:02d}"
+
     def _on_schedule_double_click(self, event):
         """Handle double-click on schedule item to view game results"""
         selection = self.schedule_tree.selection()
@@ -5192,10 +5264,16 @@ class HockeyManagerGUI(tk.Tk):
                 shots = sum(1 for event in game_result.get('events', [])
                            if hasattr(event.get('player'), 'id') and event.get('player').id == player.id and event.get('event') == 'Shot')
                 
-                # Get rating, TOI, and fatigue from player_ratings if available
+                # Get rating, TOI, and fatigue from the game result. TOI and
+                # fatigue come from the per-game snapshot taken when the
+                # result was recorded (NEW-A6); missing data stays 'N/A'.
                 rating = game_result.get('player_ratings', {}).get(selected_team_name, {}).get(player.id, 'N/A')
-                toi = "N/A"  # Would need TOI tracking
-                fatigue = "N/A"  # Would need fatigue tracking
+                _toi_map = game_result.get('player_toi', {}) or {}
+                _fat_map = game_result.get('player_fatigue', {}) or {}
+                _toi_sec = _toi_map.get(player.id)
+                toi = self._format_toi(_toi_sec) if _toi_sec is not None else "N/A"
+                _fat = _fat_map.get(player.id)
+                fatigue = str(int(round(_fat))) if _fat is not None else "N/A"
                 
                 player_data.append((
                     player.full_name,
@@ -10812,6 +10890,15 @@ class HockeyManagerGUI(tk.Tk):
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
+        # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
+        # the game (integration read; missing data stays missing).
+        try:
+            _toi, _fat = self._snapshot_game_toi_fatigue(
+                sim_engine, home_team, away_team)
+            game_result['player_toi'] = _toi
+            game_result['player_fatigue'] = _fat
+        except Exception:
+            pass
         
         self._record_game_result(game_result)
 
@@ -12122,6 +12209,14 @@ class HockeyManagerGUI(tk.Tk):
                 game_result['events'] = getattr(full_sim, 'game_log', []) or []
                 game_result['game_stats'] = getattr(full_sim, 'game_stats', {}) or {}
                 game_result['team_stats'] = getattr(full_sim, 'team_stats', {}) or {}
+                # NEW-A6: same TOI/fatigue snapshot as the detailed path.
+                try:
+                    _toi, _fat = self._snapshot_game_toi_fatigue(
+                        full_sim, home_team, away_team)
+                    game_result['player_toi'] = _toi
+                    game_result['player_fatigue'] = _fat
+                except Exception:
+                    pass
             
             # Add to game results (keeps the date/matchup indexes in sync)
             self._record_game_result(game_result)
@@ -17050,8 +17145,33 @@ class HockeyManagerGUI(tk.Tk):
         if not staff: return
 
         menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
-        menu.add_command(label="Offer Contract", command=lambda: messagebox.showinfo("WIP", "Staff contracts not yet implemented."))
+        menu.add_command(label="Offer Contract",
+                         command=lambda: self._offer_staff_contract(staff))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def _offer_staff_contract(self, staff):
+        """Route the staff context-menu 'Offer Contract' to the real
+        contract-negotiation UI (StaffManagementView.open_contract_negotiation)
+        instead of a dead 'WIP' notice."""
+        try:
+            view = self.open_staff_management_window()
+            nego = getattr(view, "open_contract_negotiation", None)
+            if not callable(nego):
+                messagebox.showinfo(
+                    "Offer Contract",
+                    "The contract negotiation UI is unavailable right now.")
+                return
+            already = False
+            try:
+                already = staff in (getattr(self.user_team, "staff", None)
+                                    or [])
+            except Exception:
+                already = False
+            nego(staff, is_hiring=not already)
+        except Exception as e:
+            messagebox.showinfo(
+                "Offer Contract",
+                f"Could not open the negotiation UI: {e}")
 
     def open_player_profile(self, player):
         """

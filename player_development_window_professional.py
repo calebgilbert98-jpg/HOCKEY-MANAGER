@@ -1513,40 +1513,82 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                           f"{player.full_name} is now selected for training assignment.")
     
     def _view_development_history(self, player):
-        """View player development history"""
+        """View player development history -- real records only.
+
+        Current program from the shared training registry, session history
+        from the practice engine. Anything without a real record is omitted,
+        never invented."""
         history_window = InGamePopup(self)
         history_window.title(f"Development History - {player.full_name}")
         history_window.geometry("500x400")
         history_window.configure(bg=self.app.BG_COLOR)
-        
+
         # Header
-        header = ttk.Label(history_window, 
+        header = ttk.Label(history_window,
                          text=f"Development History\n{player.full_name}",
                          style='DarkTitle.TLabel')
         header.pack(pady=20)
-        
+
         # Development info
         info_frame = ttk.Frame(history_window, style='Dark.TFrame')
         info_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        current_stage = "Developing"  # This would come from development engine
-        ttk.Label(info_frame, text=f"Current Development Stage: {current_stage}", 
-                 style='DarkBold.TLabel').pack(anchor='w', pady=5)
-        
-        ttk.Label(info_frame, text="Recent Development Activities:", 
-                 style='DarkBold.TLabel').pack(anchor='w', pady=(20, 5))
-        
-        # Mock history entries
-        history_entries = [
-            "• Completed skating drills training program",
-            "• Overall rating increased from 72 to 74",
-            "• Assigned to intensive conditioning program",
-            "• Participated in team scrimmage",
-            "• Development assessment: Above average progress"
-        ]
-        
-        for entry in history_entries:
-            ttk.Label(info_frame, text=entry, style='Dark.TLabel').pack(anchor='w', pady=2)
+
+        entries = []
+        # Current program (real registry)
+        prog = None
+        try:
+            from enhanced_practice_system import (
+                PracticeEngine, ACTIVE_TRAINING_PROGRAMS)
+            gm = getattr(self.app, 'game_manager', None)
+            if gm is not None and getattr(gm, 'training_programs', None):
+                prog = gm.training_programs.get(player.id)
+            if prog is None:
+                prog = ACTIVE_TRAINING_PROGRAMS.get(player.id)
+        except Exception:
+            prog = None
+            PracticeEngine = None
+        if prog:
+            entries.append(
+                f"Current program: {prog.get('focus', '?')} -- "
+                f"{prog.get('intensity', '?')} intensity "
+                f"(assigned {prog.get('assigned', 'unknown date')})")
+        else:
+            entries.append("Current program: none assigned")
+
+        # Session history (real practice-engine records)
+        history = None
+        try:
+            if PracticeEngine is not None:
+                history = PracticeEngine().get_player_history(player.id)
+        except Exception:
+            history = None
+        sessions = (history.recent_sessions[-5:]
+                    if history and history.recent_sessions else [])
+        if sessions:
+            entries.append("Recent sessions:")
+            for s in reversed(sessions):
+                try:
+                    ptype = (s.practice_type.value.replace('_', ' ').title()
+                             if hasattr(s.practice_type, 'value')
+                             else str(s.practice_type))
+                except Exception:
+                    ptype = "practice"
+                try:
+                    when = s.date_completed.isoformat()
+                except Exception:
+                    when = "?"
+                entries.append(
+                    f"  - {when}: {ptype} "
+                    f"(+{getattr(s, 'skill_gain', 0):.2f} skill, "
+                    f"+{getattr(s, 'fatigue_cost', 0)}% fatigue)")
+            entries.append(f"Total recorded sessions: "
+                           f"{getattr(history, 'total_sessions', 0)}")
+        else:
+            entries.append("No recorded practice sessions yet.")
+
+        for entry in entries:
+            ttk.Label(info_frame, text=entry,
+                      style='Dark.TLabel').pack(anchor='w', pady=2)
     
     def _view_contract_details(self, player):
         """View player contract details"""
@@ -1565,22 +1607,36 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
         info_frame = ttk.Frame(contract_window, style='Dark.TFrame')
         info_frame.pack(fill='both', expand=True, padx=20, pady=20)
         
-        # Get contract details (mock for now)
-        if hasattr(player, 'contract') and player.contract:
-            salary = f"${getattr(player.contract, 'salary', 750000):,}"
-            years = getattr(player.contract, 'years', 1)
-            contract_type = getattr(player.contract, 'contract_type', 'Standard')
+        # Contract info -- real fields only. The Contract dataclass has no
+        # contract_type; a player with no contract gets an honest "none on
+        # file", never a fabricated $750,000 / Entry Level.
+        contract = getattr(player, 'contract', None)
+        if contract is not None:
+            contract_details = [
+                ("Salary:", f"${getattr(contract, 'salary', 0):,}"),
+                ("Contract Length:",
+                 f"{getattr(contract, 'years_remaining', 0)} year(s) remaining"),
+            ]
+            _sb = getattr(contract, 'signing_bonus', 0) or 0
+            _pb = getattr(contract, 'performance_bonus', 0) or 0
+            if _sb:
+                contract_details.append(("Signing Bonus:", f"${_sb:,}"))
+            if _pb:
+                contract_details.append(("Performance Bonus:", f"${_pb:,}"))
+            _clauses = []
+            if getattr(contract, 'no_movement_clause', False):
+                _clauses.append("no-movement clause")
+            elif getattr(contract, 'no_trade_clause', False):
+                _clauses.append("no-trade clause")
+            if _clauses:
+                contract_details.append(("Trade Protection:",
+                                         ", ".join(_clauses)))
+            contract_details.append(("Status:", "Active"))
         else:
-            salary = "$750,000"
-            years = 1
-            contract_type = "Entry Level"
-        
-        contract_details = [
-            ("Salary:", salary),
-            ("Contract Length:", f"{years} year(s)"),
-            ("Contract Type:", contract_type),
-            ("Status:", "Active"),
-        ]
+            contract_details = [
+                ("Contract:", "No contract on file"),
+                ("Status:", "Unsigned"),
+            ]
         
         for label, value in contract_details:
             row = ttk.Frame(info_frame, style='Dark.TFrame')

@@ -1261,8 +1261,15 @@ class RosterView(ctk.CTkFrame):
             _p = _prospects[_sel[0]]
             try:
                 self.app.open_contract_negotiation_window(_p, is_elc=True)
-            except Exception:
-                pass
+            except Exception as e:
+                # Honest failure: keep the dialog open so the user can
+                # retry or pick someone else -- never destroy on failure.
+                messagebox.showwarning(
+                    "ELC Talks Unavailable",
+                    f"Couldn't open ELC talks for "
+                    f"{getattr(_p, 'full_name', 'that prospect')} ({e}). "
+                    f"The dialog is still open -- try again.")
+                return
             dlg.destroy()
 
         _btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
@@ -3224,6 +3231,13 @@ class FreeAgencyView(ctk.CTkFrame):
         player = self.app.tree_maps.get('fa_players', {}).get(selection[0])
         if player:
             self.app.open_contract_negotiation_window(player)
+        else:
+            # Honest map-miss: the selection couldn't be resolved to a
+            # player -- say so instead of silently doing nothing.
+            messagebox.showwarning(
+                "Couldn't Resolve Selection",
+                "That row couldn't be matched to a free agent. "
+                "Re-select the player and try again.")
 
     def _fa_staff_entry(self, item_id):
         """Unwrap a staff tree-map entry -> (staff, source, employer).
@@ -5547,6 +5561,7 @@ class ScoutingView(ctk.CTkFrame):
     def _add_prospect_to_board(self):
         p = self.selected_prospect
         if p is None:
+            messagebox.showwarning("No Prospect", "Select a prospect first.")
             return
         ids = self.scmod.get_draft_board(self.app.user_team)
         if p.id not in ids:
@@ -5558,6 +5573,7 @@ class ScoutingView(ctk.CTkFrame):
         lb = self.board_list
         sel = lb.curselection()
         if not sel:
+            messagebox.showwarning("No Prospect", "Select a prospect first.")
             return
         i = sel[0]
         j = i + direction
@@ -5572,6 +5588,7 @@ class ScoutingView(ctk.CTkFrame):
         lb = self.board_list
         sel = lb.curselection()
         if not sel:
+            messagebox.showwarning("No Prospect", "Select a prospect first.")
             return
         ids = self.scmod.get_draft_board(self.app.user_team)
         del ids[sel[0]]
@@ -11167,7 +11184,11 @@ class ContractNegotiationView(ctk.CTkFrame):
             elif where == "extensions":
                 self.app.open_contract_extensions_window()
             elif where == "cap":
-                self.app.open_salary_analytics_window()
+                # No open_salary_analytics_window exists anywhere; the
+                # Finances screen (cap-utilization meter, payroll breakdown,
+                # projections) is the honest existing cap surface. No new
+                # cap logic -- salary-cap stays in its owner's lane.
+                self.app.open_finances_window()
             elif where == "inbox":
                 self.app.open_inbox_window()
         except Exception:
@@ -11460,9 +11481,23 @@ class ContractNegotiationView(ctk.CTkFrame):
         self._submit_elc_offer()
 
     def walk_away(self):
-        self._record_offer(
-            int(str(self.salary_var.get()).replace(",", "") or 0),
-            int(self.years_var.get() or 0), "walked away")
+        # Validate before recording: a non-numeric salary gets an honest
+        # inline error, never a crash.
+        try:
+            salary = int(str(self.salary_var.get()).replace(",", "") or 0)
+        except (ValueError, TypeError):
+            self.banner_var.set(
+                "Couldn't record the walk-away: the salary field isn't a "
+                "number. Fix it or clear it first.")
+            return
+        try:
+            years = int(self.years_var.get() or 0)
+        except (ValueError, TypeError):
+            self.banner_var.set(
+                "Couldn't record the walk-away: the years field isn't a "
+                "number. Fix it or clear it first.")
+            return
+        self._record_offer(salary, years, "walked away")
         self._close_session()
         self.close_view()
 
@@ -12050,6 +12085,10 @@ class ContractExtensionsView(ctk.CTkFrame):
         player = self.app.tree_maps.get(self.expiring_tree, {}).get(item_id)
         if player:
             self.open_negotiation_window(player)
+        else:
+            # Honest map-miss: the selection couldn't be resolved.
+            self._say("Couldn't match that row to a player. "
+                      "Re-select and try again.")
     
     def auto_negotiate_all(self):
         """Auto-negotiate with all expiring contracts."""

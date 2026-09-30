@@ -755,8 +755,24 @@ class CheckinView(ctk.CTkFrame):
             if m is not None and hasattr(m, "complete_checkin"):
                 m.complete_checkin(self.team, fields, apply_trust=True,
                                    per_beat_applied=True)
-        except Exception:
-            pass
+        except Exception as e:
+            # Honest failure: trust deltas were NOT persisted. Keep the
+            # draft (nothing silently lost), say so inline, and re-present
+            # the wrap-up so the user can retry.
+            self._note(f"Check-in could not be saved ({e}). Trust changes "
+                       f"were NOT recorded -- wrap up again to retry.")
+            self._say("coach", "Something went wrong on our end -- the "
+                               "check-in didn't save. Let's try wrapping up "
+                               "once more.")
+            box = ctk.CTkFrame(self._body, fg_color="transparent")
+            box.pack(fill="x", padx=16, pady=(14, 16))
+            ctk.CTkButton(box, text="Wrap up the check-in",
+                          command=self._finish,
+                          fg_color=_GOLD, hover_color="#f0c75e",
+                          text_color="#1a1d29", height=40,
+                          font=_font(self.app, 14, "bold")).pack(fill="x",
+                                                                pady=4)
+            return
         try:
             if hasattr(self.team, "checkin_draft"):
                 delattr(self.team, "checkin_draft")
