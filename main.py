@@ -2156,6 +2156,75 @@ _RUSH_X_HOME_ICE_K = 0.0
 _HOME_ICE_EDGE = 0.05
 
 
+# Gating slice 4, Job 2B (Phase 4): the continue-blockers card is a
+# non-modal ask_card (Eastside grammar). Dismiss = defer: the blockers
+# persist until resolved and the top-nav pill re-reads the live continue
+# state. The named resolver below answers post-load re-presents by
+# blocker id against freshly recomputed blockers; the app reference is
+# kept module-side (same pattern as staff_management_window._chain_app).
+_BLOCKERS_APP = None
+
+
+def _set_blockers_app(app):
+    global _BLOCKERS_APP
+    _BLOCKERS_APP = app
+
+
+def _blockers_app():
+    app = _BLOCKERS_APP
+    if app is not None:
+        return app
+    try:
+        import tkinter as _tk
+        _root = _tk._default_root
+        if _root is not None and hasattr(_root, "get_continue_state"):
+            return _root
+    except Exception:
+        pass
+    return None
+
+
+def _continue_blockers_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['continue_blockers_answer']: the non-modal
+    continue-blockers card answered on a post-load re-present (the live
+    callback is gone). value is a blocker id (or '__close__'). Recomputes
+    the blockers live, runs the matching jump action, refreshes the pill.
+    Never raises."""
+    try:
+        app = _blockers_app()
+        if app is None or value == "__close__":
+            return False
+        try:
+            _label, _live = app.get_continue_state()
+        except Exception:
+            return False
+        for _b in _live or []:
+            if _b.get("id") == value:
+                _act = _b.get("action")
+                if _act:
+                    try:
+                        _act[1]()
+                    except Exception:
+                        pass
+                break
+        try:
+            app.refresh_next_day_button()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import (register_dialog_resolver as
+                              _blockers_reg_resolver)
+    _blockers_reg_resolver("continue_blockers_answer",
+                           _continue_blockers_answer)
+except Exception:
+    pass
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -6275,9 +6344,13 @@ class HockeyManagerGUI(tk.Tk):
 
     def _show_continue_blockers(self, blockers):
         """Tell the user what is blocking day advancement and offer a jump
-        to the first blocking task. Never silently does nothing."""
+        to each blocking task. Eastside grammar (Phase 4): a non-modal
+        card with one jump button per blocker, never a grab_set modal.
+        Dismissing the card never clears the blockers -- they persist
+        until resolved, and the top-nav pill re-reads the live continue
+        state on every press."""
         try:
-            from modern_ui import AppColors, AppFonts, AppButton
+            from popup_system import ask_card
         except Exception:
             from popup_system import messagebox
             messagebox.showwarning(
@@ -6294,69 +6367,69 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast("Syncing with clients — one moment…")
             return
 
-        # Prevent multiple clicks by disabling button during simulation
-        dlg = InGamePopup(self)
-        dlg.title("Action Required")
-        dlg.configure(bg=AppColors.BG)
-        dlg.transient(self)
-        try:
-            dlg.grab_set()
-        except Exception:
-            pass
+        _set_blockers_app(self)
 
-        tk.Label(dlg, text="Action Required Before Advancing",
-                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
-                 bg=AppColors.BG).pack(padx=28, pady=(22, 6))
-        tk.Label(dlg, text="The following must be completed first:",
-                 font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
-                 bg=AppColors.BG).pack(padx=28, pady=(0, 12))
-
+        _lines = []
         for b in blockers:
-            card = tk.Frame(dlg, bg=AppColors.BG_ELEVATED,
-                            highlightbackground=AppColors.BORDER,
-                            highlightthickness=1)
-            card.pack(fill='x', padx=28, pady=6)
-            tk.Label(card, text=b.get('title', 'Pending task'),
-                     font=AppFonts.BODY_BOLD, fg=AppColors.ACCENT,
-                     bg=AppColors.BG_ELEVATED).pack(anchor='w', padx=14, pady=(10, 2))
-            tk.Label(card, text=b.get('detail', ''),
-                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
-                     bg=AppColors.BG_ELEVATED,
-                     wraplength=420, justify='left').pack(anchor='w', padx=14, pady=(0, 10))
+            _lines.append(b.get('title', 'Pending task'))
+            if b.get('detail'):
+                _lines.append(b.get('detail'))
+            _lines.append("")
+        _message = ("\n".join(_lines).rstrip()
+                    or "Something must be completed before the day advances.")
 
-        btn_row = tk.Frame(dlg, bg=AppColors.BG)
-        btn_row.pack(pady=(14, 22))
-        first = blockers[0] if blockers else {}
-        action = first.get('action')
+        _buttons = []
+        for b in blockers:
+            _act = b.get('action')
+            if _act:
+                _buttons.append((_act[0], b.get('id', _act[0]), "primary"))
+        _buttons.append(("Close", "__close__", "secondary"))
 
-        def _go():
-            dlg.destroy()
-            if action:
-                try:
-                    action[1]()
-                except Exception as e:
-                    print(f"Blocker action failed: {e}")
+        _blockers_snapshot = list(blockers)
+        _self = self
+
+        def _answer(_value):
+            if _value == "__close__":
+                return  # dismiss-safe: blockers persist; the pill re-reads
+            # The card may be stale (parked across navigation, then the
+            # world moved): re-read the LIVE blockers and jump by id,
+            # falling back to the card-time snapshot only if the id
+            # vanished entirely.
+            try:
+                _label, _live = _self.get_continue_state()
+            except Exception:
+                _live = _blockers_snapshot
+            _target = None
+            for _b in _live or []:
+                if _b.get('id') == _value:
+                    _target = _b
+                    break
+            if _target is None:
+                for _b in _blockers_snapshot:
+                    if _b.get('id') == _value:
+                        _target = _b
+                        break
+            if _target is not None:
+                _act = _target.get('action')
+                if _act:
+                    try:
+                        _act[1]()
+                    except Exception as e:
+                        print(f"Blocker action failed: {e}")
             # R8(i): the blocker may just have been resolved (e.g. the
             # captains picker) -- the top-nav pill must re-read the live
             # continue state instead of staying "Continue (1)".
             try:
-                self.refresh_next_day_button()
+                _self.refresh_next_day_button()
             except Exception:
                 pass
 
-        if action:
-            AppButton(btn_row, text=action[0], command=_go,
-                      style="primary", width=180, height=38).pack(side='left', padx=6)
-        AppButton(btn_row, text="Close", command=dlg.destroy,
-                  style="secondary", width=120, height=38).pack(side='left', padx=6)
-
-        dlg.update_idletasks()
-        try:
-            x = self.winfo_x() + (self.winfo_width() - dlg.winfo_reqwidth()) // 2
-            y = self.winfo_y() + (self.winfo_height() - dlg.winfo_reqheight()) // 2
-            dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        except Exception:
-            pass
+        ask_card(self, "Action Required", _message, _buttons,
+                 on_answer=_answer,
+                 default_on_dismiss="defer",
+                 session_id="continue_blockers", dialog_id="blockers_card",
+                 resolver="continue_blockers_answer",
+                 kind="warning", width=540, height=280)
 
     def _set_continue_feedback(self, busy, status=""):
         """Drive the dashboard Continue button's processing feedback.
