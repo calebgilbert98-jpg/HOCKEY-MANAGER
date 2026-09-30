@@ -6496,6 +6496,12 @@ class DraftView(ctk.CTkFrame):
         # Gating T2-Phase 2: set while a draft-night call card is parked.
         # The SP clock freezes (without a grab) until the call resolves.
         self._ddt_call_parked = False
+        # Gating Phase 3 (A2/A3): the user's own pick-swap card, while
+        # open, also freezes the SP clock -- the clock must never fire
+        # under an in-progress draft decision. Tracked as the live dialog
+        # object; liveness is re-checked on every tick (self-healing if
+        # the card was destroyed without clearing it).
+        self._draft_trade_dlg = None
 
         ct = self._ct
 
@@ -7860,6 +7866,23 @@ class DraftView(ctk.CTkFrame):
                 text=f"Your next pick: #{nxt + 1} (Round {r})")
         else:
             self.next_pick_label.configure(text="No picks remaining")
+        # Gating Phase 3 (A2): the clock moved off the user's turn (a
+        # mid-draft trade moved their pick, or the clock auto-picked).
+        # Any armed two-step confirm is stale -- disarm it so a later
+        # click can't act on a dead decision.
+        if not is_user:
+            try:
+                self.selected_prospect = None
+            except Exception:
+                pass
+            try:
+                self._disarm_draft_button()
+            except Exception:
+                pass
+            try:
+                self.selected_label.configure(text="No prospect selected")
+            except Exception:
+                pass
 
     def _start_sp_draft_clock(self):
         """Single-player draft countdown for the local human's pick.
@@ -7889,6 +7912,62 @@ class DraftView(ctk.CTkFrame):
                 pass
         self._sp_clock_id = None
 
+    # Gating Phase 3 (A2/A4): the single predicate behind the SP clock
+    # freeze. The clock never advances under an in-progress draft
+    # decision -- a parked/open draft-night call card, the user's own
+    # pick-swap card, or a legacy modal grab. Extracted (not inlined) so
+    # the freeze is unit-testable headless.
+    def _draft_clock_frozen(self):
+        try:
+            if self.grab_current() is not None:
+                return True
+        except Exception:
+            pass
+        try:
+            if getattr(self, '_ddt_call_parked', False):
+                return True
+        except Exception:
+            pass
+        try:
+            _dlg = getattr(self, '_draft_trade_dlg', None)
+            if _dlg is not None:
+                try:
+                    if _dlg.winfo_exists():
+                        return True
+                except Exception:
+                    pass
+                # Card gone without clearing: self-heal, don't freeze forever.
+                self._draft_trade_dlg = None
+        except Exception:
+            pass
+        return False
+
+    # Gating Phase 3 (A1): re-read the on-clock slot live. Never trust a
+    # snapshot taken when the board was rendered -- a mid-draft trade may
+    # have moved the pick since.
+    def _live_on_clock(self):
+        try:
+            if 0 <= self.current_pick < len(self.draft_order):
+                _r, _t, _dp = self.draft_order[self.current_pick]
+                return (self.current_pick + 1, _r, _t, _dp)
+        except Exception:
+            pass
+        return (None, None, None, None)
+
+    def _slot_already_picked(self, idx):
+        """True when slot idx (0-based) already has a committed pick."""
+        try:
+            _sess = getattr(self, '_session', None)
+            if _sess is not None:
+                return bool(_sess.has_pick(int(idx) + 1))
+        except Exception:
+            pass
+        try:
+            return any(int(_ov) == int(idx) + 1
+                       for _tn, _ov, _pl in (self.picks_made or []))
+        except Exception:
+            return False
+
     def _sp_clock_tick(self):
         self._sp_clock_id = None
         if self.current_pick >= len(self.draft_order):
@@ -7896,21 +7975,12 @@ class DraftView(ctk.CTkFrame):
         _r, _team, _dp = self.draft_order[self.current_pick]
         if _team != self.app.user_team:
             return
-        try:
-            if self.grab_current() is not None:
-                # Modal open (trade offer/counter): defer, don't fire.
-                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
-                return
-        except Exception:
-            pass
-        # Gating T2-Phase 2: a parked draft-night call freezes the clock
-        # without a grab -- the call card is non-modal.
-        try:
-            if getattr(self, '_ddt_call_parked', False):
-                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
-                return
-        except Exception:
-            pass
+        # Gating Phase 3 (A2): the clock freezes under any in-progress
+        # draft decision (parked call card, open pick-swap card, modal
+        # grab) -- never fires under a decision. See _draft_clock_frozen.
+        if self._draft_clock_frozen():
+            self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+            return
         if self._sp_clock_left <= 0:
             try:
                 self._ticker(f"{_team.team_name} ran out the clock -- "
@@ -7980,6 +8050,21 @@ class DraftView(ctk.CTkFrame):
         if self.current_pick >= len(self.draft_order):
             self.end_draft()
             return
+        # Gating Phase 3 (A1/A3): a trade executed anywhere mid-draft
+        # (war-room call, pick-swap card, or the full Trade Center on
+        # another screen) moves pick objects, not this view's order list.
+        # Re-point the board at the LIVE owners before anything reads the
+        # clock, and mirror into the session journal -- the board shows
+        # the new owner, never a stale one.
+        try:
+            from draft_day_trades import _sync_view_order
+            _sync_view_order(self, self.app.league)
+        except Exception:
+            pass
+        try:
+            self._sync_session_owners()
+        except Exception:
+            pass
         round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
         # DRAFT-DAY MARKET: round 1 runs like the trade deadline. Before the
         # clock starts, the phones ring -- an AI club below may trade up for
@@ -8223,8 +8308,35 @@ class DraftView(ctk.CTkFrame):
         if not self.selected_prospect:
             messagebox.showwarning("No Prospect", "Select a prospect from the shortlist.")
             return
-        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        _overall, _r, team_on_clock, _dp = self._live_on_clock()
+        if team_on_clock is None:
+            return
         if team_on_clock != self.app.user_team:
+            # Gating Phase 3 (A1): ownership drifted under the armed pick
+            # (a mid-draft trade moved it) or the clock already auto-picked.
+            # Refuse honestly -- never silently apply, never leave a stale
+            # armed button behind.
+            _owner = getattr(team_on_clock, 'team_name', '?')
+            _pname = getattr(self.selected_prospect, 'full_name', '?')
+            self.selected_prospect = None
+            self._disarm_draft_button()
+            try:
+                self.selected_label.configure(text="No prospect selected")
+            except Exception:
+                pass
+            try:
+                self._refresh_shortlist()
+            except Exception:
+                pass
+            from popup_system import notify_card
+            try:
+                notify_card(
+                    self, "No Longer Your Pick",
+                    f"Pick #{_overall} is no longer yours -- it now belongs "
+                    f"to {_owner}. Your selection ({_pname}) was cleared; "
+                    f"no pick was made.")
+            except Exception:
+                pass
             return
         p = self.selected_prospect
         if p not in self.app.league.draft_prospects:
@@ -8316,6 +8428,27 @@ class DraftView(ctk.CTkFrame):
         try:
             _sess = self._session
             if _sess is not None and _sess.has_pick(_ov):
+                return False
+        except Exception:
+            pass
+        # Gating Phase 3 (A1): pick-ownership drift. The `team` handed in
+        # must still own the live on-clock slot -- a mid-draft trade may
+        # have moved it since the caller read the board. Acting on a stale
+        # owner is refused, never silently applied to the wrong club.
+        try:
+            _live_team = self.draft_order[self.current_pick][1]
+            _same = (_live_team is team) or (
+                getattr(_live_team, 'team_name', None) is not None
+                and getattr(_live_team, 'team_name', None)
+                == getattr(team, 'team_name', None))
+            if not _same:
+                try:
+                    self._ticker(
+                        f"Pick #{_ov} refused: {_live_team.team_name} "
+                        f"now owns the slot (stale owner "
+                        f"{getattr(team, 'team_name', '?')}).")
+                except Exception:
+                    pass
                 return False
         except Exception:
             pass
@@ -8446,6 +8579,11 @@ class DraftView(ctk.CTkFrame):
         dlg.geometry("480x460")
         dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
+        # Gating Phase 3 (A2): while this card is open the SP clock
+        # freezes -- the clock must never auto-pick under the user's
+        # in-progress trade decision. _draft_clock_frozen re-checks the
+        # card's liveness every tick (self-healing on destroy).
+        self._draft_trade_dlg = dlg
         overall = self.current_pick + 1
         self._heading(dlg, text=f"Your pick: #{overall} (Round {_r})",
                 size=13).pack(pady=(14, 4))
@@ -8517,6 +8655,26 @@ class DraftView(ctk.CTkFrame):
             sel = lb.curselection()
             if not sel or not dlg._picks:
                 return
+            # Gating Phase 3 (A1): re-validate at propose time. The slot
+            # may have moved (or been picked) while the card was open --
+            # a swap for a stale slot is refused, never silently applied.
+            _ov2, _rr2, _live_team, _live_dp = self._live_on_clock()
+            if _live_dp is not user_pick or self._slot_already_picked(
+                    self.current_pick):
+                try:
+                    dlg.destroy()
+                except Exception:
+                    pass
+                self._draft_trade_dlg = None
+                from popup_system import notify_card as _nc2
+                try:
+                    _nc2(self, "Pick No Longer Available",
+                         "That pick is no longer on the clock -- the draft "
+                         "moved on while the trade window was open. No "
+                         "trade was made.")
+                except Exception:
+                    pass
+                return
             j, partner_pick, _r2 = dlg._picks[sel[0]]
             partner = next(t for t in self.app.league.teams
                            if t.team_name == combo.get())
@@ -8571,6 +8729,7 @@ class DraftView(ctk.CTkFrame):
                     if not _done:
                         return  # legality preflight blocked it
                     dlg.destroy()
+                    self._draft_trade_dlg = None
                     messagebox.showinfo("Trade Complete",
                                         "Pick swap completed.")
                     self.process_draft_pick()
@@ -8604,6 +8763,7 @@ class DraftView(ctk.CTkFrame):
             if not _done:
                 return  # legality preflight blocked it; dialog stays open
             dlg.destroy()
+            self._draft_trade_dlg = None
             messagebox.showinfo("Trade Complete", "Pick swap completed.")
             self.process_draft_pick()
 
@@ -8695,6 +8855,18 @@ class DraftView(ctk.CTkFrame):
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
         user_team = self.app.user_team
+        # Gating Phase 3 (A1/A3): the on-clock slot is re-read live. If a
+        # mid-draft trade or a clock auto-pick moved/spent it while the
+        # swap was being built, the swap is refused honestly -- trading a
+        # spent pick would double-use the slot.
+        _ov3, _rr3, _lt3, _ldp3 = self._live_on_clock()
+        if _ldp3 is not user_pick or self._slot_already_picked(
+                self.current_pick):
+            messagebox.showerror(
+                "Pick No Longer Available",
+                "That pick is no longer on the clock -- the draft moved on "
+                "while the trade window was open. No trade was made.")
+            return False
         partner_team = self.draft_order[partner_idx][1]
         # Legality preflight: the counter path used to skip every gate.
         _ok, _why = self._validate_pick_swap(
@@ -8745,6 +8917,12 @@ class DraftView(ctk.CTkFrame):
         except Exception:
             pass
         self._ticker(f"TRADE: {summary}")
+        # Gating Phase 3 (A3): mirror the new owners into the session
+        # journal so a screen-shift re-entry sees the same board.
+        try:
+            self._sync_session_owners()
+        except Exception:
+            pass
         return True
 
     # ------------------------------------------------------------------
