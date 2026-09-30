@@ -5066,6 +5066,29 @@ class GameSim:
                 _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
             except Exception:
                 _crowd_edge = 0.0
+            # -- schemed-against superstars (2026-09-30, Muck) ----------
+            # Same shared decision as quick-sim (mesh_system.
+            # schemed_against_contest_delta): the defending TEAM shades an
+            # elite/generational threat -- his grade-A looks tighten, his
+            # linemates skate into the freed ice. Signed contest delta,
+            # grade-A creation only, never finishing. One decision, two
+            # fidelities.
+            try:
+                from mesh_system import (schemed_against_contest_delta
+                                         as _sacd2)
+                try:
+                    _onice_a = self._on_ice_skaters(attacking_team)
+                except Exception:
+                    try:
+                        _onice_a = self._get_on_ice(attacking_team)
+                    except Exception:
+                        _onice_a = []
+                _a_unit = [p for p in (_onice_a or []) if p is not None]
+                _d_unit = [p for p in (_onice_d or []) if p is not None]
+                _contest = max(0.0, min(1.0, _contest + _sacd2(
+                    shooter, _a_unit, _d_unit, _loc)))
+            except Exception:
+                pass
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,

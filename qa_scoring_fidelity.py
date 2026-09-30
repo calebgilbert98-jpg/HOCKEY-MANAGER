@@ -101,7 +101,9 @@ def main():
         for e in sim.events:
             if e.get('event') == 'Goal':
                 g += 1; a += len(e.get('assists', []))
-    gpg = g / 40
+    gpg = g / 20  # per GAME (both teams). g/40 was per-team-game -- a units
+    # bug that compared ~3.15/team-game against the per-game 2.70-3.60 band
+    # and masked a ~2x scoring inflation (2026-09-30).
     ag = a / g if g else 0
     check("GPG in 2.70-3.60 band (smoke)", 2.0 <= gpg <= 4.5, f"({gpg:.2f})")
     # Smoke band 1.45-1.80: aligns the test with the SHIPPED P1-P3 NHL-shaped

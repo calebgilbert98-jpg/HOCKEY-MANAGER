@@ -1260,6 +1260,155 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
     return max(0.50, min(1.20, _tilt))
 
 
+# -- Schemed-against superstars (2026-09-30, Muck) -----------------------
+# THE SHARED DECISION. Both engines call schemed_against_contest_delta()
+# and add the result to their contest before roll_chance_grade(); one
+# decision, two fidelities.
+#
+# The scouting report, not a coefficient. When a generational talent hops
+# the boards, the defending TEAM tilts the ice: the weak-side winger sags
+# into his wheelhouse, the D pair plays the pass instead of the man, the
+# second layer takes away the give-and-go. One defender never stops
+# McDavid -- he walks one defender -- so the denial is computed from the
+# whole defending unit's collective defensive quality (D pair carries it,
+# forwards sink as support layers), never from a single matchup. That is
+# also what makes the zero-sum honest: the attention visibly reallocated
+# to the star is exactly what leaves his linemates a half-step cleaner,
+# so the same shade that crowds him opens ice for them. League totals
+# stay stable while the tail compresses.
+#
+# Elite/generational ONLY. The threat curve is ~zero below the elite tier
+# (90+ overall) and ramps at the very top -- an average top-six forward
+# feels nothing. Applies to grade-A CREATION (contest), never finishing.
+#
+# The McDavid principle (hard floor): this shaves the margin, it never
+# flattens the star into the pack and never inverts the talent hierarchy.
+# A generational player schemed against all night is STILL the best
+# player on the planet -- he leads the league by daylight. If calibration
+# ever makes him look ordinary, the mechanic is over-tuned, full stop.
+# Spontaneity is kept: no caps anywhere -- a perfect generational season
+# can still spike to 70. The 110-goal cartoons were a structural bug (823
+# shots, broken tie-break, clamp bypass); this fixes structure, not
+# transcendence.
+SCHEME_THREAT_FLOOR = 90.0   # overall below this: zero threat, nothing felt
+SCHEME_THREAT_RAMP = 7.0     # 90 -> 0.0 threat, 97 -> 1.0 threat
+SCHEME_DENIAL_MAX = 0.18     # contest units at full threat x full team quality
+SCHEME_RELIEF_MAX = 0.10     # linemate dividend, same units
+SCHEME_OFF_WHEELHOUSE = 0.45 # denial outside his preferred zones -- the
+                             # scheme takes away his SPOTS; he can shoot
+
+# Wheelhouse zones per role: where the scheme shades. Denial concentrates
+# here; everywhere else he sees a fraction of it.
+_SCHEME_WHEELHOUSE = {
+    "Sniper": {"slot", "netfront", "crease"},
+    "Playmaker": {"slot", "perimeter"},
+    "Power Forward": {"netfront", "crease", "slot"},
+    "Grinder": {"netfront", "crease"},
+    "Enforcer": {"crease"},
+    "Two-Way Forward": {"slot", "netfront"},
+    "Offensive Defenseman": {"point", "slot"},
+    "Defensive Defenseman": {"point"},
+    "Two-Way Defenseman": {"point", "slot"},
+}
+
+
+def _scheme_threat(player) -> float:
+    """Offensive threat 0..~1: talent x form x reputation. Elite-gated --
+    ~zero below 90 overall, ramping at the very top. Never raises."""
+    try:
+        _ovr = float(player.overall_rating())
+    except Exception:
+        return 0.0
+    if _ovr < SCHEME_THREAT_FLOOR:
+        return 0.0
+    _talent = min(1.0, (_ovr - SCHEME_THREAT_FLOOR) / SCHEME_THREAT_RAMP)
+    _heat = _player_heat(player)                       # 0..1, mesh form
+    _rep = max(0.0, min(1.0, _chance_attr(player, "reputation", 0.0) / 100.0))
+    return _talent * (0.70 + 0.20 * _heat + 0.10 * _rep)
+
+
+def _scheme_team_defense(defending_onice) -> float:
+    """Collective defensive quality 0..1 of the defending unit. The D pair
+    carries the scheme (weight 1.0); the forwards sink as support layers
+    (weight 0.5). A great scheme run by bad defenders is just standing
+    around -- execution quality belongs to the team, not one man."""
+    try:
+        _num = 0.0
+        _den = 0.0
+        for _p in (defending_onice or []):
+            if _p is None:
+                continue
+            try:
+                _pos = getattr(_p, "primary_position", None)
+                _pname = getattr(_pos, "name", "") or str(_pos)
+                _is_d = "DEFENSE" in _pname
+            except Exception:
+                _is_d = False
+            _q = (defensive_positioning(_p)
+                  + _chance_attr(_p, "defensive_awareness", 70.0)
+                  + _chance_attr(_p, "checking", 70.0)) / 300.0
+            _w = 1.0 if _is_d else 0.5
+            _num += max(0.0, min(1.0, _q)) * _w
+            _den += _w
+        if _den <= 0:
+            return 0.5
+        return max(0.0, min(1.0, _num / _den))
+    except Exception:
+        return 0.5
+
+
+def _scheme_wheelhouse_factor(shooter, location: str) -> float:
+    """1.0 in his wheelhouse zones, a fraction elsewhere. Never raises."""
+    try:
+        _role = shooter.get_role()
+        _rname = getattr(_role, "value", "") or str(_role)
+        _loc = str(location or "slot").lower()
+        if _loc in _SCHEME_WHEELHOUSE.get(_rname, {"slot"}):
+            return 1.0
+        return SCHEME_OFF_WHEELHOUSE
+    except Exception:
+        return 1.0
+
+
+def schemed_against_contest_delta(shooter, attacking_onice, defending_onice,
+                                  location: str = "slot") -> float:
+    """Signed contest delta for one chance. Positive crowds the star
+    (coverage arrives early, his spots are taken); negative frees his
+    linemates (the shade reallocated). Net ~zero by construction, so
+    league scoring holds while the tail compresses toward the 50-65
+    benchmark. Elite-gated; grade-A creation only; never raises --
+    falls back to 0.0 (no scheme)."""
+    try:
+        _self = _scheme_threat(shooter)
+        _mates = 0.0
+        for _p in (attacking_onice or []):
+            if _p is None or _p is shooter:
+                continue
+            _t = _scheme_threat(_p)
+            if _t > _mates:
+                _mates = _t
+        if _self <= 0.0 and _mates <= 0.0:
+            return 0.0
+        _team_q = _scheme_team_defense(defending_onice)
+        _denial = 0.0
+        if _self > 0.0:
+            _denial = min(SCHEME_DENIAL_MAX,
+                          _self * _team_q
+                          * _scheme_wheelhouse_factor(shooter, location)
+                          * SCHEME_DENIAL_MAX)
+        _relief = 0.0
+        if _mates > 0.0:
+            _relief = min(SCHEME_RELIEF_MAX,
+                          _mates * _team_q * SCHEME_RELIEF_MAX)
+        # Net: the star eats the shade minus whatever his linemates' own
+        # threat draws off him (you can't fully shade two elites); a
+        # linemate skates into the freed ice.
+        _net = _denial - _relief
+        return max(-SCHEME_RELIEF_MAX, min(SCHEME_DENIAL_MAX, _net))
+    except Exception:
+        return 0.0
+
+
 # Heater constants (2026-09-29, per Muck): the INTENSITY factor's player
 # component. A player riding a heater earns chances at a hotter rate and
 # converts with swagger -- an amplifier, not a cheat code. The boost

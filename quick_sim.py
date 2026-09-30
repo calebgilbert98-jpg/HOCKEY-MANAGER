@@ -226,31 +226,97 @@ def best_lines(team):
             if not assigned:
                 return
 
-            def _best_for(_unit):
-                # Spread the emergency load: fewest existing assignments
-                # first, best overall breaks ties (mirrors the fill-in's
-                # best-available preference without stacking one star on
-                # every hole). Never two copies of a player in one unit.
+            # -- Short-bench hole fill (2026-09-30, Muck) -------------------
+            # The hole is filled the way a lineup is chosen: relevance to
+            # WHO IS OUT first, then talent, then the human cost. The hole's
+            # line tells us the missing role -- top-six holes (lines 0/1)
+            # want scoring roles, bottom-six holes (lines 2/3) want checking
+            # roles, D-pair holes want stay-at-home types. A 4th-line hole
+            # goes to a checker, NOT the first-line sniper: graded role fit,
+            # never best-overall. Stars CAN double-shift (realistic) but
+            # fatigue/condition genuinely bite -- they're human -- and the
+            # load spreads instead of stacking one star on every hole. And
+            # sometimes the coach just skates short: a poor-fit, tired body
+            # is worse than redistributed minutes, so the hole stays empty.
+            _F_TOP_FIT = {      # scoring-line hole
+                "Sniper": 1.00, "Playmaker": 0.90, "Power Forward": 0.85,
+                "Two-Way Forward": 0.60, "Grinder": 0.25, "Enforcer": 0.15,
+                "Offensive Defenseman": 0.30, "Two-Way Defenseman": 0.30,
+                "Defensive Defenseman": 0.20,
+            }
+            _F_BOT_FIT = {      # checking-line hole
+                "Grinder": 1.00, "Two-Way Forward": 0.85,
+                "Power Forward": 0.60, "Enforcer": 0.50,
+                "Sniper": 0.25, "Playmaker": 0.25,
+                "Defensive Defenseman": 0.30, "Two-Way Defenseman": 0.30,
+                "Offensive Defenseman": 0.20,
+            }
+            _D_PAIR_FIT = {     # D-pair hole
+                "Defensive Defenseman": 1.00, "Two-Way Defenseman": 0.70,
+                "Offensive Defenseman": 0.40, "Grinder": 0.30,
+                "Two-Way Forward": 0.30, "Power Forward": 0.25,
+                "Sniper": 0.15, "Playmaker": 0.15, "Enforcer": 0.20,
+            }
+            _role_name = {}
+            _cond = {}
+            for _p in assigned:
+                try:
+                    _r = _p.get_role()
+                    _role_name[id(_p)] = (getattr(_r, "value", "")
+                                          or str(_r))
+                except Exception:
+                    _role_name[id(_p)] = ""
+                try:
+                    _cond[id(_p)] = max(0.0, min(100.0, float(
+                        getattr(_p, "condition", 100.0) or 100.0)))
+                except Exception:
+                    _cond[id(_p)] = 100.0
+
+            def _hole_fit(_p, _kind, _unit_idx):
+                _table = (_F_TOP_FIT if (_kind == "F" and _unit_idx < 2)
+                          else _F_BOT_FIT if _kind == "F"
+                          else _D_PAIR_FIT)
+                return _table.get(_role_name.get(id(_p), ""), 0.35)
+
+            def _best_for(_unit, _kind, _unit_idx):
                 _ids = {id(_q) for _q in (_unit or []) if _q is not None}
                 _cands = [p for p in assigned if id(p) not in _ids]
                 if not _cands:
                     return None
-                _cands.sort(key=lambda p: (use_count.get(id(p), 0),
-                                           -_ovr.get(id(p), 0.0)))
+
+                def _score(_p):
+                    _pid = id(_p)
+                    _talent = _ovr.get(_pid, 0.0) / 100.0
+                    _fit = _hole_fit(_p, _kind, _unit_idx)
+                    # Human cost: a gassed star double-shifts badly.
+                    _cm = 0.55 + 0.45 * (_cond.get(_pid, 100.0) / 100.0)
+                    # Spread the emergency load: each extra unit already
+                    # skated discounts the candidate steeply.
+                    _load = 1.0 / (1.0 + 0.75 * max(
+                        0, use_count.get(_pid, 0) - 1))
+                    return _talent * (0.45 + 0.55 * _fit) * _cm * _load
+
+                _cands.sort(key=lambda p: -_score(p))
                 _fill = _cands[0]
+                # Skate short: the best available body is a poor role fit
+                # AND tired -- the coach takes the short bench over a bad
+                # double-shift, and the minutes redistribute.
+                if (_hole_fit(_fill, _kind, _unit_idx) < 0.50
+                        and _cond.get(id(_fill), 100.0) < 75.0):
+                    return None
                 use_count[id(_fill)] = use_count.get(id(_fill), 0) + 1
                 return _fill
 
-            for _line in fw_lines:
+            for _li, _line in enumerate(fw_lines):
                 for _ji in range(len(_line or [])):
                     if _line[_ji] is None:
-                        _fill = _best_for(_line)
+                        _fill = _best_for(_line, "F", _li)
                         if _fill is not None:
                             _line[_ji] = _fill
-            for _pair in def_pairs:
+            for _pi, _pair in enumerate(def_pairs):
                 for _ji in range(len(_pair or [])):
                     if _pair[_ji] is None:
-                        _fill = _best_for(_pair)
+                        _fill = _best_for(_pair, "D", _pi)
                         if _fill is not None:
                             _pair[_ji] = _fill
         except Exception:
@@ -415,6 +481,17 @@ class AdvancedGameSim:
         # team_name), same shape as GameSim's, for line-combination
         # analytics.
         self.assist_pairs = deque(maxlen=4000)
+        # Shot-volume realism (2026-09-30, Muck: one puck, shared with
+        # linemates -- NOT a flat cap). Parity with GameSim's
+        # _recent_shooters (simulation.py): the last 8 shooters per team;
+        # a player who just shot sees his choice weight cut (x0.35) --
+        # "you just shot; the puck moves on." One decision, two
+        # fidelities. AdvancedGameSim is constructed per game, so the
+        # deques reset naturally every game.
+        self._recent_shooters = {
+            home_team.team_name: deque(maxlen=8),
+            away_team.team_name: deque(maxlen=8),
+        }
         # FM team-talk boost: team_name -> multiplier (default 1.0)
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
 
@@ -1127,9 +1204,34 @@ class AdvancedGameSim:
         # the same number GameSim uses. Replaces the old overall_rating
         # weighting.
         from player_archetypes import shooter_choice_weight as _scw
+        # Shot-volume realism (2026-09-30, Muck): one puck, shared with
+        # linemates. Parity with GameSim (simulation.py: the shooter
+        # weight is cut x0.35 when the player is in _recent_shooters) --
+        # you just shot, the puck moves on. A weight, not a cap: a
+        # generational talent in a perfect season can still spike, but
+        # one man can't take every shot of his line's chances anymore.
+        _recent = self._recent_shooters.get(puck_team_name)
+
+        def _shooter_w(_p):
+            try:
+                _w = float(_scw(_p))
+            except Exception:
+                _w = 1.0
+            try:
+                if _recent is not None and getattr(_p, "id", None) in _recent:
+                    _w *= 0.35
+            except Exception:
+                pass
+            return _w
+
         shooter = random.choices(shooters,
-                                 weights=[_scw(p) for p in shooters],
+                                 weights=[_shooter_w(p) for p in shooters],
                                  k=1)[0]
+        try:
+            if _recent is not None:
+                _recent.append(getattr(shooter, "id", None))
+        except Exception:
+            pass
         goalie = self.on_ice[opp_team_name]['Goalie']
 
         # --- Enhanced Fatigue System ---
@@ -1877,6 +1979,27 @@ class AdvancedGameSim:
                 _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
             except Exception:
                 _crowd_edge = 0.0
+            # -- schemed-against superstars (2026-09-30, Muck) ----------
+            # The shared decision (mesh_system.schemed_against_contest_
+            # delta): when an elite/generational threat is on the ice, the
+            # defending TEAM shades coverage -- his grade-A looks tighten,
+            # his linemates skate into the freed ice. Signed contest delta,
+            # net ~zero; grade-A creation only, never finishing. One
+            # decision, two fidelities (GameSim calls the same helper).
+            try:
+                from mesh_system import (schemed_against_contest_delta
+                                         as _sacd)
+                _d_unit = [d for d in _defenders]
+                try:
+                    _d_fwds = ((self.on_ice.get(_def_team.team_name, {})
+                                or {}).get("Forwards", []))
+                    _d_unit += [f for f in _d_fwds if f]
+                except Exception:
+                    pass
+                _contest01 = max(0.0, min(1.0, _contest01 + _sacd(
+                    shooter, shooters, _d_unit, _loc)))
+            except Exception:
+                pass
             # -- roll ---------------------------------------------------
             _grade = _rcg(
                 _loc, _contest01, shooter,
@@ -2263,18 +2386,20 @@ class AdvancedGameSim:
                                   1.0) / _txq.SHOT_LIFT
         except Exception:
             pass
-        shot_chance = self._apply_chance_grade(
-            shot_chance, shooter, goalie, shot_type, puck_team_name,
-            opp_team_name, _contest, _screened_now, shooters)
-
-        # Power-play finishing (divergence #1): the man advantage converts
-        # better -- extra space, tired killers. Parity retune 2026-09-28
-        # (per Muck: closer to old scaling): 2.2x -> 1.6x. The old quick-sim
-        # had no PP conversion edge at all (1.0x); 1.6x keeps the mechanism
-        # GameSim shares without letting elite PP units run away.
+        # Power-play finishing (parity fix 2026-09-30): the man advantage
+        # converts better -- extra space, tired killers -- and it applies
+        # BEFORE the grade clamp. GameSim applies its 2.2x man-advantage
+        # factor on the xG path, i.e. before its per-step min(0.95, ...)
+        # caps; quick-sim's 1.6x now lands before _apply_chance_grade's
+        # 0.18 grade-A clamp so the clamp binds on PP chances too. One
+        # decision, two fidelities -- the PP edge comes from chance
+        # quality/volume, not from bypassing the quality ceiling.
         # (5v3's 3.0x has no quick-sim state to key off; accepted gap.)
         if getattr(self, "pp_team", None) == puck_team_name:
             shot_chance *= 1.6
+        shot_chance = self._apply_chance_grade(
+            shot_chance, shooter, goalie, shot_type, puck_team_name,
+            opp_team_name, _contest, _screened_now, shooters)
 
         # 6-on-5 volume lives on the event-type gate above (divergence #13:
         # 2.2x, same as GameSim) -- not here on conversion.
