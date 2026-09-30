@@ -3239,6 +3239,21 @@ class Team:
     _prev_gm_name: str = ""
     _analytics_snapshot: dict = field(default_factory=dict)
     line_control: str = "coach"  # 'coach' | 'gm'
+    # Pre-season coach expectations meeting (coach_season_meeting.py): the
+    # stored season mandate gates real systems (carousel trust bar,
+    # line/tactics authority, rookie deployment). Plain data, save/load
+    # safe. season_meeting_context is transient UI context for the
+    # conversation surface: {"reason", "season", "coach"}.
+    season_mandate: Optional[dict] = None
+    season_meeting_pending: bool = False
+    season_meeting_context: dict = field(default_factory=dict)
+    # Quarterly coach check-ins (coach_checkins.py): same pattern -- plain
+    # data on the mandate, RESUMABLE pending flag (never blocks the day),
+    # transient UI context. The check-in conversation draft lives on
+    # team.checkin_draft (not serialized, same as season_meeting_draft).
+    checkin_pending: bool = False
+    checkin_quarter: Optional[int] = None
+    checkin_context: dict = field(default_factory=dict)
     # Roster continuity for the situations factor: offseason snapshot of NHL
     # roster names + measured summer turnover (0-1). High churn = gelling
     # penalty; a kept core = battle-tested bonus. Ticked each offseason.
