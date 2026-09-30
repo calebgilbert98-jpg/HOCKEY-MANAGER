@@ -130,6 +130,14 @@ class GameSaveManager:
                 # default to False (no deferral window open).
                 '_fantasy_draft_captaincy_deferred': bool(
                     getattr(self.game_manager, '_fantasy_draft_captaincy_deferred', False)),
+                # Fantasy draft pending flag (BUG-2 fix): a mid-draft save
+                # must come back with the draft still pending -- it's the
+                # day-advance blocker, and the fantasy view only binds a
+                # fresh draft when it's set. Old saves lack the key.
+                'pending_fantasy_draft': bool(
+                    getattr(self.game_manager, 'pending_fantasy_draft', False)
+                    or getattr(getattr(self.game_manager, 'game_manager', None),
+                               'pending_fantasy_draft', False)),
                 
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
@@ -376,6 +384,17 @@ class GameSaveManager:
                             (getattr(league, 'media_fines', None) or [])],
             # Draft Day Central deals feed (summaries). Missing = old save.
             'draft_day_deals': list(getattr(league, 'draft_day_deals', None) or []),
+            # Entry-draft war-room session journal (BUG-2 fix): a mid-draft
+            # save keeps the pick order, cursor, committed picks, boards
+            # and RNG stream so the load resumes the SAME draft. Only a
+            # live (non-completed) session is written; None otherwise.
+            # Old saves lack the key -> no session.
+            'entry_draft_session': self._serialize_entry_draft_session(league),
+            # Fantasy draft session journal (BUG-2 fix): drafted players
+            # ride on the team lists (serialized with the teams as usual);
+            # only the undrafted pool + pick log + config travel here.
+            # Old saves lack the key -> no session.
+            'fantasy_draft_session': self._serialize_fantasy_draft_session(league),
         }
         
         # Serialize all teams
@@ -420,6 +439,17 @@ class GameSaveManager:
                 'league_name': getattr(team, 'league_name', 'National Hockey League'),
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
+                # Pre-season coach expectations meeting: the stored season
+                # mandate + pending flag (+ transient UI context). Plain
+                # data; old saves simply have none.
+                'season_mandate': dict(getattr(team, 'season_mandate', None) or {}),
+                'season_meeting_pending': bool(getattr(team, 'season_meeting_pending', False)),
+                'season_meeting_context': dict(getattr(team, 'season_meeting_context', None) or {}),
+                # Quarterly coach check-ins: the pending flag (+ transient
+                # UI context). History lives on the mandate dict above.
+                'checkin_pending': bool(getattr(team, 'checkin_pending', False)),
+                'checkin_quarter': getattr(team, 'checkin_quarter', None),
+                'checkin_context': dict(getattr(team, 'checkin_context', None) or {}),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
                 # In-game retained-salary ledger (real NHL retained
                 # transactions). Absent in old saves -> empty.
@@ -1202,6 +1232,21 @@ class GameSaveManager:
                 else:
                     setattr(self.game_manager, key, save_data[key])
 
+            # Fantasy draft pending flag (BUG-2 fix): restored onto the
+            # wrapper and the inner GameManager alike -- readers live on
+            # both (the day-advance blocker reads the inner manager, the
+            # fantasy view reads the wrapper's game_manager).
+            if 'pending_fantasy_draft' in save_data:
+                _pfd = bool(save_data['pending_fantasy_draft'])
+                for _t in (self.game_manager,
+                           getattr(self.game_manager, 'game_manager', None)):
+                    if _t is None:
+                        continue
+                    try:
+                        _t.pending_fantasy_draft = _pfd
+                    except Exception:
+                        pass
+
             # Re-mirror restored training programs into the Development
             # Center's module registry so the window shows them.
             if getattr(self.game_manager, 'training_programs', None):
@@ -1232,6 +1277,18 @@ class GameSaveManager:
             # Restore free agents
             if 'free_agents' in save_data:
                 self._restore_free_agents(save_data['free_agents'])
+
+            # Fantasy-draft FA identity (BUG-2 fix): the draft pool
+            # includes free agents, and the mid-draft journal restores
+            # them as its own live objects (see from_state_dict). The
+            # top-level FA list above restored them a SECOND time. Repoint
+            # every FA entry at the draft's live object by id so there is
+            # exactly one live object per player -- otherwise the same
+            # man exists twice and picks/dedup audits corrupt.
+            try:
+                self._reconcile_fantasy_free_agents()
+            except Exception as _e:
+                print(f"fantasy FA reconcile failed (non-fatal): {_e}")
 
             # One-time migration: saves written before the 1-100 scale audit
             # store player attributes on the legacy ~50 scale. Detect by
@@ -1483,6 +1540,44 @@ class GameSaveManager:
                     league, league_data.get('playoff_bracket'))
             except Exception:
                 pass
+
+            # Draft session journals (BUG-2 fix): restore AFTER teams (and
+            # the draft class) exist, so pick logs re-resolve players by
+            # id against the rebuilt rosters. A journal that can't be
+            # honored sets an honest unavailable marker -- the matching
+            # view then shows "draft unavailable" instead of silently
+            # starting a fresh draft over committed picks.
+            try:
+                self._restore_entry_draft_session(
+                    league, league_data.get('entry_draft_session'))
+            except Exception as _e:
+                print(f"entry draft session restore failed: {_e}")
+                try:
+                    league.entry_draft_session = None
+                except Exception:
+                    pass
+                try:
+                    league.entry_draft_unavailable_reason = (
+                        "The saved draft session couldn't be restored "
+                        f"({_e}). No new draft was started.")
+                except Exception:
+                    pass
+            try:
+                self._restore_fantasy_draft_session(
+                    league, league_data.get('fantasy_draft_session'))
+            except Exception as _e:
+                print(f"fantasy draft session restore failed: {_e}")
+                try:
+                    league.fantasy_draft_manager = None
+                except Exception:
+                    pass
+                try:
+                    league.fantasy_draft_unavailable_reason = (
+                        "The saved fantasy draft couldn't be restored "
+                        f"({_e}). No new draft was started; your rosters "
+                        "are untouched.")
+                except Exception:
+                    pass
             
         except Exception as e:
             print(f"Error restoring league: {e}")
@@ -1548,6 +1643,166 @@ class GameSaveManager:
             }
         except Exception:
             return None
+
+    # ------------------------------------------------------------------
+    # Draft session journals (BUG-2 fix, 2026-09-30). The live draft
+    # sessions are league-owned objects; saves persist plain-dict
+    # journals derived from them, and loads rebuild live sessions from
+    # those journals -- after teams and the draft class exist, so pick
+    # logs can re-resolve players by id. A journal that can't be honored
+    # sets an honest unavailable marker, never a silent fresh draft.
+    # ------------------------------------------------------------------
+    def _serialize_entry_draft_session(self, league):
+        """Plain-dict journal of the live entry-draft war-room session.
+
+        A live session that FAILS to serialize returns an explicit error
+        sentinel, not None: None means "no draft in progress" and would
+        let a later load silently start a fresh draft over committed
+        picks. The sentinel degrades the load to an honest unavailable
+        state instead.
+        """
+        try:
+            sess = getattr(league, 'entry_draft_session', None)
+            if sess is None or bool(getattr(sess, 'completed', False)):
+                return None
+            to_dict = getattr(sess, 'to_dict', None)
+            if not callable(to_dict):
+                return None
+            return to_dict()
+        except Exception as e:
+            print(f"entry draft session serialize failed (non-fatal): {e}")
+            return {'__journal_error__': f"{type(e).__name__}: {e}"}
+
+    def _serialize_fantasy_draft_session(self, league):
+        """Plain-dict journal of the live fantasy draft manager.
+
+        Same sentinel contract as the entry-draft journal above: a
+        failed serialization must not masquerade as "no draft".
+        """
+        try:
+            from fantasy_draft import FantasyDraftManager
+            mgr = getattr(league, 'fantasy_draft_manager', None)
+            if not isinstance(mgr, FantasyDraftManager):
+                return None
+            return mgr.to_state_dict(self._serialize_player)
+        except Exception as e:
+            print(f"fantasy draft session serialize failed (non-fatal): {e}")
+            return {'__journal_error__': f"{type(e).__name__}: {e}"}
+
+    def _restore_entry_draft_session(self, league, data):
+        """Rebuild the league-owned entry-draft session from its journal."""
+        # Clear any stale in-memory session first: a load must never leak
+        # the pre-load draft into the rebuilt league.
+        try:
+            league.entry_draft_session = None
+        except Exception:
+            pass
+        try:
+            league.entry_draft_unavailable_reason = None
+        except Exception:
+            pass
+        if not data:
+            return
+        # A damaged journal saved as a sentinel: honest unavailable, never
+        # a silent fresh draft over committed picks.
+        if isinstance(data, dict) and data.get('__journal_error__'):
+            try:
+                league.entry_draft_unavailable_reason = (
+                    "The saved draft session journal was damaged "
+                    f"({data.get('__journal_error__')}). No new draft was "
+                    "started.")
+            except Exception:
+                pass
+            return
+        from draft_night import EntryDraftSession
+        sess = EntryDraftSession.from_dict(data)
+        # Revalidate against the rebuilt league now (fail fast, honest).
+        # Audit findings are warnings, not corruption: the session still
+        # resumes, and the war room surfaces them on re-entry.
+        try:
+            _issues = sess.audit(league)
+        except Exception:
+            _issues = []
+        if _issues:
+            print("entry draft session audit on load: "
+                  + "; ".join(str(i) for i in _issues[:5]))
+        league.entry_draft_session = sess
+
+    def _restore_fantasy_draft_session(self, league, data):
+        """Rebuild the league-owned fantasy draft manager from its journal."""
+        try:
+            league.fantasy_draft_manager = None
+        except Exception:
+            pass
+        try:
+            league.fantasy_draft_unavailable_reason = None
+        except Exception:
+            pass
+        if not data:
+            return
+        # A damaged journal saved as a sentinel: honest unavailable, never
+        # a silent fresh draft (which would wipe/redeal the player pool).
+        if isinstance(data, dict) and data.get('__journal_error__'):
+            try:
+                league.fantasy_draft_unavailable_reason = (
+                    "The saved fantasy draft journal was damaged "
+                    f"({data.get('__journal_error__')}). No new draft was "
+                    "started; your rosters are untouched.")
+            except Exception:
+                pass
+            return
+        from fantasy_draft import FantasyDraftManager
+        mgr = FantasyDraftManager.from_state_dict(
+            data, league, self._restore_player)
+        league.fantasy_draft_manager = mgr
+
+    def _reconcile_fantasy_free_agents(self):
+        """Point restored FA entries at the fantasy draft's live objects.
+
+        The mid-draft journal restores pool players (including free
+        agents) as its own live objects; _restore_free_agents restored
+        the same men a second time. Walk every FA list on the game
+        manager and swap entries for the draft's live object by id, so
+        exactly one live object exists per player.
+        """
+        try:
+            league = getattr(self.game_manager, 'league', None)
+            mgr = getattr(league, 'fantasy_draft_manager', None)
+            if mgr is None:
+                return
+            by_id = {}
+            for p in (getattr(mgr, 'all_players', None) or []):
+                try:
+                    pid = getattr(p, 'id', None)
+                except Exception:
+                    pid = None
+                if pid is not None:
+                    by_id.setdefault(pid, p)
+            if not by_id:
+                return
+            seen_lists = set()
+            for holder in (self.game_manager, league,
+                           getattr(self.game_manager, 'database_manager',
+                                   None)):
+                if holder is None:
+                    continue
+                try:
+                    fa_list = getattr(holder, 'free_agents', None)
+                except Exception:
+                    continue
+                if not isinstance(fa_list, list) or id(fa_list) in seen_lists:
+                    continue
+                seen_lists.add(id(fa_list))
+                for i, p in enumerate(fa_list):
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    live = by_id.get(pid)
+                    if live is not None and live is not p:
+                        fa_list[i] = live
+        except Exception as e:
+            print(f"fantasy FA reconcile failed: {e}")
 
     def _restore_playoff_bracket(self, league, data):
         """Rebuild the live playoff bracket from plain dicts."""
@@ -1687,6 +1942,29 @@ class GameSaveManager:
             except Exception:
                 team.scout_shortlist = []
             team.board_expectation = team_data.get('board_expectation')
+            # Pre-season coach expectations meeting. Absent in old saves ->
+            # no mandate, nothing pending.
+            try:
+                team.season_mandate = dict(team_data.get('season_mandate') or {}) or None
+            except Exception:
+                team.season_mandate = None
+            team.season_meeting_pending = bool(team_data.get('season_meeting_pending', False))
+            try:
+                team.season_meeting_context = dict(team_data.get('season_meeting_context') or {})
+            except Exception:
+                team.season_meeting_context = {}
+            # Quarterly coach check-ins. Absent in old saves -> nothing
+            # pending; the history arrives inside season_mandate.
+            team.checkin_pending = bool(team_data.get('checkin_pending', False))
+            try:
+                _cq = team_data.get('checkin_quarter')
+                team.checkin_quarter = int(_cq) if _cq is not None else None
+            except (TypeError, ValueError):
+                team.checkin_quarter = None
+            try:
+                team.checkin_context = dict(team_data.get('checkin_context') or {})
+            except Exception:
+                team.checkin_context = {}
             # Annual staff payroll budget. Absent in old saves -> market-tier
             # default so existing leagues get the rule without a wipe.
             try:

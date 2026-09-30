@@ -215,6 +215,31 @@ class HomeDashboard:
         content.pack(fill="both", expand=True, padx=24, pady=20)
 
         self._create_header(content)
+        # --- Season-meeting pending banner (coach_meeting_window, additive) ---
+        # Eastside gating: while the pre-season coach meeting is pending, a
+        # persistent entry point sits at the top of the dashboard. Guarded so
+        # a missing/broken meeting module can never break the home screen.
+        try:
+            from coach_meeting_window import build_season_meeting_banner
+            _sm_banner = build_season_meeting_banner(content, self.parent)
+            if _sm_banner is not None:
+                _sm_banner.pack(fill="x", pady=(0, 12))
+        except Exception:
+            pass
+        # --- end season-meeting banner ---------------------------------------
+        # --- Coach check-in pending banner (coach_checkin_window, additive) --
+        # Eastside gating: while a quarterly coach check-in is pending, a
+        # persistent entry point sits at the top of the dashboard. NON-
+        # BLOCKING by design -- the copy says the day advances normally.
+        # Guarded so a missing/broken check-in module can never break home.
+        try:
+            from coach_checkin_window import build_coach_checkin_banner
+            _ck_banner = build_coach_checkin_banner(content, self.parent)
+            if _ck_banner is not None:
+                _ck_banner.pack(fill="x", pady=(0, 12))
+        except Exception:
+            pass
+        # --- end coach check-in banner -------------------------------------
         self._create_stat_strip(content)
         self._create_section_nav(content)
         self._create_main_grid(content)

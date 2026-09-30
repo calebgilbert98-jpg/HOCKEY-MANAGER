@@ -395,10 +395,14 @@ class FakeApp2:
     _strength_cache = {}
 
 
-star9 = mk_player("Star", "Nine", PlayerPosition.CENTER, overall=60)
+# NOTE (2026-09-30): ratings must sit in the realistic NHL band (~78-85).
+# The 2026-09-29 parity re-anchor normalizes strength to 0.5 + (avg-70)/40
+# clamped at a 0.5 floor, so the old all-45s synthetic roster clamped both
+# readings at the floor and the comparison could never hold.
+star9 = mk_player("Star", "Nine", PlayerPosition.CENTER, overall=88)
 t9 = Team("ST", "City", "Div", "Conf")
 t9.roster = [star9] + [mk_player(f"R{i}", "P", PlayerPosition.CENTER,
-                                 overall=45) for i in range(19)]
+                                 overall=78) for i in range(19)]
 app9 = FakeApp2()
 s_full = main_mod.HockeyManagerGUI._calculate_team_strength(app9, t9)
 star9.suspension_games_remaining = 2

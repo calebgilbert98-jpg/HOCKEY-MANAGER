@@ -491,6 +491,22 @@ class AutomatedSeasonFlow:
     def _training_camp_opens(self):
         """Training camps open"""
         print("🏒 Training Camps Open: New season preparation begins!")
+        # Pre-season coach expectations meeting (yearly re-arm): the user
+        # club arms its season meeting; every AI club resolves immediately.
+        # Guarded: a meeting failure must never break season automation.
+        try:
+            from coach_season_meeting import on_training_camp
+            on_training_camp(getattr(self, "game_manager", None))
+        except Exception:
+            pass
+        # Milestones are one-shot dates: re-date camp so it (and the
+        # meeting re-arm) recurs every September.
+        try:
+            for _m in self.milestones:
+                if getattr(_m, "name", "") == "Training Camp":
+                    _m.date = _m.date.replace(year=_m.date.year + 1)
+        except Exception:
+            pass
         
     def _new_season_begins(self):
         """New season starts"""

@@ -229,6 +229,20 @@ def _honored_advice(team: Any) -> Dict[str, Any]:
                     featured.add(pid)
     except Exception:
         pass
+    # Season-mandate rookie stance (coach_season_meeting): the stored
+    # preseason agreement is standing GM instruction, honored like advice.
+    # "heavy" -> play_the_kids, "sheltered" -> shorten_bench,
+    # "earned"/"none" -> no nudge. Reuses the existing multipliers below --
+    # no new tuning, just wiring the stored stance into the real path.
+    try:
+        _mand = getattr(team, "season_mandate", None) or {}
+        _stance = _mand.get("rookie_stance") if isinstance(_mand, dict) else None
+        if _stance == "heavy":
+            keys.add("play_the_kids")
+        elif _stance == "sheltered":
+            keys.add("shorten_bench")
+    except Exception:
+        pass
     return {"keys": keys, "featured_ids": featured}
 
 

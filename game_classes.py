@@ -3313,6 +3313,21 @@ class Team:
     _prev_gm_name: str = ""
     _analytics_snapshot: dict = field(default_factory=dict)
     line_control: str = "coach"  # 'coach' | 'gm'
+    # Pre-season coach expectations meeting (coach_season_meeting.py): the
+    # stored season mandate gates real systems (carousel trust bar,
+    # line/tactics authority, rookie deployment). Plain data, save/load
+    # safe. season_meeting_context is transient UI context for the
+    # conversation surface: {"reason", "season", "coach"}.
+    season_mandate: Optional[dict] = None
+    season_meeting_pending: bool = False
+    season_meeting_context: dict = field(default_factory=dict)
+    # Quarterly coach check-ins (coach_checkins.py): same pattern -- plain
+    # data on the mandate, RESUMABLE pending flag (never blocks the day),
+    # transient UI context. The check-in conversation draft lives on
+    # team.checkin_draft (not serialized, same as season_meeting_draft).
+    checkin_pending: bool = False
+    checkin_quarter: Optional[int] = None
+    checkin_context: dict = field(default_factory=dict)
     # Roster continuity for the situations factor: offseason snapshot of NHL
     # roster names + measured summer turnover (0-1). High churn = gelling
     # penalty; a kept core = battle-tested bonus. Ticked each offseason.
@@ -3791,6 +3806,36 @@ class League:
     # Draft grades by year ({str(year): [(team, grade, ratio)]}), persisted
     # so the war room's review modal and future seasons can look back.
     draft_grades_history: Dict[str, list] = field(default_factory=dict)
+    # Live draft sessions (BUG-2 fix, 2026-09-30): draft state lives on the
+    # LEAGUE, never on a view. A destroyed/rebuilt view re-attaches to the
+    # live session instead of starting a fresh draft (which silently
+    # restarted the draft, duplicated picks and orphaned prospects).
+    #  - fantasy_draft_manager: the live FantasyDraftManager for an
+    #    in-progress fantasy draft (None when no fantasy draft is active).
+    #    Owns the player pool, draft order, pick log, AI strategies and
+    #    the cursor. FantasyDraftView is a thin binder over it.
+    #  - entry_draft_session: the live EntryDraftSession (draft_night.py)
+    #    for an in-progress entry-draft war room (None when the war room
+    #    is not mid-draft). DraftView binds to it on open.
+    # Both are init=False (never constructor args) and excluded from
+    # repr; the save system persists plain-dict journals derived from
+    # them (see save_load_system), never the live objects.
+    # Old-save safe: read via getattr(league, 'fantasy_draft_manager',
+    # None) -- pickled leagues predating this change have no attribute.
+    fantasy_draft_manager: Optional[object] = field(
+        default=None, init=False, repr=False)
+    entry_draft_session: Optional[object] = field(
+        default=None, init=False, repr=False)
+    # Honest-degradation markers (BUG-2 fix): when a saved draft journal
+    # can't be honored on load (corrupt / missing references), the save
+    # system sets one of these instead of dropping the session silently --
+    # the matching view then shows "draft unavailable" with the reason,
+    # never a fresh draft over committed picks. Transient: never saved.
+    # Old-save safe: read via getattr.
+    fantasy_draft_unavailable_reason: Optional[str] = field(
+        default=None, init=False, repr=False)
+    entry_draft_unavailable_reason: Optional[str] = field(
+        default=None, init=False, repr=False)
     # All-Star rosters by season label ("2026-27" -> {division:
     # {captain_id, skater_ids, goalie_ids}}). Plain IDs, save/load safe.
     # Old-save safe: read via getattr(league, 'all_star_rosters', {}).

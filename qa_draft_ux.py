@@ -137,10 +137,10 @@ _orig_sel = _dn_mod.ai_select_prospect
 
 
 def _spy_select(team, available, team_board, needs, round_num,
-                priority, rng, overall=1):
+                priority, rng, overall=1, drafted=None):
     _seen_rounds.append(round_num)
     return _orig_sel(team, available, team_board, needs, round_num,
-                     priority, rng, overall=overall)
+                     priority, rng, overall=overall, drafted=drafted)
 
 
 _dn_mod.ai_select_prospect = _spy_select

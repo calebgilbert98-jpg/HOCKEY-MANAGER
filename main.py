@@ -512,6 +512,16 @@ class GameManager:
                 # Item 7 follow-up: the human club's letters must be the
                 # user's choice, never inherited auto-repair.
                 self._claim_user_team_captaincy(self.user_team)
+                # Pre-season coach expectations meeting (new save): the user
+                # club arms its season meeting; every AI club resolves its
+                # meeting immediately. Defers while a fantasy draft is
+                # pending (startup_settings check -- the draft completion
+                # re-arms with real rosters). Guarded and idempotent.
+                try:
+                    from coach_season_meeting import on_new_save
+                    on_new_save(self, self.user_team)
+                except Exception:
+                    pass
         else:
             debug_print(f"DEBUG: No team to set - selected_team_name={selected_team_name}, has league={hasattr(self, 'league') and self.league is not None}")
         
@@ -1347,6 +1357,17 @@ NHL League Office""",
                 _as.refresh_analytics_quality(team)
             except Exception:
                 pass
+            # Pre-season coach expectations meeting: a new head coach means
+            # a new meeting. The hire lands on the user's team here, so arm
+            # the user club (guarded; never breaks the signing).
+            try:
+                from game_classes import StaffRole as _SR
+                if (getattr(staff, "role", None) == _SR.HEAD_COACH
+                        and str(assignment).lower() == "nhl"):
+                    from coach_season_meeting import on_coach_hired
+                    on_coach_hired(team, game_manager=self)
+            except Exception:
+                pass
             return True
         except Exception:
             return False
@@ -1711,6 +1732,16 @@ NHL League Office""",
             # user's team is known -- reclaim the human club so the user
             # picks its captains instead of inheriting auto-repair.
             self._claim_user_team_captaincy(user_team)
+            # Pre-season coach expectations meeting (new save): the user
+            # club arms its season meeting; every AI club resolves its
+            # meeting immediately. Defers while a fantasy draft is pending
+            # (the draft completion re-arms with real rosters). Guarded:
+            # a meeting failure must never break new-game setup.
+            try:
+                from coach_season_meeting import on_new_save
+                on_new_save(self, user_team)
+            except Exception:
+                pass
             # Update team colors in UI if the UI is already set up
             if hasattr(self, 'modern_theme') and hasattr(self, 'style'):
                 self._update_team_colors()
@@ -5979,6 +6010,18 @@ class HockeyManagerGUI(tk.Tk):
                         })
         except Exception:
             pass
+        # Pre-season coach expectations meeting (Eastside-style, non-modal):
+        # the user can navigate anywhere; only day-advance is gated until
+        # the meeting is held. The blocker dict is built by
+        # coach_season_meeting.season_meeting_blocker (None when nothing is
+        # pending); _show_continue_blockers presents it automatically.
+        try:
+            from coach_season_meeting import season_meeting_blocker
+            _sm_blocker = season_meeting_blocker(self)
+            if _sm_blocker:
+                blockers.append(_sm_blocker)
+        except Exception:
+            pass
         if blockers:
             return ("Continue", blockers)
         # Trade deadline day: the day runs on a 30-minute game clock
@@ -6744,6 +6787,30 @@ class HockeyManagerGUI(tk.Tk):
             # the day's career totals are final.
             self._milestone_postgame()
             self.current_date += timedelta(days=1)
+
+            # Pre-season coach expectations meeting: training camp opens
+            # every September 1. The user club arms its season meeting;
+            # every AI club resolves immediately. Season-idempotent (the
+            # arm/resolve functions no-op when this season is done) and
+            # never raises -- the meeting itself gates the NEXT advance
+            # via the get_continue_state blocker, not this hook.
+            try:
+                if self.current_date.month == 9 and self.current_date.day == 1:
+                    from coach_season_meeting import on_training_camp
+                    on_training_camp(getattr(self, "game_manager", None) or self)
+            except Exception:
+                pass
+
+            # Quarterly coach check-ins: after games ~20/40/60 the GM's
+            # club arms a RESUMABLE check-in conversation (never blocks
+            # the day; expires when the next quarter arms). AI clubs
+            # resolve immediately -- no UI, never skipped. Season- and
+            # mandate-idempotent, and never raises.
+            try:
+                from coach_checkins import on_day_advanced
+                on_day_advanced(getattr(self, "game_manager", None) or self)
+            except Exception:
+                pass
 
             # Offer-sheet match windows: a sheet whose 7-day clock ran out
             # unanswered resolves as a decline -- the player goes to the
@@ -12522,8 +12589,14 @@ class HockeyManagerGUI(tk.Tk):
             'clutch_factor': 0.0
         }
         
-        # Get top players by position
-        sorted_roster = sorted(team.roster, key=lambda p: p.overall_rating(), reverse=True)
+        # Get top players by position -- only dressed players move the
+        # needle. Suspended or injured stars don't boost the team from
+        # the press box (same exclusion the strength calc uses).
+        available = [p for p in team.roster
+                     if not getattr(p, 'is_injured', False)
+                     and not (getattr(p, 'suspension_games_remaining', 0)
+                              or 0)]
+        sorted_roster = sorted(available, key=lambda p: p.overall_rating(), reverse=True)
         top_forwards = [p for p in sorted_roster if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:3]
         top_defense = [p for p in sorted_roster if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:2]
         top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
@@ -12603,13 +12676,15 @@ class HockeyManagerGUI(tk.Tk):
 
         Starters play ~75-80% of games; the backup's chance grows the longer
         the starter's consecutive-starts streak runs (covers back-to-backs).
-        Injured goalies never dress.
+        Injured or suspended goalies never dress.
         """
         import random
         goalies = sorted(
             [p for p in team.roster
              if p.primary_position.name == 'GOALIE'
-             and not getattr(p, 'is_injured', False)],
+             and not getattr(p, 'is_injured', False)
+             and not (getattr(p, 'suspension_games_remaining', 0)
+                      or 0)],
             key=lambda p: p.overall_rating(), reverse=True)
         if not goalies:
             return None
@@ -12647,8 +12722,11 @@ class HockeyManagerGUI(tk.Tk):
         
         for team, team_goals, opp_goals in [(home_team, home_goals, away_goals), (away_team, away_goals, home_goals)]:
             # Dressed lineup: 12 forwards, 6 defensemen, 1 goalie (NHL standard: 18 skaters)
-            # Injured players don't dress
-            healthy = [p for p in team.roster if not getattr(p, 'is_injured', False)]
+            # Injured or suspended players don't dress
+            healthy = [p for p in team.roster
+                       if not getattr(p, 'is_injured', False)
+                       and not (getattr(p, 'suspension_games_remaining', 0)
+                                or 0)]
             forwards = [p for p in healthy if p.primary_position.name in ['LEFT_WING', 'RIGHT_WING', 'CENTER']][:12]
             defensemen = [p for p in healthy if p.primary_position.name in ['LEFT_DEFENSE', 'RIGHT_DEFENSE']][:6]
             dressed_skaters = forwards + defensemen  # 18 skaters
@@ -16251,6 +16329,15 @@ class HockeyManagerGUI(tk.Tk):
         context = {"situation": situation,
                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
         dlg = TeamTalkDialog(self, self.user_team, "prematch", context)
+        # Flow-modal pause (same pattern as _ask_game_mode_dialog): the sim
+        # needs the talk result before it can proceed. The dialog is
+        # non-modal in code flow, so without this wait dlg.result was always
+        # read as None -- the morale boost never applied and player morale
+        # landed after the game instead of before it.
+        try:
+            dlg.wait_window()
+        except Exception:
+            pass
         if dlg.result:
             _opt, _reaction, boost = dlg.result
             return boost
@@ -16807,7 +16894,10 @@ class HockeyManagerGUI(tk.Tk):
 
         from player_context_menu import PlayerContextMenu
         PlayerContextMenu(self).show_context_menu(
-            event, player, additional_options=extras or None)
+            event, player, additional_options=extras or None,
+            # Draft screens: the clock is ticking, so scouting is the
+            # instant war-room take, not the scouting-window detour.
+            quick_scout=(context_type == 'draft'))
         
     def _handle_player_double_click(self, event, tree):
         """Handle double-clicking on a player in any tree view."""

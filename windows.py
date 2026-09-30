@@ -5653,6 +5653,12 @@ class DraftView(ctk.CTkFrame):
         self.draft_order = []          # [round, team, draft_pick]
         self.picks_made = []           # (team_name, overall, player)
         self._draft_started = False    # re-entry guard for start_draft()
+        # BUG-2 fix: the session is league-owned (league.entry_draft_session,
+        # draft_night.EntryDraftSession). The view attributes above are
+        # working copies materialized from it; the session is the durable
+        # journal. Destroying this view detaches without touching it.
+        self._session = None
+        self._reentry_issues = []
         # Per-team draft boards (team_draft_boards.build_team_boards):
         # {team_name: [prospects in that team's order]}. None until
         # start_draft() builds them; AI falls back to consensus when
@@ -5775,6 +5781,38 @@ class DraftView(ctk.CTkFrame):
             font=("Segoe UI", 10), state='disabled', wrap='word')
         self.scouting_report_box.pack(fill='both', expand=True,
                                       padx=8, pady=8)
+        # Live research strip: the next owned pick plus the department's
+        # takes on the top available prospects, with one-click quick
+        # scouting. Refreshed by _render_scouting_report.
+        _rs = tk.Frame(self._board_tab_frames["Scout Report"],
+                       bg=ct['CARD'])
+        _rs.pack(fill='x', padx=8, pady=(8, 0),
+                 before=self.scouting_report_box)
+        self._research_title = ctk.CTkLabel(
+            _rs, text="RESEARCH — NEXT PICK",
+            font=("Segoe UI", 10, 'bold'), text_color=ct['TEXT_DIM'])
+        self._research_title.pack(anchor='w', pady=(0, 2))
+        _rs_row = tk.Frame(_rs, bg=ct['CARD'])
+        _rs_row.pack(fill='x')
+        self._research_list = tk.Listbox(
+            _rs_row, height=6, activestyle='none', bg=ct['BG'],
+            fg=ct['TEXT'], selectbackground=ct['ROW_SELECTED'],
+            relief='flat', highlightthickness=1,
+            highlightbackground=ct['BORDER'])
+        self._research_list.pack(side='left', fill='x', expand=True)
+        self._research_list.bind(
+            '<Double-1>', lambda _e: self._research_quick_scout())
+        _rs_btns = tk.Frame(_rs_row, bg=ct['CARD'])
+        _rs_btns.pack(side='left', padx=(6, 0))
+        self._research_scout_btn = self._secondary_button(
+            _rs_btns, text="Quick scout",
+            command=self._research_quick_scout)
+        self._research_scout_btn.pack(pady=2)
+        self._research_open_btn = self._secondary_button(
+            _rs_btns, text="Scouting",
+            command=lambda: self.app.open_scouting_window())
+        self._research_open_btn.pack(pady=2)
+        self._research_players = []
         self._draft_board_tab("Available")
 
         # CENTER: war room
@@ -5863,6 +5901,10 @@ class DraftView(ctk.CTkFrame):
                                                   text="Trade This Pick",
                                                   command=self.trade_current_pick)
         self.trade_pick_button.pack(fill='x', pady=2)
+        self.research_button = self._secondary_button(btn_col,
+                                               text="Research This Pick",
+                                               command=self._open_draft_research)
+        self.research_button.pack(fill='x', pady=2)
         # Esc disarms a two-step pick confirmation.
         self.bind('<Escape>', lambda _e: self._disarm_draft_button())
 
@@ -5959,7 +6001,7 @@ class DraftView(ctk.CTkFrame):
         for g in ('A+', 'A', 'B+', 'B', 'C', 'D', 'F'):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
-        self.app._bind_player_context_menu(tree, 'default', False)
+        self.app._bind_player_context_menu(tree, 'draft', False)
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
                                  command=tree.yview,
                                  style='Draft.Vertical.TScrollbar')
@@ -5989,6 +6031,12 @@ class DraftView(ctk.CTkFrame):
                 frame.pack(fill='both', expand=True)
             else:
                 frame.pack_forget()
+        if name == "Scout Report":
+            # Never arrive at a stale research list mid-draft.
+            try:
+                self._refresh_draft_research()
+            except Exception:
+                pass
 
     def _create_available_board(self, parent):
         """Ranked available-prospect board (the war room's primary surface)."""
@@ -6007,7 +6055,7 @@ class DraftView(ctk.CTkFrame):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
         try:
-            self.app._bind_player_context_menu(tree, 'default', False)
+            self.app._bind_player_context_menu(tree, 'draft', False)
         except Exception:
             pass
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
@@ -6038,7 +6086,7 @@ class DraftView(ctk.CTkFrame):
             tree.tag_configure(f"pot_{g}",
                                foreground=self.dn.grade_color(g))
         try:
-            self.app._bind_player_context_menu(tree, 'default', False)
+            self.app._bind_player_context_menu(tree, 'draft', False)
         except Exception:
             pass
         v_scroll = ttk.Scrollbar(parent, orient="vertical",
@@ -6061,6 +6109,13 @@ class DraftView(ctk.CTkFrame):
         if tree is None:
             return
         tree.delete(*tree.get_children())
+        # Canonical item_id -> prospect map: the universal right-click
+        # menu (main._show_player_context_menu) resolves rows through it.
+        try:
+            _tmap = self.app.tree_maps.setdefault(tree, {})
+            _tmap.clear()
+        except Exception:
+            _tmap = None
         reports = getattr(self.app.user_team, 'scouting_reports', {}) or {}
         for i, p in enumerate(self._board_sorted_available(), 1):
             report = reports.get(getattr(p, 'id', None))
@@ -6072,17 +6127,24 @@ class DraftView(ctk.CTkFrame):
                 pos = "?"
             grade = self._GRADE_BASE.get(
                 str(getattr(p, 'potential_grade', 'C')).strip(), 'C')
-            tree.insert('', 'end',
-                        iid=str(getattr(p, 'id', '')),
-                        values=(i, getattr(p, 'full_name', '?'), pos, pot,
-                                getattr(p, 'age', '?')),
-                        tags=(f"pot_{grade}",))
+            _iid = tree.insert('', 'end',
+                                 iid=str(getattr(p, 'id', '')),
+                                 values=(i, getattr(p, 'full_name', '?'),
+                                         pos, pot, getattr(p, 'age', '?')),
+                                 tags=(f"pot_{grade}",))
+            if _tmap is not None:
+                _tmap[_iid] = p
 
     def _refresh_mypicks_board(self):
         tree = getattr(self, 'mypicks_tree', None)
         if tree is None:
             return
         tree.delete(*tree.get_children())
+        try:
+            _tmap = self.app.tree_maps.setdefault(tree, {})
+            _tmap.clear()
+        except Exception:
+            _tmap = None
         try:
             uname = self.app.user_team.team_name
         except Exception:
@@ -6096,10 +6158,12 @@ class DraftView(ctk.CTkFrame):
                 pos = "?"
             grade = self._GRADE_BASE.get(
                 str(getattr(player, 'potential_grade', 'C')).strip(), 'C')
-            tree.insert('', 'end', values=(
+            _iid = tree.insert('', 'end', values=(
                 overall, getattr(player, 'full_name', '?'), pos,
                 getattr(player, 'potential_grade', '?')),
                 tags=(f"pot_{grade}",))
+            if _tmap is not None:
+                _tmap[_iid] = player
 
     def _render_scouting_report(self):
         """Fill the Scout Report tab from the user's pre-draft joint report:
@@ -6162,6 +6226,84 @@ class DraftView(ctk.CTkFrame):
             box.delete('1.0', 'end')
             box.insert('1.0', "\n".join(lines))
             box.configure(state='disabled')
+        except Exception:
+            pass
+        self._refresh_draft_research()
+
+    # -- Mid-draft research: takes for the next owned pick ---------------
+    def _next_owned_pick(self):
+        """(overall, round) of the user's next not-yet-made pick, or None."""
+        try:
+            uteam = self.app.user_team
+            for i in range(self.current_pick + 1, len(self.draft_order)):
+                _round, team, dp = self.draft_order[i]
+                if team is uteam or team == uteam:
+                    return (int(getattr(dp, 'overall_pick', 0) or 0),
+                            int(_round or 0))
+        except Exception:
+            pass
+        return None
+
+    def _open_draft_research(self):
+        """Jump to the Scout Report tab with fresh research."""
+        try:
+            self._refresh_draft_research()
+            self._draft_board_tab("Scout Report")
+        except Exception:
+            pass
+
+    def _refresh_draft_research(self):
+        """Fill the research strip: next owned pick + top available
+        prospects with the department's report status. Never raises."""
+        try:
+            lst = getattr(self, '_research_list', None)
+            if lst is None or not lst.winfo_exists():
+                return
+            title = getattr(self, '_research_title', None)
+            nxt = self._next_owned_pick()
+            if title is not None and title.winfo_exists():
+                title.configure(
+                    text=("RESEARCH — YOUR NEXT PICK "
+                          f"(Rd {nxt[1]}, #{nxt[0]})" if nxt
+                          else "RESEARCH — NO PICKS LEFT"))
+            lst.delete(0, tk.END)
+            self._research_players = []
+            if not nxt:
+                lst.insert(tk.END, "(no picks remaining)")
+                return
+            reports = (getattr(self.app.user_team, 'scouting_reports', {})
+                       or {})
+            for p in self._available_prospects()[:8]:
+                try:
+                    pos = p.primary_position.value
+                except Exception:
+                    pos = "?"
+                rep = reports.get(getattr(p, 'id', None))
+                if rep is not None:
+                    acc = getattr(rep, 'accuracy', '?') or '?'
+                    pot = getattr(rep, 'scouted_potential', '') or ''
+                    take = f"your take: {pot} ({acc})".strip()
+                else:
+                    take = "unscouted"
+                lst.insert(tk.END,
+                           f"{getattr(p, 'full_name', '?')} ({pos}) · {take}")
+                self._research_players.append(p)
+        except Exception:
+            pass
+
+    def _research_quick_scout(self):
+        """Quick-scout the research list's selected prospect."""
+        try:
+            sel = self._research_list.curselection()
+            if not sel:
+                return
+            p = self._research_players[sel[0]]
+            from player_context_menu import PlayerContextMenu
+            PlayerContextMenu(self)._quick_scout_player(p)
+            self._refresh_draft_research()
+            _sel = getattr(self, 'selected_prospect', None)
+            if _sel is not None:
+                self._render_prospect_card(_sel)
         except Exception:
             pass
 
@@ -6282,13 +6424,18 @@ class DraftView(ctk.CTkFrame):
                 ctk.CTkLabel(card, text="", font=("Segoe UI", 2)).pack(pady=(0, 8))
         except Exception:
             pass
-        # Right-click opens the full player profile.
+        # Right-click opens the full player menu (profile, quick scout...).
         try:
+            from player_context_menu import PlayerContextMenu
             card.bind('<Button-3>',
-                      lambda _e, _p=p: self.app.open_player_profile(_p))
+                      lambda _e, _p=p: PlayerContextMenu(
+                          self).show_context_menu(
+                              _e, _p, quick_scout=True))
             for w in card.winfo_children():
                 w.bind('<Button-3>',
-                       lambda _e, _p=p: self.app.open_player_profile(_p))
+                       lambda _e, _p=p: PlayerContextMenu(
+                           self).show_context_menu(
+                               _e, _p, quick_scout=True))
         except Exception:
             pass
 
@@ -6301,12 +6448,68 @@ class DraftView(ctk.CTkFrame):
         # replace the boards mid-draft. Fresh views start unflagged.
         if getattr(self, '_draft_started', False):
             return
+        # BUG-2 fix: the draft session is league-owned
+        # (league.entry_draft_session, draft_night.EntryDraftSession). A
+        # rebuilt view re-attaches to the live session and resumes exactly
+        # where the draft left off -- it never starts a fresh draft over
+        # committed picks. A year already conducted shows its completed
+        # state, never a new draft.
+        league = self.app.league
+        current_year = league.season_year
+        # BUG-2 fix: a saved journal the load couldn't honor degrades to an
+        # honest unavailable state -- never a fresh draft over committed
+        # picks.
+        try:
+            _why = getattr(league, 'entry_draft_unavailable_reason', None)
+        except Exception:
+            _why = None
+        if _why:
+            self._show_unavailable_state(str(_why))
+            return
+        try:
+            _sess = getattr(league, 'entry_draft_session', None)
+        except Exception:
+            _sess = None
+        try:
+            _sess_year = int(getattr(_sess, 'year', 0) or 0)
+        except Exception:
+            _sess_year = 0
+        # BUG-2 fix: a parked in-progress session owns the war room --
+        # whatever the calendar says. The session is the authoritative
+        # draft; re-entry resumes it exactly where it left off, never a
+        # fresh build over committed picks.
+        if _sess is not None and not _sess.is_complete():
+            self._attach_session(_sess)
+            return
+        try:
+            _conducted = self.dn._conducted_years(league)
+        except Exception:
+            _conducted = set()
+        try:
+            _cond_years = {int(y) for y in _conducted}
+        except Exception:
+            _cond_years = set()
+        if int(current_year) in _cond_years:
+            self._show_conducted_state(current_year)
+            return
+        # BUG-2 fix: a session whose slots are all picked but never
+        # finalized (save/load edge) is finalized idempotently for the
+        # SESSION's year -- never re-drafted. resume_entry_draft_session
+        # replays nothing (every overall is already journaled) and runs
+        # the standard finalize: conducted stamp, grades, session release.
+        if _sess is not None and _sess_year and _sess.is_complete():
+            try:
+                self.dn.resume_entry_draft_session(
+                    league, _sess, app=self.app)
+            except Exception:
+                pass
+            self._show_conducted_state(_sess_year)
+            return
         # Make sure every team owns its picks (idempotent if already done)
         try:
             self.app.league.initialize_all_draft_picks()
         except Exception:
             pass
-        current_year = self.app.league.season_year
         self.draft_order = []
         try:
             order = self.app.league.get_draft_order(current_year)
@@ -6368,14 +6571,304 @@ class DraftView(ctk.CTkFrame):
         self.ticker.delete(0, tk.END)
         self._ticker("Welcome to draft night. The floor is buzzing.")
         self._refresh_shortlist()
+        # BUG-2 fix: league-own the session. The view may be destroyed at
+        # any time; the draft lives on in league.entry_draft_session and a
+        # rebuilt view resumes from it. If the session can't be created,
+        # the draft must NOT proceed sessionless (picks would commit with
+        # no journal, and a later re-entry would start fresh over them):
+        # honest unavailable instead.
+        try:
+            self._session = self.dn.EntryDraftSession.begin(
+                self.app.league, current_year, self.draft_order,
+                self.team_reports, self._draft_rng)
+            self.app.league.entry_draft_session = self._session
+        except Exception as _e:
+            self._session = None
+            try:
+                self.app.league.entry_draft_unavailable_reason = (
+                    "The draft session couldn't be created "
+                    f"({_e}). No draft was started.")
+            except Exception:
+                pass
+            self._show_unavailable_state(
+                "The draft session couldn't be created "
+                f"({_e}). No draft was started.")
+            return
         self.process_draft_pick()
         self._draft_started = True
 
     # ------------------------------------------------------------------
+    # BUG-2 fix: league-owned draft session. These methods re-attach a
+    # rebuilt view to the live session (resume), or present an honest
+    # terminal state (conducted / unavailable). They never start a fresh
+    # draft over committed picks.
+    # ------------------------------------------------------------------
+    def _attach_session(self, session):
+        """Re-entry: materialize view state from the league-owned session
+        and resume the draft exactly where it left off."""
+        league = self.app.league
+        self._session = session
+        # The session's draft class must still be the live one. If the
+        # calendar advanced a full year past a parked draft, the class
+        # was regenerated and the remaining slots can't be filled
+        # faithfully -- honest unavailable, never a silent wrong-year
+        # draft. (Unverifiable when the class isn't year-stamped: allow.)
+        try:
+            _class_year = int(getattr(league, 'draft_prospects_year', 0)
+                              or 0)
+            _syear = int(getattr(session, 'year', 0) or 0)
+        except Exception:
+            _class_year, _syear = 0, 0
+        if _class_year and _syear and _class_year != _syear:
+            self._show_unavailable_state(
+                f"This {_syear} draft was parked past its draft class "
+                f"(the {_class_year} class is now live). Its "
+                f"{len(getattr(session, 'picks', None) or [])} completed "
+                "picks stand, but the remaining slots can't be filled "
+                "faithfully -- no new draft was started.")
+            return
+        # Revalidate owners against the live pick objects: a pick traded
+        # mid-draft while the war room was closed repoints here. Committed
+        # picks keep their selecting team in the journal.
+        try:
+            session.sync_owners_from_league(league)
+        except Exception:
+            pass
+        try:
+            self._reentry_issues = session.audit(league)
+        except Exception:
+            self._reentry_issues = []
+        order = session.materialize_order(league)
+        # Defensive: every slot needs a live team. If one no longer
+        # resolves (post-load corruption), degrade honestly rather than
+        # crash or silently restart.
+        _missing = [str(s.get('overall', '?')) for s, e in
+                    zip(session.slots, order)
+                    if e[1] is None]
+        if _missing:
+            self._show_unavailable_state(
+                "Draft session can't be resumed: "
+                f"{len(_missing)} pick slot(s) no longer resolve to a "
+                f"team ({', '.join(_missing[:6])}"
+                f"{'…' if len(_missing) > 6 else ''}). No new draft was "
+                "started.")
+            return
+        self.draft_order = order
+        self.team_boards = session.materialize_boards(league)
+        # Rebuild the minimal team_reports the scouting tab needs for the
+        # user's club: the persisted board plus projected picks for the
+        # REMAINING slots the user still owns.
+        try:
+            uname = getattr(getattr(self.app, 'user_team', None),
+                            'team_name', '')
+            uboard = (self.team_boards or {}).get(uname) or []
+            _proj = []
+            for _i in range(int(session.current_pick or 0), len(order)):
+                try:
+                    _r, _t, _dp = order[_i]
+                    if _t is None or getattr(_t, 'team_name', '') != uname:
+                        continue
+                    _ov = _i + 1
+                    _pl = uboard[_ov - 1] if _ov - 1 < len(uboard) else None
+                    _proj.append({'round': int(_r or 0), 'overall': _ov,
+                                  'prospect': _pl})
+                except Exception:
+                    continue
+            self.team_reports = {uname: {'board': list(uboard),
+                                         'projected_picks': _proj}}
+        except Exception:
+            self.team_reports = None
+        self.picks_made = session.materialize_picks(league)
+        try:
+            self.current_pick = int(session.current_pick or 0)
+        except Exception:
+            self.current_pick = 0
+        # Restore the RNG stream exactly where it was (getstate/setstate),
+        # so the resumed draft is the SAME draft, not a lookalike.
+        try:
+            self._draft_rng = random.Random()
+            self._draft_rng.setstate(session.rng_state)
+        except Exception:
+            self._draft_rng = random.Random(
+                self.dn.stable_draft_seed(session.year))
+        # current_round follows the cursor (1-based, clamp to last round).
+        try:
+            if 0 <= self.current_pick < len(self.draft_order):
+                self.current_round = int(
+                    self.draft_order[self.current_pick][0] or 1)
+            else:
+                self.current_round = 7
+        except Exception:
+            self.current_round = 7
+        self._rebuild_results_from_session()
+        try:
+            self._render_scouting_report()
+        except Exception:
+            pass
+        self._ticker("Welcome back. The draft resumes where it left off -- "
+                     f"pick #{self.current_pick + 1} "
+                     f"({len(self.picks_made)} of {len(self.draft_order)} "
+                     "made).")
+        for _issue in (self._reentry_issues or [])[:5]:
+            self._ticker("Re-entry check: " + str(_issue))
+        try:
+            self._refresh_shortlist()
+        except Exception:
+            pass
+        self._draft_started = True
+        self.process_draft_pick()
+
+    def _rebuild_results_from_session(self):
+        """Rebuild the results tree from the session's pick journal."""
+        try:
+            self.draft_results_tree.delete(
+                *self.draft_results_tree.get_children())
+        except Exception:
+            return
+        try:
+            _maps = self.app.tree_maps.setdefault(
+                self.draft_results_tree, {})
+        except Exception:
+            _maps = {}
+        for team_name, overall, player in sorted(
+                self.picks_made, key=lambda t: t[1]):
+            # Mirror execute_pick's insert exactly (5 columns, pot tag).
+            try:
+                pos = player.primary_position.value
+            except Exception:
+                pos = "?"
+            try:
+                pot_grade = self._GRADE_BASE.get(
+                    str(getattr(player, 'potential_grade', 'C')).strip(),
+                    'C')
+            except Exception:
+                pot_grade = 'C'
+            try:
+                _iid = self.draft_results_tree.insert(
+                    '', 0,
+                    values=(overall, team_name,
+                            getattr(player, 'full_name', '?'), pos,
+                            getattr(player, 'potential_grade', '?')),
+                    tags=(f"pot_{pot_grade}",))
+                try:
+                    _maps[_iid] = player
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
+    def _sync_session_owners(self):
+        """Mirror mid-draft pick trades into the session journal so a
+        re-entry sees the same owners this view does."""
+        try:
+            sess = self._session
+            if sess is None:
+                return
+            for i, entry in enumerate(self.draft_order or []):
+                try:
+                    _r, _t, _dp = entry
+                    name = str(getattr(_t, 'team_name', '') or '')
+                except Exception:
+                    continue
+                try:
+                    if name and i < len(sess.slots):
+                        sess.slots[i]['owner'] = name
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _show_conducted_state(self, year):
+        """Honest terminal state for a year already conducted (war room or
+        headless): never start a fresh draft over it."""
+        self._draft_started = True
+        try:
+            self.draft_status_label.configure(
+                text=f"{year} Draft Complete")
+        except Exception:
+            pass
+        try:
+            self.clock_label.configure(text="--")
+            self.pick_info_label.configure(
+                text="This draft was already conducted.")
+        except Exception:
+            pass
+        for _b in ('draft_button', 'auto_button', 'trade_pick_button',
+                    'sim_pick_button'):
+            try:
+                getattr(self, _b).configure(state='disabled')
+            except Exception:
+                pass
+        try:
+            self.grades_button.configure(state='normal')
+        except Exception:
+            pass
+        self._ticker(f"The {year} NHL Entry Draft was already conducted. "
+                     "Use Draft Grades to review it -- no new draft was "
+                     "started.")
+        # Grades come from history, never recomputed: recomputing from the
+        # empty pick log of a re-attached view would overwrite the
+        # persisted grades with nothing.
+        try:
+            _hist = getattr(self.app.league, 'draft_grades_history',
+                            None) or {}
+            _grades = [tuple(g) for g in (_hist.get(str(int(year))) or [])]
+        except Exception:
+            _grades = []
+        if _grades:
+            self._show_grades_popup(_grades)
+
+    def _show_unavailable_state(self, reason):
+        """Honest degraded state: the draft can't run, so say so and stop.
+        Never silently restart."""
+        self._draft_started = True
+        try:
+            self.draft_status_label.configure(text="Draft Unavailable")
+        except Exception:
+            pass
+        try:
+            self.clock_label.configure(text="--")
+            self.pick_info_label.configure(text=str(reason))
+        except Exception:
+            pass
+        for _b in ('draft_button', 'auto_button', 'trade_pick_button',
+                    'sim_pick_button'):
+            try:
+                getattr(self, _b).configure(state='disabled')
+            except Exception:
+                pass
+        self._ticker(str(reason))
+
+    # ------------------------------------------------------------------
     def _ticker(self, line):
-        self.ticker.insert(0, line)
+        # The ticker is a non-wrapping Listbox: fold long lines (e.g. the
+        # draft-unavailable reason) into multiple rows so nothing is cut
+        # off mid-sentence.
+        for _ln in self._wrap_ticker_line(str(line)):
+            self.ticker.insert(0, _ln)
         if self.ticker.size() > 120:
             self.ticker.delete(120, tk.END)
+
+    def _wrap_ticker_line(self, line):
+        """Split a ticker line into rows that fit the listbox width."""
+        try:
+            import textwrap
+            from tkinter import font as _tkfont
+            _w = self.ticker.winfo_width()
+            if _w > 1:
+                _f = _tkfont.Font(font=self.ticker.cget("font"))
+                _avg = _f.measure("0123456789abcdefghijklmnopqrstuvwxyz") / 36
+                _chars = max(20, int(_w / _avg) - 2) if _avg > 0 else 42
+            else:
+                _chars = 42
+            _parts = textwrap.wrap(line, width=_chars,
+                                   break_long_words=False,
+                                   break_on_hyphens=False) or [line]
+        except Exception:
+            _parts = [line]
+        # insert(0, ...) puts each new row on top, so feed the parts in
+        # reverse to keep reading order.
+        return list(reversed(_parts))
 
     def _available_prospects(self):
         return sorted(self.app.league.draft_prospects,
@@ -6411,7 +6904,8 @@ class DraftView(ctk.CTkFrame):
         self.shortlist.selection_clear(0, tk.END)
         self.shortlist.selection_set(idx)
         player = self._shortlist_players[idx]
-        PlayerContextMenu(self.parent).show_context_menu(event, player)
+        PlayerContextMenu(self).show_context_menu(
+            event, player, quick_scout=True)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
@@ -6621,6 +7115,9 @@ class DraftView(ctk.CTkFrame):
             try:
                 from draft_day_trades import on_clock_check
                 if on_clock_check(self):
+                    # The call may have moved the pick; mirror the new
+                    # owners into the session journal.
+                    self._sync_session_owners()
                     return True  # order changed; step again
             except Exception:
                 pass
@@ -6670,6 +7167,9 @@ class DraftView(ctk.CTkFrame):
                 if on_clock_check(self):
                     round_num, team_on_clock, _dp = \
                         self.draft_order[self.current_pick]
+                    # The call may have moved the pick; mirror the new
+                    # owners into the session journal.
+                    self._sync_session_owners()
             except Exception:
                 pass
         if round_num != self.current_round:
@@ -6685,7 +7185,9 @@ class DraftView(ctk.CTkFrame):
             try:
                 from draft_day_trades import incoming_offer_for_user
                 incoming_offer_for_user(self)
-                # The call may have moved the pick; re-read the clock.
+                # The call may have moved the pick; re-read the clock and
+                # mirror the new owners into the session journal.
+                self._sync_session_owners()
                 if self.current_pick < len(self.draft_order):
                     _r2, team_on_clock, _dp = \
                         self.draft_order[self.current_pick]
@@ -6974,6 +7476,19 @@ class DraftView(ctk.CTkFrame):
             return False
 
     def execute_pick(self, team, player, reach=False, steal=False):
+        # BUG-2 fix: transactional commit -- the overall pick number is the
+        # idempotency key. A repeat call for an already-committed overall
+        # (stale re-entry, double event) is rejected, never double-applied.
+        try:
+            _ov = int(self.current_pick) + 1
+        except Exception:
+            return False
+        try:
+            _sess = self._session
+            if _sess is not None and _sess.has_pick(_ov):
+                return False
+        except Exception:
+            pass
         round_num, _t, _dp = self.draft_order[self.current_pick]
         overall = self.current_pick + 1
         if self._redraft_banned(team, player):
@@ -7010,7 +7525,7 @@ class DraftView(ctk.CTkFrame):
             overall, team.team_name, player.full_name, pos,
             getattr(player, 'potential_grade', '?')),
             tags=(f"pot_{pot_grade}",))
-        self.parent.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
+        self.app.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
                                          round_num, reach=reach, steal=steal,
                                          rng=self._draft_rng))
@@ -7043,10 +7558,30 @@ class DraftView(ctk.CTkFrame):
         except Exception:
             pass
         self.current_pick += 1
+        # BUG-2 fix: journal the commit on the league-owned session (the
+        # durable record across view destruction). record_pick is
+        # idempotent per overall; the cursor and RNG stream persist too.
+        try:
+            if self._session is not None:
+                self._session.record_pick(
+                    overall, team.team_name, getattr(player, 'id', None))
+                self._session.current_pick = self.current_pick
+                try:
+                    self._session.rng_state = self._draft_rng.getstate()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.selected_prospect = None
         self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
+        # The research strip names available prospects: keep it in step
+        # with the pool after every pick.
+        try:
+            self._refresh_draft_research()
+        except Exception:
+            pass
         # Keep the board scrolled to the newest pick (skip during sim --
         # the sim loop drives the draft and scroll churn is pure noise).
         if not self._sim_active:
@@ -7057,6 +7592,7 @@ class DraftView(ctk.CTkFrame):
         # next pick is scheduled/driven from here.
         if not self._sim_active:
             self.process_draft_pick()
+        return True
 
     # ------------------------------------------------------------------
     def trade_current_pick(self):
@@ -7337,6 +7873,16 @@ class DraftView(ctk.CTkFrame):
                 _lg, _dy, self.picks_made)
         except Exception:
             grades = self.dn.draft_grades(self.picks_made)
+        self._show_grades_popup(grades)
+
+    def _show_grades_popup(self, grades):
+        """Render the Draft Grades dialog from precomputed `grades`.
+
+        Split out of show_grades so a completed draft's persisted grades
+        can be shown without recomputing (recomputing from an empty pick
+        log would overwrite the history with nothing).
+        """
+        ct = self._ct
         dlg = InGamePopup(self)
         dlg.title("Draft Grades")
         dlg.geometry("560x680")
@@ -7461,6 +8007,18 @@ class DraftView(ctk.CTkFrame):
             _dy = int(getattr(_lg, 'draft_prospects_year', None)
                       or getattr(_lg, 'season_year', 0) or 0)
             self.dn.mark_draft_conducted(_lg, _dy)
+            # BUG-2 fix: the draft is done -- close the league-owned
+            # session so any re-entry shows the conducted state, never a
+            # fresh draft.
+            try:
+                if self._session is not None:
+                    self._session.completed = True
+            except Exception:
+                pass
+            try:
+                _lg.entry_draft_session = None
+            except Exception:
+                pass
         except Exception:
             pass
         # Stop the single-player draft clock (item 1).
@@ -10941,7 +11499,10 @@ class TradeBlockWindow(InGamePopup):
         
         # Initialize data
         self.trade_block_players = []
-        self.interested_teams = {}
+        # Maps interest-tree item ids -> (listing dict, team name, player
+        # name) for the real-store-backed Interest tab. The listing dicts
+        # live in league.trade_market; declines mutate them (the model).
+        self._interest_row_map = {}
         
         self.create_widgets()
         self.load_trade_block()
@@ -11209,32 +11770,242 @@ class TradeBlockWindow(InGamePopup):
         
         self.update_trade_block_display()
     
+    # ------------------------------------------------------------------
+    # Interest tab: real-store backing (trade_market). The canonical store
+    # for AI interest in the user's block players is league.trade_market's
+    # "listings": open listings with source == 'user_block' whose seller is
+    # the user's team. Per-team interest rows persist ON the listing
+    # (listing['ai_interest']); declines persist there too
+    # (status 'Declined' + listing['declined_teams']) so re-renders never
+    # resurrect them. All helpers are fail-safe: [] / None on any failure.
+    # ------------------------------------------------------------------
+    def _tbw_market_ctx(self):
+        """(trade_market module, league, user_team) or (None, None, None)."""
+        try:
+            import trade_market as tm
+        except Exception:
+            return None, None, None
+        try:
+            app = self.parent
+            league = getattr(app, 'league', None)
+            user_team = getattr(app, 'user_team', None)
+            if league is None or user_team is None:
+                return None, None, None
+            if getattr(user_team, 'team_name', None) is None:
+                return None, None, None
+            return tm, league, user_team
+        except Exception:
+            return None, None, None
+
+    def _tbw_user_listings(self):
+        """Open user_block listings for the user's team from the real store."""
+        tm, league, user_team = self._tbw_market_ctx()
+        if tm is None:
+            return []
+        try:
+            market = tm.get_market(league)
+            uname = user_team.team_name
+            return [li for li in tm._active_listings(market, team_name=uname)
+                    if isinstance(li, dict) and li.get('source') == 'user_block']
+        except Exception:
+            return []
+
+    def _tbw_interest_rows(self):
+        """[(player, listing, row)] for non-declined AI interest, real store."""
+        tm, league, _ut = self._tbw_market_ctx()
+        rows = []
+        if tm is None:
+            return rows
+        try:
+            for li in self._tbw_user_listings():
+                try:
+                    player, _team = tm.resolve_player(league, li.get('player_id'))
+                except Exception:
+                    player = None
+                if player is None:
+                    continue
+                for r in (li.get('ai_interest') or []):
+                    if not isinstance(r, dict):
+                        continue
+                    if r.get('status') == 'Declined':
+                        continue
+                    rows.append((player, li, r))
+        except Exception:
+            pass
+        return rows
+
+    def _tbw_interest_level(self, tm, app, bidder):
+        """Genuine interest intensity from situational buyer risk (0..1)."""
+        try:
+            d = float(tm._buyer_desperation(app, bidder) or 0.0)
+        except Exception:
+            d = 0.0
+        if d >= 0.6:
+            return 'High'
+        if d >= 0.3:
+            return 'Medium'
+        return 'Low'
+
+    def _tbw_open_neg_count(self):
+        """Open negotiations involving a user block player (real store).
+
+        Counts genuinely open trade negotiations (trade_negotiation._store)
+        whose assets include a player currently on the block. None when the
+        store is unavailable.
+        """
+        try:
+            import trade_negotiation as tneg
+        except Exception:
+            return None
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            if user_team is None:
+                return None
+            pids = set()
+            for entry in (getattr(user_team, 'trade_block', None) or []):
+                try:
+                    pid = getattr(entry, 'id', None)
+                    if pid is not None:
+                        pids.add(pid)
+                except Exception:
+                    continue
+            if not pids:
+                return 0
+            n = 0
+            for neg in (tneg._store(app) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') in pids
+                           for a in assets):
+                        n += 1
+                except Exception:
+                    continue
+            return n
+        except Exception:
+            return None
+
+    def _tbw_in_talks(self, player, team_name):
+        """Is there an open negotiation with team_name involving player?"""
+        try:
+            import trade_negotiation as tneg
+            pid = getattr(player, 'id', None)
+            for neg in (tneg._store(self.parent) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    if getattr(neg, 'partner_team_name', '') != team_name:
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') == pid
+                           for a in assets):
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
+
     def generate_trade_interest(self):
-        """Generate interest from other teams."""
-        if not hasattr(self.parent.user_team, 'trade_block') or not self.parent.user_team.trade_block:
-            messagebox.showinfo("No Players", "Add players to your trade block first.")
-            return
-        
-        import random
-        
-        # Generate interest for each player on trade block
-        for player in self.parent.user_team.trade_block:
-            # Random teams might be interested
-            interested_teams = random.sample(self.parent.league.teams, random.randint(1, 4))
-            for team in interested_teams:
-                if team != self.parent.user_team:
-                    if player not in self.interested_teams:
-                        self.interested_teams[player] = []
-                    
-                    interest_level = random.choice(['Low', 'Medium', 'High'])
-                    self.interested_teams[player].append({
-                        'team': team,
-                        'interest_level': interest_level,
-                        'status': 'Active'
-                    })
-        
-        self.update_interest_display()
-        messagebox.showinfo("Interest Generated", "Trade interest has been generated for your players!")
+        """Run the genuine AI interest computation for each block player.
+
+        Ensures every block player has a listing in the real trade_market
+        store (source 'user_block'), then runs trade_market._find_bidders --
+        buyer fit, destination appeal, situational buyer risk, person-conscious
+        interest, clause gating -- and persists the interested teams on the
+        listing itself. Teams the machinery rejects simply don't appear;
+        nothing is fabricated. Fail-safe: any exception leaves the window
+        functional and writes nothing.
+        """
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            block = list(getattr(user_team, 'trade_block', None) or []) \
+                if user_team is not None else []
+            if not block:
+                messagebox.showinfo("No Players",
+                                    "Add players to your trade block first.")
+                return
+            import trade_market as tm
+            league = getattr(app, 'league', None)
+            if league is None:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "No interest data available (no league loaded).")
+                return
+            market = tm.get_market(league)
+            today = tm._today(app)
+            heat = tm.deadline_heat(app, league, today)
+            params = tm._heat_params(heat)
+            ramp = heat >= 0.5
+            # Mirror the manual block into real listings (no-op for players
+            # already listed; pulls listings for players removed from the
+            # block). This is the same sync the daily market driver uses.
+            tm._sync_user_block(app, league, market, today, params)
+            listings = self._tbw_user_listings()
+            day = tm._iso(today)
+            checked, new = 0, 0
+            for li in listings:
+                try:
+                    bidders = tm._find_bidders(app, league, li, today, ramp)
+                except Exception:
+                    bidders = []
+                checked += 1
+                try:
+                    declined = set(li.get('declined_teams') or [])
+                    rows = [r for r in (li.get('ai_interest') or [])
+                            if isinstance(r, dict)]
+                    by_team = {r.get('team'): r for r in rows}
+                    live = set()
+                    for team in bidders:
+                        tname = getattr(team, 'team_name', '') or ''
+                        if not tname or tname in declined:
+                            continue
+                        live.add(tname)
+                        level = self._tbw_interest_level(tm, app, team)
+                        row = by_team.get(tname)
+                        if row is None:
+                            row = {'team': tname, 'interest_level': level,
+                                   'status': 'Active', 'day': day}
+                            rows.append(row)
+                            new += 1
+                        else:
+                            row['interest_level'] = level
+                            row['day'] = day
+                            if row.get('status') != 'Declined':
+                                row['status'] = 'Active'
+                    # Teams no longer interested drop off; declined teams stay
+                    # declined so a re-check never resurrects them.
+                    li['ai_interest'] = [
+                        r for r in rows
+                        if r.get('team') in live
+                        or r.get('status') == 'Declined']
+                except Exception:
+                    continue
+            self.update_trade_block_display()
+            self.update_interest_display()
+            if checked == 0:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    "Your block players could not be listed right now -- "
+                    "no interest data was changed.")
+            else:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    f"Checked {checked} listed player(s) against every rival GM.\n"
+                    f"{new} new expression(s) of interest recorded.")
+        except Exception:
+            try:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "Could not compute trade interest right now -- "
+                    "no data was changed.")
+            except Exception:
+                pass
     
     def update_trade_block_display(self):
         """Update the trade block display."""
@@ -11245,6 +12016,16 @@ class TradeBlockWindow(InGamePopup):
 
         # Add trade block players
         trade_block = getattr(self.parent.user_team, 'trade_block', [])
+        # Real interest counts: active AI interest rows per player from the
+        # trade_market store (never fabricated).
+        _interest_counts = {}
+        try:
+            for _p, _li, _r in self._tbw_interest_rows():
+                _pid = getattr(_p, 'id', None)
+                if _pid is not None:
+                    _interest_counts[_pid] = _interest_counts.get(_pid, 0) + 1
+        except Exception:
+            pass
         for player in trade_block:
             salary = getattr(player.contract, 'salary', 750000) if player.contract else 750000
             years_left = getattr(player.contract, 'years_remaining', 0) if player.contract else 0
@@ -11255,8 +12036,9 @@ class TradeBlockWindow(InGamePopup):
             except Exception:
                 pos = '?'
             
-            # Calculate interest level
-            interest_count = len(self.interested_teams.get(player, []))
+            # Interest level from the real store (active AI interest rows on
+            # this player's open user_block listing).
+            interest_count = _interest_counts.get(getattr(player, 'id', None), 0)
             if interest_count == 0:
                 interest_level = "None"
             elif interest_count <= 2:
@@ -11281,33 +12063,76 @@ class TradeBlockWindow(InGamePopup):
             "Your trade block is empty \u2014 add players to start fielding offers")
     
     def update_interest_display(self):
-        """Update the interest display."""
-        # Clear current items
-        for item in self.interest_tree.get_children():
-            self.interest_tree.delete(item)
-        
-        # Update summary
-        total_players = len(getattr(self.parent.user_team, 'trade_block', []))
-        total_interest = sum(len(interests) for interests in self.interested_teams.values())
-        
-        summary_text = f"Players on Trade Block: {total_players}\n"
-        summary_text += f"Total Interest Expressions: {total_interest}\n"
-        summary_text += f"Active Negotiations: 0\n"  # Would track actual negotiations
-        
-        self.interest_summary.delete(1.0, tk.END)
-        self.interest_summary.insert(1.0, summary_text)
-        
-        # Add detailed interest
-        for player, interests in self.interested_teams.items():
-            for interest in interests:
-                self.interest_tree.insert('', 'end', values=(
-                    player.full_name,
-                    interest['team'].team_name,
-                    interest['interest_level'],
-                    "Considering",  # Your interest level
-                    interest['status']
+        """Render the Interest tab as a VIEW over the real trade_market store.
+
+        Rows come from open user_block listings' persisted ai_interest
+        (declined teams filtered -- their decline lives in the model).
+        'Active Negotiations' counts genuinely open negotiations involving a
+        block player. Degrades to an honest empty state when the store is
+        unavailable. Never raises.
+        """
+        try:
+            # Clear current items
+            for item in self.interest_tree.get_children():
+                self.interest_tree.delete(item)
+            self._interest_row_map = {}
+
+            tm, league, user_team = self._tbw_market_ctx()
+            total_players = len(getattr(user_team, 'trade_block', [])
+                                if user_team is not None else [])
+            if tm is None:
+                rows = []
+                neg_n = None
+            else:
+                rows = self._tbw_interest_rows()
+                neg_n = self._tbw_open_neg_count()
+
+            summary_text = f"Players on Trade Block: {total_players}\n"
+            summary_text += f"Total Interest Expressions: {len(rows)}\n"
+            if neg_n is None:
+                summary_text += "Active Negotiations: n/a\n"
+            else:
+                summary_text += f"Active Negotiations: {neg_n}\n"
+            if tm is None:
+                summary_text += "No interest data available.\n"
+
+            self.interest_summary.delete(1.0, tk.END)
+            self.interest_summary.insert(1.0, summary_text)
+
+            # Add detailed interest from the real store
+            for player, listing, row in rows:
+                team_name = row.get('team', '?')
+                your_interest = ("In talks"
+                                 if self._tbw_in_talks(player, team_name)
+                                 else "\u2014")
+                try:
+                    offer = listing.get('user_offer') or {}
+                except Exception:
+                    offer = {}
+                status = ("Offer sent" if offer.get('team') == team_name
+                          else row.get('status', 'Active'))
+                iid = self.interest_tree.insert('', 'end', values=(
+                    getattr(player, 'full_name', '?'),
+                    team_name,
+                    row.get('interest_level', 'Low'),
+                    your_interest,
+                    status,
                 ))
-        set_tree_empty_state(self.interest_tree, "No trade interest yet")
+                self._interest_row_map[iid] = (
+                    listing, team_name, getattr(player, 'full_name', '?'))
+            if tm is None:
+                set_tree_empty_state(self.interest_tree,
+                                     "No interest data available")
+            elif not rows:
+                set_tree_empty_state(
+                    self.interest_tree,
+                    "No AI GMs are showing interest -- use Generate Interest "
+                    "to check")
+            else:
+                set_tree_empty_state(self.interest_tree)
+        except Exception:
+            # Fail-safe: leave whatever rendered; the window stays usable.
+            pass
     
     def get_other_teams(self):
         """Get list of other teams."""
@@ -11383,16 +12208,63 @@ class TradeBlockWindow(InGamePopup):
         self.on_team_selected()
     
     def express_interest(self, event=None):
-        """Express interest in a player."""
-        selection = self.other_tree.selection()
-        if selection:
-            item = selection[0]
-            values = self.other_tree.item(item)['values']
+        """Record genuine interest in another team's block player.
+
+        Adds the player to your unified trade targets
+        (trade_market.add_target -- the canonical user-side interest store
+        read by the scouting/targets surfaces). Never fabricates an AI
+        response. Never raises; failures report honestly.
+        """
+        try:
+            selection = self.other_tree.selection()
+            if not selection:
+                return
+            values = self.other_tree.item(selection[0])['values']
             team_name, player_name = values[0], values[1]
-            
-            messagebox.showinfo("Interest Expressed", 
-                                 f"You have expressed interest in {player_name} from {team_name}.\n\n"
-                                 f"The team will consider your interest and may respond with trade proposals.")
+            player = None
+            try:
+                league = getattr(self.parent, 'league', None)
+                for team in (getattr(league, 'teams', None) or []):
+                    if getattr(team, 'team_name', '') != team_name:
+                        continue
+                    for p in (getattr(team, 'roster', None) or []):
+                        if getattr(p, 'full_name', '') == player_name:
+                            player = p
+                            break
+                    break
+            except Exception:
+                player = None
+            if player is None:
+                messagebox.showwarning(
+                    "Interest not recorded",
+                    f"Could not find {player_name} on {team_name}'s roster -- "
+                    "nothing was recorded.")
+                return
+            try:
+                import trade_market as tm
+                added = tm.add_target(
+                    player, source="user",
+                    note=f"Trade interest expressed ({team_name} block)")
+            except Exception:
+                added = False
+            if added:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"Interest in {player_name} ({team_name}) recorded -- "
+                    f"added to your trade targets.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+            else:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"{player_name} is already on your trade targets -- "
+                    f"interest already recorded.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+        except Exception:
+            try:
+                messagebox.showwarning("Interest not recorded",
+                                       "Could not record interest right now.")
+            except Exception:
+                pass
     
     def start_trade_negotiation(self):
         """Start trade negotiation."""
@@ -11409,15 +12281,59 @@ class TradeBlockWindow(InGamePopup):
                              f"This would open the trade negotiation interface.")
     
     def decline_interest(self):
-        """Decline trade interest."""
-        selection = self.interest_tree.selection()
-        if not selection:
-            messagebox.showwarning("No Selection", "Please select an interest to decline.")
-            return
-        
-        # Remove from interest tracking
-        self.interest_tree.delete(selection[0])
-        messagebox.showinfo("Interest Declined", "Trade interest has been declined.")
+        """Decline AI interest IN THE MODEL.
+
+        Marks the team's interest row 'Declined' on the real listing and
+        records the team in the listing's declined_teams, so future interest
+        checks never resurrect it. Re-render filters declined rows. Open
+        negotiations/offers are separate real state and are left alone (an
+        open offer still needs an answer in the inbox). Never raises; the
+        model is only written after the selected row resolves.
+        """
+        try:
+            selection = self.interest_tree.selection()
+            if not selection:
+                messagebox.showwarning("No Selection",
+                                       "Please select an interest to decline.")
+                return
+            ref = (self._interest_row_map or {}).get(selection[0])
+            if ref is None:
+                # Stale selection (e.g. pre-refresh) -- just re-render.
+                self.update_interest_display()
+                return
+            listing, team_name, player_name = ref
+            try:
+                has_offer = False
+                try:
+                    offer = listing.get('user_offer') or {}
+                    has_offer = offer.get('team') == team_name
+                except Exception:
+                    pass
+                for r in (listing.get('ai_interest') or []):
+                    if isinstance(r, dict) and r.get('team') == team_name \
+                            and r.get('status') != 'Declined':
+                        r['status'] = 'Declined'
+                dteams = listing.setdefault('declined_teams', [])
+                if team_name not in dteams:
+                    try:
+                        dteams.append(team_name)
+                    except Exception:
+                        pass
+            except Exception:
+                messagebox.showwarning("Decline failed",
+                                       "Could not decline that interest -- "
+                                       "no data was changed.")
+                return
+            self.update_interest_display()
+            msg = (f"Declined {team_name}'s interest in {player_name}. "
+                   f"They won't reappear on future interest checks.")
+            if has_offer:
+                msg += ("\n\nNote: they already have an open offer on this "
+                        "player -- answer it from your inbox if you want to "
+                        "walk away from the table too.")
+            messagebox.showinfo("Interest Declined", msg)
+        except Exception:
+            pass
 
 class WaiversView(ctk.CTkFrame):
     def __init__(self, parent, app=None):

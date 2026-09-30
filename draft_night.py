@@ -265,6 +265,571 @@ def mark_draft_conducted(league, draft_year):
         pass
 
 
+# ---------------------------------------------------------------------------
+# League-owned war-room session (BUG-2 fix, 2026-09-30)
+#
+# The interactive entry draft's mutable state -- the pick order with live
+# owners, the cursor, the committed pick log, the per-team boards and the
+# per-draft RNG stream -- lives here, on the league
+# (league.entry_draft_session), never on the DraftView. Destroying the
+# view detaches; a rebuilt view re-attaches and resumes exactly where the
+# draft left off, instead of starting a fresh draft (which silently
+# restarted the order, duplicated picks and orphaned prospects).
+#
+# Picks commit transactionally: record_pick() is idempotent per overall
+# pick number, so re-entry or a double event can never double-process a
+# slot. Boards persist as prospect-id orderings (never re-rolled), and
+# the RNG stream persists via getstate/setstate, so a resumed draft
+# continues the exact same draft rather than a lookalike.
+# ---------------------------------------------------------------------------
+
+class EntryDraftSession:
+    """League-owned journal of an in-progress entry-draft war room."""
+
+    VERSION = 1
+
+    def __init__(self):
+        self.year = 0
+        # slots: [{overall:int, round:int, owner:str (team name),
+        #          pick_id:str|None (game_classes DraftPick.id)}]
+        self.slots = []
+        self.current_pick = 0  # index into slots
+        # picks: [{overall:int, team:str, player_id}] committed, in order
+        self.picks = []
+        # boards: {team_name: [prospect ids in that team's board order]}
+        self.boards = {}
+        self.rng_state = None
+        self.completed = False
+
+    # -- construction -----------------------------------------------
+    @classmethod
+    def begin(cls, league, year, draft_order, team_reports, rng):
+        """Snapshot a freshly built war-room draft into a session.
+
+        draft_order: [[round_num, team, draft_pick], ...] as built by
+        DraftView.start_draft. team_reports: {name: {"board": [...]}} or
+        None. rng: the per-draft random.Random.
+        """
+        s = cls()
+        s.year = int(year)
+        for i, entry in enumerate(draft_order or []):
+            try:
+                rnd, team, dp = entry
+            except Exception:
+                continue
+            try:
+                owner = str(getattr(team, 'team_name', '') or '')
+            except Exception:
+                owner = ''
+            try:
+                pid = str(getattr(dp, 'id', '') or '') or None
+            except Exception:
+                pid = None
+            try:
+                rnd = int(rnd or 0)
+            except Exception:
+                rnd = 0
+            s.slots.append({'overall': i + 1, 'round': rnd,
+                            'owner': owner, 'pick_id': pid})
+        try:
+            s.rng_state = rng.getstate() if rng is not None else None
+        except Exception:
+            s.rng_state = None
+        try:
+            for name, rep in (team_reports or {}).items():
+                board = (rep or {}).get('board') or []
+                ids = []
+                for p in board:
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    if pid is not None:
+                        ids.append(pid)
+                s.boards[str(name)] = ids
+        except Exception:
+            pass
+        return s
+
+    # -- liveness ----------------------------------------------------
+    def is_live_for(self, year) -> bool:
+        """True when this session is an in-progress draft for `year`."""
+        try:
+            return (not self.completed
+                    and int(self.year) == int(year)
+                    and 0 <= int(self.current_pick) < len(self.slots))
+        except Exception:
+            return False
+
+    def is_complete(self) -> bool:
+        try:
+            return bool(self.completed) or \
+                int(self.current_pick) >= len(self.slots)
+        except Exception:
+            return True
+
+    # -- transactional pick commit -----------------------------------
+    def has_pick(self, overall) -> bool:
+        try:
+            o = int(overall)
+        except Exception:
+            return False
+        return any(int(p.get('overall', -1)) == o for p in self.picks)
+
+    def record_pick(self, overall, team_name, player_id) -> bool:
+        """Record a committed pick. Idempotent per overall: returns False
+        (and records nothing) when this overall is already logged."""
+        try:
+            o = int(overall)
+        except Exception:
+            return False
+        if self.has_pick(o):
+            return False
+        self.picks.append({'overall': o, 'team': str(team_name or ''),
+                           'player_id': player_id})
+        return True
+
+    # -- owner sync (mid-draft pick trades) ----------------------------
+    def sync_owners_from_league(self, league):
+        """Repoint slot owners from the live pick objects.
+
+        A pick traded mid-draft changes draft_pick.current_team; the
+        session journal follows it so re-entry shows the real owners.
+        Already-committed picks keep their selecting team in the log.
+        """
+        try:
+            picks_by_id = self._pick_index(league)
+            for slot in self.slots:
+                pid = slot.get('pick_id')
+                if not pid:
+                    continue
+                dp = picks_by_id.get(str(pid))
+                if dp is None:
+                    continue
+                owner = self._pick_owner_name(dp)
+                if owner:
+                    slot['owner'] = owner
+        except Exception:
+            pass
+
+    # -- materialization (view re-attachment) --------------------------
+    def _team_index(self, league):
+        idx = {}
+        for t in (getattr(league, 'teams', None) or []):
+            try:
+                idx[str(getattr(t, 'team_name', ''))] = t
+            except Exception:
+                continue
+        return idx
+
+    def _prospect_index(self, league):
+        """Every draftable prospect by id: the live class plus any
+        prospect already assigned to a team (defensive; picks resolve
+        through the team lists first)."""
+        idx = {}
+        try:
+            pool = list(getattr(league, 'draft_prospects', None) or [])
+        except Exception:
+            pool = []
+        for p in pool:
+            try:
+                pid = getattr(p, 'id', None)
+            except Exception:
+                pid = None
+            if pid is not None:
+                idx.setdefault(pid, p)
+        for t in (getattr(league, 'teams', None) or []):
+            for attr in ('prospects', 'roster', 'ahl_roster'):
+                try:
+                    lst = getattr(t, attr, None) or []
+                except Exception:
+                    lst = []
+                for p in lst:
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    if pid is not None:
+                        idx.setdefault(pid, p)
+        return idx
+
+    def _pick_index(self, league):
+        idx = {}
+        for t in (getattr(league, 'teams', None) or []):
+            try:
+                dpd = getattr(t, 'draft_picks', None) or {}
+            except Exception:
+                dpd = {}
+            try:
+                vals = dpd.values() if isinstance(dpd, dict) else dpd
+            except Exception:
+                vals = []
+            for v in (vals or []):
+                # draft_picks is {year: [DraftPick, ...]}; flatten it.
+                items = v if isinstance(v, list) else [v]
+                for dp in items:
+                    try:
+                        pid = str(getattr(dp, 'id', '') or '')
+                    except Exception:
+                        continue
+                    if pid:
+                        idx[pid] = dp
+        return idx
+
+    @staticmethod
+    def _pick_owner_name(dp) -> str:
+        """current_team may be a team-name string (canonical) or a Team."""
+        try:
+            cur = getattr(dp, 'current_team', '')
+            name = getattr(cur, 'team_name', cur)
+            return str(name or '').strip()
+        except Exception:
+            return ''
+
+    def materialize_order(self, league):
+        """Rebuild the view's [[round, team, draft_pick], ...] order."""
+        teams = self._team_index(league)
+        picks = self._pick_index(league)
+        order = []
+        for slot in self.slots:
+            try:
+                rnd = int(slot.get('round', 0) or 0)
+            except Exception:
+                rnd = 0
+            team = teams.get(str(slot.get('owner', '')))
+            dp = picks.get(str(slot.get('pick_id') or ''))
+            order.append([rnd, team, dp])
+        return order
+
+    def materialize_boards(self, league):
+        """Rebuild {team_name: [prospects in board order]}."""
+        prospects = self._prospect_index(league)
+        out = {}
+        for name, ids in (self.boards or {}).items():
+            out[str(name)] = [prospects[i] for i in (ids or [])
+                              if i in prospects]
+        return out
+
+    def materialize_picks(self, league):
+        """Rebuild [(team_name, overall, player), ...] for the results log."""
+        prospects = self._prospect_index(league)
+        out = []
+        for p in sorted(self.picks,
+                        key=lambda r: int(r.get('overall', 0) or 0)):
+            try:
+                player = prospects.get(p.get('player_id'))
+            except Exception:
+                player = None
+            if player is None:
+                continue
+            out.append((str(p.get('team', '')), int(p.get('overall', 0)),
+                        player))
+        return out
+
+    # -- audit ---------------------------------------------------------
+    def audit(self, league) -> list:
+        """Honest-state audit: every committed pick's prospect must be on
+        exactly one team's prospect list; no prospect picked twice; slot
+        owners must match the live pick objects. Read-only."""
+        issues = []
+        try:
+            prospects = self._prospect_index(league)
+            # locations per prospect id across team lists
+            locs = {}
+            for t in (getattr(league, 'teams', None) or []):
+                tname = str(getattr(t, 'team_name', '?'))
+                for attr in ('prospects', 'roster', 'ahl_roster'):
+                    try:
+                        lst = getattr(t, attr, None) or []
+                    except Exception:
+                        lst = []
+                    for p in lst:
+                        try:
+                            pid = getattr(p, 'id', None)
+                        except Exception:
+                            pid = None
+                        if pid is not None:
+                            locs.setdefault(pid, []).append(
+                                f"{tname}.{attr}")
+            seen = {}
+            for p in self.picks:
+                pid = p.get('player_id')
+                o = p.get('overall')
+                if pid in seen:
+                    issues.append(f"duplicate pick: prospect taken at "
+                                  f"#{seen[pid]} and #{o}")
+                else:
+                    seen[pid] = o
+                at = locs.get(pid, [])
+                if not at:
+                    nm = '?'
+                    try:
+                        nm = getattr(prospects.get(pid), 'full_name', '?')
+                    except Exception:
+                        pass
+                    issues.append(f"orphaned prospect: #{o} {nm} is on no "
+                                  f"team's list")
+                elif len(at) > 1:
+                    issues.append(f"double-listed prospect: #{o} on "
+                                  f"{', '.join(at)}")
+            # slot owners vs live pick objects
+            picks = self._pick_index(league)
+            for slot in self.slots:
+                pid = slot.get('pick_id')
+                if not pid:
+                    continue
+                dp = picks.get(str(pid))
+                if dp is None:
+                    continue
+                live = self._pick_owner_name(dp)
+                if live and live != slot.get('owner'):
+                    issues.append(
+                        f"slot #{slot.get('overall')}: owner is {live} "
+                        f"but the session still shows {slot.get('owner')}")
+        except Exception as e:
+            issues.append(f"audit failed: {e}")
+        return issues
+
+    # -- save/load journal ----------------------------------------------
+    def to_dict(self) -> dict:
+        return {
+            'version': self.VERSION,
+            'year': int(self.year or 0),
+            'slots': [dict(s) for s in self.slots],
+            'current_pick': int(self.current_pick or 0),
+            'picks': [dict(p) for p in self.picks],
+            'boards': {str(k): list(v)
+                       for k, v in (self.boards or {}).items()},
+            'rng_state': self.rng_state,
+            'completed': bool(self.completed),
+        }
+
+    @classmethod
+    def from_dict(cls, d):
+        """Rebuild from a save journal. Raises ValueError when the
+        journal can't be honored -- the caller degrades to an honest
+        'draft unavailable' state, never a fresh draft."""
+        if not isinstance(d, dict):
+            raise ValueError("entry draft journal is not a dict")
+        s = cls()
+        try:
+            s.year = int(d.get('year', 0) or 0)
+        except Exception:
+            s.year = 0
+        if not s.year:
+            raise ValueError("entry draft journal has no year")
+        slots = d.get('slots') or []
+        if not slots:
+            raise ValueError("entry draft journal has no slots")
+        s.slots = [dict(x) for x in slots if isinstance(x, dict)]
+        try:
+            s.current_pick = int(d.get('current_pick', 0) or 0)
+        except Exception:
+            s.current_pick = 0
+        s.current_pick = max(0, min(s.current_pick, len(s.slots)))
+        picks = d.get('picks') or []
+        s.picks = [dict(x) for x in picks if isinstance(x, dict)]
+        boards = d.get('boards') or {}
+        s.boards = {str(k): list(v) for k, v in boards.items()
+                    if isinstance(v, (list, tuple))}
+        s.rng_state = d.get('rng_state')
+        s.completed = bool(d.get('completed', False))
+        return s
+
+
+def resume_entry_draft_session(league, session, app=None):
+    """Finalize a complete-but-unfinalized war-room session, headlessly.
+
+    The session's remaining slots are normally completed through the
+    war-room view itself -- an in-progress session is NEVER advanced
+    here (no hidden/off-screen AI picks; the draft pauses while its
+    screen is closed). This entry point covers the session whose slots
+    are all picked but never finalized (e.g. a save/load edge): it
+    replays nothing (every overall is already journaled) and runs the
+    standard finalize -- conducted stamp, grades, session release.
+
+    Returns the full pick log [(team_name, overall, player)].
+    """
+    year = int(getattr(session, 'year', 0) or 0)
+    if not year:
+        return []
+    # Structural guarantee: an in-progress session is NEVER advanced
+    # headlessly. Only a session whose slots are all picked gets
+    # finalized here. (The pick-completing loop below is retained for
+    # explicit callers but is unreachable while this guard stands.)
+    if not session.is_complete():
+        try:
+            return list(session.materialize_picks(league))
+        except Exception:
+            return []
+    try:
+        rng = random.Random()
+        rng.setstate(session.rng_state)
+    except Exception:
+        rng = random.Random(stable_draft_seed(year))
+    order = session.materialize_order(league)
+    boards = session.materialize_boards(league)
+    try:
+        import trade_engine as _te
+    except Exception:
+        _te = None
+    ai_manager = getattr(app, 'ai_manager', None) if app is not None else None
+
+    def _redraft_banned(team, player):
+        try:
+            banned_from = str(getattr(player, 'draft_reentry_from', '') or '')
+            return bool(banned_from) and \
+                banned_from == getattr(team, 'team_name', None)
+        except Exception:
+            return False
+
+    def _priority_of(team):
+        try:
+            if ai_manager is not None:
+                strat = ai_manager.get_team_strategy(
+                    getattr(team, 'team_name', ''))
+                return getattr(strat, 'priority', None)
+        except Exception:
+            pass
+        return None
+
+    def _pos_of(player):
+        try:
+            return player.primary_position.value
+        except Exception:
+            return "?"
+
+    try:
+        pool = sorted(list(getattr(league, 'draft_prospects', None) or []),
+                      key=lambda p: getattr(p, 'draft_ranking', 0),
+                      reverse=True)
+    except Exception:
+        pool = []
+    # Dynamic need pivot from the picks already committed in-session.
+    _drafted_by_team = {}
+    try:
+        for _tn, _ov, _pl in session.materialize_picks(league):
+            try:
+                _rnd = next(s.get('round', 7) for s in session.slots
+                            if int(s.get('overall', -1)) == int(_ov))
+            except StopIteration:
+                _rnd = 7
+            _drafted_by_team.setdefault(_tn, []).append(
+                (_pos_of(_pl), _rnd))
+    except Exception:
+        pass
+
+    resumed = []
+    for idx in range(int(session.current_pick or 0), len(order)):
+        entry = order[idx]
+        try:
+            round_num, team, _dp = entry
+        except Exception:
+            continue
+        if team is None:
+            continue
+        overall = idx + 1
+        if session.has_pick(overall):
+            # Already committed (idempotency): advance the cursor past it.
+            session.current_pick = idx + 1
+            continue
+        if not pool:
+            break
+        tname = getattr(team, 'team_name', '')
+        avail = [p for p in pool if not _redraft_banned(team, p)]
+        if not avail:
+            continue
+        needs = []
+        if _te is not None:
+            try:
+                needs = _te.team_needs(team) or []
+            except Exception:
+                needs = []
+        try:
+            board = (boards or {}).get(tname)
+        except Exception:
+            board = None
+        selected, _reach, _steal = ai_select_prospect(
+            team, avail, board, needs, round_num,
+            _priority_of(team), rng, overall=overall,
+            drafted=_drafted_by_team.get(tname))
+        if selected is None:
+            continue
+        # --- state mutation (mirrors DraftView.execute_pick, minus UI) ---
+        try:
+            team.add_player(selected, 'prospects')
+        except Exception:
+            continue
+        try:
+            league.stamp_draft_rights(selected, tname, year)
+        except Exception:
+            pass
+        try:
+            selected.draft_reentry_from = ''
+        except Exception:
+            pass
+        try:
+            pool.remove(selected)
+        except ValueError:
+            pass
+        try:
+            league.draft_prospects.remove(selected)
+        except (ValueError, AttributeError):
+            pass
+        try:
+            pid = getattr(selected, 'id', None)
+        except Exception:
+            pid = None
+        session.record_pick(overall, tname, pid)
+        session.current_pick = idx + 1
+        try:
+            session.rng_state = rng.getstate()
+        except Exception:
+            pass
+        _drafted_by_team.setdefault(tname, []).append(
+            (_pos_of(selected), round_num))
+        resumed.append((tname, overall, selected))
+
+    full_log = session.materialize_picks(league)
+    if not full_log:
+        return []
+    # Finalize like the conductor: leftovers re-enter next year, the
+    # one-draft re-draft ban is spent, the year is stamped conducted and
+    # grades persist. The war room's end_draft does the same for its path.
+    try:
+        for _p in pool:
+            try:
+                _p.draft_reentry_from = ''
+            except Exception:
+                pass
+        league.undrafted_pool = list(pool)
+    except Exception:
+        pass
+    try:
+        league.draft_prospects = []
+    except Exception:
+        pass
+    mark_draft_conducted(league, year)
+    persist_draft_grades(league, year, full_log)
+    try:
+        session.completed = True
+        league.entry_draft_session = None
+    except Exception:
+        pass
+    # News: short honest summary of the resumed (headless-completed) tail.
+    try:
+        _add_news = getattr(app, 'add_news', None) if app is not None else None
+        if _add_news is not None and resumed:
+            _first, _last = resumed[0][1], resumed[-1][1]
+            _add_news(
+                f"The {year} NHL Entry Draft resumed from pick #{_first} "
+                f"and completed ({len(resumed)} picks auto-conducted, "
+                f"#{_first}-#{_last}).")
+    except Exception:
+        pass
+    return full_log
+
+
 def conduct_entry_draft(league, draft_year, app=None, seed=None):
     """Conduct the entry draft with no UI -- the ONE headless conductor.
 
@@ -294,6 +859,30 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
     if not year:
         return []
     if year in _conducted_years(league):
+        return []
+    # BUG-2 fix: a live war-room session owns this draft. The draft is
+    # PAUSED while its screen is closed -- never completed headlessly
+    # (no hidden/off-screen AI picks). An in-progress session defers
+    # honestly: the user resumes it in the war room. Only a session
+    # whose slots are all picked but never finalized is finalized here,
+    # which makes no picks (nothing left to pick).
+    try:
+        _sess = getattr(league, 'entry_draft_session', None)
+    except Exception:
+        _sess = None
+    if _sess is not None and isinstance(_sess, EntryDraftSession) \
+            and int(getattr(_sess, 'year', 0) or 0) == year:
+        if _sess.is_complete():
+            # Covers a session that finished its slots but never
+            # finalized (resume finalizes idempotently, no picks made).
+            return resume_entry_draft_session(league, _sess, app=app)
+        try:
+            print(f"Entry draft {year}: war-room session in progress "
+                  f"({len(_sess.picks)}/{len(_sess.slots)} picks) -- "
+                  "deferring headless conduct; the draft stays parked.",
+                  flush=True)
+        except Exception:
+            pass
         return []
     prospects = list(getattr(league, 'draft_prospects', None) or [])
     if not prospects:

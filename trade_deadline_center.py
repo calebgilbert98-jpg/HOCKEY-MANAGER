@@ -14,6 +14,10 @@ import random
 # Import the trade deadline manager for backend logic
 from trade_deadline_manager import get_deadline_manager
 
+# Media rumor engine: rumors + impact availability generated from real
+# league state (read-only). Replaces the old hardcoded fictional content.
+import media_rumors
+
 
 class TradeDeadlineCenter(InGamePopup):
     """Immersive Trade Deadline Center - Active only on Trade Deadline Day"""
@@ -37,14 +41,11 @@ class TradeDeadlineCenter(InGamePopup):
         
         # Trade Activity Data (now managed by deadline_manager)
         self.recent_trades = []
-        self.trade_rumors = [
-            "Sources: Maple Leafs exploring rental options",
-            "Bruins actively shopping veteran defenseman", 
-            "Rangers looking to add scoring depth",
-            "Lightning cap situation limiting deadline moves",
-            "Avalanche targeting goaltender depth",
-            "Oilers seeking defensive upgrade before deadline"
-        ]
+        # Rumors are generated from real league state by the media rumor
+        # engine (media_rumors.py): stable per in-game day, ~1 in 4 carries
+        # a systematic distortion ("the media is wrong sometimes").
+        self.trade_rumors = media_rumors.generate_rumors(
+            deadline_manager=self.deadline_manager)
         
         # Notification system for breaking news
         self.news_queue = []
@@ -95,6 +96,7 @@ class TradeDeadlineCenter(InGamePopup):
         for rumor in getattr(self, 'trade_rumors', []):
             rumors_box.insert('end', f"\u2022 {rumor}\n\n")
         rumors_box.config(state='disabled')
+        self._rumors_box = rumors_box  # for refresh without rebuilding
 
         tk.Label(panel, text="Buyers / Sellers Watch", bg=self.PANEL_COLOR, fg=self.TEXT_WHITE,
                  font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=12)
@@ -804,23 +806,38 @@ class TradeDeadlineCenter(InGamePopup):
         self._create_impact_players_list(impact_frame)
         
     def _create_movement_stats(self, parent):
-        """Create movement statistics display"""
+        """Create movement statistics display.
+
+        Real deadline-day stats from the deadline manager. When a value is
+        absent (e.g. no deals completed yet), show an honest "--" -- never
+        a fabricated random number.
+        """
         stats_container = tk.Frame(parent, bg=self.PANEL_COLOR)
         stats_container.pack(fill='x', padx=5, pady=5)
-        
+
         # Get movement data from deadline manager
         deadline_summary = self.deadline_manager.get_deadline_summary()
         stats = deadline_summary.get('statistics', {})
-        
-        # Movement metrics
-        movements_today = stats.get('players_moved', random.randint(8, 25))
-        trades_today = stats.get('total_trades', random.randint(3, 12))
-        biggest_deal = stats.get('biggest_deal_value', random.randint(2, 8))
+
+        # Movement metrics -- real values only; "--" when not yet known
+        def _fmt(value, money=False):
+            if value is None:
+                return "--"
+            try:
+                if money and not int(value):
+                    return "--"
+            except Exception:
+                return "--"
+            return f"${value}M" if money else str(value)
+
+        movements_today = _fmt(stats.get('players_moved'))
+        trades_today = _fmt(stats.get('total_trades'))
+        biggest_deal = _fmt(stats.get('biggest_deal_value'), money=True)
         
         metrics = [
-            ("Players Moved Today", str(movements_today), self.SUCCESS_GREEN),
-            ("Trades Completed", str(trades_today), self.DEADLINE_GOLD),
-            ("Biggest Deal Value", f"${biggest_deal}M", self.URGENT_RED)
+            ("Players Moved Today", movements_today, self.SUCCESS_GREEN),
+            ("Trades Completed", trades_today, self.DEADLINE_GOLD),
+            ("Biggest Deal Value", biggest_deal, self.URGENT_RED)
         ]
         
         for i, (label, value, color) in enumerate(metrics):
@@ -833,18 +850,23 @@ class TradeDeadlineCenter(InGamePopup):
                     font=('Segoe UI', 8)).pack()
     
     def _create_impact_players_list(self, parent):
-        """Create list of high-impact players potentially available"""
+        """Create list of high-impact players potentially available.
+
+        Derived from real availability by the media rumor engine: players
+        actually on trade blocks (AI + user), expiring contracts on sellers,
+        and unhappy quality players. No real-life names, nothing hardcoded.
+        """
         players_frame = tk.Frame(parent, bg=self.PANEL_COLOR)
         players_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Sample impact players (in real game, this would come from actual data)
-        impact_players = [
-            {"name": "Jake Guentzel", "pos": "LW", "team": "PIT", "status": "Rumored", "value": "High"},
-            {"name": "Noah Hanifin", "pos": "D", "team": "CGY", "status": "Available", "value": "High"},
-            {"name": "Chris Tanev", "pos": "D", "team": "CGY", "status": "Likely", "value": "Medium"},
-            {"name": "Anthony Duclair", "pos": "RW", "team": "SJS", "status": "Available", "value": "Medium"},
-            {"name": "Tyler Toffoli", "pos": "RW", "team": "NJD", "status": "Possible", "value": "Medium"}
-        ]
+
+        impact_players = media_rumors.get_impact_players(
+            deadline_manager=self.deadline_manager)
+        if not impact_players:
+            # Honest placeholder when nothing is actually available
+            impact_players = [
+                {"name": "--", "pos": "--", "team": "--",
+                 "status": "Possible", "value": "Low"},
+            ]
         
         # Headers
         headers_frame = tk.Frame(players_frame, bg=self.NEUTRAL_GRAY)
@@ -1185,6 +1207,13 @@ class DeadlineMarketBrowser(InGamePopup):
         self.parent = parent
         self.deadline_manager = deadline_manager
         
+        # Rumors from the media rumor engine (real league state), same as the
+        # main center. (This also fixes a latent AttributeError: the rumors
+        # section below read self.trade_rumors, which was never set here.)
+        self.trade_rumors = media_rumors.generate_rumors(
+            deadline_manager=self.deadline_manager)
+        self._rumors_text = None
+
         # Colors from parent
         self.BG_COLOR = parent.BG_COLOR
         self.PANEL_COLOR = parent.PANEL_COLOR
@@ -1606,9 +1635,18 @@ class DeadlineMarketBrowser(InGamePopup):
                  padx=20, pady=8).pack(side='right', padx=10, pady=10)
     
     def _refresh_data(self):
-        """Refresh market data"""
-        # In a real implementation, this would refresh all data
-        print("Market data refreshed!")
+        """Refresh market data: file a fresh batch of media rumors."""
+        try:
+            self.trade_rumors = media_rumors.generate_rumors(
+                deadline_manager=self.deadline_manager, fresh=True)
+            if self._rumors_text is not None:
+                self._rumors_text.config(state='normal')
+                self._rumors_text.delete('1.0', 'end')
+                for rumor in self.trade_rumors:
+                    self._rumors_text.insert('end', f"• {rumor}\n\n")
+                self._rumors_text.config(state='disabled')
+        except Exception as e:
+            print(f"Rumor refresh failed: {e}")
         
     def _create_intelligence_panel(self, parent):
         """Create right panel with market intelligence"""
@@ -1651,6 +1689,7 @@ class DeadlineMarketBrowser(InGamePopup):
             rumors_text.insert('end', f"• {rumor}\n\n")
         
         rumors_text.config(state='disabled')
+        self._rumors_text = rumors_text  # for refresh without rebuilding
         
     def _create_market_temp_section(self, parent):
         """Create market temperature indicators using real market data"""
@@ -1692,7 +1731,7 @@ class DeadlineMarketBrowser(InGamePopup):
             tk.Label(pos_frame, text=temp_level.upper(), bg=self.NEUTRAL_GRAY, 
                     fg=temp_color, font=('Segoe UI', 9, 'bold')).pack(side='right', padx=10)
         
-    def _create_footer(self, parent):
+    def _create_deadline_status_footer(self, parent):
         """Create footer with deadline status"""
         footer_frame = ttk.Frame(parent, style='Deadline.TFrame')
         footer_frame.pack(fill='x', pady=(20, 0))
