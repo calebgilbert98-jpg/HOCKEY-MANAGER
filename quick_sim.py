@@ -181,6 +181,83 @@ def best_lines(team):
     pk1_defense = defensive_defensemen[:2] if len(defensive_defensemen) >= 2 else defensive_defensemen + [None] * (2 - len(defensive_defensemen))
     pk2_defense = defensive_defensemen[2:4] if len(defensive_defensemen) >= 4 else defensive_defensemen[2:] + [None] * (2 - len(defensive_defensemen[2:]))
 
+    # --- TOI-forensics repair (icetime-ecosystem, 2026-09-29) ---
+    # Never emit None skater slots in the even-strength lines. A None slot
+    # used to mean "the sim's per-tick fill-in dresses the best available
+    # player by overall" -- genuine double-shift ice time that W3's per-tick
+    # ledger recorded faithfully but W2's unit-based ledger never credited
+    # (it only credits nominal slot holders), leaving the 30-min governor
+    # blind: a double-shifting star could skate 32-38 min while the governor
+    # saw ~18 and never bound him (found via W2/W3 ledger divergence on
+    # short-benched rosters). Filling the slot explicitly with the same
+    # best-available skater the fill-in would dress changes no on-ice
+    # behavior -- it just makes selection, execution, and both ledgers
+    # agree. Defense pairs fall back to any skater (emergency D, exactly
+    # what the fill-in dressed). PP/PK units intentionally untouched (a
+    # separate known seam, out of scope for this repair).
+    def _repair_es_slots():
+        try:
+            assigned = []
+            seen = set()
+            use_count = {}
+            for _line in fw_lines:
+                for _p in (_line or []):
+                    if _p is not None and id(_p) not in seen:
+                        seen.add(id(_p))
+                        assigned.append(_p)
+                    if _p is not None:
+                        use_count[id(_p)] = use_count.get(id(_p), 0) + 1
+            for _pair in def_pairs:
+                for _p in (_pair or []):
+                    if _p is not None and id(_p) not in seen:
+                        seen.add(id(_p))
+                        assigned.append(_p)
+                    if _p is not None:
+                        use_count[id(_p)] = use_count.get(id(_p), 0) + 1
+            try:
+                _ovr = {}
+                for _p in assigned:
+                    try:
+                        _ovr[id(_p)] = float(_p.overall_rating())
+                    except Exception:
+                        _ovr[id(_p)] = 0.0
+            except Exception:
+                _ovr = {}
+            if not assigned:
+                return
+
+            def _best_for(_unit):
+                # Spread the emergency load: fewest existing assignments
+                # first, best overall breaks ties (mirrors the fill-in's
+                # best-available preference without stacking one star on
+                # every hole). Never two copies of a player in one unit.
+                _ids = {id(_q) for _q in (_unit or []) if _q is not None}
+                _cands = [p for p in assigned if id(p) not in _ids]
+                if not _cands:
+                    return None
+                _cands.sort(key=lambda p: (use_count.get(id(p), 0),
+                                           -_ovr.get(id(p), 0.0)))
+                _fill = _cands[0]
+                use_count[id(_fill)] = use_count.get(id(_fill), 0) + 1
+                return _fill
+
+            for _line in fw_lines:
+                for _ji in range(len(_line or [])):
+                    if _line[_ji] is None:
+                        _fill = _best_for(_line)
+                        if _fill is not None:
+                            _line[_ji] = _fill
+            for _pair in def_pairs:
+                for _ji in range(len(_pair or [])):
+                    if _pair[_ji] is None:
+                        _fill = _best_for(_pair)
+                        if _fill is not None:
+                            _pair[_ji] = _fill
+        except Exception:
+            pass
+
+    _repair_es_slots()
+
     # Build the complete lineup
     lines = {
         'Forwards': fw_lines,

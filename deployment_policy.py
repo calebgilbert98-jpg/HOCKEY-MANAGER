@@ -380,14 +380,22 @@ def _unit_players(lineup: Dict[str, Any], kind: str,
 
 
 def _dressed_skater_count(lineup: Dict[str, Any]) -> int:
-    """Healthy dressed skaters in a lineup dict (flat keys, nested fallback)."""
+    """Distinct dressed skaters in a lineup dict (flat keys, nested fallback).
+
+    Counts bodies, not slots: best_lines() explicitly double-shifts a star
+    into a short-handed slot (TOI-forensics repair, 2026-09-29), so the
+    same player object can appear twice. The bench-short exception must
+    see 14 bodies, not 18 slots.
+    """
     try:
-        n = 0
+        ids = set()
         for i in (1, 2, 3, 4):
-            n += len(_unit_players(lineup, "F", i))
+            for p in _unit_players(lineup, "F", i):
+                ids.add(getattr(p, "id", None) or id(p))
         for i in (1, 2, 3):
-            n += len(_unit_players(lineup, "D", i))
-        return n
+            for p in _unit_players(lineup, "D", i):
+                ids.add(getattr(p, "id", None) or id(p))
+        return len(ids)
     except Exception:
         return 0
 
@@ -770,6 +778,24 @@ def _toi_store(sim: Any) -> Dict[int, float]:
 
 
 def _raw_toi(sim: Any, pid: Any) -> float:
+    """Player's TOI seconds so far this game.
+
+    Prefers the per-tick ground-truth ledger (simulation._update_fatigue's
+    player_toi_seconds): it credits actual on-ice skaters every tick, so it
+    sees special-teams unit alternation, manpower transitions, and fill-in
+    double-shifts that the per-change W2 ledger (credited by lineup slot
+    at change time) systematically misses for PP/PK players. Falls back to
+    W2's _game_toi when the tick ledger is unavailable. The soft-cap
+    governor reads through here, so it binds on real ice time.
+    """
+    try:
+        w3 = getattr(sim, "player_toi_seconds", None)
+        if w3:
+            v = w3.get(pid)
+            if v is not None:
+                return float(v)
+    except Exception:
+        pass
     try:
         return float((getattr(sim, "_game_toi", None) or {}).get(pid, 0.0))
     except Exception:

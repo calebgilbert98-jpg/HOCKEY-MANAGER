@@ -8285,6 +8285,11 @@ class GameSim:
 
         # Special teams: dress the PP/PK units when manpower differs (not in 3v3 OT)
         special_unit = None
+        # Soft-cap governor state (icetime-ecosystem): initialized here so
+        # the top-up and fill-in below can also respect it.
+        _st_governed = False
+        _st_raw_toi = None
+        _ST_CAP = 30 * 60
         if self.period != 4:
             if len(penalized_skaters) < len(opp_mp_skaters):
                 special_unit = f"PP{(self.clock // 45) % 2 + 1}"
@@ -8292,12 +8297,34 @@ class GameSim:
                 special_unit = f"PK{(self.clock // 45) % 2 + 1}"
         if special_unit:
             unit = self._game_lineup(team).get(special_unit) or {}
+            # Soft-cap governor (icetime-ecosystem): a skater at/over the
+            # ~30-min cap sits out special teams too. His ES line is already
+            # bound by soft_cap_adjust_shares; without this, PP/PK shifts
+            # (dressed here, not by the shift engine) skate him 2-5 min past
+            # the cap in high-penalty games. Defined exceptions ride.
+            try:
+                from deployment_policy import (
+                    _raw_toi as _st_raw_toi,
+                    _game_state_from_sim as _st_gs,
+                    soft_cap_exceptions as _st_exc,
+                    SOFT_CAP_S as _ST_CAP,
+                )
+                _st_exc_d = _st_exc(_st_gs(self, team))
+                _st_governed = not any(_st_exc_d.values())
+            except Exception:
+                _st_governed = False
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
                 # Clamp to exact manpower: never dress more skaters than the
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
                 if len(on_ice) >= num_skaters:
                     break
                 if p and p.id not in penalized_ids and p.id not in on_ice_ids:
+                    if _st_governed:
+                        try:
+                            if _st_raw_toi(self, p.id) >= _ST_CAP:
+                                continue
+                        except Exception:
+                            pass
                     on_ice.append(p)
                     on_ice_ids.add(p.id)
 
@@ -8316,6 +8343,14 @@ class GameSim:
 
             player = self._lineup_player(team, f"F{current_line}_{pos}")
             if player and player.id not in penalized_ids and player.id not in on_ice_ids:
+                # Soft-cap: during special teams, the top-up must not
+                # re-dress a skater the PP/PK filter just sat out.
+                if _st_governed and special_unit:
+                    try:
+                        if _st_raw_toi(self, player.id) >= _ST_CAP:
+                            continue
+                    except Exception:
+                        pass
                 on_ice.append(player)
                 on_ice_ids.add(player.id)
 
@@ -8331,6 +8366,12 @@ class GameSim:
 
             player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
             if player and player.id not in penalized_ids and player.id not in on_ice_ids:
+                if _st_governed and special_unit:
+                    try:
+                        if _st_raw_toi(self, player.id) >= _ST_CAP:
+                            continue
+                    except Exception:
+                        pass
                 on_ice.append(player)
                 on_ice_ids.add(player.id)
         
@@ -8346,8 +8387,25 @@ class GameSim:
                 # the 6th skater is a forward -- never dress the goalie
                 pool = [pl for pl in pool
                         if pl.primary_position != PlayerPosition.GOALIE]
-            best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
-                                    reverse=True)
+            # Soft-cap: deprioritize capped skaters in the fill-in so a
+            # minute-managed star isn't re-dressed through the back door.
+            # Capped players sort last but remain eligible, so the team
+            # never dresses short.
+            if _st_governed and special_unit:
+                def _fill_key(pl):
+                    try:
+                        capped = 1 if _st_raw_toi(self, pl.id) >= _ST_CAP else 0
+                    except Exception:
+                        capped = 0
+                    try:
+                        ovr = -float(pl.overall_rating())
+                    except Exception:
+                        ovr = 0.0
+                    return (capped, ovr)
+                best_available = sorted(pool, key=_fill_key)
+            else:
+                best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
+                                        reverse=True)
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         if pulled:
