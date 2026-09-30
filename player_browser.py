@@ -6,7 +6,7 @@ Simple, reliable player display system that guarantees player visibility
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox
+from popup_system import messagebox, confirm_card
 from typing import List, Optional
 import customtkinter as ctk
 from game_classes import (Player, to_100_scale)
@@ -335,15 +335,8 @@ class PlayerBrowserView(ctk.CTkFrame):
         if not self.selected_player:
             messagebox.showwarning("No Selection", "Please select a player to draft.")
             return
-            
-        # Return the selected player to parent
-        result = messagebox.askyesno("Draft Player", 
-                                   f"Draft {self.selected_player.full_name}?\n\n"
-                                   f"Position: {self.selected_player.primary_position.value}\n"
-                                   f"Overall: {self.selected_player.overall_rating()}\n"
-                                   f"Age: {self.selected_player.age}")
-        
-        if result:
+
+        def _do_draft():
             # Set result and close
             self.result = self.selected_player
             cb = getattr(self, '_on_select', None)
@@ -353,6 +346,14 @@ class PlayerBrowserView(ctk.CTkFrame):
                 except Exception:
                     pass
             self.close_view()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = no pick.
+        confirm_card(self, "Draft Player",
+                     f"Draft {self.selected_player.full_name}?\n\n"
+                     f"Position: {self.selected_player.primary_position.value}\n"
+                     f"Overall: {self.selected_player.overall_rating()}\n"
+                     f"Age: {self.selected_player.age}",
+                     on_yes=_do_draft)
         
     def get_selected_player(self):
         """Get the selected player (for external use)"""

@@ -1774,12 +1774,26 @@ class PlayoffView(ctk.CTkFrame):
             return
         
         # Heavy sim: warn, fallback-save, then show live progress.
+        # Gating T2-Phase 3: non-modal confirm; dismiss = don't sim.
         import sim_progress
-        if not sim_progress.confirm_heavy_sim(
-                self, "Simulate Round",
-                f"This will simulate every remaining game of the "
-                f"{self.playoff_bracket.current_round} round."):
+        sim_progress.ask_heavy_sim(
+            self, "Simulate Round",
+            f"This will simulate every remaining game of the "
+            f"{self.playoff_bracket.current_round} round.",
+            on_yes=self._simulate_round_confirmed)
+
+    def _simulate_round_confirmed(self):
+        """Heavy-sim continuation: fallback save, then the synchronous
+        round sim behind a live progress dialog. Incomplete series are
+        re-read at confirm time (live state, not click-time state)."""
+        if not self.playoff_bracket:
             return
+        current_series = self.playoff_bracket.playoff_series[self.playoff_bracket.current_round]
+        incomplete_series = [s for s in current_series if not s.is_complete]
+        if not incomplete_series:
+            messagebox.showinfo("Round Complete", "Current round is already complete!")
+            return
+        import sim_progress
         sim_progress.create_fallback_save(self.app, "playoffs_round")
         dlg = sim_progress.SimProgressDialog(
             self, title="Simulating Playoff Round")
@@ -1810,10 +1824,10 @@ class PlayoffView(ctk.CTkFrame):
 
         self._update_status_display()
         self._display_bracket()
-        
+
         # Check if playoffs are complete
         if self.playoff_bracket.stanley_cup_champion:
-            messagebox.showinfo("Stanley Cup Champion!", 
+            messagebox.showinfo("Stanley Cup Champion!",
                               f"🏆 {self.playoff_bracket.stanley_cup_champion.team_name} "
                               f"wins the Stanley Cup!")
     
@@ -1836,12 +1850,6 @@ class PlayoffView(ctk.CTkFrame):
             _headless = bool(getattr(self.app, '_bulk_simming', False))
         except Exception:
             _headless = False
-        if not _headless and not sim_progress.confirm_heavy_sim(
-                self, "Simulate All Playoffs",
-                "This will simulate every remaining playoff game through "
-                "the Stanley Cup Final."):
-            return
-        sim_progress.create_fallback_save(self.app, "playoffs_all")
 
         bracket = self.playoff_bracket
         round_order = PlayoffBracket.ROUND_ORDER
@@ -1878,6 +1886,8 @@ class PlayoffView(ctk.CTkFrame):
             self._finish_all_playoffs(cancelled=False)
             return
 
+        # Gating T2-Phase 3: non-modal confirm; dismiss = don't sim. The
+        # worker body closes over the round plan built above.
         def _on_done(cancelled, error):
             if error is not None:
                 try:
@@ -1890,9 +1900,18 @@ class PlayoffView(ctk.CTkFrame):
                     pass
             self._finish_all_playoffs(cancelled=cancelled or error is not None)
 
-        sim_progress.run_threaded(
-            self, "Simulating Stanley Cup Playoffs",
-            _run_games, _on_done)
+        def _confirmed():
+            sim_progress.create_fallback_save(self.app, "playoffs_all")
+            sim_progress.run_threaded(
+                self, "Simulating Stanley Cup Playoffs",
+                _run_games, _on_done)
+
+        sim_progress.ask_heavy_sim(
+            self, "Simulate All Playoffs",
+            "This will simulate every remaining playoff game through "
+            "the Stanley Cup Final.",
+            on_yes=_confirmed)
+        return
 
     def _finish_all_playoffs(self, cancelled=False):
         """UI-thread wrap-up after Sim All: lore drain, bracket refresh,

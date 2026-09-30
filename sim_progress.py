@@ -223,3 +223,38 @@ def confirm_heavy_sim(parent, title, detail):
         "so you can restore if anything goes wrong.\n\n"
         "Proceed?",
         parent=parent)
+
+
+def ask_heavy_sim(parent, title, detail, on_yes=None, on_answer=None):
+    """Non-modal heavy-sim gate (gating T2-Phase 3): a confirm card with
+    the unresponsiveness warning. Yes runs the continuation (fallback
+    save, then the sim); No/dismiss does nothing. Falls back to the
+    blocking confirm_heavy_sim when no card UI is available."""
+    try:
+        from popup_system import confirm_card, cards_available
+    except Exception:
+        confirm_card = None
+        cards_available = None
+    if confirm_card is None or (cards_available is not None
+                                and not cards_available()):
+        if on_yes is not None and confirm_heavy_sim(parent, title, detail):
+            on_yes()
+        elif on_answer is not None:
+            on_answer(confirm_heavy_sim(parent, title, detail))
+        return
+
+    def _on_answer(answer):
+        if on_answer is not None:
+            on_answer(answer)
+        if answer and on_yes is not None:
+            on_yes()
+
+    confirm_card(
+        parent, title,
+        f"{detail}\n\n"
+        "This can take a minute or two, during which the app may appear "
+        "frozen -- this is normal. A fallback save will be created first "
+        "so you can restore if anything goes wrong.",
+        on_yes=lambda: _on_answer(True),
+        on_no=lambda: _on_answer(False),
+        on_answer=_on_answer)

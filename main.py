@@ -2225,6 +2225,50 @@ except Exception:
     pass
 
 
+# -- Gating T2-Phase 3: playoffs-mode choice (end_of_season) ------------
+# Yes opens the interactive bracket; No quick-sims the tournament
+# headless and rolls to the offseason. Dismiss = defer (re-asked on the
+# next end_of_season entry; the guard below keeps it honest). The answer
+# survives save/load via resolver_args (season_year); a stale answer
+# (season already advanced or playoffs complete) is a no-op.
+_PLAYOFFS_MODE_APP = None
+
+
+def _set_playoffs_mode_app(app):
+    global _PLAYOFFS_MODE_APP
+    _PLAYOFFS_MODE_APP = app
+
+
+def _playoffs_mode_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['playoffs_mode_answer']."""
+    try:
+        app = _PLAYOFFS_MODE_APP
+        if app is None:
+            return False
+        league = getattr(app, "league", None)
+        if league is None:
+            return False
+        if str(getattr(league, "season_year", "")) != str(
+                kwargs.get("season_year", "")):
+            return False  # stale: season already advanced
+        if app._playoffs_complete():
+            return False  # already decided
+        if value:
+            app.open_playoffs_window()
+        else:
+            app._quick_sim_playoffs_headless()
+            app._start_offseason()
+        return True
+    except Exception:
+        return False
+
+
+try:
+    _blockers_reg_resolver("playoffs_mode_answer", _playoffs_mode_answer)
+except Exception:
+    pass
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -14489,8 +14533,28 @@ class HockeyManagerGUI(tk.Tk):
                 if self._playoffs_complete():
                     self._start_offseason()
             else:
-                # Playoffs still in progress: focus the bracket, don't re-prompt.
-                self.open_playoffs_window()
+                # Re-entry with the choice deferred: re-present the card
+                # rather than opening the bracket (the user never chose).
+                # Playoffs actually in progress: focus the bracket.
+                _parked = False
+                try:
+                    _sess = (getattr(self, "pending_sessions", None) or {}).get(
+                        "playoffs_mode") or {}
+                    _dlg = (_sess.get("dialogs") or {}).get(
+                        "playoffs_mode_card") or {}
+                    _parked = bool(_dlg.get("parked")) and not _dlg.get(
+                        "answered")
+                except Exception:
+                    _parked = False
+                if _parked:
+                    try:
+                        from popup_system import represent_dialog
+                        represent_dialog("playoffs_mode", "playoffs_mode_card",
+                                         parent=self)
+                    except Exception:
+                        pass
+                else:
+                    self.open_playoffs_window()
             return
         self._season_end_handled_year = season_year
 
@@ -14507,11 +14571,32 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_bulk_simming', False):
             result = True  # bulk sims auto-start playoffs, matching test behavior
         else:
-            result = messagebox.askyesno(
-                "Playoffs",
+            # Gating T2-Phase 3: non-modal choice card. Yes opens the
+            # bracket; No quick-sims headless. Dismiss = defer (the card
+            # is re-presented if end_of_season is re-entered; the
+            # _season_end_handled_year guard keeps it honest).
+            from popup_system import ask_card as _pm_ask_card
+            _set_playoffs_mode_app(self)
+
+            def _pm_on_answer(_ans, _self=self):
+                _playoffs_mode_answer(
+                    "playoffs_mode", "playoffs_mode_card", bool(_ans),
+                    season_year=season_year)
+
+            _pm_ask_card(
+                self, "Playoffs",
                 "Play through the Stanley Cup Playoffs?\n\n"
-                "Yes: open the bracket and sim it yourself.\n"
-                "No: quick-sim the tournament to crown a champion.")
+                "Play Interactive: open the bracket and sim it yourself.\n"
+                "Quick-Sim: the tournament is decided instantly and the "
+                "season rolls to the offseason.",
+                [("Play Interactive", True, "primary"),
+                 ("Quick-Sim", False, "secondary")],
+                on_answer=_pm_on_answer,
+                session_id="playoffs_mode", dialog_id="playoffs_mode_card",
+                resolver="playoffs_mode_answer",
+                resolver_args={"season_year": str(season_year)})
+            return
+
         if result:
             self.open_playoffs_window()
         else:

@@ -6,7 +6,7 @@ Comprehensive launcher with full NHL teams, advanced game setup, and background 
 
 import tkinter as tk
 from tkinter import ttk, filedialog
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 import os
 import sys
 from datetime import datetime, date
@@ -485,12 +485,13 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             latest = cpm.latest()
             if latest is None:
                 return
-            if messagebox.askyesno(
-                    "Recover last session?",
-                    "The previous session didn't shut down cleanly.\n\n"
-                    f"Recover {checkpoint_summary(latest)}?\n\n"
-                    "No = start fresh (checkpoints are kept)."):
-                self._recover_from_checkpoint(latest)
+            # Gating T2-Phase 3: non-modal confirm; dismiss = start fresh
+            # (checkpoints are kept either way).
+            confirm_card(self, "Recover last session?",
+                         "The previous session didn't shut down cleanly.\n\n"
+                         f"Recover {checkpoint_summary(latest)}?\n\n"
+                         "No = start fresh (checkpoints are kept).",
+                         on_yes=lambda: self._recover_from_checkpoint(latest))
         except Exception as e:
             print(f"Crash recovery check failed (non-fatal): {e}")
 
@@ -3087,17 +3088,20 @@ This profile will influence player relationships, media interactions, and trade 
         if not self.selected_save:
             messagebox.showwarning("No Selection", "Please select a save game.")
             return
-            
-        result = messagebox.askyesno("Confirm Delete",
-                                   f"Delete '{self.selected_save['display_name']}'?\n\n"
-                                   "This cannot be undone.")
-        if result:
+
+        def _do_delete():
             try:
                 os.remove(self.selected_save['filename'])
                 self._load_save_games()
                 self.status_label.config(text="Save deleted")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to delete save:\n{str(e)}")
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep the save.
+        confirm_card(self, "Confirm Delete",
+                     f"Delete '{self.selected_save['display_name']}'?\n\n"
+                     "This cannot be undone.",
+                     on_yes=_do_delete)
                 
     def _import_save(self):
         """Import a save game file"""

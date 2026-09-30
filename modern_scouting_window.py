@@ -8,7 +8,7 @@ Includes: Scout management, player evaluation, assignments, reports, and draft a
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from typing import (Dict, Any)
 import datetime
 from game_classes import (Player, Staff, to_100_scale)
@@ -1433,15 +1433,17 @@ Current Status: Available for assignments
             messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
             return
 
-        result = messagebox.askyesno(
-            "Cancel Assignment",
-            f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
-            "The scout is freed up; any report filed so far is kept.")
-        if result:
+        def _do_cancel():
             ok, msg = cancel_scout_assignment(self.app, player)
             (messagebox.showinfo if ok else messagebox.showwarning)(
                 "Assignment Cancelled" if ok else "Scouting", msg)
             self._populate_assignments()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep scouting.
+        confirm_card(self, "Cancel Assignment",
+                     f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
+                     "The scout is freed up; any report filed so far is kept.",
+                     on_yes=_do_cancel)
     
     def _on_report_select(self, event):
         """Handle report selection -- renders the REAL filed report.

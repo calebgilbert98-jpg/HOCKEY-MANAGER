@@ -7,7 +7,7 @@ player pools, draft visualization, and comprehensive draft management.
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -2570,9 +2570,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             f"Confirm this draft selection?"
         )
         
-        result = messagebox.askyesno("🏒 Draft Player", confirm_text)
-        
-        if result:
+        def _do_draft():
             debug_print(f"DEBUG: User confirmed draft of {player.full_name}")
             # Make the draft pick
             success = self.draft_manager.make_pick(player)
@@ -2652,8 +2650,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             else:
                 debug_print(f"DEBUG: Draft pick failed for {player.full_name}")
                 messagebox.showerror("Draft Error", "Unable to complete the draft pick. Please try again.")
-        else:
-            debug_print(f"DEBUG: User cancelled draft of {player.full_name}")
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = no pick made.
+        confirm_card(self, "Draft Player", confirm_text,
+                     on_yes=_do_draft)
     
     def setup_integrated_draft_order(self, parent):
         """Setup integrated draft order browser directly in the tab"""
@@ -4089,20 +4089,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         current_pick = self.draft_manager.get_current_pick()
         remaining_picks = len(self.draft_manager.draft_picks) - self.draft_manager.current_pick
         
-        response = messagebox.askyesno(
-            "Simulate Rest of Draft", 
-            f"This will simulate all remaining {remaining_picks} picks in the draft.\n\n"
-            f"Current pick: #{current_pick.overall_pick if current_pick else 'N/A'}\n"
-            f"Remaining picks: {remaining_picks}\n\n"
-            f"Are you sure you want to continue?"
-        )
-        
-        if not response:
-            return
-            
+        # Gating T2-Phase 3: non-modal confirm; dismiss = do not simulate.
+        confirm_card(self, "Simulate Rest of Draft",
+                     f"This will simulate all remaining {remaining_picks} picks in the draft.\n\n"
+                     f"Current pick: #{current_pick.overall_pick if current_pick else 'N/A'}\n"
+                     f"Remaining picks: {remaining_picks}\n\n"
+                     f"Are you sure you want to continue?",
+                     on_yes=self._sim_rest_of_draft_confirmed)
+
+    def _sim_rest_of_draft_confirmed(self):
+        """Run the rest-of-draft sim after the user confirmed."""
+        current_pick = self.draft_manager.get_current_pick()
+        remaining_picks = (len(self.draft_manager.draft_picks)
+                           - self.draft_manager.current_pick)
         picks_simmed = 0
         total_picks = remaining_picks
-        
+    
         # Show progress dialog for long simulation
         progress_window = InGamePopup(self)
         progress_window.title("Simulating Draft...")
@@ -4110,46 +4112,46 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         progress_window.configure(background=self.app.BG_COLOR)
         progress_window.transient(self)
         progress_window.grab_set()
-        
+    
         progress_label = ttk.Label(progress_window, text="Simulating draft picks...", 
                                  style='Title.TLabel')
         progress_label.pack(pady=20)
-        
+    
         progress_var = tk.StringVar()
         progress_detail = ttk.Label(progress_window, textvariable=progress_var, 
                                   style='Info.TLabel')
         progress_detail.pack(pady=10)
-        
+    
         progress_window.update()
-        
+    
         while not self.draft_manager.is_draft_complete():
             current_pick = self.draft_manager.get_current_pick()
-            
+        
             if not current_pick:
                 break
-                
+            
             # Update progress
             picks_simmed += 1
             percentage = int((picks_simmed / total_picks) * 100) if total_picks > 0 else 0
             progress_var.set(f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} ({percentage}%)")
             progress_window.update()
-            
+        
             # AI selection logic with team needs
             available_players = self.draft_manager.get_available_players()
             if not available_players:
                 break
-                
+            
             team_needs = self.analyze_team_needs(current_pick.team)
             suitable_players = self.filter_by_team_needs(available_players, team_needs)
-            
+        
             if not suitable_players:
                 suitable_players = available_players[:20]  # Fallback to best available
-                
+            
             # Weight selection towards top players with some randomness
             top_candidates = suitable_players[:10]
             weights = [10, 8, 6, 5, 4, 3, 2, 2, 1, 1][:len(top_candidates)]
             ai_pick = random.choices(top_candidates, weights=weights, k=1)[0]
-            
+        
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Roster assignment (23-man NHL cap) on the manager.
@@ -4158,32 +4160,32 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
-                
+            
             # Small delay to show progress (optional)
             if picks_simmed % 10 == 0:
                 progress_window.after(10)  # Brief pause every 10 picks
-                
+            
         # Close progress window
         progress_window.destroy()
-        
+    
         # CRITICAL: Update display after simulation with forced refresh
         debug_print(f"DEBUG: Final update after simulating {picks_simmed} picks in sim_rest_of_draft")
         self.update_display()
-        
+    
         # FORCE immediate draft board refresh and make it visible
         if hasattr(self, 'recent_picks_tree'):
             debug_print("DEBUG: FORCE final draft board refresh in sim_rest_of_draft")
             self.ensure_draft_board_visible()  # Make sure draft board tab is active
             self.update_recent_picks()
-            
+        
         # FORCE team roster refresh  
         if hasattr(self, 'team_roster_tree'):
             self.update_all_team_rosters()
-            
+        
         # Force UI refresh
         self.update_idletasks()
         self.update()
-        
+    
         # Show completion message
         if self.draft_manager.is_draft_complete():
             messagebox.showinfo(
@@ -4200,7 +4202,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 f"Simulated {picks_simmed} picks.\n"
                 f"Draft may still be in progress - check current pick status."
             )
-    
+
     def analyze_team_needs(self, team):
         """Analyze what positions a team needs most"""
         # Count current picks by position
@@ -4595,45 +4597,45 @@ NHL League Office""",
         
     def begin_draft(self):
         """Start the fantasy draft"""
-        # Confirm start
-        result = messagebox.askyesno(
-            "Begin Fantasy Draft",
-            f"Are you sure you want to begin the fantasy draft?\n\n"
-            f"This will:\n"
-            f"• Clear all current team rosters\n"
-            f"• Redistribute {len(self.draft_manager.all_players)} players\n"
-            f"• Start the {self.draft_manager.config.rounds}-round draft\n\n"
-            f"This action cannot be undone!"
-        )
-        
-        if result:
-            # Hide begin draft button
-            if hasattr(self, 'begin_draft_button'):
-                self.begin_draft_button.destroy()
-            
-            # Initialize the first pick
-            self.draft_manager.current_pick = 0
-            
-            # Update display to show first pick
-            self.update_display()
-            
-            # Add delayed updates to ensure tabs are ready
-            self.after(200, self.update_recent_picks)
-            self.after(300, self.update_all_team_rosters)
-            self.after(400, self.update_main_player_spotlight)
-            
-            # Also ensure team rosters tab shows initial state
-            debug_print("DEBUG: Scheduling initial team roster display update")
-            self.after(500, lambda: self.update_team_roster() if hasattr(self, 'update_team_roster') else None)
-            
-            # Show success message
-            first_pick = self.draft_manager.get_current_pick()
-            if first_pick:
-                messagebox.showinfo(
-                    "Fantasy Draft Started!",
-                    f"The fantasy draft has begun!\n\n"
-                    f"First pick: {first_pick.team.team_name} (Pick #{first_pick.overall_pick})"
-                )
+        # Gating T2-Phase 3: non-modal confirm; dismiss = draft not started.
+        confirm_card(self, "Begin Fantasy Draft",
+                     f"Are you sure you want to begin the fantasy draft?\n\n"
+                     f"This will:\n"
+                     f"• Clear all current team rosters\n"
+                     f"• Redistribute {len(self.draft_manager.all_players)} players\n"
+                     f"• Start the {self.draft_manager.config.rounds}-round draft\n\n"
+                     f"This action cannot be undone!",
+                     on_yes=self._begin_draft_confirmed)
+
+    def _begin_draft_confirmed(self):
+        """Begin the draft after the user confirmed (clears rosters)."""
+        # Hide begin draft button
+        if hasattr(self, 'begin_draft_button'):
+            self.begin_draft_button.destroy()
+
+        # Initialize the first pick
+        self.draft_manager.current_pick = 0
+
+        # Update display to show first pick
+        self.update_display()
+
+        # Add delayed updates to ensure tabs are ready
+        self.after(200, self.update_recent_picks)
+        self.after(300, self.update_all_team_rosters)
+        self.after(400, self.update_main_player_spotlight)
+
+        # Also ensure team rosters tab shows initial state
+        debug_print("DEBUG: Scheduling initial team roster display update")
+        self.after(500, lambda: self.update_team_roster() if hasattr(self, 'update_team_roster') else None)
+
+        # Show success message
+        first_pick = self.draft_manager.get_current_pick()
+        if first_pick:
+            messagebox.showinfo(
+                "Fantasy Draft Started!",
+                f"The fantasy draft has begun!\n\n"
+                f"First pick: {first_pick.team.team_name} (Pick #{first_pick.overall_pick})"
+            )
                 
     def clear_filters(self):
         """Clear all player filters"""

@@ -409,26 +409,6 @@ class AutomationSettingsView(ctk.CTkFrame):
             messagebox.showerror("Error", f"Failed to save settings: {e}")
 
 
-class SettingsWindow(InGamePopup):
-    """Popup wrapper around AutomationSettingsView (backward compatibility)."""
-
-    def __init__(self, parent, automation):
-        super().__init__(parent, modal=True)
-        self.title("Automation Settings")
-        self._view = AutomationSettingsView(self, automation=automation)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class MilestoneNotificationView(ctk.CTkFrame):
     """View for displaying milestone notifications (focus-card view)."""
 
@@ -534,25 +514,3 @@ class MilestoneNotificationView(ctk.CTkFrame):
                 "Milestone",
                 f"Could not open the related window: {e}",
                 parent=self)
-
-
-class MilestoneNotificationWindow(InGamePopup):
-    """Popup wrapper around MilestoneNotificationView (backward compatibility)."""
-
-    def __init__(self, parent, milestone):
-        super().__init__(parent, modal=True)
-        self.title(f"Milestone: {milestone.name}")
-        app = (getattr(parent, 'app', None)
-               or getattr(parent, 'parent', None) or parent)
-        self._view = MilestoneNotificationView(self, app=app, milestone=milestone)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

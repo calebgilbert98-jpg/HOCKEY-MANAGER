@@ -18,6 +18,32 @@ import threading
 from dataclasses import asdict
 
 
+# -- Gating T2-Phase 3: rename-file prompt resolver (module level so a
+# post-load answer always finds it) ------------------------------------
+def _rename_file_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['rename_file_answer']: apply the rename named in
+    resolver_args; empty/dismissed value or missing file is a no-op."""
+    try:
+        _fp = kwargs.get("filepath", "")
+        if not value or not str(value).strip() or not _fp:
+            return False
+        _nn = str(value).strip()
+        if not _nn.endswith('.hm'):
+            _nn += '.hm'
+        _np = os.path.join(os.path.dirname(_fp), _nn)
+        os.rename(_fp, _np)
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _sl_reg
+    _sl_reg("rename_file_answer", _rename_file_answer)
+except Exception:
+    pass
+
+
 def _safe_asdict(obj: Any) -> Dict[str, Any]:
     """asdict() for a dataclass, else its __dict__, else {}. Never raises."""
     try:
@@ -3656,23 +3682,42 @@ class SaveLoadView(ctk.CTkFrame):
         current_name = self.file_tree.set(item, 'filename')
         current_path = self.file_tree.set(item, 'filepath')
 
-        # Simple rename dialog
-        new_name = simpledialog.askstring("Rename File",
-                                           f"Enter new name for '{current_name}':",
-                                           initialvalue=current_name.replace('.hm', ''))
+        # Gating T2-Phase 3: non-modal prompt; dismiss = keep the name.
+        # The answer survives save/load via the resolver (filepath in
+        # resolver_args); the draft survives navigation in the session.
+        from popup_system import prompt_card, cards_available
 
-        if new_name and new_name.strip():
+        def _do_rename(new_name):
+            if not new_name or not str(new_name).strip():
+                return
+            new_name = str(new_name).strip()
             if not new_name.endswith('.hm'):
                 new_name += '.hm'
-
             new_path = os.path.join(os.path.dirname(current_path), new_name)
-
             try:
                 os.rename(current_path, new_path)
                 self._show_banner(f"File renamed to '{new_name}'", "ok")
                 self._refresh_file_list()
             except Exception as e:
                 self._show_banner(f"Failed to rename file:\n{str(e)}", "error")
+
+        if not cards_available(self):
+            # Headless: legacy blocking prompt, identical semantics.
+            new_name = simpledialog.askstring(
+                "Rename File",
+                f"Enter new name for '{current_name}':",
+                initialvalue=current_name.replace('.hm', ''))
+            _do_rename(new_name)
+            return
+
+        prompt_card(
+            self, "Rename File",
+            f"Enter new name for '{current_name}':",
+            on_answer=_do_rename,
+            initial=current_name.replace('.hm', ''),
+            session_id="rename_file", dialog_id="rename_file_card",
+            resolver="rename_file_answer",
+            resolver_args={"filepath": current_path})
 
     def _show_file_properties(self):
         """Show detailed properties of selected file"""

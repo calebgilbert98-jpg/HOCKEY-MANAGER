@@ -901,8 +901,15 @@ class _MessageBoxFacade:
         mgr = _resolve_manager(parent)
         if mgr is None:
             return _fallback(kind).showinfo(title, message)
-        return _dialog(mgr, kind, title or "", message or "",
-                       [("OK", True, "primary")])
+        # Gating T2-Phase 4: FYI notifications are fire-and-forget --
+        # a dismissible non-modal card, never a grab_set seizure.
+        # Pure information; the flow already stopped or succeeded on
+        # its own, so nothing needs to wait for the dismissal.
+        try:
+            notify_card(parent, title or "", message or "", kind=kind)
+        except Exception:
+            pass
+        return True
 
     def showinfo(self, title=None, message=None, parent=None, **kw):
         return self._show("info", title, message, parent, **kw)
@@ -1543,6 +1550,57 @@ def notify_card(parent, title, message, kind="info", width=470, height=180):
                                "token": {"token_id": token_id,
                                          "close": _close}})
     return {"token_id": token_id, "close": _close}
+
+
+def confirm_card(parent, title, message, on_yes, *, on_no=None,
+                 yes_label="Yes", no_label="No", session_id=None,
+                 dialog_id=None, resolver=None, resolver_args=None,
+                 kind="question"):
+    """Fire-and-forget confirm: a non-modal Yes/No question card.
+
+    T2-Phase 3 workhorse for the ~20 confirm-then-continue sites (deletes,
+    releases, resets, save-overwrites). Yes runs ``on_yes``; No runs
+    ``on_no`` when given. Dismiss (Escape / X / click-out) is the safe
+    default -- No -- never an accidental Yes.
+
+    No session is required: a confirm dismissed by save/load or navigation
+    simply never fires, which is the honest outcome (nothing was decided;
+    the user re-initiates). Named ``resolver`` + ``resolver_args`` may be
+    given for sites that DO hold state, following the ask_card grammar.
+    Headless (no card manager): falls back to the legacy blocking facade
+    so CLI/test flows keep their old answer semantics.
+    """
+    if not cards_available(parent):
+        try:
+            ans = messagebox.askyesno(title, message)
+        except Exception:
+            ans = False
+        try:
+            if ans:
+                on_yes()
+            elif on_no is not None:
+                on_no()
+        except Exception:
+            pass
+        return None
+
+    def _on_answer(value):
+        try:
+            if value:
+                on_yes()
+            elif on_no is not None:
+                on_no()
+        except Exception:
+            pass
+
+    return ask_card(parent, title, message,
+                    [(yes_label, True, "primary"),
+                     (no_label, False, "secondary")],
+                    on_answer=_on_answer,
+                    default_on_dismiss=False,
+                    session_id=session_id, dialog_id=dialog_id,
+                    resolver=resolver, resolver_args=resolver_args,
+                    kind=kind)
 
 
 def prompt_card(parent, title, prompt, on_answer=None, *, initial="",

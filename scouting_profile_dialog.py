@@ -263,28 +263,6 @@ class ScoutingProfileView(ctk.CTkFrame):
         self.close_view()
 
 
-class ScoutingProfileDialog(InGamePopup):
-    """Popup wrapper around ScoutingProfileView (backward compatibility)."""
-
-    def __init__(self, parent, on_apply=None):
-        super().__init__(parent, modal=True)
-        self.title("Scouting Profiles")
-        app = (getattr(parent, 'app', None)
-               or getattr(parent, 'parent', None) or parent)
-        self._view = ScoutingProfileView(self, app=app, on_apply=on_apply)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class ProfileEditorView(ctk.CTkFrame):
     """Create or edit a single custom scouting profile (focus-card view)."""
 
@@ -495,26 +473,3 @@ class ProfileEditorView(ctk.CTkFrame):
                                   positions=list(codes))
         save_custom_profile(profile)
         self._finish(name)
-
-
-class ProfileEditorDialog(InGamePopup):
-    """Popup wrapper around ProfileEditorView (backward compatibility)."""
-
-    def __init__(self, parent, bg, fg, profile=None, on_save=None):
-        super().__init__(parent, modal=True)
-        self.title("Edit Profile" if profile else "New Scouting Profile")
-        app = (getattr(parent, 'app', None)
-               or getattr(parent, 'parent', None) or parent)
-        self._view = ProfileEditorView(self, app=app, bg=bg, fg=fg,
-                                       profile=profile, on_save=on_save)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

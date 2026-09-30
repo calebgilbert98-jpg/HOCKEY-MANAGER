@@ -6,7 +6,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from datetime import date
 from game_classes import EmailMessage
 
@@ -1480,12 +1480,19 @@ class InboxView(ctk.CTkFrame):
 
     def _delete_current(self):
         """Delete current message."""
-        if self.selected_message:
-            if messagebox.askyesno("Delete Message", "Are you sure you want to delete this message?"):
-                self.inbox.delete_message(self.selected_message.id)
-                self.selected_message = None
-                self._clear_preview()
-                self._refresh_inbox()
+        if not self.selected_message:
+            return
+
+        def _do_delete():
+            self.inbox.delete_message(self.selected_message.id)
+            self.selected_message = None
+            self._clear_preview()
+            self._refresh_inbox()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep the message.
+        confirm_card(self, "Delete Message",
+                     "Are you sure you want to delete this message?",
+                     on_yes=_do_delete)
 
     def _reply_to_current(self):
         """Reply to the current message via a real editor.
@@ -1559,20 +1566,30 @@ class InboxView(ctk.CTkFrame):
 
     def _mark_all_read(self):
         """Mark all messages as read."""
-        if messagebox.askyesno("Mark All Read", "Mark all messages as read?"):
+        def _do_mark():
             self.inbox.mark_all_read()
             self._refresh_inbox()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep unread.
+        confirm_card(self, "Mark All Read", "Mark all messages as read?",
+                     on_yes=_do_mark)
 
     def _delete_read_messages(self):
         """Delete all read messages."""
         read_messages = [msg for msg in self.inbox.messages if msg.is_read]
-        if read_messages:
-            if messagebox.askyesno("Delete Read", f"Delete {len(read_messages)} read messages?"):
-                for message in read_messages:
-                    self.inbox.delete_message(message.id)
-                self._refresh_inbox()
-        else:
+        if not read_messages:
             messagebox.showinfo("Delete Read", "No read messages to delete.")
+            return
+
+        def _do_delete():
+            for message in read_messages:
+                self.inbox.delete_message(message.id)
+            self._refresh_inbox()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep them.
+        confirm_card(self, "Delete Read",
+                     f"Delete {len(read_messages)} read messages?",
+                     on_yes=_do_delete)
 
     def _refresh_inbox(self):
         """Refresh the inbox display, preserving the active filter."""
@@ -1707,14 +1724,12 @@ class _MessageEditor(InGamePopup):
     def _on_close(self):
         """Discard the draft; confirm first if anything was typed."""
         if self._draft_text():
-            try:
-                if not messagebox.askyesno(
-                        "Discard draft?",
-                        "Close without sending? Your draft will be lost.",
-                        parent=self):
-                    return
-            except Exception:
-                pass
+            # Gating T2-Phase 3: non-modal confirm; dismiss/Escape keeps
+            # editing (the safe default), Yes discards and closes.
+            confirm_card(self, "Discard draft?",
+                         "Close without sending? Your draft will be lost.",
+                         on_yes=self.destroy)
+            return
         self.destroy()
 
     def _send(self):

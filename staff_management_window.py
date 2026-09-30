@@ -9,7 +9,7 @@ styled dark treeview with rating-tier and morale tags, CTk dialogs.
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from typing import List
 
 import customtkinter as ctk
@@ -1560,24 +1560,25 @@ class StaffManagementView(ctk.CTkFrame):
         else:
             msg = f"Are you sure you want to release {len(selected_staff_list)} staff members?"
 
-        if not messagebox.askyesno("Confirm Release", msg):
-            return
+        def _do_release():
+            user_team = self._get_user_team()
+            if not user_team:
+                return
 
-        user_team = self._get_user_team()
-        if not user_team:
-            return
+            released_count = 0
+            for staff in selected_staff_list:
+                if staff in user_team.staff:
+                    user_team.staff.remove(staff)
+                    released_count += 1
 
-        released_count = 0
-        for staff in selected_staff_list:
-            if staff in user_team.staff:
-                user_team.staff.remove(staff)
-                released_count += 1
+            # Clear selection
+            self.selected_staff.clear()
 
-        # Clear selection
-        self.selected_staff.clear()
+            messagebox.showinfo("Staff Released", f"Successfully released {released_count} staff member(s).")
+            self.update_current_staff_view()
 
-        messagebox.showinfo("Staff Released", f"Successfully released {released_count} staff member(s).")
-        self.update_current_staff_view()
+        # Gating T2-Phase 3: non-modal confirm; dismiss = nobody released.
+        confirm_card(self, "Confirm Release", msg, on_yes=_do_release)
 
     # ------------------------------------------------------------------
     # Dialogs
@@ -2227,11 +2228,7 @@ class StaffManagementView(ctk.CTkFrame):
 
     def release_staff_action(self, staff: Staff, details_window=None):
         """Perform staff release action."""
-        result = messagebox.askyesno("Confirm Release",
-                                    f"Are you sure you want to release {staff.full_name}?\n"
-                                    f"This will end their contract immediately.")
-
-        if result:
+        def _do_release():
             user_team = self._get_user_team()
             if user_team and staff in user_team.staff:
                 user_team.staff.remove(staff)
@@ -2241,6 +2238,12 @@ class StaffManagementView(ctk.CTkFrame):
                     details_window.destroy()
 
                 self.update_views()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = nobody released.
+        confirm_card(self, "Confirm Release",
+                     f"Are you sure you want to release {staff.full_name}?\n"
+                     f"This will end their contract immediately.",
+                     on_yes=_do_release)
 
     def make_staff_offer_action(self, staff: Staff, details_window=None):
         """Make offer to a hiring candidate.

@@ -4,7 +4,8 @@
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import (messagebox, InGamePopup)
+from popup_system import (messagebox, InGamePopup, ask_card, confirm_card,
+                          cards_available)
 import customtkinter as ctk
 from game_classes import (StaffRole, PlayerPosition, to_100_scale)
 import random
@@ -1904,16 +1905,30 @@ class RosterView(ctk.CTkFrame):
                             pass
                 except Exception:
                     pass
-                if messagebox.askyesno(
-                        "Unsigned prospect",
-                        f"{player.full_name} needs an entry-level contract "
-                        f"before he can join the {to_roster.upper()} "
-                        f"roster.\n\nOpen contract talks now?"):
+                # Gating T2-Phase 3: non-modal question; dismiss = no talks.
+                _set_elc_app(self.app)
+                _pid = str(getattr(player, "id", ""))
+
+                def _elc_on_answer(_ans, _p=player):
+                    if not _ans:
+                        return
                     try:
                         self.app.open_contract_negotiation_window(
-                            player, is_elc=True)
+                            _p, is_elc=True)
                     except Exception:
                         pass
+
+                ask_card(self, "Unsigned prospect",
+                         f"{player.full_name} needs an entry-level contract "
+                         f"before he can join the {to_roster.upper()} "
+                         f"roster.\n\nOpen contract talks now?",
+                         [("Open Talks", True, "primary"),
+                          ("Not Now", False, "secondary")],
+                         on_answer=_elc_on_answer,
+                         default_on_dismiss=False,
+                         session_id="elc_talks", dialog_id="elc_card",
+                         resolver="elc_talks_answer",
+                         resolver_args={"player_id": _pid})
                 return
             try:
                 player.playing_where = "NHL" if to_roster == 'nhl' \
@@ -4393,6 +4408,115 @@ try:
     _gating_reg_resolver("trade_waiver_answer", _stale_popup_answer)
     _gating_reg_resolver("draft_call_answer", _stale_popup_answer)
     _gating_reg_resolver("deposition_answer", _stale_popup_answer)
+except Exception:
+    pass
+
+
+# -- Gating T2-Phase 3: unsigned-prospect ELC question ------------------
+# "Open contract talks now?" Yes opens the ELC negotiation for the
+# prospect; No/dismiss does nothing (the promotion was already refused).
+# The player is carried by id so a post-load answer re-resolves him.
+_ELC_APP = None
+
+
+def _set_elc_app(app):
+    global _ELC_APP
+    _ELC_APP = app
+
+
+def _elc_app():
+    app = _ELC_APP
+    if app is not None:
+        return app
+    try:
+        import tkinter as _tk
+        _root = _tk._default_root
+        if _root is not None and hasattr(_root, "open_contract_negotiation_window"):
+            return _root
+    except Exception:
+        pass
+    return None
+
+
+def _find_player_by_id(app, pid):
+    try:
+        league = getattr(app, "league", None)
+        for team in getattr(league, "teams", None) or []:
+            for roster in (getattr(team, "roster", None),
+                           getattr(team, "prospects", None)):
+                for p in roster or []:
+                    if str(getattr(p, "id", "")) == str(pid):
+                        return p
+    except Exception:
+        pass
+    return None
+
+
+def _elc_talks_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['elc_talks_answer']: Yes opens ELC talks for the
+    prospect named in resolver_args; anything else is a no-op. Honest
+    when the player can't be re-resolved (stale id): does nothing."""
+    try:
+        if not value:
+            return False
+        app = _elc_app()
+        if app is None:
+            return False
+        player = _find_player_by_id(app, kwargs.get("player_id", ""))
+        if player is None:
+            return False
+        try:
+            app.open_contract_negotiation_window(player, is_elc=True)
+        except Exception:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+try:
+    _gating_reg_resolver("elc_talks_answer", _elc_talks_answer)
+except Exception:
+    pass
+
+
+# -- Gating T2-Phase 3: game-viewer "simulate and watch" questions ------
+# A transient view question (the schedule viewer stays on screen), so the
+# continuation keeps a live (view, game, commit) tuple in a module-level
+# holder. A post-load answer can't re-find the view: honest no-op.
+_WATCH_GAME_CTX = {}
+
+
+def _set_watch_game_ctx(view, game_data, commit):
+    _WATCH_GAME_CTX.clear()
+    _WATCH_GAME_CTX["view"] = view
+    _WATCH_GAME_CTX["game"] = game_data
+    _WATCH_GAME_CTX["commit"] = commit
+
+
+def _watch_game_on_answer(answer):
+    ctx = _WATCH_GAME_CTX.get("view")
+    game = _WATCH_GAME_CTX.get("game")
+    if not answer or ctx is None or game is None:
+        return
+    try:
+        ctx._launch_game_viewer(game, commit=_WATCH_GAME_CTX.get("commit", False))
+    except Exception:
+        pass
+
+
+def _watch_game_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['watch_game_answer']: Yes re-launches the viewer
+    for the game held in the module ctx; anything else is a no-op."""
+    try:
+        _watch_game_on_answer(value)
+        return bool(value)
+    except Exception:
+        return False
+
+
+try:
+    _gating_reg_resolver("watch_game_answer", _watch_game_answer)
 except Exception:
     pass
 
@@ -9442,22 +9566,32 @@ class ScheduleView(ctk.CTkFrame):
             is_past_game = False
 
         if is_past_game:
-            response = messagebox.askyesno(
-                "Game Not Played",
-                "This game hasn't been played yet.\n\n"
-                "Would you like to simulate and watch it?\n"
-                "(The result will be recorded in your season.)")
-            if not response:
-                return
-            self._launch_game_viewer(game_data, commit=True)
+            # Gating T2-Phase 3: non-modal; dismiss = don't simulate.
+            _set_watch_game_ctx(self, game_data, True)
+            ask_card(self, "Game Not Played",
+                     "This game hasn't been played yet.\n\n"
+                     "Would you like to simulate and watch it?\n"
+                     "(The result will be recorded in your season.)",
+                     [("Simulate & Watch", True, "primary"),
+                      ("Not Now", False, "secondary")],
+                     on_answer=_watch_game_on_answer,
+                     default_on_dismiss=False,
+                     session_id="watch_game", dialog_id="watch_card",
+                     resolver="watch_game_answer")
+            return
         else:
-            response = messagebox.askyesno(
-                "Future Game",
-                "This game is scheduled for today or the future.\n\n"
-                "Watch a preview simulation? It will not affect your season.")
-            if not response:
-                return
-            self._launch_game_viewer(game_data, commit=False)
+            # Gating T2-Phase 3: non-modal; dismiss = no preview.
+            _set_watch_game_ctx(self, game_data, False)
+            ask_card(self, "Future Game",
+                     "This game is scheduled for today or the future.\n\n"
+                     "Watch a preview simulation? It will not affect your season.",
+                     [("Watch Preview", True, "primary"),
+                      ("Not Now", False, "secondary")],
+                     on_answer=_watch_game_on_answer,
+                     default_on_dismiss=False,
+                     session_id="watch_game", dialog_id="watch_card",
+                     resolver="watch_game_answer")
+            return
 
     def simulate_selected_game(self):
         """Simulate the selected game without watching.

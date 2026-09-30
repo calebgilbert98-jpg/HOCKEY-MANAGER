@@ -6,7 +6,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from media_system import (MediaSystem, MediaEngagementLevel)
 
 import customtkinter as ctk
@@ -576,16 +576,20 @@ TIP: {"Higher engagement = more storylines but more interactions" if status['eng
         """Skip all pending events."""
         pending = len(self.media_system.get_pending_media_events())
         if pending > 0:
-            result = messagebox.askyesno(
-                "Skip All Events",
-                f"Skip all {pending} pending media events?\n\n"
-                "They will be auto-handled professionally.")
-            if result:
-                self.media_system.skip_all_pending_events()
-                self._update_display()
-                messagebox.showinfo("Events Skipped",
-                                    f"All {pending} events handled "
-                                    "professionally.")
+            # Gating T2-Phase 3: non-modal confirm; dismiss = keep events.
+            confirm_card(self, "Skip All Events",
+                         f"Skip all {pending} pending media events?\n\n"
+                         "They will be auto-handled professionally.",
+                         on_yes=self._skip_all_events_confirmed)
+
+    def _skip_all_events_confirmed(self):
+        """Skip all pending events after the user confirmed."""
+        pending = len(self.media_system.get_pending_media_events())
+        self.media_system.skip_all_pending_events()
+        self._update_display()
+        messagebox.showinfo("Events Skipped",
+                            f"All {pending} events handled "
+                            "professionally.")
 
     def _skip_event(self, event):
         """Skip a specific event."""
