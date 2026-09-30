@@ -466,6 +466,13 @@ class GameSaveManager:
                 'season_mandate': dict(getattr(team, 'season_mandate', None) or {}),
                 'season_meeting_pending': bool(getattr(team, 'season_meeting_pending', False)),
                 'season_meeting_context': dict(getattr(team, 'season_meeting_context', None) or {}),
+                # Hot-hand audition ledger (line_chemistry.hot_hand_auditions):
+                # in-flight auditions evaluated across games via start_gp.
+                # Was never serialized: every save wiped the ledger, so
+                # auditions never resolved after a load. Plain pid->dict
+                # data; missing key = old save -> empty ledger.
+                'lc_auditions': {k: dict(v) for k, v in
+                                 (getattr(team, '_lc_auditions', None) or {}).items()},
                 # Quarterly coach check-ins: the pending flag (+ transient
                 # UI context). History lives on the mandate dict above.
                 'checkin_pending': bool(getattr(team, 'checkin_pending', False)),
@@ -2019,6 +2026,14 @@ class GameSaveManager:
                 team.checkin_context = dict(team_data.get('checkin_context') or {})
             except Exception:
                 team.checkin_context = {}
+            # Hot-hand audition ledger (line_chemistry). Old saves lack the
+            # key -> empty ledger; new auditions earn normally afterwards.
+            try:
+                team._lc_auditions = {
+                    k: dict(v) for k, v in
+                    (team_data.get('lc_auditions', None) or {}).items()}
+            except Exception:
+                team._lc_auditions = {}
             # Annual staff payroll budget. Absent in old saves -> market-tier
             # default so existing leagues get the rule without a wipe.
             try:
