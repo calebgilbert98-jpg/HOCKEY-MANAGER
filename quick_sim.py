@@ -728,16 +728,67 @@ class AdvancedGameSim:
         return (sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0)
                     for p in members) / len(members))
 
+    def _toi_cap_s(self, team_name):
+        """Soft-cap seconds for this team/game state (scoring calibration,
+        2026-09-30). 30 min normally, 35 min when the bench is short
+        (injury-depleted). Applies in OT too -- 3v3 rides the same two
+        forwards, and an uncapped OT produced 52-min games.
+        Mirrors deployment_policy's SOFT_CAP_S / SOFT_CAP_SHORT_S, which
+        GameSim already enforces; AdvancedGameSim never did, letting
+        double-shifted stars skate 37-47 min and producing 100-goal seasons.
+        """
+        try:
+            from deployment_policy import (
+                SOFT_CAP_S as _cap, SOFT_CAP_SHORT_S as _cap_short,
+                _dressed_skater_count as _count,
+            )
+            try:
+                _n = _count(self.lineups[team_name])
+            except Exception:
+                _n = 18
+            return _cap_short if _n < 15 else _cap
+        except Exception:
+            return 30 * 60
+
+    def _line_toi_capped(self, team_name, line, cap_s):
+        """True if any skater on this unit is at/over the TOI soft cap."""
+        if cap_s is None:
+            return False
+        try:
+            _st = self.stats.get(team_name, {})
+            for p in line or []:
+                if p and _st.get(getattr(p, "id", None), {}).get("toi", 0) >= cap_s:
+                    return True
+        except Exception:
+            pass
+        return False
+
     def _select_lines_idx(self, team_name):
-        """Least-fatigued unit. Returns (fw, df, goalie, fw_idx, df_idx)."""
+        """Least-fatigued unit. Returns (fw, df, goalie, fw_idx, df_idx).
+
+        Respects the TOI soft cap: units containing a skater at/over the
+        cap are skipped (he sits out). If every unit is capped, falls back
+        to least-fatigued so a shift is always dressed.
+        """
         lineup = self.lineups[team_name]
         fw_lines = lineup['Forwards']
         df_pairs = lineup['Defense']
         goalies = lineup['Goalies']
-        fw_idx = min(range(len(fw_lines)),
-                     key=lambda i: self._line_fatigue(team_name, fw_lines[i]))
-        df_idx = min(range(len(df_pairs)),
-                     key=lambda i: self._line_fatigue(team_name, df_pairs[i]))
+        _cap = self._toi_cap_s(team_name)
+
+        def _pick(lines):
+            _best, _best_f = None, float("inf")
+            _fb, _fb_f = None, float("inf")
+            for i, _line in enumerate(lines):
+                _f = self._line_fatigue(team_name, _line)
+                if _f < _fb_f:
+                    _fb_f, _fb = _f, i
+                if not self._line_toi_capped(team_name, _line, _cap) and _f < _best_f:
+                    _best_f, _best = _f, i
+            return _best if _best is not None else _fb
+
+        fw_idx = _pick(fw_lines)
+        df_idx = _pick(df_pairs)
         goalie = goalies[0] if goalies and goalies[0] else None
         return fw_lines[fw_idx], df_pairs[df_idx], goalie, fw_idx, df_idx
 
@@ -772,18 +823,21 @@ class AdvancedGameSim:
         fw_lines = lineup['Forwards']
         df_pairs = lineup['Defense']
         use_f, use_d, directed = fresh_f, fresh_d, False
+        _cap = self._toi_cap_s(team_name)
         if 0 <= want_f < len(fw_lines):
             if want_f == fresh_f:
                 if act_f:
                     directed = True  # rotation already had the matchup unit
-            elif (self._line_fatigue(team_name, fw_lines[want_f])
+            elif (not self._line_toi_capped(team_name, fw_lines[want_f], _cap)
+                    and self._line_fatigue(team_name, fw_lines[want_f])
                     <= self._line_fatigue(team_name, fw_lines[fresh_f]) + 6):
                 use_f, directed = want_f, True
         if 0 <= want_d < len(df_pairs):
             if want_d == fresh_d:
                 if act_d:
                     directed = True
-            elif (self._line_fatigue(team_name, df_pairs[want_d])
+            elif (not self._line_toi_capped(team_name, df_pairs[want_d], _cap)
+                    and self._line_fatigue(team_name, df_pairs[want_d])
                     <= self._line_fatigue(team_name, df_pairs[fresh_d]) + 6):
                 use_d, directed = want_d, True
         return fw_lines[use_f], df_pairs[use_d], goalie, use_f, use_d, directed
@@ -930,6 +984,36 @@ class AdvancedGameSim:
             if getattr(self, "_ot_3v3", False):
                 fw = [p for p in fw if p][:2]
                 df = [p for p in df if p][:1]
+            # TOI soft cap (player level): a skater at/over the cap sits out
+            # this shift, even on a "stuck" line that bypassed selection.
+            # Prevents double-shifted stars from skating 37-47 min.
+            # Never empties a unit: if all are capped, the least-toied
+            # dresses (cap binds him next shift).
+            try:
+                _pcap = self._toi_cap_s(team_name)
+                if _pcap is not None:
+                    _st = self.stats.get(team_name, {})
+
+                    def _toi_of(_p):
+                        try:
+                            return _st.get(getattr(_p, "id", None), {}).get("toi", 0)
+                        except Exception:
+                            return 0
+
+                    def _cap_filter(_unit):
+                        _live = [p for p in (_unit or []) if p]
+                        if not _live:
+                            return _unit
+                        _ok = [p for p in _live if _toi_of(p) < _pcap]
+                        if _ok:
+                            return _ok
+                        _live.sort(key=_toi_of)
+                        return _live[:1]
+
+                    fw = _cap_filter(fw)
+                    df = _cap_filter(df)
+            except Exception:
+                pass
             self.on_ice[team_name]['Forwards'] = fw
             self.on_ice[team_name]['Defense'] = df
             self.on_ice[team_name]['Goalie'] = g
@@ -2552,6 +2636,8 @@ class AdvancedGameSim:
         # by finishing (the shared shooter_choice_weight) x relationship
         # closeness with the passer. Same decision GameSim makes.
         _rcands = [p for p in shooters if p != passer]
+        if not _rcands:
+            return
         try:
             from player_archetypes import shooter_choice_weight as _scw5
             from mesh_system import relationship_mult as _relm2
