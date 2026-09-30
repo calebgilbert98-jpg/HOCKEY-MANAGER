@@ -2672,6 +2672,9 @@ class SaveLoadView(ctk.CTkFrame):
         slots_frame = ttk.LabelFrame(parent, text="Quick Save Slots", style='Card.TLabelframe')
         slots_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
+        # Kept so _refresh_quick_save_slots can rebuild the slot rows
+        # in place after a quick save, without rebuilding the whole tab.
+        self._quick_slots_frame = slots_frame
         self._create_quick_save_slots(slots_frame)
 
         # Quick save buttons
@@ -3313,10 +3316,26 @@ class SaveLoadView(ctk.CTkFrame):
         return slots
 
     def _refresh_quick_save_slots(self):
-        """Refresh the quick save slots display"""
-        # This would be called to update the quick save slots UI
-        # For now, we'll implement this when the tab is visible
-        pass
+        """Refresh the quick save slots display in place.
+
+        Rebuilds the slot rows inside the existing slots frame so the
+        Quick Save tab shows a just-written slot immediately, without
+        rebuilding the whole view.
+        """
+        frame = getattr(self, '_quick_slots_frame', None)
+        if frame is None:
+            return
+        try:
+            if not frame.winfo_exists():
+                return
+            for child in frame.winfo_children():
+                child.destroy()
+        except Exception:
+            return
+        try:
+            self._create_quick_save_slots(frame)
+        except Exception as e:
+            print(f"Error refreshing quick save slots: {e}")
 
     def _open_save_folder(self):
         """Open the saves folder in file explorer"""
@@ -3429,10 +3448,56 @@ class SaveLoadView(ctk.CTkFrame):
             self._show_banner(f"Failed to delete save file:\n{str(e)}", "error")
 
     def _sort_files(self, column):
-        """Sort files by column"""
-        # Implementation for sorting the file list
-        # This would sort the treeview by the selected column
-        pass
+        """Sort the Manage-Saves file list by the clicked column.
+
+        Clicking the same header again reverses the order. Size and
+        Last Modified sort numerically/chronologically; everything else
+        sorts case-insensitively as text.
+        """
+        if column == 'filepath':
+            return  # hidden bookkeeping column, nothing to sort
+        reverse = (getattr(self, '_sort_column', None) == column
+                   and not getattr(self, '_sort_reverse', False))
+        self._sort_column = column
+        self._sort_reverse = reverse
+
+        def _key(item):
+            raw = self.file_tree.set(item, column)
+            if column == 'size':
+                try:
+                    return float(str(raw).split()[0])
+                except (ValueError, IndexError):
+                    return 0.0
+            if column == 'modified':
+                for fmt in ("%m/%d %H:%M", "%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M"):
+                    try:
+                        from datetime import datetime
+                        return datetime.strptime(str(raw).strip(), fmt)
+                    except (ValueError, TypeError):
+                        continue
+                return str(raw)
+            return str(raw).lower()
+
+        items = list(self.file_tree.get_children(''))
+        try:
+            items.sort(key=_key, reverse=reverse)
+        except Exception:
+            return
+        for index, item in enumerate(items):
+            self.file_tree.move(item, '', index)
+        # Keep the header honest about the current direction.
+        for col_id in self.file_tree['columns']:
+            try:
+                base = {'filename': 'File Name', 'description': 'Description',
+                        'team': 'Team', 'date': 'Game Date', 'size': 'Size',
+                        'modified': 'Last Modified', 'category': 'Category',
+                        'type': 'Type'}.get(col_id, '')
+                arrow = ''
+                if col_id == column:
+                    arrow = ' \u25bc' if reverse else ' \u25b2'
+                self.file_tree.heading(col_id, text=f"{base}{arrow}")
+            except Exception:
+                continue
 
     def _create_file_context_menu(self):
         """Create context menu for file operations"""

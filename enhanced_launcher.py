@@ -2029,9 +2029,11 @@ This profile will influence player relationships, media interactions, and trade 
                                        bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_PRIMARY)
         settings_content.pack(fill='x', padx=20, pady=20)
         
-        # Placeholder for future settings
+        # Honest: the launcher keeps no settings of its own. New-game
+        # options live on the Advanced Configuration tab; everything else
+        # is configured in-game through Settings.
         tk.Label(settings_content,
-                text="Launcher settings and preferences will be available here.\nGame settings can be configured in-game.",
+                text="The launcher doesn't keep settings of its own.\nNew-game options are on the Advanced Configuration tab;\nall other settings are configured in-game (Settings).",
                 font=AppFonts.BODY,
                 bg=AppColors.BG_ELEVATED, fg=AppColors.TEXT_SECONDARY,
                 justify='center').pack(pady=40)

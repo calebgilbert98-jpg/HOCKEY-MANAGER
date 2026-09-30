@@ -972,14 +972,54 @@ class InboxView(ctk.CTkFrame):
         self._action_section("HOW TO PLAY TONIGHT")
         btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
         btn_row.pack(fill='x', padx=10, pady=8)
-        self._primary_button(btn_row, text="\u25B6 WATCH LIVE",
+        # Preseason exhibitions are never appointment viewing: the engine
+        # quick-sims them and records no stats (main._resolve_game_day).
+        # The button stays visible but disabled so the UI is honest about
+        # the choice being unavailable instead of silently discarding it.
+        is_preseason = self._is_preseason_game_day(app)
+        watch_btn = self._primary_button(btn_row, text="\u25B6 WATCH LIVE",
                              width=200, height=44,
                              command=lambda: app._resolve_game_day(True)
-                             ).pack(side='left', padx=(0, 8))
+                             )
+        watch_btn.pack(side='left', padx=(0, 8))
         self._secondary_button(btn_row, text="\u26A1 QUICK SIM",
                                width=200, height=44,
                                command=lambda: app._resolve_game_day(False)
                                ).pack(side='left', padx=8)
+        if is_preseason:
+            # Disabled AND visibly dimmed: a disabled button that looks
+            # identical to an enabled one fails the accessibility pass.
+            watch_btn.configure(state="disabled", fg_color="#3d434e",
+                                hover_color="#3d434e", text_color="#9aa0ab")
+            self._iwrap("Preseason exhibitions aren't watchable -- they're "
+                        "quick-simmed and no stats are recorded.",
+                        size=10, dim=True, padx=14, pady=(0, 6))
+
+    def _is_preseason_game_day(self, app):
+        """True when today's user-team game is a preseason exhibition."""
+        try:
+            team = getattr(app, 'user_team', None)
+            today = getattr(app, 'current_date', None)
+            if team is None or today is None:
+                return False
+            for item in (getattr(getattr(app, 'league', None),
+                                'schedule', None) or []):
+                try:
+                    if isinstance(item, dict):
+                        d, h, a = (item.get("date"), item.get("home_team"),
+                                   item.get("away_team"))
+                    elif isinstance(item, (tuple, list)) and len(item) >= 3:
+                        d, h, a = item[0], item[1], item[2]
+                    else:
+                        continue
+                    if d == today and (h == team or a == team):
+                        return bool(item.get("preseason")) \
+                            if isinstance(item, dict) else False
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
 
     def _render_postmatch_presser(self, message):
         """Post-match presser Q&A inside the inbox (non-blocking)."""
@@ -1443,18 +1483,74 @@ class InboxView(ctk.CTkFrame):
                 self._refresh_inbox()
 
     def _reply_to_current(self):
-        """Reply to current message."""
-        if self.selected_message and self.selected_message.requires_response:
-            messagebox.showinfo("Reply", f"Reply functionality for {self.selected_message.category} messages coming soon!")
+        """Reply to the current message via a real editor.
+
+        Send appends the reply to the inbox message store; the original
+        is marked read and its response requirement cleared.
+        """
+        message = self.selected_message
+        if not message:
+            return
+        subject = message.subject or ""
+        if not subject.lower().startswith("re:"):
+            subject = f"Re: {subject}"
+        app = self.app
+
+        def _on_sent(msg, _to):
+            self.inbox.add_message(msg)
+            try:
+                message.requires_response = False
+            except Exception:
+                pass
+            try:
+                self.inbox.mark_message_read(message.id)
+            except Exception:
+                pass
+            self._refresh_inbox()
+            self.focus_message(msg.id)
+
+        _MessageEditor(self, app, title="Reply",
+                       to_value=message.sender or "", to_locked=True,
+                       subject_value=subject,
+                       category=message.category or "General",
+                       on_sent=_on_sent)
 
     def _forward_current(self):
-        """Forward current message."""
-        if self.selected_message:
-            messagebox.showinfo("Forward", "Forward functionality coming soon!")
+        """Forward the current message via a real editor (quoted body)."""
+        message = self.selected_message
+        if not message:
+            return
+        subject = message.subject or ""
+        if not subject.lower().startswith("fwd:"):
+            subject = f"Fwd: {subject}"
+        quoted = (f"--- Forwarded message ---\n"
+                  f"From: {message.sender or ''}\n"
+                  f"Date: {message.date_sent}\n"
+                  f"Subject: {message.subject or ''}\n\n"
+                  f"{message.content or ''}")
+        app = self.app
+
+        def _on_sent(msg, _to):
+            self.inbox.add_message(msg)
+            self._refresh_inbox()
+            self.focus_message(msg.id)
+
+        _MessageEditor(self, app, title="Forward message",
+                       subject_value=subject, body_value=quoted,
+                       category=message.category or "General",
+                       on_sent=_on_sent)
 
     def _compose_email(self):
-        """Compose a new email."""
-        messagebox.showinfo("Compose", "Compose functionality coming soon!")
+        """Compose a new message via a real editor."""
+        app = self.app
+
+        def _on_sent(msg, _to):
+            self.inbox.add_message(msg)
+            self._refresh_inbox()
+            self.focus_message(msg.id)
+
+        _MessageEditor(self, app, title="Compose message",
+                       category="General", on_sent=_on_sent)
 
     def _mark_all_read(self):
         """Mark all messages as read."""
@@ -1530,6 +1626,127 @@ class InboxView(ctk.CTkFrame):
 
 
 # Sample email generation removed - emails are now generated dynamically from actual game events
+
+
+class _MessageEditor(InGamePopup):
+    """Non-modal To/Subject/Body editor behind Reply, Forward, and Compose.
+
+    Thin and honest: Send builds a real EmailMessage and appends it to the
+    user's inbox store through the existing add_message() write path, so
+    the sent copy is a real record in the same store as incoming mail.
+    The sent copy is marked read -- it is our own outbound text, not new
+    mail -- and never expires as headline news (no TTL). Closing the
+    editor discards the draft (confirmed when the user typed something).
+    Never modal: no grab_set, so it can't seize the game loop.
+    """
+
+    def __init__(self, parent, app, title, to_value="", to_locked=False,
+                 subject_value="", body_value="", category="General",
+                 sender_tag="You", on_sent=None):
+        super().__init__(parent)
+        self.app = app if app is not None else parent
+        self.title(title)
+        self.geometry("520x460")
+        self._category = category or "General"
+        self._sender_tag = sender_tag
+        self._on_sent = on_sent
+        self._sent = False
+
+        self.to_var = tk.StringVar(value=to_value)
+        self.subj_var = tk.StringVar(value=subject_value)
+
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+
+        def _row(label, var, locked=False):
+            r = ctk.CTkFrame(body, fg_color="transparent")
+            r.pack(fill="x", pady=(0, 8))
+            ctk.CTkLabel(r, text=label, width=70, anchor="w",
+                         font=("Segoe UI", 11, "bold")).pack(side="left")
+            e = ctk.CTkEntry(r, textvariable=var, width=380,
+                             font=("Segoe UI", 11))
+            if locked:
+                e.configure(state="disabled")
+            e.pack(side="left", fill="x", expand=True)
+            return e
+
+        _row("To:", self.to_var, locked=to_locked)
+        _row("Subject:", self.subj_var)
+        ctk.CTkLabel(body, text="Message:", anchor="w",
+                     font=("Segoe UI", 11, "bold")).pack(anchor="w",
+                                                        pady=(4, 4))
+        self.body_box = ctk.CTkTextbox(body, font=("Segoe UI", 11),
+                                       wrap="word")
+        self.body_box.pack(fill="both", expand=True)
+        if body_value:
+            self.body_box.insert("1.0", body_value)
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x", pady=(12, 0))
+        ctk.CTkButton(btns, text="Send", width=120,
+                      command=self._send).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(btns, text="Cancel", width=120, fg_color="transparent",
+                      border_width=1, command=self._on_close).pack(side="right")
+
+        try:
+            self.protocol("WM_DELETE_WINDOW", self._on_close)
+        except Exception:
+            pass
+
+    def _draft_text(self):
+        try:
+            return self.body_box.get("1.0", "end").strip()
+        except Exception:
+            return ""
+
+    def _on_close(self):
+        """Discard the draft; confirm first if anything was typed."""
+        if self._draft_text():
+            try:
+                if not messagebox.askyesno(
+                        "Discard draft?",
+                        "Close without sending? Your draft will be lost.",
+                        parent=self):
+                    return
+            except Exception:
+                pass
+        self.destroy()
+
+    def _send(self):
+        to = self.to_var.get().strip()
+        if not to:
+            messagebox.showwarning("No recipient",
+                                   "Enter a recipient before sending.",
+                                   parent=self)
+            return
+        body = self._draft_text()
+        if not body:
+            messagebox.showwarning("Empty message",
+                                   "Write something before sending.",
+                                   parent=self)
+            return
+        subject = self.subj_var.get().strip() or "(no subject)"
+        today = getattr(self.app, "current_date", None) or date.today()
+        msg = EmailMessage(
+            sender=self._sender_tag,
+            sender_type="System",
+            subject=subject,
+            content=f"To: {to}\n\n{body}",
+            date_sent=today,
+            game_date_sent=today,
+            category=self._category,
+            is_read=True,  # our own sent copy, not new mail
+        )
+        self._sent = True
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        cb = self._on_sent
+        if callable(cb):
+            cb(msg, to)
+
+
 class InboxWindow(InGamePopup):
     """Popup wrapper around InboxView (backward compatibility).
 
