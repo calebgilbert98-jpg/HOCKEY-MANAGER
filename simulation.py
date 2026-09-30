@@ -2821,7 +2821,31 @@ class GameSim:
         hit_outcome = self._maybe_throw_hit(defending_team, attacking_team, puck_carrier, 0.35)
         if hit_outcome is not None:
             return hit_outcome
-        
+
+        # 5v4 forecheck (PP zone sustenance, shared channel): the power play
+        # hunts the puck -- numbers + structure tell. A well-drilled unit
+        # swarms the carrier and re-enters; a malformed one chases as
+        # individuals and the kill walks out. Volume channel only.
+        try:
+            if self._is_team_on_power_play(defending_team):
+                from line_chemistry import pp_zone_sustenance as _pzs_n
+                _unit_n = [pl for pl in defending_skaters if pl is not None]
+                _sus_n = _pzs_n(_unit_n, sim=self, team=defending_team)
+                _hunter = max(_unit_n,
+                              key=lambda pl: pl.checking + pl.anticipation)
+                _hskill = (_hunter.checking + _hunter.anticipation
+                           + _hunter.skating) / 3.0
+                _cskill = (puck_carrier.puck_handling + puck_carrier.composure
+                           + puck_carrier.skating) / 3.0
+                _strip = (_hskill / max(1.0, _hskill + _cskill)) * 0.95 * _sus_n
+                if random.random() < _strip:
+                    self._log_event(
+                        f"{_hunter.full_name} strips the puck on the forecheck.",
+                        "TURNOVER")
+                    return self._turnover_possession(defending_team)
+        except Exception:
+            pass
+
         # Apply fatigue effects
         fatigue_factor = 0.5 + 0.5 * (self.player_fatigue.get(puck_carrier.id, 100) / 100)
 
@@ -2865,6 +2889,35 @@ class GameSim:
         # The forechecking unit stays alive -- without this all five
         # hunters stand frozen while the breakout develops.
         self._defense_tick(defending_team, mode="forecheck")
+
+        # 5v4 forecheck strip (PP zone sustenance, shared channel): when
+        # the kill is trying to break out, the 5-man PP hunts the puck.
+        # A strip here is gold -- the PP gets it right back in the OZ.
+        try:
+            if (self._is_team_on_penalty_kill(attacking_team)
+                    and self._is_team_on_power_play(defending_team)):
+                from line_chemistry import pp_zone_sustenance as _pzs_dz
+                _unit_dz = [pl for pl in defending_skaters if pl is not None]
+                _sus_dz = _pzs_dz(_unit_dz, sim=self, team=defending_team)
+                _hunter_dz = max(_unit_dz,
+                                 key=lambda pl: pl.checking + pl.anticipation)
+                _hs_dz = (_hunter_dz.checking + _hunter_dz.anticipation
+                          + _hunter_dz.skating) / 3.0
+                _carrier_dz = getattr(self, "possession_player", None)
+                _onice_atk = self._get_on_ice(attacking_team)
+                if _carrier_dz is not None and _carrier_dz in _onice_atk:
+                    _cs_dz = (_carrier_dz.puck_handling + _carrier_dz.composure
+                              + _carrier_dz.skating) / 3.0
+                else:
+                    _cs_dz = 70.0
+                _strip_dz = (_hs_dz / max(1.0, _hs_dz + _cs_dz)) * 0.70 * _sus_dz
+                if random.random() < _strip_dz:
+                    self._log_event(
+                        f"{_hunter_dz.full_name} strips the puck on the forecheck.",
+                        "TURNOVER")
+                    return self._turnover_possession(defending_team)
+        except Exception:
+            pass
 
         # Attempt breakout
         return self._attempt_breakout(attacking_team, defending_team)
@@ -2986,7 +3039,18 @@ class GameSim:
             
             att_roll = best_attacker.skating + best_attacker.anticipation + random.randint(1, 10)
             def_roll = best_defender.defensive_awareness + best_defender.anticipation + random.randint(1, 10)
-            
+            # 5v4 numbers (shared sustenance channel): the PP covers the ice
+            # with five; the shorthanded rush chases with four.
+            try:
+                if self._is_team_on_power_play(defending_team):
+                    from line_chemistry import pp_zone_sustenance as _pzs_r
+                    _unit_r = [pl for pl in self._get_on_ice(defending_team)
+                               if pl.primary_position != PlayerPosition.GOALIE]
+                    def_roll *= 1.0 + 0.25 * (_pzs_r(_unit_r, sim=self,
+                                                     team=defending_team) - 0.75)
+            except Exception:
+                pass
+
             if att_roll > def_roll:
                 self.possession_team = attacking_team
                 self.possession_player = best_attacker
@@ -3468,6 +3532,18 @@ class GameSim:
             man_ratio = len(attackers) / max(1, len(defenders))
             pressure_roll *= min(1.6, max(0.7, man_ratio))
 
+        # PP zone sustenance (shared channel): a well-structured PP
+        # forechecks as five and disrupts the clear; a malformed PP lets
+        # the kill walk out clean.
+        try:
+            if self._is_team_on_power_play(attacking_team):
+                from line_chemistry import pp_zone_sustenance as _pzs_c
+                _unit_c = [pl for pl in attackers if pl is not None]
+                pressure_roll *= _pzs_c(_unit_c, sim=self,
+                                        team=attacking_team)
+        except Exception:
+            pass
+
         if clear_roll > pressure_roll:
             return self._zone_clear(defending_team)
         else:
@@ -3499,7 +3575,19 @@ class GameSim:
             # breakout hard, 1-4 concedes the zone and barely pressures.
             fc = getattr(defending_team, "tactic_forecheck", "2-1-2")
             pressure *= {"2-1-2": 1.05, "1-2-2": 1.0, "1-4": 0.85}.get(fc, 1.0)
-        
+
+        # PP zone sustenance (shared channel): a well-structured 5-man
+        # forecheck smothers the shorthanded breakout; a malformed one
+        # lets the kill walk out. The 5v4 numbers edge (+16 pressure) is
+        # the base; sustenance differentiates around it.
+        try:
+            if self._is_team_on_power_play(defending_team):
+                from line_chemistry import pp_zone_sustenance as _pzs_b
+                _unit_b = [pl for pl in forecheckers if pl is not None]
+                pressure = pressure * _pzs_b(_unit_b, sim=self, team=defending_team) + 16.0
+        except Exception:
+            pass
+
         # Forecheck pressure is physical: finish the check on the breakout passer
         hit_outcome = self._maybe_throw_hit(defending_team, attacking_team, best_defender, 0.30)
         if hit_outcome is not None:
@@ -5802,7 +5890,10 @@ class GameSim:
             if _lc_eff2 != 1.0:
                 goal_prob = (1.0 - adjusted_save_prob) * _lc_eff2
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
-            if _sit_lc2 == "pk":
+            # detect_situation returns the ATTACKING team's view: the
+            # defending PK unit's denial applies when the attack is on
+            # the PP ("pp"), not when the attack is shorthanded.
+            if _sit_lc2 == "pp":
                 _deny2 = _lkdf2(_d_unit, sim=self, team=defending_team)
                 if _deny2 != 1.0:
                     goal_prob = (1.0 - adjusted_save_prob) * _deny2
@@ -7677,6 +7768,10 @@ class GameSim:
             # Power play goal
             self.game_stats[shooter.id]['power_play_goals'] += 1
             self.team_stats[scoring_team.team_name]['power_play_goals'] += 1
+            # The shorthanded side concedes a penalty-kill goal against.
+            _conceding = (self.away_team if scoring_team is self.home_team
+                          else self.home_team)
+            self.team_stats[_conceding.team_name]['penalty_kill_goals_against'] += 1
             
             for assist_player in assists:
                 self.game_stats[assist_player.id]['power_play_assists'] += 1
@@ -7686,9 +7781,9 @@ class GameSim:
             self.game_stats[shooter.id]['short_handed_goals'] += 1
             self.team_stats[scoring_team.team_name]['short_handed_goals'] += 1
             
-            # Opposing team gets a goal against on their power play
-            opposing_team = self.away_team if scoring_team is self.home_team else self.home_team
-            self.team_stats[opposing_team.team_name]['penalty_kill_goals_against'] += 1
+            # No penalty_kill_goals_against here: the conceding side was on
+            # the POWER PLAY, not the kill. A shorthanded goal against is
+            # not a failed kill.
         
         assist_str = []
         for assist_player in assists:
@@ -8092,6 +8187,16 @@ class GameSim:
                                            defending_team).get("pressure", 1.0)))
         except Exception:
             pass
+        # PP zone sustenance (shared channel): a well-structured PP holds
+        # the blue line as a unit; a malformed PP concedes it.
+        try:
+            if self._is_team_on_power_play(attacking_team):
+                from line_chemistry import pp_zone_sustenance as _pzs_k
+                _unit_k = [pl for pl in self._get_on_ice(attacking_team)
+                           if pl.primary_position != PlayerPosition.GOALIE]
+                keep_prob *= _pzs_k(_unit_k, sim=self, team=attacking_team)
+        except Exception:
+            pass
         if _r.random() < keep_prob:
             self._log_event(f"{pincher.full_name} holds the line, keeps it in.",
                             "KEEP_IN")
@@ -8122,6 +8227,38 @@ class GameSim:
         if self._is_team_on_penalty_kill(attacking_team):
             if random.random() < 0.65:
                 return self._zone_clear(attacking_team)
+            # 5v4 swarm (PP zone sustenance, shared channel): when the kill
+            # holds the puck, the 5-man power play hunts it -- numbers +
+            # structure tell. A well-drilled unit strips the puck and goes
+            # back to work; a malformed one lets the kill kill time.
+            # Volume channel only: the PK never cycles like a power play.
+            try:
+                from line_chemistry import pp_zone_sustenance as _pzs_sw
+                _unit_sw = [pl for pl in self._get_on_ice(defending_team)
+                            if pl is not None and pl.primary_position != PlayerPosition.GOALIE]
+                _sus_sw = _pzs_sw(_unit_sw, sim=self, team=defending_team)
+                _hunter_sw = max(_unit_sw,
+                                 key=lambda pl: pl.checking + pl.anticipation)
+                _hs_sw = (_hunter_sw.checking + _hunter_sw.anticipation
+                          + _hunter_sw.skating) / 3.0
+                _carrier_sw = getattr(self, "possession_player", None)
+                if _carrier_sw is not None and _carrier_sw in self._get_on_ice(attacking_team):
+                    _cs_sw = (_carrier_sw.puck_handling + _carrier_sw.composure
+                              + _carrier_sw.skating) / 3.0
+                else:
+                    _cs_sw = 70.0
+                _strip_sw = (_hs_sw / max(1.0, _hs_sw + _cs_sw)) * 1.00 * _sus_sw
+                if random.random() < _strip_sw:
+                    self._log_event(
+                        f"{_hunter_sw.full_name} swarms the puck carrier shorthanded.",
+                        "TURNOVER")
+                    return self._turnover_possession(defending_team)
+                # Even when the swarm doesn't strip it, the 5-man pressure
+                # forces the kill to fire it down -- they can't hold it.
+                if random.random() < 0.50 * _sus_sw:
+                    return self._zone_clear(attacking_team)
+            except Exception:
+                pass
 
         # Update zone time stats (Stage 2)
         self._update_zone_time_stats(attacking_team, defending_team)

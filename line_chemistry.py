@@ -1109,6 +1109,45 @@ def pk_denial_factor(defending_unit: List[Any], coach: Any = None,
     except Exception:
         return 1.0
 
+
+# ---------------------------------------------------------------------------
+# PP zone sustenance: formation completeness on the VOLUME channel.
+#
+# A well-structured PP (point QB + net-front + one-timer + bumper, no
+# malformed flag) sustains zone time and generates its looks; a malformed
+# PP (perimeter, nothing inside) gets cleared and struggles to re-enter.
+#
+# Shared by both engines (parity by construction):
+#   - GameSim applies it to zone sustenance (keep-ins, clear disruption,
+#     5v4 forecheck strip) -- the volume funnel into SOG.
+#   - quick_sim applies it to PP shot_prob -- the same funnel, no zones.
+# Never touches finishing or grade ceilings. Anchored at the league-average
+# PP1 (fit ~0.85 -> 1.00) so the channel differentiates structure without
+# moving the league mean on its own.
+# ---------------------------------------------------------------------------
+# Anchored at the measured on-ice PP-unit mean (PP1/PP2 rotation, soft-cap
+# governance), not the PP1 paper mean -- the channel must be ~1.0 for the
+# average unit actually deployed, or it weakens the league's PPs outright.
+PP_FIT_ANCHOR = 0.76
+_PP_SUS_MIN, _PP_SUS_MAX = 0.75, 1.25
+
+
+def pp_zone_sustenance(unit: List[Any], sim: Any = None,
+                       team: Any = None) -> float:
+    """0.75..1.25 PP zone-sustenance multiplier from formation completeness.
+
+    unit: the 5-man PP unit (skaters). sim/team thread through to the shared
+    unit_efficiency cache (detail=True warms the fast path).
+    """
+    try:
+        rep = unit_efficiency(unit, situation=PP, sim=sim, team=team,
+                              detail=True)
+        fit01 = float(getattr(rep, "fit01", PP_FIT_ANCHOR))
+    except Exception:
+        fit01 = PP_FIT_ANCHOR
+    return _clamp(1.0 + 2.0 * (fit01 - PP_FIT_ANCHOR),
+                  _PP_SUS_MIN, _PP_SUS_MAX)
+
 # ---------------------------------------------------------------------------
 # Schemed-against relief, apportioned THROUGH chemistry.
 #

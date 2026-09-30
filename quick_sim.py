@@ -1520,6 +1520,32 @@ class AdvancedGameSim:
         except Exception:
             pass
         
+        # PP formation completeness (shared channel with GameSim): a
+        # well-structured 5-man unit sustains OZ time and generates volume;
+        # a malformed one bleeds it. The same pp_zone_sustenance the
+        # watched path uses on its forecheck/keep-in/strip hooks, applied
+        # here on the shot-volume gate. Volume channel only.
+        try:
+            _pp_tn = getattr(self, "pp_team", None)
+            if (_pp_tn is not None and team is not None
+                    and getattr(team, "team_name", "") == _pp_tn):
+                from line_chemistry import pp_zone_sustenance as _pzs_qs
+                _onice_qs = getattr(self, "on_ice", {}).get(_pp_tn, {})
+                _unit_qs = []
+                for _slot, _pl in _onice_qs.items():
+                    if _slot == "Goalie":
+                        continue
+                    # on_ice slots hold lists (Forwards/Defense), not players
+                    if isinstance(_pl, (list, tuple)):
+                        _unit_qs.extend([p for p in _pl if p is not None])
+                    elif _pl is not None:
+                        _unit_qs.append(_pl)
+                if _unit_qs:
+                    _tm_qs = self.home_team if _pp_tn == self.home_team.team_name else self.away_team
+                    shot_prob *= _pzs_qs(_unit_qs, sim=self, team=_tm_qs)
+        except Exception:
+            pass
+
         # Random selection based on probabilities
         rand = random.random()
         if rand < shot_prob:
@@ -2104,7 +2130,10 @@ class AdvancedGameSim:
                                 team=puck_team_name)
                 if _lc_eff != 1.0:
                     shot_chance *= _lc_eff
-                if _sit_lc == "pk":
+                # detect_situation returns the ATTACKING team's view: the
+                # defending PK unit's denial applies when the attack is on
+                # the PP ("pp"), not when the attack is shorthanded.
+                if _sit_lc == "pp":
                     _deny = _lkdf(_d_unit, sim=self, team=opp_team_name)
                     if _deny != 1.0:
                         shot_chance *= _deny
