@@ -108,6 +108,53 @@ def _pick_hit_participants(home: Any, away: Any):
     return hitting, hitter, victim_team, victim
 
 
+def _goalie_run_probability(is_playoff=False, rivalry_heat=0.0,
+                            chippiness=30.0):
+    """How often a controversial hit runs the goalie instead of a skater.
+
+    Rare at base (10% of controversial hits); likelier in the playoffs,
+    against heated rivals, and from chippy (high-intensity) rooms.
+    Capped so it stays a flashpoint, not a pattern.
+    """
+    try:
+        p = 0.10
+        if is_playoff:
+            p *= 1.5
+        p *= 1.0 + max(0.0, float(rivalry_heat or 0.0)) / 150.0
+        p *= 0.7 + max(0.0, float(chippiness or 0.0)) / 100.0
+        return min(p, 0.35)
+    except Exception:
+        return 0.10
+
+
+def _pick_goalie_victim(team: Any):
+    """The goalie who'd be in net: best healthy goalie, else best goalie.
+
+    Used by the goalie-run variant -- the victim is whoever is actually
+    minding the net, never a placeholder. Returns None when the roster
+    has no goalie at all.
+    """
+    try:
+        from game_classes import PlayerPosition as _PP
+        gs = [p for p in (getattr(team, "roster", []) or [])
+              if getattr(p, "primary_position", None) == _PP.GOALIE]
+        if not gs:
+            return None
+        healthy = [p for p in gs if not getattr(p, "is_injured", False)]
+        pool = healthy or gs
+
+        def _ovr(g):
+            try:
+                return float(g.overall_rating()) if callable(
+                    getattr(g, "overall_rating", None)) else 0.0
+            except Exception:
+                return 0.0
+
+        return max(pool, key=_ovr)
+    except Exception:
+        return None
+
+
 def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
                     rivalries: list, ledger: Any,
                     is_playoff: bool = False,
@@ -191,13 +238,46 @@ def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
             p_hit *= 1.25
         if random.random() < p_hit:
             _ht, _hp, _vt, _vp = _pick_hit_participants(home, away)
+            # Goalie-run variant (additive): rarely the borderline hit runs
+            # the opposing goalie instead of a skater -- the hitter is
+            # always a skater, goalies don't throw these hits. Rare at
+            # base; likelier in the playoffs, against heated rivals, and
+            # from chippy (high-intensity) rooms. The goalie's injury
+            # state still comes from the engines (never invented), which
+            # the DoPS review already reads for its escalators.
+            _goalie_run = False
+            try:
+                try:
+                    from reputation_system import \
+                        get_rivalry_heat as _gr_heat
+                    _rh = _gr_heat(rivalries, _ht, _vt)
+                except Exception:
+                    _rh = 0.0
+                try:
+                    from reputation_system import \
+                        _roster_chippiness as _gr_chip
+                    _chip = _gr_chip(getattr(_ht, "roster", []))
+                except Exception:
+                    _chip = 30.0
+                _p_gr = _goalie_run_probability(is_playoff, _rh, _chip)
+                if random.random() < _p_gr:
+                    _gv = _pick_goalie_victim(_vt)
+                    if _gv is not None:
+                        _vp = _gv
+                        _goalie_run = True
+            except Exception:
+                _goalie_run = False
             _hn = getattr(_hp, "full_name", "A hitter") if _hp else "A hitter"
             _vn = getattr(_vp, "full_name", "a victim") if _vp else "a victim"
             _htn, _vtn = _team_name(_ht), _team_name(_vt)
+            if _goalie_run:
+                _detail = (f"{_hn} ({_htn}) ran {_vtn} goalie {_vn} -- "
+                           f"under league review")
+            else:
+                _detail = (f"{_hn} ({_htn}) caught {_vn} ({_vtn}) with a "
+                           f"borderline hit -- under league review")
             record_game_incident(
-                rivalries, home, away, "controversial_hit",
-                f"{_hn} ({_htn}) caught {_vn} ({_vtn}) with a borderline "
-                f"hit -- under league review")
+                rivalries, home, away, "controversial_hit", _detail)
             out["incidents"].append("controversial_hit")
             # The hitter's controversy (original personality parameter,
             # dealt at generation) travels with the detail so the DoPS
@@ -213,6 +293,7 @@ def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
                 "hitter": _hn, "hitter_team": _htn,
                 "victim": _vn, "victim_team": _vtn,
                 "hitter_controversy": max(0.0, min(100.0, _hcon)),
+                "goalie_run": bool(_goalie_run),
             })
     except Exception:
         pass
@@ -915,10 +996,12 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
                 except Exception:
                     pass
         try:
+            _grun = bool(d.get("goalie_run"))
+            _hit_phrase = (f"ran {victim} (their goalie)" if _grun
+                           else f"caught {victim} with a borderline hit")
             record_team_event(
                 victim_team, "controversial_hit",
-                f"Seething: {hitter} ({hitter_team_name}) caught {victim} "
-                f"with a borderline hit"
+                f"Seething: {hitter} ({hitter_team_name}) {_hit_phrase}"
                 f"{f' and was suspended {suspended_games} games' if suspended_games else (' and was fined' if fined else '')} "
                 f"-- the room wants payback.",
                 morale_delta=-1, tone="down")

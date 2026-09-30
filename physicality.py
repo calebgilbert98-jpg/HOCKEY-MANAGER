@@ -318,6 +318,13 @@ def apply_missed_call(sim: Any, player: Any, team: Any,
                        if team is home else home)
         vname = getattr(victim_team, "team_name", "") or "the opposition"
         vpname = getattr(victim, "full_name", "") or ""
+        try:
+            from game_classes import PlayerPosition as _PP
+            _victim_is_goalie = (
+                victim is not None
+                and getattr(victim, "primary_position", None) == _PP.GOALIE)
+        except Exception:
+            _victim_is_goalie = False
         _heat(sim, MISSED_CALL_HEAT)
         try:
             sim._log_event(
@@ -328,14 +335,16 @@ def apply_missed_call(sim: Any, player: Any, team: Any,
             pass
         try:
             sim._emit_pbp("missed_call", player=pname, team=tname,
-                          infraction=infraction_name, victim_team=vname)
+                          infraction=infraction_name, victim_team=vname,
+                          victim=vpname or vname)
         except Exception:
             pass
         try:
             from reputation_system import record_game_incident
             record_game_incident(
                 getattr(sim, "rivalries", []), team, victim_team, "bad_call",
-                f"{pname} ({tname}) {infraction_name} on {vname} went uncalled")
+                f"{pname} ({tname}) {infraction_name} on "
+                f"{vpname or vname} went uncalled")
         except Exception:
             pass
         # DoPS look (additive): the same stash the old invented-roll path
@@ -352,6 +361,7 @@ def apply_missed_call(sim: Any, player: Any, team: Any,
                 "hitter": pname, "hitter_team": tname,
                 "victim": vpname or vname, "victim_team": vname,
                 "hitter_controversy": max(0.0, min(100.0, hcon)),
+                "goalie_run": bool(_victim_is_goalie),
             })
         except Exception:
             pass

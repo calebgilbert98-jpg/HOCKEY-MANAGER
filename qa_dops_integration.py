@@ -259,6 +259,154 @@ pp = [playoff_penalty_mult(True, g) for g in (1, 2, 7)]
 check("playoff desperation penalties run hot early, cool by game 7",
       pp[0] >= 1.0 >= pp[2] and pp[0] > pp[2])
 
+# --------------------------------------- G. goalie-run incidents
+# G1. probability shape: rare at base, up in playoffs / heat / chippiness
+_p = ni._goalie_run_probability
+check("goalie-run base rate is rare (10% of controversial hits)",
+      abs(_p(False, 0.0, 30.0) - 0.10) < 1e-9)
+check("playoffs lift the goalie-run rate",
+      abs(_p(True, 0.0, 30.0) - 0.15) < 1e-9)
+check("rivalry heat lifts the goalie-run rate",
+      _p(False, 75.0, 30.0) > _p(False, 0.0, 30.0))
+check("chippy (high-intensity) rooms lift the goalie-run rate",
+      _p(False, 0.0, 80.0) > _p(False, 0.0, 30.0))
+check("goalie-run rate is capped",
+      _p(True, 200.0, 100.0) == 0.35)
+
+# G2. victim picker: best healthy goalie, never a skater, None when empty
+gr_home = Team("GH", "City", "Div", "Conf")
+gr_away = Team("GA", "City", "Div", "Conf")
+g1 = mk_player("Starter", "Goalie", PlayerPosition.GOALIE, overall=88)
+g2 = mk_player("Backup", "Goalie", PlayerPosition.GOALIE, overall=80)
+g1.is_injured = True
+gr_away.roster = ([mk_player(f"S{i}", "K", PlayerPosition.CENTER, overall=70)
+                   for i in range(18)] + [g1, g2])
+gr_home.roster = ([mk_player("Goon", "H", PlayerPosition.LEFT_WING,
+                             discipline=20, aggressiveness=95,
+                             controversy=80, overall=78)]
+                  + [mk_player(f"H{i}", "K", PlayerPosition.CENTER,
+                               overall=70) for i in range(17)]
+                  + [mk_player("Home", "Goalie", PlayerPosition.GOALIE,
+                               overall=85)])
+check("goalie-run victim is the healthy goalie",
+      ni._pick_goalie_victim(gr_away) is g2)
+check("no goalie on roster -> no goalie-run victim",
+      ni._pick_goalie_victim(Team("GX", "City", "Div", "Conf")) is None)
+
+# G3. rolled path: forced goalie run wires through the whole chain
+rivalries_g = []
+real_random = random.random
+random.random = lambda: 0.0  # force p_hit and the goalie-run roll
+try:
+    rolled = ni._roll_incidents(gr_home, gr_away, 3, 2, rivalries_g,
+                                None, False, 0)
+finally:
+    random.random = real_random
+ghits = [d for d in rolled["incident_details"]
+         if d.get("kind") == "controversial_hit"]
+check("rolled controversial hit occurred", len(ghits) == 1)
+gd = ghits[0] if ghits else {}
+check("forced roll flags the goalie run", gd.get("goalie_run") is True)
+check("rolled goalie-run victim is the healthy away goalie",
+      gd.get("victim") == g2.full_name)
+check("rolled goalie-run hitter is a skater (never a goalie)",
+      gd.get("hitter") == gr_home.roster[0].full_name)
+check("rivalry record carries the goalie run",
+      any(r.get("kind") == "team_team"
+          and any("ran" in (i.get("detail") or "")
+                  and "goalie" in (i.get("detail") or "")
+                  for i in r.get("incidents", []))
+          for r in rivalries_g))
+
+# G4. DoPS review resolves a goalie victim: injury + star escalators fire
+gd4 = {"kind": "controversial_hit",
+       "hitter": gr_home.roster[0].full_name, "hitter_team": "GH",
+       "victim": g2.full_name, "victim_team": "GA",
+       "hitter_controversy": 80, "goalie_run": True}
+g2.is_injured = True
+g2.overall_rating = lambda: 92
+real_random = random.random
+random.random = lambda: 0.0  # force the suspension branch
+try:
+    res4 = ni._dops_suspension_review(FakeApp(), gd4, gr_home, gr_away,
+                                      "2026-10-12", [])
+finally:
+    random.random = real_random
+    g2.is_injured = False
+    g2.overall_rating = lambda: 80
+check("hurt star goalie victim escalates the suspension (1+1+1+1)",
+      res4.get("games", 0) >= 4)
+check("suspension reason names the goalie victim",
+      g2.full_name in (gr_home.roster[0].suspension_reason or ""))
+
+# G5. live path: heat-scaled goalie victim, offender stays a skater
+import simulation as sim_mod
+
+
+class HeatSim(FakeSim):
+    def _get_on_ice(self, team):
+        return [p for p in team.roster
+                if p.primary_position != PlayerPosition.GOALIE]
+
+    def _lineup_player(self, team, key):
+        if key == "G1":
+            gs = [p for p in team.roster
+                  if p.primary_position == PlayerPosition.GOALIE]
+            return gs[0] if gs else None
+        return None
+
+
+ga2 = Team("GA2", "City", "Div", "Conf")
+gg = mk_player("Net", "Minder", PlayerPosition.GOALIE, overall=86)
+ga2.roster = [gg] + [mk_player(f"X{i}", "K", PlayerPosition.CENTER,
+                               overall=70) for i in range(18)]
+hsim = HeatSim(gr_home, gr_away)
+hsim.away_team = ga2
+hsim._live_heat = 40.0
+real_random = random.random
+random.random = lambda: 0.0  # force the goalie-victim roll at max heat
+try:
+    v_hot = sim_mod.GameSim._resolve_missed_call_victim(hsim, gr_home)
+finally:
+    random.random = real_random
+check("max heat can make the goalie the missed-call victim",
+      v_hot is gg)
+hsim._live_heat = 0.0
+real_random = random.random
+random.random = lambda: 0.99  # cold game: no goalie-victim roll
+try:
+    v_cold = sim_mod.GameSim._resolve_missed_call_victim(hsim, gr_home)
+finally:
+    random.random = real_random
+check("cold game keeps the missed-call victim a skater",
+      v_cold is not None
+      and v_cold.primary_position != PlayerPosition.GOALIE)
+
+# G6. stash carries the goalie_run flag for the consequence pass
+sim2 = FakeSim(gr_home, gr_away)
+phy.apply_missed_call(sim2, gr_home.roster[0], gr_home, "Charging",
+                      victim=g2)
+phy.apply_missed_call(sim2, gr_home.roster[0], gr_home, "Charging",
+                      victim=gr_away.roster[0])
+st_goalie, st_skater = sim2._live_borderline_hits[-2:]
+check("goalie victim stashed with goalie_run=True",
+      st_goalie.get("victim") == g2.full_name
+      and st_goalie.get("goalie_run") is True)
+check("skater victim stashed with goalie_run=False",
+      st_skater.get("goalie_run") is False)
+
+# G7. consequence pass: the room seethes about the goalie run
+gd7 = dict(gd4)
+gd7["victim"] = g2.full_name
+gr_away.dynamics_log = []
+ni.apply_incident_consequences(FakeApp(), gr_home, gr_away,
+                               ["controversial_hit"], [gd7], False,
+                               (3, 2), "2026-10-12", None, [])
+check("seething team event names the goalie run",
+      any("ran" in (e.get("text") or "")
+          and "goalie" in (e.get("text") or "")
+          for e in (gr_away.dynamics_log or [])))
+
 print(f"\n{PASS} passed, {FAIL} failed")
 if FAILURES:
     print("FAILURES:")

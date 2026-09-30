@@ -6628,6 +6628,45 @@ class GameSim:
         self._resolve_penalty(culprit, team, infraction=(name, minutes, detail))
         return "Penalty", attacking_team
 
+    def _resolve_missed_call_victim(self, team):
+        """Who took the whiffed dirty hit: a real on-ice player, never invented.
+
+        Usually a skater, but when the game is getting out of hand (high
+        live heat) the missed call can run the opposing goalie instead --
+        the retaliation variant. Rare at base (4%), likelier as heat
+        climbs (up to 30% at max heat). The offender is always a skater.
+        Returns None when no player resolves (the caller falls back to
+        the team name).
+        """
+        try:
+            _opp = (self.away_team if team is self.home_team
+                    else self.home_team)
+            _heat_now = max(0.0, float(
+                getattr(self, "_live_heat", 0.0) or 0.0))
+            _p_gv = min(0.30, 0.04 + 0.26 * _heat_now / 40.0)
+            if random.random() < _p_gv:
+                _gv = None
+                try:
+                    _gv = self._lineup_player(_opp, 'G1')
+                except Exception:
+                    _gv = None
+                if _gv is None:
+                    try:
+                        _gv = _opp.get_starting_goalie()
+                    except Exception:
+                        _gv = None
+                _gvn = getattr(_gv, "full_name", "") or ""
+                if _gvn and _gvn != "Default Goalie":
+                    return _gv
+            _cands = [p for p in self._get_on_ice(_opp)
+                      if getattr(p, "primary_position", None)
+                      is not PlayerPosition.GOALIE]
+            if _cands:
+                return random.choice(_cands)
+        except Exception:
+            pass
+        return None
+
     def _resolve_penalty(self, player, team, infraction=None):
         """
         NHL-style penalty call: named infraction, realistic length, whistle,
@@ -6660,17 +6699,7 @@ class GameSim:
                 # Resolve the victim from the live on-ice state so the
                 # post-game DoPS review reads a real player's injury/star
                 # state (never invented). Falls back to the team name.
-                _victim = None
-                try:
-                    _opp = (self.away_team if team is self.home_team
-                            else self.home_team)
-                    _cands = [p for p in self._get_on_ice(_opp)
-                              if getattr(p, "primary_position", None)
-                              is not PlayerPosition.GOALIE]
-                    if _cands:
-                        _victim = random.choice(_cands)
-                except Exception:
-                    _victim = None
+                _victim = self._resolve_missed_call_victim(team)
                 _physicality.apply_missed_call(self, player, team, name,
                                                victim=_victim)
                 return "missed"
