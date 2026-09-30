@@ -217,6 +217,11 @@ class GameSaveManager:
         Whitelisted to kind == "team_talk" and JSON-round-tripped: only
         plain data (str/float/bool/dict) survives, so a session can never
         smuggle a live widget or game object into the save.
+
+        Gating (staff negotiate chain): kind == "staff_negotiate_chain"
+        is also whitelisted -- it holds only staff IDs + result strings
+        (JSON-safe by construction), so a parked chain survives save/load
+        and resumes via its named resolver.
         """
         try:
             import json
@@ -230,11 +235,13 @@ class GameSaveManager:
                 scrub_abandoned_waiver_stamps(app)
             except Exception:
                 pass
+            _keep_kinds = ("team_talk", "staff_negotiate_chain")
             sessions = getattr(app, 'pending_sessions', None) or {}
             out = {}
             for sid, sess in sessions.items():
                 try:
-                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                    if (not isinstance(sess, dict)
+                            or sess.get('kind') not in _keep_kinds):
                         continue
                     probe = json.loads(json.dumps(sess))
                     out[sid] = probe
@@ -245,7 +252,14 @@ class GameSaveManager:
             return {}
 
     def _restore_team_talk_sessions(self, saved):
-        """Restore parked team-talk sessions onto the app (Tier-B)."""
+        """Restore parked team-talk sessions onto the app (Tier-B).
+
+        Also restores parked staff negotiate chains (kind ==
+        "staff_negotiate_chain"): no date-staleness applies (staff IDs
+        revalidate against the live roster on resume), then
+        rebuild_registry_from_sessions() re-registers their parked
+        resume question in the pending-items registry.
+        """
         app = getattr(self, 'app', None)
         if app is None or not isinstance(saved, dict):
             return
@@ -264,14 +278,25 @@ class GameSaveManager:
                 app.pending_sessions = sessions
             for sid, sess in saved.items():
                 try:
-                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                    if not isinstance(sess, dict):
                         continue
-                    tt = sess.get('team_talk') or {}
-                    if today and tt.get('date') and tt.get('date') != today:
-                        continue  # stale: its game is gone
+                    _kind = sess.get('kind')
+                    if _kind == 'team_talk':
+                        tt = sess.get('team_talk') or {}
+                        if today and tt.get('date') and tt.get('date') != today:
+                            continue  # stale: its game is gone
+                    elif _kind == 'staff_negotiate_chain':
+                        pass  # IDs revalidate on resume; no date staleness
+                    else:
+                        continue
                     sessions[sid] = sess
                 except Exception:
                     continue
+            try:
+                from popup_system import rebuild_registry_from_sessions
+                rebuild_registry_from_sessions(app)
+            except Exception:
+                pass
         except Exception:
             pass
     

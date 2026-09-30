@@ -16539,6 +16539,18 @@ class HockeyManagerGUI(tk.Tk):
             park_question_cards_for(self)
         except Exception:
             pass
+        # Gating: park the staff negotiate chain when its open negotiation
+        # screen is torn down without on_done firing (user navigated away
+        # mid-step). Between-step teardowns are ignored (step already
+        # cleared by the advancing callback).
+        try:
+            from staff_management_window import (
+                park_staff_negotiate_chain_if_needed)
+            _cur = getattr(self, "_current_screen", None)
+            _cid = _cur.get("id") if isinstance(_cur, dict) else None
+            park_staff_negotiate_chain_if_needed(self, _cid)
+        except Exception:
+            pass
         cur = getattr(self, '_current_screen', None)
         self._current_screen = None
         if cur is None:
