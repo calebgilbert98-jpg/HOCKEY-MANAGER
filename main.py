@@ -17981,10 +17981,9 @@ class HockeyManagerGUI(tk.Tk):
         return self.show_screen('practice_center', 'Practice Center', PracticeCenterView)
 
     def open_trade_block_window(self):
-        """Open the Trade Block management window."""
-        if 'trade_block' not in self.open_windows or not self.open_windows['trade_block'].winfo_exists():
-            self.open_windows['trade_block'] = TradeBlockWindow(self)
-        self.open_windows['trade_block'].focus_set()
+        """Open the Trade Block management screen (full-screen jump)."""
+        return self.show_screen("trade_block", "Trade Block",
+                                TradeBlockWindow)
 
     def open_offer_sheet_window(self):
         """Open the Offer Sheet window (sign a rival RFA). BUG-020."""
@@ -21837,35 +21836,64 @@ class TacticsWindow(InGamePopup):
         return InGamePopup.__getattr__(self, name)
 
 
-class TradeBlockWindow(InGamePopup):
+class TradeBlockWindow(tk.Frame):
     """
     Enhanced Trade Block window with filtering, sorting, bulk actions, context menu, and summary.
+
+    Gating Phase 2: a Tier-1 screen (``show_screen("trade_block", ...)``).
+    Filter pills, the active tab, checkbox selection, and the other-teams
+    browser selection live in ``app.pending_sessions["trade_block_ui"]``
+    (Tier B, write-through). The block itself is model state
+    (``app.trade_block`` + the ``trade_market`` store) and is always read
+    live, so the screen rebuilds honestly on every open.
     """
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Manage Trade Block")
-        self.geometry("900x700")
-        self.configure(bg=parent.BG_COLOR)
-        self.resizable(False, False)
+    # -- screen shims: Toplevel API the old popup code still calls -------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def resizable(self, _w=None, _h=None):
+        return None
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def __init__(self, parent, app=None):
+        tk.Frame.__init__(self, parent)
+        _app = app if app is not None else parent
+        self.app = _app
+        # Historical: this whole class reads self.parent.<app attribute>.
+        self.parent = _app
+        self._close_screen = None  # set by show_screen()
+        self.configure(bg=self.parent.BG_COLOR)
 
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
-        self.style.configure('Panel.TFrame', background=parent.CONTENT_BG)
-        self.style.configure('TitleBar.TFrame', background=parent.TITLE_BAR_COLOR)
-        self.style.configure('Title.TLabel', background=parent.TITLE_BAR_COLOR, foreground=parent.HEADER_COLOR, font=(parent.FONT_FAMILY, 13, 'bold'))
-        self.style.configure('TButton', font=(parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
-        self.style.map('TButton', background=[('active', parent.ACCENT_ACTIVE), ('hover', parent.ACCENT_HOVER)])
-        self.style.configure('Summary.TLabel', background=parent.CONTENT_BG, foreground=parent.ACCENT_COLOR, font=(parent.FONT_FAMILY, 12, 'bold'))
+        self.style.configure('Panel.TFrame', background=self.parent.CONTENT_BG)
+        self.style.configure('TitleBar.TFrame', background=self.parent.TITLE_BAR_COLOR)
+        self.style.configure('Title.TLabel', background=self.parent.TITLE_BAR_COLOR, foreground=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 13, 'bold'))
+        self.style.configure('TButton', font=(self.parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=self.parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
+        self.style.map('TButton', background=[('active', self.parent.ACCENT_ACTIVE), ('hover', self.parent.ACCENT_HOVER)])
+        self.style.configure('Summary.TLabel', background=self.parent.CONTENT_BG, foreground=self.parent.ACCENT_COLOR, font=(self.parent.FONT_FAMILY, 12, 'bold'))
 
         # --- Title bar ---
         title_bar = ttk.Frame(self, style='TitleBar.TFrame')
         title_bar.pack(fill="x")
         # Team logo (placeholder)
-        logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=parent.TITLE_BAR_COLOR, highlightthickness=0)
+        logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=0)
         logo_canvas.pack(side="right", padx=8)
-        logo_canvas.create_text(20, 20, text="LOGO", fill="white", font=(parent.FONT_FAMILY, 8, 'bold'))
+        logo_canvas.create_text(20, 20, text="LOGO", fill="white", font=(self.parent.FONT_FAMILY, 8, 'bold'))
 
         # --- Summary panel ---
         self.summary_panel = ttk.Frame(self, style='Panel.TFrame', padding=8)
@@ -21879,9 +21907,9 @@ class TradeBlockWindow(InGamePopup):
         # generate/decline interest and express interest all read/write
         # league.trade_market, never fabricated data. ---
         try:
-            self.style.configure('Block.TNotebook', background=parent.CONTENT_BG)
+            self.style.configure('Block.TNotebook', background=self.parent.CONTENT_BG)
             self.style.configure('Block.TNotebook.Tab',
-                                 font=(parent.FONT_FAMILY, 11, 'bold'),
+                                 font=(self.parent.FONT_FAMILY, 11, 'bold'),
                                  padding=(12, 6))
         except Exception:
             pass
@@ -21894,6 +21922,9 @@ class TradeBlockWindow(InGamePopup):
         notebook.add(interest_tab, text="Trade Interest")
         notebook.add(others_tab, text="Other Teams")
         self._tb_notebook = notebook
+        # Gating Phase 2: tab switches write through to the Tier-B session.
+        notebook.bind("<<NotebookTabChanged>>",
+                      lambda _e: self._snapshot_tb_session())
         # Maps interest-tree item ids -> (listing dict, team name, player
         # name) for the real-store-backed Interest tab. The listing dicts
         # live in league.trade_market; declines mutate them (the model).
@@ -21985,7 +22016,7 @@ class TradeBlockWindow(InGamePopup):
         ttk.Button(btn_frame, text="Suggest Trade Value", command=self.suggest_trade_value).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Simulate Trade Offers", command=self.simulate_trade_offers).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Generate Interest", command=self.generate_trade_interest).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Close", command=self.close_view).pack(side="right", padx=5)
 
         # --- Checkbox state ---
         self.selected_items = set()
@@ -21999,11 +22030,101 @@ class TradeBlockWindow(InGamePopup):
         self.create_other_trade_blocks(others_tab)
         self.update_interest_display()
 
+        # Gating Phase 2: restore parked UI state (filters/tab/selection),
+        # revalidating checkbox ids against the live roster.
+        self._tb_restoring = False
+        self._restore_tb_session()
+
     def _tb_set_filter(self, var, value):
         """Set a trade-block pill filter and refresh instantly."""
         var.set(value)
         self._tb_paint_pills()
         self._populate_tree()
+        self._snapshot_tb_session()  # Gating P2: write-through
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B UI session ("trade_block_ui", kind
+    # "trade_block"). Filters, active tab, checkbox selection, and the
+    # other-teams browser selection write through on every interaction;
+    # on open they are restored with the selection revalidated against the
+    # live roster (§6: honest "no longer available" handling). The block
+    # itself is model state and is always read live.
+    # ------------------------------------------------------------------
+    _TB_SESSION_ID = "trade_block_ui"
+
+    def _tb_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self.parent, self._TB_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "trade_block")
+        return sess
+
+    def _snapshot_tb_session(self):
+        if getattr(self, "_tb_restoring", False):
+            return
+        try:
+            sess = self._tb_session()
+            if not sess:
+                return
+            sess["filters"] = {k: v.get() for k, v in
+                               (self.filter_vars or {}).items()}
+            try:
+                sess["tab"] = self._tb_notebook.index("current")
+            except Exception:
+                pass
+            sess["selected_items"] = sorted(
+                str(i) for i in (self.selected_items or set()))
+            sess["other_team"] = (self.team_var.get()
+                                  if hasattr(self, "team_var") else "")
+        except Exception:
+            pass
+
+    def _restore_tb_session(self):
+        try:
+            sess = self._tb_session()
+            if not sess:
+                return
+            self._tb_restoring = True
+            try:
+                for k, val in (sess.get("filters") or {}).items():
+                    if k in (self.filter_vars or {}):
+                        try:
+                            self.filter_vars[k].set(val)
+                        except Exception:
+                            pass
+                self._tb_paint_pills()
+                try:
+                    tab = sess.get("tab")
+                    if tab is not None:
+                        self._tb_notebook.select(int(tab))
+                except Exception:
+                    pass
+                # Revalidate checkbox ids against the live roster; stale
+                # ids (traded/released while parked) are dropped honestly.
+                try:
+                    idmap = {str(getattr(p, "id", "")): getattr(p, "id", None)
+                             for p in (getattr(self.parent.user_team,
+                                               "roster", None) or [])}
+                    self.selected_items = {
+                        idmap[s] for s in (sess.get("selected_items") or [])
+                        if s in idmap}
+                except Exception:
+                    pass
+                other = sess.get("other_team") or ""
+                if other and hasattr(self, "team_var"):
+                    try:
+                        if other in (self.team_combo.cget("values") or ()):
+                            self.team_var.set(other)
+                            self.on_team_selected()
+                    except Exception:
+                        pass
+            finally:
+                self._tb_restoring = False
+            self._populate_tree()
+            self._snapshot_tb_session()
+        except Exception:
+            pass
 
     def _tb_paint_pills(self):
         for var, btns in getattr(self, '_tb_pill_groups', []):
@@ -22118,6 +22239,7 @@ class TradeBlockWindow(InGamePopup):
                 elif player:
                     self.selected_items.add(player.id)
                 self._populate_tree()
+                self._snapshot_tb_session()  # Gating P2: write-through
 
     def add_selected_to_block(self):
         # Convert selected IDs to player objects
@@ -22159,7 +22281,8 @@ class TradeBlockWindow(InGamePopup):
         shop_window.title("Shop Players")
         shop_window.geometry("700x500")
         shop_window.configure(bg=self.parent.BG_COLOR)
-        shop_window.grab_set()  # Make window modal
+        # Gating Phase 2: no grab_set -- the card is non-modal per the
+        # Eastside grammar; dismissing it defers, nothing is decided.
         
         # Create scrollable text widget
         frame = ttk.Frame(shop_window, style='Panel.TFrame', padding=15)
@@ -23009,6 +23132,7 @@ class TradeBlockWindow(InGamePopup):
             set_tree_empty_state(
                 self.other_tree,
                 f"{label} has no players on the block")
+        self._snapshot_tb_session()  # Gating P2: write-through
 
     def refresh_other_blocks(self):
         """Refresh other teams' trade blocks."""
