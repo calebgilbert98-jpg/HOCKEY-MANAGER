@@ -1238,13 +1238,18 @@ def _card_shell(manager, title, message, kind="question", width=470,
 
 
 def _card_buttons(host, buttons, on_pick):
-    """Button row. buttons = [(label, value, style)]."""
+    """Button row. buttons = [(label, value, style)].
+
+    One row when the buttons fit; if the row would overflow the card it
+    reflows into a vertical stack (growing the card) so no button clips.
+    """
     brow = tk.Frame(host, bg=_BG)
     brow.pack(fill="x", padx=18, pady=(6, 14))
     try:
         accent = _app_accent(host._popup_manager.root)
     except Exception:
         accent = "#14b8a6"
+    _made = []
     for label, value, style in buttons:
         bg = accent if style == "primary" else "#2a2e37"
         fg = "#ffffff" if style == "primary" else _TEXT
@@ -1255,6 +1260,25 @@ def _card_buttons(host, buttons, on_pick):
                       relief="flat", bd=0, cursor="hand2",
                       command=lambda v=value: on_pick(v))
         b.pack(side="right", padx=(8, 0))
+        _made.append(b)
+    try:
+        brow.update_idletasks()
+        if _made and brow.winfo_reqwidth() > brow.winfo_width():
+            for b in _made:
+                b.pack_forget()
+            for b in _made:
+                b.pack(side="top", fill="x", pady=(5, 0))
+            brow.update_idletasks()
+            # Grow the card so the stacked rows fit.
+            mgr = getattr(host, "_popup_manager", None)
+            entry = mgr._entry_for(host) if mgr is not None else None
+            if entry is not None:
+                entry["height"] = min(
+                    560, int(entry.get("height", 200))
+                    + 44 * (len(_made) - 1))
+                mgr._place_entry(entry)
+    except Exception:
+        pass
 
 
 def _track_card(manager, token_id, record):
