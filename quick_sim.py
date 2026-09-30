@@ -2193,7 +2193,19 @@ class AdvancedGameSim:
         backhand_val = getattr(shooter, 'backhand', 10)
         
         # Choose shot type
+        # Sniper one-timers at EV (2026-09-30, (c) winger spotlight, Muck):
+        # the one_timer attribute was PP-only for forwards — a sniper's
+        # signature weapon didn't exist at even strength. Attribute-driven:
+        # better one-timer tool = more one-timer looks (feeds find him).
+        # Bounded and modest; the d_to_d_onetimer scenario resolves them.
+        _ot_prob = max(0.0, min(0.20, (float(one_timer_val) - 60.0) / 200.0))
         if self.pp_team and random.random() < 0.3:  # More one-timers on PP
+            shooting_base = one_timer_val
+            shot_type = "one-timer"
+        elif (not self.pp_team and random.random() < _ot_prob
+              and shooter.primary_position in [
+                  PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING,
+                  PlayerPosition.CENTER]):
             shooting_base = one_timer_val
             shot_type = "one-timer"
         elif shooter.primary_position in [PlayerPosition.LEFT_WING, PlayerPosition.RIGHT_WING]:
@@ -2279,13 +2291,30 @@ class AdvancedGameSim:
         # toolkit. Scoring-sensitive rails [0.97, 1.03] on both sides (the
         # goalie side is inverted: a better save composite lowers the goal
         # chance). One decision, two fidelities.
+        # Winger spotlight (2026-09-30, (c) Muck): on one-timer shots the
+        # d_to_d_onetimer scenario battle REPLACES these single-composite
+        # hooks (§6 rule 2 — never stack; the scenario already contains
+        # finishing and goalie_save). EV only: PP conversion is the
+        # tuning crew's lane. (QS tips/deflections resolve on their own
+        # attribute-rich deflection path — deflections/off_the_puck/
+        # balance vs the goalie — left untouched.)
+        _qs_ev = self.pp_team is None
+        _qs_ot = (_qs_ev and shot_type == "one-timer"
+                  and goalie is not None)
         try:
-            from attribute_composites import apply_amplifier as _ac_qs
-            shot_chance = _ac_qs(shot_chance, shooter, "finishing", sim=self,
-                                 team=puck_team_name, energy=fatigue_factor * 100)
-            if goalie:
-                shot_chance = _ac_qs(shot_chance, goalie, "goalie_save",
-                                    sim=self, team=opp_team_name, invert=True)
+            if _qs_ot:
+                from scenario_composites import apply_scenario as _asc_qsot
+                shot_chance = _asc_qsot(shot_chance, [shooter], [goalie],
+                                        "d_to_d_onetimer", sim=self,
+                                        off_team=puck_team_name,
+                                        def_team=opp_team_name)
+            else:
+                from attribute_composites import apply_amplifier as _ac_qs
+                shot_chance = _ac_qs(shot_chance, shooter, "finishing", sim=self,
+                                     team=puck_team_name, energy=fatigue_factor * 100)
+                if goalie:
+                    shot_chance = _ac_qs(shot_chance, goalie, "goalie_save",
+                                        sim=self, team=opp_team_name, invert=True)
         except Exception:
             pass
         # Heater shutdown REMOVED (2026-09-29, per Muck): the damper below cut
