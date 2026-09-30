@@ -62,6 +62,23 @@ def _parse_version(v):
         return (0,)
 
 
+def should_migrate_50_to_100(save_data: dict) -> bool:
+    """Decide whether a save needs the legacy 1-50 -> 1-100 attribute migration.
+
+    The attribute_scale stamp is authoritative: a save stamped 100 was written
+    by the 1-100 engine and must NEVER migrate, even if its version string
+    predates the 2.0 stamp fix. (Sep-2026 saves were written with
+    version='1.0' + attribute_scale=100; the old version-only check doubled
+    their already-modern attributes toward 100 on every load -- the
+    double-migration corruption. See fix-save-double-migration.)
+    """
+    version = (save_data or {}).get('version', '1.0')
+    stamped_scale = (save_data or {}).get('attribute_scale')
+    if stamped_scale is not None and stamped_scale >= 100:
+        return False
+    return _parse_version(version) < _parse_version(SAVE_VERSION_100_SCALE)
+
+
 class GameSaveManager:
     """Manages saving and loading of complete game states"""
     
@@ -77,6 +94,10 @@ class GameSaveManager:
             os.makedirs(self.save_directory)
         # Legacy migration flag (set when loading a pre-2.0 save)
         self._migrate_50_to_100 = False
+        # Set by _detect_scale_corruption() when a loaded save's attributes
+        # look maxed-out by the old double-migration bug (load-time warning).
+        self._scale_corruption_detected = False
+        self._scale_corruption_detail = ""
     
     def create_save_data(self) -> Dict[str, Any]:
         """Create a complete save data structure"""
@@ -1048,6 +1069,28 @@ class GameSaveManager:
                 except Exception:
                     pass  # headless / no display: the print above suffices
 
+                # Double-migration corruption warning: the save loaded, but
+                # its attributes were maxed out by the old bug and the world
+                # will not play right (everyone ~99 overall). Warn loudly;
+                # the user decides whether to keep playing, restore a
+                # backup, or start fresh. The damage cannot be undone.
+                if getattr(self, '_scale_corruption_detected', False):
+                    _warn = (
+                        "WARNING: this save's player attributes appear to "
+                        "have been maxed out by an old save-migration bug "
+                        f"({self._scale_corruption_detail}). "
+                        "Everyone is ~99 overall and the damage cannot be "
+                        "reversed. It is recommended to restore an older "
+                        "backup of this save (from before its attributes "
+                        "were maxed) or start a new game. "
+                        "Loading it anyway will not corrupt anything further "
+                        "-- the migration bug itself is fixed.")
+                    print(_warn)
+                    try:
+                        messagebox.showwarning("Save May Be Corrupted", _warn)
+                    except Exception:
+                        pass
+
                 # Re-sync mirrors. _restore_game_state rebuilds league teams
                 # as NEW objects on the wrapped manager, so any other holder
                 # of the old objects goes stale:
@@ -1110,8 +1153,10 @@ class GameSaveManager:
                                      f"Save file version {version} may not be fully compatible")
             # Legacy migration: saves before 2.0 used 1-50 attribute scale;
             # 2.0+ uses native 1-100. Scale old attributes up on load.
-            self._migrate_50_to_100 = (
-                _parse_version(version) < _parse_version(SAVE_VERSION_100_SCALE))
+            # should_migrate_50_to_100() treats the attribute_scale stamp as
+            # authoritative so contradictory saves (version 1.0 + scale 100)
+            # are never migrated -- that was the double-migration corruption.
+            self._migrate_50_to_100 = should_migrate_50_to_100(save_data)
             if self._migrate_50_to_100:
                 print(f"Migrating save v{version} attributes from 1-50 to 1-100 scale")
             
@@ -1301,6 +1346,15 @@ class GameSaveManager:
                     save_data.get('attribute_scale'))
             except Exception as e:
                 print(f"Legacy scale migration skipped: {e}")
+
+            # Corruption check: saves already maxed by the old
+            # double-migration bug are flagged here; load_game() warns.
+            # The damage can't be undone (information is lost), so we
+            # detect and warn rather than silently loading a broken world.
+            try:
+                self._detect_scale_corruption()
+            except Exception as e:
+                print(f"Scale-corruption check skipped: {e}")
 
             # Restore settings
             if 'settings' in save_data:
@@ -2419,6 +2473,51 @@ class GameSaveManager:
                     migrated += 1
         print(f"Migrated {len(players)} players from legacy attribute scale "
               f"({migrated} fields doubled, mean was {mean:.1f})")
+
+    def _detect_scale_corruption(self):
+        """Flag saves whose attributes were maxed by the double-migration bug.
+
+        A healthy league has a league-wide attribute mean around ~72 with a
+        real distribution. A mean above 90 means the distribution collapsed
+        to the 100 clamp -- the signature of the old double-migration bug
+        (Sep-2026: version='1.0' + attribute_scale=100 saves migrated on
+        every load, then persisted). Sets self._scale_corruption_detected;
+        load_game() surfaces the warning. Never blocks the load -- the user
+        decides what to do with their save.
+        """
+        self._scale_corruption_detected = False
+        self._scale_corruption_detail = ""
+        try:
+            gm = self.game_manager
+            league = getattr(gm, 'league', None)
+            if not league or not getattr(league, 'teams', None):
+                return
+            players = []
+            for team in league.teams:
+                for pool in ('roster', 'ahl_roster', 'prospects'):
+                    players.extend(getattr(team, pool, None) or [])
+            players = [p for p in players if p is not None]
+            if len(players) < 20:
+                return
+            sample = []
+            for p in players[:400]:
+                for f in ('skating', 'shooting', 'passing'):
+                    v = getattr(p, f, None)
+                    if isinstance(v, (int, float)):
+                        sample.append(v)
+            if not sample:
+                return
+            mean = sum(sample) / len(sample)
+            if mean > 90:
+                self._scale_corruption_detected = True
+                self._scale_corruption_detail = (
+                    f"league-wide attribute mean {mean:.1f} over "
+                    f"{len(sample)} samples ({len(players)} players)")
+                print(f"WARNING: {self._scale_corruption_detail} -- this save "
+                      f"looks corrupted by the old double-migration bug "
+                      f"(attributes maxed toward 100).")
+        except Exception as e:
+            print(f"Scale-corruption check skipped: {e}")
     
     def _restore_settings(self, settings_data: Dict[str, Any]):
         """Restore game settings"""
