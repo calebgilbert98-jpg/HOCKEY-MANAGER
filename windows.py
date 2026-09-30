@@ -4397,52 +4397,77 @@ except Exception:
     pass
 
 
-class TradeWindow(InGamePopup):
-    """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
+class TradeWindow(ctk.CTkFrame):
+    """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history.
+
+    Gating Phase 2: a Tier-1 screen (``show_screen("trade", ...)``), not a
+    popup card. The in-progress deal lives in
+    ``app.pending_sessions["trade_deal"]`` (Tier B, write-through on every
+    mutation): the user can shift to the roster mid-negotiation and shift
+    back -- the screen rebuilds from the session and revalidates every
+    asset, with an honest "no longer available" note if the world moved.
+    Dismiss = defer: navigating away parks the deal (and any parked waiver
+    questions); it never abandons or sends anything.
+    """
 
     METER_W = 280
     METER_H = 22
 
-    def destroy(self):
-        # Gating T2-Phase 2: closing the window with an unsent proposal
-        # abandons it -- its single-use waiver stamps are cleared (a dead
-        # proposal spends nothing) and the parked questions are dropped.
-        try:
-            if not getattr(self, "_trade_propose_session", None):
+    # -- screen shims: Toplevel API the old popup code still calls -------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
                 pass
-            else:
-                from popup_system import (get_pending_session,
-                                          scrub_abandoned_waiver_stamps)
-                _app = getattr(self.parent, "app", self.parent)
-                _sess = get_pending_session(
-                    _app, self._trade_propose_session)
-                if isinstance(_sess, dict) and not _sess.get("sent"):
-                    scrub_abandoned_waiver_stamps(_app)
-                self._drop_propose_session()
+
+    def destroy(self):
+        # Gating Phase 2: teardown parks, never abandons. The deal and any
+        # parked waiver questions live in Tier-B sessions; stamps are
+        # consumed on send or cleared on explicit cancel only.
+        try:
+            self._trade_propose_session = None
         except Exception:
             pass
-        super().destroy()
+        try:
+            ctk.CTkFrame.destroy(self)
+        except Exception:
+            pass
 
-    def __init__(self, parent, preset=None):
+    def __init__(self, parent, preset=None, app=None):
         from ctk_theme import (
             init_ctk_theme, CTkOfferList, CTkPlayerList,
             primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
         )
+        ctk.CTkFrame.__init__(self, parent)
+        _app = app if app is not None else getattr(parent, 'app', parent)
+        self.app = _app
+        # Historical: this whole class treats self.parent as the app root.
+        self.parent = _app
+        self._close_screen = None  # set by show_screen()
+        # Local alias: the body below was written against the app object.
+        parent = _app
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
                         CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
                         RED=RED, BLUE=BLUE)
         init_ctk_theme()
-        # A workbench, not a verdict: non-modal with click-out so the
-        # user can dismiss it freely and keep exploring. Sending an
-        # offer never resolves instantly -- the AI GM answers in a few
-        # days via the inbox.
-        super().__init__(parent, modal=False, dismiss_on_backdrop=True)
-        self.parent = parent
-        self.title("Trade Center")
-        self.geometry("1280x780")
+        # Screen mode: no popup chrome (title/geometry are no-op shims now;
+        # the navbar carries the title). The workbench stays non-modal by
+        # construction -- sending never resolves instantly; the AI GM
+        # answers in a few days via the inbox.
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
         self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
@@ -4612,8 +4637,25 @@ class TradeWindow(InGamePopup):
         # History panel (hidden by default)
         self.history_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
 
-        self.update_views()
+        # Gating Phase 2: the in-progress deal is Tier-B state. A preset
+        # always opens a fresh workbench (drop the parked deal first, like
+        # the old destroy-and-rebuild); otherwise rebuild from the session
+        # with honest revalidation.
+        self._trade_propose_session = None
+        # Suppress write-through while the view builds: update_views ->
+        # update_trade_partner_roster snapshots, and it must not wipe the
+        # parked deal before _restore_deal_session runs.
+        self._restoring = True
+        try:
+            if preset:
+                self._reset_deal_session()
+            self.update_views()
+            self._restore_deal_session()
+        finally:
+            self._restoring = False
         self._apply_preset()
+        self._snapshot_deal_session()
+        self._reconcile_stamps()
         self._wire_player_menus()
 
     # ------------------------------------------------------------------
@@ -4656,6 +4698,24 @@ class TradeWindow(InGamePopup):
                         if str(k) == str(getattr(a, 'id', '')) and v}
             except Exception:
                 pass
+            # Gating Phase 2 (§6): version-stamp the negotiation terms --
+            # if the AI moved under a parked negotiation, surface it
+            # honestly on resume.
+            try:
+                _hash = self._neg_terms_hash()
+                _sess = self._deal_session()
+                _old = _sess.get("neg_terms_hash") if _sess else None
+                if _sess and _hash and _old and _old != _hash:
+                    from popup_system import notify_card
+                    notify_card(
+                        self, "Proposal updated",
+                        "Their side of the proposal changed while you were "
+                        "away -- the workbench now shows the latest terms.",
+                        kind="warning")
+                if _sess and _hash:
+                    _sess["neg_terms_hash"] = _hash
+            except Exception:
+                pass
             self._refresh_offer_lists()
             try:
                 self.propose_btn.configure(text="Send Counter-Offer")
@@ -4675,6 +4735,270 @@ class TradeWindow(InGamePopup):
                 lambda e, p: mgr.show_context_menu(e, p))
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B deal session ("trade_deal", kind "trade").
+    #
+    # The in-progress deal -- both sides' asset IDs, partner, retention %,
+    # pick protection -- is snapshotted on every mutation (write-through),
+    # so the screen can be rebuilt from the session on open. Revalidation
+    # resolves every snapshotted ID against live league state; anything the
+    # world moved is dropped with an honest "no longer available" note
+    # (the §6 mid-trade roster-mutation risk). Only plain data is stored,
+    # so the session survives save/load.
+    # ------------------------------------------------------------------
+    _DEAL_SESSION_ID = "trade_deal"
+    _PROPOSE_SESSION_ID = "trade_propose"
+
+    def _deal_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self._trade_app(), self._DEAL_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "trade")
+        return sess
+
+    def _asset_ref(self, asset):
+        try:
+            label = self.te.asset_label(asset)
+        except Exception:
+            label = str(getattr(asset, "full_name",
+                                getattr(asset, "name", "?")))
+        try:
+            kind = "pick" if self.te._is_pick(asset) else "player"
+        except Exception:
+            kind = "player"
+        return {"id": str(getattr(asset, "id", "")), "kind": kind,
+                "label": label}
+
+    def _snapshot_deal_session(self):
+        """Write-through: current in-progress deal -> Tier-B session."""
+        if getattr(self, "_restoring", False):
+            return
+        try:
+            sess = self._deal_session()
+            if not sess:
+                return
+            user_refs = [self._asset_ref(a)
+                         for a in (self.trade_offers.get("user") or [])]
+            partner_refs = [self._asset_ref(a)
+                            for a in (self.trade_offers.get("partner") or [])]
+            lvl_user, lvl_partner = {}, {}
+            for side, lvl_map in (("user", lvl_user), ("partner", lvl_partner)):
+                for a in (self.trade_offers.get(side) or []):
+                    lvl = (self._asset_levels.get(side) or {}).get(id(a),
+                                                                   "NHL")
+                    lvl_map[str(getattr(a, "id", ""))] = lvl
+            sess["partner"] = (self.partner_combo.get()
+                               if hasattr(self, "partner_combo") else "")
+            sess["user_assets"] = user_refs
+            sess["partner_assets"] = partner_refs
+            sess["asset_levels"] = {"user": lvl_user,
+                                    "partner": lvl_partner}
+            sess["retention"] = {str(k): float(v)
+                                 for k, v in (self._retention or {}).items()
+                                 if v}
+            sess["pick_protection"] = {
+                str(k): v for k, v in (self._pick_protection or {}).items()
+                if v}
+            sess["terms_version"] = int(sess.get("terms_version") or 0) + 1
+            sess["negotiation_id"] = self._negotiation_id
+            try:
+                import datetime as _dt
+                sess["updated_at"] = _dt.datetime.now().isoformat(
+                    timespec="seconds")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _clear_deal_session(self):
+        try:
+            sessions = getattr(self._trade_app(), "pending_sessions", None)
+            if isinstance(sessions, dict):
+                sessions.pop(self._DEAL_SESSION_ID, None)
+        except Exception:
+            pass
+
+    def _reset_deal_session(self):
+        """Fresh workbench: drop the parked deal and any parked propose
+        chain for a *different* deal (a dead proposal spends nothing --
+        its single-use waiver stamps are cleared, same as the old
+        destroy-and-rebuild on preset open)."""
+        try:
+            from popup_system import get_pending_session
+            app = self._trade_app()
+            ps = get_pending_session(app, self._PROPOSE_SESSION_ID)
+            if isinstance(ps, dict) and not ps.get("sent"):
+                self._clear_propose_stamps(ps)
+            self._drop_propose_session()
+            # Sweep orphaned id-keyed propose sessions from the popup era.
+            sessions = getattr(app, "pending_sessions", None)
+            if isinstance(sessions, dict):
+                for sid in [s for s in sessions
+                            if str(s).startswith("trade_propose:")]:
+                    sessions.pop(sid, None)
+        except Exception:
+            pass
+        self._clear_deal_session()
+
+    def _resolve_deal_asset(self, team, asset_id, kind):
+        """Revalidate: resolve a snapshotted asset ID against live state."""
+        if team is None or not asset_id:
+            return None
+        sid = str(asset_id)
+        if kind == "pick":
+            try:
+                for _yr, picks in (
+                        getattr(team, "draft_picks", None) or {}).items():
+                    for pk in (picks or []):
+                        if str(getattr(pk, "id", "")) == sid:
+                            try:
+                                if not pk.can_be_traded():
+                                    return None
+                            except Exception:
+                                pass
+                            return pk
+            except Exception:
+                return None
+            return None
+        for attr in ("roster", "ahl_roster", "prospects"):
+            try:
+                for p in (getattr(team, attr, None) or []):
+                    if str(getattr(p, "id", "")) == sid:
+                        return p
+            except Exception:
+                continue
+        return None
+
+    def _restore_deal_session(self):
+        """Rebuild the in-progress deal from the Tier-B session, dropping
+        (honestly) anything the world moved since it was parked."""
+        dropped = []
+        try:
+            sess = self._deal_session()
+            if (not sess or (not sess.get("user_assets")
+                             and not sess.get("partner_assets")
+                             and not sess.get("partner"))):
+                return dropped
+            pname = sess.get("partner") or ""
+            if pname and hasattr(self, "partner_combo"):
+                try:
+                    vals = list(self.partner_combo.cget("values") or [])
+                except Exception:
+                    vals = []
+                if pname in vals:
+                    self.partner_combo.set(pname)
+            # Refresh the partner roster first (it clears the partner side
+            # of the deal by design); the restore re-fills it below.
+            self.update_trade_partner_roster()
+            partner = self._partner_team()
+            user_team = getattr(self._trade_app(), "user_team", None)
+            lvl_maps = sess.get("asset_levels") or {}
+            ret_map = {str(k): v
+                       for k, v in (sess.get("retention") or {}).items()}
+            prot_map = {str(k): v
+                        for k, v in (sess.get("pick_protection") or {}).items()}
+            restored = {"user": [], "partner": []}
+            new_levels = {"user": {}, "partner": {}}
+            for side, refs in (("user", sess.get("user_assets") or []),
+                               ("partner", sess.get("partner_assets") or [])):
+                team = user_team if side == "user" else partner
+                for ref in (refs or []):
+                    obj = self._resolve_deal_asset(
+                        team, ref.get("id"), ref.get("kind"))
+                    if obj is None:
+                        dropped.append(ref.get("label")
+                                       or f"{ref.get('kind', 'asset')} "
+                                          f"{ref.get('id', '?')}")
+                        continue
+                    restored[side].append(obj)
+                    lvl = (lvl_maps.get(side) or {}).get(
+                        str(ref.get("id")), "NHL")
+                    new_levels[side][id(obj)] = lvl
+            self.trade_offers = restored
+            self._asset_levels = new_levels
+            keep = {str(getattr(a, "id", "")) for a in restored["user"]}
+            self._retention = {}
+            self._pick_protection = {}
+            for a in restored["user"]:
+                aid = getattr(a, "id", None)
+                if str(aid) in ret_map and ret_map[str(aid)]:
+                    try:
+                        self._retention[aid] = float(ret_map[str(aid)])
+                    except Exception:
+                        pass
+                if str(aid) in prot_map and prot_map[str(aid)]:
+                    self._pick_protection[aid] = prot_map[str(aid)]
+            self._refresh_offer_lists()
+            self._update_meter()
+            self._reconcile_stamps()
+            if dropped:
+                # Honest revalidation (§6): the world moved while parked.
+                from popup_system import notify_card
+                notify_card(
+                    self, "Deal updated",
+                    "No longer available and removed from the deal:\n" +
+                    "\n".join("• %s" % n for n in dropped[:8]),
+                    kind="warning")
+            self._snapshot_deal_session()
+        except Exception:
+            pass
+        return dropped
+
+    def _reconcile_stamps(self):
+        """A parked waiver stamp only lives while its player is still in
+        the deal -- scrub stamps for players who left (a dead proposal
+        spends nothing)."""
+        try:
+            from popup_system import get_pending_session
+            ps = get_pending_session(self._trade_app(),
+                                     self._PROPOSE_SESSION_ID)
+            if not isinstance(ps, dict) or ps.get("sent"):
+                return
+            in_deal = {str(getattr(a, "id", ""))
+                       for a in (self.trade_offers.get("user") or [])}
+            stamped = [str(i) for i in (ps.get("stamped") or [])]
+            gone = [i for i in stamped if i not in in_deal]
+            if not gone:
+                return
+            league = self._trade_league()
+            for _t in (getattr(league, "teams", None) or []):
+                for _pl in (getattr(_t, "roster", None) or []):
+                    try:
+                        if str(getattr(_pl, "id", "")) in gone:
+                            _c = getattr(_pl, "contract", None)
+                            if _c is not None:
+                                _c.ntc_waiver_for = ""
+                    except Exception:
+                        continue
+            ps["stamped"] = [i for i in stamped if i not in gone]
+        except Exception:
+            pass
+
+    def _neg_terms_hash(self):
+        """Version-stamp (§6): fingerprint the model-side negotiation's
+        current terms so an AI move under a paused negotiation is
+        detectable on resume."""
+        try:
+            import trade_negotiation as _tn
+            if not self._negotiation_id:
+                return None
+            neg = _tn.get_negotiation(self.parent, self._negotiation_id)
+            if neg is None:
+                return None
+            bits = [str(getattr(neg, "status", ""))]
+            for a in (getattr(neg, "user_assets", None) or []):
+                bits.append("u" + str(getattr(a, "id", "")))
+            for a in (getattr(neg, "partner_assets", None) or []):
+                bits.append("p" + str(getattr(a, "id", "")))
+            for k in sorted((getattr(neg, "retention", None) or {})):
+                bits.append("r%s=%s" % (k, neg.retention[k]))
+            for k in sorted((getattr(neg, "pick_protection", None) or {})):
+                bits.append("q%s=%s" % (k, neg.pick_protection[k]))
+            return "|".join(bits)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Views
@@ -4756,6 +5080,7 @@ class TradeWindow(InGamePopup):
             self._asset_levels['partner'] = {}
             self._refresh_offer_lists()
             self._update_meter()
+            self._snapshot_deal_session()  # Gating P2: write-through
         finally:
             self._set_busy(False)
 
@@ -4851,6 +5176,7 @@ class TradeWindow(InGamePopup):
             self._retention.pop(pid, None)
         self._refresh_offer_lists()
         self._update_meter()
+        self._snapshot_deal_session()  # Gating P2: write-through
 
     # ------------------------------------------------------------------
     # Trade meter
@@ -4947,6 +5273,7 @@ class TradeWindow(InGamePopup):
             self._asset_levels[side][id(player)] = lvl
             self._refresh_offer_lists()
             self._update_meter()
+            self._snapshot_deal_session()  # Gating P2: write-through
 
     def _remove_player_from_trade(self, side, player):
         """Right-click on a roster row: pull that player out of the deal."""
@@ -4983,6 +5310,7 @@ class TradeWindow(InGamePopup):
             self._pick_protection.pop(str(getattr(gone, 'id', '')), None)
         self._refresh_offer_lists()
         self._update_meter()
+        self._snapshot_deal_session()  # Gating P2: write-through
 
     def _team_picks(self, team):
         picks = []
@@ -5093,6 +5421,7 @@ class TradeWindow(InGamePopup):
                     self._pick_protection[pk.id] = prot
                 self._refresh_offer_lists()
                 self._update_meter()
+                self._snapshot_deal_session()  # Gating P2: write-through
                 dlg.destroy()
 
         primary_button(dlg, text="Add to Offer", command=add).pack(pady=12)
@@ -5232,7 +5561,9 @@ class TradeWindow(InGamePopup):
             self._propose_trade_send(partner, user_assets, partner_assets)
             return
         from popup_system import get_pending_session
-        _sess_id = f"trade_propose:{id(self)}"
+        # Gating Phase 2: stable session id (the old id(self)-keyed id died
+        # with the popup; the chain must survive screen rebuilds).
+        _sess_id = self._PROPOSE_SESSION_ID
         _sess = get_pending_session(self._trade_app(), _sess_id)
         _sess["kind"] = "trade_propose"
         _sess["partner"] = partner.team_name
@@ -5255,12 +5586,37 @@ class TradeWindow(InGamePopup):
         user_assets is rebuilt from the live offer: the waiver chain may
         have pulled a player (and his retention row) out on a refused
         waiver.
+
+        Gating Phase 2 (§6): consume-once -- a parked chain can only send a
+        single time -- and cap legality is revalidated transactionally at
+        the moment of send (the deal may have changed while parked).
         """
+        # Consume-once: never double-send a parked chain.
+        from popup_system import get_pending_session
+        _ps = get_pending_session(self._trade_app(),
+                                  self._PROPOSE_SESSION_ID)
+        if isinstance(_ps, dict) and _ps.get("sent"):
+            return
         # Deal terms the user set on this screen (retention %, pick protection).
         user_assets = list(self.trade_offers.get("user", []))
         partner_assets = list(self.trade_offers.get("partner", []))
         retention = {k: v for k, v in self._retention.items() if v}
         pick_protection = dict(self._pick_protection)
+        if not user_assets or not partner_assets:
+            messagebox.showwarning(
+                "Incomplete",
+                "The deal is empty -- put assets on both sides first.")
+            return
+        # Transactional cap revalidation: the preflight ran before the
+        # waiver chain; re-check now, at the moment of send.
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets, retention=retention):
+            messagebox.showerror(
+                "Cap problem",
+                "This trade no longer clears the salary cap (the deal "
+                "changed while the waiver questions were parked). Shed "
+                "salary first.")
+            return
         if self._negotiation_id and self._preset.get("mode") == "counter":
             neg = tn.get_negotiation(self.parent, self._negotiation_id)
             if neg is not None and neg.is_open:
@@ -5273,7 +5629,7 @@ class TradeWindow(InGamePopup):
                     "They will answer in a few days -- the reply lands in "
                     "your inbox. You can close this window.")
                 self._mark_propose_sent()
-                self.destroy()
+                self._finish_proposal()
                 return
         tn.send_offer(self.parent, partner, user_assets, partner_assets,
                       retention=retention, pick_protection=pick_protection)
@@ -5283,7 +5639,29 @@ class TradeWindow(InGamePopup):
             "Expect an answer within a few days -- it will arrive in your "
             "inbox, so feel free to close this and keep working.")
         self._mark_propose_sent()
-        self.destroy()
+        self._finish_proposal()
+
+    def _finish_proposal(self):
+        """The deal is sent: consume the parked chain, reset the workbench,
+        and leave the screen (the old popup closed on send)."""
+        try:
+            self._drop_propose_session()
+        except Exception:
+            pass
+        try:
+            self._clear_deal_session()
+        except Exception:
+            pass
+        try:
+            self.trade_offers = {'user': [], 'partner': []}
+            self._asset_levels = {'user': {}, 'partner': {}}
+            self._retention = {}
+            self._pick_protection = {}
+            self._refresh_offer_lists()
+            self._update_meter()
+        except Exception:
+            pass
+        self.close_view()
 
     # -- Gating T2-Phase 2: waiver question chain ----------------------
     def _trade_app(self):
@@ -5325,9 +5703,8 @@ class TradeWindow(InGamePopup):
     def _mark_propose_sent(self):
         try:
             from popup_system import get_pending_session
-            _sess_id = getattr(self, "_trade_propose_session", None)
-            _sess = (get_pending_session(self._trade_app(), _sess_id)
-                     if _sess_id else None)
+            _sess = get_pending_session(self._trade_app(),
+                                        self._PROPOSE_SESSION_ID)
             if isinstance(_sess, dict):
                 _sess["sent"] = True
         except Exception:
@@ -5358,9 +5735,8 @@ class TradeWindow(InGamePopup):
         try:
             from popup_system import (get_pending_session,
                                       unregister_pending_item)
-            _sess_id = getattr(self, "_trade_propose_session", None)
-            if not _sess_id:
-                return
+            # Gating Phase 2: stable session id (survives screen rebuilds).
+            _sess_id = self._PROPOSE_SESSION_ID
             _app = self._trade_app()
             _sess = get_pending_session(_app, _sess_id)
             if isinstance(_sess, dict):
@@ -5379,9 +5755,9 @@ class TradeWindow(InGamePopup):
         from popup_system import (ask_card, cards_available,
                                   get_pending_session, register_pending_item,
                                   unregister_pending_item, RESUMABLE)
-        _sess_id = getattr(self, "_trade_propose_session", None)
-        _sess = (get_pending_session(self._trade_app(), _sess_id)
-                 if _sess_id else None)
+        # Gating Phase 2: stable session id (survives screen rebuilds).
+        _sess = get_pending_session(self._trade_app(),
+                                    self._PROPOSE_SESSION_ID)
         if not isinstance(_sess, dict):
             return
         _queue = _sess.get("queue") or []
@@ -5477,6 +5853,7 @@ class TradeWindow(InGamePopup):
                     self._update_meter()
                 except Exception:
                     pass
+                self._snapshot_deal_session()  # Gating P2: write-through
             self._waiver_step()
             return
         # Yes: roll the waiver.

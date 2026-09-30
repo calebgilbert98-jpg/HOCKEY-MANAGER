@@ -15996,19 +15996,12 @@ class HockeyManagerGUI(tk.Tk):
         return self.show_screen('free_agency', 'Free Agency', FreeAgencyView)
 
     def open_trade_window(self, preset=None):
-        if ('trade' not in self.open_windows
-                or not self.open_windows['trade'].winfo_exists()
-                or preset):
-            # A preset (negotiation counter, player-menu proposal) always
-            # opens a fresh workbench so the terms are exactly what was asked.
-            try:
-                old = self.open_windows.get('trade')
-                if old is not None and old.winfo_exists():
-                    old.destroy()
-            except Exception:
-                pass
-            self.open_windows['trade'] = TradeWindow(self, preset=preset)
-        self.open_windows['trade'].focus_set()
+        # Gating Phase 2: the Trade Center is a Tier-1 screen. The
+        # in-progress deal lives in app.pending_sessions["trade_deal"]
+        # (Tier B, write-through) and rebuilds on open, so a preset always
+        # opens a fresh workbench while plain opens resume the parked deal.
+        return self.show_screen("trade", "Trade Center", TradeWindow,
+                                preset=preset, fresh=bool(preset))
 
     def open_trade_deadline_center(self):
         """Open the Trade Deadline Center - only available on trade deadline day"""
