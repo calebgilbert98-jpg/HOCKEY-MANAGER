@@ -614,6 +614,17 @@ class SettingsView(ctk.CTkFrame):
         """Load settings from file or create defaults (GUI-free helper)."""
         return load_settings()
 
+    def refresh(self):
+        """Re-entrant refresh for screen-cache hits (gating Phase 1).
+
+        Preserves in-progress edits: when the user has unsaved (dirty)
+        changes the widgets are left alone -- parking the view must never
+        wipe half-made changes. Otherwise values re-sync from the dict.
+        """
+        if getattr(self, "_dirty", False):
+            return
+        self._load_current_values()
+
     def _load_current_values(self):
         """Load current values into the UI"""
         # Game Results settings

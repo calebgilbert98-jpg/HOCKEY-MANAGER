@@ -4695,8 +4695,9 @@ class TradeWindow(InGamePopup):
                 trade_date=_gdate,
                 season_windows=self.te.regular_season_windows(_gleague))
             if not ok:
-                from tkinter import messagebox
-                messagebox.showwarning("Can't retain", note)
+                # Non-modal FYI (gating T2-Phase 0): no OS-modal dialog.
+                from popup_system import notify_card
+                notify_card(self, "Can't retain", note, kind="warning")
                 self._refresh_retention_section()
                 return
             self._retention[pid] = pct
@@ -13065,7 +13066,11 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self.player = player
         self.market_value = market_value
         self.max_years = max_years
-        
+        # Gating Phase 1: negotiation state lives in app.negotiation_sessions
+        # (same pattern as ContractNegotiationView) so the user can jump to
+        # another screen mid-talks and resume from the navbar.
+        self._session = self._get_session()
+
         self.configure(fg_color=parent.BG_COLOR)
         
         # Main frame
@@ -13182,8 +13187,10 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self.years_var.trace_add('write', self.update_total)
         self.salary_var.trace_add('write', self.update_total)
         self.bonus_var.trace_add('write', self.update_total)
-        
-        # Initial update
+        self.ntc_var.trace_add('write', self.update_total)
+
+        # Restore any in-progress offer parked in the session, then update.
+        self._restore_draft()
         self.update_total()
         
         # Buttons
@@ -13199,6 +13206,80 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self._counter_host = ttk.Frame(main_frame)
         self._counter_host.pack(fill='x', padx=5, pady=4)
     
+    # ---------- session ----------
+
+    def _get_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is None:
+            sessions = {}
+            self.app.negotiation_sessions = sessions
+        player = self.player
+        key = getattr(player, "id", None) or id(player)
+        sess = sessions.get(key)
+        if sess is None or sess.get("player") is not player:
+            sess = {
+                "player": player,
+                "is_extension": True,
+                "draft_salary": "",
+                "draft_years": 0,
+                "draft_ntc": False,
+                "draft_signing_bonus": "",
+            }
+            sessions[key] = sess
+        self._sess_key = key
+        try:
+            self.app.refresh_screen_navbar()
+        except Exception:
+            pass
+        return sess
+
+    def _close_session(self):
+        sessions = getattr(self.app, "negotiation_sessions", None)
+        if sessions is not None:
+            sessions.pop(getattr(self, "_sess_key", None), None)
+        try:
+            self.app.refresh_screen_navbar()
+        except Exception:
+            pass
+
+    def _restore_draft(self):
+        """Seed the offer widgets from the session's in-progress draft.
+
+        The widget traces fire update_total (which writes through to the
+        session), so the draft is snapshotted first and the write-through
+        is suspended during the restore -- otherwise restoring salary
+        first would clobber the parked years/ntc/bonus with the widgets'
+        still-initial values.
+        """
+        sess = dict(self._session or {})
+        self._restoring = True
+        try:
+            try:
+                sal = sess.get("draft_salary") or f"{self.market_value:,}"
+                self.salary_var.set(str(sal))
+            except Exception:
+                pass
+            try:
+                yrs = int(sess.get("draft_years") or min(5, self.max_years))
+                self.years_var.set(max(1, min(yrs, self.max_years)))
+            except Exception:
+                pass
+            try:
+                ntc = sess.get("draft_ntc", None)
+                if ntc is None:
+                    # Cross-view compat: ContractNegotiationView stores clauses
+                    # as draft_clause ("none"/"full"/...).
+                    ntc = str(sess.get("draft_clause") or "none") != "none"
+                self.ntc_var.set(bool(ntc))
+            except Exception:
+                pass
+            try:
+                self.bonus_var.set(str(sess.get("draft_signing_bonus") or "0"))
+            except Exception:
+                pass
+        finally:
+            self._restoring = False
+
     def update_total(self, *args):
         """Update the total contract value display."""
         try:
@@ -13213,6 +13294,22 @@ class ExtensionNegotiationView(ctk.CTkFrame):
             
             total = (salary * years) + bonus
             self.total_value_var.set(f"${total:,}")
+            # Write-through: the in-progress offer survives navigation.
+            # Suspended while _restore_draft seeds the widgets (the traces
+            # fire on each .set(), and must not clobber the parked draft).
+            if getattr(self, "_restoring", False):
+                return
+            try:
+                sess = self._session
+                sess["draft_salary"] = str(salary)
+                sess["draft_years"] = years
+                sess["draft_signing_bonus"] = str(bonus)
+                ntc = bool(self.ntc_var.get())
+                sess["draft_ntc"] = ntc
+                # Cross-view compat with ContractNegotiationView.
+                sess["draft_clause"] = "full" if ntc else "none"
+            except Exception:
+                pass
         except ValueError:
             self.total_value_var.set("Invalid input")
     
@@ -13273,6 +13370,7 @@ class ExtensionNegotiationView(ctk.CTkFrame):
                           f"({'with' if self.ntc_var.get() else 'without'} NTC, "
                           f"bonus ${bonus:,}).{_why}")
                 self._hide_counter()
+                self._close_session()
                 self.after(1200, self.close_view)
             else:
                 counter_years = min(years + random.randint(-1, 1), self.max_years)

@@ -3505,6 +3505,11 @@ class HockeyManagerGUI(tk.Tk):
                                                    self._on_continue_pressed,
                                                    tooltip="Advance to the next day")
         self.refresh_next_day_button()
+        # Apply the inbox priority styling for the current unread state.
+        try:
+            self.update_inbox_notification()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Screen navigation history (back/forward)
@@ -14489,6 +14494,13 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.rivalry_review_news = []
         except Exception:
             pass
+        # Snapshot staff breakthrough headlines for the year-end recap
+        # (delivered below), which runs after these lists are drained.
+        try:
+            self._season_review_staff_news = list(
+                getattr(self.league, "staff_breakthrough_news", None) or [])
+        except Exception:
+            self._season_review_staff_news = []
         # Staff breakthrough headlines from end_of_season.
         try:
             _bn = list(getattr(self.league, "staff_breakthrough_news", None)
@@ -15438,9 +15450,10 @@ class HockeyManagerGUI(tk.Tk):
             title = f"Shot Chart: Player"
 
         if not shots:
-            from tkinter import messagebox
-            messagebox.showinfo("Shot Chart", "No shot data available yet. "
-                              "Watch a game live to capture its shot chart.")
+            # Non-modal FYI (gating T2-Phase 0): no OS-modal dialog.
+            from popup_system import notify_card
+            notify_card(self, "Shot Chart", "No shot data available yet. "
+                        "Watch a game live to capture its shot chart.")
             return
 
         self.show_screen("shot_chart", title, ShotChartViewerView,
@@ -15467,6 +15480,13 @@ class HockeyManagerGUI(tk.Tk):
         'inbox': '_populate_inbox',
         'schedule': 'update_views',
         'news': 'populate_news',
+        # Gating Phase 1: verified re-entrant refresh methods (clear-then-fill).
+        # 'save_game' is intentionally NOT cached: its call sites always pass
+        # mode='save'/'load' as a kwarg, and the cache-hit path requires no
+        # args/kwargs, so the entry could never hit.
+        'dressing_room': 'refresh',
+        'manager_hub': 'refresh',
+        'settings': 'refresh',
     }
 
     def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
@@ -15646,7 +15666,16 @@ class HockeyManagerGUI(tk.Tk):
         Cacheable screens are stashed (hidden, not destroyed) in the bounded
         LRU so jumping back is instant; anything else is destroyed as before.
         Evicted entries are destroyed to cap memory.
+
+        Gating T2: any open question/notify/prompt card is parked first --
+        the card closes without answering; session-backed questions keep
+        their open state and can re-present.
         """
+        try:
+            from popup_system import park_question_cards_for
+            park_question_cards_for(self)
+        except Exception:
+            pass
         cur = getattr(self, '_current_screen', None)
         self._current_screen = None
         if cur is None:
@@ -15717,16 +15746,62 @@ class HockeyManagerGUI(tk.Tk):
         
     def _get_inbox_button_text(self):
         """Get the text for the inbox button with unread count."""
-        unread_count = self.user_team.inbox.unread_count
+        try:
+            unread_count = self.user_team.inbox.unread_count
+        except Exception:
+            unread_count = 0
         if unread_count > 0:
-            return f"Inbox ({unread_count})"
-        return "Inbox"
-        
+            return f"\u2709 Inbox ({unread_count})"
+        return "\u2709 Inbox"
+
     def update_inbox_notification(self):
-        """Update the inbox button notification."""
-        if hasattr(self, 'inbox_btn'):
-            # CTk widgets use configure(), not config()
-            self.inbox_btn.configure(text=self._get_inbox_button_text())
+        """Update the inbox button notification.
+
+        FM-style priority: while mail is unread the inbox pill takes the
+        accent fill so it sits in clear priority view; once read it drops
+        back to the quiet nav style. Width follows the label.
+        """
+        if not hasattr(self, 'inbox_btn'):
+            return
+        try:
+            unread_count = self.user_team.inbox.unread_count
+        except Exception:
+            unread_count = 0
+        try:
+            from modern_ui import AppColors
+        except Exception:
+            AppColors = None
+        btn = self.inbox_btn
+        try:
+            btn.configure(text=self._get_inbox_button_text())
+        except Exception:
+            pass
+        try:
+            probe = tk.Label(btn.master, text=btn.cget("text"),
+                             font=(self.FONT_FAMILY, 10, 'bold'))
+            try:
+                probe.update_idletasks()
+                btn.configure(width=probe.winfo_reqwidth() + 28)
+            finally:
+                probe.destroy()
+        except Exception:
+            pass
+        try:
+            if unread_count > 0 and AppColors is not None:
+                btn.configure(fg_color=AppColors.ACCENT,
+                              hover_color=AppColors.ACCENT_DIM,
+                              text_color=AppColors.ACCENT_TEXT,
+                              border_width=0)
+            else:
+                fg = AppColors.TEXT_SECONDARY if AppColors else '#a1a1aa'
+                hover = AppColors.BG_HOVER if AppColors else '#1e1e24'
+                btn.configure(fg_color="transparent",
+                              hover_color=hover,
+                              text_color=fg,
+                              border_width=1,
+                              border_color=BORDER)
+        except Exception:
+            pass
             
     def send_email_to_user(self, message):
         """Send an email message to the user's inbox."""
@@ -16315,10 +16390,21 @@ class HockeyManagerGUI(tk.Tk):
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
 
     def _career_team_talk(self, opponent) -> float:
-        """Show pre-match team talk dialog. Returns sim boost multiplier."""
+        """Show pre-match team talk. Returns sim boost multiplier.
+
+        Screen + callback/session flow (gating Phase 1): the talk is a
+        full-screen focus card (not a popup), the answer arrives via
+        on_done into a date-keyed Tier-B session, and a re-entrant day
+        pass reuses the parked answer instead of re-asking. The sim needs
+        the boost before it can proceed, so this fallback path pauses on
+        a variable while the screen is up -- but the session is the
+        source of truth, so the morale boost can never silently no-op
+        (the original bug) and the answer survives navigation.
+        """
         if not self._career_prompts_allowed():
             return 1.0
-        from manager_hub_window import TeamTalkDialog
+        from popup_system import get_pending_session
+        from manager_hub_window import TeamTalkView
         my_strength = self._career_team_strength(self.user_team)
         opp_strength = self._career_team_strength(opponent)
         situation = "favorite" if my_strength > opp_strength + 5 else (
@@ -16328,20 +16414,63 @@ class HockeyManagerGUI(tk.Tk):
             pass
         context = {"situation": situation,
                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
-        dlg = TeamTalkDialog(self, self.user_team, "prematch", context)
-        # Flow-modal pause (same pattern as _ask_game_mode_dialog): the sim
-        # needs the talk result before it can proceed. The dialog is
-        # non-modal in code flow, so without this wait dlg.result was always
-        # read as None -- the morale boost never applied and player morale
-        # landed after the game instead of before it.
         try:
-            dlg.wait_window()
+            _opp_key = getattr(opponent, "id", None) or getattr(
+                opponent, "team_name", "?")
+            _date = self.current_date.isoformat()
+        except Exception:
+            _opp_key, _date = "?", "?"
+        session_id = f"team_talk:{_date}:{_opp_key}"
+
+        def _session_boost():
+            try:
+                sess = get_pending_session(self, session_id)
+                prev = ((sess or {}).get("dialogs") or {}).get("talk") or {}
+                if prev.get("answered"):
+                    return float(prev.get("boost", 1.0))
+            except Exception:
+                pass
+            return None
+
+        prev_boost = _session_boost()
+        if prev_boost is not None:
+            return prev_boost
+
+        wake = tk.BooleanVar(master=self, value=False)
+
+        def _on_done(result):
+            try:
+                boost = 1.0
+                if result:
+                    _opt, _reaction, boost = result
+                sess = get_pending_session(self, session_id)
+                if sess is not None:
+                    sess["dialogs"]["talk"] = {
+                        "answered": True,
+                        "boost": float(boost or 1.0),
+                    }
+            except Exception:
+                pass
+            try:
+                wake.set(True)
+            except Exception:
+                pass
+
+        try:
+            view = self.show_screen("team_talk", "Pre-Match Team Talk",
+                                    TeamTalkView, self.user_team, "prematch",
+                                    context, on_done=_on_done)
+            # Navigating away without answering ("not now") must also
+            # release the waiter; the session simply stays unanswered.
+            try:
+                view.bind("<Destroy>", lambda _e: wake.set(True), add="+")
+            except Exception:
+                pass
+            self.wait_variable(wake)
         except Exception:
             pass
-        if dlg.result:
-            _opt, _reaction, boost = dlg.result
-            return boost
-        return 1.0
+        prev_boost = _session_boost()
+        return prev_boost if prev_boost is not None else 1.0
 
     def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
                                 went_ot: bool, sim_engine=None):

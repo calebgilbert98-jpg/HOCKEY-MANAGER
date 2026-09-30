@@ -2085,16 +2085,17 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             return
         old = grudged[0]
         try:
-            from tkinter import messagebox as _mb
+            # Non-modal FYI cards (gating T2-Phase 0): no OS-modal dialog.
+            from popup_system import notify_card
             today = self.app.current_date.isoformat()[:7]
             if getattr(old, "_grudge_talk_stamp", "") == today:
-                _mb.showinfo("Not yet",
-                             "You've already tried this month. Give it time.")
+                notify_card(self, "Not yet",
+                            "You've already tried this month. Give it time.")
                 return
             league = getattr(self.app, "league", None)
             res = _cc.clear_the_air(old, team, league)
             old._grudge_talk_stamp = today
-            _mb.showinfo("Clear the Air", "\n".join(res.get("lines", [])))
+            notify_card(self, "Clear the Air", "\n".join(res.get("lines", [])))
         except Exception:
             pass
         try:
