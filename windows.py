@@ -5100,14 +5100,39 @@ class TradeWindow(InGamePopup):
                     _wok = False
                 _bits.append(f"\u2022 {_vn} ({_tv['detail']}) -- "
                              f"{'likely to waive' if _wok else 'may refuse'}")
-            if not messagebox.askyesno(
-                    "Trade protection",
+            # Gating T2-Phase 2: the heads-up is a question card, not a
+            # blocking dialog. Dismiss = safe default (don't send).
+            from popup_system import ask_card, cards_available
+            if not cards_available(self):
+                if not messagebox.askyesno(
+                        "Trade protection",
+                        "Heads-up -- the other side has clause players:\n\n"
+                        + "\n".join(_bits)
+                        + "\n\nThey'll be asked to waive for a move to the "
+                        f"{self.parent.user_team.team_name}, and a refusal kills "
+                        "the deal. Send the offer anyway?"):
+                    return
+            else:
+                ask_card(
+                    self, "Trade protection",
                     "Heads-up -- the other side has clause players:\n\n"
                     + "\n".join(_bits)
                     + "\n\nThey'll be asked to waive for a move to the "
                     f"{self.parent.user_team.team_name}, and a refusal kills "
-                    "the deal. Send the offer anyway?"):
+                    "the deal. Send the offer anyway?",
+                    [("Send it anyway", True, "primary"),
+                     ("Not now", False, "secondary")],
+                    on_answer=lambda ans: (
+                        self._propose_trade_after_heads_up(
+                            partner, user_assets, partner_assets, _league)
+                        if ans else None),
+                    default_on_dismiss=False)
                 return
+        self._propose_trade_after_heads_up(
+            partner, user_assets, partner_assets, _league)
+
+    def _propose_trade_after_heads_up(self, partner, user_assets,
+                                      partner_assets, _league):
         # No-trade / no-movement clauses: the user's own clause players must
         # waive for this specific destination before the offer goes out.
         # Yes = ask him, No = pull him from the offer, Cancel = stop.
@@ -5158,51 +5183,43 @@ class TradeWindow(InGamePopup):
         # Waivers stamped in this pass belong to the proposal being built:
         # if the user cancels, they are cleared -- a dead proposal spends
         # nothing (the same rule the MP host applies to dead deals).
-        _stamped = []
-        for _v in self.te.trade_vetoes(
-                self.parent.user_team, partner,
-                [p for p in user_assets if not self.te._is_pick(p)], _league):
-            _p, _pname = _v["player"], getattr(
-                _v["player"], "full_name", str(_v["player"]))
-            _ans = messagebox.askyesnocancel(
-                "No-trade clause",
-                f"{_pname} has a {_v['detail']}.\n\nAsk him to waive it for "
-                f"a move to the {partner.team_name}?\n\n"
-                f"Yes = ask him  |  No = remove him from the offer  |  "
-                f"Cancel = stop")
-            if _ans is None:
-                for _sp in _stamped:
-                    try:
-                        _sp.contract.ntc_waiver_for = ""
-                    except Exception:
-                        pass
-                return
-            if _ans is False:
-                self.trade_offers['user'] = [
-                    a for a in self.trade_offers['user'] if a is not _p]
-                self._retention.pop(getattr(_p, 'id', None), None)
-                user_assets = list(self.trade_offers['user'])
-                self._refresh_offer_lists()
-                self._update_meter()
-                continue
-            _ok, _why = self.te.will_waive_ntc(
-                _p, self.parent.user_team, partner, _league)
-            if _ok:
-                try:
-                    _p.contract.ntc_waiver_for = partner.team_name
-                    _stamped.append(_p)
-                except Exception:
-                    pass
-                messagebox.showinfo("Waiver granted", _why)
-            else:
-                messagebox.showwarning(
-                    "Waiver refused",
-                    f"{_why}\n\nHe's staying put -- remove him from the "
-                    f"offer or cancel.")
-                return
+        # Gating T2-Phase 2: the waiver ask loop is a chain of question
+        # cards (one open at a time, ordered via the session). Dismiss =
+        # defer -- the unsent offer waits for the answer.
+        _vetoes = self.te.trade_vetoes(
+            self.parent.user_team, partner,
+            [p for p in user_assets if not self.te._is_pick(p)], _league)
+        if not _vetoes:
+            self._propose_trade_send(partner, user_assets, partner_assets)
+            return
+        from popup_system import get_pending_session
+        _sess_id = f"trade_propose:{id(self)}"
+        _sess = get_pending_session(self._trade_app(), _sess_id)
+        _sess["kind"] = "trade_propose"
+        _sess["partner"] = partner.team_name
+        _sess["queue"] = [
+            {"player_id": str(getattr(_v["player"], "id", "")),
+             "pname": getattr(_v["player"], "full_name",
+                             str(_v["player"])),
+             "detail": _v.get("detail", "clause")}
+            for _v in _vetoes]
+        _sess["stamped"] = []
+        _sess["sent"] = False
+        self._trade_propose_session = _sess_id
+        self._waiver_step()
+        return
+        self._propose_trade_send(partner, user_assets, partner_assets)
+
+    def _propose_trade_send(self, partner, user_assets, partner_assets):
+        """Send the offer after the waiver chain completes.
+
+        user_assets is rebuilt from the live offer: the waiver chain may
+        have pulled a player (and his retention row) out on a refused
+        waiver.
+        """
         # Deal terms the user set on this screen (retention %, pick protection).
-        # Rebuilt here because the waiver loop above may have pulled a player
-        # (and his retention row) out of the offer on a refused waiver.
+        user_assets = list(self.trade_offers.get("user", []))
+        partner_assets = list(self.trade_offers.get("partner", []))
         retention = {k: v for k, v in self._retention.items() if v}
         pick_protection = dict(self._pick_protection)
         if self._negotiation_id and self._preset.get("mode") == "counter":
@@ -5216,6 +5233,7 @@ class TradeWindow(InGamePopup):
                     f"Your revised proposal is with {partner.team_name}.\n"
                     "They will answer in a few days -- the reply lands in "
                     "your inbox. You can close this window.")
+                self._mark_propose_sent()
                 self.destroy()
                 return
         tn.send_offer(self.parent, partner, user_assets, partner_assets,
@@ -5225,7 +5243,239 @@ class TradeWindow(InGamePopup):
             f"Your offer is with {partner.team_name}'s front office.\n"
             "Expect an answer within a few days -- it will arrive in your "
             "inbox, so feel free to close this and keep working.")
+        self._mark_propose_sent()
         self.destroy()
+
+    # -- Gating T2-Phase 2: waiver question chain ----------------------
+    def _trade_app(self):
+        _p = getattr(self, "parent", None)
+        return getattr(_p, "app", _p)
+
+    def _trade_current_screen_id(self):
+        try:
+            return (getattr(self._trade_app(), "_current_screen", None)
+                    or {}).get("id")
+        except Exception:
+            return None
+
+    def _trade_league(self):
+        _app = self._trade_app()
+        return (getattr(getattr(_app, "game_manager", None), "league", None)
+                or getattr(_app, "league", None))
+
+    def _trade_partner_team(self, partner_name):
+        """Revalidate: resolve the partner team object fresh from the league."""
+        try:
+            for _t in (getattr(self._trade_league(), "teams", None) or []):
+                if getattr(_t, "team_name", None) == partner_name:
+                    return _t
+        except Exception:
+            pass
+        return None
+
+    def _trade_offer_player(self, player_id):
+        for _a in (self.trade_offers.get("user", None) or []):
+            try:
+                if (not self.te._is_pick(_a)
+                        and str(getattr(_a, "id", "")) == str(player_id)):
+                    return _a
+            except Exception:
+                continue
+        return None
+
+    def _mark_propose_sent(self):
+        try:
+            from popup_system import get_pending_session
+            _sess_id = getattr(self, "_trade_propose_session", None)
+            _sess = (get_pending_session(self._trade_app(), _sess_id)
+                     if _sess_id else None)
+            if isinstance(_sess, dict):
+                _sess["sent"] = True
+        except Exception:
+            pass
+
+    def _clear_propose_stamps(self, _sess):
+        """A dead proposal spends nothing: clear single-use waiver stamps."""
+        try:
+            _ids = {str(i) for i in (_sess.get("stamped") or [])}
+            for _t in (getattr(self._trade_league(), "teams", None) or []):
+                for _pl in (getattr(_t, "roster", None) or []):
+                    try:
+                        if str(getattr(_pl, "id", "")) in _ids:
+                            _c = getattr(_pl, "contract", None)
+                            if _c is not None:
+                                _c.ntc_waiver_for = ""
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            _sess["stamped"] = []
+        except Exception:
+            pass
+
+    def _drop_propose_session(self):
+        """Forget the propose session and its parked questions."""
+        try:
+            from popup_system import (get_pending_session,
+                                      unregister_pending_item)
+            _sess_id = getattr(self, "_trade_propose_session", None)
+            if not _sess_id:
+                return
+            _app = self._trade_app()
+            _sess = get_pending_session(_app, _sess_id)
+            if isinstance(_sess, dict):
+                for _did in list((_sess.get("dialogs") or {}).keys()):
+                    unregister_pending_item(_app, f"q:{_sess_id}:{_did}")
+                try:
+                    del _app.pending_sessions[_sess_id]
+                except Exception:
+                    pass
+            self._trade_propose_session = None
+        except Exception:
+            pass
+
+    def _waiver_step(self):
+        """Ask the next waiver question in the queue, or send the offer."""
+        from popup_system import (ask_card, cards_available,
+                                  get_pending_session, register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        _sess_id = getattr(self, "_trade_propose_session", None)
+        _sess = (get_pending_session(self._trade_app(), _sess_id)
+                 if _sess_id else None)
+        if not isinstance(_sess, dict):
+            return
+        _queue = _sess.get("queue") or []
+        if not _queue:
+            _partner = self._trade_partner_team(_sess.get("partner"))
+            if _partner is None:
+                messagebox.showwarning(
+                    "Trade stale",
+                    "The trade partner changed while the waiver questions "
+                    "were parked. The offer was not sent.")
+                self._clear_propose_stamps(_sess)
+                return
+            self._propose_trade_send(
+                _partner,
+                list(self.trade_offers.get("user", [])),
+                list(self.trade_offers.get("partner", [])))
+            return
+        _item = _queue[0]
+        _pid = _item.get("player_id")
+        _p = self._trade_offer_player(_pid)
+        if _p is None:
+            # Player left the offer while parked: skip honestly, continue.
+            _queue.pop(0)
+            self._waiver_step()
+            return
+        _pname = getattr(_p, "full_name", _item.get("pname", "?"))
+        _partner_name = _sess.get("partner", "?")
+        _did = f"waiver:{_pid}"
+        _msg = (f"{_pname} has a {_item.get('detail', 'clause')}.\n\n"
+                f"Ask him to waive it for a move to {_partner_name}?\n\n"
+                "Yes = ask him  |  No = remove him from the offer  |  "
+                "Cancel = stop")
+        _buttons = [("Yes \u2014 ask him", True, "primary"),
+                    ("No \u2014 remove from offer", False, "secondary"),
+                    ("Cancel", "cancel", "secondary")]
+
+        def _on_answer(ans, _pid=_pid, _did=_did, _sess_id=_sess_id):
+            try:
+                unregister_pending_item(self._trade_app(),
+                                        f"q:{_sess_id}:{_did}")
+            except Exception:
+                pass
+            self._waiver_answer(_sess_id, _pid, ans)
+
+        if not cards_available(self):
+            # Headless: legacy blocking path, identical branches.
+            _on_answer(messagebox.askyesnocancel("No-trade clause", _msg))
+            return
+        _app = self._trade_app()
+        _item_id = f"q:{_sess_id}:{_did}"
+        _title = f"Waiver: {_pname} \u2014 answer"
+        _detail = (f"{_pname} must waive his clause before the offer to "
+                   f"{_partner_name} can be sent.")
+        _screen_id = self._trade_current_screen_id()
+        register_pending_item(_app, _item_id, kind=RESUMABLE, title=_title,
+                              detail=_detail, screen_id=_screen_id)
+        ask_card(self, "No-trade clause", _msg, _buttons,
+                 on_answer=_on_answer, default_on_dismiss="defer",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="trade_waiver_answer",
+                 resolver_args={"player_id": _pid})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE, "title": _title,
+                "detail": _detail, "screen_id": _screen_id}
+        except Exception:
+            pass
+
+    def _waiver_answer(self, _sess_id, _pid, _ans):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self._trade_app(), _sess_id)
+        if not isinstance(_sess, dict):
+            return
+        _queue = _sess.get("queue") or []
+        if _queue and str(_queue[0].get("player_id")) == str(_pid):
+            _queue.pop(0)
+        else:
+            _queue[:] = [q for q in _queue
+                         if str(q.get("player_id")) != str(_pid)]
+        _p = self._trade_offer_player(_pid)
+        if _ans is None or _ans == "cancel":
+            # Cancel: clear every stamp -- a dead proposal spends nothing.
+            self._clear_propose_stamps(_sess)
+            return
+        if _ans is False:
+            # No: pull him (and his retention row) from the offer.
+            if _p is not None:
+                self.trade_offers["user"] = [
+                    a for a in self.trade_offers["user"] if a is not _p]
+                self._retention.pop(getattr(_p, "id", None), None)
+                try:
+                    self._refresh_offer_lists()
+                    self._update_meter()
+                except Exception:
+                    pass
+            self._waiver_step()
+            return
+        # Yes: roll the waiver.
+        if _p is None:
+            self._waiver_step()
+            return
+        _partner = self._trade_partner_team(_sess.get("partner"))
+        _user_team = getattr(self._trade_app(), "user_team", None)
+        if _partner is None or _user_team is None:
+            messagebox.showwarning(
+                "Trade stale",
+                "The trade changed while the question was parked. "
+                "The offer was not sent.")
+            self._clear_propose_stamps(_sess)
+            return
+        try:
+            _ok, _why = self.te.will_waive_ntc(
+                _p, _user_team, _partner, self._trade_league())
+        except Exception:
+            _ok, _why = False, "The waiver request failed."
+        if _ok:
+            try:
+                _p.contract.ntc_waiver_for = _partner.team_name
+                _st = _sess.get("stamped") or []
+                _st.append(str(_pid))
+                _sess["stamped"] = _st
+            except Exception:
+                pass
+            messagebox.showinfo("Waiver granted", _why)
+            self._waiver_step()
+        else:
+            messagebox.showwarning(
+                "Waiver refused",
+                f"{_why}\n\nHe's staying put -- remove him from the "
+                "offer or cancel.")
+            # Dead stop, exactly like the blocking version: the window
+            # stays open and earlier stamps stay live with the offer.
+            return
 
     # ------------------------------------------------------------------
     # History
