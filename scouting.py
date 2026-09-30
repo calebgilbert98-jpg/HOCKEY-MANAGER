@@ -18,6 +18,13 @@ GRADE_COLORS = {
 
 SCOUT_REGIONS = ['CHL', 'USHL / NCAA', 'Europe', 'International', 'Top 50 Prospects']
 
+# Pro beats (refinement #4): leagues a pro scout can be assigned to. Kept
+# separate from SCOUT_REGIONS (the amateur draft beat) so each tick only
+# processes its own region kind. ALL_SCOUT_REGIONS is what the region
+# dropdown offers.
+PRO_BEATS = ['AHL', 'SHL', 'Liiga', 'KHL', 'NL']
+ALL_SCOUT_REGIONS = SCOUT_REGIONS + PRO_BEATS
+
 
 def scout_roles():
     """All StaffRole values that count as scouts."""
