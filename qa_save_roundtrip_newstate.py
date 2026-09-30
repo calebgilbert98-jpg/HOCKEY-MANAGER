@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_save_roundtrip_newstate.py -- round-trip audit for persisted state added
 by the six-commit stack (Muck 2026-09-30: "make sure saving isnt broken in
 the future and corrupting post all our builds").

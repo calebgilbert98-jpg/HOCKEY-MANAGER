@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_save_double_migration.py -- double-migration corruption triage QA.
 
 Regression tests for the Sep-2026 save corruption: saves written with

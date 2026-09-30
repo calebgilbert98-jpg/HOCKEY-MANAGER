@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 #!/usr/bin/env python3
 """qa_scheme_parity.py — scheme-bite + chance-origin parity, GameSim vs QuickSim.
 
