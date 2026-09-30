@@ -18296,21 +18296,98 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             _kind, _detail = None, ""
         if _kind == "NMC":
-            _ask = messagebox.askyesno(
-                "No-movement clause",
-                f"{player.full_name} has a {_detail}.\n\n"
-                "He must approve the demotion. Ask him?")
-            if not _ask:
+            # Gating T2-Phase 2: NMC demotion consent is a question card,
+            # not a blocking dialog. Dismiss = defer (safe default: not
+            # asked, the player stays on the roster).
+            from popup_system import (ask_card, cards_available,
+                                      get_pending_session,
+                                      register_pending_item,
+                                      unregister_pending_item, RESUMABLE)
+            _sess_id = f"demote_nmc:{player.id}"
+            _sess = get_pending_session(self, _sess_id)
+            _sess["kind"] = "demote_nmc"
+            _sess["player_id"] = str(player.id)
+            _did = f"consent:{player.id}"
+            _item_id = f"q:{_sess_id}:{_did}"
+            _title = f"NMC consent: {player.full_name} \u2014 answer"
+            _detail = (f"{player.full_name} must approve the demotion "
+                       "before he can be sent down.")
+            _screen_id = None
+            try:
+                _screen_id = (getattr(self, "_current_screen", None)
+                              or {}).get("id")
+            except Exception:
+                pass
+            _nmc_msg = (f"{player.full_name} has a {_detail}.\n\n"
+                        "He must approve the demotion. Ask him?")
+
+            def _nmc_on_answer(ans, _pid=player.id,
+                               _sess_id=_sess_id, _item_id=_item_id):
+                try:
+                    unregister_pending_item(self, _item_id)
+                except Exception:
+                    pass
+                self._demote_nmc_answer(_sess_id, _pid, ans)
+
+            if not cards_available(self):
+                # Headless: legacy blocking path, identical branches.
+                _nmc_on_answer(messagebox.askyesno(
+                    "No-movement clause", _nmc_msg))
                 return
-            _lg = getattr(getattr(self, 'game_manager', None),
-                          'league', None) or getattr(self, 'league', None)
-            _ok, _why = _te.will_waive_ntc(
-                player, self.user_team, None, _lg, context="waivers")
-            if not _ok:
-                messagebox.showwarning(
-                    "Demotion refused",
-                    f"{_why}\n\nHe's staying on the roster.")
-                return
+            register_pending_item(
+                self, _item_id, kind=RESUMABLE, title=_title,
+                detail=_detail, screen_id=_screen_id)
+            ask_card(self, "No-movement clause", _nmc_msg,
+                     [("Ask him", True, "primary"),
+                      ("Not now", False, "secondary")],
+                     on_answer=_nmc_on_answer,
+                     default_on_dismiss="defer",
+                     session_id=_sess_id, dialog_id=_did,
+                     resolver="deposition_answer",
+                     resolver_args={"player_id": str(player.id)})
+            try:
+                _sess["dialogs"][_did]["registry"] = {
+                    "item_id": _item_id, "kind": RESUMABLE,
+                    "title": _title, "detail": _detail,
+                    "screen_id": _screen_id}
+            except Exception:
+                pass
+            return
+        self._send_to_ahl_after_consent(player)
+
+    def _demote_nmc_answer(self, _sess_id, _pid, _ans):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self, _sess_id)
+        _player = next((p for p in self.user_team.roster
+                        if str(p.id) == str(_pid)), None)
+        try:
+            if (isinstance(getattr(self, "pending_sessions", None), dict)
+                    and _sess_id in self.pending_sessions):
+                del self.pending_sessions[_sess_id]
+        except Exception:
+            pass
+        if _ans is not True:
+            # No or dismiss: safe default -- not asked, stays on roster.
+            return
+        if _player is None:
+            messagebox.showwarning(
+                "Player unavailable",
+                "The player is no longer on the roster. The demotion "
+                "stopped.")
+            return
+        import trade_engine as _te
+        _lg = getattr(getattr(self, 'game_manager', None),
+                      'league', None) or getattr(self, 'league', None)
+        _ok, _why = _te.will_waive_ntc(
+            _player, self.user_team, None, _lg, context="waivers")
+        if not _ok:
+            messagebox.showwarning(
+                "Demotion refused",
+                f"{_why}\n\nHe's staying on the roster.")
+            return
+        self._send_to_ahl_after_consent(_player)
+
+    def _send_to_ahl_after_consent(self, player):
         # Waiver eligibility: non-exempt players (25+ or 160+ NHL games)
         # must clear the wire -- no quiet burial of veterans. Shared with
         # the multiplayer demotion path so both use one rulebook.
