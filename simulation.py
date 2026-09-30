@@ -3118,7 +3118,7 @@ class GameSim:
             for team in (self.home_team, self.away_team):
                 st = get_shift_state(self, team)
                 change_f, change_d = should_change_on_fly(self, team, st)
-                # Hard cap: no shift beyond 60s without a whistle. Force
+                # Hard cap: no shift beyond 50s without a whistle. Force
                 # the change even if the puck isn't safe (tired legs).
                 clock = getattr(self, "clock", 0)
                 if st.f_age(clock) >= 50:

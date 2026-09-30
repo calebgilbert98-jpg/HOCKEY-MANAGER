@@ -1364,13 +1364,14 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
             pname = getattr(star, "full_name", "a skater")
             unit = "line" if side == "F" else "pair"
             cap_label = "35 (short bench)" if short_bench else "30"
+            cap_trigger = "35:00" if short_bench else "30:00"
             _log_deployment(sim, team, {
                 "event": "soft_cap_bind",
                 "line": line_no, "side": side,
                 "player": pname,
                 "toi_min": round(worst_s / 60.0, 1),
                 "action": (f"{pname} at {worst_s / 60.0:.1f} min "
-                           f"(soft-cap trigger 27:00, cap ~{cap_label}) -- deployment "
+                           f"(soft-cap trigger {cap_trigger}, cap ~{cap_label}) -- deployment "
                            f"shifts to next "
                            f"{'lines' if side == 'F' else 'pairs'}"),
                 "text": (f"{tname}: {pname} hits the "
