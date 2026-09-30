@@ -420,6 +420,8 @@ class OfferSheetWindow(InGamePopup):
     # ------------------------------------------------------------------
 
     def _present_offer_sheet(self):
+        if self.app._mp_client_block("offer sheets"):
+            return
         if self._selected is None:
             messagebox.showinfo("Offer Sheets", "Select a player first.")
             return

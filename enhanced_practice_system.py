@@ -2185,6 +2185,8 @@ class PracticeCenterView(ctk.CTkFrame):
     
     def _start_practice_schedule(self):
         """Start a practice schedule for the selected player"""
+        if self.app._mp_client_block("practice plans"):
+            return
         if not self.selected_player:
             return
         
@@ -2273,6 +2275,33 @@ class PracticeCenterView(ctk.CTkFrame):
                 # PracticeCenterWindow - use default session duration of 60 minutes
                 duration = 60
             
+            # MP client: the session runs on the host's canonical player --
+            # a local engine call would mutate this snapshot and be wiped
+            # by the next sync.
+            if getattr(self.app, "mp_client", None) is not None:
+                try:
+                    _team = getattr(self.app, "user_team", None)
+                    self.app.mp_client.send_action(
+                        "practice_session",
+                        {"team_id": getattr(_team, "team_name", ""),
+                         "player_id": str(
+                             getattr(self.selected_player, "id", "")),
+                         "practice_type": practice_type.value,
+                         "intensity": intensity.value,
+                         "duration": duration,
+                         "trainer_quality": trainer_quality})
+                except Exception as e:
+                    messagebox.showerror(
+                        "Not Sent",
+                        f"Couldn't reach the host ({e}). Nothing changed.")
+                    return
+                messagebox.showinfo(
+                    "Session Sent",
+                    f"Practice session for "
+                    f"{self.selected_player.full_name} was sent to the "
+                    f"host and applies on the next sync.")
+                return
+
             session = self.practice_engine.execute_practice(
                 self.selected_player, practice_type, intensity, duration, trainer_quality,
                 team=self._practice_team()

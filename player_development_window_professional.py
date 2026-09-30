@@ -1065,6 +1065,32 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             'assigned': game_date,
             'player_name': player.full_name,
         }
+        # MP client: the program and its first session land on the host's
+        # canonical state -- writing them into this snapshot would be
+        # wiped by the next sync. The local registry stays as a display
+        # mirror only.
+        if getattr(self.app, "mp_client", None) is not None:
+            try:
+                _team = getattr(self.app, "user_team", None)
+                self.app.mp_client.send_action(
+                    "set_practice",
+                    {"team_id": getattr(_team, "team_name", ""),
+                     "focus": focus,
+                     "intensity": intensity_label,
+                     "player_ids": [str(getattr(player, "id", ""))]})
+            except Exception as e:
+                messagebox.showerror(
+                    "Not Sent",
+                    f"Couldn't reach the host ({e}). Nothing changed.")
+                self._update_progress_display()
+                return
+            ACTIVE_TRAINING_PROGRAMS[player.id] = prog
+            messagebox.showinfo(
+                "Training Sent",
+                f"{player_name}'s {focus} program was sent to the host. "
+                f"It runs there and applies on the next sync.")
+            self._update_progress_display()
+            return
         ACTIVE_TRAINING_PROGRAMS[player.id] = prog
         gm = getattr(self.app, 'game_manager', None)
         if gm is not None:

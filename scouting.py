@@ -32,7 +32,6 @@ ALL_SCOUT_REGIONS = SCOUT_REGIONS + PRO_BEATS
 # the existing user-assigned amateur flow (no default).
 _EURO_BEAT_CYCLE = ['SHL', 'Liiga', 'KHL', 'NL']
 
-
 def scout_roles():
     """All StaffRole values that count as scouts."""
     from game_classes import StaffRole

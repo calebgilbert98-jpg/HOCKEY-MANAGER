@@ -2638,8 +2638,9 @@ class HockeyManagerGUI(tk.Tk):
         claiming_team.add_player(player)
         player.team_name = claiming_team.team_name
 
-        # A pending user claim beaten by a higher-priority club, or
-        # fulfilled -- either way the pending flag is spent.
+        # Pending claims are spent when they resolve -- fulfilled or
+        # beaten by a higher-priority club. The legacy host flag keeps its
+        # behavior; client clubs track in player.mp_claim_teams.
         try:
             _user_pending = bool(getattr(player, "user_claim_pending", False))
         except Exception:
@@ -2664,6 +2665,23 @@ class HockeyManagerGUI(tk.Tk):
                     f"(waiver priority #{_rank}).")
             except Exception:
                 pass
+        try:
+            _mp_pending = list(getattr(player, "mp_claim_teams", None) or [])
+        except Exception:
+            _mp_pending = []
+        for _loser in _mp_pending:
+            if _loser == getattr(claiming_team, "team_name", ""):
+                continue
+            try:
+                self.add_news(
+                    f"{_loser}'s waiver claim for {player.full_name} was "
+                    f"beaten by {claiming_team.team_name} (priority order).")
+            except Exception:
+                pass
+        try:
+            player.mp_claim_teams = []
+        except Exception:
+            pass
 
         # Successful claim: the club drops to the bottom of the waiver
         # priority order (NHL rule -- priority spent).
@@ -2741,7 +2759,18 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     _is_user = bool(getattr(team, 'is_user_team', False))
                 if _is_user:
-                    if (getattr(player, "user_claim_pending", False)
+                    # Pending claims are per-team: the legacy host flag
+                    # belongs to the host's own club only, client claims
+                    # ride in player.mp_claim_teams.
+                    _mp_pending = (getattr(player, "mp_claim_teams", None)
+                                   or [])
+                    _is_host_club = (team is getattr(self, "user_team",
+                                                     None))
+                    _claimed = (
+                        team.team_name in _mp_pending
+                        or (getattr(player, "user_claim_pending", False)
+                            and _is_host_club))
+                    if (_claimed
                             and len(team.roster) < 23
                             and team.cap_space > player.contract.salary):
                         claiming_team = team
@@ -2795,6 +2824,23 @@ class HockeyManagerGUI(tk.Tk):
                             f"lapsed (roster or cap space changed).")
                     except Exception:
                         pass
+                try:
+                    _lapsed = list(getattr(player, "mp_claim_teams", None)
+                                   or [])
+                except Exception:
+                    _lapsed = []
+                for _loser in _lapsed:
+                    try:
+                        self.add_news(
+                            f"{_loser}'s waiver claim for "
+                            f"{player.full_name} lapsed (roster or cap "
+                            f"space changed before processing).")
+                    except Exception:
+                        pass
+                try:
+                    player.mp_claim_teams = []
+                except Exception:
+                    pass
                 
                 # Add to original team's AHL roster on clearance: waiving is
                 # always a demotion move (cap burial or AHL shuttle), for
@@ -7068,6 +7114,24 @@ class HockeyManagerGUI(tk.Tk):
         return getattr(self, 'mp_client', None) is not None \
             and getattr(self, 'mp_host', None) is None
 
+    def _mp_client_block(self, what):
+        """Phase-1 honesty guard for MP clients.
+
+        Returns True when running as a multiplayer client: the caller must
+        abort WITHOUT mutating local state (the next STATE_SYNC would wipe
+        it silently). Shows a notice explaining client sync is coming.
+        Non-client modes return False (proceed normally).
+        """
+        if not self._mp_client_mode():
+            return False
+        try:
+            self._mp_toast(
+                f"Multiplayer: {what} isn't synced to the host yet — "
+                "client management support is coming in the next update.")
+        except Exception:
+            pass
+        return True
+
     def _on_continue_pressed(self):
         """Every Continue button / Space shortcut funnels through here."""
         if self._mp_host_mode():
@@ -7199,7 +7263,7 @@ class HockeyManagerGUI(tk.Tk):
                 "Advance the day even though not every manager is ready?\n\n"
                 "Unready managers' clubs will simply miss this day's decisions.")
         except Exception:
-            ok = True
+            ok = False  # fail CLOSED: never force-advance on a dialog error
         if not ok:
             return
         self._mp_toast("Host forced the advance.")
@@ -7503,10 +7567,10 @@ class HockeyManagerGUI(tk.Tk):
         Returns (ok, detail). Runs on the main thread, called from the
         host's event poll after net_host validated ownership/shape.
 
-        Phase-1 scoping (deliberate):
-        * set_lines / set_tactics stay LOCAL -- lineup state lives in GUI
-          session state (self.lineup) and is not part of the serialized
-          save, so each manager sets their own lines on their own screen.
+        Phase-2 scoping:
+        * set_lines / set_tactics propagate: the host applies the client's
+          lineup/tactics to the canonical team objects (validated, flattened
+          like the SP editor) and they ride the next STATE_SYNC to the sim.
         * Roster/cap mutations (signings, trades, call-ups) are the
           Phase-1b game-logic surface: validated stubs below. Each real
           handler mutates the host's canonical objects and returns
@@ -7517,7 +7581,13 @@ class HockeyManagerGUI(tk.Tk):
         if team is None:
             return False, f"unknown team: {team_id}"
         if action in ("set_lines", "set_tactics"):
-            return False, "lines & tactics are managed locally in Phase 1"
+            handler = {"set_lines": self._mp_set_lines,
+                       "set_tactics": self._mp_set_tactics}[action]
+            try:
+                return handler(params, team, manager)
+            except Exception as e:
+                print(f"MP action {action} failed: {e}")
+                return False, f"{action} failed: {e}"
         if action in ("advise_coach", "unfeature_player", "team_event",
                       "set_line_control"):
             return self._apply_morale_action(action, params, team)
@@ -7553,10 +7623,13 @@ class HockeyManagerGUI(tk.Tk):
             "fire_staff": self._mp_fire_staff,
             "assign_scout": self._mp_assign_scout,
             "set_practice": self._mp_set_practice,
+            "practice_session": self._mp_practice_session,
             "team_talk": self._mp_team_talk,
             "press_conference": self._mp_press_conference,
             "propose_trade": self._mp_propose_trade,
             "draft_pick": self._mp_draft_pick,
+            "set_captaincy": self._mp_set_captaincy,
+            "set_trade_block": self._mp_set_trade_block,
         }.get(action)
         if handler is None:
             return False, f"unsupported action: {action}"
@@ -7567,6 +7640,316 @@ class HockeyManagerGUI(tk.Tk):
             return False, f"{action} failed: {e}"
 
     # -- Phase 2 management-action helpers (host side) --------------------
+
+    def _mp_set_lines(self, params, team, manager):
+        """Apply a client's lineup to the canonical team.lineup.
+
+        The client sends player IDs in the editor's nested shape; the host
+        resolves them against the canonical roster (ownership validated),
+        rejects dupes and non-goalies in net, then stores + flattens exactly
+        like the SP editor (flatten_lineup). The next STATE_SYNC carries it
+        to everyone and the sim dresses it via resolve_game_lineup.
+        """
+        lines = params.get("lines")
+        if not isinstance(lines, dict):
+            return False, "Missing lines payload."
+        try:
+            from quick_sim import flatten_lineup
+        except Exception:
+            return False, "Lineup machinery unavailable."
+        nested = {}
+        seen = set()
+        def _resolve(pid):
+            if pid in (None, "", "None"):
+                return None
+            p = self._mp_team_player(team, pid)
+            return p
+        # Forwards: 4 x 3 — skaters only.
+        fw = lines.get("Forwards") or []
+        out_fw = []
+        for li in range(4):
+            line = fw[li] if li < len(fw) else []
+            out_line = []
+            for si in range(3):
+                pid = line[si] if si < len(line) else None
+                p = _resolve(pid)
+                if p is None:
+                    out_line.append(None)
+                    continue
+                if self._mp_is_goalie(p):
+                    return False, (f"{p.full_name} is a goalie -- "
+                                   "skaters only on forward lines.")
+                key = str(getattr(p, "id", ""))
+                if key in seen:
+                    return False, (f"{p.full_name} is dressed twice -- "
+                                   "each player skates one slot.")
+                seen.add(key)
+                out_line.append(p)
+            out_fw.append(out_line)
+        nested["Forwards"] = out_fw
+        # Defense: 3 x 2 — skaters only.
+        df = lines.get("Defense") or []
+        out_df = []
+        for li in range(3):
+            pair = df[li] if li < len(df) else []
+            out_pair = []
+            for si in range(2):
+                pid = pair[si] if si < len(pair) else None
+                p = _resolve(pid)
+                if p is None:
+                    out_pair.append(None)
+                    continue
+                if self._mp_is_goalie(p):
+                    return False, (f"{p.full_name} is a goalie -- "
+                                   "skaters only on defense pairs.")
+                key = str(getattr(p, "id", ""))
+                if key in seen:
+                    return False, (f"{p.full_name} is dressed twice -- "
+                                   "each player skates one slot.")
+                seen.add(key)
+                out_pair.append(p)
+            out_df.append(out_pair)
+        nested["Defense"] = out_df
+        # Goalies: 2 — goalies only.
+        gl = lines.get("Goalies") or []
+        out_gl = []
+        for si in range(2):
+            pid = gl[si] if si < len(gl) else None
+            p = _resolve(pid)
+            if p is None:
+                out_gl.append(None)
+                continue
+            if not self._mp_is_goalie(p):
+                return False, (f"{p.full_name} isn't a goalie.")
+            key = str(getattr(p, "id", ""))
+            if key in seen:
+                return False, (f"{p.full_name} is dressed twice.")
+            seen.add(key)
+            out_gl.append(p)
+        nested["Goalies"] = out_gl
+        # Special teams ride along when supplied (same keys as the editor).
+        # Note: special-teamers are the same skaters dressed at even
+        # strength, so duplicate detection restarts here -- it only guards
+        # against one player holding two jobs on the SAME unit.
+        for key in ("PP1", "PP2", "PK1", "PK2"):
+            units = lines.get(key)
+            if not isinstance(units, dict):
+                continue
+            seen_st = set()
+            out_units = {}
+            for ukey, plist in units.items():
+                resolved = []
+                for pid in plist or []:
+                    p = _resolve(pid)
+                    if p is None:
+                        continue
+                    pkey = str(getattr(p, "id", ""))
+                    if pkey in seen_st:
+                        return False, (f"{p.full_name} has two jobs on "
+                                       f"{key} -- one player, one role.")
+                    seen_st.add(pkey)
+                    resolved.append(p)
+                out_units[ukey] = resolved
+            nested[key] = out_units
+        team.lineup = flatten_lineup(nested)
+        return True, "Lines saved."
+
+    @staticmethod
+    def _mp_is_goalie(player):
+        pos = getattr(player, "primary_position", "")
+        return getattr(pos, "value", pos) == "G"
+
+    def _mp_set_tactics(self, params, team, manager):
+        """Apply a client's tactics to the canonical team tactics state.
+
+        The whiteboard edits the seven zone modules (team.tactics dict);
+        line_matchups ride along. Every value is validated against the
+        tactics catalogs -- unknown modules/keys are rejected, never
+        defaulted. The next STATE_SYNC carries it to the sim.
+        """
+        tactics = params.get("tactics")
+        if not isinstance(tactics, dict):
+            return False, "Missing tactics payload."
+        try:
+            import tactics as tx
+        except Exception:
+            return False, "Tactics machinery unavailable."
+        changed = []
+        modules = tactics.get("modules")
+        if isinstance(modules, dict):
+            if not isinstance(getattr(team, "tactics", None), dict):
+                team.tactics = {}
+            for mod, key in modules.items():
+                mod = str(mod)
+                catalog = tx.CATALOGS.get(mod)
+                if catalog is None:
+                    return False, f"Unknown tactics module: {mod!r}."
+                key = str(key)
+                if key not in catalog:
+                    return False, f"Invalid {mod} system: {key!r}."
+                if team.tactics.get(mod) != key:
+                    # SP parity: install through the shared helper so the
+                    # room's learning-curve familiarity hit applies exactly
+                    # as it does on the single-player whiteboard (it also
+                    # busts the tactics cache).
+                    if tx.set_team_system(team, mod, key):
+                        changed.append(mod)
+                    else:
+                        return False, f"Couldn't install {mod} system."
+        if "line_matchups" in tactics:
+            lm = tactics["line_matchups"]
+            if not isinstance(lm, dict):
+                return False, "Invalid line_matchups."
+            cur = getattr(team, "line_matchups",
+                          {"F": [None] * 4, "D": [None] * 3})
+            if not isinstance(cur, dict):
+                cur = {"F": [None] * 4, "D": [None] * 3}
+            for side, want in (("F", 4), ("D", 3)):
+                vals = lm.get(side)
+                if vals is None:
+                    continue
+                if not isinstance(vals, list) or len(vals) != want:
+                    return False, f"Invalid line_matchups[{side}]."
+                clean = []
+                for v in vals:
+                    if v is None:
+                        clean.append(None)
+                        continue
+                    try:
+                        iv = int(v)
+                    except (TypeError, ValueError):
+                        return False, f"Invalid matchup value: {v!r}."
+                    if not 1 <= iv <= 4:
+                        return False, f"Invalid matchup value: {v!r}."
+                    clean.append(iv)
+                cur[side] = clean
+            team.line_matchups = cur
+            changed.append("line_matchups")
+        if not changed:
+            return False, "Nothing to change."
+        return True, "Tactics saved."
+
+    def _mp_set_captaincy(self, params, team, manager):
+        """Set the club's captain + alternates on canonical state.
+
+        Same 1C+2A rule the SP pickers enforce: two alternates from the
+        NHL roster, no goalie letters, no double letters. A deposition
+        context (established captain losing the C) runs the shared
+        captaincy_change judgment consequences on the host, exactly as
+        the SP manual tool does locally -- the conversation happened on
+        the client, the fallout lands here.
+        """
+        alt_ids = params.get("alt_ids") or []
+        if not isinstance(alt_ids, list):
+            return False, "Malformed alternates."
+        alts = [self._mp_team_player(team, pid) for pid in alt_ids]
+        if len(alts) != 2 or any(a is None for a in alts):
+            return False, "Pick exactly two alternates from your club."
+        cap = self._mp_team_player(team, params.get("captain_id", "") or "")
+        picked = ([cap] if cap is not None else []) + alts
+        if len({str(getattr(pl, "id", "")) for pl in picked}) != len(picked):
+            return False, "One player, one letter."
+        for pl in picked:
+            if self._mp_is_goalie(pl):
+                return False, (f"{pl.full_name} is a goalie -- goalies "
+                                "can't wear a letter (NHL Rule 6.1).")
+            if pl not in (getattr(team, "roster", None) or []):
+                return False, (f"{pl.full_name} isn't on the NHL roster.")
+        dep = params.get("deposition") or {}
+        # Validate EVERYTHING before touching a single letter: a rejected
+        # payload must leave the existing captaincy untouched.
+        old_c = None
+        dep_tier = str(dep.get("tier", "grumbles")) if isinstance(dep, dict) else "grumbles"
+        if isinstance(dep, dict) and dep.get("old_captain_id"):
+            old_c = self._mp_team_player(team, dep.get("old_captain_id", ""))
+            if old_c is None:
+                return False, "The deposed captain isn't on your club."
+            if dep_tier not in ("graceful", "grumbles", "furious"):
+                return False, "Unknown deposition tone."
+        roster = list(getattr(team, "roster", None) or [])
+        for pl in roster:
+            try:
+                pl.captaincy = None
+            except Exception:
+                pass
+        if old_c is not None:
+            try:
+                import captaincy_change as _cc
+                report = _cc.apply_deposition(
+                    team, old_c, cap, dep_tier,
+                    talked=bool(dep.get("talked", False)),
+                    date_str=str(dep.get("date_str", "") or ""),
+                    compromise_alternate=bool(dep.get("compromise",
+                                                      False)))
+                for line in (report.get("news") or []):
+                    try:
+                        self.add_news(line)
+                    except Exception:
+                        pass
+            except Exception as e:
+                # Restore the old letters rather than leaving the club
+                # letterless on a half-applied deposition.
+                try:
+                    old_c.captaincy = "C"
+                except Exception:
+                    pass
+                return False, f"Deposition fallout failed: {e}"
+            # The C was dealt by apply_deposition (or left vacant); the
+            # alternates are (re)written here.
+            for al in alts:
+                try:
+                    al.captaincy = "A"
+                except Exception:
+                    pass
+            try:
+                team._captaincy_auto_assigned = False
+            except Exception:
+                pass
+            return True, "Captaincy change applied."
+        if cap is None:
+            return False, "Choose a captain (C)."
+        try:
+            cap.captaincy = "C"
+            for al in alts:
+                al.captaincy = "A"
+        except Exception:
+            return False, "Couldn't write the letters."
+        try:
+            team._captaincy_auto_assigned = False
+        except Exception:
+            pass
+        try:
+            self.add_news(
+                f"{team.team_name} named {cap.full_name} captain "
+                f"({alts[0].full_name}, {alts[1].full_name} alternates).")
+        except Exception:
+            pass
+        return True, f"{cap.full_name} named captain."
+
+    def _mp_set_trade_block(self, params, team, manager):
+        """Set the club's trade block on the league-level registry
+        (trade_market.trade_blocks) -- the signal AI GMs read when
+        shopping for deals. Only NHL-roster players are accepted."""
+        ids = params.get("player_ids") or []
+        if not isinstance(ids, list):
+            return False, "Malformed trade block."
+        try:
+            import trade_market as _tm
+            blocks = _tm.get_trade_blocks(getattr(self, "league", None))
+        except Exception:
+            return False, "Trade market isn't available."
+        roster = list(getattr(team, "roster", None) or [])
+        valid = []
+        for pid in ids:
+            pl = self._mp_team_player(team, pid)
+            if pl is not None and pl in roster:
+                # Raw ids, exactly like refresh_trade_blocks stores them:
+                # the registry is indexed and resolved by int player.id.
+                valid.append(getattr(pl, "id", ""))
+        blocks[team.team_name] = valid
+        if valid:
+            return True, f"Trade block updated ({len(valid)} players)."
+        return True, "Trade block cleared."
 
     def _mp_team_player(self, team, player_id):
         """Find a player on a team's roster / AHL / prospects by id."""
@@ -8020,7 +8403,14 @@ class HockeyManagerGUI(tk.Tk):
         return True, f"{player.full_name} returned to junior."
 
     def _mp_claim_waivers(self, params, team, manager):
-        """Claim off waivers: mirrors WaiversView.claim_from_waivers()."""
+        """Claim off waivers: queue the claim exactly like the SP wire tab.
+
+        The claim is NOT granted instantly -- it is processed at noon in
+        waiver priority order by process_waivers(), so a higher-priority
+        club (human or AI) that also wants him gets him first. Pending
+        claims are tracked per team (mp_claim_teams) so every human GM's
+        claim is independent.
+        """
         pid = str(params.get("player_id", "") or "")
         player = None
         try:
@@ -8040,46 +8430,25 @@ class HockeyManagerGUI(tk.Tk):
                              "salary", 0) or 0)
         if salary > self._mp_cap_room(team):
             return False, "Not enough cap space to claim him."
-        original = self._mp_find_team(getattr(player, "team_name", ""))
-        if original is not None:
+        pending = getattr(player, "mp_claim_teams", None)
+        if not isinstance(pending, list):
+            pending = []
             try:
-                original.remove_player(player)
+                player.mp_claim_teams = pending
             except Exception:
                 pass
-        team.add_player(player)
-        # Rivalry lifecycle: a waiver claim is a transfer, same as the
-        # single-player path -- personal beefs follow the man.
+        if team.team_name in pending:
+            return False, (f"You already have a pending claim on "
+                           f"{player.full_name}.")
+        pending.append(team.team_name)
         try:
-            from reputation_system import on_player_transfer as _opt
-            _rivs = getattr(getattr(self, "league", None), "rivalries", None)
-            if isinstance(_rivs, list):
-                _opt(_rivs, player, from_team=original, to_team=team)
+            self.add_news(
+                f"{team.team_name} submitted a waiver claim for "
+                f"{player.full_name}.")
         except Exception:
             pass
-        # Dressing room: the room reacts to WHO arrives, bounded.
-        try:
-            import dressing_room as _dr_arr
-            _dr_arr.cascade_on_arrival(
-                team, player, how="waiver claim",
-                date_str=str(getattr(self, "current_date", "")))
-        except Exception:
-            pass
-        try:
-            player.on_waivers = False
-            player.waiver_days = 0
-        except Exception:
-            pass
-        try:
-            if player in self.waiver_list:
-                self.waiver_list.remove(player)
-        except Exception:
-            pass
-        try:
-            self.add_news(f"{player.full_name} claimed off waivers by "
-                          f"{team.team_name}.")
-        except Exception:
-            pass
-        return True, f"Claimed {player.full_name} off waivers."
+        return True, (f"Claim submitted for {player.full_name} -- processed "
+                      f"at noon in waiver priority order.")
 
     def _mp_buyout_player(self, params, team, manager):
         """Buy out a contract: same cap-hit schedule the buyout view
@@ -8275,6 +8644,36 @@ class HockeyManagerGUI(tk.Tk):
                                 "staff budget.")
         except Exception:
             pass
+        # SP parity: the staffer can decline the offer. Same acceptance
+        # chance the staff view shows (offer vs market ask, club prestige,
+        # GM stature) -- the roll happens BEFORE any mutation, exactly as
+        # the SP view rolls before sign_free_agent_staff().
+        try:
+            import random as _r
+            from game_classes import staff_market_ask as _sask, \
+                to_100_scale as _t100
+            _askv = _sask(staffer)
+            _mult = salary / max(1, _askv)
+            _rating = _t100(staffer.overall_rating)
+            _prestige = getattr(team, 'prestige', 50)
+            _base = (0.45 + (_mult - 1.0) * 1.4 + (_prestige - 50) / 400
+                     - (_rating - 60) / 600)
+            try:
+                import reputation_system as _rs
+                _base += _rs.gm_staff_accept_delta(team)
+            except Exception:
+                pass
+            _chance = max(0.05, min(0.98, _base))
+            if _r.random() >= _chance:
+                return False, (
+                    f"{getattr(staffer, 'full_name', 'Staffer')} declined "
+                    f"your offer.")
+        except Exception:
+            pass
+        # Join the new club first; only leave the old source after the
+        # hire has landed, so a failure can't strand the staffer.
+        # Terms are stamped here -- after the acceptance roll, so a
+        # declined offer leaves the market pool untouched.
         try:
             staffer.salary = salary
             staffer.contract_years = years
@@ -8282,8 +8681,6 @@ class HockeyManagerGUI(tk.Tk):
             staffer.assignment = _asg if _asg in ("nhl", "ahl") else "nhl"
         except Exception:
             pass
-        # Join the new club first; only leave the old source after the
-        # hire has landed, so a failure can't strand the staffer.
         hired = False
         try:
             roster = getattr(team, "staff", None)
@@ -8379,6 +8776,53 @@ class HockeyManagerGUI(tk.Tk):
         return True, (f"{name} assigned to {region}."
                       if region else f"{name} recalled from assignment.")
 
+    def _mp_practice_session(self, params, team, manager):
+        """Run one practice session: the same engine call the SP practice
+        center makes -- can_practice gate, then execute_practice against
+        the canonical player (skill gain + fatigue land on real state)."""
+        try:
+            from enhanced_practice_system import (
+                PracticeEngine, PracticeType, PracticeIntensity)
+        except Exception:
+            return False, "Practice system isn't available."
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            ptype = PracticeType(str(params.get("practice_type", "")))
+        except Exception:
+            return False, "Unknown practice type."
+        try:
+            intensity = PracticeIntensity(str(params.get("intensity", "")))
+        except Exception:
+            return False, "Unknown intensity."
+        try:
+            duration = int(params.get("duration", 60))
+        except (TypeError, ValueError):
+            duration = 60
+        duration = max(15, min(180, duration))
+        try:
+            trainer_quality = int(params.get("trainer_quality", 12))
+        except (TypeError, ValueError):
+            trainer_quality = 12
+        engine = PracticeEngine()
+        try:
+            can, why = engine.can_practice(player, ptype, intensity)
+        except Exception:
+            can, why = True, ""
+        if not can:
+            return False, why or "He can't practice right now."
+        try:
+            session = engine.execute_practice(
+                player, ptype, intensity, duration, trainer_quality,
+                team=team)
+        except Exception as e:
+            return False, f"Session failed: {e}"
+        if not session:
+            return False, "Session failed."
+        return True, (f"Session complete: +{session.skill_gain:.2f} skill, "
+                      f"+{session.fatigue_cost}% fatigue.")
+
     def _mp_set_practice(self, params, team, manager):
         """Set training programs: writes the same game_manager.
         training_programs entries the practice window creates."""
@@ -8413,17 +8857,46 @@ class HockeyManagerGUI(tk.Tk):
                 return False, "No matching players on your club."
         else:
             players = list(getattr(team, "roster", []) or [])
-        try:
-            for p in players:
-                gm.training_programs[str(getattr(p, "id", ""))] = {
+        # SP parity: the Development Center stamps int keys
+        # (gm.training_programs[player.id]) and runs a first session
+        # immediately through the practice engine. String keys would
+        # never match the int-keyed lookup in _process_training_programs.
+        from enhanced_practice_system import (
+            PracticeEngine, FOCUS_TO_PRACTICE_TYPE,
+            INTENSITY_LABEL_TO_ENUM)
+        _engine = PracticeEngine()
+        _ptype = FOCUS_TO_PRACTICE_TYPE.get(focus)
+        _intensity = INTENSITY_LABEL_TO_ENUM.get(intensity)
+        _applied, _skipped = [], []
+        for pl in players:
+            try:
+                _can, _why = _engine.can_practice(pl, _ptype, _intensity)
+            except Exception:
+                _can, _why = True, ""
+            if not _can:
+                _skipped.append(getattr(pl, "full_name", "?"))
+                continue
+            try:
+                gm.training_programs[getattr(pl, "id", "")] = {
                     "focus": focus, "intensity": intensity,
                     "assigned": game_today,
                     "team": getattr(team, "team_name", ""),
+                    "player_name": getattr(pl, "full_name", ""),
                 }
-        except Exception as e:
-            return False, f"Practice update failed: {e}"
-        return True, (f"Practice set: {focus} / {intensity} "
-                      f"for {len(players)} players.")
+                # First session runs now, exactly like the SP assignment.
+                _engine.execute_practice(pl, _ptype, _intensity, 60, 12)
+                _applied.append(pl)
+            except Exception:
+                _skipped.append(getattr(pl, "full_name", "?"))
+        if not _applied:
+            return False, ("Nobody could train right now"
+                           + (f": {', '.join(_skipped[:3])}"
+                              if _skipped else "."))
+        _msg = (f"Practice set: {focus} / {intensity} "
+                f"for {len(_applied)} players.")
+        if _skipped:
+            _msg += f" ({len(_skipped)} skipped -- too fatigued.)"
+        return True, _msg
 
     # -- dressing-room actions (host side) --------------------------------
 
@@ -9820,6 +10293,8 @@ class HockeyManagerGUI(tk.Tk):
         user_team = getattr(self, 'user_team', None) or (getattr(gm, 'user_team', None) if gm else None)
         if gm is None or not user_team:
             return
+        league = (getattr(self, 'league', None)
+                  or (getattr(gm, 'league', None) if gm else None))
         if not hasattr(gm, 'training_programs') or gm.training_programs is None:
             gm.training_programs = {}
         game_today = getattr(self, 'current_date', None) or date.today()
@@ -9833,11 +10308,20 @@ class HockeyManagerGUI(tk.Tk):
                 gm.training_programs[pid] = adopted
 
         engine = PracticeEngine()
+        # Every club's programs run, not just the host's: a client GM's
+        # training assignment lives in the same registry. (AI clubs never
+        # write programs, so SP behavior is unchanged.)
         players = {}
-        for roster_list in (user_team.roster, user_team.ahl_roster,
-                            user_team.prospects):
-            for pl in roster_list:
-                players[pl.id] = pl
+        _teams_by_name = {}
+        for _t in (getattr(league, 'teams', None) or []):
+            try:
+                _teams_by_name[getattr(_t, 'team_name', '')] = _t
+                for roster_list in (_t.roster, _t.ahl_roster,
+                                    _t.prospects):
+                    for pl in roster_list or []:
+                        players[getattr(pl, 'id', None)] = (pl, _t)
+            except Exception:
+                continue
         expired = []
         for pid, prog in list(gm.training_programs.items()):
             assigned = prog.get('assigned')
@@ -9849,9 +10333,15 @@ class HockeyManagerGUI(tk.Tk):
             if assigned is None or (game_today - assigned).days >= 30:
                 expired.append(pid)
                 continue
-            player = players.get(pid)
-            if not player:
+            _hit = players.get(pid)
+            if not _hit:
                 continue
+            player, _pteam = _hit
+            # The drill is run by the player's own coaching staff, not
+            # the host's -- fall back to the host club only for legacy
+            # programs stamped without a team.
+            _coach_team = (_teams_by_name.get(prog.get('team'))
+                           or _pteam or user_team)
             ptype = FOCUS_TO_PRACTICE_TYPE.get(prog.get('focus'), PracticeType.SKATING)
             intensity = INTENSITY_LABEL_TO_ENUM.get(prog.get('intensity'))
             if intensity is None:
@@ -9863,7 +10353,7 @@ class HockeyManagerGUI(tk.Tk):
                     # (who teaches it, archetype affinity, attitude, fit,
                     # system) instead of a flat trainer number.
                     engine.execute_practice(player, ptype, intensity, 60, 12,
-                                            team=user_team)
+                                            team=_coach_team)
             except Exception:
                 continue
         for pid in expired:
@@ -18341,6 +18831,29 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
         messagebox.showinfo("Lines Updated", "Your team's best lines have been set!")
 
+def _mp_lineup_to_ids(lineup):
+    """Serialize an editor nested lineup to player-ID payload for set_lines.
+
+    Player objects can't cross the wire; the host resolves IDs against the
+    canonical roster. None/empty slots stay None-shaped.
+    """
+    def _pid(p):
+        return None if p is None else str(getattr(p, "id", "") or "")
+    out = {}
+    for key in ("Forwards", "Defense"):
+        rows = lineup.get(key) if isinstance(lineup, dict) else None
+        out[key] = [[_pid(p) for p in (row or [])] for row in (rows or [])]
+    # Goalies is a flat [starter, backup] list, not rows.
+    _gl = lineup.get("Goalies") if isinstance(lineup, dict) else None
+    out["Goalies"] = [_pid(p) for p in (_gl or [])]
+    for key in ("PP1", "PP2", "PK1", "PK2"):
+        units = lineup.get(key) if isinstance(lineup, dict) else None
+        if isinstance(units, dict):
+            out[key] = {uk: [_pid(p) for p in (plist or [])]
+                        for uk, plist in units.items()}
+    return out
+
+
 class CleanEditLinesView(ctk.CTkFrame):
     """Clean, simple, and intuitive line editor with proper contrast and readability"""
     
@@ -19372,6 +19885,14 @@ class CleanEditLinesView(ctk.CTkFrame):
         try:
             # Extract and save lineup
             self.save_lineup_from_interface()
+            _mp_result = self._mp_send_lines()
+            if _mp_result:
+                if _mp_result is True:
+                    self.show_modern_notification(
+                        "Lines Sent",
+                        "Your lineup was sent to the host and applies on the "
+                        "next sync.", "info")
+                return
             self.app.user_team.lineup = flatten_lineup(self.lineup)
             
             # Show success notification
@@ -19380,6 +19901,44 @@ class CleanEditLinesView(ctk.CTkFrame):
         except Exception as e:
             # Show error notification
             self.show_modern_notification("❌ Save Failed", f"Error saving lineup: {str(e)}", "error")
+
+    def _mp_send_lines(self):
+        """Route line changes through the host in MP client mode.
+
+        Returns True when the lines were sent, "failed" when the send
+        failed (consumed: the caller must NOT mutate local state -- the
+        error is already shown), False when not an MP client.
+        """
+        try:
+            client = getattr(self.app, "mp_client", None)
+            if client is None:
+                return False
+            team = getattr(self.app, "user_team", None)
+            payload = {
+                "team_id": getattr(team, "team_name", "") if team else "",
+                "lines": _mp_lineup_to_ids(self.lineup),
+            }
+            try:
+                client.send_action("set_lines", payload)
+            except Exception as e:
+                try:
+                    self.show_modern_notification(
+                        "Not Sent",
+                        f"Couldn't reach the host ({e}). Nothing changed.",
+                        "error")
+                except Exception:
+                    pass
+                return "failed"
+            return True
+        except Exception as e:
+            try:
+                self.show_modern_notification(
+                    "Not Sent",
+                    f"Couldn't reach the host ({e}). Nothing changed.",
+                    "error")
+            except Exception:
+                pass
+            return "failed"
     
     def show_modern_notification(self, title, message, notification_type="info"):
         """Show a modern notification popup"""

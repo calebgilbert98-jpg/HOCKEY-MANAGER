@@ -139,6 +139,8 @@ ALL_TYPES = {
 SUPPORTED_ACTIONS = {
     "set_lines",        # params: {team_id, lines: {...}}
     "set_tactics",      # params: {team_id, tactics: {...}}
+    "set_captaincy",    # params: {team_id, captain_id, alt_ids: [...]}
+    "set_trade_block",  # params: {team_id, player_ids: [...]}
     "sign_free_agent",  # params: {team_id, player_id, contract: {...}}
     "propose_trade",    # params: {team_id, partner_team_id, offer: {...}}
     "release_player",   # params: {team_id, player_id}
@@ -170,11 +172,13 @@ SUPPORTED_ACTIONS = {
     # Staff / scouting / practice / room (Phase 2).
     "hire_staff",       # params: {team_id, staff_id, role, salary, years, assignment: nhl|ahl}
     "fire_staff",       # params: {team_id, staff_id}
-    "assign_scout",     # params: {team_id, scout_id, assignment: {...}}
+    "assign_scout",     # params: {team_id, scout_id, region}
     "set_practice",     # params: {team_id, focus, intensity}
+    "practice_session", # params: {team_id, player_id, practice_type, intensity, duration, trainer_quality}
     "team_talk",        # params: {team_id, tone, situation, speaker?}
     "press_conference", # params: {team_id, stance, topic?}
     "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
+    "return_to_junior", # params: {team_id, player_id}
 }
 
 

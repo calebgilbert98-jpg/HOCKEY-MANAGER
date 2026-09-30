@@ -2536,9 +2536,23 @@ def refresh_trade_blocks(app, league):
                 blocks[user_name] = ublock
         except Exception:
             pass
+        # Human-managed clubs keep their manual blocks: the host mirrors
+        # its own user's block above, and MP clients set theirs through
+        # the set_trade_block action. Regenerating them from AI stance
+        # logic would wipe a human GM's picks on every market tick.
+        _human_names = {user_name} if user_name else set()
+        try:
+            _mph = getattr(app, "mp_host", None)
+            if _mph is not None:
+                for _m in (_mph.active_managers() or []):
+                    _tid = _m.get("team_id") if isinstance(_m, dict) else None
+                    if _tid:
+                        _human_names.add(_tid)
+        except Exception:
+            pass
         for team in _nhl_teams(league):
             tname = getattr(team, "team_name", "")
-            if tname == user_name:
+            if tname in _human_names:
                 continue
             try:
                 stance = tsl.stance(app, tname)
