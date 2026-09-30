@@ -3390,35 +3390,54 @@ class StatsStandingsView(ctk.CTkFrame):
             total_goals = 0
             total_games = 0
             total_teams = 0
-            pp_efficiency_sum = 0
+            pp_goals_total = 0
+            pp_opps_total = 0
+            pp_teams_with_data = 0
             overtime_games = 0
             shutouts = 0
             
+            # Real special-teams data: game_manager.team_stats carries
+            # season-aggregated power_play_goals / power_play_opportunities
+            # per team (written by the sim on every goal). No estimation.
+            try:
+                _ts = getattr(getattr(self.app, 'game_manager', None),
+                              'team_stats', None) or {}
+            except Exception:
+                _ts = {}
+
             for team in self.app.league.teams:
                 if hasattr(team, 'league_name') and team.league_name == "National Hockey League":
                     total_teams += 1
                     team_games = max(team.games_played, 1)
                     total_games += team_games
-                    
+
                     # Use team stats or calculate from wins/losses
                     team_goals = getattr(team, 'goals_for', team.wins * 3 + team.losses * 2)
                     total_goals += team_goals
-                    
-                    # Estimate PP efficiency (mock calculation)
-                    pp_eff = min(30, 15 + (team.wins / max(team_games, 1)) * 10)
-                    pp_efficiency_sum += pp_eff
-                    
+
+                    entry = _ts.get(getattr(team, 'team_name', ''), {}) or {}
+                    pp_g = entry.get('power_play_goals', 0) or 0
+                    pp_o = entry.get('power_play_opportunities', 0) or 0
+                    if pp_o:
+                        pp_goals_total += pp_g
+                        pp_opps_total += pp_o
+                        pp_teams_with_data += 1
+
                     # Estimate overtime games
                     if hasattr(team, 'ot_losses'):
                         overtime_games += team.ot_losses
-            
+
             if total_teams > 0:
                 avg_goals_per_game = total_goals / max(total_games, 1)
-                avg_pp_efficiency = pp_efficiency_sum / total_teams
-                
+                if pp_opps_total > 0:
+                    pp_line = (f"{100.0 * pp_goals_total / pp_opps_total:.1f}% "
+                               f"league average ({pp_teams_with_data} teams)")
+                else:
+                    pp_line = "No power-play data yet this season"
+
                 trends_data = [
                     ("Goals per game", f"{avg_goals_per_game:.2f} league average"),
-                    ("Power play efficiency", f"{avg_pp_efficiency:.1f}% league average"),
+                    ("Power play efficiency", pp_line),
                     ("Overtime games", f"{overtime_games} total this season"),
                     ("Games played", f"{total_games} total across {total_teams} teams"),
                 ]
@@ -3646,26 +3665,35 @@ Analysis will be updated as the season progresses.
             # Default to standings
             self.create_division_standings(self.division_container, division)
     
+    def _teams_for_division(self, division):
+        """Real NHL teams for a division, via the Team.division attribute.
+
+        "All Divisions" returns every NHL club. Falls back through the
+        alternate league sources when the primary one is unavailable.
+        """
+        def _pick(teams):
+            teams = [t for t in (teams or [])
+                     if getattr(t, 'league_name', '') == "National Hockey League"]
+            if division == "All Divisions":
+                return list(teams)
+            return [t for t in teams
+                    if division.lower() in str(getattr(t, 'division', '')
+                                               or '').lower()]
+
+        if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
+            found = _pick(self.app.league.teams)
+            if found:
+                return found
+        return _pick(self.get_fallback_teams())
+
     def create_division_standings(self, parent, division):
         """Create division-specific standings using real team data"""
         # Get real teams for this division
-        division_teams = []
         try:
-            if hasattr(self.app, 'league') and hasattr(self.app.league, 'teams'):
-                all_teams = [team for team in self.app.league.teams
-                           if hasattr(team, 'league_name') and team.league_name == "National Hockey League"]
-
-                # For now, take any NHL teams and group them by division placeholder
-                # In a real implementation, teams would have division attributes
-                division_teams = all_teams[:4]  # Take first 4 for this division
-
-            if not division_teams:
-                fallback_teams = self.get_fallback_teams()
-                division_teams = fallback_teams[:4]
-
+            division_teams = self._teams_for_division(division)
         except Exception as e:
             print(f"Error getting division teams: {e}")
-            division_teams = self.get_fallback_teams()[:4]
+            division_teams = []
 
         # Convert teams to standings format
         divisions_data = {
@@ -3700,6 +3728,9 @@ Analysis will be updated as the season progresses.
         if division in divisions_data:
             for team_data in divisions_data[division]:
                 tree.insert('', 'end', values=team_data)
+            if not divisions_data[division]:
+                tree.insert('', 'end', values=(
+                    f"No teams found for '{division}'.", "", "", "", ""))
 
     def create_head_to_head_analysis(self, parent, division):
         """Create head-to-head analysis with real division data"""
@@ -4455,16 +4486,75 @@ Analysis will be updated as the season progresses.
         # Calculate league-wide statistics
         self._fill_metric_cards(metrics_frame)
 
-        # Charts placeholder card
+        # Team performance snapshot -- real data, no placeholders.
+        # Goals/points come from Team records; special-teams rates come
+        # from game_manager.team_stats (season aggregates written by the
+        # sim). When no games have been played yet the table says so
+        # honestly instead of fabricating numbers.
         charts_card = self._card(parent_frame)
         charts_card.pack(fill='both', expand=True, padx=10, pady=(0, 10))
 
-        self._heading(charts_card, text="Performance Charts", size=13,
+        self._heading(charts_card, text="Team Performance Snapshot", size=13,
                       text_color=ct['TEAL']).pack(anchor='w', padx=14,
                                                  pady=(10, 4))
-        self._body(charts_card,
-                   text="Advanced charts and visualizations would appear here",
-                   dim=True).pack(pady=50)
+        self._fill_team_snapshot_table(charts_card)
+
+    def _fill_team_snapshot_table(self, parent):
+        """Team snapshot table: real GP / GF / GA / PP% / PK% per NHL team."""
+        try:
+            league = getattr(getattr(self.app, 'game_manager', None),
+                             'league', None) or getattr(self.app, 'league', None)
+            teams = [t for t in (getattr(league, 'teams', None) or [])
+                     if getattr(t, 'league_name', '') == "National Hockey League"]
+            ts = getattr(getattr(self.app, 'game_manager', None),
+                         'team_stats', None) or {}
+        except Exception:
+            teams, ts = [], {}
+
+        played = [t for t in teams if getattr(t, 'games_played', 0) > 0]
+        if not played:
+            self._body(parent,
+                       text="No games played yet -- the snapshot fills in "
+                            "once the season starts.",
+                       dim=True).pack(pady=30)
+            return
+
+        columns = {
+            'team': ('Team', 170),
+            'gp': ('GP', 45),
+            'gf': ('GF', 45),
+            'ga': ('GA', 45),
+            'pp': ('PP%', 60),
+            'pk': ('PK%', 60),
+        }
+        tree = self._make_tree(parent, columns, height=12, padx=10, pady=10)
+
+        def _pct(goals, opps):
+            try:
+                return f"{100.0 * goals / opps:.1f}%" if opps else "--"
+            except Exception:
+                return "--"
+
+        rows = []
+        for t in played:
+            entry = ts.get(getattr(t, 'team_name', ''), {}) or {}
+            pp = _pct(entry.get('power_play_goals', 0),
+                      entry.get('power_play_opportunities', 0))
+            pk_ga = entry.get('penalty_kill_goals_against', 0)
+            pk_opps = entry.get('penalty_kill_opportunities', 0)
+            try:
+                pk = (f"{100.0 * (1 - pk_ga / pk_opps):.1f}%"
+                      if pk_opps else "--")
+            except Exception:
+                pk = "--"
+            rows.append((getattr(t, 'team_name', '?'),
+                         getattr(t, 'games_played', 0),
+                         getattr(t, 'goals_for', 0),
+                         getattr(t, 'goals_against', 0),
+                         pp, pk))
+        rows.sort(key=lambda r: (r[2] - r[3], r[2]), reverse=True)
+        for row in rows:
+            tree.insert('', 'end', values=row)
 
     def _fill_metric_cards(self, metrics_frame):
         """Fill the analytics metric cards from real league data."""
