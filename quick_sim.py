@@ -1676,13 +1676,13 @@ class AdvancedGameSim:
         # x line chemistry. Most real goals come off a pass; this keeps
         # the primary rate unified with GameSim's reworked pass play, and
         # the ledger keeps the pair.
-        # Restored 2026-09-29 (scoring calibration): 0.45 -> 0.60, the
-        # pre-parity intensity. With P2 the sim ledger is the single source
-        # of truth for user games; at 0.60 the primary rate matches the
-        # event derivation it replaces (A/G ~1.6-1.7).
+        # Tuned 2026-09-30 (scoring calibration): 0.60 -> 0.65. The sim
+        # ledger was producing A/G 1.49-1.53, just under the 1.55-1.70
+        # band; +0.05 primary lifts A/G into the band without touching
+        # finishing constants.
         if not assist_ids:
             _pool = [p for p in _skaters if p.id != shooter.id]
-            if _pool and random.random() < 0.60:
+            if _pool and random.random() < 0.65:
                 _passer = None
                 try:
                     from mesh_system import (primary_assist_score as _pas,

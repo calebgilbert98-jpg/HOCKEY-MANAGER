@@ -1087,7 +1087,7 @@ CHANCE_LOCATION_PRIORS = {
 # attributes can still bury 50; he just earns fewer grade-A looks per
 # unit of talent than a sniper does.
 CHANCE_ARCHETYPE_A_TILT = {
-    "Sniper": 1.18,
+    "Sniper": 1.12,
     "Playmaker": 1.10,
     "Power Forward": 1.12,
     "Two-Way Forward": 1.00,
@@ -1172,7 +1172,7 @@ def _piecewise_tilt(x, points):
 # separate at the bottom where it matters. Continuous, never a wall, no caps.
 CHANCE_TALENT_TILT_POINTS = (
     (50, 0.38), (60, 0.48), (65, 0.58), (70, 0.62), (75, 0.70),
-    (80, 0.74), (85, 0.78), (88, 0.82), (90, 0.88), (92, 0.95), (95, 1.05),
+    (80, 0.74), (85, 0.78), (88, 0.82), (90, 0.88), (92, 0.93), (95, 0.98),
 )
 
 
