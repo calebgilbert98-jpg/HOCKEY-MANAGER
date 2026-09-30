@@ -14,6 +14,58 @@ from ui_widgets import PillButton
 from manager_career import morale_label
 
 
+def _mp_is_client(app):
+    """True when this app instance is an MP client (not host, not SP)."""
+    try:
+        return getattr(app, "mp_client", None) is not None
+    except Exception:
+        return False
+
+
+def _mp_route(app, action, params, on_sent=None):
+    """Route a management action to the host in MP client mode.
+
+    Returns True when routed -- the caller must NOT mutate local state.
+    The host validates, applies to the canonical state, and the next
+    STATE_SYNC refreshes the UI (the action_ack/action_rejected toast
+    confirms the outcome). Returns False on the host / in single-player,
+    where the caller keeps its normal local behavior.
+
+    If the send itself fails, the action is CONSUMED (True): the caller
+    must not fall through to its local branch, which would mutate a
+    snapshot the next sync wipes. The user gets an honest error instead,
+    and on_sent is NOT called -- success UX must live in on_sent, never
+    after this call, or a failed send would show a false confirmation.
+    """
+    try:
+        client = getattr(app, "mp_client", None)
+        if client is None:
+            return False
+        p = dict(params or {})
+        team = getattr(app, "user_team", None)
+        p.setdefault("team_id",
+                     getattr(team, "team_name", "") if team else "")
+        try:
+            client.send_action(action, p)
+        except Exception as e:
+            try:
+                messagebox.showerror(
+                    "Not Sent",
+                    f"Couldn't reach the host ({e}). Nothing changed -- "
+                    f"try again.")
+            except Exception:
+                pass
+            return True
+        if on_sent is not None:
+            try:
+                on_sent()
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
 def _sfont(family, size, weight=""):
     """Scale-aware font tuple replacement (honors Settings -> Font size).
 
@@ -1752,8 +1804,6 @@ class RosterView(ctk.CTkFrame):
         loophole where a signed veteran could be stashed in the
         prospects list to dodge the cap.
         """
-        if self.app._mp_client_block("roster moves"):
-            return
         try:
             import game_classes as _gc
         except Exception:
@@ -1893,6 +1943,15 @@ class RosterView(ctk.CTkFrame):
                 messagebox.showwarning("Recall blocked (new CBA)", _block)
                 return
 
+        # MP client: the gates above are local UX; the actual move is
+        # host-applied. Route it instead of mutating the snapshot.
+        if _mp_route(self.app,
+                     "call_up" if to_roster == 'nhl'
+                     else "send_to_minors" if to_roster == 'ahl'
+                     else "return_to_junior",
+                     {"player_id": str(getattr(player, "id", ""))}):
+            return
+
         # Remove from source
         if from_roster == 'nhl':
             self.app.user_team.roster.remove(player)
@@ -1936,8 +1995,25 @@ class RosterView(ctk.CTkFrame):
             self.app.trade_block = []
 
         if player not in self.app.trade_block:
-            self.app.trade_block.append(player)
-            messagebox.showinfo("Trade Block", f"{player.full_name} added to trade block.")
+            # MP client: the league-level block lives on the host (it's
+            # what AI GMs read); the local list stays as the display.
+            # It is only appended on a successful send -- a failed send
+            # shows the error and leaves the display untouched.
+            _tb_ids = ([str(getattr(p, "id", ""))
+                        for p in self.app.trade_block]
+                       + [str(getattr(player, "id", ""))])
+
+            def _tb_done():
+                self.app.trade_block.append(player)
+                messagebox.showinfo(
+                    "Trade Block",
+                    f"{player.full_name} added to trade block.")
+
+            if _mp_is_client(self.app):
+                if _mp_route(self.app, "set_trade_block",
+                             {"player_ids": _tb_ids}, on_sent=_tb_done):
+                    return
+            _tb_done()
         else:
             messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
 
@@ -4963,8 +5039,6 @@ class TradeWindow(InGamePopup):
     def propose_trade(self):
         """Send the offer. The AI GM answers in a few days via the inbox --
         this window can be closed freely in the meantime."""
-        if self.parent._mp_client_block("trade proposals"):
-            return
         import trade_negotiation as tn
         partner = self._partner_team()
         if partner is None:
@@ -5018,6 +5092,39 @@ class TradeWindow(InGamePopup):
             messagebox.showerror("Cap problem",
                                  "This trade puts YOU over the salary cap. "
                                  "Shed salary first.")
+            return
+        # MP client: route the raw offer to the host BEFORE the local
+        # waiver dialogs -- the host runs the same askyesnocancel waiver
+        # flow over the wire (NTC_WAIVER_REQUEST prompts) against canonical
+        # state, so local stamping would just be snapshot noise.
+        def _offer_sent():
+            messagebox.showinfo(
+                "Offer sent",
+                f"Your offer is with {partner.team_name}'s front office.\n"
+                "If any of your players must waive a clause, you'll be "
+                "asked -- then expect an answer within a few days in your "
+                "inbox.")
+            self.destroy()
+        if _mp_route(self.parent, "propose_trade", {
+                "partner_team_id": partner.team_name,
+                "offer": {
+                    "players_out": [str(getattr(a, "id", ""))
+                                    for a in user_assets
+                                    if not self.te._is_pick(a)],
+                    "picks_out": [str(getattr(a, "id", ""))
+                                  for a in user_assets
+                                  if self.te._is_pick(a)],
+                    "players_in": [str(getattr(a, "id", ""))
+                                   for a in partner_assets
+                                   if not self.te._is_pick(a)],
+                    "picks_in": [str(getattr(a, "id", ""))
+                                 for a in partner_assets
+                                 if self.te._is_pick(a)],
+                    "retention": {str(k): v for k, v in
+                                  _pre_retention.items()},
+                    "pick_protection": {str(k): v for k, v in
+                                        self._pick_protection.items()},
+                }}, on_sent=_offer_sent):
             return
         # Waivers stamped in this pass belong to the proposal being built:
         # if the user cancels, they are cleared -- a dead proposal spends
@@ -5162,7 +5269,9 @@ class ScoutingView(ctk.CTkFrame):
         reg_frame.pack(fill='x', pady=(0, 4))
         ttk.Label(reg_frame, text="Region:", style='Secondary.TLabel').pack(side='left')
         self.region_combo = ttk.Combobox(reg_frame, textvariable=self.region_var,
-                                        values=self.scmod.SCOUT_REGIONS,
+                                        values=getattr(
+                                            self.scmod, "ALL_SCOUT_REGIONS",
+                                            self.scmod.SCOUT_REGIONS),
                                         state='readonly', width=16)
         self.region_combo.pack(side='left', padx=6)
         ttk.Button(reg_frame, text="Assign", command=self._assign_region,
@@ -5331,13 +5440,15 @@ class ScoutingView(ctk.CTkFrame):
                 self.scmod.get_scout_region(self._gm, self.selected_scout) or "")
 
     def _assign_region(self):
-        if self.app._mp_client_block("scout assignments"):
-            return
         if not self.selected_scout:
             messagebox.showwarning("No Scout", "Select a scout first.")
             return
         region = self.region_var.get()
         if not region:
+            return
+        if _mp_route(self.app, "assign_scout",
+                     {"scout_id": str(getattr(self.selected_scout, "id", "")),
+                      "region": region}):
             return
         self.scmod.set_scout_region(self._gm, self.selected_scout, region)
         self._refresh_scouts()
@@ -11775,6 +11886,15 @@ class TradeBlockWindow(InGamePopup):
                           if p.full_name == player_name), None)
             if player:
                 self.parent.user_team.trade_block.remove(player)
+                # MP client: keep the host's league-level block in sync --
+                # send the list that was actually mutated.
+                if _mp_is_client(self.app):
+                    _mp_route(self.app, "set_trade_block",
+                              {"player_ids":
+                               [str(getattr(p, "id", ""))
+                                for p in getattr(
+                                    self.parent.user_team, "trade_block",
+                                    [])]})
         
         self.update_trade_block_display()
     
@@ -12609,8 +12729,6 @@ class WaiversView(ctk.CTkFrame):
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
-        if self.app._mp_client_block("waiver claims"):
-            return
         # Waiver window (the wire doesn't run in the June dead month).
         # One rulebook in transaction_windows.py.
         try:
@@ -12668,6 +12786,19 @@ class WaiversView(ctk.CTkFrame):
                                   "a higher-priority club that also claims him gets him first.",
                                   confirm_text="Submit Claim")
             if confirm:
+                # MP client: the claim queues on the host and is processed
+                # at noon in priority order -- never set the local flag,
+                # which the next STATE_SYNC would wipe.
+                def _claim_sent():
+                    messagebox.showinfo(
+                        "Claim Submitted",
+                        f"Waiver claim submitted for {player.full_name}. "
+                        f"It will be processed at the next waiver run in "
+                        f"priority order{_rank_txt}.")
+                if _mp_route(self.app, "claim_waivers",
+                             {"player_id": str(getattr(player, "id", ""))},
+                             on_sent=_claim_sent):
+                    return
                 # Real NHL: the claim is queued and processed at noon in
                 # priority order (main.process_waivers), not granted
                 # instantly. The flag is spent when the claim resolves.
@@ -13432,7 +13563,7 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self._counter_panel = None
 
     def _accept_counter(self, counter_years, counter_salary, bonus):
-        if self.parent._mp_client_block("contract extensions"):
+        if self.app._mp_client_block("contract extensions"):
             return
         self.player.contract.salary = counter_salary
         self.player.contract.years_remaining = counter_years
@@ -13777,8 +13908,6 @@ class StaffContractView(ctk.CTkFrame):
 
         assignment picks which club the hire joins: "nhl" or "ahl".
         """
-        if self.app._mp_client_block("staff hiring"):
-            return
         import random
         salary = self._parse_offer()
         if salary is None:
@@ -13799,6 +13928,14 @@ class StaffContractView(ctk.CTkFrame):
                 f"budget (${remaining:,}). Every club in the league works "
                 f"under a staff payroll budget -- trim the offer or move "
                 f"money by letting staff go.")
+            return
+        # MP client: the host runs the acceptance roll against canonical
+        # state -- a local roll would be snapshot noise.
+        if _mp_route(self.app, "hire_staff",
+                     {"staff_id": str(getattr(staff, "id", "")),
+                      "salary": salary, "years": years,
+                      "assignment": assignment},
+                     on_sent=self.close_view):
             return
         chance = self._staff_offer_accept_chance(staff, salary)
         if random.random() < chance:
@@ -13982,8 +14119,6 @@ class SetCaptainsView(ctk.CTkFrame):
                     self.alternate2_var.set(p.full_name)
 
     def save_captains(self):
-        if self.app._mp_client_block("captaincy changes"):
-            return
         team = self.app.user_team
         try:
             import captaincy_change as _cc
@@ -14014,9 +14149,33 @@ class SetCaptainsView(ctk.CTkFrame):
             _cc is not None and old_c is not None
             and _cc.is_established_captain(old_c)
             and (new_c is None or new_c is not old_c))
+        dep_ctx = None
         if deposition:
-            if not self._run_deposition_flow(team, old_c, new_c, _cc):
+            _proceed, dep_ctx = self._run_deposition_flow(
+                team, old_c, new_c, _cc)
+            if not _proceed:
                 return  # backed down or cancelled: leave everything as is
+        # MP client: letters land on the host's canonical roster. The
+        # deposition conversation happened here; its fallout applies on
+        # the host via the deposition context.
+        _cap_params = {
+            "captain_id": (str(getattr(new_c, "id", ""))
+                           if new_c is not None else ""),
+            "alt_ids": [str(getattr(a, "id", ""))
+                        for a in (alt1, alt2) if a is not None]}
+        if dep_ctx:
+            _cap_params["deposition"] = dep_ctx
+
+        def _caps_sent():
+            messagebox.showinfo(
+                "Captains Sent",
+                "Your captaincy picks were sent to the host and apply "
+                "on the next sync.")
+            self.close_view()
+        if _mp_route(self.app, "set_captaincy", _cap_params,
+                     on_sent=_caps_sent):
+            return
+        if deposition:
             self._apply_letters(team, new_c, alt1, alt2,
                                skip_captain=True)
         else:
@@ -14058,8 +14217,13 @@ class SetCaptainsView(ctk.CTkFrame):
                 pass
 
     def _run_deposition_flow(self, team, old_c, new_c, _cc):
-        """The judgment call. Returns True when the change went through
-        (letters applied via captaincy_change), False on back-down/cancel.
+        """The judgment call. Returns (proceed, dep_ctx).
+
+        The conversation (dialogs, pushback, the call) always happens
+        here -- it's the GM's experience. dep_ctx describes the outcome
+        for the host when the letters must land on canonical state (MP
+        client); None when the consequences were applied locally (SP),
+        which is also the case the host never sees.
         Headless fallback: talk first, stand firm -- same as the AI."""
         try:
             league = getattr(self.app, "league", None)
@@ -14077,7 +14241,7 @@ class SetCaptainsView(ctk.CTkFrame):
             new_name = (getattr(new_c, "full_name", "no one")
                         if new_c is not None else "no one")
         if pre == "cancel":
-            return False
+            return False, None
         talked = (pre == "speak")
         acceptance = float(info.get("acceptance", 0.5))
         acceptance += 0.18 if talked else -0.10
@@ -14092,7 +14256,7 @@ class SetCaptainsView(ctk.CTkFrame):
             except Exception:
                 call = "firm"
             if call == "backdown":
-                return False
+                return False, None
             compromise = (call == "alternate")
         else:
             compromise = False
@@ -14100,6 +14264,13 @@ class SetCaptainsView(ctk.CTkFrame):
             date_str = self.app.current_date.isoformat()
         except Exception:
             date_str = ""
+        # MP client: the fallout (morale, news, the letters) lands on the
+        # host's canonical state -- applying it to this snapshot would be
+        # wiped by the next sync.
+        if _mp_is_client(self.app):
+            return True, {"old_captain_id": str(getattr(old_c, "id", "")),
+                          "tier": tier, "talked": talked,
+                          "compromise": compromise, "date_str": date_str}
         report = _cc.apply_deposition(team, old_c, new_c, tier,
                                       talked=talked, date_str=date_str,
                                       compromise_alternate=compromise)
@@ -14116,7 +14287,7 @@ class SetCaptainsView(ctk.CTkFrame):
                 pass
         # Extreme fallout leaves a repair path in the Dressing Room
         # ("Clear the air" row) -- nothing more to do here.
-        return True
+        return True, None
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""
@@ -14280,6 +14451,19 @@ class MandatoryCaptainsView(SetCaptainsView):
                 pass
             self._refresh_gate()
             return False
+        # MP client: letters land on the host's canonical roster.
+        _by_id = {}
+        for _p in (getattr(self.app.user_team, "roster", None) or []):
+            try:
+                _by_id[getattr(_p, "full_name", "")] = str(
+                    getattr(_p, "id", ""))
+            except Exception:
+                pass
+        if _mp_route(self.app, "set_captaincy",
+                     {"captain_id": _by_id.get(c, ""),
+                      "alt_ids": [_by_id.get(a1, ""), _by_id.get(a2, "")]},
+                     on_sent=self.close_view):
+            return True
         gm._persist_captaincy_pick(self.app.user_team, c, a1, a2)
         try:
             self.app.update_all_views()
@@ -14390,8 +14574,6 @@ class MandatoryCaptainsView(SetCaptainsView):
         """Validate, then persist exactly like the manual tool. Invalid
         picks are rejected with an inline message -- never silently
         fixed, and the blocker stays open."""
-        if self.app._mp_client_block("captaincy changes"):
-            return
         self._confirm_current_pick()
 
 
@@ -15275,8 +15457,6 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                    command=self._render_detail).pack(side=tk.LEFT)
 
     def _confirm_buyout(self, p, total, annual, byears, rows):
-        if self.app._mp_client_block("buyouts"):
-            return
         # Buyout window (real NHL: June 15-30). One rulebook in
         # transaction_windows.py.
         try:
@@ -15288,6 +15468,17 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                 return
         except Exception:
             pass
+        # MP client: the host applies the buyout to canonical state.
+        if _mp_route(self.app, "buyout_player",
+                     {"player_id": str(getattr(p, "id", ""))}):
+            self._selected = None
+            for child in self.detail.winfo_children():
+                child.destroy()
+            self._line(self.detail, "Buyout sent", bold=True)
+            self._line(self.detail,
+                       f"{p.full_name}'s buyout was sent to the host and "
+                       f"applies on the next sync.", secondary=True)
+            return
         team = self.app.user_team
         league = self.app.league
         # One rulebook: the shared buyout mutation (buyout_window.py).
