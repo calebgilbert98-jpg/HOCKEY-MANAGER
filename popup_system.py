@@ -979,3 +979,509 @@ class _SimpleDialogFacade:
 
 messagebox = _MessageBoxFacade()
 simpledialog = _SimpleDialogFacade()
+
+
+# ---------------------------------------------------------------------------
+# Tier-2 question cards (non-modal) — gating pattern, T2-Phase 1
+#
+# ask_card / prompt_card / notify_card are the non-modal counterparts of the
+# blocking facades above. Enforcement moved from input lock-in (grab_set +
+# wait_window) to the caller's flow state machine: the card returns a token
+# immediately and the answer arrives later via on_answer. Dismissal (Escape /
+# X / click-out) is NEVER an accidental answer: default_on_dismiss="defer"
+# (the default for gating questions) parks the question — the parent flow
+# stays "awaiting answer" and the card can re-present from the session.
+# Any other default_on_dismiss value answers with that safe default.
+#
+# Additive: the blocking facades above are untouched; unmigrated call sites
+# keep working exactly as before.
+# ---------------------------------------------------------------------------
+
+import uuid as _uuid
+
+#: Named resolvers so a parked question survives save/load. A lambda can't
+#: be serialized; a migrated site registers resolve_<name> here and stores
+#: the name in the session. Re-presentation of unanswered questions after
+#: load is wired per migrated flow (T2-Phase 2+).
+DIALOG_RESOLVERS = {}
+
+
+def register_dialog_resolver(name, fn):
+    """Register a named resolver for parked question cards."""
+    DIALOG_RESOLVERS[name] = fn
+    return fn
+
+
+def get_dialog_resolver(name):
+    return DIALOG_RESOLVERS.get(name)
+
+
+def _question_cards(manager):
+    """Per-manager registry of open question/notify cards (for park-on-navigate)."""
+    cards = getattr(manager, "_question_cards", None)
+    if cards is None:
+        cards = {}
+        manager._question_cards = cards
+    return cards
+
+
+def _coerce_app(parent, manager):
+    """Best-effort resolve of the app object from a card parent.
+
+    The parent may be the app itself, a view with .app, or a bare widget.
+    A non-widget parent that isn't a view is treated as the app itself so an
+    explicit session_id always gets session backing. Returns None only when
+    nothing app-like can be found (card still works; it just isn't
+    session-backed).
+    """
+    try:
+        app = getattr(parent, "app", None)
+        if app is not None:
+            return app
+        if parent is not None and not hasattr(parent, "winfo_exists"):
+            # Not a widget: treat the parent itself as the app/session owner.
+            return parent
+        w = parent
+        for _ in range(25):
+            w = getattr(w, "master", None)
+            if w is None:
+                break
+            if hasattr(w, "pending_sessions") or hasattr(w, "show_screen"):
+                return w
+    except Exception:
+        pass
+    return None
+
+
+def get_pending_session(app, session_id):
+    """Tier-B session dict (generalizes app.negotiation_sessions).
+
+    Every content flow keeps its in-progress state here, keyed by session
+    id, so navigation / cache eviction / save-load can never lose work.
+    Sessions are plain data (JSON-friendly values only for anything that
+    must survive save/load).
+    """
+    if app is None or not session_id:
+        return None
+    try:
+        sessions = getattr(app, "pending_sessions", None)
+        if sessions is None:
+            sessions = {}
+            app.pending_sessions = sessions
+        sess = sessions.get(session_id)
+        if sess is None:
+            sess = {"id": session_id, "dialogs": {}}
+            sessions[session_id] = sess
+        if "dialogs" not in sess:
+            sess["dialogs"] = {}
+        return sess
+    except Exception:
+        return None
+
+
+def _write_question_session(app, session_id, dialog_id, payload):
+    sess = get_pending_session(app, session_id)
+    if sess is None:
+        return None
+    try:
+        sess["dialogs"][dialog_id] = payload
+    except Exception:
+        return None
+    return sess
+
+
+def _card_shell(manager, title, message, kind="question", width=470,
+                height=200):
+    """Build the shared question-card chrome (non-modal). Returns host."""
+    host, _close = manager.show_card(title, width=width, height=height,
+                                     modal=False, dismiss_on_backdrop=True)
+    host.configure(bg=_BG)
+    top = tk.Frame(host, bg=_BG)
+    top.pack(fill="both", expand=True, padx=18, pady=(14, 6))
+    glyph, color = _KIND_STYLE.get(kind, _KIND_STYLE["question"])
+    icon = tk.Label(top, text=glyph, bg=_BG, fg=color,
+                    font=("Segoe UI", 22, "bold"), width=3, anchor="n")
+    icon.pack(side="left", padx=(0, 10))
+    msg = tk.Label(top, text=message, bg=_BG, fg=_TEXT,
+                   font=("Segoe UI", 11), wraplength=360, justify="left",
+                   anchor="nw")
+    msg.pack(side="left", fill="both", expand=True)
+    lines = max(1, len(message or "") // 48)
+    if lines > 3:
+        try:
+            entry = manager._entry_for(host)
+            if entry is not None:
+                entry["height"] = min(420, 200 + (lines - 3) * 20)
+                manager._place_entry(entry)
+        except Exception:
+            pass
+    return host
+
+
+def _card_buttons(host, buttons, on_pick):
+    """Button row. buttons = [(label, value, style)]."""
+    brow = tk.Frame(host, bg=_BG)
+    brow.pack(fill="x", padx=18, pady=(6, 14))
+    try:
+        accent = _app_accent(host._popup_manager.root)
+    except Exception:
+        accent = "#14b8a6"
+    for label, value, style in buttons:
+        bg = accent if style == "primary" else "#2a2e37"
+        fg = "#ffffff" if style == "primary" else _TEXT
+        b = tk.Button(brow, text=label, bg=bg, fg=fg,
+                      activebackground="#0e7c72" if style == "primary" else "#343945",
+                      activeforeground="#ffffff",
+                      font=("Segoe UI", 11, "bold"), padx=22, pady=6,
+                      relief="flat", bd=0, cursor="hand2",
+                      command=lambda v=value: on_pick(v))
+        b.pack(side="right", padx=(8, 0))
+
+
+def _track_card(manager, token_id, record):
+    try:
+        _question_cards(manager)[token_id] = record
+    except Exception:
+        pass
+
+
+def _untrack_card(manager, token_id):
+    try:
+        _question_cards(manager).pop(token_id, None)
+    except Exception:
+        pass
+
+
+def ask_card(parent, title, message, buttons, on_answer=None, *,
+             default_on_dismiss="defer", session_id=None, dialog_id=None,
+             resolver=None, resolver_args=None, kind="question",
+             width=470, height=210):
+    """Non-modal question card.
+
+    buttons: [(label, value, style)] like _dialog. Returns a token dict
+    immediately; the answer arrives later via on_answer(value).
+
+    Dismiss (Escape / X / click-out):
+      - "defer" (default): nothing is decided. The card closes; the parent
+        flow stays "awaiting answer". The open question is written to the
+        session (when session_id/dialog_id are given) so it can re-present.
+      - any other value: answers with that safe default.
+
+    resolver/resolver_args: name + JSON-friendly args for save/load-safe
+    re-presentation (see DIALOG_RESOLVERS).
+    """
+    mgr = _resolve_manager(parent)
+    token_id = "q_" + _uuid.uuid4().hex[:8]
+    token = {"token_id": token_id, "dialog_id": dialog_id or token_id,
+             "answered": False}
+    if mgr is None:
+        # Headless / no manager: fail closed.
+        if default_on_dismiss != "defer" and callable(on_answer):
+            try:
+                on_answer(default_on_dismiss)
+            except Exception:
+                pass
+        token["close"] = lambda: None
+        return token
+
+    did = dialog_id or token_id
+    app = _coerce_app(parent, mgr)
+    labels = [str(lbl) for lbl, _v, _s in buttons]
+    if session_id:
+        _write_question_session(app, session_id, did, {
+            "dialog_id": did, "title": title, "message": message,
+            "options": labels, "answer": None,
+            "resolver": resolver, "resolver_args": resolver_args or {},
+            "default_on_dismiss": (default_on_dismiss
+                                   if isinstance(default_on_dismiss, str)
+                                   else None),
+        })
+
+    state = {"done": False}
+
+    def _finish_session_answer(idx):
+        if session_id:
+            try:
+                sess = get_pending_session(app, session_id)
+                if sess is not None and did in sess["dialogs"]:
+                    sess["dialogs"][did]["answer"] = idx
+            except Exception:
+                pass
+
+    host = _card_shell(mgr, title, message, kind=kind, width=width,
+                       height=height)
+
+    def _close_widget():
+        try:
+            host.destroy()
+        except Exception:
+            pass
+
+    def _answer(value):
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        try:
+            idx = [v for _l, v, _s in buttons].index(value)
+        except ValueError:
+            idx = None
+        _finish_session_answer(idx)
+        _close_widget()
+        if callable(on_answer):
+            try:
+                on_answer(value)
+            except Exception:
+                pass
+
+    def _dismiss():
+        # User actively dismissed: Escape / X / click-out.
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        _close_widget()
+        if default_on_dismiss == "defer":
+            return  # parked; session holds the open question
+        if callable(on_answer):
+            try:
+                on_answer(default_on_dismiss)
+            except Exception:
+                pass
+
+    def _park():
+        # Navigation: close the widget only. Never answers, never applies
+        # the dismiss default. The session already holds the open question.
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        _close_widget()
+
+    _card_buttons(host, buttons, _answer)
+    try:
+        host.protocol("WM_DELETE_WINDOW", _dismiss)
+    except Exception:
+        pass
+    try:
+        host._handles_escape = True
+        host.bind("<Escape>", lambda e: _dismiss(), add="+")
+    except Exception:
+        pass
+    _track_card(mgr, token_id, {"kind": "question", "park": _park,
+                               "dialog_id": did, "session_id": session_id})
+    token["close"] = _park
+    return token
+
+
+def notify_card(parent, title, message, kind="info", width=470, height=180):
+    """Non-modal FYI card. Dismissible, no answer, no session.
+
+    Pure information — the flow already stopped or succeeded on its own.
+    """
+    mgr = _resolve_manager(parent)
+    if mgr is None:
+        return None
+    token_id = "n_" + _uuid.uuid4().hex[:8]
+    host = _card_shell(mgr, title, message, kind=kind, width=width,
+                       height=height)
+    state = {"done": False}
+
+    def _close():
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        try:
+            host.destroy()
+        except Exception:
+            pass
+
+    _card_buttons(host, [("OK", True, "primary")], lambda v: _close())
+    try:
+        host.protocol("WM_DELETE_WINDOW", _close)
+    except Exception:
+        pass
+    try:
+        host._handles_escape = True
+        host.bind("<Escape>", lambda e: _close(), add="+")
+    except Exception:
+        pass
+    _track_card(mgr, token_id, {"kind": "notify", "park": _close})
+    return {"token_id": token_id, "close": _close}
+
+
+def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
+                as_int=False, default_on_dismiss="defer", session_id=None,
+                dialog_id=None, resolver=None, resolver_args=None,
+                width=440, height=200):
+    """Non-modal text/integer prompt. Typed input writes through to the
+    session on every keystroke (when session_id is given), so navigating
+    away never loses half-typed text."""
+    mgr = _resolve_manager(parent)
+    token_id = "p_" + _uuid.uuid4().hex[:8]
+    if mgr is None:
+        if default_on_dismiss != "defer" and callable(on_answer):
+            try:
+                on_answer(default_on_dismiss)
+            except Exception:
+                pass
+        return {"token_id": token_id, "close": lambda: None}
+
+    did = dialog_id or token_id
+    app = _coerce_app(parent, mgr)
+    if session_id:
+        _write_question_session(app, session_id, did, {
+            "dialog_id": did, "title": title, "message": prompt,
+            "options": [], "answer": None, "draft": initial,
+            "resolver": resolver, "resolver_args": resolver_args or {},
+            "default_on_dismiss": (default_on_dismiss
+                                   if isinstance(default_on_dismiss, str)
+                                   else None),
+        })
+
+    host, _close = mgr.show_card(title, width=width, height=height,
+                                 modal=False, dismiss_on_backdrop=True)
+    host.configure(bg=_BG)
+    tk.Label(host, text=prompt, bg=_BG, fg=_TEXT, font=("Segoe UI", 11),
+             wraplength=390, justify="left").pack(anchor="w", padx=18,
+                                                  pady=(14, 8))
+    var = tk.StringVar(value="" if initial is None else str(initial))
+    ent = tk.Entry(host, textvariable=var, bg="#0f1115", fg=_TEXT,
+                   insertbackground=_TEXT, font=("Segoe UI", 12),
+                   relief="flat", highlightbackground=_BORDER,
+                   highlightthickness=1)
+    ent.pack(fill="x", padx=18, pady=(0, 12))
+    try:
+        ent.focus_set()
+    except Exception:
+        pass
+    state = {"done": False}
+
+    def _write_draft(*_a):
+        if session_id:
+            try:
+                sess = get_pending_session(app, session_id)
+                if sess is not None and did in sess["dialogs"]:
+                    sess["dialogs"][did]["draft"] = var.get()
+            except Exception:
+                pass
+
+    try:
+        var.trace_add("write", _write_draft)
+    except Exception:
+        pass
+
+    def _close_widget():
+        try:
+            host.destroy()
+        except Exception:
+            pass
+
+    def _submit(event=None):
+        if state["done"]:
+            return
+        val = var.get()
+        if as_int:
+            try:
+                val = int(val)
+            except ValueError:
+                try:
+                    ent.configure(highlightbackground=_DANGER)
+                except Exception:
+                    pass
+                return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        if session_id:
+            try:
+                sess = get_pending_session(app, session_id)
+                if sess is not None and did in sess["dialogs"]:
+                    sess["dialogs"][did]["answer"] = val
+            except Exception:
+                pass
+        _close_widget()
+        if callable(on_answer):
+            try:
+                on_answer(val)
+            except Exception:
+                pass
+
+    def _dismiss():
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        _close_widget()
+        if default_on_dismiss == "defer":
+            return  # draft stays in the session
+        if callable(on_answer):
+            try:
+                on_answer(default_on_dismiss)
+            except Exception:
+                pass
+
+    def _park():
+        if state["done"]:
+            return
+        state["done"] = True
+        _untrack_card(mgr, token_id)
+        _close_widget()
+
+    ent.bind("<Return>", _submit)
+    brow = tk.Frame(host, bg=_BG)
+    brow.pack(fill="x", padx=18, pady=(0, 14))
+    try:
+        accent = _app_accent(mgr.root)
+    except Exception:
+        accent = "#14b8a6"
+    okb = tk.Button(brow, text="OK", bg=accent, fg="#ffffff",
+                    activebackground="#0e7c72", activeforeground="#ffffff",
+                    font=("Segoe UI", 11, "bold"), padx=22, pady=6,
+                    relief="flat", bd=0, cursor="hand2", command=_submit)
+    okb.pack(side="right")
+    cb = tk.Button(brow, text="Cancel", bg="#2a2e37", fg=_TEXT,
+                   activebackground="#343945", activeforeground=_TEXT,
+                   font=("Segoe UI", 11, "bold"), padx=18, pady=6,
+                   relief="flat", bd=0, cursor="hand2", command=_dismiss)
+    cb.pack(side="right", padx=(0, 8))
+    try:
+        host.protocol("WM_DELETE_WINDOW", _dismiss)
+    except Exception:
+        pass
+    try:
+        host._handles_escape = True
+        host.bind("<Escape>", lambda e: _dismiss(), add="+")
+    except Exception:
+        pass
+    _track_card(mgr, token_id, {"kind": "prompt", "park": _park,
+                               "dialog_id": did, "session_id": session_id})
+    return {"token_id": token_id, "close": _park}
+
+
+def park_question_cards(manager):
+    """Park-on-navigate: close every open question/notify/prompt card WITHOUT
+    answering it. Session-backed questions keep their open state and can
+    re-present; the parent flow stays "awaiting answer".
+
+    Called by the app's screen-shift navigation before switching screens.
+    Returns the number of cards parked.
+    """
+    if manager is None:
+        return 0
+    n = 0
+    for record in list(_question_cards(manager).values()):
+        try:
+            record["park"]()
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def park_question_cards_for(parent):
+    """Resolve the manager from a parent widget/app and park its cards."""
+    try:
+        return park_question_cards(_resolve_manager(parent))
+    except Exception:
+        return 0

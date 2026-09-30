@@ -6,8 +6,8 @@
 # (suggest / enforce / take over the whiteboard).
 # CustomTkinter: CTkToplevel chrome, CTkScrollableFrame, mirrors morale_window.
 
-from tkinter import messagebox
-from popup_system import InGamePopup
+# (messagebox migrated to popup_system.ask_card in _on_enforce/_on_takeover)
+from popup_system import InGamePopup, ask_card
 
 import customtkinter as ctk
 
@@ -558,10 +558,25 @@ class TacticsView(ctk.CTkFrame):
         team = self._team()
         if team is None or not self._pending:
             return
-        if not messagebox.askyesno(
-                "Enforce Tactics",
-                "Overrule your head coach and enforce these systems?\n"
-                "It works -- and he won't forget it."):
+        # Non-modal question card (gating T2): the user can navigate away
+        # mid-question; the answer arrives via the continuation. Dismiss =
+        # "not now" (nothing enforced).
+        ask_card(self, "Enforce Tactics",
+                 "Overrule your head coach and enforce these systems?\n"
+                 "It works -- and he won't forget it.",
+                 [("Enforce", True, "primary"), ("Cancel", False, "secondary")],
+                 on_answer=self._on_enforce_answer)
+
+    def _on_enforce_answer(self, answer):
+        if not answer:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        team = self._team()
+        if team is None or not self._pending:
             return
         try:
             res = rs.enforce_tactics(team, dict(self._pending),
@@ -577,16 +592,32 @@ class TacticsView(ctk.CTkFrame):
                 news(f"Tactics: {res['text']}")
         except Exception:
             pass
-        self.refresh()
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _on_takeover(self):
         team = self._team()
         if team is None:
             return
-        if not messagebox.askyesno(
-                "Take Over Whiteboard",
-                "Take permanent control of tactics from your head coach?\n"
-                "His reaction will depend on his personality."):
+        # Non-modal question card (gating T2): dismiss = "not now".
+        ask_card(self, "Take Over Whiteboard",
+                 "Take permanent control of tactics from your head coach?\n"
+                 "His reaction will depend on his personality.",
+                 [("Take Over", True, "primary"), ("Cancel", False, "secondary")],
+                 on_answer=self._on_takeover_answer)
+
+    def _on_takeover_answer(self, answer):
+        if not answer:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        team = self._team()
+        if team is None:
             return
         try:
             res = rs.take_over_tactics(team, self._team_context())
@@ -607,7 +638,10 @@ class TacticsView(ctk.CTkFrame):
                 news(f"Tactics: {res['text']}")
         except Exception:
             pass
-        self.refresh()
+        try:
+            self.refresh()
+        except Exception:
+            pass
 
     def _on_handback(self):
         team = self._team()

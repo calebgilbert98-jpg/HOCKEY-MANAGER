@@ -430,6 +430,40 @@ class ManagerHubView(ctk.CTkFrame):
         self.prospect_list.pack(fill="both", expand=True, pady=5)
         self._refresh_prospects()
 
+    def refresh(self):
+        """Re-entrant refresh for screen-cache hits (gating Phase 1).
+
+        Clear-then-fill per tab. The Profile tab is static manager identity
+        and is intentionally not refreshed.
+        """
+        for _fn in (self._refresh_board, self._refresh_squad,
+                    self._refresh_training, self._refresh_prospects,
+                    self._refresh_press):
+            try:
+                _fn()
+            except Exception:
+                pass
+
+    def _refresh_press(self):
+        """Clear-then-fill rebuild of the press-conference history text."""
+        box = self.press_list
+        try:
+            box.config(state="normal")
+        except Exception:
+            pass
+        try:
+            box.delete("1.0", "end")
+        except Exception:
+            return
+        hist = self.career.press_history
+        if not hist:
+            box.insert("end", "No press conferences held yet.")
+        for entry in reversed(hist[-20:]):
+            box.insert(
+                "end",
+                f"[{entry.get('date')}] {entry.get('type')}: "
+                f"{entry.get('summary')}\n\n")
+
     def _refresh_prospects(self):
         """List the user club's drafted (unsigned) prospects, best first."""
         box = self.prospect_list

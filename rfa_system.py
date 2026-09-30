@@ -1468,7 +1468,11 @@ def _ask_user_offering_trade_alt(app, offering_team, original_team, player,
     if app is None:
         return False
     try:
-        from tkinter import messagebox as _mb
+        # In-game facade (gating T2-Phase 0): styled card instead of an
+        # OS-modal dialog. The surrounding offer-sheet resolution is
+        # synchronous by design, so this stays on the blocking facade
+        # rather than the async ask_card (restructure deferred to T2-Phase 2).
+        from popup_system import messagebox as _mb
     except Exception:
         return False
     try:
