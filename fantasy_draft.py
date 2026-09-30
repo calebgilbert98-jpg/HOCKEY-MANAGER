@@ -71,6 +71,9 @@ class FantasyDraftManager:
         self.current_pick = 0
         self.team_strategies = {}
         self.draft_started = False  # Track if draft has begun
+        # The human club, set by the binding view (the manager itself is
+        # league-owned and view-agnostic). Used for YOUR-PICK highlighting.
+        self.user_team = None
         
         self.setup_draft_order()
         self.setup_draft_picks()
@@ -150,9 +153,22 @@ class FantasyDraftManager:
         return None
         
     def make_pick(self, player: Player) -> bool:
-        """Make a draft pick"""
+        """Make a draft pick.
+
+        Idempotent per overall pick number (BUG-2 fix): the pick commits
+        exactly once. A repeated/double-clicked call for an overall that
+        already has a player recorded is rejected, so re-entry or a
+        double event can never double-process a slot.
+        """
         current_pick = self.get_current_pick()
         if current_pick:
+            # Idempotency: this overall was already committed (e.g. a
+            # double-click raced the first commit, or a stale view
+            # re-fired). Never advance twice for one slot.
+            if current_pick.player is not None:
+                debug_print(f"DEBUG: Pick #{current_pick.overall_pick} "
+                            f"already committed -- rejecting duplicate")
+                return False
             # Check if player is available by ID instead of object identity
             available_players = self.get_available_players()
             available_player_ids = {p.id for p in available_players}
@@ -627,6 +643,413 @@ class FantasyDraftManager:
                         fa_pools["W"].remove(signed)
                     ros.append(signed)
 
+    # ------------------------------------------------------------------
+    # League-owned session persistence (BUG-2 fix, 2026-09-30)
+    # ------------------------------------------------------------------
+    def to_state_dict(self, serialize_player) -> dict:
+        """Derive the save/load journal for this draft (plain dicts only).
+
+        serialize_player: save manager's _serialize_player. Drafted
+        players ride on team rosters (serialized with the teams as usual);
+        only the undrafted pool is carried here. Picks reference players
+        by id so the load can re-resolve them against the rebuilt rosters.
+        """
+        try:
+            cfg = self.config
+            config_d = {
+                'rounds': int(getattr(cfg, 'rounds', 40) or 40),
+                'serpentine': bool(getattr(cfg, 'serpentine', True)),
+                'draft_order_type': str(getattr(cfg, 'draft_order_type',
+                                                'Randomized')),
+                'salary_cap_enabled': bool(getattr(cfg, 'salary_cap_enabled',
+                                                   True)),
+            }
+        except Exception:
+            config_d = {'rounds': 40, 'serpentine': True,
+                        'draft_order_type': 'Randomized',
+                        'salary_cap_enabled': True}
+        strategies = {}
+        for name, strat in (self.team_strategies or {}).items():
+            try:
+                strategies[str(name)] = {
+                    'risk_tolerance': float(getattr(strat, 'risk_tolerance',
+                                                    0.5) or 0.5),
+                    'youth_preference': float(getattr(strat, 'youth_preference',
+                                                     0.5) or 0.5),
+                    'needs_vs_bpa': float(getattr(strat, 'needs_vs_bpa',
+                                                  0.6) or 0.6),
+                    'position_weights': dict(getattr(strat, 'position_weights',
+                                                     None) or {}),
+                }
+            except Exception:
+                continue
+        picks = []
+        for pk in (self.draft_picks or []):
+            if getattr(pk, 'player', None) is None:
+                continue
+            try:
+                picks.append({
+                    'overall': int(getattr(pk, 'overall_pick', 0) or 0),
+                    'round': int(getattr(pk, 'round_num', 0) or 0),
+                    'team': str(getattr(getattr(pk, 'team', None),
+                                        'team_name', '') or ''),
+                    'player_id': getattr(pk.player, 'id', None),
+                })
+            except Exception:
+                continue
+        pool = []
+        try:
+            for p in self.get_available_players():
+                try:
+                    d = serialize_player(p)
+                except Exception:
+                    d = None
+                if d:
+                    pool.append(d)
+        except Exception:
+            pool = []
+        # Drafted players are NOT on any roster mid-draft (the flow
+        # cleared rosters for redistribution), so the journal must carry
+        # them too -- otherwise a mid-draft load could never re-resolve
+        # the committed picks and would degrade to "unavailable".
+        drafted = []
+        try:
+            for pk in (self.draft_picks or []):
+                p = getattr(pk, 'player', None)
+                if p is None:
+                    continue
+                try:
+                    d = serialize_player(p)
+                except Exception:
+                    d = None
+                if d:
+                    drafted.append(d)
+        except Exception:
+            drafted = []
+        return {
+            'version': 1,
+            'draft_started': bool(getattr(self, 'draft_started', False)),
+            'config': config_d,
+            'draft_order': [str(getattr(t, 'team_name', '') or '')
+                            for t in (self.draft_order or [])],
+            'strategies': strategies,
+            'current_pick': int(getattr(self, 'current_pick', 0) or 0),
+            'picks': picks,
+            'pool': pool,
+            'drafted': drafted,
+        }
+
+    @classmethod
+    def from_state_dict(cls, state, league, restore_player):
+        """Rebuild a live manager from a save journal (post-load).
+
+        Teams resolve by name against the rebuilt league; drafted players
+        resolve by id against the rebuilt team rosters; the undrafted pool
+        is restored from the journal's serialized players. Raises
+        ValueError when the journal can't be honored -- the caller must
+        degrade to an honest "draft unavailable" state, never a fresh
+        draft (which would silently restart and orphan prospects).
+        """
+        if not isinstance(state, dict):
+            raise ValueError("fantasy draft journal is not a dict")
+        teams_by_name = {}
+        for t in (getattr(league, 'teams', None) or []):
+            try:
+                teams_by_name[str(getattr(t, 'team_name', ''))] = t
+            except Exception:
+                continue
+        order_names = [str(n) for n in (state.get('draft_order') or [])]
+        order_teams = []
+        for n in order_names:
+            t = teams_by_name.get(n)
+            if t is None:
+                raise ValueError(f"fantasy draft team missing: {n}")
+            order_teams.append(t)
+        if not order_teams:
+            raise ValueError("fantasy draft journal has no draft order")
+        cfg_d = state.get('config') or {}
+        config = DraftConfiguration(
+            rounds=int(cfg_d.get('rounds', 40) or 40),
+            serpentine=bool(cfg_d.get('serpentine', True)),
+            draft_order_type=str(cfg_d.get('draft_order_type',
+                                           'Randomized')),
+            salary_cap_enabled=bool(cfg_d.get('salary_cap_enabled', True)),
+        )
+        # Index every rostered player by id for identity preservation:
+        # a pool player who already exists as a live restored object
+        # (roster, or a drafted player below) must reuse THAT object --
+        # restoring a second copy would orphan/duplicate him.
+        rostered = {}
+        for t in (getattr(league, 'teams', None) or []):
+            for attr in ('roster', 'ahl_roster', 'prospects'):
+                try:
+                    lst = getattr(t, attr, None) or []
+                except Exception:
+                    lst = []
+                for p in lst:
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    if pid is not None:
+                        rostered.setdefault(pid, p)
+        # Drafted players ride in the journal (they are roster-less
+        # mid-draft). Restore each exactly once; these become the live
+        # objects the picks reference.
+        drafted_by_id = {}
+        for d in (state.get('drafted') or []):
+            if not isinstance(d, dict):
+                continue
+            try:
+                pid = d.get('id')
+            except Exception:
+                pid = None
+            if pid is None or pid in drafted_by_id or pid in rostered:
+                continue
+            try:
+                p = restore_player(d)
+            except Exception:
+                p = None
+            if p is not None:
+                try:
+                    if getattr(p, 'id', None) is None:
+                        p.id = pid
+                except Exception:
+                    pass
+                drafted_by_id[pid] = p
+        pool = []
+        for d in (state.get('pool') or []):
+            if not isinstance(d, dict):
+                continue
+            try:
+                pid = d.get('id')
+            except Exception:
+                pid = None
+            if pid is not None and pid in rostered:
+                pool.append(rostered[pid])
+                continue
+            if pid is not None and pid in drafted_by_id:
+                pool.append(drafted_by_id[pid])
+                continue
+            try:
+                p = restore_player(d)
+            except Exception:
+                p = None
+            if p is not None:
+                pool.append(p)
+        mgr = cls.__new__(cls)
+        mgr.teams = order_teams
+        mgr.config = config
+        mgr.draft_order = list(order_teams)
+        mgr.draft_picks = []
+        mgr.current_pick = 0
+        mgr.team_strategies = {}
+        mgr.draft_started = bool(state.get('draft_started', False))
+        mgr.user_team = None
+        # Strategies: plain numbers back into TeamDraftStrategy.
+        for name, s in ((state.get('strategies') or {}).items()):
+            try:
+                t = teams_by_name.get(str(name))
+                if t is None or not isinstance(s, dict):
+                    continue
+                strat = TeamDraftStrategy(
+                    team=t,
+                    risk_tolerance=float(s.get('risk_tolerance', 0.5)),
+                    youth_preference=float(s.get('youth_preference', 0.5)),
+                    needs_vs_bpa=float(s.get('needs_vs_bpa', 0.6)),
+                )
+                pw = s.get('position_weights')
+                if isinstance(pw, dict) and pw:
+                    strat.position_weights = {str(k): float(v)
+                                              for k, v in pw.items()}
+                mgr.team_strategies[str(name)] = strat
+            except Exception:
+                continue
+        # Rebuild the pick slots in serpentine order (same construction as
+        # setup_draft_picks), then replay the recorded picks.
+        overall = 1
+        for round_num in range(1, config.rounds + 1):
+            if config.serpentine and round_num % 2 == 0:
+                team_order = list(reversed(order_teams))
+            else:
+                team_order = order_teams
+            for pick_in_round, team in enumerate(team_order, 1):
+                mgr.draft_picks.append(DraftPick(
+                    round_num=round_num, pick_num=pick_in_round,
+                    overall_pick=overall, team=team))
+                overall += 1
+        by_overall = {p['overall']: p for p in (state.get('picks') or [])
+                      if isinstance(p, dict)}
+        drafted_ids = set()
+        for pk in mgr.draft_picks:
+            rec = by_overall.get(pk.overall_pick)
+            if not rec:
+                continue
+            pid = rec.get('player_id')
+            # Journal-restored drafted players first (they are roster-less
+            # mid-draft); rostered fallback for robustness. Missing
+            # entirely -> the journal can't be honored: fail loudly so the
+            # caller degrades to "draft unavailable", never a silent fresh
+            # draft over committed picks.
+            player = drafted_by_id.get(pid)
+            if player is None:
+                player = rostered.get(pid)
+            if player is None:
+                raise ValueError(
+                    f"fantasy draft pick #{pk.overall_pick}: drafted "
+                    f"player id {pid!r} not found in journal or rosters")
+            pk.player = player
+            try:
+                drafted_ids.add(getattr(player, 'id', pid))
+            except Exception:
+                pass
+        mgr.all_players = list(pool) + [drafted_by_id[pid]
+                                        for pid in drafted_ids
+                                        if pid in drafted_by_id]
+        try:
+            mgr.current_pick = int(state.get('current_pick', 0) or 0)
+        except Exception:
+            mgr.current_pick = 0
+        mgr.current_pick = max(0, min(mgr.current_pick,
+                                      len(mgr.draft_picks)))
+        return mgr
+
+
+# ----------------------------------------------------------------------
+# League-owned session accessors (BUG-2 fix, 2026-09-30)
+#
+# The FantasyDraftManager instance is created once per fantasy draft and
+# lives on the league (league.fantasy_draft_manager). Views bind to it;
+# destroying a view never touches it. Save/load persists a plain-dict
+# journal derived from the live manager (see to_state_dict /
+# from_state_dict above).
+# ----------------------------------------------------------------------
+
+def get_fantasy_draft_manager(game_manager):
+    """Return the league-owned live manager, or None.
+
+    Never creates one: creation is the binding view's job (it owns the
+    player-collection side effects), and load-time rebuilds live in the
+    save system.
+    """
+    try:
+        league = getattr(game_manager, 'league', None)
+        mgr = getattr(league, 'fantasy_draft_manager', None)
+    except Exception:
+        return None
+    return mgr if isinstance(mgr, FantasyDraftManager) else None
+
+
+def fantasy_session_valid(manager, league) -> bool:
+    """True when the manager still belongs to this league's live objects.
+
+    Guards against stale managers after a load that rebuilt the league
+    without rebuilding the session (the save system rebuilds eagerly, so
+    this is a backstop, not the primary path).
+    """
+    try:
+        if manager is None or league is None:
+            return False
+        teams = getattr(manager, 'teams', None) or []
+        league_teams = getattr(league, 'teams', None) or []
+        if not teams or not league_teams:
+            return False
+        # Identity, not equality: a rebuilt league has equal-but-new teams.
+        return any(t0 is t1 for t0 in teams for t1 in league_teams)
+    except Exception:
+        return False
+
+
+def audit_fantasy_draft(manager, league) -> list:
+    """Orphan/duplicate audit for a fantasy draft session.
+
+    Every drafted prospect must be assigned to exactly one team list
+    league-wide; no player may be picked twice; undrafted pool players
+    must not sit on a roster. Returns a list of human-readable issue
+    strings (empty = clean). Read-only: never mutates.
+    """
+    issues = []
+    try:
+        if manager is None or league is None:
+            return ["no draft session to audit"]
+        seen_ids = {}
+        for pk in (getattr(manager, 'draft_picks', None) or []):
+            player = getattr(pk, 'player', None)
+            if player is None:
+                continue
+            try:
+                pid = getattr(player, 'id', None)
+            except Exception:
+                pid = None
+            key = pid if pid is not None else id(player)
+            if key in seen_ids:
+                issues.append(
+                    f"duplicate pick: {getattr(player, 'full_name', '?')} "
+                    f"taken at #{seen_ids[key]} and "
+                    f"#{getattr(pk, 'overall_pick', '?')}")
+            else:
+                seen_ids[key] = getattr(pk, 'overall_pick', '?')
+        # Where is every drafted player right now?
+        locations = {}
+        # The draft's own live player set: mid-draft this is the valid
+        # home for drafted players (rosters are cleared until completion).
+        in_draft_ids = set()
+        try:
+            for p in (getattr(manager, 'all_players', None) or []):
+                try:
+                    pid = getattr(p, 'id', None)
+                except Exception:
+                    pid = None
+                in_draft_ids.add(pid if pid is not None else id(p))
+        except Exception:
+            pass
+        for t in (getattr(league, 'teams', None) or []):
+            tname = str(getattr(t, 'team_name', '?'))
+            for attr in ('roster', 'ahl_roster', 'prospects'):
+                try:
+                    lst = getattr(t, attr, None) or []
+                except Exception:
+                    lst = []
+                for p in lst:
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    key = pid if pid is not None else id(p)
+                    locations.setdefault(key, []).append(
+                        f"{tname}.{attr}")
+        for key, overall in seen_ids.items():
+            locs = locations.get(key, [])
+            # Mid-draft, drafted players live in the manager's own live
+            # set (rosters are cleared for redistribution and refilled
+            # only at completion) -- that is a valid home, not an orphan.
+            _in_draft = key in in_draft_ids
+            if not locs and not _in_draft:
+                issues.append(f"orphaned prospect: pick #{overall} is on "
+                              f"no team's roster")
+            elif len(locs) > 1:
+                issues.append(f"double-rostered prospect: pick #{overall} "
+                              f"on {', '.join(locs)}")
+        # Undrafted pool players must not be rostered anywhere.
+        try:
+            available_ids = set()
+            for p in manager.get_available_players():
+                try:
+                    pid = getattr(p, 'id', None)
+                except Exception:
+                    pid = None
+                available_ids.add(pid if pid is not None else id(p))
+            for key in available_ids:
+                if key in locations:
+                    issues.append("pool player on a roster: "
+                                  f"{', '.join(locations[key])}")
+        except Exception:
+            pass
+    except Exception as e:
+        issues.append(f"audit failed: {e}")
+    return issues
+
+
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
 
@@ -644,20 +1067,35 @@ class FantasyDraftView(tk.Frame):
         # Full-screen view: window chrome lives on the wrapper now.
         self.configure(background=self.app.BG_COLOR)
         
-        # Initialize draft data - collect ALL NHL players properly
-        nhl_teams = [team for team in game_manager.league.teams 
+        # BUG-2 fix: the draft manager is league-owned, never view-owned.
+        # Re-entering the screen attaches to the live session (draft order,
+        # picks, strategies and cursor intact); only a genuinely new draft
+        # collects the pool and builds a fresh manager. Destroying this
+        # view detaches without touching the session.
+        nhl_teams = [team for team in game_manager.league.teams
                     if team.league_name == "National Hockey League"]
-        all_nhl_players = self.collect_all_nhl_players(nhl_teams)
-        
-        debug_print(f"DEBUG: Collected {len(all_nhl_players)} NHL players for fantasy draft")
-        
-        self.draft_manager = FantasyDraftManager(nhl_teams, all_nhl_players)
+        self._reentry_issues = []
+        # BUG-2 fix: None when the draft is unavailable (no pending draft
+        # and no restorable session, or a journal the load couldn't honor).
+        # The view then shows an honest unavailable panel -- never a draft.
+        self._draft_unavailable = None
+        self._bind_draft_manager(nhl_teams)
+        if self._draft_unavailable:
+            self._show_unavailable_panel(self._draft_unavailable)
+            return
+
         self.user_team = game_manager.user_team
-        
+
         # Ensure user team is set - if not, use the first team in the draft
         if not self.user_team and nhl_teams:
             self.user_team = nhl_teams[0]  # Use first team as fallback
             game_manager.user_team = self.user_team
+            # BUG-2 fix: keep the league-owned manager in sync with the
+            # fallback -- the manager, not the view, is authoritative.
+            try:
+                self.draft_manager.user_team = self.user_team
+            except Exception:
+                pass
             debug_print(f"DEBUG: No user team found, setting to: {self.user_team.team_name}")
         
         debug_print(f"DEBUG: User team set to: {self.user_team.team_name if self.user_team else 'None'}")
@@ -675,11 +1113,59 @@ class FantasyDraftView(tk.Frame):
         self.setup_card_styles()
         self.setup_integrated_ui()
         self.update_display()
-        
+
+        # Re-entry honesty (BUG-2 fix): when the main interface opens on a
+        # re-attached session whose audit found issues, say so once. The
+        # begin-flow path warns inside begin_fantasy_draft instead.
+        if getattr(self.draft_manager, 'draft_started', False):
+            try:
+                self.after(400, self._warn_reentry_issues)
+            except Exception:
+                pass
+
         # Initial population of players list
         if hasattr(self, 'players_tree'):
             debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
+
+    def _warn_reentry_issues(self):
+        """Surface re-entry audit issues once (main-interface path)."""
+        try:
+            issues = list(getattr(self, '_reentry_issues', None) or [])
+        except Exception:
+            issues = []
+        self._reentry_issues = []
+        if not issues:
+            return
+        try:
+            messagebox.showwarning(
+                "Draft Session Issues",
+                "The re-attached draft session has issues:\n\n"
+                + "\n".join(f"• {i}" for i in issues[:8])
+                + "\n\nThe draft resumes from the recorded picks, "
+                  "but review these.")
+        except Exception:
+            pass
+
+    def _show_unavailable_panel(self, reason):
+        """Honest degraded state: the draft can't run, so say so and stop.
+
+        Never silently starts a fresh draft over rosters that were already
+        cleared and re-filled."""
+        try:
+            import tkinter as tk
+            from tkinter import ttk
+            panel = ttk.Frame(self, style='Panel.TFrame')
+            panel.pack(fill=tk.BOTH, expand=True, padx=40, pady=60)
+            ttk.Label(panel, text="Fantasy Draft Unavailable",
+                      style='MainTitle.TLabel').pack(pady=(0, 16))
+            ttk.Label(panel, text=str(reason), style='Normal.TLabel',
+                      wraplength=560, justify='left').pack(pady=(0, 24))
+            ttk.Button(panel, text="Back to Dashboard",
+                       command=self.close_view,
+                       style='TButton').pack()
+        except Exception:
+            pass
 
     def close_view(self):
         """Close this screen via the screen manager, or destroy as fallback."""
@@ -688,6 +1174,129 @@ class FantasyDraftView(tk.Frame):
             fn()
         else:
             self.destroy()
+
+    def _bind_draft_manager(self, nhl_teams):
+        """Attach to the league-owned draft session, or create it.
+
+        Returns True when re-attaching to a live session (re-entry), False
+        when a fresh draft was started, None when the draft is unavailable
+        (self._draft_unavailable carries the reason -- the view shows an
+        honest "unavailable" panel instead of a draft).
+        On re-entry the session is revalidated (orphan/duplicate audit);
+        any issues are stashed on self._reentry_issues and surfaced
+        honestly in the UI instead of silently restarting the draft.
+        """
+        league = getattr(self.game_manager, 'league', None)
+        # BUG-2 fix: a saved journal the load couldn't honor degrades to
+        # an honest unavailable state -- never a fresh draft over
+        # committed picks.
+        try:
+            _why = getattr(league, 'fantasy_draft_unavailable_reason', None)
+        except Exception:
+            _why = None
+        if _why:
+            self._draft_unavailable = str(_why)
+            self._reentry_issues = []
+            return None
+        mgr = get_fantasy_draft_manager(self.game_manager)
+        if mgr is not None and not fantasy_session_valid(mgr, league):
+            # Stale/corrupt session object: a fresh draft here would
+            # silently restart over committed picks. Honest unavailable.
+            self._draft_unavailable = (
+                "The saved fantasy draft session is damaged and can't be "
+                "resumed. No new draft was started -- your rosters are "
+                "untouched.")
+            try:
+                league.fantasy_draft_unavailable_reason = \
+                    self._draft_unavailable
+            except Exception:
+                pass
+            self._reentry_issues = []
+            return None
+        if mgr is not None and fantasy_session_valid(mgr, league):
+            # Re-entry: the draft continues exactly where it left off.
+            self.draft_manager = mgr
+            try:
+                mgr.user_team = self.game_manager.user_team
+            except Exception:
+                pass
+            try:
+                self._reentry_issues = audit_fantasy_draft(mgr, league)
+            except Exception:
+                self._reentry_issues = []
+            if self._reentry_issues:
+                debug_print("DEBUG: fantasy draft re-entry audit issues: "
+                            + "; ".join(self._reentry_issues))
+            else:
+                debug_print("DEBUG: re-attached to live fantasy draft "
+                            f"session at pick #{mgr.current_pick + 1}")
+            return True
+        # Fresh draft ONLY when a fantasy draft is genuinely pending. A
+        # dropped session with no pending draft (or a load that couldn't
+        # rebuild one) must not silently conjure a new draft over rosters
+        # that were already cleared and re-filled.
+        try:
+            _pending = bool(getattr(self.game_manager,
+                                    'pending_fantasy_draft', False))
+        except Exception:
+            _pending = False
+        if not _pending:
+            self._draft_unavailable = (
+                "No fantasy draft is pending. The saved draft session "
+                "could not be restored, so no new draft was started -- "
+                "your rosters are untouched.")
+            self._reentry_issues = []
+            return None
+        # Fresh draft: the pre-draft safety checkpoint is taken HERE,
+        # before the pool collection wipes the rosters (the old call in
+        # begin_fantasy_draft ran after the wipe and could only snapshot
+        # empty rosters).
+        try:
+            cpm = getattr(self.game_manager, 'checkpoint_manager', None)
+            if cpm is not None:
+                cpm.checkpoint("Before Fantasy Draft")
+        except Exception as _e:
+            print(f"Pre-draft checkpoint failed (non-fatal): {_e}")
+        all_nhl_players = self.collect_all_nhl_players(nhl_teams)
+        debug_print(f"DEBUG: Collected {len(all_nhl_players)} NHL players "
+                    f"for fantasy draft")
+        self.draft_manager = FantasyDraftManager(nhl_teams, all_nhl_players)
+        try:
+            self.draft_manager.user_team = self.game_manager.user_team
+        except Exception:
+            pass
+        try:
+            if league is not None:
+                league.fantasy_draft_manager = self.draft_manager
+        except Exception:
+            pass
+        self._reentry_issues = []
+        return False
+
+    def _draft_tree_context_menu(self, event, tree):
+        """Right-click a player on a fantasy draft list -> full player menu
+        with the instant war-room scouting take."""
+        try:
+            item_id = tree.identify_row(event.y)
+            if not item_id:
+                return
+            tree.selection_set(item_id)
+            # fantasy_draft keeps a flat item_id -> player map; sanity-check
+            # against the row text in case two trees reused an item id.
+            player = (getattr(self.app, 'tree_maps', {}) or {}).get(item_id)
+            if player is None:
+                return
+            try:
+                row_name = (tree.item(item_id, 'values') or [''])[0]
+                if row_name and getattr(player, 'full_name', '') != row_name:
+                    return
+            except Exception:
+                pass
+            from player_context_menu import PlayerContextMenu
+            PlayerContextMenu(self).show_context_menu(
+                event, player, quick_scout=True)
+        except Exception:
+            pass
 
     def initial_player_load(self):
         """Load players after UI initialization"""
@@ -982,16 +1591,62 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         """Begin the fantasy draft and ensure all rosters are cleared"""
         debug_print("DEBUG: Beginning fantasy draft - clearing all team rosters")
 
-        # --- MULTIPLAYER/CHECKPOINTS: pre-draft safety checkpoint ---
-        # Taken BEFORE rosters are wiped, so a mid-draft crash recovers
-        # to an intact league instead of a half-drafted one.
+        # BUG-2 fix: re-entry must never wipe rosters. If the draft already
+        # started (session re-attached), this is a resume -- skip the wipe
+        # and the re-mark, keep the pending flag, and show the main
+        # interface. Wiping here would delete every already-drafted player
+        # from their new clubs.
+        if getattr(self.draft_manager, 'draft_started', False):
+            debug_print("DEBUG: begin_fantasy_draft on a started draft -- "
+                        "resume, no roster wipe")
+            try:
+                _issues = list(getattr(self, '_reentry_issues', None) or [])
+            except Exception:
+                _issues = []
+            if _issues:
+                try:
+                    messagebox.showwarning(
+                        "Draft Session Issues",
+                        "The re-attached draft session has issues:\n\n"
+                        + "\n".join(f"• {_i}" for _i in _issues[:8])
+                        + "\n\nThe draft resumes, but review these.")
+                except Exception:
+                    pass
+            self._reentry_issues = []
+            if hasattr(self.game_manager, 'pending_fantasy_draft'):
+                self.game_manager.pending_fantasy_draft = True
+            for widget in self.winfo_children():
+                widget.destroy()
+            self.setup_integrated_ui()
+            debug_print("DEBUG: Fantasy draft resumed - rosters untouched")
+            self.after(200, self.ensure_draft_board_current)
+            self.after(500, self.ensure_draft_board_current)
+            return
+
+        # NOTE (BUG-2 fix): the pre-draft safety checkpoint now lives in
+        # _bind_draft_manager, taken BEFORE the pool collection wipes the
+        # rosters. By the time we get here the wipe already happened, so a
+        # checkpoint here could only snapshot empty rosters.
+        #
+        # Re-entry honesty: if the revalidation audit found orphaned or
+        # duplicated prospects, say so instead of silently continuing.
         try:
-            cpm = getattr(self.game_manager, 'checkpoint_manager', None)
-            if cpm is not None:
-                cpm.checkpoint("Before Fantasy Draft")
-        except Exception as _e:
-            print(f"Pre-draft checkpoint failed (non-fatal): {_e}")
-        
+            _issues = list(getattr(self, '_reentry_issues', None) or [])
+        except Exception:
+            _issues = []
+        if _issues:
+            try:
+                messagebox.showwarning(
+                    "Draft Session Issues",
+                    "The re-attached draft session has issues:\n\n"
+                    + "\n".join(f"• {_i}" for _i in _issues[:8])
+                    + ("\n\nThe draft resumes, but review these."
+                       if len(_issues) > 8 else
+                       "\n\nThe draft resumes, but review these."))
+            except Exception:
+                pass
+        self._reentry_issues = []
+
         # CRITICAL: Clear ALL team rosters completely
         self.clear_all_team_rosters_completely()
         
@@ -1151,6 +1806,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Selection binding
         self.players_tree.bind('<<TreeviewSelect>>', self.on_player_select)
+        self.players_tree.bind('<Button-3>',
+                               lambda e: self._draft_tree_context_menu(
+                                   e, self.players_tree))
         
     def setup_draft_controls_panel(self, parent):
         """Setup draft order and control buttons"""
@@ -1617,6 +2275,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Bind events
         self.integrated_players_tree.bind('<Button-1>', self.integrated_on_player_select)
         self.integrated_players_tree.bind('<Double-1>', self.integrated_on_player_draft)
+        self.integrated_players_tree.bind('<Button-3>',
+                                          lambda e: self._draft_tree_context_menu(
+                                              e, self.integrated_players_tree))
         
         # Button frame (more prominent and always visible)
         button_frame = ttk.LabelFrame(main_frame, text="Draft Actions", style='TLabelframe')
@@ -3754,6 +4415,28 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Add completion message to inbox
         self.add_draft_completion_message()
         
+        # BUG-2 fix: orphan/duplicate audit at completion (after the
+        # roster normalizer redistributed everyone). Then release the
+        # league-owned session so a later open starts clean instead of
+        # re-attaching to a finished draft.
+        try:
+            _issues = audit_fantasy_draft(
+                self.draft_manager, getattr(self.game_manager, 'league', None))
+        except Exception:
+            _issues = []
+        if _issues:
+            debug_print("DEBUG: fantasy draft completion audit issues: "
+                        + "; ".join(_issues))
+        # Stash for the completion email below.
+        self._completion_audit_issues = list(_issues)
+        try:
+            _lg = getattr(self.game_manager, 'league', None)
+            if _lg is not None and getattr(_lg, 'fantasy_draft_manager', None) \
+                    is self.draft_manager:
+                _lg.fantasy_draft_manager = None
+        except Exception:
+            pass
+
         # Update the main game if possible
         try:
             if hasattr(self.app, 'update_views'):
@@ -3767,7 +4450,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         try:
             from game_classes import EmailMessage
             from datetime import date
-            
+
+            _audit = list(getattr(self, '_completion_audit_issues', None) or [])
+            _audit_line = ""
+            if _audit:
+                _audit_line = ("\n\nLEAGUE AUDIT NOTE:\n"
+                               + "\n".join(f"• {i}" for i in _audit[:8])
+                               + "\n")
+
             completion_email = EmailMessage(
                 sender="NHL Commissioner",
                 sender_type="League",
@@ -3780,7 +4470,7 @@ DRAFT RESULTS:
 • Total players redistributed: {len(self.draft_manager.all_players)}
 • Draft rounds completed: {self.draft_manager.config.rounds}
 • Your team's final roster has been updated
-
+{_audit_line}
 All players have been assigned to their new teams based on the draft results. You can now review your new roster and begin planning for the upcoming season.
 
 Thank you for participating in the Fantasy Draft!
@@ -4941,7 +5631,6 @@ NHL League Office""",
         """Generate additional players to ensure 40 rounds worth of picks"""
         from game_classes import Player, PlayerPosition, Contract
         import random
-        import uuid
         
         debug_print(f"DEBUG: Generating {num_needed} additional players for deep draft")
         
@@ -4988,13 +5677,13 @@ NHL League Office""",
             else:  # Bottom 40% - developing players
                 skill_base = random.randint(4, 12)
             
-            # Generate player
+            # Generate player (id auto-assigns from the Player counter;
+            # first/last are separate fields -- full_name is a property)
             player = Player(
-                id=str(uuid.uuid4()),
-                full_name=f"{random.choice(first_names)} {random.choice(last_names)}",
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
                 age=random.randint(18, 35),
                 primary_position=position,
-                overall_rating_cache=None  # Will be calculated
             )
             
             # Set attributes with some variation

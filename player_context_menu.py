@@ -86,27 +86,30 @@ class PlayerContextMenu:
         self.parent = parent_window
 
     def _app(self):
-        """Walk up .parent chain to the app object (has user_team)."""
+        """Walk up .parent/.master chain to the app object (has user_team).
+        Views hold the app as .app, so check that too."""
         seen = set()
         obj = self.parent
-        for _ in range(6):
+        for _ in range(10):
             if obj is None or id(obj) in seen:
                 break
             seen.add(id(obj))
             if hasattr(obj, "user_team") and getattr(obj, "user_team") is not None:
                 return obj
-            obj = getattr(obj, "parent", None)
+            _app = getattr(obj, "app", None)
+            if _app is not None and hasattr(_app, "user_team"):
+                return _app
+            nxt = getattr(obj, "parent", None)
+            if nxt is None:
+                nxt = getattr(obj, "master", None)
+            obj = nxt
         return self.parent
         
-    def show_context_menu(self, event, player, additional_options=None):
-        """
-        Show context menu for a player
-        
-        Args:
-            event: The right-click event
-            player: The Player object
-            additional_options: List of tuples (label, command) for window-specific options
-        """
+    def show_context_menu(self, event, player, additional_options=None,
+                          quick_scout=False):
+        """Show context menu for a player. Draft screens pass quick_scout=True
+        so the Scout entry becomes an instant war-room take (the draft clock
+        is ticking -- no scouting-window detour)."""
         context_menu = tk.Menu(self.parent, tearoff=0)
         
         # Configure menu styling to match parent window
@@ -128,8 +131,10 @@ class PlayerContextMenu:
         context_menu.add_separator()
         
         context_menu.add_command(
-            label="Scout Player",
-            command=lambda: self._scout_player(player)
+            label=("⚡ Quick Scout (war-room take)" if quick_scout
+                   else "Scout Player"),
+            command=lambda: (self._quick_scout_player(player) if quick_scout
+                             else self._scout_player(player))
         )
         
         context_menu.add_command(
@@ -290,6 +295,110 @@ class PlayerContextMenu:
             # Fallback to assignment dialog
             self._create_scout_assignment_dialog(player)
     
+    def _quick_scout_player(self, player):
+        """War-room take for draft screens: the best available scout files a
+        single rushed viewing through the normal report machinery -- an
+        honest rough take (accuracy stays low until viewings accumulate) --
+        and a standing assignment is added so it keeps improving through
+        the normal scouting loop. Never raises, never modal: the take lands
+        on the draft ticker and the research strip refreshes inline.
+        Returns the report, or None when there is no scout to ask."""
+        app = self._app()
+        try:
+            team = getattr(app, "user_team", None)
+            reports = getattr(team, "scouting_reports", {}) if team else {}
+            pid = getattr(player, "id", None)
+            report = reports.get(pid) if pid is not None else None
+            if report is None:
+                # Best scout: amateur scouts first, then highest JPA+JPP.
+                from game_classes import StaffRole
+                import scouting as scmod
+                scouts = [s for s in (getattr(team, "staff", []) or [])
+                          if scmod.is_scout(s)]
+                if not scouts:
+                    self._draft_note("War room has no scouts -- hire one "
+                                     "for a mid-draft take.")
+                    return None
+
+                def _key(s):
+                    role_bonus = (100 if getattr(s, "role", None)
+                                  == StaffRole.AMATEUR_SCOUT else 0)
+                    return (role_bonus
+                            + getattr(s, "judging_player_ability", 10)
+                            + getattr(s, "judging_player_potential", 10))
+                scout = max(scouts, key=_key)
+                from game_classes import ScoutingReport
+                report = ScoutingReport(player=player, scout=scout)
+                # One rushed viewing -- a war-room glance, not a finished
+                # report. The standing assignment builds it up normally.
+                report.update_report(player, scout)
+                note = ("War-room take (single rushed viewing) -- "
+                        "standing assignment added.")
+                report.notes = (note if not report.notes
+                                else report.notes + " " + note)
+                reports[pid] = report
+                assigns = getattr(app, "scouting_assignments", None)
+                if isinstance(assigns, dict) and player not in assigns \
+                        and len(assigns) < 30:
+                    assigns[player] = scout
+            self._draft_note(self._take_line(player, report))
+            return report
+        except Exception:
+            return None
+
+    @staticmethod
+    def _take_line(player, report):
+        acc = getattr(report, "accuracy", "?") or "?"
+        pot = getattr(report, "scouted_potential", "?") or "?"
+        views = getattr(report, "viewings", 0) or 0
+        scout_name = getattr(getattr(report, "scout", None),
+                             "full_name", "Your scout")
+        return (f"War-room take: {scout_name} on "
+                f"{getattr(player, 'full_name', '?')}: {pot} potential, "
+                f"accuracy {acc} ({views} viewing"
+                f"{'s' if views != 1 else ''})")
+
+    def _draft_note(self, line):
+        """Non-modal feedback for a war-room take: a ticker line plus an
+        inline research-strip refresh on the open entry-draft view, if
+        one is up. Never a popup -- the draft clock is ticking."""
+        try:
+            view = self._draft_view()
+            if view is None:
+                return
+            try:
+                view._ticker(line)
+            except Exception:
+                pass
+            try:
+                view._refresh_draft_research()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _draft_view(self):
+        """Find the open entry-draft war-room view by duck-typing the
+        widget tree (it owns _refresh_draft_research)."""
+        try:
+            app = self._app()
+            stack = list(app.winfo_children())
+        except Exception:
+            return None
+        seen = set()
+        while stack:
+            w = stack.pop()
+            if id(w) in seen:
+                continue
+            seen.add(id(w))
+            if hasattr(w, "_refresh_draft_research"):
+                return w
+            try:
+                stack.extend(w.winfo_children())
+            except Exception:
+                pass
+        return None
+
     def _create_scout_assignment_dialog(self, player):
         """Create a dialog for scout assignment"""
         dialog = InGamePopup(self.parent)

@@ -106,6 +106,7 @@ class RuntimeApp:
         self.news_log = []
         self.open_windows = {}
         self.mp_host = None
+        self.tree_maps = {}  # real app maps draft-result rows -> players
 
     def add_news_story(self, s):
         self.news_log.append(s)
