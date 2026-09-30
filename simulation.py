@@ -7043,7 +7043,7 @@ class GameSim:
                                      "infraction": (name, penalty_length, detail),
                                      "ticks": 0}
             opposing = self.away_team if team is self.home_team else self.home_team
-            self._pull_goalie(opposing)  # 6th attacker during the delay
+            self._pull_goalie(opposing, delayed=True)  # 6th attacker during the delay
             self._log_event(
                 f"Delayed penalty coming up on {player.full_name} "
                 f"({team.team_name}, {name}) -- play continues!", "PENALTY")
