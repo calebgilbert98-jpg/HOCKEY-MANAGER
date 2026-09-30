@@ -138,6 +138,12 @@ class GameSaveManager:
                     getattr(self.game_manager, 'pending_fantasy_draft', False)
                     or getattr(getattr(self.game_manager, 'game_manager', None),
                                'pending_fantasy_draft', False)),
+                # Parked Tier-B sessions (gating pattern): resumable flows
+                # such as the pre-match team talk. Whitelisted to
+                # plain-data team-talk sessions only -- anything holding
+                # live objects is dropped defensively so a save can never
+                # break the restore. Old saves lack the key -> no sessions.
+                'pending_sessions': self._serializable_team_talk_sessions(),
                 
                 # Free agency and waivers
                 'free_agents': self._serialize_free_agents(),
@@ -203,6 +209,61 @@ class GameSaveManager:
         except Exception as e:
             print(f"Error creating save data: {e}")
             raise
+
+    def _serializable_team_talk_sessions(self):
+        """Extract pickle-safe parked team-talk sessions from the app.
+
+        Whitelisted to kind == "team_talk" and JSON-round-tripped: only
+        plain data (str/float/bool/dict) survives, so a session can never
+        smuggle a live widget or game object into the save.
+        """
+        try:
+            import json
+            app = getattr(self, 'app', None)
+            sessions = getattr(app, 'pending_sessions', None) or {}
+            out = {}
+            for sid, sess in sessions.items():
+                try:
+                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                        continue
+                    probe = json.loads(json.dumps(sess))
+                    out[sid] = probe
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return {}
+
+    def _restore_team_talk_sessions(self, saved):
+        """Restore parked team-talk sessions onto the app (Tier-B)."""
+        app = getattr(self, 'app', None)
+        if app is None or not isinstance(saved, dict):
+            return
+        try:
+            today = None
+            try:
+                cd = getattr(getattr(self, 'game_manager', None),
+                             'current_date', None)
+                if cd is not None:
+                    today = cd.isoformat() if hasattr(cd, 'isoformat') else str(cd)
+            except Exception:
+                today = None
+            sessions = getattr(app, 'pending_sessions', None)
+            if sessions is None:
+                sessions = {}
+                app.pending_sessions = sessions
+            for sid, sess in saved.items():
+                try:
+                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                        continue
+                    tt = sess.get('team_talk') or {}
+                    if today and tt.get('date') and tt.get('date') != today:
+                        continue  # stale: its game is gone
+                    sessions[sid] = sess
+                except Exception:
+                    continue
+        except Exception:
+            pass
     
     def _canonical_ledger(self):
         """Return the live narrative ledger, wherever it is attached.
@@ -1246,6 +1307,17 @@ class GameSaveManager:
                         _t.pending_fantasy_draft = _pfd
                     except Exception:
                         pass
+
+            # Parked team-talk sessions (gating): restore Tier-B state so
+            # a mid-talk save/load resumes honestly instead of losing the
+            # talk. Sessions for other dates are stale (their game is
+            # gone) and are dropped.
+            if 'pending_sessions' in save_data:
+                try:
+                    self._restore_team_talk_sessions(
+                        save_data.get('pending_sessions') or {})
+                except Exception as _tte:
+                    print(f"team-talk session restore failed (non-fatal): {_tte}")
 
             # Re-mirror restored training programs into the Development
             # Center's module registry so the window shows them.

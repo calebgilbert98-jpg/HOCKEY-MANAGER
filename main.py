@@ -6722,6 +6722,14 @@ class HockeyManagerGUI(tk.Tk):
                     [g for g in todays_games
                      if not (isinstance(g, dict) and g.get('preseason'))])
                 self._process_todays_games(todays_games)
+                if getattr(self, '_abort_day_sim', False):
+                    # Mid-team-talk save/load orphaned this day sim (the
+                    # pre-load frame's objects are dead). Bail before
+                    # post-day processing; the parked talk resumes from
+                    # its session on the next Continue. The finally below
+                    # still restores the Continue button.
+                    self._abort_day_sim = False
+                    return
             
             self._set_continue_feedback(True, "Updating injuries...")
             # Process injury recovery: countdown runs in GAMES MISSED, so only
@@ -10543,6 +10551,15 @@ class HockeyManagerGUI(tk.Tk):
                     talk_boost = 1.0  # no dressing-room speeches in September
                 else:
                     talk_boost = self._career_team_talk(opponent)
+                    if talk_boost is None:
+                        # Save/load landed mid-talk (epoch guard): the
+                        # pre-load day sim is stale. Abort this game --
+                        # simulate_day bails before post-day processing
+                        # touches orphaned objects. The parked talk
+                        # survives in its session and re-presents on the
+                        # next Continue.
+                        self._abort_day_sim = True
+                        return
                 # Adaptive Rivals: AI scouts the user (quick sim)
                 _qs_adapted = None
                 _qs_plan = []
@@ -15574,17 +15591,51 @@ class HockeyManagerGUI(tk.Tk):
         return view
 
     def _navbar_session_chips(self, navbar, current_id):
-        """Resume chips for in-progress negotiations (jump away, jump back)."""
+        """Resume chips for in-progress work (jump away, jump back).
+
+        Covers contract negotiations (existing) and parked team talks
+        (gating: an unanswered pre-match talk parks instead of resolving
+        neutral -- the chip brings the exact session back).
+        """
         try:
             sessions = getattr(self, "negotiation_sessions", None) or {}
-            if not sessions:
+            # Parked team talks: unanswered sessions for the current screen
+            # set. Never chip the talk on its own screen (it's not parked
+            # there -- it's showing).
+            talk_chips = []
+            try:
+                if current_id != "team_talk":
+                    psessions = getattr(self, "pending_sessions", None) or {}
+                    for sid, sess in list(psessions.items()):
+                        if not isinstance(sess, dict):
+                            continue
+                        if sess.get("kind") != "team_talk":
+                            continue
+                        talk = (sess.get("dialogs") or {}).get("talk") or {}
+                        if talk.get("answered"):
+                            continue
+                        tt = sess.get("team_talk") or {}
+                        talk_chips.append(
+                            (sid, tt.get("opponent_name") or "opposition"))
+            except Exception:
+                pass
+            if not sessions and not talk_chips:
                 return
             chips = ctk.CTkFrame(navbar, fg_color="transparent")
             chips._session_chips = True
             chips.pack(side='right', padx=12)
-            ctk.CTkLabel(chips, text="Resume:",
-                         font=(FONT_FAMILY, 11), text_color=MUTED).pack(
-                             side='left', padx=(0, 6))
+            # NOTE: FONT_FAMILY/MUTED are not module globals (pre-existing
+            # latent NameError -- negotiation chips silently never rendered
+            # either). Use the instance font + theme muted color.
+            ctk.CTkLabel(
+                chips, text="Resume:",
+                font=(getattr(self, "FONT_FAMILY", "Helvetica"), 11),
+                text_color=TEXT_DIM).pack(side='left', padx=(0, 6))
+            for sid, opp_name in talk_chips:
+                secondary_button(
+                    chips, text="\U0001f5e3 Team Talk", width=118, height=28,
+                    command=lambda s=sid: self._resume_team_talk(s)
+                ).pack(side='left', padx=3)
             for key, sess in list(sessions.items()):
                 player = sess.get("player")
                 name = getattr(player, "full_name", "?").split()[-1]
@@ -16389,22 +16440,24 @@ class HockeyManagerGUI(tk.Tk):
         self.career.press_history.append(
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
 
-    def _career_team_talk(self, opponent) -> float:
-        """Show pre-match team talk. Returns sim boost multiplier.
+    def _career_team_talk(self, opponent):
+        """Show pre-match team talk. Returns sim boost multiplier, or None
+        when the world was reloaded under a waiting talk (the caller must
+        abort the stale day sim -- see _abort_day_sim).
 
-        Screen + callback/session flow (gating Phase 1): the talk is a
-        full-screen focus card (not a popup), the answer arrives via
-        on_done into a date-keyed Tier-B session, and a re-entrant day
-        pass reuses the parked answer instead of re-asking. The sim needs
-        the boost before it can proceed, so this fallback path pauses on
-        a variable while the screen is up -- but the session is the
-        source of truth, so the morale boost can never silently no-op
-        (the original bug) and the answer survives navigation.
+        Screen + callback/session flow (gating: park-on-navigation): the
+        talk is a full-screen focus card (not a popup); the answer arrives
+        via on_done into a date-keyed Tier-B session that carries the full
+        game context (opponent, situation) so a parked talk re-presents
+        exactly. Navigating away PARKS the session -- the waiter is NOT
+        released, the day sim stays paused on the talk, and a navbar
+        resume chip brings the exact session back. Dismiss = defer
+        ("not now"): an unanswered talk can never resolve as a silent
+        neutral. "Say nothing" remains the explicit, deliberate neutral.
         """
         if not self._career_prompts_allowed():
             return 1.0
         from popup_system import get_pending_session
-        from manager_hub_window import TeamTalkView
         my_strength = self._career_team_strength(self.user_team)
         opp_strength = self._career_team_strength(opponent)
         situation = "favorite" if my_strength > opp_strength + 5 else (
@@ -16415,12 +16468,39 @@ class HockeyManagerGUI(tk.Tk):
         context = {"situation": situation,
                    "opponent_name": getattr(opponent, "team_name", "the opposition")}
         try:
-            _opp_key = getattr(opponent, "id", None) or getattr(
-                opponent, "team_name", "?")
+            _opp_id = getattr(opponent, "id", None)
+            _opp_key = _opp_id or getattr(opponent, "team_name", "?")
             _date = self.current_date.isoformat()
         except Exception:
-            _opp_key, _date = "?", "?"
+            _opp_id, _opp_key, _date = None, "?", "?"
         session_id = f"team_talk:{_date}:{_opp_key}"
+
+        # Tier-B session carries the full context from creation so a
+        # parked talk (navigation, save/load) re-presents exactly.
+        # Plain data only -- this session is save-serialized.
+        sess = get_pending_session(self, session_id)
+        if sess is not None:
+            try:
+                sess["kind"] = "team_talk"
+                tt = sess.get("team_talk")
+                if not isinstance(tt, dict):
+                    tt = {}
+                    sess["team_talk"] = tt
+                tt.update({
+                    "when": "prematch",
+                    "date": _date,
+                    "opponent_id": _opp_id,
+                    "opponent_name": context["opponent_name"],
+                    "situation": situation,
+                    "context": dict(context),
+                    "parked": bool(tt.get("parked", False)),
+                })
+            except Exception:
+                pass
+
+        # Stale sessions (other dates) can never be resumed -- their game
+        # is gone. Prune so the dict stays small and honest.
+        self._prune_team_talk_sessions(keep_date=_date)
 
         def _session_boost():
             try:
@@ -16434,43 +16514,267 @@ class HockeyManagerGUI(tk.Tk):
 
         prev_boost = _session_boost()
         if prev_boost is not None:
+            # Consume-once: a parked answer is single-use; the next talk
+            # (new date/opponent) starts clean.
+            self._consume_team_talk_session(session_id)
             return prev_boost
 
+        # Epoch guard: a save/load under a waiting talk orphans this
+        # frame's game objects. on_game_loaded bumps the epoch and wakes
+        # us; a mismatch here aborts instead of simming on dead state.
+        _epoch = getattr(self, "_team_talk_epoch", 0)
         wake = tk.BooleanVar(master=self, value=False)
-
-        def _on_done(result):
-            try:
-                boost = 1.0
-                if result:
-                    _opt, _reaction, boost = result
-                sess = get_pending_session(self, session_id)
-                if sess is not None:
-                    sess["dialogs"]["talk"] = {
-                        "answered": True,
-                        "boost": float(boost or 1.0),
-                    }
-            except Exception:
-                pass
-            try:
-                wake.set(True)
-            except Exception:
-                pass
-
+        self._active_team_talk = {
+            "session_id": session_id, "wake": wake, "epoch": _epoch,
+        }
         try:
-            view = self.show_screen("team_talk", "Pre-Match Team Talk",
-                                    TeamTalkView, self.user_team, "prematch",
-                                    context, on_done=_on_done)
-            # Navigating away without answering ("not now") must also
-            # release the waiter; the session simply stays unanswered.
-            try:
-                view.bind("<Destroy>", lambda _e: wake.set(True), add="+")
-            except Exception:
-                pass
+            _view = self._present_team_talk_screen(sess, wake, _epoch)
+            if _view is None:
+                # Screen could not present (genuine failure, not
+                # navigation): pre-existing fail-safe, not a silent park.
+                return 1.0
             self.wait_variable(wake)
         except Exception:
             pass
+        finally:
+            try:
+                if getattr(self, "_active_team_talk", None) is not None and \
+                        self._active_team_talk.get("wake") is wake:
+                    self._active_team_talk = None
+            except Exception:
+                pass
+        if getattr(self, "_team_talk_epoch", 0) != _epoch:
+            return None
         prev_boost = _session_boost()
-        return prev_boost if prev_boost is not None else 1.0
+        if prev_boost is not None:
+            self._consume_team_talk_session(session_id)
+            return prev_boost
+        # Unreachable in practice: the waiter is released only by an
+        # answer (navigation parks, never releases). Fail closed to the
+        # pre-existing neutral only if something truly unexpected broke
+        # the wait -- never silently mid-flow.
+        return 1.0
+
+    def _present_team_talk_screen(self, sess, wake, epoch):
+        """(Re-)present the team-talk screen for a Tier-B session.
+
+        `wake` is the day-sim waiter to release on answer, or None when
+        there is no live waiter (e.g. resumed after save/load -- the
+        answer then parks in the session and the next Continue applies
+        it pre-game, no re-ask). The view always rebuilds from the
+        session's stored context: returning resumes the exact session.
+        """
+        from manager_hub_window import TeamTalkView
+        session_id = (sess or {}).get("id") if isinstance(sess, dict) else None
+        tt = ((sess or {}).get("team_talk") or {}) if isinstance(sess, dict) else {}
+        context = dict(tt.get("context") or {})
+        if not context:
+            context = {"situation": tt.get("situation", "even"),
+                       "opponent_name": tt.get("opponent_name", "the opposition")}
+        try:
+            if self.user_team is not None:
+                _team = self.user_team
+            else:
+                _team = None
+        except Exception:
+            _team = None
+        # Revalidate the opponent against the live league (pattern:
+        # revalidation on re-present). Falls back to the stored name.
+        try:
+            _opp = self._resolve_team_talk_opponent(tt)
+            if _opp is not None:
+                context["opponent_name"] = getattr(
+                    _opp, "team_name",
+                    context.get("opponent_name", "the opposition"))
+        except Exception:
+            pass
+
+        def _on_done(result):
+            try:
+                # View contract: (option, reaction, boost) tuple, or None
+                # for "say nothing". Record the answer no matter what --
+                # a malformed result still counts as answered (dismiss is
+                # a separate path that never calls on_done).
+                boost = 1.0
+                if result:
+                    try:
+                        _opt, _reaction, boost = result
+                    except (TypeError, ValueError):
+                        try:
+                            boost = float(result)
+                        except (TypeError, ValueError):
+                            boost = 1.0
+                from popup_system import get_pending_session as _gps
+                s2 = _gps(self, session_id)
+                if s2 is not None:
+                    s2["dialogs"]["talk"] = {
+                        "answered": True,
+                        "boost": float(boost or 1.0),
+                    }
+                    t2 = s2.get("team_talk")
+                    if isinstance(t2, dict):
+                        t2["parked"] = False
+            except Exception:
+                pass
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+            if wake is not None:
+                try:
+                    # Don't wake a stale frame: if a load bumped the
+                    # epoch after we presented, the waiter is already
+                    # released and this answer belongs to the session.
+                    if getattr(self, "_team_talk_epoch", 0) == epoch:
+                        wake.set(True)
+                except Exception:
+                    pass
+
+        try:
+            view = self.show_screen("team_talk", "Pre-Match Team Talk",
+                                    TeamTalkView, _team,
+                                    "prematch", context,
+                                    on_done=_on_done, fresh=True)
+        except Exception:
+            return None
+        # Park-on-navigation: destroying the view WITHOUT an answer
+        # parks the session (context preserved) and surfaces the resume
+        # chip. The waiter is deliberately NOT released -- the day sim
+        # stays paused on the talk. Dismiss = defer, never an answer.
+        try:
+            view.bind(
+                "<Destroy>",
+                lambda e, v=view, s=session_id:
+                    self._on_team_talk_destroyed(e, v, s),
+                add="+")
+        except Exception:
+            pass
+        return view
+
+    def _on_team_talk_destroyed(self, event, view, session_id):
+        """Park a team talk whose screen was destroyed unanswered.
+
+        NOTE: customtkinter frames are canvas-based -- a <Destroy> binding
+        on a CTkFrame fires with the frame's *internal canvas* (a
+        descendant), not the frame itself. The guard therefore accepts the
+        view or any strict descendant of it.
+        """
+        try:
+            w = event.widget
+            try:
+                is_ours = (w is view) or str(w).startswith(str(view) + ".")
+            except Exception:
+                is_ours = False
+            if not is_ours:
+                return  # unrelated widget teardown, not our screen
+            # Read-only lookup: get_pending_session would RECREATE a
+            # consumed session -- a post-answer destroy must be a no-op.
+            sessions = getattr(self, "pending_sessions", None) or {}
+            sess = sessions.get(session_id)
+            if not isinstance(sess, dict):
+                return
+            talk = (sess.get("dialogs") or {}).get("talk") or {}
+            if talk.get("answered"):
+                return  # answered close: nothing to park
+            if sess.get("kind") != "team_talk":
+                return
+            tt = sess.get("team_talk")
+            if isinstance(tt, dict):
+                tt["parked"] = True
+            # The new screen's navbar picks up the resume chip via
+            # show_screen -> _navbar_session_chips; this is a no-op
+            # mid-teardown (no current screen yet) and a refresh otherwise.
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _resume_team_talk(self, session_id):
+        """Navbar resume chip: bring a parked team talk back.
+
+        With a live day sim waiting, the screen re-presents wired to its
+        waiter. After a save/load (no waiter), the answer parks in the
+        session and the next Continue applies it pre-game -- no re-ask.
+        """
+        try:
+            from popup_system import get_pending_session
+            sess = get_pending_session(self, session_id)
+            if sess is None or sess.get("kind") != "team_talk":
+                return
+            talk = ((sess.get("dialogs") or {}).get("talk")) or {}
+            if talk.get("answered"):
+                try:
+                    self.refresh_screen_navbar()
+                except Exception:
+                    pass
+                return
+            active = getattr(self, "_active_team_talk", None)
+            if (active and active.get("session_id") == session_id
+                    and active.get("wake") is not None):
+                self._present_team_talk_screen(
+                    sess, active["wake"],
+                    getattr(self, "_team_talk_epoch", 0))
+            else:
+                self._present_team_talk_screen(sess, None, 0)
+        except Exception:
+            pass
+
+    def _resolve_team_talk_opponent(self, tt):
+        """Re-link a parked team-talk opponent against the live league."""
+        try:
+            tt = tt or {}
+            oid = tt.get("opponent_id")
+            oname = tt.get("opponent_name")
+            teams = getattr(getattr(self, "league", None), "teams", None) or []
+            if oid is not None:
+                for t in teams:
+                    try:
+                        if getattr(t, "id", None) == oid:
+                            return t
+                    except Exception:
+                        continue
+            if oname:
+                for t in teams:
+                    try:
+                        if getattr(t, "team_name", None) == oname:
+                            return t
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
+
+    def _prune_team_talk_sessions(self, keep_date):
+        """Drop team-talk sessions that can never resume (other dates)."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            for sid in list(sessions.keys()):
+                try:
+                    sess = sessions.get(sid)
+                    if not isinstance(sess, dict) or sess.get("kind") != "team_talk":
+                        continue
+                    tt = sess.get("team_talk") or {}
+                    if tt.get("date") != keep_date:
+                        del sessions[sid]
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _consume_team_talk_session(self, session_id):
+        """Consume-once: remove a team-talk session after its answer applied."""
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            if session_id in sessions:
+                del sessions[session_id]
+            try:
+                self.refresh_screen_navbar()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _career_after_user_game(self, winner, loser, scores, home_team, away_team,
                                 went_ot: bool, sim_engine=None):
@@ -16578,6 +16882,23 @@ class HockeyManagerGUI(tk.Tk):
     def on_game_loaded(self):
         """Called when a game is loaded from save file."""
         self.is_new_game = False
+        # Team-talk parking (gating): a save/load under a waiting talk
+        # orphans the pre-load waiter -- its game objects are dead. Bump
+        # the epoch so the stale _career_team_talk frame aborts instead
+        # of simming on them, and release its waiter so it wakes
+        # promptly. The parked talk survives in its Tier-B session (see
+        # save_load_system) and re-presents on the next Continue.
+        try:
+            self._team_talk_epoch = getattr(self, "_team_talk_epoch", 0) + 1
+            _active = getattr(self, "_active_team_talk", None)
+            self._active_team_talk = None
+            if _active and _active.get("wake") is not None:
+                try:
+                    _active["wake"].set(True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Belt-and-braces: _restore_game_state rebuilds league teams as new
         # objects, so re-point the GUI mirrors seeded at boot. (load_game
         # already syncs these; this covers any path that restores state
@@ -16594,6 +16915,13 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         self._rebuild_news_log_from_stories()
+        # Re-surface the resume chip if a parked team talk survived the
+        # load (it shows on the next screen navbar; the Continue path
+        # re-presents the talk itself).
+        try:
+            self.refresh_screen_navbar()
+        except Exception:
+            pass
         print("Game loaded from save - autosave enabled")
         
     def on_game_saved(self):
