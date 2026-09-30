@@ -10,7 +10,7 @@ from ctk_theme import (init_ctk_theme, primary_button, secondary_button, heading
 from datetime import date, timedelta, datetime
 from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
 from game_classes import debug_print
-from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, TradeBlockWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView)
+from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView, make_tree_sortable, set_tree_empty_state)
 from ui_widgets import PillButton
 # Quick-sim engine + shared lineup helpers (extracted from main.py 2026-09-28;
 # re-exported here so `from main import best_lines` etc. keeps working)
@@ -20557,8 +20557,34 @@ class TradeBlockWindow(InGamePopup):
         self.summary_label = ttk.Label(self.summary_panel, text="", style='Summary.TLabel')
         self.summary_label.pack(anchor="w")
 
+        # --- Tabbed content: block management, live AI interest, other teams.
+        # The Trade Interest tab is adopted from the (now-deleted) windows.py
+        # TradeBlockWindow: a view over the real trade_market store --
+        # generate/decline interest and express interest all read/write
+        # league.trade_market, never fabricated data. ---
+        try:
+            self.style.configure('Block.TNotebook', background=parent.CONTENT_BG)
+            self.style.configure('Block.TNotebook.Tab',
+                                 font=(parent.FONT_FAMILY, 11, 'bold'),
+                                 padding=(12, 6))
+        except Exception:
+            pass
+        notebook = ttk.Notebook(self, style='Block.TNotebook')
+        notebook.pack(fill="both", expand=True, padx=18, pady=(8, 18))
+        block_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        interest_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        others_tab = ttk.Frame(notebook, style='Panel.TFrame')
+        notebook.add(block_tab, text="Your Trade Block")
+        notebook.add(interest_tab, text="Trade Interest")
+        notebook.add(others_tab, text="Other Teams")
+        self._tb_notebook = notebook
+        # Maps interest-tree item ids -> (listing dict, team name, player
+        # name) for the real-store-backed Interest tab. The listing dicts
+        # live in league.trade_market; declines mutate them (the model).
+        self._interest_row_map = {}
+
         # --- Filter panel (pill rows, instant-apply) ---
-        filter_panel = ttk.Frame(self, style='Panel.TFrame', padding=8)
+        filter_panel = ttk.Frame(block_tab, style='Panel.TFrame', padding=8)
         filter_panel.pack(fill="x", padx=18, pady=(8, 0))
         self.filter_vars = {
             'pos': tk.StringVar(master=self, value="All"),
@@ -20602,7 +20628,7 @@ class TradeBlockWindow(InGamePopup):
         self._tb_paint_pills()
 
         # --- Panel frame ---
-        panel = ttk.Frame(self, style='Panel.TFrame', padding=12)
+        panel = ttk.Frame(block_tab, style='Panel.TFrame', padding=12)
         panel.pack(fill="both", expand=True, padx=18, pady=18)
 
         # --- Treeview columns ---
@@ -20642,6 +20668,7 @@ class TradeBlockWindow(InGamePopup):
         ttk.Button(btn_frame, text="Shop Player", command=self.shop_selected_players).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Suggest Trade Value", command=self.suggest_trade_value).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Simulate Trade Offers", command=self.simulate_trade_offers).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Generate Interest", command=self.generate_trade_interest).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
 
         # --- Checkbox state ---
@@ -20650,6 +20677,11 @@ class TradeBlockWindow(InGamePopup):
         self.sort_reverse = False
 
         self._populate_tree()
+
+        # Ported tabs (real trade_market store): interest + other teams.
+        self.create_trade_interest(interest_tab)
+        self.create_other_trade_blocks(others_tab)
+        self.update_interest_display()
 
     def _tb_set_filter(self, var, value):
         """Set a trade-block pill filter and refresh instantly."""
@@ -21022,7 +21054,7 @@ class TradeBlockWindow(InGamePopup):
         return interested
 
     def _update_summary(self):
-        block = self.app.trade_block
+        block = self.parent.trade_block
         n_block = len(block)
         avg_ovr = int(sum(p.overall_rating() for p in block) / n_block) if n_block else 0
         cap_freed = sum(p.contract.salary for p in block if p.contract.years_remaining > 0)
@@ -21030,18 +21062,705 @@ class TradeBlockWindow(InGamePopup):
 
     def simulate_trade_offers(self):
         """Manually trigger trade offers for players on the trade block."""
-        if not self.app.trade_block:
+        if not self.parent.trade_block:
             messagebox.showinfo("No Players on Block", "Add players to the trade block first.")
             return
         
         # Call the parent's method to process trade block offers
-        self.app.process_trade_block_offers()
+        self.parent.process_trade_block_offers()
         
         # Update the view
         self._populate_tree()
 
     def update_views(self):
         self._populate_tree()
+
+    # ------------------------------------------------------------------
+    # Trade Interest tab: real-store backing (trade_market). Adopted from
+    # the deleted windows.py TradeBlockWindow (ccbac5f fix). The canonical
+    # store for AI interest in the user's block players is
+    # league.trade_market's "listings": open listings with source ==
+    # 'user_block' whose seller is the user's team. Per-team interest rows
+    # persist ON the listing (listing['ai_interest']); declines persist
+    # there too (status 'Declined' + listing['declined_teams']) so
+    # re-renders never resurrect them. All helpers are fail-safe: [] /
+    # None on any failure.
+    # ------------------------------------------------------------------
+    def create_trade_interest(self, parent):
+        """Create trade interest management (real trade_market store)."""
+        # Interest summary
+        summary_frame = ttk.LabelFrame(parent, text="Trade Interest Summary")
+        summary_frame.pack(fill='x', padx=10, pady=10)
+
+        self.interest_summary = tk.Text(summary_frame, height=6, wrap='word',
+                                        bg=self.parent.CONTENT_BG,
+                                        fg=self.parent.TEXT_COLOR,
+                                        insertbackground=self.parent.TEXT_COLOR)
+        self.interest_summary.pack(fill='x', padx=10, pady=10)
+
+        # Detailed interest
+        detail_frame = ttk.LabelFrame(parent, text="Detailed Interest")
+        detail_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        columns = ('Your Player', 'Interested Team', 'Their Interest',
+                   'Your Interest', 'Status')
+        self.interest_tree = ttk.Treeview(detail_frame, columns=columns,
+                                          show='headings', height=10)
+
+        for col in columns:
+            self.interest_tree.heading(col, text=col)
+            self.interest_tree.column(col, width=150)
+        make_tree_sortable(self.interest_tree)
+
+        # Buttons for interest management
+        interest_buttons = ttk.Frame(detail_frame)
+        interest_buttons.pack(fill='x', pady=5)
+
+        ttk.Button(interest_buttons, text="Negotiate Trade",
+                   command=self.start_trade_negotiation).pack(side='left',
+                                                              padx=5)
+        ttk.Button(interest_buttons, text="Decline Interest",
+                   command=self.decline_interest).pack(side='left', padx=5)
+
+        interest_scrollbar = ttk.Scrollbar(detail_frame, orient='vertical',
+                                           command=self.interest_tree.yview)
+        self.interest_tree.configure(yscrollcommand=interest_scrollbar.set)
+
+        self.interest_tree.pack(side='left', fill='both', expand=True)
+        interest_scrollbar.pack(side='right', fill='y')
+
+    def _tbw_market_ctx(self):
+        """(trade_market module, league, user_team) or (None, None, None)."""
+        try:
+            import trade_market as tm
+        except Exception:
+            return None, None, None
+        try:
+            app = self.parent
+            league = getattr(app, 'league', None)
+            user_team = getattr(app, 'user_team', None)
+            if league is None or user_team is None:
+                return None, None, None
+            if getattr(user_team, 'team_name', None) is None:
+                return None, None, None
+            return tm, league, user_team
+        except Exception:
+            return None, None, None
+
+    def _tbw_user_listings(self):
+        """Open user_block listings for the user's team from the real store."""
+        tm, league, user_team = self._tbw_market_ctx()
+        if tm is None:
+            return []
+        try:
+            market = tm.get_market(league)
+            uname = user_team.team_name
+            return [li for li in tm._active_listings(market, team_name=uname)
+                    if isinstance(li, dict) and li.get('source') == 'user_block']
+        except Exception:
+            return []
+
+    def _tbw_interest_rows(self):
+        """[(player, listing, row)] for non-declined AI interest, real store."""
+        tm, league, _ut = self._tbw_market_ctx()
+        rows = []
+        if tm is None:
+            return rows
+        try:
+            for li in self._tbw_user_listings():
+                try:
+                    player, _team = tm.resolve_player(league,
+                                                      li.get('player_id'))
+                except Exception:
+                    player = None
+                if player is None:
+                    continue
+                for r in (li.get('ai_interest') or []):
+                    if not isinstance(r, dict):
+                        continue
+                    if r.get('status') == 'Declined':
+                        continue
+                    rows.append((player, li, r))
+        except Exception:
+            pass
+        return rows
+
+    def _tbw_interest_level(self, tm, app, bidder):
+        """Genuine interest intensity from situational buyer risk (0..1)."""
+        try:
+            d = float(tm._buyer_desperation(app, bidder) or 0.0)
+        except Exception:
+            d = 0.0
+        if d >= 0.6:
+            return 'High'
+        if d >= 0.3:
+            return 'Medium'
+        return 'Low'
+
+    def _tbw_open_neg_count(self):
+        """Open negotiations involving a user block player (real store).
+
+        Counts genuinely open trade negotiations (trade_negotiation._store)
+        whose assets include a player currently on the block. None when the
+        store is unavailable.
+        """
+        try:
+            import trade_negotiation as tneg
+        except Exception:
+            return None
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            if user_team is None:
+                return None
+            pids = set()
+            for entry in (getattr(user_team, 'trade_block', None) or []):
+                try:
+                    pid = getattr(entry, 'id', None)
+                    if pid is not None:
+                        pids.add(pid)
+                except Exception:
+                    continue
+            for entry in (getattr(app, 'trade_block', None) or []):
+                try:
+                    pid = getattr(entry, 'id', None)
+                    if pid is not None:
+                        pids.add(pid)
+                except Exception:
+                    continue
+            if not pids:
+                return 0
+            n = 0
+            for neg in (tneg._store(app) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') in pids
+                           for a in assets):
+                        n += 1
+                except Exception:
+                    continue
+            return n
+        except Exception:
+            return None
+
+    def _tbw_in_talks(self, player, team_name):
+        """Is there an open negotiation with team_name involving player?"""
+        try:
+            import trade_negotiation as tneg
+            pid = getattr(player, 'id', None)
+            for neg in (tneg._store(self.parent) or []):
+                try:
+                    if not getattr(neg, 'is_open', False):
+                        continue
+                    if getattr(neg, 'partner_team_name', '') != team_name:
+                        continue
+                    assets = list(getattr(neg, 'user_assets', None) or []) + \
+                        list(getattr(neg, 'partner_assets', None) or [])
+                    if any(isinstance(a, dict) and a.get('id') == pid
+                           for a in assets):
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return False
+
+    def generate_trade_interest(self):
+        """Run the genuine AI interest computation for each block player.
+
+        Ensures every block player has a listing in the real trade_market
+        store (source 'user_block'), then runs trade_market._find_bidders --
+        buyer fit, destination appeal, situational buyer risk, person-conscious
+        interest, clause gating -- and persists the interested teams on the
+        listing itself. Teams the machinery rejects simply don't appear;
+        nothing is fabricated. Fail-safe: any exception leaves the window
+        functional and writes nothing.
+        """
+        from tkinter import messagebox
+        try:
+            app = self.parent
+            user_team = getattr(app, 'user_team', None)
+            block = []
+            seen = set()
+            for src in (getattr(app, 'trade_block', None) or [],
+                        getattr(user_team, 'trade_block', None)
+                        if user_team is not None else []):
+                for p in (src or []):
+                    try:
+                        pid = getattr(p, 'id', None)
+                    except Exception:
+                        pid = None
+                    if pid is None or pid in seen:
+                        continue
+                    seen.add(pid)
+                    block.append(p)
+            if not block:
+                messagebox.showinfo("No Players",
+                                    "Add players to your trade block first.")
+                return
+            import trade_market as tm
+            league = getattr(app, 'league', None)
+            if league is None:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "No interest data available (no league loaded).")
+                return
+            market = tm.get_market(league)
+            today = tm._today(app)
+            heat = tm.deadline_heat(app, league, today)
+            params = tm._heat_params(heat)
+            ramp = heat >= 0.5
+            # Mirror the manual block into real listings (no-op for players
+            # already listed; pulls listings for players removed from the
+            # block). This is the same sync the daily market driver uses.
+            tm._sync_user_block(app, league, market, today, params)
+            listings = self._tbw_user_listings()
+            day = tm._iso(today)
+            checked, new = 0, 0
+            for li in listings:
+                try:
+                    bidders = tm._find_bidders(app, league, li, today, ramp)
+                except Exception:
+                    bidders = []
+                checked += 1
+                try:
+                    declined = set(li.get('declined_teams') or [])
+                    rows = [r for r in (li.get('ai_interest') or [])
+                            if isinstance(r, dict)]
+                    by_team = {r.get('team'): r for r in rows}
+                    live = set()
+                    for team in bidders:
+                        tname = getattr(team, 'team_name', '') or ''
+                        if not tname or tname in declined:
+                            continue
+                        live.add(tname)
+                        level = self._tbw_interest_level(tm, app, team)
+                        row = by_team.get(tname)
+                        if row is None:
+                            row = {'team': tname, 'interest_level': level,
+                                   'status': 'Active', 'day': day}
+                            rows.append(row)
+                            new += 1
+                        else:
+                            row['interest_level'] = level
+                            row['day'] = day
+                            if row.get('status') != 'Declined':
+                                row['status'] = 'Active'
+                    # Teams no longer interested drop off; declined teams stay
+                    # declined so a re-check never resurrects them.
+                    li['ai_interest'] = [
+                        r for r in rows
+                        if r.get('team') in live
+                        or r.get('status') == 'Declined']
+                except Exception:
+                    continue
+            self._populate_tree()
+            self.update_interest_display()
+            if checked == 0:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    "Your block players could not be listed right now -- "
+                    "no interest data was changed.")
+            else:
+                messagebox.showinfo(
+                    "Interest Generated",
+                    f"Checked {checked} listed player(s) against every rival GM.\n"
+                    f"{new} new expression(s) of interest recorded.")
+        except Exception:
+            try:
+                messagebox.showwarning(
+                    "Interest unavailable",
+                    "Could not compute trade interest right now -- "
+                    "no data was changed.")
+            except Exception:
+                pass
+
+    def update_interest_display(self):
+        """Render the Interest tab as a VIEW over the real trade_market store.
+
+        Rows come from open user_block listings' persisted ai_interest
+        (declined teams filtered -- their decline lives in the model).
+        'Active Negotiations' counts genuinely open negotiations involving a
+        block player. Degrades to an honest empty state when the store is
+        unavailable. Never raises.
+        """
+        try:
+            # Clear current items
+            for item in self.interest_tree.get_children():
+                self.interest_tree.delete(item)
+            self._interest_row_map = {}
+
+            tm, league, user_team = self._tbw_market_ctx()
+            n_block = 0
+            try:
+                n_block = len(getattr(self.parent, 'trade_block', None) or [])
+            except Exception:
+                pass
+            if tm is None:
+                rows = []
+                neg_n = None
+            else:
+                rows = self._tbw_interest_rows()
+                neg_n = self._tbw_open_neg_count()
+
+            summary_text = f"Players on Trade Block: {n_block}\n"
+            summary_text += f"Total Interest Expressions: {len(rows)}\n"
+            if neg_n is None:
+                summary_text += "Active Negotiations: n/a\n"
+            else:
+                summary_text += f"Active Negotiations: {neg_n}\n"
+            if tm is None:
+                summary_text += "No interest data available.\n"
+
+            self.interest_summary.delete(1.0, tk.END)
+            self.interest_summary.insert(1.0, summary_text)
+
+            # Add detailed interest from the real store
+            for player, listing, row in rows:
+                team_name = row.get('team', '?')
+                your_interest = ("In talks"
+                                 if self._tbw_in_talks(player, team_name)
+                                 else "\u2014")
+                try:
+                    offer = listing.get('user_offer') or {}
+                except Exception:
+                    offer = {}
+                status = ("Offer sent" if offer.get('team') == team_name
+                          else row.get('status', 'Active'))
+                iid = self.interest_tree.insert('', 'end', values=(
+                    getattr(player, 'full_name', '?'),
+                    team_name,
+                    row.get('interest_level', 'Low'),
+                    your_interest,
+                    status,
+                ))
+                self._interest_row_map[iid] = (
+                    listing, team_name, getattr(player, 'full_name', '?'))
+            if tm is None:
+                set_tree_empty_state(self.interest_tree,
+                                     "No interest data available")
+            elif not rows:
+                set_tree_empty_state(
+                    self.interest_tree,
+                    "No AI GMs are showing interest -- use Generate Interest "
+                    "to check")
+            else:
+                set_tree_empty_state(self.interest_tree)
+        except Exception:
+            # Fail-safe: leave whatever rendered; the window stays usable.
+            pass
+
+    def decline_interest(self):
+        """Decline AI interest IN THE MODEL.
+
+        Marks the team's interest row 'Declined' on the real listing and
+        records the team in the listing's declined_teams, so future interest
+        checks never resurrect it. Re-render filters declined rows. Open
+        negotiations/offers are separate real state and are left alone (an
+        open offer still needs an answer in the inbox). Never raises; the
+        model is only written after the selected row resolves.
+        """
+        from tkinter import messagebox
+        try:
+            selection = self.interest_tree.selection()
+            if not selection:
+                messagebox.showwarning("No Selection",
+                                       "Please select an interest to decline.")
+                return
+            ref = (self._interest_row_map or {}).get(selection[0])
+            if ref is None:
+                # Stale selection (e.g. pre-refresh) -- just re-render.
+                self.update_interest_display()
+                return
+            listing, team_name, player_name = ref
+            try:
+                has_offer = False
+                try:
+                    offer = listing.get('user_offer') or {}
+                    has_offer = offer.get('team') == team_name
+                except Exception:
+                    pass
+                for r in (listing.get('ai_interest') or []):
+                    if isinstance(r, dict) and r.get('team') == team_name \
+                            and r.get('status') != 'Declined':
+                        r['status'] = 'Declined'
+                dteams = listing.setdefault('declined_teams', [])
+                if team_name not in dteams:
+                    try:
+                        dteams.append(team_name)
+                    except Exception:
+                        pass
+            except Exception:
+                messagebox.showwarning("Decline failed",
+                                       "Could not decline that interest -- "
+                                       "no data was changed.")
+                return
+            self.update_interest_display()
+            msg = (f"Declined {team_name}'s interest in {player_name}. "
+                   f"They won't reappear on future interest checks.")
+            if has_offer:
+                msg += ("\n\nNote: they already have an open offer on this "
+                        "player -- answer it from your inbox if you want to "
+                        "walk away from the table too.")
+            messagebox.showinfo("Interest Declined", msg)
+        except Exception:
+            pass
+
+    def start_trade_negotiation(self):
+        """Open the real Trade Center pre-set to this negotiation.
+
+        The selected row is (your block player, interested team): open the
+        Trade Center with that team as the partner and your player already
+        on your side of the deal. Routes through the app's open_trade_window
+        (main.py:15300); honest warning if anything is unresolvable.
+        """
+        from tkinter import messagebox
+        try:
+            tree = getattr(self, 'interest_tree', None)
+            selection = tree.selection() if tree is not None else []
+            if not selection:
+                messagebox.showwarning("No Selection",
+                                       "Please select an interest to negotiate.")
+                return
+            ref = (self._interest_row_map or {}).get(selection[0])
+            if ref is None:
+                messagebox.showwarning("Stale Selection",
+                                       "That row is out of date -- the view "
+                                       "has been refreshed.")
+                self.update_interest_display()
+                return
+            listing, team_name, _player_name = ref
+            league = getattr(self.parent, 'league', None)
+            partner = next(
+                (t for t in (getattr(league, 'teams', None) or [])
+                 if getattr(t, 'team_name', '') == team_name), None)
+            if partner is None:
+                messagebox.showwarning("Team unavailable",
+                                       f"Could not find {team_name} in the "
+                                       "league.")
+                return
+            player = None
+            try:
+                import trade_market as tmk
+                player, _t = tmk.resolve_player(league,
+                                                listing.get('player_id'))
+            except Exception:
+                player = None
+            opener = getattr(self.parent, 'open_trade_window', None)
+            if not callable(opener):
+                messagebox.showwarning("Negotiation unavailable",
+                                       "The Trade Center is unavailable "
+                                       "right now.")
+                return
+            opener(preset={"partner": partner,
+                           "user_assets": [player] if player else []})
+        except Exception as e:
+            try:
+                messagebox.showwarning("Negotiation unavailable",
+                                       f"Could not open the Trade Center: {e}")
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Other Teams tab: the league-wide board (trade_market data). Ported
+    # from the deleted windows.py TradeBlockWindow; reads
+    # trade_market.get_trade_blocks(league) and resolves each id -- no
+    # random.sample placeholders. Expressing interest writes the
+    # canonical user-side interest store (trade_market.add_target).
+    # ------------------------------------------------------------------
+    def create_other_trade_blocks(self, parent):
+        """Create view of other teams' trade blocks."""
+        # Team selection
+        select_frame = ttk.Frame(parent)
+        select_frame.pack(fill='x', padx=10, pady=10)
+
+        ttk.Label(select_frame, text="Select Team:").pack(side='left', padx=5)
+        self.team_var = tk.StringVar(master=self)
+        self.team_combo = ttk.Combobox(select_frame, textvariable=self.team_var,
+                                       values=self.get_other_teams(), width=30)
+        self.team_combo.pack(side='left', padx=5)
+        self.team_combo.bind('<<ComboboxSelected>>', self.on_team_selected)
+
+        ttk.Button(select_frame, text="Refresh",
+                   command=self.refresh_other_blocks).pack(side='left',
+                                                           padx=10)
+        ttk.Button(select_frame, text="Express Interest",
+                   command=self.express_interest).pack(side='left', padx=5)
+
+        # Other teams' players
+        other_frame = ttk.LabelFrame(parent, text="Available Players")
+        other_frame.pack(fill='both', expand=True, padx=10, pady=10)
+
+        columns = ('Team', 'Name', 'Position', 'Age', 'Overall', 'Salary',
+                   'Availability')
+        self.other_tree = ttk.Treeview(other_frame, columns=columns,
+                                       show='headings', height=15)
+
+        for col in columns:
+            self.other_tree.heading(col, text=col)
+            if col in ['Name', 'Team']:
+                self.other_tree.column(col, width=120)
+            elif col in ['Position', 'Age', 'Overall']:
+                self.other_tree.column(col, width=80)
+            elif col == 'Availability':
+                self.other_tree.column(col, width=280)
+            else:
+                self.other_tree.column(col, width=100)
+        make_tree_sortable(self.other_tree)
+
+        # Double-click to express interest
+        self.other_tree.bind('<Double-1>', self.express_interest)
+
+        other_scrollbar = ttk.Scrollbar(other_frame, orient='vertical',
+                                        command=self.other_tree.yview)
+        self.other_tree.configure(yscrollcommand=other_scrollbar.set)
+
+        self.other_tree.pack(side='left', fill='both', expand=True)
+        other_scrollbar.pack(side='right', fill='y')
+
+    def get_other_teams(self):
+        """Get list of other teams."""
+        return [team.team_name for team in self.parent.league.teams
+                if team != self.parent.user_team]
+
+    def on_team_selected(self, event=None):
+        """Show the selected team's real trade block (trade_market data).
+
+        Reads trade_market.get_trade_blocks(league), resolves each id, and
+        shows the truthful availability note. Unresolvable ids are skipped
+        gracefully; an empty block shows an empty-state message.
+        """
+        try:
+            import trade_market
+        except Exception:
+            trade_market = None
+        for item in self.other_tree.get_children():
+            self.other_tree.delete(item)
+        selected_team = self.team_var.get()
+        app = getattr(self, 'parent', None)
+        league = getattr(app, 'league', None) if app is not None else None
+        rows = 0
+        if trade_market is not None and league is not None and selected_team:
+            try:
+                blocks = trade_market.get_trade_blocks(league)
+            except Exception:
+                blocks = {}
+            for pid in (blocks.get(selected_team, []) or []):
+                try:
+                    player, team = trade_market.resolve_player(league, pid)
+                except Exception:
+                    player, team = None, None
+                if player is None or team is None:
+                    continue  # stale/unresolvable id -- skip gracefully
+                try:
+                    salary = getattr(getattr(player, 'contract', None),
+                                     'salary', 750000) or 750000
+                except Exception:
+                    salary = 750000
+                try:
+                    pos = (player.primary_position.value
+                           if hasattr(player.primary_position, 'value')
+                           else str(player.primary_position))
+                    ovr = player.overall_rating()
+                except Exception:
+                    pos, ovr = '?', '?'
+                try:
+                    note = trade_market.block_availability_note(app, league,
+                                                                pid)
+                except Exception:
+                    note = 'Available'
+                self.other_tree.insert('', 'end', values=(
+                    team.team_name,
+                    player.full_name,
+                    pos,
+                    getattr(player, 'age', '?'),
+                    ovr,
+                    f"${salary:,}",
+                    note,
+                ))
+                rows += 1
+        if rows:
+            set_tree_empty_state(self.other_tree)
+        else:
+            label = selected_team if selected_team else "No team"
+            set_tree_empty_state(
+                self.other_tree,
+                f"{label} has no players on the block")
+
+    def refresh_other_blocks(self):
+        """Refresh other teams' trade blocks."""
+        try:
+            import trade_market
+            trade_market.refresh_trade_blocks(self.parent,
+                                              getattr(self.parent, 'league',
+                                                      None))
+        except Exception:
+            pass
+        self.team_combo.configure(values=self.get_other_teams())
+        self.on_team_selected()
+
+    def express_interest(self, event=None):
+        """Record genuine interest in another team's block player.
+
+        Adds the player to your unified trade targets
+        (trade_market.add_target -- the canonical user-side interest store
+        read by the scouting/targets surfaces). Never fabricates an AI
+        response. Never raises; failures report honestly.
+        """
+        from tkinter import messagebox
+        try:
+            selection = self.other_tree.selection()
+            if not selection:
+                return
+            values = self.other_tree.item(selection[0])['values']
+            team_name, player_name = values[0], values[1]
+            player = None
+            try:
+                league = getattr(self.parent, 'league', None)
+                for team in (getattr(league, 'teams', None) or []):
+                    if getattr(team, 'team_name', '') != team_name:
+                        continue
+                    for p in (getattr(team, 'roster', None) or []):
+                        if getattr(p, 'full_name', '') == player_name:
+                            player = p
+                            break
+                    break
+            except Exception:
+                player = None
+            if player is None:
+                messagebox.showwarning(
+                    "Interest not recorded",
+                    f"Could not find {player_name} on {team_name}'s roster -- "
+                    "nothing was recorded.")
+                return
+            try:
+                import trade_market as tm
+                added = tm.add_target(
+                    player, source="user",
+                    note=f"Trade interest expressed ({team_name} block)")
+            except Exception:
+                added = False
+            if added:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"Interest in {player_name} ({team_name}) recorded -- "
+                    f"added to your trade targets.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+            else:
+                messagebox.showinfo(
+                    "Interest Expressed",
+                    f"{player_name} is already on your trade targets -- "
+                    f"interest already recorded.\n\nTo make an offer, open "
+                    f"a negotiation from the Trade Center.")
+        except Exception:
+            try:
+                messagebox.showwarning("Interest not recorded",
+                                       "Could not record interest right now.")
+            except Exception:
+                pass
         
 class ContractExtensionsView(ctk.CTkFrame):
     """Window for handling contract extensions."""
