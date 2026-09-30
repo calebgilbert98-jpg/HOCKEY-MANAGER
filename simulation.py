@@ -5225,6 +5225,36 @@ class GameSim:
                 if tendency_key == "shoot":
                     if recent and getattr(p, "id", None) in recent:
                         w *= 0.35  # you just shot; the puck moves on
+                    # PP micro-rotation (2026-09-30, Muck): heaters get
+                    # better looks WITHIN the unit — the same shared helper
+                    # quick-sim uses. Bounded, mean 1.0 over the unit, never
+                    # changes who dresses.
+                    try:
+                        from line_chemistry import (pp_look_shares as _lpls3,
+                                                    detect_situation as _lcdet3)
+                        if _lcdet3(sim=self, team=None) == "pp":
+                            _att3 = None
+                            try:
+                                _cs3 = self._get_current_situation()
+                                _csn3 = getattr(_cs3, "name", "")
+                                if _csn3 == "POWER_PLAY":
+                                    _att3 = self.home_team
+                                elif _csn3 == "PENALTY_KILL":
+                                    _att3 = self.away_team
+                            except Exception:
+                                pass
+                            if _att3 is not None:
+                                _uk3 = frozenset(getattr(q, "id", None)
+                                                for q in pool)
+                                if getattr(self, "_lc_look_key", None) != _uk3:
+                                    self._lc_look = _lpls3(pool, sim=self,
+                                                           team=_att3)
+                                    self._lc_look_key = _uk3
+                                if getattr(self, "_lc_look", None):
+                                    w *= self._lc_look.get(
+                                        getattr(p, "id", None), 1.0)
+                    except Exception:
+                        pass
                 weights.append(w)
             pick = random.choices(pool, weights=weights, k=1)[0]
             if tendency_key == "shoot" and recent is not None:
@@ -5755,6 +5785,28 @@ class GameSim:
             if _schemed_f2 != 1.0:
                 goal_prob = (1.0 - adjusted_save_prob) * _schemed_f2
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # Line chemistry (2026-09-30, Muck): the shared unit-efficiency
+        # multiplier — same helper, same point as quick-sim (one decision,
+        # two fidelities). Situation-aware, bounded per-line, truthful.
+        # Never touches finishing or grade ceilings.
+        try:
+            from line_chemistry import (unit_efficiency as _lcef2,
+                                        pk_denial_factor as _lkdf2,
+                                        detect_situation as _lcdet2)
+            _sit_lc2 = _lcdet2(sim=self, team=attacking_team)
+            _lc_eff2 = _lcef2(_a_unit, situation=_sit_lc2, sim=self,
+                              team=attacking_team)
+            if _lc_eff2 != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _lc_eff2
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+            if _sit_lc2 == "pk":
+                _deny2 = _lkdf2(_d_unit, sim=self, team=defending_team)
+                if _deny2 != 1.0:
+                    goal_prob = (1.0 - adjusted_save_prob) * _deny2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
         except Exception:
             pass
 

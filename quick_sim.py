@@ -456,7 +456,15 @@ def resolve_game_lineup(team):
     lineup = (_gm_lines if _gm_lines is not None
               else getattr(team, 'lineup', None))
     if not lineup or not isinstance(lineup, dict):
-        return best_lines(team)
+        lineup = best_lines(team)
+        # Coach-built fallback gets the hot-hand audition too (GM law
+        # doesn't apply — these are the coach's lines).
+        try:
+            from line_chemistry import hot_hand_auditions as _lcha2
+            lineup, _ = _lcha2(team, lineup)
+        except Exception:
+            pass
+        return lineup
     # Defensive: fill missing keys with best_lines
     keys = ['Forwards', 'Defense', 'Goalies']
     missing = [k for k in keys if k not in lineup]
@@ -464,6 +472,17 @@ def resolve_game_lineup(team):
         base = best_lines(team)
         for k in missing:
             lineup[k] = base[k]
+    # Hot-hand audition (2026-09-30, Muck): form is first-class in coach
+    # selection. Heaters earn a one-line look (bounded, talent-guarded,
+    # never changes who dresses); sustained auditions earn the spot,
+    # faded ones go back down — the experiment ledger tracks it all.
+    # Coach paths only: the GM's set lines are the law.
+    if _gm_lines is None:
+        try:
+            from line_chemistry import hot_hand_auditions as _lcha
+            lineup, _ = _lcha(team, lineup)
+        except Exception:
+            pass
     return lineup
 
 
@@ -1243,7 +1262,33 @@ class AdvancedGameSim:
                     _w *= 0.35
             except Exception:
                 pass
+            # PP micro-rotation (2026-09-30, Muck): heaters get better
+            # looks WITHIN the unit — bounded share tilt, mean 1.0, never
+            # changes who dresses. Same shared helper GameSim uses.
+            try:
+                if self.pp_team and getattr(self, "_lc_look", None):
+                    _w *= self._lc_look.get(getattr(_p, "id", None), 1.0)
+            except Exception:
+                pass
             return _w
+
+        # Lazily (re)compute the PP look shares when the unit changes.
+        try:
+            if self.pp_team:
+                from line_chemistry import pp_look_shares as _lpls
+                _ukey = (self.pp_team,
+                         frozenset(getattr(p, "id", None) for p in shooters))
+                if getattr(self, "_lc_look_key", None) != _ukey:
+                    _tm = (self.home_team
+                           if puck_team_name == self.home_team.team_name
+                           else self.away_team)
+                    self._lc_look = _lpls(shooters, sim=self, team=_tm)
+                    self._lc_look_key = _ukey
+            else:
+                self._lc_look = None
+                self._lc_look_key = None
+        except Exception:
+            pass
 
         shooter = random.choices(shooters,
                                  weights=[_shooter_w(p) for p in shooters],
@@ -2047,6 +2092,28 @@ class AdvancedGameSim:
             try:
                 if _schemed_f != 1.0:
                     shot_chance *= _schemed_f
+            except Exception:
+                pass
+            # Line chemistry (2026-09-30, Muck): the shared unit-efficiency
+            # multiplier — archetype fit, composite complementarity,
+            # talent+performance foundation, morale/bonds. Situation-aware
+            # (EV line balance / PP formation completeness / PK scheme),
+            # bounded per-line, truthful (no league pin). One decision,
+            # two fidelities — GameSim applies the same helper at the
+            # same point. Never touches finishing or grade ceilings.
+            try:
+                from line_chemistry import (unit_efficiency as _lcef,
+                                            pk_denial_factor as _lkdf,
+                                            detect_situation as _lcdet)
+                _sit_lc = _lcdet(sim=self, team=puck_team_name)
+                _lc_eff = _lcef(shooters, situation=_sit_lc, sim=self,
+                                team=puck_team_name)
+                if _lc_eff != 1.0:
+                    shot_chance *= _lc_eff
+                if _sit_lc == "pk":
+                    _deny = _lkdf(_d_unit, sim=self, team=opp_team_name)
+                    if _deny != 1.0:
+                        shot_chance *= _deny
             except Exception:
                 pass
             # Breakaway scenario (§6): on a clean breakaway, the battle is

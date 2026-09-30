@@ -422,12 +422,16 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
                          location, sim=None, off_team=None, def_team=None):
     """The schemed-against battle. Returns (star_factor, relief_factor):
     - star_factor (<= 1.0): multiplies the star's grade-A creation chance.
-    - relief_factor (>= 1.0): multiplies his linemates' grade-A creation
-      chance — the zero-sum dividend of the attention he draws.
+    - relief_factor (>= 1.0): the UNIT-WIDE relief budget funded by the
+      attention the star draws (1.0 + budget). It is NOT applied flat to
+      every linemate — schemed_factor_for_shooter apportions it across the
+      unit through line_chemistry.chemistry_relief_share (fit-weighted),
+      so the total dividend never exceeds the budget.
 
     For non-elite shooters both are exactly 1.0 (feels nothing). Bounded
     rails, mean-neutral at even threat, no finishing touch. Callers apply
-    star_factor to the star's chance and relief_factor to linemates'.
+    star_factor to the star's chance; the relief budget is apportioned
+    per-shooter by schemed_factor_for_shooter.
 
     Battle structure: the scheme's execution (team commitment vs league
     baseline, through the shared battle core) scaled by the elite threat
@@ -484,18 +488,29 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
                                def_team=None):
     """Single factor to multiply one shooter's grade-A chance. If the
     shooter is elite, the star suppression; if he's a linemate of an
-    elite, the zero-sum relief; otherwise exactly 1.0. This is the call-
-    site helper — one factor per chance, never stacked."""
+    elite, his CHEMISTRY-WEIGHTED share of the zero-sum relief budget;
+    otherwise exactly 1.0. This is the call-site helper — one factor per
+    chance, never stacked.
+
+    Relief flows through line_chemistry.chemistry_relief_share: the budget
+    is split across the unit by archetype fit with the star (the net-front
+    guy next to a schemed playmaker eats; a redundant second sniper gets
+    scraps), so the unit-wide dividend can never exceed the budget no
+    matter the unit size. Defensive import — if line_chemistry is
+    unavailable, falls back to an even split of the budget."""
     try:
+        _unit = _as_list(attacking_onice)
         _star, _ = apply_schemed_threat(shooter, attacking_onice,
                                         defending_onice, location,
                                         sim=sim, off_team=off_team,
                                         def_team=def_team)
         if _star < 1.0:
             return _star
-        # Not the star — check if a linemate draws the shade.
-        _best_relief = 1.0
-        for _p in _as_list(attacking_onice):
+        # Not the star — find the elite linemate drawing the shade and the
+        # unit-wide relief budget his suppression funds.
+        _best_budget = 0.0
+        _best_star = None
+        for _p in _unit:
             if _p is None or _p is shooter:
                 continue
             try:
@@ -507,9 +522,19 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
                                          defending_onice, location,
                                          sim=sim, off_team=off_team,
                                          def_team=def_team)
-            if _r > _best_relief:
-                _best_relief = _r
-        return _best_relief
+            _budget = _r - 1.0
+            if _budget > _best_budget:
+                _best_budget = _budget
+                _best_star = _p
+        if _best_budget <= 0.0 or _best_star is None:
+            return 1.0
+        try:
+            from line_chemistry import chemistry_relief_share as _crs
+            _share = _crs(shooter, _best_star, _unit)
+        except Exception:
+            _n = max(1, len([p for p in _unit if p is not None]) - 1)
+            _share = 1.0 / _n
+        return 1.0 + _best_budget * max(0.0, min(1.0, _share))
     except Exception:
         return 1.0
 
