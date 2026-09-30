@@ -612,12 +612,41 @@ class PlayerProfile(InGamePopup):
                         bg=card.card_bg)
         title.pack(anchor="w", pady=(0, 16))
 
-        # -- TRACK-2 HOOK (attribute composite ratings) -------------------
-        # Track 2 will expose get_composite_ratings(player) from its own
-        # module. The composite-ratings UI section mounts HERE (above the
-        # FM24 groups). The coordinator wires it at merge; this card
-        # deliberately builds nothing composite-side itself.
-        # -- end TRACK-2 HOOK --------------------------------------------
+        # -- Attribute composite ratings (Track 2 shared module) -------------
+        # What the engine actually uses: bounded per-event composites.
+        try:
+            import attribute_composites as _ac
+            _comp = _ac.get_composite_ratings(self.player)
+            _is_g = 'GOALIE' in str(
+                getattr(self.player, 'primary_position', '')).upper()
+            _comp_labels = [
+                ("chance_creation", "Chance Creation"),
+                ("finishing", "Finishing"),
+                ("skating", "Skating"),
+                ("defensive_play", "Defensive Play"),
+                ("physicality", "Physicality"),
+                ("faceoff", "Faceoffs"),
+                ("puck_retrieval", "Puck Retrieval"),
+                ("discipline", "Discipline"),
+                ("goalie_save", "Goaltending"),
+            ]
+            if _is_g:
+                _comp_labels = [("goalie_save", "Goaltending"),
+                                ("skating", "Skating"),
+                                ("puck_retrieval", "Puck Retrieval"),
+                                ("discipline", "Discipline")]
+            _comp_title = tk.Label(content, text="Composite Ratings",
+                                   font=AppFonts.H3,
+                                   fg=AppColors.TEXT_PRIMARY,
+                                   bg=card.card_bg)
+            _comp_title.pack(anchor="w", pady=(8, 4))
+            for _key, _label in _comp_labels:
+                if _key in _comp:
+                    self._create_attribute_bar(content, _label, _comp[_key],
+                                               card.card_bg, compact=True)
+        except Exception:
+            pass
+        # -- end composite ratings ------------------------------------------
 
         # W6: one-row canonical Condition bar at the top of the Attributes
         # card, color-coded on the shared condition scale.
