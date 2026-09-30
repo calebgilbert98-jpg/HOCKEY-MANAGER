@@ -10871,8 +10871,9 @@ class ContractNegotiationView(ctk.CTkFrame):
 
     Offer builder on the left, team/player context on the right: cap space,
     the agent's ask, comparable contracts, and this negotiation's offer
-    history. Negotiation state lives in ``app.negotiation_sessions`` so the
-    user can jump to another screen mid-talks and resume from the navbar.
+    history. Negotiation state lives in ``app.pending_sessions`` (see
+    ``popup_system.get_negotiation_session``) so the user can jump to
+    another screen mid-talks and resume from the navbar.
     """
 
     def __init__(self, parent, player=None, is_extension=False, app=None,
@@ -10897,39 +10898,28 @@ class ContractNegotiationView(ctk.CTkFrame):
     # ---------- session ----------
 
     def _get_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is None:
-            sessions = {}
-            self.app.negotiation_sessions = sessions
-        player = self.player
-        key = getattr(player, "id", None) or id(player)
-        sess = sessions.get(key)
-        if sess is None or sess.get("player") is not player:
-            sess = {
-                "player": player,
-                "is_extension": self.is_extension,
-                "is_elc": self.is_elc,
-                "offers": [],          # (salary, years, result)
-                "asking_price": None,  # last known agent ask
-                "draft_salary": "",
-                "draft_years": 1,
-                "draft_clause": "none",
-                "draft_clause_size": 10,
-                "draft_signing_bonus": "",
-                "draft_perf_bonus": "",
-            }
-            sessions[key] = sess
-        self._sess_key = key
-        return sess
+        # Gating Phase 1: Tier-B session in app.pending_sessions (see
+        # popup_system.get_negotiation_session). Draft terms write through
+        # on every widget change, so the in-progress offer survives
+        # navigation, cache eviction, and re-presentation.
+        from popup_system import get_negotiation_session
+        sess = get_negotiation_session(self.app, self.player, defaults={
+            "is_extension": self.is_extension,
+            "is_elc": self.is_elc,
+            "offers": [],          # (salary, years, result)
+            "asking_price": None,  # last known agent ask
+            "draft_salary": "",
+            "draft_years": 1,
+            "draft_clause": "none",
+            "draft_clause_size": 10,
+            "draft_signing_bonus": "",
+            "draft_perf_bonus": "",
+        })
+        return sess if sess is not None else {}
 
     def _close_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is not None:
-            sessions.pop(self._sess_key, None)
-        try:
-            self.app.refresh_screen_navbar()
-        except Exception:
-            pass
+        from popup_system import close_negotiation_session
+        close_negotiation_session(self.app, self.player)
 
     # ---------- market data ----------
 
@@ -12403,7 +12393,7 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self.player = player
         self.market_value = market_value
         self.max_years = max_years
-        # Gating Phase 1: negotiation state lives in app.negotiation_sessions
+        # Gating Phase 1: negotiation state lives in app.pending_sessions
         # (same pattern as ContractNegotiationView) so the user can jump to
         # another screen mid-talks and resume from the navbar.
         self._session = self._get_session()
@@ -12546,24 +12536,20 @@ class ExtensionNegotiationView(ctk.CTkFrame):
     # ---------- session ----------
 
     def _get_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is None:
-            sessions = {}
-            self.app.negotiation_sessions = sessions
-        player = self.player
-        key = getattr(player, "id", None) or id(player)
-        sess = sessions.get(key)
-        if sess is None or sess.get("player") is not player:
-            sess = {
-                "player": player,
-                "is_extension": True,
-                "draft_salary": "",
-                "draft_years": 0,
-                "draft_ntc": False,
-                "draft_signing_bonus": "",
-            }
-            sessions[key] = sess
-        self._sess_key = key
+        # Gating Phase 1: terms live in the app.pending_sessions entry
+        # (popup_system.get_negotiation_session); the view rebuilds from
+        # the session on open via _restore_draft, and update_total writes
+        # every widget change back through immediately.
+        from popup_system import get_negotiation_session
+        sess = get_negotiation_session(self.app, self.player, defaults={
+            "is_extension": True,
+            "draft_salary": "",
+            "draft_years": 0,
+            "draft_ntc": False,
+            "draft_signing_bonus": "",
+        })
+        if sess is None:
+            sess = {}
         try:
             self.app.refresh_screen_navbar()
         except Exception:
@@ -12571,13 +12557,8 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         return sess
 
     def _close_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is not None:
-            sessions.pop(getattr(self, "_sess_key", None), None)
-        try:
-            self.app.refresh_screen_navbar()
-        except Exception:
-            pass
+        from popup_system import close_negotiation_session
+        close_negotiation_session(self.app, self.player)
 
     def _restore_draft(self):
         """Seed the offer widgets from the session's in-progress draft.

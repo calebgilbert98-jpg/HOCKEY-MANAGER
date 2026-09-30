@@ -1101,7 +1101,7 @@ def get_pending_session(app, session_id):
         return None
     try:
         sessions = getattr(app, "pending_sessions", None)
-        if sessions is None:
+        if not isinstance(sessions, dict):
             sessions = {}
             app.pending_sessions = sessions
         sess = sessions.get(session_id)
@@ -1124,6 +1124,88 @@ def _write_question_session(app, session_id, dialog_id, payload):
     except Exception:
         return None
     return sess
+
+
+# ---------------------------------------------------------------------------
+# Contract-negotiation sessions (gating Phase 1 -- Tier-B generalization).
+#
+# These generalize the old ``app.negotiation_sessions`` dict: negotiation
+# state now lives in ``app.pending_sessions`` keyed by session id, with
+# write-through on every meaningful interaction (the views write their
+# draft terms into the entry on each widget change), so navigating away
+# mid-talks can never lose the in-progress offer. The ``"player"`` value is
+# a live game object (runtime only); the save serializer whitelists
+# kind == "team_talk" sessions, so negotiation entries are dropped from
+# saves exactly as the old attribute dict was -- no save/load change.
+# ---------------------------------------------------------------------------
+
+CONTRACT_NEGOTIATION_KIND = "contract_negotiation"
+
+
+def _negotiation_player_key(player):
+    try:
+        return getattr(player, "id", None) or id(player)
+    except Exception:
+        return id(player)
+
+
+def negotiation_session_id(player):
+    """Session id for a player's contract negotiation."""
+    return "negotiation:%s" % (_negotiation_player_key(player),)
+
+
+def get_negotiation_session(app, player, defaults=None):
+    """Return the Tier-B session for this player's contract talks.
+
+    Creates and initializes it on first use (from ``defaults``); returns
+    the existing entry -- with its in-progress draft terms -- on resume.
+    Re-initializes when the entry belongs to a different player object
+    (e.g. a fresh league reusing an id), matching the old
+    ``negotiation_sessions`` semantics.
+    """
+    if app is None or player is None:
+        return None
+    try:
+        sid = negotiation_session_id(player)
+        sess = get_pending_session(app, sid)
+        if sess is None:
+            return None
+        if (sess.get("kind") != CONTRACT_NEGOTIATION_KIND
+                or sess.get("player") is not player):
+            # (Re)initialize in place so existing view references to the
+            # entry stay valid.
+            sess.clear()
+            sess.update({
+                "id": sid,
+                "kind": CONTRACT_NEGOTIATION_KIND,
+                "player": player,
+                "player_key": _negotiation_player_key(player),
+                "dialogs": {},
+            })
+            if defaults:
+                try:
+                    sess.update(dict(defaults))
+                except Exception:
+                    pass
+        if "dialogs" not in sess:
+            sess["dialogs"] = {}
+        return sess
+    except Exception:
+        return None
+
+
+def close_negotiation_session(app, player):
+    """Consume a finished/cancelled negotiation session."""
+    try:
+        sessions = getattr(app, "pending_sessions", None)
+        if sessions:
+            sessions.pop(negotiation_session_id(player), None)
+        try:
+            app.refresh_screen_navbar()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _card_shell(manager, title, message, kind="question", width=470,
