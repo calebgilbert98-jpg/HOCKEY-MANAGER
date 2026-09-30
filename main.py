@@ -2105,7 +2105,15 @@ def _player_needs_waivers(player):
 # baselines and trap games are exactly 1.0). Calibrated so the rush-vs-rush
 # AWAY response matches the event sim (~+0.11 goals/game); the home-ice factor
 # is the existing +0.05 lightweight strength edge. (Tuning review.)
-_RUSH_X_HOME_ICE_K = 1000.0
+#
+# PARKED 2026-09-30 (caleb-integration): re-measured on Caleb's new tree
+# (post-eb5101b talent-gradient restepening). The event sim's rush-vs-rush
+# response is now home +0.43 / AWAY +0.61 -- the away side benefits MORE,
+# the home-favoring interaction this dampener modeled no longer exists.
+# K=0.0 disables it; the lightweight's natural rush response (~+0.54 away)
+# now matches the event sim within tolerance. If Caleb's engine reverts to
+# home-favoring rush dynamics, restore K=1000.0.
+_RUSH_X_HOME_ICE_K = 0.0
 _HOME_ICE_EDGE = 0.05
 
 
@@ -12265,12 +12273,13 @@ class HockeyManagerGUI(tk.Tk):
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)
-        # σ=1.85 with the 2.5 team-quality slope (parity 2026-09-29): slightly
-        # tighter than the reference spread; team differences carry more of
-        # the variance, lifting ties and trimming shutouts toward the event
-        # sim's shape.
-        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 1.85))))
-        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 1.85))))
+        # σ=2.05 (parity 2026-09-29, recalibrated 2026-09-30 on Caleb's new
+        # tree): the event sim's score spread widened post-eb5101b (talent-
+        # gradient restepening) to ~2.05; σ tracks it so the lightweight's
+        # measured stddev (~2.0 after round/clip) matches. Team differences
+        # carry the systematic variance; σ carries the game-level noise.
+        home_goals = max(0, min(8, round(random.normalvariate(home_goal_expectation, 2.05))))
+        away_goals = max(0, min(8, round(random.normalvariate(away_goal_expectation, 2.05))))
         
         # Apply clutch performance factors in close games
         if abs(home_goals - away_goals) <= 1:
