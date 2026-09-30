@@ -412,12 +412,56 @@ def _direction_mult(player: Any, direction: str, style_key: str) -> float:
 # ---------------------------------------------------------------------------
 
 
-#: Vibe-product clamp: the talent-hierarchy invariant. With the 0.90/0.10
-#: base, a 75 OVR at max vibes can never pass a 92 OVR at min vibes
-#: (equal form), and an 85 OVR max-heater can never pass a 93 OVR max-cold
-#: -- for every coaching style.
-_VIBE_CLAMP_LO = 0.95
-_VIBE_CLAMP_HI = 1.05
+#: Vibe-product clamp per coaching style: the talent-hierarchy invariant,
+#: now TRUE (B1, 2026-09-30). Vibes alone (at equal form) can never flip a
+#: real talent gap for any style -- the widest clamp spread
+#: (players_coach, 6.4%) stays strictly below the 85-vs-93 gap (8.4%).
+#: Crossing requires genuine heat; the spread is each style's signature:
+#: the drill sergeant's trust hierarchy effectively never budges (4.1%),
+#: the players' coach rides a real hot hand sooner (6.4%).
+#: Form is counted ONCE: the old heater bonus inside the vibe product
+#: double-counted it (kink 14.8x at form=50). Form now enters smoothly
+#: through the base perf term, scaled by style x adaptability (form_sens).
+_VIBE_CLAMP_HALF = {
+    "drill_sergeant": 0.020,
+    "tactician": 0.026,
+    "motivator": 0.029,
+    "developer": 0.029,
+    "balanced": 0.0301,
+    "players_coach": 0.0300,
+}
+
+
+#: Style form-sensitivity: how much a player's recent form moves his
+#: deployment base. A players' coach lives on feel (1.2); a drill
+#: sergeant trusts the hierarchy, not the week (0.6).
+_STYLE_FORM_MULT = {
+    "drill_sergeant": 0.6,
+    "tactician": 0.75,
+    "motivator": 0.9,
+    "balanced": 1.0,
+    "developer": 1.1,
+    "players_coach": 1.2,
+}
+
+
+def _adapt_form_mult(coach: Any) -> float:
+    """Adaptability axis for the QUANTITY form weight (deployment minutes).
+
+    Gentler than the leverage recency_w (which drives minute QUALITY):
+    a stubborn coach still counts form, just less -- 0.9 vs 1.25, not
+    0.2 vs 1.3. Keeps the crossover ordering (stubborn > adaptable)
+    without freezing stubborn lineups entirely.
+    """
+    try:
+        a = float(getattr(coach, "adaptability", 65) or 65)
+    except Exception:
+        a = 65.0
+    if a < 45:
+        return 0.95
+    if a > 65:
+        return 1.15
+    return 1.0
 
 
 def _player_deployment_score(player: Any, coach: Any, style_key: str,
@@ -425,10 +469,16 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
                              direction: str = None) -> float:
     """One scalar: how much this coach wants THIS player on the ice.
 
-    Talent + recent performance DOMINATE: base = 0.90*OVR + 0.10*form-shape.
-    Every other factor is a bounded modulator inside a [0.95, 1.05] vibe
-    clamp, so soft factors ("vibes") can never flip a real talent gap --
-    a 75 OVR never sits above a 92 OVR on vibes, for any coaching style.
+    Talent + recent performance DOMINATE: base = 0.90*OVR + 0.10*form-shape,
+    with the form weight scaled by style x adaptability (form_sens) -- a
+    players' coach rides heat, a stubborn drill sergeant barely registers
+    it. Form is counted ONCE (B1): the old heater bonus inside the vibe
+    product double-counted it.
+    Every other factor is a bounded modulator inside a style-dependent
+    vibe clamp, and vibes alone can never flip a real talent gap at equal
+    form -- the widest clamp spread (6.4%) stays below the 85-vs-93 gap
+    (8.4%). Crossing needs genuine heat; how much heat is the style's
+    signature (drill sergeant: effectively never; players' coach: sooner).
 
     Coaching style + adaptability modulate how strongly each factor bites
     (deviation scaling), and team direction (buyer/seller) tilts youth vs
@@ -447,12 +497,16 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         if ovr <= 0:
             ovr = 5.0
         form01 = _norm_form01(player)
-        perf = 80.0 + 20.0 * (form01 + 1.0) / 2.0   # 80..100
-        base = (0.90 * ovr + 0.10 * perf) / 100.0
-
         style = _safe_coach_style(coach)
         skey = style.get("key") or style_key or "balanced"
-        recency_w = _adapt_recency_mult(coach)
+        # Form enters ONCE, smoothly, through the base perf term: style x
+        # adaptability scales how much recent form moves the base.
+        form_sens = (_STYLE_FORM_MULT.get(skey, 1.0)
+                     * _adapt_form_mult(coach))
+        perf = 80.0 + 20.0 * (form01 + 1.0) / 2.0   # 80..100
+        perf_eff = 90.0 + (perf - 90.0) * form_sens
+        base = (0.90 * ovr + 0.10 * perf_eff) / 100.0
+
         if direction is None:
             direction = _team_direction(team) if team is not None else "neutral"
 
@@ -489,12 +543,6 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         # Team direction: rebuilds develop youth; contenders lean on vets.
         vibes.append(_direction_mult(player, direction, skey))
 
-        # Recency, bounded: genuine heaters earn more (never a hierarchy
-        # inversion -- inside the vibe clamp, adaptability-scaled).
-        heat01 = max(0.0, min(1.0, (form01 - 0.5) / 0.5))
-        if heat01 > 0:
-            heater_m = 1.0 + 0.08 * heat01 * recency_w
-            vibes.append(_style_factor_mult(heater_m, skey, "recency"))
         # Comeback: recently returned from injury (W4 games_since_return),
         # a short leash of extra trust that decays over ~5 games.
         try:
@@ -509,7 +557,8 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         vibe = 1.0
         for m in vibes:
             vibe *= m
-        vibe = max(_VIBE_CLAMP_LO, min(_VIBE_CLAMP_HI, vibe))
+        clamp_half = _VIBE_CLAMP_HALF.get(skey, 0.030)
+        vibe = max(1.0 - clamp_half, min(1.0 + clamp_half, vibe))
         score = base * vibe
 
         # Honored GM advice (suggest-to-coach). The gate already ran at

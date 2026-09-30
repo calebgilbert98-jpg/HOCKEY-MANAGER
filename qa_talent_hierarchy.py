@@ -20,11 +20,15 @@ DIAGNOSIS (2026-09-29, pre-composites):
       form is incidental. At the rails every style computes the same
       numbers, which is the unrealistic part.
 
-STATUS: B1 OPEN. Per the 2026-09-29 redirect, the formula rewrite (form
-  single-counting + style-dependent crossover) lands AFTER Track 2's
-  composites module merges: rebase onto the merge, implement there, and
-  flip the XFAIL checks below into hard checks. Do NOT "fix" the formula
-  against the old double-counted form plumbing.
+STATUS: B1 CLOSED 2026-09-30. Formula rewrite implemented in
+  deployment_policy.py: form single-counted (heater_m removed from the
+  vibe product; form enters once, smoothly, via the base perf term scaled
+  by style x adaptability form_sens), style-dependent vibe clamps
+  (4.1%-6.4% spread, always below the 85-vs-93 gap of 8.4%), false
+  docstring rewritten. X1-X4 flipped from xcheck to hard check() --
+  all green: kink 1.0x, drill_sergeant unreachable, ordering
+  ds(unreachable) > stubborn(93.5) > adaptable(60.8) > players_coach(55.8),
+  pc crossover needs genuine heat (55.8 in (50, 100]).
 
 PROTOCOL NOTE: measurements drive _player_deployment_score directly with
   neutral-vs-tilted vibe protocols. If Track 2 moves form into the
@@ -210,6 +214,10 @@ print("   distinct dimensions: minutes vs minute-quality. The double-")
 print("   reward to avoid is form counted twice INSIDE quantity (B1a).")
 print()
 
+def _fmt_t(t):
+    return "unreachable" if t is None else f"{t:.1f}"
+
+
 print("== M6 DRAFT crossover targets (post-merge design; ordering is the "
       "contract, absolute forms are illustrative) ==")
 print(f"{'style':16} {'today':>10} {'target':>28}")
@@ -236,9 +244,9 @@ for s in _STYLES:
     tgt = dict((k, v) for k, v, _ in _targets)[s]
     print(f"{s:16} {('%.1f' % t) if t is not None else 'unreachable':>10} "
           f"{tgt:>28}")
-print(f"{'stubborn(bal)':16} {'0.0':>10} "
+print(f"{'stubborn(bal)':16} {_fmt_t(crossover_threshold('balanced', 20)):>10} "
       f"{'harder than adaptable':>28}")
-print(f"{'adaptable(bal)':16} {'0.0':>10} "
+print(f"{'adaptable(bal)':16} {_fmt_t(crossover_threshold('balanced', 90)):>10} "
       f"{'easier than stubborn':>28}")
 print("   required ordering: drill_sergeant > stubborn > adaptable > "
       "players_coach")
@@ -291,17 +299,13 @@ print()
 # ---------------------------------------------------------------------------
 print("== B1-OPEN (expected failures until the formula rewrite) ==")
 # X1: single-count form -- no 15x slope kink at form=50.
-xcheck("X1 form single-counted: slope kink at form=50 <= 4x",
+check("X1 form single-counted: slope kink at form=50 <= 4x",
        s_hi / s_lo <= 4.0, f"today {s_hi / s_lo:.1f}x")
-
-def _fmt_t(t):
-    return "unreachable" if t is None else f"{t:.1f}"
-
 
 # X2: drill sergeant's trust hierarchy barely budges -- crossover
 # effectively unreachable within the full form range.
 t_ds = crossover_threshold("drill_sergeant")
-xcheck("X2 drill_sergeant crossover unreachable (vibe-tilted)",
+check("X2 drill_sergeant crossover unreachable (vibe-tilted)",
        t_ds is None, f"today threshold {_fmt_t(t_ds)}")
 
 # X3: crossover difficulty ordering:
@@ -314,14 +318,14 @@ tds = inf if t_ds is None else t_ds
 tst = inf if t_stub is None else t_stub
 tad = inf if t_adapt is None else t_adapt
 tpc = inf if t_pc is None else t_pc
-xcheck("X3 crossover ordering ds > stubborn > adaptable > players_coach",
+check("X3 crossover ordering ds > stubborn > adaptable > players_coach",
        tds > tst > tad > tpc and tds == inf and tpc < inf,
        f"today ds={_fmt_t(t_ds)} stub={_fmt_t(t_stub)} "
        f"adapt={_fmt_t(t_adapt)} pc={_fmt_t(t_pc)}")
 
 # X4: players' coach rides the hot hand -- but it must BE a hot hand:
 # crossover needs genuine heat (form > 50), never vibes alone at form 0.
-xcheck("X4 players_coach crossover needs genuine heat (50 < t <= 100)",
+check("X4 players_coach crossover needs genuine heat (50 < t <= 100)",
        t_pc is not None and 50.0 < t_pc <= 100.0, f"today t={_fmt_t(t_pc)}")
 
 print()
