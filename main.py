@@ -17986,11 +17986,10 @@ class HockeyManagerGUI(tk.Tk):
                                 TradeBlockWindow)
 
     def open_offer_sheet_window(self):
-        """Open the Offer Sheet window (sign a rival RFA). BUG-020."""
-        if 'offer_sheet' not in self.open_windows or not self.open_windows['offer_sheet'].winfo_exists():
-            from offer_sheet_ui import OfferSheetWindow
-            self.open_windows['offer_sheet'] = OfferSheetWindow(self)
-        self.open_windows['offer_sheet'].focus_set()
+        """Open the Offer Sheet screen (sign a rival RFA). BUG-020."""
+        from offer_sheet_ui import OfferSheetWindow
+        return self.show_screen("offer_sheet", "Offer Sheets",
+                                OfferSheetWindow)
         
     def open_contract_extensions_window(self):
         """Open the Contract Extensions screen (full-screen jump)."""
