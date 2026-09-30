@@ -415,6 +415,12 @@ class GameSaveManager:
                 'league_name': getattr(team, 'league_name', 'National Hockey League'),
                 'standings_position': getattr(team, 'standings_position', 0),
                 'board_expectation': getattr(team, 'board_expectation', None),
+                # Pre-season coach expectations meeting: the stored season
+                # mandate + pending flag (+ transient UI context). Plain
+                # data; old saves simply have none.
+                'season_mandate': dict(getattr(team, 'season_mandate', None) or {}),
+                'season_meeting_pending': bool(getattr(team, 'season_meeting_pending', False)),
+                'season_meeting_context': dict(getattr(team, 'season_meeting_context', None) or {}),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
                 # In-game retained-salary ledger (real NHL retained
                 # transactions). Absent in old saves -> empty.
@@ -1612,6 +1618,17 @@ class GameSaveManager:
             except Exception:
                 team.scout_shortlist = []
             team.board_expectation = team_data.get('board_expectation')
+            # Pre-season coach expectations meeting. Absent in old saves ->
+            # no mandate, nothing pending.
+            try:
+                team.season_mandate = dict(team_data.get('season_mandate') or {}) or None
+            except Exception:
+                team.season_mandate = None
+            team.season_meeting_pending = bool(team_data.get('season_meeting_pending', False))
+            try:
+                team.season_meeting_context = dict(team_data.get('season_meeting_context') or {})
+            except Exception:
+                team.season_meeting_context = {}
             # Annual staff payroll budget. Absent in old saves -> market-tier
             # default so existing leagues get the rule without a wipe.
             try:

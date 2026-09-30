@@ -3536,6 +3536,15 @@ def hire_coach(team: Any, candidate: Dict[str, Any],
         goal_met=True)
     for ln in lines:
         _log(team, ln)
+    # Pre-season coach expectations meeting: a new voice behind the bench
+    # means a new meeting. User club arms (new_coach re-arms even
+    # mid-season); AI clubs resolve immediately, no UI. Guarded: never
+    # breaks the hire.
+    try:
+        from coach_season_meeting import on_coach_hired
+        on_coach_hired(team)
+    except Exception:
+        pass
     return lines
 
 
@@ -3686,7 +3695,24 @@ def _team_points_pace(team, league):
 
 
 def _coach_board_expectation(team):
-    """(expectation, expected pace): the same bar the GM is judged against."""
+    """(expectation, expected pace): the bar the coach is judged against.
+
+    When a season mandate exists, the coach is judged against what was
+    AGREED in the pre-season meeting (coach_season_meeting's EXPECTED_PACE)
+    -- the trust drift then measures him against his own mandate. The
+    board's judgment of the GM (ai_gm_identity.update_job_security) is
+    untouched: the gap between board demand and mandate is the intended
+    tension. Falls back to the strength-based bar with no mandate.
+    """
+    try:
+        from coach_season_meeting import mandate_expected_pace
+        _pace = mandate_expected_pace(team)
+        if _pace:
+            from coach_season_meeting import get_active_mandate
+            _m = get_active_mandate(team) or {}
+            return _m.get("expectation", "playoffs"), float(_pace)
+    except Exception:
+        pass
     try:
         from ai_gm_identity import expectation_from_strength, EXPECTED_PACE
     except Exception:

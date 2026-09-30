@@ -3704,6 +3704,16 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         if hasattr(self.game_manager, 'pending_fantasy_draft'):
             self.game_manager.pending_fantasy_draft = False
 
+        # Pre-season coach expectations meeting: rosters are now known,
+        # before the first advance. The user club arms its season meeting;
+        # every AI club resolves immediately. Guarded: never breaks the
+        # draft completion flow.
+        try:
+            from coach_season_meeting import on_fantasy_draft_complete
+            on_fantasy_draft_complete(getattr(self, 'game_manager', None))
+        except Exception:
+            pass
+
         # Roster soundness: 40 rounds of picks must not leave 40-man NHL
         # rosters. Trim to 23 (best 23 stay), guarantee >= 2 goalies per
         # club, demote the rest to the AHL.
