@@ -437,7 +437,7 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
     f_tired = f_age > 40
     d_tired = d_age > 45
 
-    # Hard cap: no shift beyond 60s, even at a stoppage. This overrides
+    # Hard cap: no shift beyond 50s, even at a stoppage. This overrides
     # the OZ-keep and matching logic below.
     must_change_f = f_age >= 50
     must_change_d = d_age >= 50
