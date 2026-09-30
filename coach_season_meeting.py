@@ -74,9 +74,18 @@ Downstream wiring (the mandate is REAL):
     "sheltered" -> shorten_bench, "earned"/"none" -> no nudge. Reuses the
     existing multipliers -- no new tuning.
 
-TUNING CONSTANTS (need Chris's approval -- flagged in the build report):
-  TRUST_ALIGNED_BUMP, TRUST_MISALIGNED_DENT, COACH_LOW_MORALE_NOTCH,
-  AI_CONTROL_KEEP, AI_CONTROL_DEFER, AI_WWY_HEAVY.
+TUNING CONSTANTS -- the situational trust scale (rebalanced 2026-09-30,
+needs Chris's approval -- flagged in the build report):
+  Every trust delta is a function of (GM choice, coach personality,
+  situational fit). Bounds: the worst realistic single meeting moves
+  trust 70 -> low 50s; the best realistic meeting tops out in the mid
+  80s. Trust is hard to build and hard to destroy in one conversation.
+  TRUST_ALIGN_GROUNDED / TRUST_ALIGN_SHARED / TRUST_SEAL_ALIGNED /
+  TRUST_SEAL_MISALIGNED / TRUST_TANK_REFUSAL / TRUST_KEEP_DOMAIN /
+  TRUST_TAKE_FIRST_CHAIR (below), plus the documented per-beat rules:
+  expectation beat in [-5, +3], rookie beat in [-3, +3], tactics beat
+  in [-2, +2], each ownership beat in [-3, +2], deployer beat in
+  [-2, +3]. See the trust_*_delta functions for the full rules.
 """
 
 from __future__ import annotations
@@ -110,16 +119,37 @@ _UI_TO_AI = {
 
 ROOKIE_STANCES = ("heavy", "earned", "sheltered", "none")
 
+#: Tactical style buckets for the tactics-beat fit check: a system that
+#: clashes with the coach's philosophy costs more than an adjacent one.
+_PRESET_STYLE = {
+    "chaos_pressure": "attack",
+    "stranglehold": "defense",
+    "hybrid_transition": "balanced",
+}
+
 # ---------------------------------------------------------------------------
 # Tuning constants -- NEED CHRIS'S APPROVAL (see module docstring)
 # ---------------------------------------------------------------------------
 
-#: gm_trust delta when GM and coach agree in the meeting. Mirrors the
-#: honored-advice bump in reputation_system.advise_coach (+5).
-TRUST_ALIGNED_BUMP = 5
-#: gm_trust delta when they disagree. A real ding, smaller than the
-#: +15 reprieve bump.
-TRUST_MISALIGNED_DENT = -8
+#: gm_trust delta when GM and coach agree AND the agreed rung matches what
+#: the roster earns: an honest, grounded conversation builds trust.
+TRUST_ALIGN_GROUNDED = 3
+#: gm_trust delta when they agree but both misread the roster: agreement
+#: still feels good, even if reality will teach them otherwise.
+TRUST_ALIGN_SHARED = 2
+#: Closing handshake at seal when expectation == coach_assessment.
+TRUST_SEAL_ALIGNED = 2
+#: Closing handshake at seal when they carried a disagreement into camp.
+TRUST_SEAL_MISALIGNED = -2
+#: gm_trust delta when a coach refuses a tank mandate the roster doesn't
+#: warrant (ambitious/authoritarian coach, roster earns contend+). The
+#: refusal stays possible -- the cost is survivable, not fatal.
+TRUST_TANK_REFUSAL = -4
+#: gm_trust delta when the coach keeps a domain (lines or tactics).
+TRUST_KEEP_DOMAIN = 2
+#: gm_trust delta when a first-nhl-chair rookie cedes a domain: he defers
+#: gratefully to the GM who believed in him.
+TRUST_TAKE_FIRST_CHAIR = 1
 #: Coach morale (1-100) below which his season assessment drops a notch.
 COACH_LOW_MORALE_NOTCH = 40
 #: AI authority: control_need >= this -> the coach keeps lines + tactics.
@@ -129,6 +159,10 @@ AI_CONTROL_DEFER = 40
 #: AI rookie stance: working_with_youngsters >= this nudges the stance one
 #: step toward "heavy".
 AI_WWY_HEAVY = 75
+#: Roster age profile bands (average roster age): a young core takes to
+#: heavy rookie minutes naturally; a veteran room resents them.
+ROSTER_YOUNG_MAX_AGE = 26.0
+ROSTER_VETERAN_MIN_AGE = 28.5
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +407,422 @@ def coach_season_assessment(team: Any, coach: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Situational inputs for the trust scale
+# ---------------------------------------------------------------------------
+
+def _coach_ambition(coach: Any) -> str:
+    try:
+        return str(getattr(coach, "ambition", "") or "climb").strip().lower()
+    except Exception:
+        return "climb"
+
+
+def _coach_control(coach: Any) -> float:
+    return _num(getattr(coach, "control_need", 50), 50)
+
+
+def _coach_youth_trust(coach: Any) -> float:
+    return _num(getattr(coach, "working_with_youngsters", 50), 50)
+
+
+def _is_authoritarian(coach: Any) -> bool:
+    return _coach_control(coach) >= 75
+
+
+def _is_collaborative(coach: Any) -> bool:
+    return _coach_control(coach) <= 40
+
+
+def _is_first_chair(coach: Any) -> bool:
+    try:
+        return bool(getattr(coach, "first_nhl_chair", False))
+    except Exception:
+        return False
+
+
+def _is_developer(coach: Any) -> bool:
+    return _coach_ambition(coach) == "developer" or _coach_youth_trust(coach) >= 75
+
+
+def _is_loyal(coach: Any) -> bool:
+    return _coach_ambition(coach) in ("lifer", "hometown")
+
+
+def _ambition_drive() -> Dict[str, float]:
+    try:
+        from ai_gm_identity import AMBITION_DRIVE
+        return dict(AMBITION_DRIVE)
+    except Exception:
+        return {"stanley_cup": 1.00, "climb": 0.70, "hometown": 0.50,
+                "lifer": 0.35, "developer": 0.25}
+
+
+def _is_win_now_ambitious(coach: Any) -> bool:
+    amb = _coach_ambition(coach)
+    if amb == "stanley_cup":
+        return True
+    try:
+        return amb == "climb" and float(_ambition_drive().get("climb", 0.7)) >= 0.7
+    except Exception:
+        return False
+
+
+def _coach_tactical_style(coach: Any) -> str:
+    """attack | defense | balanced, from the coach's coaching attributes."""
+    try:
+        atk = _num(getattr(coach, "attacking_coaching", 50), 50.0)
+        dfn = _num(getattr(coach, "defensive_coaching", 50), 50.0)
+        if atk >= dfn + 12:
+            return "attack"
+        if dfn >= atk + 12:
+            return "defense"
+    except Exception:
+        pass
+    return "balanced"
+
+
+def roster_earned_expectation(team: Any) -> str:
+    """The rung the roster actually earns (strength -> expectation).
+
+    The reality anchor for the expectations beat: the GM's ask and the
+    coach's read are both measured against this. Never raises.
+    """
+    try:
+        from ai_gm_identity import expectation_from_strength
+        read = expectation_from_strength(_roster_avg_overall(team))
+        if read in SEASON_EXPECTATIONS:
+            return read
+    except Exception:
+        pass
+    return "playoffs"
+
+
+def roster_age_profile(team: Any) -> str:
+    """young | prime | veteran | unknown, from average roster age.
+
+    Cheap derivation (no new data pipelines): players carry ``age``.
+    "unknown" (no age data, e.g. old saves / test doubles) behaves as
+    "prime" in the trust math -- neutral, never punitive. Never raises.
+    """
+    try:
+        ages: List[float] = []
+        for p in getattr(team, "roster", None) or []:
+            try:
+                a = getattr(p, "age", None)
+                if a is not None:
+                    ages.append(float(a))
+            except (TypeError, ValueError):
+                continue
+        if not ages:
+            return "unknown"
+        avg = sum(ages) / len(ages)
+        if avg < ROSTER_YOUNG_MAX_AGE:
+            return "young"
+        if avg > ROSTER_VETERAN_MIN_AGE:
+            return "veteran"
+        return "prime"
+    except Exception:
+        return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Situational trust scale -- one component per conversation beat.
+#
+# Every component returns (delta, tone, note[, misaligned]). The tone is the
+# situational classification the conversation UI keys its voice lines on;
+# the note is the plain-language reason recorded in the meeting notes.
+# The user's meeting applies each beat live (visible consequence); the AI
+# path applies compute_meeting_trust_delta() at seal -- identical math,
+# identical scale (user/AI parity).
+# ---------------------------------------------------------------------------
+
+def trust_expectation_delta(team: Any, coach: Any, chosen: Any,
+                            assessed: Any):
+    """Expectations beat: the ask measured against reality AND the coach.
+
+    Rules: agreement on the earned rung builds (+3); agreement off it is
+    still agreement (+2). Ambition the roster can cash is welcomed or
+    cheap; ambition above reality costs -2 per notch (extra -1 for
+    overruling a coach who read it right; ambitious coaches forgive 1).
+    Honest patience costs little (-2..+1 by personality); patience far
+    below what the roster warrants costs more; a tank demand on a
+    contend+ roster can draw an outright refusal (-4, survivable).
+    Range [-5, +3].
+    """
+    chosen = normalize_expectation(chosen) or "playoffs"
+    assessed = normalize_expectation(assessed) or chosen
+    earned = roster_earned_expectation(team)
+    ci = _NOTCH_ORDER.index(chosen)
+    ai = _NOTCH_ORDER.index(assessed)
+    ei = _NOTCH_ORDER.index(earned)
+    coach_off = ai - ei  # +: the coach overrates the roster
+
+    if ci == ai:
+        if ci == ei:
+            return (TRUST_ALIGN_GROUNDED, "aligned_grounded",
+                    "GM and coach agreed on what the roster earns.", False)
+        return (TRUST_ALIGN_SHARED, "aligned_shared",
+                "GM and coach aligned (both off the roster's true rung).",
+                False)
+
+    if ci > ai:
+        # The GM is more ambitious than the coach's read.
+        if _is_first_chair(coach):
+            return (1, "above_defer",
+                    "Rookie coach deferred to the GM's ambition.", False)
+        if ci <= ei:
+            # The ambition is real -- the coach was pessimistic.
+            if _is_win_now_ambitious(coach):
+                return (2, "above_welcomed",
+                        "Coach welcomed the bigger, realistic target.", False)
+            if _is_developer(coach):
+                return (-1, "above_developer_worry",
+                        "Developer coach worries win-now impatience hurts the kids.",
+                        False)
+            return (1, "above_pragmatic",
+                    "Coach bought the bigger target, with caveats.", False)
+        # Asking above what the roster supports.
+        over = ci - ei
+        delta = -2 * over
+        note = "The target outruns the roster."
+        if coach_off == 0:
+            delta -= 1
+            note = ("The target outruns the roster -- and overrules a coach "
+                    "who read it right.")
+        if _is_win_now_ambitious(coach):
+            delta += 1
+            note += " He likes the ambition anyway."
+        delta = max(-5, min(1, delta))
+        return (delta, "above_delusional", note, delta <= -3)
+
+    # The GM is more patient than the coach's read.
+    if coach_off >= 2:
+        # The coach wildly overrates the roster; the GM brings him down
+        # toward reality. Correcting a delusional read is cheap.
+        if _is_authoritarian(coach) or _is_win_now_ambitious(coach):
+            return (-2, "correcting_delusion",
+                    "Coach bristled, but the roster doesn't support his read.",
+                    False)
+        return (-1, "correcting_delusion",
+                "GM corrected an inflated read; the roster backs him.", False)
+    if _is_first_chair(coach):
+        return (1, "honest_defer",
+                "Rookie coach deferred to the GM's patience.", False)
+    if ci == ei:
+        # Honest patience: the roster IS this. Small dent, or respect.
+        if _is_developer(coach):
+            return (1, "honest_developer",
+                    "Developer coach respected the honest build.", False)
+        if _is_win_now_ambitious(coach):
+            return (-2, "honest_pushback",
+                    "Ambitious coach pushed back on a patient mandate.", False)
+        if _is_loyal(coach):
+            return (-1, "honest_loyal",
+                    "Loyal coach bought the honest mandate.", False)
+        return (-1, "honest_reluctant",
+                "Coach accepted a patient mandate reluctantly.", False)
+    # Patience beyond what the roster warrants.
+    under = ei - ci
+    if (chosen == "rebuild" and ei >= _NOTCH_ORDER.index("contend")
+            and (_is_authoritarian(coach) or _is_win_now_ambitious(coach))):
+        return (TRUST_TANK_REFUSAL, "tank_refusal",
+                "Coach refused a tank mandate outright.", True)
+    if _is_developer(coach):
+        return (-1, "patient_developer",
+                "Developer coach accepted the patient mandate.", False)
+    if _is_loyal(coach):
+        return (-1, "patient_loyal",
+                "Loyal coach bought into the patient mandate.", False)
+    if _is_win_now_ambitious(coach):
+        return (-(1 + under), "patient_pushback",
+                "Ambitious coach pushed back on excessive patience.", False)
+    return (-(under + 1), "patient_reluctant",
+            "Coach accepted excessive patience reluctantly.", False)
+
+
+def trust_rookie_delta(team: Any, coach: Any, stance: Any, expectation: Any):
+    """Rookie-stance beat: the ask measured against the roster's age.
+
+    Heavy minutes for a young core is natural; the same demand on a
+    veteran win-now roster is real conflict. "Earned" is universally
+    liked; "sheltered" is safe; "none" wastes a young core and itches a
+    developer. Range [-3, +3].
+    """
+    stance = stance if stance in ROOKIE_STANCES else "none"
+    expectation = normalize_expectation(expectation) or "playoffs"
+    profile = roster_age_profile(team)
+    if profile == "unknown":
+        profile = "prime"  # neutral when age data is absent
+    y = _coach_youth_trust(coach)
+    vet_first = y <= 40
+    developer = _is_developer(coach)
+    win_now = expectation in ("win_cup", "contend")
+
+    if stance == "heavy":
+        if profile == "young":
+            delta = 3 if (developer or y >= 70) else 2
+            return (delta, "heavy_natural",
+                    "Heavy minutes for a young core: natural.")
+        if profile == "veteran":
+            delta = -2
+            if vet_first:
+                delta -= 1
+            if win_now:
+                delta -= 1
+            return (max(-3, delta), "heavy_conflict",
+                    "Heavy rookie minutes on a veteran win-now roster: real conflict.")
+        delta = 0
+        if developer:
+            delta += 1
+        if vet_first:
+            delta -= 1
+        if win_now and y < 55:
+            delta -= 1
+        return (max(-3, min(2, delta)), "heavy_mixed",
+                "Coach weighed heavy rookie minutes against the roster.")
+    if stance == "earned":
+        return ((2 if y >= 60 else 1), "earned",
+                "Coach bought into earned-not-given ice time.")
+    if stance == "sheltered":
+        return ((2 if profile == "young" else 1), "sheltered",
+                "Coach accepted sheltered rookie deployment.")
+    if developer:
+        return (-2, "none_developer",
+                "Developer coach uneasy about a full AHL year for the kids.")
+    if profile == "young":
+        return (-1, "none_waste",
+                "A young core kept down: mild waste.")
+    if vet_first:
+        return (1, "none_patient",
+                "Veterans-first coach approved the patient path.")
+    return (0, "none_neutral", "Coach accepted no rookie minutes this year.")
+
+
+def trust_tactics_delta(team: Any, coach: Any, preset_key: Any):
+    """Tactical-approach beat: the system measured against his philosophy.
+
+    A system that fits how he coaches builds trust; an adjacent one is
+    fine; a clash costs -- more from an authoritarian, nothing from a
+    collaborative coach who adapts. Range [-2, +2].
+    """
+    cstyle = _coach_tactical_style(coach)
+    pstyle = _PRESET_STYLE.get(preset_key)
+    if not preset_key or pstyle is None:
+        return (0, "tactics_none", "No system installed.")
+    if cstyle == pstyle:
+        return (2, "tactics_fit", "The system fits how he coaches.")
+    if "balanced" in (cstyle, pstyle):
+        if _is_authoritarian(coach):
+            return (0, "tactics_adjacent",
+                    "Authoritarian coach grudgingly accepted an adjacent system.")
+        return (1, "tactics_adjacent", "Coach accepted an adjacent system.")
+    if _is_authoritarian(coach):
+        return (-2, "tactics_clash",
+                "Authoritarian coach bristled at a clashing system.")
+    if _is_collaborative(coach):
+        return (0, "tactics_clash_soft",
+                "Collaborative coach will adapt to the clash.")
+    return (-1, "tactics_clash",
+            "Coach accepted a clashing system with reservations.")
+
+
+def trust_ownership_delta(coach: Any, owner: Any, domain: str = "lines"):
+    """Lines/tactics ownership beat: scaled by the coach's control_need.
+
+    Keeping a domain is +2 for everyone. Taking one stings on a sliding
+    scale: -(1 + round(control_need / 50)) -> -1 (collaborative), -2
+    (balanced), -3 (authoritarian). A first-chair rookie defers
+    gratefully (+1). Range [-3, +2].
+    """
+    label = "lineup" if domain == "lines" else "tactics"
+    if owner != "gm":
+        return (TRUST_KEEP_DOMAIN, "keep", "Coach keeps the %s." % label)
+    if _is_first_chair(coach):
+        return (TRUST_TAKE_FIRST_CHAIR, "take_defer",
+                "Rookie coach deferred to the GM who believed in him.")
+    delta = -(1 + round(_coach_control(coach) / 50.0))
+    return (delta, "take",
+            "GM took the %s (control_need %d)." % (label, int(_coach_control(coach))))
+
+
+def trust_deployer_delta(coach: Any, choice: Any):
+    """Deployer beat (GM took both pens): how the arrangement is framed.
+
+    Reassurance lands warmly (grudgingly with an authoritarian); cold
+    expectation-setting chills an authoritarian; demanding buy-in bristles
+    a proud coach (misaligned) but rallies a loyal or rookie one.
+    A falsy choice means the beat never ran -- no delta. Range [-2, +3].
+    """
+    ch = str(choice or "").strip().lower()
+    if not ch:
+        return (0, "deployer_none", "", False)
+    if ch == "reassure":
+        if _is_authoritarian(coach):
+            return (1, "deployer_reassure_grudging",
+                    "Authoritarian coach grudgingly accepted the deployer role.",
+                    False)
+        if _is_collaborative(coach):
+            return (3, "deployer_reassure_warm",
+                    "Collaborative coach embraced the deployer role.", False)
+        return (2, "deployer_reassure",
+                "Coach accepted the deployer role after reassurance.", False)
+    if ch == "expectations":
+        if _is_authoritarian(coach):
+            return (-2, "deployer_expect_cold",
+                    "Authoritarian coach went cold on the deployer role.", False)
+        return (0, "deployer_expect",
+                "Coach accepted the deployer role as the job.", False)
+    if _is_authoritarian(coach) or _is_win_now_ambitious(coach):
+        return (-2, "deployer_demand_bristle",
+                "Proud coach bristled at the buy-in demand.", True)
+    if _is_loyal(coach) or _is_first_chair(coach):
+        return (1, "deployer_demand_loyal",
+                "Loyal coach gave full buy-in.", False)
+    return (0, "deployer_demand_flat", "Coach gave buy-in without warmth.", False)
+
+
+def trust_seal_delta(aligned: bool) -> int:
+    """Closing handshake at seal. The beats carried the substance; this is
+    the handshake on the way out of the room."""
+    return TRUST_SEAL_ALIGNED if aligned else TRUST_SEAL_MISALIGNED
+
+
+def compute_meeting_trust_delta(team: Any, coach: Any,
+                                fields: Dict[str, Any]) -> int:
+    """The full situational trust delta for a completed meeting.
+
+    Sum of every beat component plus the seal handshake. Used by the AI
+    resolution path (no conversation beats run there); the user's path
+    applies the same components live and only the handshake at seal --
+    identical math, identical scale. ``fields`` is the normalized mandate
+    dict; ``deployer_choice`` is honored when present (AI never has one).
+    Never raises.
+    """
+    try:
+        fields = dict(fields or {})
+        total = 0
+        d, _, _, _ = trust_expectation_delta(
+            team, coach, fields.get("expectation"), fields.get("coach_assessment"))
+        total += d
+        d, _, _ = trust_rookie_delta(
+            team, coach, fields.get("rookie_stance"), fields.get("expectation"))
+        total += d
+        d, _, _ = trust_tactics_delta(team, coach, fields.get("tactical_approach"))
+        total += d
+        d, _, _ = trust_ownership_delta(coach, fields.get("lines_owner"), "lines")
+        total += d
+        d, _, _ = trust_ownership_delta(coach, fields.get("tactics_owner"), "tactics")
+        total += d
+        if fields.get("deployer_choice"):
+            d, _, _, _ = trust_deployer_delta(coach, fields.get("deployer_choice"))
+            total += d
+        total += trust_seal_delta(bool(fields.get("aligned")))
+        return int(total)
+    except Exception:
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Downstream wiring
 # ---------------------------------------------------------------------------
 
@@ -420,14 +870,21 @@ def apply_mandate_downstream(team: Any, mandate: Dict[str, Any]) -> None:
 
 
 def store_mandate(team: Any, fields: Dict[str, Any],
-                  apply_trust: bool = True) -> Optional[Dict[str, Any]]:
+                  apply_trust: bool = True,
+                  per_beat_applied: bool = False) -> Optional[Dict[str, Any]]:
     """Validate, store, and apply a season mandate -- THE completion call.
 
     The sibling's conversation UI calls this when the meeting completes;
     the AI path calls it too (user/AI parity). Derives ``aligned`` from
-    expectation vs coach_assessment, applies the shared gm_trust effect,
-    applies downstream wiring, stores the mandate, clears the pending
-    flag. Never raises; returns the stored mandate or None.
+    expectation vs coach_assessment, applies the situational gm_trust
+    effect, applies downstream wiring, stores the mandate, clears the
+    pending flag. Never raises; returns the stored mandate or None.
+
+    Trust: the conversation UI applies each beat's situational delta live
+    (visible consequence), so it passes ``per_beat_applied=True`` and only
+    the seal handshake lands here. The AI path (no conversation) gets the
+    full meeting delta from ``compute_meeting_trust_delta`` -- identical
+    components, identical scale.
     """
     try:
         if team is None:
@@ -472,9 +929,16 @@ def store_mandate(team: Any, fields: Dict[str, Any],
             "reason": str(fields.get("reason") or _context_reason(team) or ""),
         }
         # One trust scale for the user's meeting and AI resolution alike.
+        # per_beat_applied=True (conversation UI): the beats already moved
+        # trust live -- only the closing handshake lands at seal.
+        # per_beat_applied=False (AI path): the full situational meeting
+        # delta, computed from the same beat components.
         if apply_trust and coach is not None:
             try:
-                delta = TRUST_ALIGNED_BUMP if aligned else TRUST_MISALIGNED_DENT
+                if per_beat_applied:
+                    delta = trust_seal_delta(aligned)
+                else:
+                    delta = compute_meeting_trust_delta(team, coach, mandate)
                 cur = _num(getattr(coach, "gm_trust", 70), 70)
                 coach.gm_trust = max(0.0, min(100.0, cur + delta))
             except Exception:

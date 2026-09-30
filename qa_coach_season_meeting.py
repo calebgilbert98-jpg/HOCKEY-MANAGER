@@ -36,14 +36,18 @@ def make_coach(**kw):
     c.control_need = 50
     c.first_nhl_chair = False
     c.working_with_youngsters = 50
+    # Pinned: tactical attributes are randomized at Staff construction, and
+    # the trust scale reads them -- pin for exact-value scenarios.
+    c.attacking_coaching = 70
+    c.defensive_coaching = 55
     for k, v in kw.items():
         setattr(c, k, v)
     return c
 
 
-def make_team(name, coach=None, ovr=65, n=18, board="playoffs"):
+def make_team(name, coach=None, ovr=65, n=18, board="playoffs", age=26):
     t = Team(team_name=name, city=name, division="A", conference="E")
-    t.roster = [make_player(ovr) for _ in range(n)]
+    t.roster = [make_player(ovr, age) for _ in range(n)]
     t.board_expectation = board
     t.staff = []
     if coach is not None:
@@ -104,7 +108,14 @@ check("mandate stored", isinstance(t.season_mandate, dict) and t.season_mandate[
 check("expectation normalized cup->win_cup", m["expectation"] == "win_cup")
 check("aligned derived False (win_cup vs contend)", m["aligned"] is False)
 check("pending cleared", not csm.is_meeting_pending(t))
-check("trust dented on disagreement", t.staff[0].gm_trust == 70 + csm.TRUST_MISALIGNED_DENT)
+# Situational trust (verified beat-by-beat): expectation win_cup over a
+# coach who read contend -> above_delusional -2 (ambition forgives 1);
+# heavy rookies on a prime roster pushing for the Cup -> -1; chaos fits
+# his attack style -> +2; taking both pens at control_need 50 -> -2/-2;
+# no deployer beat; misaligned seal -> -2. Total -7.
+check("trust reflects the situational beats (-7)",
+      t.staff[0].gm_trust == 70 + csm.compute_meeting_trust_delta(t, t.staff[0], m)
+      and t.staff[0].gm_trust == 63)
 check("lines gate written", t.line_control == "gm")
 import tactics as _tx
 check("tactics gate written", _tx.get_tactics_control(t) == "gm")
@@ -120,7 +131,13 @@ m2 = csm.store_mandate(t, {"season": 2026, "expectation": "playoffs",
                            "coach_assessment": "playoffs",
                            "rookie_stance": "bogus", "tactical_approach": "bogus",
                            "lines_owner": "gm", "tactics_owner": "coach"})
-check("aligned True bumps trust", t.staff[0].gm_trust == 70 + csm.TRUST_ALIGNED_BUMP)
+# Situational trust: aligned on playoffs (roster earns contend, so this is
+# shared-off-rung agreement +2); no rookie minutes on a prime roster -> 0;
+# no system -> 0; taking lines at control_need 50 -> -2; keeping tactics
+# -> +2; aligned seal -> +2. Total +4.
+check("aligned meeting nets the situational total (+4)",
+      t.staff[0].gm_trust == 70 + csm.compute_meeting_trust_delta(t, t.staff[0], m2)
+      and t.staff[0].gm_trust == 74)
 check("bad rookie_stance -> none", m2["rookie_stance"] == "none")
 check("bad preset -> None", m2["tactical_approach"] is None)
 check("coach keeps lines default path", t.line_control == "gm" and _tx.get_tactics_control(t) == "coach")
@@ -324,6 +341,142 @@ check("load restores context", (t2.season_meeting_context or {}).get("reason") =
 t3 = mgr._restore_team({"team_name": "OldT", "city": "Old", "division": "A", "conference": "E"})
 check("old save -> no mandate, not pending",
       t3.season_mandate is None and t3.season_meeting_pending is False)
+
+print("== situational trust scale: four honest meetings ==")
+# Every delta is grounded in the GM's choices, the coach's personality,
+# and the roster's situation. Worst realistic meeting lands in the low
+# 50s; the best lands in the mid-80s. Real disagreement is kept --
+# including an ambitious coach refusing a rebuild -- and honest hard
+# conversations stay survivable.
+
+
+def _beats(team, coach, fields):
+    """(total, {beat: delta}) for a normalized mandate dict."""
+    out = {}
+    d, _, _, _ = csm.trust_expectation_delta(
+        team, coach, fields["expectation"], fields["coach_assessment"])
+    out["expectation"] = d
+    d, _, _ = csm.trust_rookie_delta(
+        team, coach, fields["rookie_stance"], fields["expectation"])
+    out["rookies"] = d
+    d, _, _ = csm.trust_tactics_delta(team, coach, fields["tactical_approach"])
+    out["tactics"] = d
+    d, _, _ = csm.trust_ownership_delta(coach, fields["lines_owner"], "lines")
+    out["lines"] = d
+    d, _, _ = csm.trust_ownership_delta(coach, fields["tactics_owner"], "tactics")
+    out["tactics_own"] = d
+    if fields.get("deployer_choice"):
+        d, _, _, _ = csm.trust_deployer_delta(coach, fields["deployer_choice"])
+        out["deployer"] = d
+    out["seal"] = csm.trust_seal_delta(fields["aligned"])
+    return csm.compute_meeting_trust_delta(team, coach, fields), out
+
+
+# S1: contender roster + honest "contend". Agreement on the earned rung,
+# earned-not-given ice time, a system adjacent to his attack style, both
+# pens stay his. Nothing heroic -- just alignment. 70 -> 81.
+c = make_coach()
+t = make_team("S1", c, ovr=68, age=27)
+f = {"season": 2026, "expectation": "contend",
+     "coach_assessment": csm.coach_season_assessment(t, c), "aligned": True,
+     "rookie_stance": "earned", "tactical_approach": "hybrid_transition",
+     "lines_owner": "coach", "tactics_owner": "coach", "meeting_done": True}
+check("S1 coach reads contend on a 68-strength roster",
+      f["coach_assessment"] == "contend")
+total, beats = _beats(t, c, f)
+check("S1 beats: exp +3 / rookies +1 / tactics +1 / lines +2 / tactics_own +2 / seal +2",
+      beats == {"expectation": 3, "rookies": 1, "tactics": 1, "lines": 2,
+                "tactics_own": 2, "seal": 2})
+check("S1 contender + honest contend: 70 -> 81", total == 11 and 70 + total == 81)
+
+# S2: rebuild roster + honest "rebuild", developer coach, young core,
+# heavy minutes. Patience as a plan, respected. 70 -> 83.
+c = make_coach(ambition="developer", working_with_youngsters=85)
+t = make_team("S2", c, ovr=50, age=23)
+f = {"season": 2026, "expectation": "rebuild",
+     "coach_assessment": csm.coach_season_assessment(t, c), "aligned": True,
+     "rookie_stance": "heavy", "tactical_approach": "hybrid_transition",
+     "lines_owner": "coach", "tactics_owner": "coach", "meeting_done": True}
+check("S2 coach reads rebuild on a 50-strength roster",
+      f["coach_assessment"] == "rebuild")
+total, beats = _beats(t, c, f)
+check("S2 beats: exp +3 / rookies +3 / tactics +1 / lines +2 / tactics_own +2 / seal +2",
+      beats == {"expectation": 3, "rookies": 3, "tactics": 1, "lines": 2,
+                "tactics_own": 2, "seal": 2})
+check("S2 honest rebuild: 70 -> 83", total == 13 and 70 + total == 83)
+
+# S3: the nightmare -- tank demand on a contend roster, authoritarian
+# Cup-chaser stripped of both pens, then demanded to buy in. He refuses
+# the tank outright (-4) and the meeting survives anyway. 70 -> 51.
+c = make_coach(ambition="stanley_cup", control_need=90,
+               working_with_youngsters=30, attacking_coaching=80,
+               defensive_coaching=45)
+t = make_team("S3", c, ovr=68, age=30)
+f = {"season": 2026, "expectation": "rebuild",
+     "coach_assessment": csm.coach_season_assessment(t, c), "aligned": False,
+     "rookie_stance": "heavy", "tactical_approach": "stranglehold",
+     "lines_owner": "gm", "tactics_owner": "gm",
+     "deployer_choice": "demand", "meeting_done": True}
+check("S3 ambitious coach reads win_cup on a 68-strength roster",
+      f["coach_assessment"] == "win_cup")
+total, beats = _beats(t, c, f)
+check("S3 walkthrough: tank refusal -4 / rookie conflict -3 / tactics clash -2 / "
+      "lines -3 / tactics -3 / deployer bristle -2 / seal -2",
+      beats == {"expectation": -4, "rookies": -3, "tactics": -2, "lines": -3,
+                "tactics_own": -3, "deployer": -2, "seal": -2})
+check("S3 tank demand on a contender: 70 -> 51 (low 50s, not the 30s)",
+      total == -19 and 70 + total == 51)
+
+# S4: veteran win-now roster, GM demands heavy rookie minutes anyway.
+# One real conflict (-3) inside an otherwise aligned meeting. 70 -> 78.
+c = make_coach(working_with_youngsters=35, attacking_coaching=60,
+               defensive_coaching=60)
+t = make_team("S4", c, ovr=68, age=31)
+f = {"season": 2026, "expectation": "contend",
+     "coach_assessment": csm.coach_season_assessment(t, c), "aligned": True,
+     "rookie_stance": "heavy", "tactical_approach": "hybrid_transition",
+     "lines_owner": "coach", "tactics_owner": "coach", "meeting_done": True}
+total, beats = _beats(t, c, f)
+check("S4 rookie conflict costs -3 but the meeting survives",
+      beats["rookies"] == -3 and beats["expectation"] == 3)
+check("S4 veteran roster + heavy-kids demand: 70 -> 78", total == 8 and 70 + total == 78)
+
+print("== user/AI trust parity: no double-count at seal ==")
+# AI path: no conversation runs, so the full situational total lands at seal.
+t = make_team("ParAI", make_coach(), ovr=68, age=27)
+m = csm.store_mandate(t, {"season": 2026, "expectation": "contend",
+                          "coach_assessment": "contend",
+                          "rookie_stance": "earned",
+                          "tactical_approach": "hybrid_transition",
+                          "lines_owner": "coach", "tactics_owner": "coach"},
+                      per_beat_applied=False)
+check("ai path applies the full situational total",
+      t.staff[0].gm_trust == 70 + csm.compute_meeting_trust_delta(t, t.staff[0], m))
+# User path: beats land live during the conversation; seal adds only the
+# closing handshake. Live beats + seal must equal the AI total exactly.
+t2 = make_team("ParUser", make_coach(), ovr=68, age=27)
+c2 = t2.staff[0]
+live = 0
+d, _, _, _ = csm.trust_expectation_delta(t2, c2, "contend", "contend")
+live += d
+d, _, _ = csm.trust_rookie_delta(t2, c2, "earned", "contend")
+live += d
+d, _, _ = csm.trust_tactics_delta(t2, c2, "hybrid_transition")
+live += d
+d, _, _ = csm.trust_ownership_delta(c2, "coach", "lines")
+live += d
+d, _, _ = csm.trust_ownership_delta(c2, "coach", "tactics")
+live += d
+c2.gm_trust = 70 + live  # what the conversation UI applies beat-by-beat
+m2 = csm.store_mandate(t2, {"season": 2026, "expectation": "contend",
+                            "coach_assessment": "contend",
+                            "rookie_stance": "earned",
+                            "tactical_approach": "hybrid_transition",
+                            "lines_owner": "coach", "tactics_owner": "coach"},
+                       per_beat_applied=True)
+check("user path: live beats + seal handshake == ai path total",
+      c2.gm_trust == 70 + csm.compute_meeting_trust_delta(t2, c2, m2)
+      and c2.gm_trust == t.staff[0].gm_trust)
 
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 if failed:

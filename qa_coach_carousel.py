@@ -281,12 +281,14 @@ dr.hire_coach(h_team, {"coach": h_coach, "name": "Hired",
 check("hire_date stamped", h_coach.hire_date == "2026-12-10")
 # The hire auto-resolves the pre-season season meeting (coach_season_meeting
 # hook at the end of hire_coach): for an AI club the meeting resolves with
-# no UI and the mandate trust effect applies. Here the roster reads
-# "contend" and the coach assesses "contend" -> aligned -> +5 on the
-# fresh 70. (A user club would arm instead of resolving.)
+# no UI and the full situational trust delta applies. Here the roster reads
+# "contend" and the coach assesses "contend" -> the same math the user's
+# meeting would produce, applied at seal. (A user club would arm instead
+# of resolving.)
 import coach_season_meeting as _csm
 check("trust reset + meeting alignment",
-      h_coach.gm_trust == 70 + _csm.TRUST_ALIGNED_BUMP)
+      h_coach.gm_trust == 70 + _csm.compute_meeting_trust_delta(
+          h_team, h_coach, h_team.season_mandate))
 check("hire wrote the mandate", (h_team.season_mandate or {}).get("meeting_done") is True)
 
 print("== end-to-end: a disaster season costs the job ==")

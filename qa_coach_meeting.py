@@ -169,8 +169,10 @@ shot("02_expectations.png", view)
 
 view.debug_choose("expectations", "contend")  # below his read -> pushback
 check("B5 expectations -> rookies", view.draft["stage"] == "rookies")
-check("B6 ambitious coach pushed back on lower mandate (trust 70->67)",
-      coach_b.gm_trust == 67, coach_b.gm_trust)
+# Situational: ambition the roster can't cash back down -- an ambitious
+# coach pushed one notch below his read: patient_pushback -2 (70->68).
+check("B6 ambitious coach pushed back on lower mandate (trust 70->68)",
+      coach_b.gm_trust == 68, coach_b.gm_trust)
 check("B7 disagreement note recorded",
       any("push" in n or "uneasy" in n or "patient" in n or "lowered" in n
           for n in view.draft["notes"]),
@@ -178,18 +180,20 @@ check("B7 disagreement note recorded",
 
 view.debug_choose("rookies", "heavy")  # win-now + low youngsters -> resist
 check("B8 rookies -> tactics", view.draft["stage"] == "tactics")
-check("B9 win-now coach resisted heavy minutes (67->64)",
-      coach_b.gm_trust == 64, coach_b.gm_trust)
+# Heavy minutes on a prime roster chasing contention: mild friction -1.
+check("B9 win-now coach resisted heavy minutes (68->67)",
+      coach_b.gm_trust == 67, coach_b.gm_trust)
 
 view.debug_choose("tactics", "stranglehold")  # attack-style coach -> misfit
 check("B10 tactics -> lines", view.draft["stage"] == "lines")
-check("B11 authoritarian bristled at style misfit (64->62)",
-      coach_b.gm_trust == 62, coach_b.gm_trust)
+check("B11 authoritarian bristled at style clash (67->65)",
+      coach_b.gm_trust == 65, coach_b.gm_trust)
 
 view.debug_choose("lines", "gm")
 check("B12 lines -> tactics_own", view.draft["stage"] == "tactics_own")
-check("B13 authoritarian lost the lineup (62->56)",
-      coach_b.gm_trust == 56, coach_b.gm_trust)
+# Taking the lineup scales with control_need: -(1+round(80/50)) = -3.
+check("B13 authoritarian lost the lineup (65->62)",
+      coach_b.gm_trust == 62, coach_b.gm_trust)
 
 view.debug_choose("tactics_own", "gm")
 check("B14 BOTH gm -> deployer beat mandatory",
@@ -198,8 +202,9 @@ shot("03_deployer.png", view)
 
 view.debug_choose("deployer", "reassure")
 check("B15 deployer -> closing", view.draft["stage"] == "closing")
-# chain: 70 -3 -3 -2 -6 -7 +2 = 51
-check("B16 reassure moved trust (49->51)", coach_b.gm_trust == 51,
+# Live chain: 70 -2 -1 -2 -3 -3 +1 = 60; seal adds only the misaligned
+# handshake (-2) since the beats already landed live -> 58.
+check("B16 reassure moved trust (59->60)", coach_b.gm_trust == 60,
       coach_b.gm_trust)
 check("B17 deployer note recorded", bool(view.draft.get("deployer_note")),
       view.draft.get("deployer_note"))
@@ -209,7 +214,8 @@ mandate = cmw.build_mandate(team_b, view.draft, 2026)
 check("B18 mandate shape matches contract",
       set(mandate) == {"season", "expectation", "coach_assessment", "aligned",
                        "rookie_stance", "tactical_approach", "lines_owner",
-                       "tactics_owner", "deployer_notes", "meeting_done"},
+                       "tactics_owner", "deployer_choice", "deployer_notes",
+                       "meeting_done"},
       sorted(mandate))
 check("B19 mandate values",
       mandate["expectation"] == "contend"
@@ -231,6 +237,8 @@ check("B20c downstream wiring: line_control follows mandate",
       getattr(team_b, "line_control", None) == "gm",
       getattr(team_b, "line_control", None))
 check("B21 pending cleared on seal", team_b.season_meeting_pending is False)
+check("B21b seal applied only the handshake (60->58, no double-count)",
+      coach_b.gm_trust == 58, coach_b.gm_trust)
 check("B22 mandate written to team",
       getattr(team_b, "season_mandate", {}).get("expectation") == "contend")
 check("B23 draft dropped after seal",
@@ -254,7 +262,9 @@ team_c = make_team(76, coach_c)
 view_c = make_view(team_c, make_app(team_c))
 view_c.debug_choose("opening", "begin")
 view_c.debug_choose("expectations", "rebuild")
-check("C1 tank refusal costs -7 (70->63)", coach_c.gm_trust == 63,
+# Tank demand on a contend roster from an ambitious authoritarian:
+# outright refusal (-4), survivable.
+check("C1 tank refusal costs -4 (70->66)", coach_c.gm_trust == 66,
       coach_c.gm_trust)
 check("C2 refusal marks misaligned", view_c.draft.get("misaligned") is True)
 m_c = cmw.build_mandate(team_c, view_c.draft, 2026)
@@ -270,10 +280,12 @@ check("D1 developer assesses rebuild for 52 roster",
       view_d.draft["coach_assessment"])
 view_d.debug_choose("opening", "begin")
 view_d.debug_choose("expectations", "rebuild")
-check("D2 developer buys in (+6 -> 76)", coach_d.gm_trust == 76,
+# Agreement off the roster's true rung is still agreement (+2).
+check("D2 developer buys in (+2 -> 72)", coach_d.gm_trust == 72,
       coach_d.gm_trust)
 view_d.debug_choose("rookies", "heavy")
-check("D3 developer loves heavy minutes (76->80)", coach_d.gm_trust == 80,
+# Heavy minutes with no age data: neutral-prime roster, developer +1.
+check("D3 developer accepts heavy minutes (72->73)", coach_d.gm_trust == 73,
       coach_d.gm_trust)
 
 # ------------------------------------------------- E: first-chair defers
@@ -284,7 +296,8 @@ team_e = make_team(76, coach_e)
 view_e = make_view(team_e, make_app(team_e))
 view_e.debug_choose("opening", "begin")
 view_e.debug_choose("expectations", "contend")  # below his win_cup read
-check("E1 rookie chair defers (+2 -> 72)", coach_e.gm_trust == 72,
+# First-chair rookie defers to the GM's patience: +1, not misaligned.
+check("E1 rookie chair defers (+1 -> 71)", coach_e.gm_trust == 71,
       coach_e.gm_trust)
 check("E2 deferral not misaligned", not view_e.draft.get("misaligned"))
 
@@ -294,6 +307,7 @@ team_f = make_team(70, coach_f)
 view_f = make_view(team_f, make_app(team_f))
 view_f.debug_choose("opening", "begin")
 view_f.debug_choose("expectations", "contend")
+trust_after_beat = coach_f.gm_trust  # whatever the situational beat gave
 n_log = len(view_f.draft["log"])
 view_f2 = make_view(team_f, make_app(team_f))  # "return"
 check("F1 stage resumes at rookies", view_f2.draft["stage"] == "rookies")
@@ -301,8 +315,8 @@ check("F2 transcript replayed exactly",
       len(view_f2.draft["log"]) == n_log, (len(view_f2.draft["log"]), n_log))
 check("F3 choices preserved",
       view_f2.draft["choices"].get("expectation") == "contend")
-check("F4 trust not double-applied", coach_f.gm_trust == 76,
-      coach_f.gm_trust)  # aligned +6 only
+check("F4 trust not double-applied on return",
+      coach_f.gm_trust == trust_after_beat, coach_f.gm_trust)
 view_f2.debug_choose("rookies", "earned")
 check("F5 meeting continues after return",
       view_f2.draft["stage"] == "tactics")

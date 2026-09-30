@@ -202,14 +202,23 @@ def _finalize_meeting(team, mandate):
             if not callable(fn):
                 continue
             try:
-                fn(team, mandate)
+                # The conversation UI applies each beat's situational trust
+                # delta live (visible consequence), so at seal only the
+                # closing handshake lands -- per_beat_applied=True.
+                fn(team, mandate, per_beat_applied=True)
                 return True
             except TypeError:
                 try:
-                    fn(team)
+                    fn(team, mandate)
                     return True
-                except Exception:
-                    continue
+                except TypeError:
+                    try:
+                        fn(team)
+                        return True
+                    except Exception:
+                        continue
+            except Exception:
+                continue
             except Exception:
                 continue
     # Fallback: write the contract's model shape directly.
@@ -239,32 +248,10 @@ def _identity_presets():
 
 
 # ---------------------------------------------------------------------------
-# Trust tuning -- ALL constants below need Chris's approval before push.
+# Trust tuning -- owned by the sibling model's situational scale
+# (coach_season_meeting.py). This UI renders -- never invents -- trust
+# changes. ALL new tuning still needs Chris's approval before push.
 # ---------------------------------------------------------------------------
-TRUST_EXPECT_ALIGNED       = +6   # coach's read == GM's mandate
-TRUST_EXPECT_ABOVE_WELCOME = +4   # ambitious coach handed a bigger target
-TRUST_EXPECT_DEFER         = +2   # rookie chair defers to the GM
-TRUST_EXPECT_PRAGMATIC     = +1   # loyal/pragmatic buy-in
-TRUST_EXPECT_MILD          = -3   # mild pushback / disappointment
-TRUST_EXPECT_TANK_REFUSAL  = -7   # "I can't coach a tank"
-TRUST_ROOKIE_ALIGNED       = +3
-TRUST_ROOKIE_FRICTION      = -3
-TRUST_ROOKIE_STRONG        = -5   # kids thrown to a win-now wolves den
-TRUST_TACTICS_FIT          = +3
-TRUST_TACTICS_MISFIT       = -2
-TRUST_KEEP_HIGH_CONTROL    = +3   # authoritarian keeps his domain
-TRUST_KEEP_LOW_CONTROL     = +2   # collaborative appreciates trust
-TRUST_KEEP_MID             = +2
-TRUST_TAKE_HIGH_CONTROL    = -6   # authoritarian loses his domain
-TRUST_TAKE_MID             = -2
-TRUST_TAKE_LOW_CONTROL     = +1   # collaborative rolls with it
-TRUST_TAKE_FIRST_CHAIR     = +2   # rookie defers
-TRUST_DEPLOYER_REASSURE_HI = +2   # grudging acceptance
-TRUST_DEPLOYER_REASSURE_LO = +4
-TRUST_DEPLOYER_EXPECT_HI   = -4   # cold "Understood."
-TRUST_DEPLOYER_EXPECT_LO   = -1
-TRUST_DEPLOYER_DEMAND_HIT  = -3   # proud coach bristles
-TRUST_DEPLOYER_DEMAND_LOYAL = +1
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +314,25 @@ def _is_authoritarian(coach):
 
 def _is_collaborative(coach):
     return _control(coach) <= 40
+
+
+def _mtrust(name, *args):
+    """Call a trust component on the sibling model; None if unavailable.
+
+    The sibling (coach_season_meeting.py) owns the one situational trust
+    scale used by the conversation UI, the AI resolution path, and the
+    carousel. The UI only ever renders what the model computes.
+    """
+    m = _sibling()
+    if m is None:
+        return None
+    fn = getattr(m, name, None)
+    if not callable(fn):
+        return None
+    try:
+        return fn(*args)
+    except Exception:
+        return None
 
 
 def _is_first_chair(coach):
@@ -493,401 +499,310 @@ def expectation_options(team, board_exp):
     return sorted(offered, key=lambda r: order[r])
 
 
-def _expectation_reaction(coach, chosen, assessed, rng):
-    """(coach_text, trust_delta, note, misaligned)."""
-    ci, ai = _RUNGS.index(chosen), _RUNGS.index(assessed)
-    note, misaligned = "", False
-    if chosen == assessed:
+def _expectation_reaction(team, coach, chosen, assessed, rng):
+    """(coach_text, trust_delta, note, misaligned).
+
+    The trust delta comes from the sibling's situational scale
+    (trust_expectation_delta): the ask measured against what the roster
+    earns AND the coach's own read. The tone it returns selects the voice;
+    personality flavors the lines.
+    """
+    res = _mtrust("trust_expectation_delta", team, coach, chosen, assessed)
+    delta, tone, note, misaligned = res if res else (0, "neutral", "", False)
+    cup_ish = chosen in ("win_cup", "cup")
+    contend_ish = chosen in ("contend", "contender")
+
+    if tone == "tank_refusal":
+        text = _pick(rng, [
+            "I can't coach a tank. You want to lose games on purpose, you'll need a different bench boss.",
+            "Rebuild? I don't do losing seasons. Find someone who does.",
+        ])
+    elif tone in ("aligned_grounded", "aligned_shared"):
         if _is_first_chair(coach):
             text = _pick(rng, [
                 "That's the season I pictured when you hired me. I'm in.",
                 "Good -- that's exactly how I read this group. We're aligned.",
             ])
-            delta = TRUST_EXPECT_ALIGNED
         elif _is_developer(coach) and chosen == "rebuild":
             text = _pick(rng, [
                 "Good. No pretending. We develop, we teach, and the wins come when they're ready.",
                 "Honest plan. The kids will feel the patience -- that's when they grow.",
             ])
-            delta = TRUST_EXPECT_ALIGNED
-        elif _is_win_now_ambitious(coach) and chosen in ("win_cup", "contend"):
+        elif _is_win_now_ambitious(coach) and (cup_ish or contend_ish):
             text = _pick(rng, [
                 "Now you're speaking my language. Give me a healthy room and I'll give you June hockey.",
                 "That's why I'm here. Say it to the room too -- they'll run through a wall.",
             ])
-            delta = TRUST_EXPECT_ALIGNED
         else:
             text = _pick(rng, [
                 "Alright. Then everything we do this year serves that. I can coach that.",
                 "Clear target. I'll build the whole year around it.",
                 "Good -- one plan, no mixed messages. The room will appreciate that.",
             ])
-            delta = TRUST_EXPECT_ALIGNED
-        note = (f"Coach's own read matched the mandate "
-                f"({_EXPECT_LABELS[assessed][0]}).")
-    elif ci < ai:
-        # GM is MORE ambitious than the coach's read.
-        if _is_win_now_ambitious(coach):
-            text = _pick(rng, [
-                "You don't have to sell me. I've been waiting for someone to say it out loud.",
-                "Bigger than I had it -- good. I'd rather chase something than protect something.",
-            ])
-            delta = TRUST_EXPECT_ABOVE_WELCOME
-            note = "Coach welcomed the bigger target."
-        elif _is_authoritarian(coach):
+    elif tone == "above_welcomed":
+        text = _pick(rng, [
+            "You don't have to sell me. I've been waiting for someone to say it out loud.",
+            "Bigger than I had it -- good. I'd rather chase something than protect something.",
+        ])
+    elif tone == "above_developer_worry":
+        text = _pick(rng, [
+            "Higher than my read. Just ... don't let the chase cost us the kids' development.",
+            "Ambitious. I'll coach to win -- but I'm not burying a prospect to steal a point in November.",
+        ])
+    elif tone in ("above_defer", "honest_defer", "patient_defer"):
+        text = _pick(rng, [
+            "If that's what you believe, I believe it. I'll coach like it.",
+            "You gave me this chair. I'll coach whatever season you ask me to.",
+        ])
+    elif tone == "above_pragmatic":
+        text = _pick(rng, [
+            "Ambitious. ...Alright, I'll find a way. But the room needs to hear it from you too.",
+            "Higher than I had it. Fine -- I'd rather aim up. Just don't move the goalposts in January.",
+        ])
+    elif tone == "above_delusional":
+        if _is_authoritarian(coach):
             text = _pick(rng, [
                 "Careful. Don't hand me a target I can't hit and then act surprised in March.",
                 "Ambitious. Just remember who has to stand in front of the room and sell it.",
             ])
-            delta = TRUST_EXPECT_MILD
-            note = "Coach thinks the target outruns the roster."
-        elif _is_first_chair(coach):
-            text = _pick(rng, [
-                "If that's what you believe, I believe it. I'll coach like it.",
-                "Bigger than my read -- but you're the one who bet on me. I'm in.",
-            ])
-            delta = TRUST_EXPECT_DEFER
-            note = "Rookie coach deferred to the GM's ambition."
         else:
             text = _pick(rng, [
-                "Ambitious. ...Alright, I'll find a way. But the room needs to hear it from you too.",
-                "Higher than I had it. Fine -- I'd rather aim up. Just don't move the goalposts in January.",
+                "That's ... a big ask for this group. I'll coach it -- but I'm telling you now, it's a stretch.",
+                "Higher than the roster says. Alright -- but when it gets hard in January, this was your call.",
             ])
-            delta = TRUST_EXPECT_PRAGMATIC
-            note = "Coach bought into the bigger target, with caveats."
+    elif tone == "honest_developer":
+        text = _pick(rng, [
+            "Honestly? Good. I'd rather build it right than fake it for a year.",
+            "Patience is a plan. The kids get real minutes and nobody panics in November.",
+        ])
+    elif tone in ("honest_pushback", "patient_pushback"):
+        text = _pick(rng, [
+            "Lower than I'd like. ...Fine -- but I coach to win every night regardless.",
+            "Not the season I pictured. I'll coach hard -- just don't ask me to lose on purpose.",
+        ])
+    elif tone in ("honest_loyal", "patient_loyal"):
+        text = _pick(rng, [
+            "Whatever the plan is, I'm with you. We'll make it work.",
+            "Not the fun answer, but it's an honest one. I'm in.",
+        ])
+    elif tone in ("honest_reluctant", "patient_reluctant"):
+        text = _pick(rng, [
+            "Not what I hoped. But I'll coach the team in front of me.",
+            "Lower than my read. I'll adjust -- just don't expect me to smile about it in October.",
+        ])
+    elif tone == "patient_developer":
+        text = _pick(rng, [
+            "A step back from my read -- but patience is a plan I understand.",
+            "Lower than I had it. The kids get room, at least.",
+        ])
+    elif tone == "correcting_delusion":
+        text = _pick(rng, [
+            "...You really think we're that far off? ...Fine. Your read, your call.",
+            "I had us higher. But you've seen the same roster I have -- I'll trust your eyes.",
+        ])
     else:
-        # GM is LESS ambitious (rebuild-ward) than the coach's read.
-        gap = ai - ci
-        tank = chosen == "rebuild" or gap >= 2
-        if _is_first_chair(coach):
-            # The rookie defers to the GM who believed in him -- always.
-            text = _pick(rng, [
-                "You gave me this chair. I'll coach whatever season you ask me to.",
-                "My read was higher -- but I'm not going to argue with the person who believed in me.",
-            ])
-            delta = TRUST_EXPECT_DEFER
-            note = "Rookie coach deferred to the GM's patience."
-        elif tank and _is_authoritarian(coach):
-            text = _pick(rng, [
-                "I can't coach a tank. You want to lose games on purpose, you'll need a different bench boss.",
-                "Rebuild? I don't do losing seasons. Find someone who does.",
-            ])
-            delta = TRUST_EXPECT_TANK_REFUSAL
-            note = "Coach refused a tank mandate outright."
-            misaligned = True
-        elif _is_win_now_ambitious(coach):
-            text = _pick(rng, [
-                "Lower than I'd like. ...Fine -- but I coach to win every night regardless.",
-                "Not the season I pictured. I'll coach hard -- just don't ask me to lose on purpose.",
-            ])
-            delta = TRUST_EXPECT_MILD
-            note = ("Ambitious coach pushed back on a patient mandate."
-                    if tank else
-                    "Ambitious coach uneasy with the lowered target.")
-        elif tank and _is_developer(coach):
-            text = _pick(rng, [
-                "Honestly? Good. I'd rather build it right than fake it for a year.",
-                "Patience is a plan. The kids get real minutes and nobody panics in November.",
-            ])
-            delta = TRUST_EXPECT_ALIGNED
-            note = "Developer coach embraced the patient mandate."
-        elif _is_loyal(coach):
-            text = _pick(rng, [
-                "Whatever the plan is, I'm with you. We'll make it work.",
-                "Not the fun answer, but it's an honest one. I'm in.",
-            ])
-            delta = TRUST_EXPECT_PRAGMATIC
-            note = "Loyal coach bought into the patient mandate."
-        elif _is_developer(coach):
-            text = _pick(rng, [
-                "A step back from my read -- but patience is a plan I understand.",
-                "Lower than I had it. The kids get room, at least.",
-            ])
-            delta = TRUST_EXPECT_PRAGMATIC
-            note = "Developer coach accepted the lowered target."
-        else:
-            text = _pick(rng, [
-                "Not what I hoped. But I'll coach the team in front of me.",
-                "Lower than my read. I'll adjust -- just don't expect me to smile about it in October.",
-            ])
-            delta = TRUST_EXPECT_MILD if tank else -1
-            note = "Coach accepted a patient mandate reluctantly."
+        text = _pick(rng, [
+            "Alright. I'll coach the team in front of me.",
+            "Noted. Let's get to camp.",
+        ])
     return text, delta, note, misaligned
-
-
-# ---------------------------------------------------------------------------
 # Beat: rookie playing time
 # ---------------------------------------------------------------------------
 
-def _rookie_reaction(coach, stance, expectation, rng):
-    """(coach_text, trust_delta, note)."""
-    y = _youngsters(coach)
-    win_now = expectation in ("win_cup", "contend")
-    note = ""
-    if stance == "heavy":
+def _rookie_reaction(team, coach, stance, expectation, rng):
+    """(coach_text, trust_delta, note).
+
+    Situational via the sibling's trust_rookie_delta: heavy minutes land
+    differently on a young core than on a veteran win-now room.
+    """
+    res = _mtrust("trust_rookie_delta", team, coach, stance, expectation)
+    delta, tone, note = res if res else (0, "neutral", "")
+    if tone == "heavy_natural":
         if _is_developer(coach):
             text = _pick(rng, [
                 "That's why I'm here. Give me the kids -- I'll make players out of them.",
                 "Heavy minutes, real mistakes, real growth. This is how you build a core.",
             ])
-            delta = TRUST_ROOKIE_ALIGNED + 1
-            note = "Developer coach thrilled with heavy rookie minutes."
-        elif y >= 70:
+        else:
             text = _pick(rng, [
                 "Music to my ears. You don't develop a player with six minutes a night.",
                 "Good. Sink-or-swim is how you find out who's real.",
             ])
-            delta = TRUST_ROOKIE_ALIGNED
-            note = "Coach trusts youth and welcomed heavy minutes."
-        elif y <= 40:
-            text = _pick(rng, [
-                "You want me to win with teenagers learning on the job? That's how you ruin a kid AND a season.",
-                "Heavy minutes for kids who aren't ready -- the room will eat them alive.",
-            ])
-            delta = TRUST_ROOKIE_STRONG
-            note = "Veterans-first coach strongly resisted heavy rookie minutes."
-        elif win_now and y < 70:
-            text = _pick(rng, [
-                "In a win-now year? You're asking me to develop and contend at the same time. Pick one.",
-                "Kids don't win in April. I'll play them -- but don't blame me when it costs us points.",
-            ])
-            delta = TRUST_ROOKIE_FRICTION
-            note = "Win-now coach resisted heavy rookie minutes."
-        else:
-            text = _pick(rng, [
-                "Bold. I'll play them -- but I won't protect them from the consequences.",
-                "Alright. They get rope. What they do with it is on them.",
-            ])
-            delta = -1
-            note = "Coach accepted heavy rookie minutes cautiously."
-    elif stance == "earned":
-        if y >= 60:
-            text = _pick(rng, [
-                "Earn it in camp, keep it with play. That's how a room stays honest.",
-                "Perfect. The kids respect it more when nobody hands them anything.",
-            ])
-            delta = TRUST_ROOKIE_ALIGNED
-        elif y <= 35:
-            text = _pick(rng, [
-                "Good. Nobody's handed anything around here.",
-                "Camp decides. That's the meritocracy I want.",
-            ])
-            delta = TRUST_ROOKIE_ALIGNED - 1
-        else:
-            text = _pick(rng, [
-                "Fair. Ice time is earned -- that's a message the whole room understands.",
-                "Standard. They earn it, they keep it.",
-            ])
-            delta = +2
-        note = "Coach bought into earned-not-given ice time."
-    elif stance == "sheltered":
-        if y >= 60:
-            text = _pick(rng, [
-                "Protected minutes, real minutes. I can work with that.",
-                "Sheltered doesn't mean soft -- it means smart. Good call.",
-            ])
-            delta = TRUST_ROOKIE_ALIGNED - 1
-        elif win_now:
-            text = _pick(rng, [
-                "Fine -- as long as 'sheltered' doesn't mean passengers in April.",
-                "Sheltered keeps them alive. Just don't ask me to lean on them late.",
-            ])
-            delta = +1
-        else:
-            text = _pick(rng, [
-                "Third line, soft starts. They'll learn without drowning.",
-                "Reasonable. Protected -- but they still have to swim a little.",
-            ])
-            delta = +2
-        note = "Coach accepted sheltered rookie deployment."
-    else:  # none
-        if _is_developer(coach):
-            text = _pick(rng, [
-                "None? ...Alright, your call. But a kid rotting in the AHL doesn't develop either.",
-                "I hope you know what you're shelving. Some of these kids are ready.",
-            ])
-            delta = -2
-            note = "Developer coach uneasy about a full AHL year for the kids."
-        elif y <= 40:
-            text = _pick(rng, [
-                "Good. They'll be better for the wait.",
-                "Patience. The AHL exists for a reason.",
-            ])
-            delta = TRUST_ROOKIE_ALIGNED - 1
-            note = "Veterans-first coach approved the patient path."
-        else:
-            text = _pick(rng, [
-                "AHL year for all of them. Fine -- your prospects, your timeline.",
-                "No rush. When they come up, they'll be ready.",
-            ])
-            delta = 0
-            note = "Coach accepted no rookie minutes this year."
+    elif tone == "heavy_conflict":
+        text = _pick(rng, [
+            "You want me to win with teenagers learning on the job? That's how you ruin a kid AND a season.",
+            "Heavy minutes for kids who aren't ready -- the room will eat them alive.",
+        ])
+    elif tone == "heavy_mixed":
+        text = _pick(rng, [
+            "Bold. I'll play them -- but I won't protect them from the consequences.",
+            "Alright. They get rope. What they do with it is on them.",
+        ])
+    elif tone == "earned":
+        text = _pick(rng, [
+            "Earn it in camp, keep it with play. That's how a room stays honest.",
+            "Perfect. The kids respect it more when nobody hands them anything.",
+            "Fair. Ice time is earned -- that's a message the whole room understands.",
+        ])
+    elif tone == "sheltered":
+        text = _pick(rng, [
+            "Protected minutes, real minutes. I can work with that.",
+            "Third line, soft starts. They'll learn without drowning.",
+        ])
+    elif tone == "none_developer":
+        text = _pick(rng, [
+            "None? ...Alright, your call. But a kid rotting in the AHL doesn't develop either.",
+            "I hope you know what you're shelving. Some of these kids are ready.",
+        ])
+    elif tone == "none_waste":
+        text = _pick(rng, [
+            "AHL year for all of them? We've got kids who could help now.",
+            "No rush -- but don't let them rot down there either.",
+        ])
+    elif tone == "none_patient":
+        text = _pick(rng, [
+            "Good. They'll be better for the wait.",
+            "Patience. The AHL exists for a reason.",
+        ])
+    else:
+        text = _pick(rng, [
+            "AHL year for all of them. Fine -- your prospects, your timeline.",
+            "No rush. When they come up, they'll be ready.",
+        ])
     return text, delta, note
-
-
-# ---------------------------------------------------------------------------
 # Beat: tactical approach
 # ---------------------------------------------------------------------------
 
-def _tactics_reaction(coach, preset_key, rng):
-    """(coach_text, trust_delta, note)."""
-    presets = _identity_presets()
-    preset = presets.get(preset_key, {})
-    pname = preset.get("name", preset_key)
-    style = _coach_style(coach)
-    want = _PRESET_STYLE.get(preset_key)
-    note = ""
-    if preset_key == "hybrid_transition":
-        text = _pick(rng, [
-            "Sound hockey. No gimmicks -- I like it.",
-            "Balanced, read-based. That's how you win in May, not just October.",
-        ])
-        delta = TRUST_TACTICS_FIT - 1
-        note = f"Coach comfortable with {pname}."
-    elif want == style:
-        text = _pick(rng, [
-            f"That suits us. The room buys in when the system fits the skates -- {pname} fits ours.",
-            "Now you're thinking like a coach. That's our game.",
-        ])
-        delta = TRUST_TACTICS_FIT
-        note = f"{pname} fits the coach's style."
-    else:
-        if _is_authoritarian(coach):
-            text = _pick(rng, [
-                "That's not how I coach. I'll run it -- but you're asking a cover band to play jazz.",
-                f"{pname}? Fine. But don't be surprised when I coach my instincts in a tie game.",
-            ])
-            delta = TRUST_TACTICS_MISFIT
-            note = f"Authoritarian coach bristled at {pname} (style mismatch)."
-        elif _is_collaborative(coach):
-            text = _pick(rng, [
-                "Not my first choice, but I'll make it work. I'll find our version of it.",
-                "I'll adapt -- that's the job. Give me camp and I'll install it right.",
-            ])
-            delta = 0
-            note = f"Collaborative coach accepted {pname} despite the mismatch."
-        else:
-            text = _pick(rng, [
-                "Alright. I'll adapt -- but camp's going to be about unlearning old habits.",
-                "Not natural for me, but I can coach it. It'll take October to look right.",
-            ])
-            delta = TRUST_TACTICS_MISFIT + 1
-            note = f"Coach accepted {pname} with reservations (style mismatch)."
-    return text, delta, note
+def _tactics_reaction(team, coach, preset_key, rng):
+    """(coach_text, trust_delta, note).
 
-# ---------------------------------------------------------------------------
+    Situational via the sibling's trust_tactics_delta: the system is
+    measured against the coach's philosophy -- fit, adjacent, or clash.
+    """
+    res = _mtrust("trust_tactics_delta", team, coach, preset_key)
+    delta, tone, note = res if res else (0, "neutral", "")
+    presets = _identity_presets()
+    pname = presets.get(preset_key, {}).get("name", preset_key)
+    if tone == "tactics_fit":
+        text = _pick(rng, [
+            "That suits us. The room buys in when the system fits the skates -- %s fits ours." % pname,
+            "Now you're thinking like a coach. That's our game.",
+            "Sound hockey. No gimmicks -- I like it.",
+        ])
+    elif tone == "tactics_adjacent":
+        text = _pick(rng, [
+            "Not my first choice, but I'll make it work. I'll find our version of it.",
+            "I'll adapt -- that's the job. Give me camp and I'll install it right.",
+        ])
+    elif tone == "tactics_clash":
+        text = _pick(rng, [
+            "That's not how I coach. I'll run it -- but you're asking a cover band to play jazz.",
+            "%s? Fine. But don't be surprised when I coach my instincts in a tie game." % pname,
+        ])
+    elif tone == "tactics_clash_soft":
+        text = _pick(rng, [
+            "Not natural for me, but I'll bend. Give me camp.",
+            "I'll adapt -- that's the job.",
+        ])
+    else:
+        text = _pick(rng, [
+            "Alright. Let's get to work.",
+            "Noted. We'll install it in camp.",
+        ])
+    return text, delta, note
 # Beats: lines ownership / tactics ownership
 # ---------------------------------------------------------------------------
 
-def _lines_reaction(coach, owner, rng):
-    """(coach_text, trust_delta, note)."""
-    if owner == "coach":
+def _lines_reaction(team, coach, owner, rng):
+    """(coach_text, trust_delta, note).
+
+    Situational via the sibling's trust_ownership_delta: taking the
+    lineup stings on a sliding scale of the coach's control_need.
+    """
+    res = _mtrust("trust_ownership_delta", coach, owner, "lines")
+    delta, tone, note = res if res else (0, "neutral", "")
+    if tone == "keep":
         if _is_authoritarian(coach):
             text = _pick(rng, [
                 "Good. The bench is mine -- that's the deal.",
                 "Damn right. You hired a coach, let him coach the bench.",
             ])
-            delta = TRUST_KEEP_HIGH_CONTROL
         elif _is_collaborative(coach):
             text = _pick(rng, [
                 "I appreciate the trust. I won't waste it.",
                 "Thank you. The room responds when the lines come from the bench.",
             ])
-            delta = TRUST_KEEP_LOW_CONTROL
         else:
             text = _pick(rng, [
                 "Good. I'll own the results.",
                 "The lineup's mine -- and so is the accountability.",
             ])
-            delta = TRUST_KEEP_MID
-        note = "Coach keeps the lineup card."
+    elif tone == "take_defer":
+        text = _pick(rng, [
+            "Your team, your lines. I'll coach them hard.",
+            "Fair -- you built this roster. I'll make your lines work.",
+        ])
+    elif _is_authoritarian(coach):
+        text = _pick(rng, [
+            "So I'm a substitute teacher now? ...Fine. But when the power play dries up, that's your lineup, not mine.",
+            "You set the lines, you own the lines. Remember that in February.",
+        ])
+    elif _is_collaborative(coach):
+        text = _pick(rng, [
+            "Alright -- I'll make your lines work. Just keep me in the loop.",
+            "Fine. Clear direction beats a tug-of-war.",
+        ])
     else:
-        if _is_first_chair(coach):
-            text = _pick(rng, [
-                "Your team, your lines. I'll coach them hard.",
-                "Fair -- you built this roster. I'll make your lines work.",
-            ])
-            delta = TRUST_TAKE_FIRST_CHAIR
-            note = "Rookie coach deferred on line control."
-        elif _is_authoritarian(coach):
-            text = _pick(rng, [
-                "So I'm a substitute teacher now? ...Fine. But when the power play dries up, that's your lineup, not mine.",
-                "You set the lines, you own the lines. Remember that in February.",
-            ])
-            delta = TRUST_TAKE_HIGH_CONTROL
-            note = "Authoritarian coach bristled at losing the lineup."
-        elif _is_collaborative(coach):
-            text = _pick(rng, [
-                "Alright -- I'll make your lines work. Just keep me in the loop.",
-                "Fine. Clear direction beats a tug-of-war.",
-            ])
-            delta = TRUST_TAKE_LOW_CONTROL
-            note = "Collaborative coach accepted GM-set lines."
-        else:
-            text = _pick(rng, [
-                "Your call. I'll coach whoever's on the sheet.",
-                "Not my preference, but I'll make it work.",
-            ])
-            delta = TRUST_TAKE_MID
-            note = "Coach ceded the lineup card reluctantly."
+        text = _pick(rng, [
+            "Your call. I'll coach whoever's on the sheet.",
+            "Not my preference, but I'll make it work.",
+        ])
     return text, delta, note
+def _tactics_owner_reaction(team, coach, owner, rng):
+    """(coach_text, trust_delta, note).
 
-
-def _tactics_owner_reaction(coach, owner, rng):
-    """(coach_text, trust_delta, note)."""
-    if owner == "coach":
+    Situational via the sibling's trust_ownership_delta: taking the
+    whiteboard stings on a sliding scale of the coach's control_need.
+    """
+    res = _mtrust("trust_ownership_delta", coach, owner, "tactics")
+    delta, tone, note = res if res else (0, "neutral", "")
+    if tone == "keep":
         if _is_authoritarian(coach):
             text = _pick(rng, [
                 "Good -- you hired a coach, let him coach.",
                 "My systems, my adjustments. That's the job.",
             ])
-            delta = TRUST_KEEP_HIGH_CONTROL
         elif _is_collaborative(coach):
             text = _pick(rng, [
                 "Thank you. I'll keep you posted on every adjustment.",
                 "I appreciate it. You'll see everything I'm thinking -- no black box.",
             ])
-            delta = TRUST_KEEP_LOW_CONTROL
         else:
             text = _pick(rng, [
                 "Good. That's my craft.",
                 "The whiteboard's mine. I'll own what it produces.",
             ])
-            delta = TRUST_KEEP_MID
-        note = "Coach keeps tactical control."
+    elif tone == "take_defer":
+        text = _pick(rng, [
+            "I'll study it until it's mine.",
+            "Your system -- I'll learn it cold and coach it like I drew it up.",
+        ])
+    elif _is_authoritarian(coach):
+        text = _pick(rng, [
+            "You want to coach from the press box? ...I'll run your system. But systems don't adjust themselves in the second intermission.",
+            "Fine. Your system. When it breaks down in March, we'll see whose adjustments save us.",
+        ])
+    elif _is_collaborative(coach):
+        text = _pick(rng, [
+            "Fine. Clear direction beats no direction.",
+            "Alright -- one system, no mixed signals. I can work with that.",
+        ])
     else:
-        if _is_first_chair(coach):
-            text = _pick(rng, [
-                "I'll study it until it's mine.",
-                "Your system -- I'll learn it cold and coach it like I drew it up.",
-            ])
-            delta = TRUST_TAKE_FIRST_CHAIR
-            note = "Rookie coach deferred on tactical control."
-        elif _is_authoritarian(coach):
-            text = _pick(rng, [
-                "You want to coach from the press box? ...I'll run your system. But systems don't adjust themselves in the second intermission.",
-                "Fine. Your system. When it breaks down in March, we'll see whose adjustments save us.",
-            ])
-            delta = TRUST_TAKE_HIGH_CONTROL - 1
-            note = "Authoritarian coach bristled at losing tactical control."
-        elif _is_collaborative(coach):
-            text = _pick(rng, [
-                "Fine. Clear direction beats no direction.",
-                "Alright -- one system, no mixed signals. I can work with that.",
-            ])
-            delta = TRUST_TAKE_LOW_CONTROL
-            note = "Collaborative coach accepted GM-set tactics."
-        else:
-            text = _pick(rng, [
-                "Not how I'd draw it up, but I'll execute.",
-                "Your system. I'll coach it straight.",
-            ])
-            delta = TRUST_TAKE_MID
-            note = "Coach ceded tactical control reluctantly."
+        text = _pick(rng, [
+            "Not how I'd draw it up, but I'll execute.",
+            "Your system. I'll coach it straight.",
+        ])
     return text, delta, note
-
-
-# ---------------------------------------------------------------------------
 # Beat: the deployer (conditional -- GM took BOTH lines and tactics)
 # ---------------------------------------------------------------------------
 
@@ -904,85 +819,66 @@ _DEPLOYER_OPTIONS = [
 ]
 
 
-def _deployer_reaction(coach, choice, rng):
-    """(coach_text, trust_delta, note, deployer_note, misaligned)."""
-    misaligned = False
+def _deployer_reaction(team, coach, choice, rng):
+    """(coach_text, trust_delta, note, deployer_note, misaligned).
+
+    Situational via the sibling's trust_deployer_delta: reassurance lands
+    warmly (grudgingly with an authoritarian); demanding buy-in bristles
+    a proud coach but rallies a loyal or rookie one.
+    """
+    res = _mtrust("trust_deployer_delta", coach, choice)
+    delta, tone, note, misaligned = res if res else (0, "neutral", "", False)
     if choice == "reassure":
         deployer_note = ("GM reassured the coach: still the voice in the room; "
                          "deploying the GM's vision with his own feel for the game.")
-        if _is_authoritarian(coach):
-            text = _pick(rng, [
-                "...Alright. I can coach inside a structure -- as long as it's not a cage.",
-                "The voice in the room. ...Fine. Hold me to that.",
-            ])
-            delta = TRUST_DEPLOYER_REASSURE_HI
-            note = "Authoritarian coach grudgingly accepted the deployer role."
-        elif _is_collaborative(coach):
+    elif choice == "expectations":
+        deployer_note = ("GM set expectations: the coach deploys the plan as drawn; "
+                         "execution is the job this year.")
+    else:
+        deployer_note = ("GM demanded full buy-in: the coach deploys the vision "
+                         "all-in, or not at all.")
+    if tone == "deployer_reassure_grudging":
+        text = _pick(rng, [
+            "...Alright. I can coach inside a structure -- as long as it's not a cage.",
+            "The voice in the room. ...Fine. Hold me to that.",
+        ])
+    elif tone in ("deployer_reassure_warm", "deployer_reassure"):
+        if _is_collaborative(coach):
             text = _pick(rng, [
                 "That means something, hearing you say it. We're good.",
                 "Good. Then we're partners, not a hierarchy. I can do that.",
             ])
-            delta = TRUST_DEPLOYER_REASSURE_LO
-            note = "Collaborative coach embraced the deployer role."
         else:
             text = _pick(rng, [
                 "Fair enough. Let's go to work.",
                 "Alright. My voice, your system. Let's see what it does.",
             ])
-            delta = TRUST_DEPLOYER_REASSURE_LO - 1
-            note = "Coach accepted the deployer role after reassurance."
-    elif choice == "expectations":
-        deployer_note = ("GM set expectations: the coach deploys the plan as drawn; "
-                         "execution is the job this year.")
-        if _is_authoritarian(coach):
-            text = _pick(rng, [
-                "Understood.",
-                "...Understood.",
-            ])
-            delta = TRUST_DEPLOYER_EXPECT_HI
-            note = "Authoritarian coach went cold on the deployer role."
-        else:
-            text = _pick(rng, [
-                "Clear is clear. I'll execute.",
-                "No ambiguity -- I respect that, even if I don't love it.",
-            ])
-            delta = TRUST_DEPLOYER_EXPECT_LO
-            note = "Coach accepted the deployer role as the job."
-    else:  # demand
-        deployer_note = ("GM demanded full buy-in: the coach deploys the vision "
-                         "all-in, or not at all.")
-        if _is_authoritarian(coach) or _is_win_now_ambitious(coach):
-            text = _pick(rng, [
-                "Careful. I didn't take this job to be a puppet.",
-                "All in? I don't do half-measures -- but I don't take ultimatums either.",
-            ])
-            delta = TRUST_DEPLOYER_DEMAND_HIT
-            note = "Proud coach bristled at the buy-in demand."
-            misaligned = True
-        elif _is_loyal(coach):
-            text = _pick(rng, [
-                "You have me. All in.",
-                "Was never going to be half-hearted. You know that.",
-            ])
-            delta = TRUST_DEPLOYER_DEMAND_LOYAL
-            note = "Loyal coach gave full buy-in."
-        elif _is_first_chair(coach):
-            text = _pick(rng, [
-                "I'm here because you believed in me. I'm in.",
-                "All in. You stuck your neck out for me -- I won't forget it.",
-            ])
-            delta = TRUST_DEPLOYER_DEMAND_LOYAL + 1
-            note = "Rookie coach gave full buy-in out of loyalty."
-        else:
-            text = _pick(rng, [
-                "Fine. All in.",
-                "...Alright. You want all in, you get all in.",
-            ])
-            delta = -1
-            note = "Coach gave buy-in without warmth."
+    elif tone == "deployer_expect_cold":
+        text = _pick(rng, [
+            "Understood.",
+            "...Understood.",
+        ])
+    elif tone == "deployer_expect":
+        text = _pick(rng, [
+            "Clear is clear. I'll execute.",
+            "No ambiguity -- I respect that, even if I don't love it.",
+        ])
+    elif tone == "deployer_demand_bristle":
+        text = _pick(rng, [
+            "Careful. I didn't take this job to be a puppet.",
+            "All in? I don't do half-measures -- but I don't take ultimatums either.",
+        ])
+    elif tone == "deployer_demand_loyal":
+        text = _pick(rng, [
+            "You have me. All in.",
+            "I'm here because you believed in me. I'm in.",
+        ])
+    else:
+        text = _pick(rng, [
+            "Fine. All in.",
+            "...Alright. You want all in, you get all in.",
+        ])
     return text, delta, note, deployer_note, misaligned
-
-
 def _closing_line(coach, aligned, rng):
     if aligned:
         pool = [
@@ -1021,6 +917,7 @@ def build_mandate(team, draft, season_label):
         "tactical_approach": ch.get("tactical_approach"),
         "lines_owner": ch.get("lines_owner"),
         "tactics_owner": ch.get("tactics_owner"),
+        "deployer_choice": draft.get("deployer_choice"),  # None unless the deployer beat ran
         "deployer_notes": draft.get("deployer_note", ""),
         "meeting_done": True,
     }
@@ -1528,26 +1425,28 @@ class SeasonMeetingView(ctk.CTkFrame):
             self.draft["coach_assessment"] = assessed
             self.draft["choices"]["expectation"] = key
             text, delta, note, misaligned = _expectation_reaction(
-                self.coach, key, assessed, self._rng)
+                self.team, self.coach, key, assessed, self._rng)
             nxt = "rookies"
         elif stage == "rookies":
             self.draft["choices"]["rookie_stance"] = key
             exp = self.draft["choices"].get("expectation", "playoffs")
-            text, delta, note = _rookie_reaction(self.coach, key, exp,
-                                                self._rng)
+            text, delta, note = _rookie_reaction(self.team, self.coach, key,
+                                                exp, self._rng)
             nxt = "tactics"
         elif stage == "tactics":
             self.draft["choices"]["tactical_approach"] = key
-            text, delta, note = _tactics_reaction(self.coach, key, self._rng)
+            text, delta, note = _tactics_reaction(self.team, self.coach, key,
+                                                 self._rng)
             nxt = "lines"
         elif stage == "lines":
             self.draft["choices"]["lines_owner"] = key
-            text, delta, note = _lines_reaction(self.coach, key, self._rng)
+            text, delta, note = _lines_reaction(self.team, self.coach, key,
+                                               self._rng)
             nxt = "tactics_own"
         elif stage == "tactics_own":
             self.draft["choices"]["tactics_owner"] = key
-            text, delta, note = _tactics_owner_reaction(self.coach, key,
-                                                       self._rng)
+            text, delta, note = _tactics_owner_reaction(self.team, self.coach,
+                                                       key, self._rng)
             ch = self.draft["choices"]
             if ch.get("lines_owner") == "gm" and ch.get("tactics_owner") == "gm":
                 nxt = "deployer"
@@ -1556,7 +1455,8 @@ class SeasonMeetingView(ctk.CTkFrame):
         elif stage == "deployer":
             (text, delta, note,
              deployer_note, misaligned) = _deployer_reaction(
-                 self.coach, key, self._rng)
+                 self.team, self.coach, key, self._rng)
+            self.draft["deployer_choice"] = key
             self.draft["deployer_note"] = deployer_note
             nxt = "closing"
         else:
