@@ -981,6 +981,14 @@ class AdvancedGameSim:
             d1, d2, _style = _gpw(self, team)
         except Exception:
             d1, d2 = 120, 60
+        # OT drama, live lever: high-drama games pull earlier (extra
+        # seconds on the coach's window). Conversion untouched -- risk.
+        try:
+            from ot_drama import pull_aggression_secs as _agg
+            _a = _agg(getattr(self, "_drama_ctx", None))
+            d1, d2 = d1 + _a, d2 + _a
+        except Exception:
+            pass
         deficit = -diff
         if deficit == 1 and remaining > d1:
             return False
@@ -1150,6 +1158,16 @@ class AdvancedGameSim:
         # the away's top line got checked. Small, on its own channel.
         self._matchup_edge[home_name] = 1.02 if home_directed else 1.0
         self._matchup_edge[away_name] = 0.99 if home_directed else 1.0
+        # OT drama, live lever: in 3v3 OT the matchup tilt (coach personnel
+        # choices + room/crowd edge) rides this channel instead.
+        try:
+            if getattr(self, "_ot_3v3", False):
+                _tilt = float(getattr(self, "_ot_tilt", 0.0) or 0.0)
+                if _tilt:
+                    self._matchup_edge[home_name] = 1.0 + _tilt
+                    self._matchup_edge[away_name] = 1.0 - _tilt
+        except Exception:
+            pass
 
         # Goalie-pull check (once per shift; period 3 only inside).
         self._maybe_pull_goalies()
@@ -1522,9 +1540,10 @@ class AdvancedGameSim:
         overtime_limit = 300  # 5 minutes OT (NHL regular season)
         shootout_rounds = 3  # Initial shootout rounds, then sudden death
 
-        # OT drama (ot_drama, additive): high-drama games get a slightly
-        # longer OT runway, so the better 3v3 side decides it instead of a
-        # shootout coin flip. No league -> exactly today's behavior.
+        # OT drama (ot_drama, additive): the live levers (pull aggression,
+        # OT matchup tilt, shootout edge) read this context. OT itself is
+        # always the flat NHL 300 seconds -- drama moves who wins it, not
+        # how long it lasts. No league -> exactly today's behavior.
         _ot_ctx = None
         if getattr(self, "league", None) is not None:
             try:
@@ -1532,10 +1551,9 @@ class AdvancedGameSim:
                 _ot_ctx = ot_context(
                     self.home_team, self.away_team, league=self.league,
                     atmosphere={"energy": getattr(self, "_crowd_energy", 50.0)})
-                overtime_limit = int(300 * (0.85 + 0.3 * _ot_ctx["drama01"]))
             except Exception:
                 _ot_ctx = None
-                overtime_limit = 300
+        self._drama_ctx = _ot_ctx
 
         # Fresh game: no stale last-passer carried over from a previous game
         for _t in (self.home_team, self.away_team):
@@ -1549,42 +1567,6 @@ class AdvancedGameSim:
         while self.time < 3600:
             self._simulate_shift()
 
-        # OT drama equalizer (ot_drama, additive): a 1-goal regulation game
-        # in a hot context can see the trailing team pull the goalie and
-        # force OT. Runs AFTER regulation, outside the shift loop: it only
-        # adjusts the team total and appends a game-record event. Caleb's
-        # shift/chance/shot logic is untouched, and per-player attribution
-        # flows from team totals via distribute_stats. No league -> skipped.
-        if getattr(self, "league", None) is not None and _ot_ctx is not None:
-            try:
-                _r_hs = self.score[self.home_team.team_name]
-                _r_ag = self.score[self.away_team.team_name]
-                if abs(_r_hs - _r_ag) == 1:
-                    from ot_drama import (late_equalizer_roll as _eq_roll,
-                                          ADVANCED_ONE_GOAL_SHARE as _eq_share)
-                    if _eq_roll(_ot_ctx,
-                                trailing_team_is_home=(_r_hs < _r_ag),
-                                one_goal_share=_eq_share):
-                        _trail = self.home_team if _r_hs < _r_ag else self.away_team
-                        self.score[_trail.team_name] += 1
-                        _scorer = None
-                        try:
-                            _cands = [p for p in (getattr(_trail, "roster", []) or [])
-                                      if p is not None and "goalie" not in
-                                      str(getattr(p, "primary_position", "")).lower()]
-                            if _cands:
-                                _scorer = random.choice(_cands)
-                        except Exception:
-                            _scorer = None
-                        self.events.append({
-                            "time": self.time, "period": 3,
-                            "team": _trail.team_name, "player": _scorer,
-                            "event": "Goal", "assists": [],
-                            "note": "late equalizer (ot_drama)",
-                        })
-            except Exception:
-                pass
-        
         # Overtime: 3v3 sudden death - first goal wins (divergence #3:
         # GameSim skates 3v3; this engine used to run full-strength OT).
         if self.score[self.home_team.team_name] == self.score[self.away_team.team_name]:
@@ -1593,6 +1575,17 @@ class AdvancedGameSim:
             ot_away_start = self.score[self.away_team.team_name]
             self.period = 4
             self._ot_3v3 = True
+            # OT drama, live lever (ot_drama): 3v3 matchup choices. The
+            # coach's personnel acumen + room/crowd edge tilt OT finishing
+            # a touch, on the existing matchup channel (shot_chance mult).
+            try:
+                from ot_drama import ot_matchup_tilt as _omt
+                self._ot_tilt = _omt(
+                    getattr(self, "_drama_ctx", None),
+                    home_coach=getattr(self, "_home_coach", None),
+                    away_coach=getattr(self, "_away_coach", None))
+            except Exception:
+                self._ot_tilt = 0.0
             try:
                 while (self.time < ot_start + overtime_limit and
                        self.score[self.home_team.team_name] == self.score[self.away_team.team_name]):
@@ -1601,6 +1594,7 @@ class AdvancedGameSim:
                     # (The loop condition checks the tie each iteration)
             finally:
                 self._ot_3v3 = False
+                self._ot_tilt = 0.0
             
             # Enforce true sudden death: max 1 goal per team in OT
             # (A shift might generate multiple goals before the loop checks)

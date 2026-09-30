@@ -5810,6 +5810,26 @@ class GameSim:
         except Exception:
             pass
 
+        # OT drama, live lever (2026-09-30 rebuild): 3v3 matchup choices.
+        # Regular-season OT only -- the coach's personnel acumen plus the
+        # room/crowd edge tilt OT finishing a touch, bounded small.
+        try:
+            if (getattr(self, "_ot_sudden_death", False)
+                    and not getattr(self, "is_playoff", False)
+                    and getattr(self, "period", 0) == 4):
+                from ot_drama import ot_matchup_tilt as _omt2
+                _tilt2 = _omt2(
+                    self._drama_ctx_lazy(),
+                    home_coach=getattr(self, "_home_coach", None),
+                    away_coach=getattr(self, "_away_coach", None))
+                if _tilt2:
+                    _m2 = (1.0 + _tilt2 if attacking_team is self.home_team
+                           else 1.0 - _tilt2)
+                    goal_prob = (1.0 - adjusted_save_prob) * _m2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
         # Defensive contest 2026-09-28 (shared decision, one decision two
         # fidelities): on-ice defenders contest via blocks/gap/angles/sticks.
         try:
@@ -6974,6 +6994,28 @@ class GameSim:
             return found[0] if found else None
         except Exception:
             return None
+
+    def _drama_ctx_lazy(self):
+        """OT drama context, computed once per game (ot_drama, additive).
+
+        Rivalry heat reads the sim's rivalry store through a league shim;
+        every other factor degrades gracefully when inputs are missing.
+        Powers the live levers: pull aggression, OT matchup tilt, shootout
+        edge. Never raises.
+        """
+        try:
+            if getattr(self, "_drama_ctx", None) is None:
+                from types import SimpleNamespace as _SN
+                from ot_drama import ot_context as _oc
+                _lg = _SN(rivalries=getattr(self, "rivalries", None))
+                self._drama_ctx = _oc(
+                    self.home_team, self.away_team, league=_lg,
+                    atmosphere={"energy": getattr(self, "_crowd_energy",
+                                                  50.0)})
+        except Exception:
+            self._drama_ctx = {"ot_mult": 1.0, "home_win_edge": 0.0,
+                               "drama01": 0.3, "drivers": []}
+        return self._drama_ctx
 
     # -- Coach instructions (impact-tier engine; additive) --
     def set_coach_instruction(self, team_name, instruction):
@@ -8587,10 +8629,20 @@ class GameSim:
 
         The probability core is the ONE shared decision
         (player_traits.resolve_shootout_attempt) -- this method only adds
-        the GameSim logging/pbp around it.
+        the GameSim logging/pbp around it, plus the OT drama context edge
+        (same nudge AdvancedGameSim applies -- one decision, two fidelities).
         """
         from player_traits import resolve_shootout_attempt as _shared_so
-        is_goal = _shared_so(shooter, goalie)
+        _edge = 0.0
+        try:
+            from ot_drama import shootout_edge as _se
+            _shooter_home = (getattr(shooter, "team_name", None)
+                             == getattr(self.home_team, "team_name", None))
+            _edge = _se(self._drama_ctx_lazy(),
+                        shooter_is_home=_shooter_home)
+        except Exception:
+            _edge = 0.0
+        is_goal = _shared_so(shooter, goalie, edge=_edge)
         result = "scores" if is_goal else "is stopped"
         self._log_event(f"Shootout: {shooter.full_name} {result} against {goalie.full_name}!", "SHOOTOUT_ATTEMPT")
         self._emit_pbp("shootout_attempt", shooter=shooter, goalie=goalie,
@@ -8966,6 +9018,14 @@ class GameSim:
             _d1, _d2, _style = _gp_windows(self, team)
         except Exception:
             _d1, _d2 = 120, 60
+        # OT drama, live lever: high-drama games pull earlier (extra
+        # seconds on the coach's window). Conversion untouched -- risk.
+        try:
+            from ot_drama import pull_aggression_secs as _agg
+            _a = _agg(self._drama_ctx_lazy())
+            _d1, _d2 = _d1 + _a, _d2 + _a
+        except Exception:
+            pass
         deficit = -diff
         if deficit == 1 and self.clock > _d1:
             return False

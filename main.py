@@ -12429,26 +12429,31 @@ class HockeyManagerGUI(tk.Tk):
         if home_goals == away_goals:
             went_to_ot = True
         elif abs(home_goals - away_goals) == 1:
-            # Drama equalizer (ot_drama): pulled goalie / 6-on-5 forces OT
-            # in big games. The equalizer is a real scored goal plus the
-            # ensuing OT winner (~+0.08 GPG league-wide at full drama --
-            # negligible, and inherent to having more OT games at all).
+            # OT drama, live lever (ot_drama): the trailing coach pulls the
+            # goalie and the end-game 6v5 resolves honestly -- tying goal
+            # (game goes to OT), empty-netter (lead grows), or nothing.
+            # Both scoring outcomes are real goals; nothing is manufactured.
             # Regulation scoring means are never touched.
             try:
-                from ot_drama import late_equalizer_roll, LIGHTWEIGHT_ONE_GOAL_SHARE
-                _eq_ctx = _drama()
-                if late_equalizer_roll(
-                        _eq_ctx,
-                        trailing_team_is_home=(home_goals < away_goals),
-                        one_goal_share=LIGHTWEIGHT_ONE_GOAL_SHARE):
+                from ot_drama import late_six_on_five as _l65
+                _6v5_ctx = _drama()
+                _trailing_is_home = home_goals < away_goals
+                _seg, _pull_secs = _l65(
+                    _6v5_ctx, trailing_team_is_home=_trailing_is_home)
+                if _seg == "tie":
                     went_to_ot = True
-                    _trailing_is_home = home_goals < away_goals
                     if _trailing_is_home:
                         home_goals += 1
                     else:
                         away_goals += 1
-                    self._ot_equalizer_news(home_team, away_team, _eq_ctx,
-                                            trailing_team_is_home=_trailing_is_home)
+                    self._late_six_on_five_news(
+                        home_team, away_team, _6v5_ctx,
+                        trailing_team_is_home=_trailing_is_home)
+                elif _seg == "empty_net":
+                    if _trailing_is_home:
+                        away_goals += 1
+                    else:
+                        home_goals += 1
             except Exception:
                 pass
         if went_to_ot:
@@ -12476,6 +12481,17 @@ class HockeyManagerGUI(tk.Tk):
                                 - away_star_effects['clutch_factor']) * 0.08)
             home_ot_chance = (0.50 + clutch_edge
                               + _ctx.get("home_win_edge", 0.0))
+            # OT drama, live lever (ot_drama): 3v3 matchup choices. The
+            # coach's personnel acumen plus the room/crowd edge tilt OT
+            # finishing a touch, bounded small.
+            try:
+                from ot_drama import ot_matchup_tilt as _omt
+                from game_classes import StaffRole as _SR
+                _hc = (home_team.get_staff_by_role(_SR.HEAD_COACH) or [None])[0]
+                _ac = (away_team.get_staff_by_role(_SR.HEAD_COACH) or [None])[0]
+                home_ot_chance += _omt(_ctx, home_coach=_hc, away_coach=_ac)
+            except Exception:
+                pass
             home_ot_chance = max(0.40, min(0.60, home_ot_chance))
             if random.random() < home_ot_chance:
                 home_goals += 1
@@ -12518,9 +12534,9 @@ class HockeyManagerGUI(tk.Tk):
         
         return winner, loser, (home_goals, away_goals), went_to_ot
 
-    def _ot_equalizer_news(self, home_team, away_team, ctx,
-                           trailing_team_is_home=False):
-        """One headline when the drama equalizer forces OT (ot_drama).
+    def _late_six_on_five_news(self, home_team, away_team, ctx,
+                                 trailing_team_is_home=False):
+        """One headline when the late 6v5 produces the tying goal (ot_drama).
 
         Single hook: uses the existing GameManager -> GUI news path
         (add_news lives on the GUI; the manager only holds it via .app).

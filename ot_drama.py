@@ -1,22 +1,37 @@
-"""OT drama: which games reach overtime and who wins it, shaped by the room.
+"""OT drama: live in-game levers for overtime drama, shared pure module.
 
 Chris's five factors -- game intensity, player/coach morale and situational
-state, rivalry heat, grudge matches, atmospheric/fan factors -- feed an
-OT-likelihood multiplier and a home OT win edge. Pure reads only: this
-module never writes to teams, the league, or the standings, and never
-raises -- missing inputs degrade to quiet neutrals (same contract as
-narrative_ledger.matchup_narrative).
+state, rivalry heat, grudge matches, atmospheric/fan factors -- drive three
+LIVE levers that operate inside the game on every sim path (lightweight
+day-advance, AdvancedGameSim, watched GameSim):
 
-Additive by design (Caleb owns the engine): callers pass the context into
-existing resolution code via optional parameters with behavior-preserving
-defaults. Regulation scoring is never touched -- OT likelihood moves via
-the explicit, capped late-equalizer roll, not by shifting the GPG
-equilibrium.
+1. Pulled-goalie timing / 6v5 aggression: in high-drama games the trailing
+   coach pulls earlier (extra seconds on the shared goalie_pull window).
+   More 6v5 time means more late tying goals AND more empty-netters -- the
+   mechanism is honest, both outcomes are real goals.
+2. OT 3v3 matchup choices: the coach's personnel/matchup acumen
+   (tactical_knowledge, match_preparation, attacking_coaching) plus the
+   room/crowd edge tilt OT finishing a touch, bounded small.
+3. Shootout composure: the shared player_traits shootout core already
+   resolves shooter skill/traits vs the goalie; shootout_edge() carries the
+   room/crowd context nudge on every path that reaches a shootout.
+
+There is deliberately NO synthetic post-regulation equalizer: games reach
+OT because a real 6v5 goal was scored, never because a roll said so.
+
+Pure reads only: this module never writes to teams, the league, or the
+standings, and never raises -- missing inputs degrade to quiet neutrals
+(same contract as narrative_ledger.matchup_narrative).
+
+Additive by design: callers pass the context into existing resolution code
+via optional parameters with behavior-preserving defaults. Regulation
+scoring is never touched directly -- the levers move timing, personnel
+edges, and the honest 6v5 segment, not the GPG equilibrium.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # §8 tuning constants -- every knob lives here, in one place.
@@ -26,24 +41,25 @@ RIVALRY_OT_WEIGHT = 0.25          # heat/100 * this added to ot_mult
 INTENSITY_OT_WEIGHT = 0.10        # league tension contribution
 GRUDGE_OT_BONUS = 0.15            # flat bonus for grudge matches
 GRUDGE_HOME_EDGE = 0.03           # home pride edge in grudge games
-EQUALIZER_RATE = 0.45             # (ot_mult - 1) * this = induced-tie prob
-EQUALIZER_P_CAP = 0.20            # hard per-game ceiling on the equalizer roll
-INDUCED_OT_CAP = 0.06             # design §8: induced OT stays under ~6% of games
-# The equalizer only rolls on 1-goal games, so the per-game cap is scaled
-# by the calling path's structural 1-goal share: cap = min(P_CAP,
-# INDUCED_OT_CAP / share). The design doc assumed ~25%; the lightweight
-# goal model (σ=1.0 per side) lands ~72% within a goal structurally.
-DEFAULT_ONE_GOAL_SHARE = 0.25
-LIGHTWEIGHT_ONE_GOAL_SHARE = 0.72
-# AdvancedGameSim regulation ends within a goal ~1/3 of the time
-# (measured 0.33 on the Small database; OT games excluded).
-ADVANCED_ONE_GOAL_SHARE = 0.35
 WIN_EDGE_CLAMP = (-0.15, 0.15)    # max home OT win-probability edge
 MORALE_WIN_WEIGHT = 0.10          # per 100 morale-diff points
 SITUATION_WIN_WEIGHT = 0.50       # per 1.0 xg_mult diff (~+/-0.08 in practice)
 CROWD_WIN_WEIGHT = 0.06           # per +/-50 energy from neutral
 SHOOTOUT_EDGE_MAX = 0.06          # max shootout probability nudge
 SHOOTOUT_EDGE_DAMP = 0.40         # shootouts are coin flips; edge matters less
+
+# Lever 1: pulled-goalie aggression.
+PULL_AGGRESSION_MAX_SECS = 45.0   # extra pull-window seconds at full drama
+# Lever 2: OT 3v3 matchup tilt.
+MATCHUP_TILT_CLAMP = 0.05         # max |tilt| on OT goal probability
+MATCHUP_EDGE_FLOW = 0.25          # home_win_edge flows through at 1/4 strength
+MATCHUP_COACH_WEIGHT = 0.04       # per 100 tactical-acumen-gap points
+# Lever 3 (lightweight path): the end-game 6v5 segment, modeled from the
+# same pull decision the shift engines execute live. Real NHL: ~12-15% of
+# goalie pulls yield the tying goal, ~25-30% end in an empty-netter.
+SIX_ON_FIVE_BASE_SECS = 100.0     # average coach's down-1 pull window
+TIE_RATE_PER_MIN = 0.10           # 6v5 tying-goal rate
+EN_RATE_PER_MIN = 0.20            # empty-netter-against rate
 
 
 def _avg_morale(team: Any) -> Any:
@@ -154,44 +170,121 @@ def ot_context(home_team: Any, away_team: Any, league: Any = None,
     return out
 
 
-def late_equalizer_roll(ctx: Dict[str, Any],
-                        trailing_team_is_home: bool = False,
-                        one_goal_share: float = DEFAULT_ONE_GOAL_SHARE) -> bool:
-    """Late-equalizer roll -- call ONLY when regulation ends 1-goal apart.
+# ---------------------------------------------------------------------------
+# Lever 1: pulled-goalie timing / 6v5 aggression.
+# ---------------------------------------------------------------------------
+def pull_aggression_secs(ctx: Optional[Dict[str, Any]]) -> float:
+    """Extra seconds on the goalie-pull window from game drama.
 
-    Models the pulled-goalie / 6-on-5 score that forces OT in big games.
-    Probability is (ot_mult - 1) * EQUALIZER_RATE, capped per game at
-    min(EQUALIZER_P_CAP, INDUCED_OT_CAP / one_goal_share) so the induced
-    OT rate stays under ~6% of games for the calling path's structural
-    1-goal share. Cold/neutral contexts (ot_mult <= 1) never fire.
-
-    Scoring-equilibrium note: the equalizer models a REAL scored goal (the
-    empty-netter) plus the ensuing OT winner, so each induced OT adds ~2
-    goals vs its regulation counterfactual. At ~4% induced games that is
-    ~+0.08 GPG league-wide -- negligible against the ~6.1 equilibrium, and
-    inherent to having more OT games at all (OT always ends with a goal).
-    Regulation scoring means are never touched. Never raises.
+    Neutral games (drama01 == 0.3) pull on the coach's window exactly;
+    max-drama games pull up to PULL_AGGRESSION_MAX_SECS earlier. Callers add
+    this to both down-1 and down-2 windows from goalie_pull.pull_windows.
+    Pure; never raises.
     """
     try:
-        import random
-        _mult = float((ctx or {}).get("ot_mult", 1.0))
-        _p = (_mult - 1.0) * EQUALIZER_RATE
-        if _p <= 0:
-            return False
-        _share = float(one_goal_share or DEFAULT_ONE_GOAL_SHARE)
-        _cap = min(EQUALIZER_P_CAP, INDUCED_OT_CAP / max(_share, 1e-6))
-        _p = min(_p, _cap)
-        return random.random() < _p
+        _d01 = float((ctx or {}).get("drama01", 0.3) or 0.3)
+        _secs = (_d01 - 0.3) / 0.7 * PULL_AGGRESSION_MAX_SECS
+        return max(0.0, min(PULL_AGGRESSION_MAX_SECS, _secs))
     except Exception:
-        return False
+        return 0.0
 
 
-def shootout_edge(ctx: Dict[str, Any], shooter_is_home: bool = False) -> float:
+# ---------------------------------------------------------------------------
+# Lever 2: OT 3v3 matchup choices.
+# ---------------------------------------------------------------------------
+def _coach_matchup_acumen(coach: Any) -> Optional[float]:
+    """3v3 personnel/matchup acumen from coach attributes (1-100 scale).
+
+    None when the coach is unreadable -- the caller degrades to the
+    context edge alone.
+    """
+    try:
+        if coach is None:
+            return None
+        _vals = []
+        for _n in ("tactical_knowledge", "match_preparation",
+                   "attacking_coaching"):
+            _v = getattr(coach, _n, None)
+            if _v is not None:
+                _vals.append(float(_v))
+        if not _vals:
+            return None
+        return sum(_vals) / len(_vals)
+    except Exception:
+        return None
+
+
+def ot_matchup_tilt(ctx: Optional[Dict[str, Any]],
+                    home_coach: Any = None,
+                    away_coach: Any = None) -> float:
+    """Signed OT goal-probability tilt, home-positive, |tilt| <= 0.05.
+
+    The room/crowd/situational edge (home_win_edge) flows through at
+    quarter strength -- that's the matchup manifesting on the ice -- plus
+    the head-coach 3v3 acumen gap. Shift engines multiply the attacking
+    team's OT goal chance by (1 + tilt) / (1 - tilt); the lightweight path
+    adds it to the OT coin flip. Pure; never raises.
+    """
+    try:
+        _ctx = ctx or {}
+        _tilt = float(_ctx.get("home_win_edge", 0.0) or 0.0) * MATCHUP_EDGE_FLOW
+        _ha = _coach_matchup_acumen(home_coach)
+        _aa = _coach_matchup_acumen(away_coach)
+        if _ha is not None and _aa is not None:
+            _tilt += ((_ha - _aa) / 100.0) * MATCHUP_COACH_WEIGHT
+        return max(-MATCHUP_TILT_CLAMP, min(MATCHUP_TILT_CLAMP, _tilt))
+    except Exception:
+        return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Lever 3 (lightweight path): the end-game 6v5 segment.
+# ---------------------------------------------------------------------------
+def late_six_on_five(ctx: Optional[Dict[str, Any]],
+                     trailing_team_is_home: bool = False,
+                     rng: Any = None) -> Tuple[str, float]:
+    """Model the trailing coach's goalie pull on the lightweight path.
+
+    The shift engines execute this live (pull window + 6v5 shifts +
+    empty-net chances); the day-advance path has no shifts, so it resolves
+    the same decision probabilistically from the same inputs: pull time =
+    the average coach's window plus drama aggression, then competing
+    exponential rates for the tying goal vs the empty-netter.
+
+    Returns (outcome, pull_secs) where outcome is "tie", "empty_net", or
+    "none". Call ONLY when regulation ends exactly 1 goal apart -- a
+    down-2 pull can't change the result, so there's nothing to resolve.
+    Both scoring outcomes are real goals. Pure; never raises.
+    """
+    try:
+        import math
+        import random as _random
+        _rng = rng if rng is not None else _random
+        _pull_secs = SIX_ON_FIVE_BASE_SECS + pull_aggression_secs(ctx)
+        _mins = _pull_secs / 60.0
+        _p_tie = 1.0 - math.exp(-TIE_RATE_PER_MIN * _mins)
+        _p_en = 1.0 - math.exp(-EN_RATE_PER_MIN * _mins)
+        _r = float(_rng.random())
+        if _r < _p_tie:
+            return "tie", _pull_secs
+        if _r < _p_tie + (1.0 - _p_tie) * _p_en:
+            return "empty_net", _pull_secs
+        return "none", _pull_secs
+    except Exception:
+        return "none", 0.0
+
+
+# ---------------------------------------------------------------------------
+# Lever 3 (shootouts): context nudge on the shared shootout core.
+# ---------------------------------------------------------------------------
+def shootout_edge(ctx: Optional[Dict[str, Any]],
+                  shooter_is_home: bool = False) -> float:
     """Small probability nudge for the shared shootout core.
 
     Damped from home_win_edge (shootouts are coin flips; edges matter
     less), clamped to +/-SHOOTOUT_EDGE_MAX. Positive favors the shooter.
-    Never raises.
+    The composure itself lives in player_traits.resolve_shootout_attempt
+    (clutch shooters elevate, big-game goalies elevate). Never raises.
     """
     try:
         _e = float((ctx or {}).get("home_win_edge", 0.0))
