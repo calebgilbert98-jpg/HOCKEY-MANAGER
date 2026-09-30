@@ -3498,6 +3498,11 @@ class HockeyManagerGUI(tk.Tk):
                                                    self._on_continue_pressed,
                                                    tooltip="Advance to the next day")
         self.refresh_next_day_button()
+        # Apply the inbox priority styling for the current unread state.
+        try:
+            self.update_inbox_notification()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Screen navigation history (back/forward)
@@ -15720,16 +15725,62 @@ class HockeyManagerGUI(tk.Tk):
         
     def _get_inbox_button_text(self):
         """Get the text for the inbox button with unread count."""
-        unread_count = self.user_team.inbox.unread_count
+        try:
+            unread_count = self.user_team.inbox.unread_count
+        except Exception:
+            unread_count = 0
         if unread_count > 0:
-            return f"Inbox ({unread_count})"
-        return "Inbox"
-        
+            return f"\u2709 Inbox ({unread_count})"
+        return "\u2709 Inbox"
+
     def update_inbox_notification(self):
-        """Update the inbox button notification."""
-        if hasattr(self, 'inbox_btn'):
-            # CTk widgets use configure(), not config()
-            self.inbox_btn.configure(text=self._get_inbox_button_text())
+        """Update the inbox button notification.
+
+        FM-style priority: while mail is unread the inbox pill takes the
+        accent fill so it sits in clear priority view; once read it drops
+        back to the quiet nav style. Width follows the label.
+        """
+        if not hasattr(self, 'inbox_btn'):
+            return
+        try:
+            unread_count = self.user_team.inbox.unread_count
+        except Exception:
+            unread_count = 0
+        try:
+            from modern_ui import AppColors
+        except Exception:
+            AppColors = None
+        btn = self.inbox_btn
+        try:
+            btn.configure(text=self._get_inbox_button_text())
+        except Exception:
+            pass
+        try:
+            probe = tk.Label(btn.master, text=btn.cget("text"),
+                             font=(self.FONT_FAMILY, 10, 'bold'))
+            try:
+                probe.update_idletasks()
+                btn.configure(width=probe.winfo_reqwidth() + 28)
+            finally:
+                probe.destroy()
+        except Exception:
+            pass
+        try:
+            if unread_count > 0 and AppColors is not None:
+                btn.configure(fg_color=AppColors.ACCENT,
+                              hover_color=AppColors.ACCENT_DIM,
+                              text_color=AppColors.ACCENT_TEXT,
+                              border_width=0)
+            else:
+                fg = AppColors.TEXT_SECONDARY if AppColors else '#a1a1aa'
+                hover = AppColors.BG_HOVER if AppColors else '#1e1e24'
+                btn.configure(fg_color="transparent",
+                              hover_color=hover,
+                              text_color=fg,
+                              border_width=1,
+                              border_color=BORDER)
+        except Exception:
+            pass
             
     def send_email_to_user(self, message):
         """Send an email message to the user's inbox."""
