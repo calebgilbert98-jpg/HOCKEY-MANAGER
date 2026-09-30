@@ -1061,6 +1061,10 @@ class RosterView(ctk.CTkFrame):
         # configured them, so they were invisible. Now they actually style.
         tree.tag_configure('selected', background=ct['ROW_SELECTED'])
         tree.tag_configure('injured', foreground=ct['RED'])
+        # TRACK C #3a: suspended rows keep the 'injured' red foreground via the
+        # status rewrite; this background-only tag composes without a
+        # foreground conflict (two foreground tags do not compose reliably).
+        tree.tag_configure('suspended', background='#3a2320')
         tree.tag_configure('elite', foreground=ct['GOLD'])
         tree.tag_configure('star', foreground=ct['TEAL'])
 
@@ -1308,6 +1312,14 @@ class RosterView(ctk.CTkFrame):
             morale_raw = int(getattr(player, 'morale', 7) or 7)
             morale = f"{morale_raw * 10} {morale_label(morale_raw)}"
             injury_status = getattr(player, 'injury_status', 'Healthy')
+            # TRACK C #3a: suspended players are silently unavailable in the
+            # lineup builder -- surface the badge in the status column.
+            try:
+                _susp_n = int(getattr(player, 'suspension_games_remaining', 0) or 0)
+            except (TypeError, ValueError):
+                _susp_n = 0
+            if _susp_n > 0:
+                injury_status = f"SUSPENDED ({_susp_n})"
 
             # Basic values for all roster types
             values = [checkbox, getattr(player, 'jersey_number', ''), name, position,
@@ -1350,6 +1362,8 @@ class RosterView(ctk.CTkFrame):
                 tags.append('selected')
             if injury_status != 'Healthy':
                 tags.append('injured')
+            if _susp_n > 0:
+                tags.append('suspended')
             if overall >= 94:
                 tags.append('elite')
             elif overall >= 88:

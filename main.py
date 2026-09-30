@@ -3411,6 +3411,21 @@ class HockeyManagerGUI(tk.Tk):
             "Manager Hub": self.open_manager_hub
         })
         
+        # Systems dropdown (TRACK C): engine-state surfaces the sim already
+        # computes but never showed -- deployment, condition, discipline,
+        # rivalries, clutch, assistants, circumstance shifts, fan buzz.
+        self._create_dropdown_menu(left_menu_frame, "Systems",
+            tooltip="Systems: the engine's inner workings, made visible", menu_items={
+            "Ice-Time Deployment": self.open_trackc_deployment,
+            "Roster Condition": self.open_trackc_condition,
+            "Discipline List": self.open_trackc_discipline,
+            "Rivalry Dashboard": self.open_trackc_rivalry,
+            "Clutch Factors": self.open_trackc_clutch,
+            "Assistant Coaches": self.open_trackc_assistants,
+            "Circumstance Shifts": self.open_trackc_circumstance,
+            "Fan Buzz": self.open_trackc_fanbuzz
+        })
+        
         # Finances dropdown
         self._create_dropdown_menu(left_menu_frame, "Finances",
             tooltip="Finances: budgets, payroll, and contract extensions", menu_items={
@@ -5685,6 +5700,47 @@ class HockeyManagerGUI(tk.Tk):
         from performance_monitor import PerformanceMonitorView
         return self.show_screen("performance_monitor", "Performance Monitor",
                                 PerformanceMonitorView)
+
+    # TRACK C systems screens: read-only views over live engine state.
+    def open_trackc_deployment(self):
+        from trackc_deployment_view import TrackCDeploymentView
+        return self.show_screen("trackc_deployment", "Ice-Time Deployment",
+                                TrackCDeploymentView)
+
+    def open_trackc_condition(self):
+        from trackc_condition_view import TrackCConditionView
+        return self.show_screen("trackc_condition", "Roster Condition",
+                                TrackCConditionView)
+
+    def open_trackc_discipline(self):
+        from trackc_discipline_view import TrackCDisciplineView
+        return self.show_screen("trackc_discipline", "Discipline List",
+                                TrackCDisciplineView)
+
+    def open_trackc_rivalry(self):
+        from trackc_rivalry_view import TrackCRivalryView
+        return self.show_screen("trackc_rivalry", "Rivalry Dashboard",
+                                TrackCRivalryView)
+
+    def open_trackc_clutch(self):
+        from trackc_clutch_view import TrackCClutchView
+        return self.show_screen("trackc_clutch", "Clutch Factors",
+                                TrackCClutchView)
+
+    def open_trackc_assistants(self):
+        from trackc_assistant_view import TrackCAssistantView
+        return self.show_screen("trackc_assistants", "Assistant Coaches",
+                                TrackCAssistantView)
+
+    def open_trackc_circumstance(self):
+        from trackc_circumstance_view import TrackCCircumstanceView
+        return self.show_screen("trackc_circumstance", "Circumstance Shifts",
+                                TrackCCircumstanceView)
+
+    def open_trackc_fanbuzz(self):
+        from trackc_fanbuzz_view import TrackCFanBuzzView
+        return self.show_screen("trackc_fanbuzz", "Fan Buzz",
+                                TrackCFanBuzzView)
         
     # Enhanced panel update methods
 
