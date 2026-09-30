@@ -60,6 +60,17 @@ from typing import Any, Dict, List, Optional, Tuple
 #: lineup region (owned by the lineup worker).
 SOFT_CAP_S = 30 * 60
 
+#: Short-bench second-tier cap (icetime-ecosystem, 2026-09-29). When the
+#: bench_depleted exception fires (fewer than 15 dressed skaters -- a
+#: genuinely thin roster, not a bookkeeping artifact), the governor used to
+#: stand down entirely ("ride the horses"), and a double-shifted star could
+#: skate 40-63 min with nothing binding him (measured in the s2 baseline
+#: season: 1176/1312 games over 30, max 63.3). A short bench SHOULD ride its
+#: horses harder, but not into the ground: the binding logic still runs,
+#: just at 35:00 instead of 30:00. must_win_playoff and ot_marathon keep the
+#: full stand-down (rare, and genuinely exceptional).
+SOFT_CAP_SHORT_S = 35 * 60
+
 #: How many recent dynamics-log entries to scan for honored GM advice.
 #: Advice is GM-initiated and rare; this window captures standing
 #: instructions without resurrecting ancient history.
@@ -242,53 +253,268 @@ def _safe_coach_fit(coach: Any, player: Any) -> float:
         return 0.0
 
 
+#: Team-direction stance cache, filled by the app pre-game
+#: (main.py game dispatch) from trade_storylines.stance(). Keys are team
+#: names -> 'buyer' | 'seller' | 'bubble' | 'neutral'. Absent entries fall
+#: back to the roster-age heuristic in _team_direction().
+_DIRECTION_CACHE: Dict[str, str] = {}
+
+
+def set_team_direction(mapping: Dict[str, str]) -> None:
+    """App-side hook: stash trade_storylines stances for the sim to read.
+
+    Additive plumbing only -- the stance MODEL lives in trade_storylines.
+    """
+    try:
+        for k, v in (mapping or {}).items():
+            if v in ("buyer", "seller", "bubble", "neutral"):
+                _DIRECTION_CACHE[str(k)] = v
+    except Exception:
+        pass
+
+
+def _direction_from_roster(team: Any) -> str:
+    """Fallback direction when no stance is cached (probes, thin standings).
+
+    Young core + low talent -> seller (rebuild); old core + high talent ->
+    buyer (contend); else neutral. Explicitly allowed by the directive as
+    the "roster-age signal" fallback.
+    """
+    try:
+        skaters = [p for p in (getattr(team, "roster", None) or [])
+                   if getattr(getattr(p, "primary_position", None),
+                              "name", "") != "GOALIE"]
+        if len(skaters) < 10:
+            return "neutral"
+        ovrs = []
+        ages = []
+        for p in skaters:
+            try:
+                ovrs.append(float(p.overall_rating()))
+            except Exception:
+                continue
+            ages.append(float(_attr100(p, "age", 26)))
+        if not ovrs:
+            return "neutral"
+        # Core = top 12 skaters by talent (the players who decide direction).
+        order = sorted(range(len(ovrs)), key=lambda i: ovrs[i], reverse=True)
+        core = order[:12]
+        avg_age = sum(ages[i] for i in core) / len(core)
+        avg_ovr = sum(ovrs[i] for i in core) / len(core)
+        if avg_age <= 26.0 and avg_ovr < 80.0:
+            return "seller"
+        if avg_age >= 28.5 and avg_ovr >= 79.0:
+            return "buyer"
+        return "neutral"
+    except Exception:
+        return "neutral"
+
+
+def _team_direction(team: Any) -> str:
+    """'buyer' | 'seller' | 'bubble' | 'neutral' for this team right now."""
+    try:
+        name = getattr(team, "team_name", None)
+        s = _DIRECTION_CACHE.get(name)
+        if s in ("buyer", "seller", "bubble", "neutral"):
+            return s
+    except Exception:
+        pass
+    return _direction_from_roster(team)
+
+
+#: Style x factor modulation weights (addendum). Each entry scales the
+#: factor's DEVIATION from 1.0: mult' = 1 + (mult - 1) * w. Bounded by
+#: construction; the vibe-product clamp below keeps the talent hierarchy
+#: invariant for every style.
+_STYLE_FACTOR_W = {
+    "drill_sergeant": {"morale": 0.5, "attitude": 1.6, "archetype": 1.2,
+                       "relationships": 0.5, "recency": 0.7,
+                       "direction_youth": 0.7, "direction_vet": 1.3},
+    "players_coach":  {"morale": 1.6, "attitude": 0.6, "archetype": 0.8,
+                       "relationships": 1.6, "recency": 1.2,
+                       "direction_youth": 1.0, "direction_vet": 1.0},
+    "developer":      {"morale": 1.0, "attitude": 1.0, "archetype": 1.0,
+                       "relationships": 1.1, "recency": 1.0,
+                       "direction_youth": 1.8, "direction_vet": 0.8},
+    "motivator":      {"morale": 1.4, "attitude": 1.0, "archetype": 0.9,
+                       "relationships": 1.2, "recency": 1.3,
+                       "direction_youth": 1.0, "direction_vet": 1.0},
+    "tactician":      {"morale": 0.8, "attitude": 1.2, "archetype": 1.5,
+                       "relationships": 0.8, "recency": 0.8,
+                       "direction_youth": 1.0, "direction_vet": 1.0},
+    "balanced":       {"morale": 1.0, "attitude": 1.0, "archetype": 1.0,
+                       "relationships": 1.0, "recency": 1.0,
+                       "direction_youth": 1.0, "direction_vet": 1.0},
+}
+
+
+def _style_factor_mult(mult: float, style_key: str, factor: str) -> float:
+    """Scale a factor's deviation from 1.0 by the coach's style weight."""
+    try:
+        w = _STYLE_FACTOR_W.get(style_key or "balanced",
+                                _STYLE_FACTOR_W["balanced"]).get(factor, 1.0)
+        return 1.0 + (float(mult) - 1.0) * float(w)
+    except Exception:
+        return mult
+
+
+def _adapt_recency_mult(coach: Any) -> float:
+    """Adaptability axis: stubborn coaches (~0 recency) stick with their
+    guys; adaptable coaches ride the hot hand at full weight."""
+    try:
+        a = float(getattr(coach, "adaptability", 65) or 65)
+    except Exception:
+        a = 65.0
+    if a < 45:
+        return 0.2
+    if a > 65:
+        return 1.3
+    return 1.0
+
+
+def _norm_form01(player: Any) -> float:
+    """mesh_form normalized to [-1, 1] (cold..hot)."""
+    form = _attr100(player, "mesh_form", 0)
+    return max(-1.0, min(1.0, form / 100.0 if abs(form) > 1.0 else form))
+
+
+def _direction_mult(player: Any, direction: str, style_key: str) -> float:
+    """Team-direction age bias, style-modulated.
+
+    seller -> youth (<=23) earn development minutes over fading veterans
+    (32+ and cold); buyer -> lean on veterans, kids wait their turn.
+    """
+    try:
+        age = float(_attr100(player, "age", 26))
+    except Exception:
+        age = 26.0
+    youth = age <= 23
+    vet = age >= 32
+    fading_vet = vet and _norm_form01(player) < 0.0
+    base_m, factor = 1.0, None
+    if direction == "seller":
+        if youth:
+            base_m, factor = 1.10, "direction_youth"
+        elif fading_vet:
+            base_m, factor = 0.92, "direction_vet"
+    elif direction == "buyer":
+        if vet:
+            base_m, factor = 1.06, "direction_vet"
+        elif youth:
+            base_m, factor = 0.95, "direction_youth"
+    if factor is None:
+        return 1.0
+    return _style_factor_mult(base_m, style_key, factor)
+
+
+# ---------------------------------------------------------------------------
+# 2. Restructured _player_deployment_score (REPLACES the existing function)
+# ---------------------------------------------------------------------------
+
+
+#: Vibe-product clamp: the talent-hierarchy invariant. With the 0.90/0.10
+#: base, a 75 OVR at max vibes can never pass a 92 OVR at min vibes
+#: (equal form), and an 85 OVR max-heater can never pass a 93 OVR max-cold
+#: -- for every coaching style.
+_VIBE_CLAMP_LO = 0.95
+_VIBE_CLAMP_HI = 1.05
+
+
 def _player_deployment_score(player: Any, coach: Any, style_key: str,
-                             advice: Dict[str, Any]) -> float:
+                             advice: Dict[str, Any], team: Any = None,
+                             direction: str = None) -> float:
     """One scalar: how much this coach wants THIS player on the ice.
 
-    Talent is the base; form, attitude, archetype fit, and the coach-player
-    relationship move it; honored GM advice moves it a lot. Consumes (never
-    re-derives) morale, mesh_form, coachability/work_ethic/determination,
-    coach_archetype_valuation, coach_player_fit, coach_bonds, usage_featured.
+    Talent + recent performance DOMINATE: base = 0.90*OVR + 0.10*form-shape.
+    Every other factor is a bounded modulator inside a [0.95, 1.05] vibe
+    clamp, so soft factors ("vibes") can never flip a real talent gap --
+    a 75 OVR never sits above a 92 OVR on vibes, for any coaching style.
+
+    Coaching style + adaptability modulate how strongly each factor bites
+    (deviation scaling), and team direction (buyer/seller) tilts youth vs
+    veteran minutes. Honored GM advice stays OUTSIDE the clamp: those are
+    deliberate decisions, not vibes.
+
+    Consumes (never re-derives) morale, mesh_form, coachability/work_ethic/
+    determination, coach_archetype_valuation, coach_player_fit, coach_bonds,
+    games_since_return, usage_featured, age.
     """
     try:
         try:
-            score = float(player.overall_rating()) / 100.0
+            ovr = float(player.overall_rating())
         except Exception:
-            score = 0.60
-        if score <= 0:
-            score = 0.05
+            ovr = 60.0
+        if ovr <= 0:
+            ovr = 5.0
+        form01 = _norm_form01(player)
+        perf = 80.0 + 20.0 * (form01 + 1.0) / 2.0   # 80..100
+        base = (0.90 * ovr + 0.10 * perf) / 100.0
 
-        # Recent performance / form: mesh_form (-1 cold .. 1 hot) is the
-        # owned form tracker; morale doubles as form/confidence (1-100).
-        form = _attr100(player, "mesh_form", 0)
-        form = max(-1.0, min(1.0, form / 100.0 if abs(form) > 1.0 else form))
-        score *= 1.0 + 0.25 * form
-        morale = _attr100(player, "morale", 70) / 100.0
-        score *= 0.85 + 0.30 * max(0.0, min(1.0, morale))
+        style = _safe_coach_style(coach)
+        skey = style.get("key") or style_key or "balanced"
+        recency_w = _adapt_recency_mult(coach)
+        if direction is None:
+            direction = _team_direction(team) if team is not None else "neutral"
 
-        # Attitude: coachability / work ethic / determination.
+        vibes = []
+        # Morale (0.96..1.04) -- the room's confidence in him.
+        morale01 = max(0.0, min(1.0, _attr100(player, "morale", 70) / 100.0))
+        vibes.append(_style_factor_mult(0.96 + 0.08 * morale01, skey, "morale"))
+        # Attitude: coachability / work ethic / determination (0.98..1.02).
         att = (_attr100(player, "coachability", 50)
                + _attr100(player, "work_ethic", 50)
                + _attr100(player, "determination", 50)) / 3.0
-        score *= 0.92 + 0.16 * (att / 100.0)
+        vibes.append(_style_factor_mult(0.98 + 0.04 * (att / 100.0),
+                                        skey, "attitude"))
+        # Archetype fit vs the coach's system (0.92..1.08).
+        arch = _safe_archetype_valuation(coach, player)
+        arch = max(0.92, min(1.08, arch))
+        vibes.append(_style_factor_mult(arch, skey, "archetype"))
 
         if coach is not None:
-            # Archetype fit vs the coach's system (0.5..1.15).
-            score *= _safe_archetype_valuation(coach, player)
-            # Coach-player relationship: fit (-1..1) nudges; a bond forged
-            # in fire (coach_bonds) means the coach trusts him -- bought in.
+            # Coach-player relationship (morale blanket): fit (-1..1);
+            # negative fit bites harder (-12% vs +8%).
             fit = _safe_coach_fit(coach, player)
-            score *= 1.0 + 0.15 * fit
+            fit_m = 1.0 + (0.08 if fit >= 0 else 0.12) * fit
+            vibes.append(_style_factor_mult(fit_m, skey, "relationships"))
+            # A bond forged in fire: the coach trusts him.
             bonds = getattr(player, "coach_bonds", None) or {}
             try:
-                if getattr(coach, "id", None) in bonds:
-                    score *= 1.10
+                has_bond = getattr(coach, "id", None) in bonds
             except Exception:
-                pass
+                has_bond = False
+            if has_bond:
+                vibes.append(_style_factor_mult(1.04, skey, "relationships"))
+
+        # Team direction: rebuilds develop youth; contenders lean on vets.
+        vibes.append(_direction_mult(player, direction, skey))
+
+        # Recency, bounded: genuine heaters earn more (never a hierarchy
+        # inversion -- inside the vibe clamp, adaptability-scaled).
+        heat01 = max(0.0, min(1.0, (form01 - 0.5) / 0.5))
+        if heat01 > 0:
+            heater_m = 1.0 + 0.08 * heat01 * recency_w
+            vibes.append(_style_factor_mult(heater_m, skey, "recency"))
+        # Comeback: recently returned from injury (W4 games_since_return),
+        # a short leash of extra trust that decays over ~5 games.
+        try:
+            gsr = getattr(player, "games_since_return", None)
+            injured = bool(getattr(player, "is_injured", False))
+            if (not injured and gsr is not None and 0 <= int(gsr) <= 5):
+                comeback01 = (6 - int(gsr)) / 6.0
+                vibes.append(1.0 + 0.10 * comeback01)
+        except Exception:
+            pass
+
+        vibe = 1.0
+        for m in vibes:
+            vibe *= m
+        vibe = max(_VIBE_CLAMP_LO, min(_VIBE_CLAMP_HI, vibe))
+        score = base * vibe
 
         # Honored GM advice (suggest-to-coach). The gate already ran at
-        # advise time; these flags MEAN the coach agreed.
+        # advise time; these flags MEAN the coach agreed. Deliberate
+        # decisions -- applied outside the vibe clamp.
         pid = getattr(player, "id", None)
         keys = advice.get("keys", set())
         if pid in advice.get("featured_ids", set()):
@@ -311,8 +537,6 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         return 0.5
 
 
-# ---------------------------------------------------------------------------
-# Lineup access (read-only; never resolves or writes lineups -- W1's region)
 # ---------------------------------------------------------------------------
 
 def _game_lineup_for(sim: Any, team: Any) -> Dict[str, Any]:
@@ -635,7 +859,7 @@ def deployment_weights(team: Any, coach_style: Dict[str, Any],
         featured_lines: List[int] = []
         for i in (1, 2, 3, 4):
             players = [p for p in _line("F", i) if not _is_goalie(p)]
-            s = sum(_player_deployment_score(p, coach, style_key, advice)
+            s = sum(_player_deployment_score(p, coach, style_key, advice, team=team)
                     for p in players)
             f_scores.append(s if players else 0.0)
             if any(getattr(p, "id", None) in advice["featured_ids"]
@@ -643,13 +867,13 @@ def deployment_weights(team: Any, coach_style: Dict[str, Any],
                 featured_lines.append(i)
         for i in (1, 2, 3):
             players = [p for p in _line("D", i) if not _is_goalie(p)]
-            s = sum(_player_deployment_score(p, coach, style_key, advice)
+            s = sum(_player_deployment_score(p, coach, style_key, advice, team=team)
                     for p in players)
             d_scores.append(s if players else 0.0)
         for i in (1, 2):
             for kind, acc in (("PP", pp_scores), ("PK", pk_scores)):
                 players = [p for p in _line(kind, i) if not _is_goalie(p)]
-                s = sum(_player_deployment_score(p, coach, style_key, advice)
+                s = sum(_player_deployment_score(p, coach, style_key, advice, team=team)
                         for p in players)
                 acc.append(s if players else 0.0)
 
@@ -1082,6 +1306,9 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
     ratios and nobody would ever sit. If all lines are capped, the least-
     capped line stays available so deployment never stalls. Never raises;
     returns the input shares unchanged on any failure.
+
+    Short-bench games (bench_depleted) bind at 35:00 rather than standing
+    down entirely; must-win playoff games and OT marathons still ride.
     """
     try:
         shares = list(shares)
@@ -1090,8 +1317,10 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
             return shares
         gs = _game_state_from_sim(sim, team)
         exc = soft_cap_exceptions(gs)
-        if any(exc.values()):
+        if exc.get("must_win_playoff") or exc.get("ot_marathon"):
             return shares  # exceptions: ride the horses
+        cap_s = SOFT_CAP_SHORT_S if exc.get("bench_depleted") else SOFT_CAP_S
+        short_bench = cap_s > SOFT_CAP_S
         lineup = _game_lineup_for(sim, team)
         kind = "F" if side == "F" else "D"
         bound = []
@@ -1103,7 +1332,7 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
             tois = [(_raw_toi(sim, getattr(p, "id", None)), p)
                     for p in players]
             worst_s, star = max(tois, key=lambda t: t[0])
-            if worst_s >= SOFT_CAP_S:
+            if worst_s >= cap_s:
                 bound.append((i + 1, worst_s, star))
         if not bound:
             return shares
@@ -1134,16 +1363,19 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
             logged.add(key)
             pname = getattr(star, "full_name", "a skater")
             unit = "line" if side == "F" else "pair"
+            cap_label = "35 (short bench)" if short_bench else "30"
             _log_deployment(sim, team, {
                 "event": "soft_cap_bind",
                 "line": line_no, "side": side,
                 "player": pname,
                 "toi_min": round(worst_s / 60.0, 1),
                 "action": (f"{pname} at {worst_s / 60.0:.1f} min "
-                           f"(soft-cap trigger 27:00, cap ~30) -- deployment "
+                           f"(soft-cap trigger 27:00, cap ~{cap_label}) -- deployment "
                            f"shifts to next "
                            f"{'lines' if side == 'F' else 'pairs'}"),
-                "text": (f"{tname}: {pname} hits the ~30-min soft cap; "
+                "text": (f"{tname}: {pname} hits the "
+                         f"{'35-min short-bench' if short_bench else '~30-min'} "
+                         f"soft cap; "
                          f"the {line_no}{_ordinal(line_no)} {unit} sits "
                          f"while the next units take the ice."),
             })

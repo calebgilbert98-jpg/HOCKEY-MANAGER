@@ -8301,16 +8301,24 @@ class GameSim:
             # ~30-min cap sits out special teams too. His ES line is already
             # bound by soft_cap_adjust_shares; without this, PP/PK shifts
             # (dressed here, not by the shift engine) skate him 2-5 min past
-            # the cap in high-penalty games. Defined exceptions ride.
+            # the cap in high-penalty games. Short-bench games govern at the
+            # 35-min second-tier cap; must-win playoff games and OT marathons
+            # ride.
             try:
                 from deployment_policy import (
                     _raw_toi as _st_raw_toi,
                     _game_state_from_sim as _st_gs,
                     soft_cap_exceptions as _st_exc,
                     SOFT_CAP_S as _ST_CAP,
+                    SOFT_CAP_SHORT_S as _ST_CAP_SHORT,
                 )
                 _st_exc_d = _st_exc(_st_gs(self, team))
-                _st_governed = not any(_st_exc_d.values())
+                if _st_exc_d.get("must_win_playoff") or _st_exc_d.get("ot_marathon"):
+                    _st_governed = False
+                else:
+                    _st_governed = True
+                    if _st_exc_d.get("bench_depleted"):
+                        _ST_CAP = _ST_CAP_SHORT
             except Exception:
                 _st_governed = False
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):

@@ -12003,6 +12003,16 @@ class HockeyManagerGUI(tk.Tk):
         sim = GameSim(home_team, away_team, atmosphere=_atm,
                       crowd_hype=crowd_hype_for_tension(
                           _atm.get("energy", 50.0), _atm.get("mood", 30.0)))
+        # Deployment directive: feed today's trade-deadline stances to the
+        # ice-time ecosystem so coaches read team direction (buyer/seller).
+        # Additive; the stance model lives in trade_storylines.
+        try:
+            from deployment_policy import set_team_direction as _set_tdir
+            import trade_storylines as _ts
+            _set_tdir({home_team.team_name: _ts.stance(self, home_team.team_name),
+                       away_team.team_name: _ts.stance(self, away_team.team_name)})
+        except Exception:
+            pass
         periods = set()
         had_shootout = {'v': False}
 
@@ -12759,6 +12769,15 @@ class HockeyManagerGUI(tk.Tk):
         so the result processes exactly like any other sim.
         """
         from pbp_visual_sim import open_pbp_window
+
+        # Deployment directive: same direction-cache fill as the batch path.
+        try:
+            from deployment_policy import set_team_direction as _set_tdir
+            import trade_storylines as _ts
+            _set_tdir({home_team.team_name: _ts.stance(self, home_team.team_name),
+                       away_team.team_name: _ts.stance(self, away_team.team_name)})
+        except Exception:
+            pass
 
         # Adaptive Rivals: AI scouts the user and adjusts tactics for this game.
         # Reverts to base identity afterwards.
