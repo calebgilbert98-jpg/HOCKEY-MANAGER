@@ -879,6 +879,16 @@ def monthly_trade_request_check(app) -> int:
         except Exception:
             pass
         random.shuffle(roster)
+        # B39: the fracture ladder's trade fallout. The monthly room tick
+        # (reputation_system.room_implications_monthly_tick) stamps
+        # team._room_trade_risk_mult when the room is Fracturing/Lost;
+        # it multiplies this month's roll and is reset after this pass
+        # (debt that isn't spent this month carries to the next).
+        try:
+            _risk_mult = float(getattr(team, "_room_trade_risk_mult",
+                                       1.0) or 1.0)
+        except Exception:
+            _risk_mult = 1.0
         for player in roster:
             if fired >= TRADE_REQUEST_MONTHLY_CAP:
                 break
@@ -891,13 +901,17 @@ def monthly_trade_request_check(app) -> int:
                              "team_name": getattr(team, "team_name", "")})
                 if risk < 0.45:
                     continue
-                if random.random() < (risk - 0.35) * 0.5:
+                if random.random() < (risk - 0.35) * 0.5 * _risk_mult:
                     player.transfer_requested = True
                     fired += 1
                     if _is_notable(player):
                         _headline_trade_request(app, game_date, player, team)
             except Exception:
                 continue
+        try:
+            team._room_trade_risk_mult = 1.0
+        except Exception:
+            pass
     return fired
 
 

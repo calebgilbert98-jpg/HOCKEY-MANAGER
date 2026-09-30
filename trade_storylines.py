@@ -181,12 +181,15 @@ def situational_context(app, team, partner=None):
             mult *= _WINNING_STREAK_MULT
             notes.append(f'{sk}-game win streak -- no need to tinker')
 
-        # Rivalries: GMs hate dealing within a blood feud
+        # Rivalries: minuscule premium only -- mirrors build_bid's
+        # never-blocked tax EXACTLY (B41, Muck 2026-09-29): max +2% at
+        # intensity 100, scaling from the 50 threshold with no cliff.
+        # Same cap, same threshold, same curve as the market path.
         if partner is not None:
             pname = getattr(partner, 'team_name', '')
             inten = _rivalry_intensity(app, name, pname)
-            if inten >= 30:
-                bump = 1.0 + min(0.25, inten / 400.0)
+            if inten >= 50:
+                bump = 1.0 + 0.02 * min(1.0, max(0.0, (float(inten) - 50.0) / 50.0))
                 mult *= bump
                 notes.append('bitter rivals -- premium demanded')
 

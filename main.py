@@ -1801,6 +1801,13 @@ NHL League Office""",
                         player.is_injured = False
                         player.injury_type = "None"
                         player.games_remaining_injured = 0
+                        # B18 (fixed 2026-09-30): keep the legacy string
+                        # consistent -- stale injury_status values from the
+                        # old hit path must not linger after recovery.
+                        try:
+                            player.injury_status = "Healthy"
+                        except Exception:
+                            pass
                         try:
                             player.in_concussion_protocol = False
                             # Re-aggravation window opens on return.
@@ -6869,6 +6876,14 @@ class HockeyManagerGUI(tk.Tk):
                     self.game_manager._process_monthly_development()
                 except Exception as e:
                     print(f"Player development error (non-fatal): {e}")
+                # B39 (fixed 2026-09-30): the fracture ladder's production
+                # caller. Runs BEFORE the trade-request check so the
+                # room's trade-risk multiplier applies in the same pass.
+                try:
+                    import reputation_system as _rs_tick
+                    _rs_tick.room_implications_monthly_tick(self)
+                except Exception as e:
+                    print(f"Room implications tick error (non-fatal): {e}")
                 # Monthly headline check: rare trade requests (risk-model
                 # driven, capped league-wide so it stays rare).
                 try:

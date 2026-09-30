@@ -1302,7 +1302,9 @@ def chance_heat_boost_tilt(player) -> float:
     """
     try:
         _h = _player_heat(player)
-        return 1.0 + CHANCE_HEAT_BOOST * _player_heat(player)
+        # Centered: 1.0 at neutral heat (0.5), +12% at full heater (1.0),
+        # -12% at full cold (0.0).
+        return 1.0 + CHANCE_HEAT_BOOST * (_h - 0.5) * 2.0
     except Exception:
         return 1.0
 

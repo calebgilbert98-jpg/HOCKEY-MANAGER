@@ -234,9 +234,15 @@ class PracticeEngine:
             intensity in [PracticeIntensity.INTENSE, PracticeIntensity.EXTREME]):
             return False, "Player already had intense practice today."
         
-        # Check injury status (if implemented)
-        if hasattr(player, 'injury_status') and player.injury_status != "Healthy":
-            return False, f"Player injured: {player.injury_status}"
+        # Check injury status: the single source of truth is the new injury
+        # system (is_injured, counted down by the day-tick recovery loop
+        # in main._process_injury_recovery). B18 (fixed 2026-09-30): the
+        # legacy injury_status string was written by the old hit-injury
+        # path and never cleared, permanently blocking practice -- it no
+        # longer gates here.
+        if getattr(player, 'is_injured', False):
+            _itype = getattr(player, 'injury_type', None) or 'injured'
+            return False, f"Player injured: {_itype}"
         
         return True, "Ready to practice"
     

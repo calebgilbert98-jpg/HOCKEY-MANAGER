@@ -1208,6 +1208,242 @@ def room_implications(status: Dict[str, Any], entity: Any,
     return out
 
 
+def room_implications_monthly_tick(app) -> int:
+    """B39 (fixed 2026-09-30): the fracture ladder's production caller.
+
+    Runs inside the monthly tick (main.py, first of month). For every NHL
+    team, the head coach's room_status is evaluated; when the level is
+    Strain/Fracturing/Lost, room_implications()'s fallout is applied
+    through the EXISTING channels -- nothing new is invented:
+
+      * media       -> dynamics feed story (+ user-team news item)
+      * chemistry   -> roster happiness drop (team_chemistry recomputes
+                       lower on the next Morale refresh)
+      * trade       -> team._room_trade_risk_mult, consumed and reset by
+                       headlines.monthly_trade_request_check in the same
+                       monthly pass
+      * personnel   -> team flags (_captaincy_review_due,
+                       _coach_firing_recommended) + dynamics feed story
+      * performance -> roster happiness drop (effort drain)
+
+    Secure rooms are untouched. Additive; never raises. Returns the number
+    of teams where fallout fired.
+    """
+    fired = 0
+    try:
+        league = getattr(app, "league", None)
+        teams = list(getattr(league, "teams", None) or [])
+    except Exception:
+        return 0
+    for team in teams:
+        try:
+            if getattr(team, "league_name",
+                       "National Hockey League") != "National Hockey League":
+                continue
+            roster = list(getattr(team, "roster", None) or [])
+            if not roster:
+                continue
+            coach = _tick_head_coach(team)
+            if coach is None:
+                continue
+            ctx = _tick_team_context(team, roster)
+            try:
+                status = room_status(coach, ctx, roster)
+            except Exception:
+                continue
+            level = status.get("level", "Secure")
+            if level == "Secure":
+                continue
+            try:
+                fallout = room_implications(status, coach, ctx, roster)
+            except Exception:
+                continue
+            _apply_room_fallout(app, team, roster, coach, ctx, status,
+                                fallout)
+            fired += 1
+        except Exception:
+            continue
+    return fired
+
+
+def _tick_head_coach(team):
+    """Head coach from team.staff (same lookup as the Morale window)."""
+    try:
+        for s in getattr(team, "staff", []) or []:
+            if "Head Coach" in str(getattr(getattr(s, "role", None),
+                                           "value", "")):
+                return s
+    except Exception:
+        pass
+    return None
+
+
+def _tick_team_context(team, roster):
+    """Minimal team_context for room_status (mirrors the Morale window)."""
+    ctx = {"win_pct": 0.5, "room_leadership": 50, "losing_streak": 0}
+    try:
+        w = getattr(team, "wins", 0) or 0
+        l = getattr(team, "losses", 0) or 0
+        otl = getattr(team, "otl", 0) or 0
+        gp = w + l + otl
+        ctx["win_pct"] = (w / gp) if gp else 0.5
+        try:
+            leaders = team_hierarchy(roster).get("Team Leaders", [])
+            if leaders:
+                ctx["room_leadership"] = sum(
+                    getattr(p, "leadership", 50) or 50
+                    for p in leaders) / len(leaders)
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return ctx
+
+
+def _apply_chemistry_hit(team, roster, ctx, magnitude):
+    """B39: make a chemistry fallout item move the actual chemistry score.
+
+    team_chemistry is a pure function of (leadership, reputation,
+    controversy, age) -- room tension made manifest is a controversy
+    bump. Binary-search a uniform bump (0..30) so the observed score
+    drop lands near |magnitude|. The end-of-season controversy
+    normalization pulls spikes back toward baseline, so this is
+    seasonal texture, not a ratchet. Returns the applied bump.
+    """
+    target = abs(float(magnitude or 0))
+    if target <= 0 or not roster:
+        return 0.0
+    try:
+        base = team_chemistry(roster, ctx)["score"]
+    except Exception:
+        return 0.0
+    orig = [getattr(p, "controversy", 0) or 0 for p in roster]
+
+    def _score_at(bump):
+        for p, c in zip(roster, orig):
+            try:
+                p.controversy = min(100, c + bump)
+            except Exception:
+                pass
+        try:
+            return team_chemistry(roster, ctx)["score"]
+        except Exception:
+            return base
+
+    lo, hi = 0.0, 30.0
+    best, best_err = 0.0, target  # bump 0 -> drop 0 -> err == target
+    for _ in range(10):
+        mid = (lo + hi) / 2.0
+        drop = base - _score_at(mid)
+        err = abs(drop - target)
+        if err < best_err or (err == best_err and mid < best):
+            best, best_err = mid, err
+        if drop < target:
+            lo = mid
+        else:
+            hi = mid
+    for p, c in zip(roster, orig):
+        try:
+            p.controversy = min(100, c + best)
+        except Exception:
+            pass
+    return best
+
+
+def _apply_room_fallout(app, team, roster, coach, ctx, status, fallout):
+    """Apply one team's room_implications fallout via existing channels."""
+    level = status.get("level", "")
+    cname = getattr(coach, "full_name", "the coach") or "the coach"
+    tname = getattr(team, "team_name", "") or "the team"
+    is_user = False
+    try:
+        is_user = (getattr(app, "user_team", None) is team)
+    except Exception:
+        pass
+
+    def _news(story):
+        if not is_user:
+            return
+        try:
+            app.news_log.append({"date": getattr(app, "current_date", None),
+                                 "story": story})
+        except Exception:
+            pass
+
+    for item in fallout or []:
+        try:
+            area = item.get("area", "")
+            text = item.get("text", "")
+            try:
+                mag = float(item.get("magnitude", 0) or 0)
+            except Exception:
+                mag = 0.0
+            if area == "chemistry":
+                # Chemistry is derived from (leadership, reputation,
+                # controversy, age) -- room tension made manifest is a
+                # controversy bump, calibrated so the Morale screen's
+                # score actually drops near the fallout magnitude.
+                _apply_chemistry_hit(team, roster, ctx, mag)
+                # Morale sours too: happiness feeds trade-request risk
+                # and the other morale readers.
+                drop = max(1, int(abs(mag)) // 3)
+                for p in roster:
+                    try:
+                        p.happiness = max(
+                            0, int(getattr(p, "happiness", 70) or 70) - drop)
+                    except Exception:
+                        continue
+                record_team_event(team, "room_chemistry",
+                                  f"🧊 {text} ({cname})",
+                                  morale_delta=int(mag), tone="down")
+                _news(f"🧊 {tname}: {text}.")
+            elif area == "media":
+                record_team_event(team, "room_media",
+                                  f"📰 {text}", morale_delta=-2, tone="down")
+                _news(f"📰 {tname}: {text}.")
+            elif area == "trade":
+                try:
+                    cur = float(getattr(team, "_room_trade_risk_mult",
+                                        1.0) or 1.0)
+                    team._room_trade_risk_mult = max(cur, mag if mag > 1
+                                                     else 1.5)
+                except Exception:
+                    pass
+                record_team_event(team, "room_trade",
+                                  f"🔁 {text}", morale_delta=-3, tone="down")
+                _news(f"🔁 {tname}: {text}.")
+            elif area == "personnel":
+                low = text.lower()
+                try:
+                    if "captaincy" in low:
+                        team._captaincy_review_due = True
+                    if any(k in low for k in ("firing", "termination",
+                                              "fired", "job in danger",
+                                              "win or else")):
+                        team._coach_firing_recommended = True
+                except Exception:
+                    pass
+                record_team_event(team, "room_personnel",
+                                  f"⚠️ {text}", morale_delta=-4, tone="down")
+                _news(f"⚠️ {tname}: {text}.")
+            elif area == "performance":
+                # Silent quit: effort drains -> happiness (and locker-room
+                # impact) slide.
+                drop = max(1, int(abs(mag)) // 3)
+                for p in roster:
+                    try:
+                        p.happiness = max(
+                            0, int(getattr(p, "happiness", 70) or 70) - drop)
+                    except Exception:
+                        continue
+                record_team_event(team, "room_performance",
+                                  f"📉 {text} ({cname})",
+                                  morale_delta=int(mag), tone="down")
+            # Unknown areas are ignored -- additive by design.
+        except Exception:
+            continue
+
+
 # ---------------------------------------------------------------------------
 # Coaching styles & player engagement styles
 # ---------------------------------------------------------------------------

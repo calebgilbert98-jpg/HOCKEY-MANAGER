@@ -9421,32 +9421,13 @@ class GameSim:
             return self._resolve_turnover(puck_carrier, potential_hitter, TurnoverType.FORCED_ERROR)
         elif hit_result == HitResult.PENALTY_DRAWN:
             self._resolve_penalty(potential_hitter, hitting_team)
-        elif hit_result == HitResult.INJURY_CAUSED:
-            self._apply_game_injury(puck_carrier, potential_hitter)
+        # B17 (fixed 2026-09-30): INJURY_CAUSED needs no further action
+        # here. The injury was already applied by _resolve_hit_result ->
+        # _apply_hit_injury (the new is_injured/games_remaining_injured
+        # system) before this branch runs -- the old _apply_game_injury
+        # call wrote a SECOND legacy record (injury_status/injury_days)
+        # that the recovery loop never reads or clears, so it was removed.
         return None
-
-    def _apply_game_injury(self, injured_player, hitting_player=None):
-        """Apply an in-game injury from a hit. Player leaves the game."""
-        try:
-            injury_types = [
-                ('upper body', 3, 14),   # name, min days, max days
-                ('lower body', 5, 21),
-                ('head', 7, 30),
-                ('shoulder', 4, 18),
-            ]
-            inj_type, min_d, max_d = random.choice(injury_types)
-            days = random.randint(min_d, max_d)
-            injured_player.injury_status = f"{inj_type} ({days} days)"
-            injured_player.injury_days = days
-            if injured_player.id in self.game_stats:
-                self.game_stats[injured_player.id]['injured'] = True
-                self.game_stats[injured_player.id]['injury_type'] = inj_type
-            hitter = getattr(hitting_player, 'name', 'opponent') if hitting_player else 'opponent'
-            self._log_event(
-                f"INJURY: {getattr(injured_player, 'name', 'player')} "
-                f"hurt on a hit from {hitter} ({inj_type}).")
-        except Exception:
-            pass
 
     def _attempt_hit(self, hitting_player, target_player, hit_type=HitType.BODY_CHECK):
         """
