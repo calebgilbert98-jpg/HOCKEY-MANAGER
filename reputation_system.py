@@ -1686,6 +1686,65 @@ def player_coach_response(player: Any, coach: Any,
 
 
 # ---------------------------------------------------------------------------
+# Adaptability: morale-shock dampening + slump recovery (T1 refinement,
+# 2026-09-30)
+#
+# adaptability was card-only decoration until the attributes pass wired it
+# into coach_practice.practice_attitude (kept as-is). The refinement gives
+# it two morale jobs. Morale and form stay separate systems -- neither
+# helper reads or writes form, and the morale 1-100 scale is untouched.
+#
+# 1. adaptability_shock_mult -- bounded dampening on NEGATIVE morale
+#    deltas only (benching/demotion/healthy scratch, trade arrival, role
+#    changes, losing-streak drag). Callers multiply the negative delta by
+#    this; positive morale gains are never passed through it.
+#    Formula: mult = clamp(1 - (adaptability - 70) / 100, 0.75, 1.0).
+#    adaptability 90 -> 0.80 (shock softened 20%); 95 -> 0.75 rail;
+#    70 -> 1.00 (neutral); <= 70 -> 1.00 (low adaptability takes the full
+#    shock -- never amplified, additive-only).
+# 2. adaptability_recovery_mult -- bounded rate modifier for slump
+#    recovery: high adaptability refills morale faster after a slump.
+#    Formula: mult = clamp(1 + (adaptability - 70) / 120, 1.0, 1.25).
+#    adaptability 90 -> ~1.17; 100 -> 1.25 rail; <= 70 -> 1.00 (never
+#    slower). Applies to positive morale-recovery moves only.
+# ---------------------------------------------------------------------------
+
+def _adaptability(player: Any) -> float:
+    """adaptability 50-90 on the card; 70 neutral for old saves."""
+    try:
+        v = getattr(player, "adaptability", 70)
+        return float(v) if v is not None else 70.0
+    except (TypeError, ValueError):
+        return 70.0
+
+
+def adaptability_shock_mult(player: Any) -> float:
+    """Morale-shock dampening from adaptability. Rails [0.75, 1.0].
+
+    Multiply a NEGATIVE morale delta by this. Positive deltas must not
+    be passed through it.
+    """
+    try:
+        a = _adaptability(player)
+    except Exception:
+        return 1.0
+    return max(0.75, min(1.0, 1.0 - (a - 70.0) / 100.0))
+
+
+def adaptability_recovery_mult(player: Any) -> float:
+    """Slump-recovery rate from adaptability. Rails [1.0, 1.25].
+
+    Multiply a positive morale-RECOVERY delta (coming out of a slump)
+    by this. Never below 1.0 -- low adaptability never recovers slower.
+    """
+    try:
+        a = _adaptability(player)
+    except Exception:
+        return 1.0
+    return max(1.0, min(1.25, 1.0 + (a - 70.0) / 120.0))
+
+
+# ---------------------------------------------------------------------------
 # Team dynamics feed
 # ---------------------------------------------------------------------------
 # The living story of the room: every event that pushes morale up or down,
@@ -6050,11 +6109,20 @@ def apply_fresh_start(player: Any, old_team: Any, new_team: Any,
         player.happiness = max(0, min(100, happiness + dh))
     except Exception:
         pass
+    # T1 refinement (2026-09-30): trade-arrival morale shock dampening --
+    # a high-adaptability player absorbs a step-down move better. Only
+    # negative deltas are dampened; positive gains are untouched.
+    _dm_applied = dm
+    if dm < 0:
+        try:
+            _dm_applied = dm * adaptability_shock_mult(player)
+        except Exception:
+            _dm_applied = dm
     try:
-        player.morale = max(0, min(100, morale + dm))
+        player.morale = max(0, min(100, morale + _dm_applied))
     except Exception:
         pass
-    result["morale_delta"] = dm
+    result["morale_delta"] = _dm_applied
     result["happiness_delta"] = dh
 
     # The room notices: log to the new team's dynamics feed.

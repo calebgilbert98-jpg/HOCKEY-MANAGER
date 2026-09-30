@@ -9610,9 +9610,12 @@ class GameSim:
         # Select result based on probabilities
         # -- Impact scaling (additive): applied AFTER the hit-type and
         # trait logic above, so all existing tuning is preserved.
+        # T1 refinement (2026-09-30): the hitter is passed so bodycheck
+        # power scales the within-tier effects (injury/turnover/heat);
+        # tier thresholds unchanged.
         try:
             import impact_system as _imp
-            _heff = _imp.hit_effects(impact)
+            _heff = _imp.hit_effects(impact, hitting_player)
             results = [
                 (r, p * _heff["turnover_mult"] if r == HitResult.TURNOVER_CAUSED
                  else p * _heff["injury_mult"] if r == HitResult.INJURY_CAUSED
@@ -9682,9 +9685,11 @@ class GameSim:
 
         # -- Impact consequences (additive): big hits raise the
         # temperature and can swing momentum at the right moment.
+        # T1 refinement (2026-09-30): the hitter is passed so bodycheck
+        # power scales the within-tier heat; tier thresholds unchanged.
         try:
             import impact_system as _imp
-            _heff = _imp.hit_effects(impact)
+            _heff = _imp.hit_effects(impact, hitting_player)
             if _heff["heat"]:
                 self._live_heat = min(40.0, self._live_heat + _heff["heat"])
             if impact == 2 and _heff["momentum"] and hitting_team is not None:

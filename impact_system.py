@@ -240,6 +240,43 @@ def classify_shot_impact(shooter: Any, ctx: ImpactContext) -> int:
     return _roll(pt / s, pn / s, pb / s)
 
 
+# ---------------------------------------------------------------------------
+# Bodycheck refinement (T1 refinement, 2026-09-30)
+#
+# bodycheck is truth-in-display since the attributes pass (4th voice in the
+# hit blend above). The refinement gives it two more jobs, both bounded and
+# both additive -- no tier threshold, band, or existing constant changes:
+#
+# 1. LIKELIHOOD: _bodycheck_big_roll_mult -- a bounded multiplier on the
+#    big-hit roll inside classify_hit_impact (applied above).
+# 2. POWER: _bodycheck_power_mult -- a bounded within-tier multiplier on
+#    the downstream hit effects (injury / turnover / heat) in hit_effects
+#    below. A high-bodycheck hitter's connects land heavier without ever
+#    changing which tier the hit classified into.
+# ---------------------------------------------------------------------------
+
+def _bodycheck_big_roll_mult(hitter: Any) -> float:
+    """Big-hit roll multiplier from bodycheck. Rails [0.90, 1.15]."""
+    try:
+        bc = float(getattr(hitter, "bodycheck", 70) or 70)
+    except (TypeError, ValueError):
+        bc = 70.0
+    mult = 1.0 + (bc - 70.0) / 200.0
+    return max(0.90, min(1.15, mult))
+
+
+def _bodycheck_power_mult(hitter: Any) -> float:
+    """Within-tier hit-power multiplier from bodycheck. Rails [0.92, 1.12]:
+    a 90-bodycheck hitter's connects scale injury/turnover/heat ~+8%;
+    a 50-bodycheck hitter's ~-8%; 70 is neutral."""
+    try:
+        bc = float(getattr(hitter, "bodycheck", 70) or 70)
+    except (TypeError, ValueError):
+        bc = 70.0
+    mult = 1.0 + (bc - 70.0) / 250.0
+    return max(0.92, min(1.12, mult))
+
+
 def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
     """Tier of a body check."""
     overall = _overall(hitter)
@@ -254,6 +291,19 @@ def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
                 + _attr(hitter, "determination")
                 + _attr(hitter, "bodycheck")) / 4.0
     pb += max(-0.05, min(0.09, (hit_attr - 70) / 350.0))
+
+    # T1 refinement (2026-09-30): bodycheck raises the BIG-tier
+    # classification probability directly -- a bounded multiplier on the
+    # big-hit roll, applied after the attribute blend and before the
+    # archetype/coach/personality voices (those still add on top).
+    # Formula: mult = clamp(1 + (bodycheck - 70) / 200, 0.90, 1.15).
+    # Rails [0.90, 1.15]: a 90-bodycheck hitter rolls ~+10% big
+    # probability; a 50-bodycheck hitter rolls ~-10%; 70 is neutral
+    # (missing attr defaults to 70 -- no penalty on old saves).
+    # Tier thresholds are untouched; this only reweights the roll.
+    # Guardrail: enforcer big-hit rate (~33.9% vs ~30% band) is Muck's
+    # standing calibration -- shrink the rails if the league rate drifts.
+    pb *= _bodycheck_big_roll_mult(hitter)
 
     arch = _archetype(hitter).lower()
     if "enforcer" in arch:
@@ -376,16 +426,40 @@ def shot_effects(tier: int) -> Dict[str, float]:
             "heat": 0.0, "momentum": 0.0}
 
 
-def hit_effects(tier: int) -> Dict[str, float]:
-    """Adjustments to the existing hit-result weights + intensity."""
+def hit_effects(tier: int, hitter: Any = None) -> Dict[str, float]:
+    """Adjustments to the existing hit-result weights + intensity.
+
+    T1 refinement (2026-09-30): pass the hitter to scale the *within-tier*
+    effects by bodycheck power -- injury_mult, turnover_mult and heat are
+    multiplied by _bodycheck_power_mult(hitter) (rails [0.92, 1.12]), so a
+    high-bodycheck hitter's connects land heavier without changing tier
+    thresholds or the tier table. hitter=None returns the tier table
+    unchanged (byte-identical for existing callers). penalty_mult and the
+    momentum story-gate are never scaled: heavier hits don't draw more
+    penalties and don't buy more stories.
+    """
     if tier == BIG:
-        return {"turnover_mult": 1.6, "injury_mult": 2.2,
+        base = {"turnover_mult": 1.6, "injury_mult": 2.2,
                 "penalty_mult": 1.3, "heat": 2.0, "momentum": 1.0}
-    if tier == TIRED:
-        return {"turnover_mult": 0.6, "injury_mult": 0.5,
+    elif tier == TIRED:
+        base = {"turnover_mult": 0.6, "injury_mult": 0.5,
                 "penalty_mult": 0.8, "heat": 0.0, "momentum": 0.0}
-    return {"turnover_mult": 1.0, "injury_mult": 1.0,
-            "penalty_mult": 1.0, "heat": 0.0, "momentum": 0.0}
+    else:
+        base = {"turnover_mult": 1.0, "injury_mult": 1.0,
+                "penalty_mult": 1.0, "heat": 0.0, "momentum": 0.0}
+    if hitter is None:
+        return base
+    try:
+        pm = _bodycheck_power_mult(hitter)
+    except Exception:
+        return base
+    if pm == 1.0:
+        return base
+    out = dict(base)
+    out["turnover_mult"] = base["turnover_mult"] * pm
+    out["injury_mult"] = base["injury_mult"] * pm
+    out["heat"] = base["heat"] * pm
+    return out
 
 
 def save_effects(tier: int) -> Dict[str, float]:

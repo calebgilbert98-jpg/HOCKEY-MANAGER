@@ -375,6 +375,30 @@ def _bump_morale(player, delta):
     player.morale = max(1, min(100, m + delta))
 
 
+# T1 refinement (2026-09-30): adaptability in the farm-confidence pass.
+# Demotion frustration (cook_vet) and slump dips (slump/g_slump) are morale
+# SHOCKS -- negative deltas dampened via adaptability_shock_mult (rails
+# [0.75, 1.0]). Cooking surges (cook/g_cook) are slump RECOVERY -- positive
+# deltas scaled by adaptability_recovery_mult (rails [1.0, 1.25]), so high
+# adaptability refills morale faster: the hole is shallower AND refills
+# quicker, which is what "shortens slumps" means in morale terms. Form and
+# production curves are untouched (morale and form stay separate).
+def _adapt_shock_mult(player):
+    try:
+        import reputation_system as _rs
+        return _rs.adaptability_shock_mult(player)
+    except Exception:
+        return 1.0
+
+
+def _adapt_recovery_mult(player):
+    try:
+        import reputation_system as _rs
+        return _rs.adaptability_recovery_mult(player)
+    except Exception:
+        return 1.0
+
+
 def _bump_happiness(player, delta):
     h = getattr(player, "happiness", 70) or 70
     player.happiness = max(0, min(100, h + delta))
@@ -508,7 +532,8 @@ def weekly_farm_confidence(league, user_team=None):
                 if tag == "cook":
                     nhl_gp = getattr(getattr(p, "stats", None),
                                      "games_played", 0) or 0
-                    _bump_morale(p, 6 if nhl_gp > 0 else 4)
+                    _bump_morale(p, (6 if nhl_gp > 0 else 4)
+                                 * _adapt_recovery_mult(p))
                     p.ahl_callup_buzz = True
                     if is_user and not getattr(p, "ahl_buzz_note_sent", False):
                         ledger = getattr(p, "ahl_stats", None)
@@ -519,7 +544,7 @@ def weekly_farm_confidence(league, user_team=None):
                                                 ppg=pts / gp))
                         p.ahl_buzz_note_sent = True
                 elif tag == "g_cook":
-                    _bump_morale(p, 3)
+                    _bump_morale(p, 3 * _adapt_recovery_mult(p))
                     p.ahl_callup_buzz = True
                     if is_user and not getattr(p, "ahl_buzz_note_sent", False):
                         notes.append(_buzz_note(
@@ -528,16 +553,16 @@ def weekly_farm_confidence(league, user_team=None):
                                              "save_percentage", 0) or 0)))
                         p.ahl_buzz_note_sent = True
                 elif tag == "g_slump":
-                    _bump_morale(p, -3)
+                    _bump_morale(p, -3 * _adapt_shock_mult(p))
                     _bump_happiness(p, -1)
                     p.ahl_callup_buzz = False
                 elif tag == "cook_vet":
                     # Producing, but the phone never rings: frustration.
                     _bump_happiness(p, -3)
-                    _bump_morale(p, -2)
+                    _bump_morale(p, -2 * _adapt_shock_mult(p))
                     p.ahl_callup_buzz = False
                 elif tag == "slump":
-                    _bump_morale(p, -4)
+                    _bump_morale(p, -4 * _adapt_shock_mult(p))
                     _bump_happiness(p, -2)
                     p.ahl_callup_buzz = False
                 else:

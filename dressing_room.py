@@ -616,7 +616,7 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
                 kid_delta += 1
                 story += " A happy room makes for a soft landing."
             kid_delta = max(-4, min(3, kid_delta))
-            _bump(arriving, kid_delta)
+            _bump(arriving, _adapt_dampen(arriving, kid_delta))
             lines.append(story)
         else:
             # Young room: the kid cohort's character decides whether he
@@ -668,7 +668,9 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
             lines.append(f"{aname} lands with the {_gname.lower()} -- "
                          f"a vet knows how to find his people.")
         else:
-            _bump(arriving, -2)
+            # T1 refinement: the outsider's landing shock is dampened by
+            # his adaptability.
+            _bump(arriving, _adapt_dampen(arriving, -2))
             lines.append(f"{aname} arrives. Even outsiders respect the resume.")
         _vcocky, _vhot, _vtough, _vquiet, _vspot = _personality_of(arriving)
         try:
@@ -677,7 +679,8 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
             _vmood = 70.0
         if _vtough and _vmood < 55:
             # Tough sell, bad circumstances: difficult until they change.
-            _bump(arriving, -2)
+            # T1 refinement: adaptability dampens the landing shock.
+            _bump(arriving, _adapt_dampen(arriving, -2))
             lines.append(f"{aname} doesn't like the circumstances. "
                          f"He'll be difficult until they change.")
         vet_inf = influence_of(arriving)
@@ -691,8 +694,9 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
         if cap is not None and not cap_is_arriving and cap_letter == "C":
             if vet_inf > cap_inf and vet_age < 33:
                 # Alpha meets alpha: bounded friction, they'll sort it out.
-                _bump(cap, -2)
-                _bump(arriving, -2)
+                # T1 refinement: both men's adaptability dampens the rub.
+                _bump(cap, _adapt_dampen(cap, -2))
+                _bump(arriving, _adapt_dampen(arriving, -2))
                 lines.append(f"Two alphas, one room: {aname} and "
                              f"{_name(cap)} will sort out the pecking order.")
             elif cap_inf >= 70:
@@ -724,7 +728,7 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
                     wing = _clamp(getattr(lp, "morale", 70)) >= 65
                 except Exception:
                     wing = False
-            _bump(arriving, -1 if wing else -2)
+            _bump(arriving, _adapt_dampen(arriving, -1 if wing else -2))
             _gname = str(best['name'] or "")
             if _gname.lower().startswith("the "):
                 _gname = _gname[4:]
@@ -733,7 +737,7 @@ def _arrival_reaction(team: Any, arriving: Any, how: str = "signing",
             if wing:
                 lines.append(f"{best['leader']} has taken him under his wing.")
         else:
-            _bump(arriving, -6)
+            _bump(arriving, _adapt_dampen(arriving, -6))
             lines.append(f"{aname} arrives an outsider. The room will "
                          f"decide about him.")
 
@@ -1413,6 +1417,23 @@ def _bump(player: Any, delta: float) -> None:
         pass
 
 
+def _adapt_dampen(player: Any, delta: float) -> float:
+    """Adaptability morale-shock dampening (T1 refinement, 2026-09-30).
+
+    Negative deltas only: a high-adaptability player absorbs trade shocks,
+    benchings, demotions and losing-streak drag better (rails [0.75, 1.0]
+    via reputation_system.adaptability_shock_mult). Positive deltas pass
+    through untouched.
+    """
+    try:
+        if delta < 0:
+            import reputation_system as _rs
+            return delta * _rs.adaptability_shock_mult(player)
+    except Exception:
+        pass
+    return delta
+
+
 def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
                      date_str: str = "") -> List[str]:
     """A trade shakes the room. Departures hurt; arrivals must integrate.
@@ -1442,11 +1463,13 @@ def cascade_on_trade(team: Any, traded: Any = None, arriving: Any = None,
             if p is traded:
                 continue
             if clique is not None and _pid(p) in clique["member_ids"]:
-                _bump(p, -base_hit * (0.5 + clique["bond"]))
+                _bump(p, _adapt_dampen(p, -base_hit * (0.5 + clique["bond"])))
             else:
                 # Ambient hit: a strong leader in good spirits keeps his
-                # own guys' morale in check.
-                _bump(p, _leader_dampen(team, p, -1))
+                # own guys' morale in check. T1 refinement: adaptability
+                # dampens the shock per player on top of the leader's
+                # steadying hand.
+                _bump(p, _adapt_dampen(p, _leader_dampen(team, p, -1)))
         # After the shock, strong leaders pull their lowest guys back
         # from the brink -- the room doesn't spiral on one trade.
         try:
