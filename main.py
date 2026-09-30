@@ -2117,7 +2117,12 @@ class HockeyManagerGUI(tk.Tk):
         # Item 7: a captaincy choice deferred from headless new-game setup
         # (no display existed to ask) is raised here as a mandatory,
         # non-dismissible blocker before the user can continue.
-        self.after_idle(self._raise_captaincy_blocker_if_pending)
+        # NOTE: must be after(), not after_idle(): update_idletasks() calls
+        # later in __init__ (e.g. _create_nav_pill) flush idle callbacks, so
+        # after_idle would raise the modal mid-construction and hang/crash
+        # startup. Timer callbacks are not processed by update_idletasks,
+        # so this only fires once mainloop() is running and __init__ done.
+        self.after(250, self._raise_captaincy_blocker_if_pending)
         
         # Set application icon
         self._set_application_icon()
