@@ -16010,10 +16010,13 @@ class HockeyManagerGUI(tk.Tk):
                               "The Trade Deadline Center is only available on Trade Deadline Day.\n\n"
                               "Check back when the deadline approaches!")
             return
-            
-        if 'trade_deadline' not in self.open_windows or not self.open_windows['trade_deadline'].winfo_exists():
-            self.open_windows['trade_deadline'] = TradeDeadlineCenter(self)
-        self.open_windows['trade_deadline'].focus_set()
+
+        # Gating Phase 2: Tier-1 screen. show_screen registers the view in
+        # open_windows['trade_deadline'], so the clock-tick refresh path
+        # (open_windows.get('trade_deadline').refresh()) keeps working
+        # unchanged.
+        return self.show_screen("trade_deadline", "Trade Deadline Center",
+                                TradeDeadlineCenter)
 
     def open_draft_day_central(self):
         """Open Draft Day Central - the draft-day event hub"""

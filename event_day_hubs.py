@@ -916,8 +916,16 @@ def prompt_event_day(parent, game_manager, event):
         if event == 'draft':
             DraftDayCentralWindow(parent, game_manager)
         elif event == 'deadline':
-            from trade_deadline_center import TradeDeadlineCenter
-            TradeDeadlineCenter(parent)
+            # Gating Phase 2: route through the app's opener so the
+            # deadline center opens as a Tier-1 screen (prompt_event_day
+            # is called with the app as parent; main.py:12010).
+            opener = getattr(parent, 'open_trade_deadline_center', None)
+            if callable(opener):
+                opener()
+            else:
+                from trade_deadline_center import TradeDeadlineCenter
+                parent.show_screen("trade_deadline", "Trade Deadline Center",
+                                   TradeDeadlineCenter)
         elif event == 'free_agency':
             FreeAgencyFrenzyWindow(parent, game_manager)
     except Exception:

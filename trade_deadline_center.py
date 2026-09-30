@@ -6,7 +6,6 @@ regular-season game, per the CBA; Mar 8 fallback)
 """
 
 import tkinter as tk
-from popup_system import InGamePopup
 from tkinter import ttk
 import time
 from datetime import datetime, timedelta
@@ -20,15 +19,82 @@ from trade_deadline_manager import get_deadline_manager
 import media_rumors
 
 
-class TradeDeadlineCenter(InGamePopup):
+# -- Gating Phase 2: shared palette. _create_styles() aliases this so the
+# views and the widget style names read from one source of truth. -----
+_DEADLINE_COLORS = {
+    "DEADLINE_BG": '#0e0e11',      # Charcoal background
+    "URGENT_RED": '#00ceb8',       # Teal accent
+    "DEADLINE_RED": '#00ceb8',     # Alias for accent
+    "DEADLINE_GOLD": '#00ceb8',    # Teal for highlights
+    "NEUTRAL_GRAY": '#1e1e24',     # Card surface for inactive elements
+    "TEXT_WHITE": '#FFFFFF',       # White text
+    "SUCCESS_GREEN": '#3DDC84',    # Green for completed trades
+    "PANEL_COLOR": '#16161a',      # Panel background
+    "BORDER_COLOR": '#2a2a30',     # Borders
+}
+
+
+class _DeadlineScreenBase(tk.Frame):
+    """Tier-1 screen base for the deadline family (Gating Phase 2).
+
+    The old classes were InGamePopup Toplevels opened by a factory. They
+    are now screens built by ``show_screen`` as
+    ``view_cls(holder, *args, app=app)``; the Toplevel API below is kept as
+    no-op shims so the shared layout code works unchanged. Views are
+    destroyed on navigation like any other screen, so every ``after()``
+    loop must guard ``winfo_exists()``.
+    """
+
+    def __init__(self, parent, app=None):
+        tk.Frame.__init__(self, parent)
+        _app = app if app is not None else getattr(parent, "app", parent)
+        self.app = _app
+        # Historical: the old code read self.parent.<app attribute>.
+        self.parent = _app
+        self._close_screen = None  # set by show_screen()
+
+    # -- Toplevel shims ------------------------------------------------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def resizable(self, _w=None, _h=None):
+        return None
+
+    def attributes(self, *_args):
+        return None
+
+    def transient(self, _master=None):
+        return None
+
+    def protocol(self, _name=None, _func=None):
+        return None
+
+    def state(self, _s=None):
+        return None
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+
+class TradeDeadlineCenter(_DeadlineScreenBase):
     """Immersive Trade Deadline Center - Active only on Trade Deadline Day"""
     
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        
+    def __init__(self, parent, app=None):
+        _DeadlineScreenBase.__init__(self, parent, app=app)
+
         # Initialize trade deadline manager
-        self.deadline_manager = get_deadline_manager(getattr(parent, 'game_manager', None))
+        self.deadline_manager = get_deadline_manager(getattr(self.app, 'game_manager', None))
         
         # Deadline Constants (from manager)
         self.DEADLINE_HOUR = self.deadline_manager.DEADLINE_HOUR
@@ -61,22 +127,16 @@ class TradeDeadlineCenter(InGamePopup):
         self._check_breaking_news()
         
     def _setup_window(self):
-        """Configure the main window with immersive design"""
-        self.title("NHL TRADE DEADLINE CENTER")
+        """Configure the screen with immersive design (Tier-1: no topmost,
+        no WM_DELETE -- the navbar owns close; the footer button still
+        calls _close_deadline_center)."""
         self.configure(bg='#0e0e11')  # Charcoal background
-        try:
-            self.state('zoomed')  # Full screen on Windows
-        except Exception:
-            self.geometry("1600x950")  # Fallback for Linux/macOS
-        
-        # Window styling
-        self.attributes('-topmost', True)
-        self.protocol("WM_DELETE_WINDOW", self._close_deadline_center)
+
         
     def _close_deadline_center(self):
         """Close the trade deadline center"""
         self.auto_trades_active = False
-        self.destroy()
+        self.close_view()
 
     def _create_intelligence_panel(self, parent):
         """Right column: league intelligence - rumors and buyers/sellers"""
@@ -327,17 +387,11 @@ class TradeDeadlineCenter(InGamePopup):
     def _create_styles(self):
         """Create custom styles for deadline center"""
         style = ttk.Style()
-        
-        # Deadline theme colors
-        self.DEADLINE_BG = '#0e0e11'      # Charcoal background
-        self.URGENT_RED = '#00ceb8'       # Teal accent
-        self.DEADLINE_RED = '#00ceb8'     # Alias for accent
-        self.DEADLINE_GOLD = '#00ceb8'    # Teal for highlights
-        self.NEUTRAL_GRAY = '#1e1e24'     # Card surface for inactive elements
-        self.TEXT_WHITE = '#FFFFFF'       # White text
-        self.SUCCESS_GREEN = '#3DDC84'    # Green for completed trades
-        self.PANEL_COLOR = '#16161a'      # Panel background
-        self.BORDER_COLOR = '#2a2a30'     # Borders
+
+        # Deadline theme colors (Gating Phase 2: hoisted to
+        # _DEADLINE_COLORS; the exact values are unchanged).
+        for _k, _v in _DEADLINE_COLORS.items():
+            setattr(self, _k, _v)
         
         # Custom styles
         style.configure('Deadline.TFrame', background=self.DEADLINE_BG)
@@ -936,11 +990,15 @@ class TradeDeadlineCenter(InGamePopup):
     
     def _open_quick_trade_interface(self):
         """Open the quick trade proposal interface"""
-        QuickTradeInterface(self, self.deadline_manager)
-    
+        # Gating Phase 2: Tier-1 screen (own screen id so the navbar
+        # jump is tracked like any other screen).
+        self.app.show_screen("deadline_quick_trade", "Quick Trade",
+                             QuickTradeInterface, self.deadline_manager)
+
     def _open_emergency_trade(self):
         """Open emergency trade interface for last-minute deals"""
-        EmergencyTradeInterface(self, self.deadline_manager)
+        self.app.show_screen("deadline_emergency_trade", "Emergency Trade",
+                             EmergencyTradeInterface, self.deadline_manager)
 
     def _advance_deadline_clock(self):
         """Advance the deadline-day game clock 30 minutes (same as Continue)."""
@@ -951,10 +1009,11 @@ class TradeDeadlineCenter(InGamePopup):
     
     def _open_market_browser(self):
         """Open comprehensive market browser"""
-        DeadlineMarketBrowser(self, self.deadline_manager)
+        self.app.show_screen("deadline_market", "Deadline Market",
+                             DeadlineMarketBrowser, self.deadline_manager)
 
 
-class QuickTradeInterface(InGamePopup):
+class QuickTradeInterface(_DeadlineScreenBase):
     """Quick trade proposal interface for deadline day.
 
     Everything reads live league state: the partner list is every NHL
@@ -968,19 +1027,21 @@ class QuickTradeInterface(InGamePopup):
     the card defers, never sends.
     """
 
-    def __init__(self, parent, deadline_manager):
-        super().__init__(parent)
-        self.parent = parent
+    _QT_SESSION_ID = "deadline_quick_trade"
+
+    def __init__(self, parent, deadline_manager, app=None):
+        _DeadlineScreenBase.__init__(self, parent, app=app)
         self.deadline_manager = deadline_manager
 
-        # Colors from parent
-        self.BG_COLOR = parent.BG_COLOR
-        self.PANEL_COLOR = parent.PANEL_COLOR
-        self.TEXT_WHITE = parent.TEXT_WHITE
-        self.DEADLINE_GOLD = parent.DEADLINE_GOLD
-        self.URGENT_RED = parent.URGENT_RED
+        # Colors: center-palette constants (the old code read them from the
+        # center card; the frame background still comes from the app).
+        self.BG_COLOR = (getattr(self.app, 'BG_COLOR', None)
+                         or _DEADLINE_COLORS["DEADLINE_BG"])
+        self.PANEL_COLOR = _DEADLINE_COLORS["PANEL_COLOR"]
+        self.TEXT_WHITE = _DEADLINE_COLORS["TEXT_WHITE"]
+        self.DEADLINE_GOLD = _DEADLINE_COLORS["DEADLINE_GOLD"]
+        self.URGENT_RED = _DEADLINE_COLORS["URGENT_RED"]
 
-        self.app = self._resolve_app()
         gm = getattr(self.app, 'game_manager', None) if self.app else None
         self.league = getattr(gm, 'league', None)
         self.user_team = getattr(self.app, 'user_team', None) \
@@ -995,27 +1056,116 @@ class QuickTradeInterface(InGamePopup):
 
         self._setup_window()
         self._create_interface()
+        # Gating Phase 2: rebuild the parked quick proposal (§6).
+        self._qt_restoring = False
+        self._restore_qt_session()
 
     # -- context ------------------------------------------------------
     def _resolve_app(self):
-        """Walk up past popup cards to the main app.
+        """Gating Phase 2: self.app is wired by the screen base already."""
+        return self.app
 
-        Popup cards delegate missing attributes to the app root, so the
-        walk skips InGamePopup frames explicitly and stops at the first
-        real object exposing user_team + game_manager.
-        """
-        from popup_system import InGamePopup
-        node, seen = self, set()
-        while node is not None and id(node) not in seen:
-            seen.add(id(node))
-            if isinstance(node, InGamePopup):
-                node = node.__dict__.get('parent', None)
-                continue
-            if hasattr(node, 'user_team') and hasattr(node, 'game_manager'):
-                return node
-            return None
-        return None
+    # -- Tier-B session ("deadline_quick_trade", kind "trade") ---------
+    # The parked proposal (partner + asset ids) writes through on every
+    # interaction and rebuilds on open with the ids revalidated against
+    # live rosters/picks (§6). Nothing is ever sent implicitly.
+    def _qt_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self.app, self._QT_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "trade")
+        return sess
 
+    @staticmethod
+    def _asset_ref(asset):
+        # Same dict-ref convention as TradeWindow._asset_ref (JSON-safe).
+        return {"id": str(getattr(asset, "id", "")), "kind": "player",
+                "label": str(getattr(asset, "full_name",
+                                     getattr(asset, "name", "?")))}
+
+    def _snapshot_qt_session(self):
+        if getattr(self, "_qt_restoring", False):
+            return
+        try:
+            sess = self._qt_session()
+            if not sess:
+                return
+            sess["partner_name"] = (getattr(self.partner_team, "team_name",
+                                            "") or "")
+            sess["user_assets"] = [self._asset_ref(a)
+                                   for a in (self.user_assets or [])]
+            sess["partner_assets"] = [self._asset_ref(a)
+                                      for a in (self.partner_assets or [])]
+        except Exception:
+            pass
+
+    def _clear_qt_session(self):
+        try:
+            sessions = getattr(self.app, "pending_sessions", None)
+            if isinstance(sessions, dict):
+                sessions.pop(self._QT_SESSION_ID, None)
+        except Exception:
+            pass
+
+    def _restore_qt_session(self):
+        try:
+            sess = self._qt_session()
+            if not sess or not sess.get("partner_name"):
+                return
+            self._qt_restoring = True
+            try:
+                pname = sess["partner_name"]
+                # Select the partner in the listbox (drives _on_team_select,
+                # which rebuilds their pool from live state).
+                found = False
+                try:
+                    for i, name in enumerate(
+                            self._team_listbox.get(0, 'end')):
+                        if name == pname:
+                            self._team_listbox.selection_clear(0, 'end')
+                            self._team_listbox.selection_set(i)
+                            self._team_listbox.see(i)
+                            found = True
+                            break
+                except Exception:
+                    pass
+                if not found:
+                    return  # partner gone: parked proposal is dead
+                self._on_team_select()
+
+                def _revalidate(refs, pool):
+                    out = []
+                    for ref in (refs or []):
+                        _id = (ref.get("id") if isinstance(ref, dict)
+                               else str(ref))
+                        for _label, asset in (pool or []):
+                            if str(getattr(asset, "id", "")) == str(_id):
+                                out.append(asset)
+                                break
+                    return out
+
+                user = _revalidate(sess.get("user_assets"), self._your_pool)
+                partner = _revalidate(sess.get("partner_assets"),
+                                      self._their_pool)
+                dropped = ((len(sess.get("user_assets") or []) - len(user))
+                           + (len(sess.get("partner_assets") or [])
+                              - len(partner)))
+                self.user_assets = user
+                self.partner_assets = partner
+                self._render_offer('user')
+                self._render_offer('partner')
+                self._update_evaluation()
+                if dropped:
+                    from popup_system import notify_card
+                    notify_card(self, "Proposal changed",
+                                f"{dropped} asset(s) are no longer "
+                                f"available -- the workbench shows the live "
+                                f"state.", kind="warning")
+            finally:
+                self._qt_restoring = False
+        except Exception:
+            pass
     def _nhl_partners(self):
         """Every NHL team except the user's, sorted -- real league state."""
         out = []
@@ -1047,13 +1197,9 @@ class QuickTradeInterface(InGamePopup):
 
     # -- window -------------------------------------------------------
     def _setup_window(self):
-        """Setup window properties (non-modal card)."""
-        self.title("Quick Trade Proposal - Trade Deadline")
-        self.geometry("900x680")
+        """Setup screen properties (Tier-1: no Toplevel calls)."""
         self.configure(bg=self.BG_COLOR)
-        self.resizable(False, False)
-        self.transient(self.parent)
-        # No grab_set: Eastside grammar -- the card is non-modal and
+        # No grab_set: Eastside grammar -- the screen is non-modal and
         # dismissing it defers the proposal, never sends it.
 
     def _create_interface(self):
@@ -1218,7 +1364,7 @@ class QuickTradeInterface(InGamePopup):
         cancel_btn = tk.Button(buttons_frame, text="CANCEL",
                                bg='#6B7280', fg=self.TEXT_WHITE,
                                font=('Segoe UI', 12, 'bold'), padx=24, pady=8,
-                               command=self.destroy)
+                               command=self.close_view)
         cancel_btn.pack(side='right')
 
     # -- live data ----------------------------------------------------
@@ -1351,6 +1497,7 @@ class QuickTradeInterface(InGamePopup):
         self._refresh_their_pool()
         self._render_offer('partner')
         self._update_evaluation()
+        self._snapshot_qt_session()  # Gating P2: write-through
 
     def _add_asset(self, side):
         if side == 'user':
@@ -1367,6 +1514,7 @@ class QuickTradeInterface(InGamePopup):
             assets.append(asset)
         self._render_offer(side)
         self._update_evaluation()
+        self._snapshot_qt_session()  # Gating P2: write-through
 
     def _remove_asset(self, side):
         if side == 'user':
@@ -1379,6 +1527,7 @@ class QuickTradeInterface(InGamePopup):
         assets.pop(sel[0])
         self._render_offer(side)
         self._update_evaluation()
+        self._snapshot_qt_session()  # Gating P2: write-through
 
     def _update_evaluation(self):
         """Run the real trade engine over the current proposal."""
@@ -1434,6 +1583,10 @@ class QuickTradeInterface(InGamePopup):
                 "Incomplete",
                 "Add at least one asset to each side of the deal first.")
             return
+        # Gating Phase 2 (§6): consume-once -- a double-click must not send
+        # the same proposal twice.
+        if getattr(self, "_qt_sent", False):
+            return
         # No-trade clauses block the deal before it leaves the building --
         # say so honestly instead of sending a dead proposal.
         try:
@@ -1454,6 +1607,20 @@ class QuickTradeInterface(InGamePopup):
                 "Remove them from the offer, or ask for a waiver in the "
                 "full Trade Center.")
             return
+        # Gating Phase 2 (§6): transactional cap revalidation at the moment
+        # of send -- the cap may have moved since the workbench was built.
+        try:
+            import trade_engine as te
+            if not te._cap_ok_after(self.user_team, self.user_assets,
+                                    self.partner_assets):
+                messagebox.showwarning(
+                    "Cap check",
+                    "The deal no longer fits under the salary cap -- "
+                    "your roster moved since the proposal was built. "
+                    "Adjust the offer and try again.")
+                return
+        except Exception:
+            pass
         try:
             import trade_negotiation as tn
             neg = tn.send_offer(self.app, self.partner_team,
@@ -1463,6 +1630,7 @@ class QuickTradeInterface(InGamePopup):
             messagebox.showwarning("Send failed",
                                    f"Could not send the proposal: {e}")
             return
+        self._qt_sent = True  # consume-once: the deal is in the inbox now
         # Confirmation reflects real post-send state: on deadline day the
         # AI answers instantly, so read the negotiation's actual status.
         pname = str(getattr(self.partner_team, 'team_name', 'them'))
@@ -1491,10 +1659,14 @@ class QuickTradeInterface(InGamePopup):
                     f"YOU SEND: {you}\nYOU GET: {them}\n\n"
                     "The reply will land in your inbox.")
         messagebox.showinfo(title, body)
-        self.destroy()
+        # Gating Phase 2: the proposal is parked no more -- clear the
+        # session and leave the screen (close_view is a no-op-safe shim
+        # only when the navbar owns the view).
+        self._clear_qt_session()
+        self.close_view()
 
 
-class EmergencyTradeInterface(InGamePopup):
+class EmergencyTradeInterface(_DeadlineScreenBase):
     """Emergency trade interface for last-minute deadline deals.
 
     Only real one-click actions survive here:
@@ -1510,19 +1682,19 @@ class EmergencyTradeInterface(InGamePopup):
     card defers, nothing happens implicitly.
     """
 
-    def __init__(self, parent, deadline_manager):
-        super().__init__(parent)
-        self.parent = parent
+    def __init__(self, parent, deadline_manager, app=None):
+        _DeadlineScreenBase.__init__(self, parent, app=app)
         self.deadline_manager = deadline_manager
 
-        # Colors from parent
-        self.BG_COLOR = parent.BG_COLOR
-        self.PANEL_COLOR = parent.PANEL_COLOR
-        self.TEXT_WHITE = parent.TEXT_WHITE
-        self.DEADLINE_RED = parent.DEADLINE_RED
-        self.URGENT_RED = parent.URGENT_RED
+        # Colors: center-palette constants (the old code read them from the
+        # center card; the frame background still comes from the app).
+        self.BG_COLOR = (getattr(self.app, 'BG_COLOR', None)
+                         or _DEADLINE_COLORS["DEADLINE_BG"])
+        self.PANEL_COLOR = _DEADLINE_COLORS["PANEL_COLOR"]
+        self.TEXT_WHITE = _DEADLINE_COLORS["TEXT_WHITE"]
+        self.DEADLINE_RED = _DEADLINE_COLORS["DEADLINE_RED"]
+        self.URGENT_RED = _DEADLINE_COLORS["URGENT_RED"]
 
-        self.app = self._resolve_app()
         gm = getattr(self.app, 'game_manager', None) if self.app else None
         self.league = getattr(gm, 'league', None)
         self.user_team = getattr(self.app, 'user_team', None) \
@@ -1532,28 +1704,13 @@ class EmergencyTradeInterface(InGamePopup):
         self._create_interface()
 
     def _resolve_app(self):
-        """Walk up past popup cards to the main app (user_team +
-        game_manager). Same contract as QuickTradeInterface."""
-        from popup_system import InGamePopup
-        node, seen = self, set()
-        while node is not None and id(node) not in seen:
-            seen.add(id(node))
-            if isinstance(node, InGamePopup):
-                node = node.__dict__.get('parent', None)
-                continue
-            if hasattr(node, 'user_team') and hasattr(node, 'game_manager'):
-                return node
-            return None
-        return None
+        """Gating Phase 2: self.app is wired by the screen base already."""
+        return self.app
 
     def _setup_window(self):
-        """Setup emergency window (non-modal card)."""
-        self.title("EMERGENCY TRADE - DEADLINE IMMINENT")
-        self.geometry("600x470")
+        """Setup the emergency screen (Tier-1: no Toplevel calls)."""
         self.configure(bg=self.DEADLINE_RED)
-        self.resizable(False, False)
-        self.transient(self.parent)
-        # No grab_set, no topmost: a non-modal card per Eastside grammar.
+        # No grab_set, no topmost: a non-modal screen per Eastside grammar.
 
     def _create_interface(self):
         """Create emergency interface"""
@@ -1603,7 +1760,7 @@ class EmergencyTradeInterface(InGamePopup):
 
         tk.Button(content, text="CLOSE", bg='#6B7280', fg=self.TEXT_WHITE,
                   font=('Segoe UI', 11, 'bold'), padx=24, pady=6,
-                  command=self.destroy).pack(pady=(12, 0))
+                  command=self.close_view).pack(pady=(12, 0))
 
     def _emergency_option(self, parent, title, desc, command):
         option_frame = tk.Frame(parent, bg=self.PANEL_COLOR, relief='ridge',
@@ -1682,12 +1839,11 @@ class EmergencyTradeInterface(InGamePopup):
         self._set_status(msg)
 
 
-class DeadlineMarketBrowser(InGamePopup):
+class DeadlineMarketBrowser(_DeadlineScreenBase):
     """Comprehensive market browser for deadline day trading"""
-    
-    def __init__(self, parent, deadline_manager):
-        super().__init__(parent)
-        self.parent = parent
+
+    def __init__(self, parent, deadline_manager, app=None):
+        _DeadlineScreenBase.__init__(self, parent, app=app)
         self.deadline_manager = deadline_manager
         
         # Rumors from the media rumor engine (real league state), same as the
@@ -1697,26 +1853,23 @@ class DeadlineMarketBrowser(InGamePopup):
             deadline_manager=self.deadline_manager)
         self._rumors_text = None
 
-        # Colors from parent
-        self.BG_COLOR = parent.BG_COLOR
-        self.PANEL_COLOR = parent.PANEL_COLOR
-        self.TEXT_WHITE = parent.TEXT_WHITE
-        self.DEADLINE_GOLD = parent.DEADLINE_GOLD
-        self.DEADLINE_RED = parent.DEADLINE_RED
-        self.SUCCESS_GREEN = parent.SUCCESS_GREEN
-        self.URGENT_RED = parent.URGENT_RED
+        # Colors: center-palette constants (the old code read them from the
+        # center card; the frame background still comes from the app).
+        self.BG_COLOR = (getattr(self.app, 'BG_COLOR', None)
+                         or _DEADLINE_COLORS["DEADLINE_BG"])
+        self.PANEL_COLOR = _DEADLINE_COLORS["PANEL_COLOR"]
+        self.TEXT_WHITE = _DEADLINE_COLORS["TEXT_WHITE"]
+        self.DEADLINE_GOLD = _DEADLINE_COLORS["DEADLINE_GOLD"]
+        self.DEADLINE_RED = _DEADLINE_COLORS["DEADLINE_RED"]
+        self.SUCCESS_GREEN = _DEADLINE_COLORS["SUCCESS_GREEN"]
+        self.URGENT_RED = _DEADLINE_COLORS["URGENT_RED"]
         
         self._setup_window()
         self._create_interface()
         
     def _setup_window(self):
-        """Setup market browser window"""
-        self.title("Deadline Market Intelligence")
-        self.geometry("1200x800")
+        """Setup market browser screen (Tier-1: no Toplevel calls)."""
         self.configure(bg=self.BG_COLOR)
-        
-        # Center on parent
-        self.transient(self.parent)
         
     def _create_interface(self):
         """Create comprehensive market browser interface"""
@@ -2105,7 +2258,7 @@ class DeadlineMarketBrowser(InGamePopup):
         
         # Close button
         tk.Button(footer_frame, text="Close Browser",
-                 command=self.destroy,
+                 command=self.close_view,
                  bg='#6B7280', fg=self.TEXT_WHITE,
                  font=('Segoe UI', 12, 'bold'), 
                  padx=20, pady=8).pack(side='right', padx=20, pady=10)
@@ -2239,6 +2392,8 @@ class DeadlineMarketBrowser(InGamePopup):
         
     def _update_countdown(self):
         """Update countdown timer using real deadline manager data"""
+        if not self.winfo_exists():
+            return  # Gating Phase 2: the view was destroyed on navigation
         if self.deadline_passed:
             return
             
@@ -2273,6 +2428,8 @@ class DeadlineMarketBrowser(InGamePopup):
         
     def _animate_ticker(self):
         """Animate the scrolling ticker"""
+        if not self.winfo_exists():
+            return  # Gating Phase 2: the view was destroyed on navigation
         if self.deadline_passed:
             return
             
@@ -2288,6 +2445,8 @@ class DeadlineMarketBrowser(InGamePopup):
         
     def _generate_auto_trades(self):
         """Generate automatic trade notifications using deadline manager"""
+        if not self.winfo_exists():
+            return  # Gating Phase 2: the view was destroyed on navigation
         if not self.auto_trades_active or self.deadline_passed:
             return
             
@@ -2306,8 +2465,9 @@ class DeadlineMarketBrowser(InGamePopup):
             next_check = 5000  # Every 5 seconds when high urgency
         else:
             next_check = 10000  # Every 10 seconds normally
-            
-        self.after(next_check, self._generate_auto_trades)
+
+        if self.winfo_exists():
+            self.after(next_check, self._generate_auto_trades)
         
     def _add_breaking_trade(self, trade_description=None):
         """Add a breaking trade notification"""
@@ -2330,10 +2490,11 @@ class DeadlineMarketBrowser(InGamePopup):
         current_text = self.ticker_label.cget('text')
         new_text = f"{current_text} --- {trade}"
         self.ticker_label.config(text=new_text)
+
     def _close_deadline_center(self):
         """Close the trade deadline center"""
         self.auto_trades_active = False
-        self.destroy()
+        self.close_view()
 
 
 def is_trade_deadline_day():
