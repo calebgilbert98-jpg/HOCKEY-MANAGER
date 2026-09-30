@@ -1051,6 +1051,45 @@ def audit_fantasy_draft(manager, league) -> list:
     return issues
 
 
+# ---------------------------------------------------------------------------
+# Gating Phase 2: standalone-browser navigation helpers.
+#
+# The player browser / draft order browser are Tier-1 screens now. Opening
+# one replaces (destroys) this draft view; the draft manager is league-owned
+# so re-entering the screen re-attaches to the live session (BUG-2 fix).
+# ---------------------------------------------------------------------------
+def _browser_return_nav(app, game_manager):
+    """Where a standalone browser returns to when closed.
+
+    Back to the draft screen while the draft is pending; the dashboard
+    once the draft has completed (avoids the 'not available' info popup).
+    """
+    try:
+        if getattr(game_manager, 'pending_fantasy_draft', False):
+            app.open_fantasy_draft_window()
+        else:
+            app.show_dashboard()
+    except Exception:
+        pass
+
+
+def _browser_pick(app, game_manager, player):
+    """Pick continuation for the browser screen's on_select callback.
+
+    Runs on the freshly re-opened draft view (the old view was replaced
+    by the browser screen), then the browser's close_view fires and its
+    _close_screen no-ops (we are already on the draft screen).
+    """
+    try:
+        _browser_return_nav(app, game_manager)
+        cur = getattr(app, '_current_screen', None) or {}
+        view = cur.get('view')
+        if view is not None and hasattr(view, 'draft_specific_player'):
+            view.draft_specific_player(player)
+    except Exception:
+        pass
+
+
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
 
@@ -1988,29 +2027,36 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.setup_integrated_draft_order(order_tab)
         
     def open_player_browser(self):
-        """Open the standalone player browser"""
-        from player_browser import PlayerBrowserWindow
-        
+        """Open the standalone player browser (Gating Phase 2: Tier-1 screen).
+
+        The old blocking wait_window flow is replaced by the view's
+        on_select callback; the pick continuation returns to the draft
+        screen (the draft manager is league-owned, so re-entry is safe).
+        """
+        from player_browser import PlayerBrowserView
+
         available_players = self.draft_manager.get_available_players()
         if not available_players:
             messagebox.showinfo("No Players", "No players available for drafting.")
             return
-            
-        browser = PlayerBrowserWindow(self, available_players, "Fantasy Draft - Available Players")
-        
-        # Wait for user to make selection
-        self.wait_window(browser)
-        
-        # Check if player was drafted
-        selected_player = browser.get_selected_player()
-        if selected_player:
-            self.draft_specific_player(selected_player)
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen(
+            'player_browser', 'Fantasy Draft - Available Players',
+            PlayerBrowserView, available_players,
+            'Fantasy Draft - Available Players',
+            on_select=lambda p: _browser_pick(app, gm, p))
+        # Closing without picking returns to the draft (was: popup teardown).
+        view._close_screen = lambda: _browser_return_nav(app, gm)
             
     def open_draft_order_browser(self):
-        """Open the standalone draft order browser"""
-        from player_browser import SimpleDraftOrderWindow
-        
-        SimpleDraftOrderWindow(self, self.draft_manager)
+        """Open the standalone draft order browser (Gating Phase 2: screen)."""
+        from player_browser import SimpleDraftOrderView
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen('draft_order', 'Draft Order',
+                               SimpleDraftOrderView, self.draft_manager)
+        view._close_screen = lambda: _browser_return_nav(app, gm)
         
     def open_quick_draft(self):
         """Open quick draft interface"""
@@ -2029,15 +2075,17 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             messagebox.showinfo("Not Your Turn", f"It's {current_pick.team.team_name}'s turn to pick.")
             return
             
-        # Open browser for user's pick
-        from player_browser import PlayerBrowserWindow
-        
-        browser = PlayerBrowserWindow(self, available_players, f"Your Pick #{current_pick.overall_pick}")
-        self.wait_window(browser)
-        
-        selected_player = browser.get_selected_player()
-        if selected_player:
-            self.draft_specific_player(selected_player)
+        # Open browser for user's pick (Gating Phase 2: Tier-1 screen,
+        # pick delivered via the view's on_select callback).
+        from player_browser import PlayerBrowserView
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen(
+            'player_browser', f"Your Pick #{current_pick.overall_pick}",
+            PlayerBrowserView, available_players,
+            f"Your Pick #{current_pick.overall_pick}",
+            on_select=lambda p: _browser_pick(app, gm, p))
+        view._close_screen = lambda: _browser_return_nav(app, gm)
             
     def draft_specific_player(self, player):
         """Draft a specific player from browser"""

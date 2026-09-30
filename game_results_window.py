@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 import tkinter as tk
-from popup_system import InGamePopup
 from tkinter import ttk
 import customtkinter as ctk
 from datetime import date
@@ -11,14 +10,25 @@ class GameResultsView(ctk.CTkFrame):
     def __init__(self, parent, results_data=None, app=None):
         ctk.CTkFrame.__init__(self, parent)
         self.app = app if app is not None else parent
-        self._close_screen = None  # set by show_screen() or the GameResultsWindow wrapper
+        self._close_screen = None  # set by show_screen()
         self.results_data = results_data
-        
+
         # Extract date from results_data
         if isinstance(results_data, dict) and 'date' in results_data:
             self.date_str = results_data['date']
         else:
             self.date_str = date.today().strftime("%B %d, %Y")
+
+        # Gating Phase 2: thin Tier-B session for this read-mostly view
+        # (the data payload lives in results_data, passed fresh each open).
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self.app, "game_results")
+            if _sess is not None:
+                _sess.update(kind="game_results", screen_id="game_results",
+                             title="Game Results", date_str=self.date_str)
+        except Exception:
+            pass
         
         self.configure(fg_color=self.app.BG_COLOR)
         
@@ -29,7 +39,7 @@ class GameResultsView(ctk.CTkFrame):
         self._load_data()
 
     def close_view(self):
-        """Close this screen (dashboard in screen mode, card in popup mode)."""
+        """Close this screen (dashboard in screen mode)."""
         fn = getattr(self, '_close_screen', None)
         if callable(fn):
             fn()
@@ -253,23 +263,7 @@ class GameResultsView(ctk.CTkFrame):
         else:
             self.news_text.insert('end', "No news available for today.")
 
-class GameResultsWindow(InGamePopup):
-    """Popup wrapper around GameResultsView (backward compatibility)."""
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent)
-        self._view = GameResultsView(self, app=parent, *args, **kwargs)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-        self.title(f"Daily Results - {self._view.date_str}")
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
 
-
-# Legacy alias for compatibility
-AdvancedGameResultsWindow = GameResultsWindow
+# Gating Phase 2: the legacy InGamePopup wrapper (GameResultsWindow) and
+# its AdvancedGameResultsWindow alias were deleted -- the view is
+# screen-only now (show_screen "game_results").

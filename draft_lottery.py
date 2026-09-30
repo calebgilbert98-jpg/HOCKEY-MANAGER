@@ -12,7 +12,9 @@ Public API:
   league.lottery_results[year] (idempotent -- re-running returns the
   stored rows).
 - lottery_reveal_text(rows) -> short plain-text summary for the inbox.
-- LotteryRevealWindow(InGamePopup): the televised countdown, 16 -> 1.
+- LotteryRevealView(ctk.CTkFrame): the televised countdown, 16 -> 1,
+  as a Tier-1 screen (show_screen "draft_lottery"). In-progress reveal
+  progress writes through to app.pending_sessions["draft_lottery"].
 
 Wiring:
 - game_classes.League.simulate_draft_lottery delegates here (real odds);
@@ -24,6 +26,8 @@ Wiring:
 
 import random
 from typing import Any, Dict, List, Optional
+
+import customtkinter as ctk
 
 # Reverse-standings rank (1 = worst) -> odds %. Real NHL numbers.
 LOTTERY_ODDS: List[float] = [
@@ -227,30 +231,22 @@ def apply_user_reactions(app: Any, rows: List[Dict[str, Any]]) -> None:
 # The televised reveal window
 # ---------------------------------------------------------------------------
 
-class LotteryRevealWindow:
-    """Broadcast-style countdown reveal, picks 16 -> 1.
+class LotteryRevealView(ctk.CTkFrame):
+    """Broadcast-style countdown reveal, picks 16 -> 1, as a Tier-1 screen.
 
-    InGamePopup is imported lazily so headless environments can import
-    this module freely; the real app always has the popup manager.
+    Same televised countdown behavior as the old InGamePopup window, now
+    embedded via ``HockeyManagerGUI.show_screen("draft_lottery", ...)``.
+    In-progress state (revealed picks) writes through to a thin Tier-B
+    session (``app.pending_sessions["draft_lottery"]``); the canonical
+    rows persist on ``league.lottery_results[year]``.
     """
 
-    def __new__(cls, *args, **kwargs):
-        from popup_system import InGamePopup
-
-        class _Win(cls, InGamePopup):
-            pass
-
-        # Bypass LotteryRevealWindow.__new__ on the recursive construction.
-        inst = InGamePopup.__new__(_Win, *args, **kwargs)
-        return inst
-
-    def __init__(self, parent, app, year, rows, on_done=None):
+    def __init__(self, parent, year, rows, on_done=None, app=None):
         import tkinter as tk
-        # No-manager fallback (headless/tests): the frame was never
-        # initialized by __new__; init it here so the window still builds.
-        if not hasattr(self, "tk"):
-            tk.Frame.__init__(self, parent)
-        self.app = app
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen()
+        self._year = year
         self._rows = list(rows)
         self._on_done = on_done
         # Reveal order: 16..3, then the #2/#1 drama.
@@ -262,10 +258,9 @@ class LotteryRevealWindow:
         self._revealed: List[Dict[str, Any]] = []
         self._timers: List[str] = []
 
-        try:
-            self.title(f"NHL Draft Lottery {year}")
-        except Exception:
-            pass
+        # Thin Tier-B session (write-through as picks are revealed).
+        self._session_id = "draft_lottery"
+        self._write_session(complete=False)
 
         BG, PANEL, GOLD, WHITE, MUTED = (
             "#0e0e11", "#16161a", "#ffd75e", "#F2F5FA", "#9aa0aa")
@@ -324,6 +319,31 @@ class LotteryRevealWindow:
 
         self._next()
 
+    # -- Tier-B session ---------------------------------------------------
+    def _write_session(self, complete=False):
+        try:
+            from popup_system import get_pending_session
+            sess = get_pending_session(self.app, self._session_id)
+            if sess is not None:
+                sess.update(
+                    kind="draft_lottery",
+                    screen_id=self._session_id,
+                    title=f"NHL Draft Lottery {self._year}",
+                    year=self._year,
+                    revealed=[r["pick"] for r in self._revealed],
+                    complete=bool(complete),
+                )
+        except Exception:
+            pass
+
+    def _clear_session(self):
+        try:
+            sessions = getattr(self.app, "pending_sessions", None)
+            if isinstance(sessions, dict):
+                sessions.pop(self._session_id, None)
+        except Exception:
+            pass
+
     # -- reveal driver ----------------------------------------------------
     def _after(self, ms, fn):
         try:
@@ -345,6 +365,7 @@ class LotteryRevealWindow:
         self._team_var.set(row["team"])
         self._detail_var.set(f"{odds}{arrow}\n{reaction_line(row)}")
         self._board_append(row)
+        self._write_session(complete=False)
         pause = 4200 if row["pick"] == 2 else 2300
         self._after(pause, self._next)
 
@@ -383,11 +404,14 @@ class LotteryRevealWindow:
             self._draft_btn.configure(state="normal")
         except Exception:
             pass
+        self._write_session(complete=True)
         if self._on_done:
             try:
                 self._on_done()
             except Exception:
                 pass
+        # The reveal is finished: no in-progress state remains.
+        self._clear_session()
 
     def _open_draft(self):
         try:
@@ -402,6 +426,16 @@ class LotteryRevealWindow:
         for t in self._timers:
             try:
                 self.after_cancel(t)
+            except Exception:
+                pass
+        self._clear_session()
+        # Screen mode: return to the dashboard; the timers are cancelled
+        # above so nothing keeps running after navigation.
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            try:
+                fn()
+                return
             except Exception:
                 pass
         try:

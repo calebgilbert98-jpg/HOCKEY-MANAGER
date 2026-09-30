@@ -782,13 +782,15 @@ class InboxView(ctk.CTkFrame):
             self.special_action_btn.pack(side='right', padx=5)
 
     def _watch_lottery_reveal(self):
-        """Open the televised lottery countdown from the inbox."""
+        """Open the televised lottery countdown from the inbox.
+
+        Gating Phase 2: the reveal is a Tier-1 screen now (was a popup).
+        """
         pending = getattr(self.app.game_manager, '_pending_lottery_reveal', None)
         if not pending:
             return
         try:
-            from draft_lottery import LotteryRevealWindow
-            app = pending.get("app") or self.app
+            from draft_lottery import LotteryRevealView
 
             def _clear(_p=pending):
                 try:
@@ -798,8 +800,10 @@ class InboxView(ctk.CTkFrame):
                 except Exception:
                     pass
 
-            LotteryRevealWindow(self.app, app, pending["year"],
-                                pending["rows"], on_done=_clear)
+            self.app.show_screen(
+                "draft_lottery", f"NHL Draft Lottery {pending['year']}",
+                LotteryRevealView, pending["year"], pending["rows"],
+                on_done=_clear)
         except Exception:
             pass
 
