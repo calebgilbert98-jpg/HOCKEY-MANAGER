@@ -411,6 +411,44 @@ class PlayerProfile(InGamePopup):
                                  bg=AppColors.BG_ELEVATED,
                                  fg=AppColors.TEXT_PRIMARY)
             ovr_pill.pack(side="left")
+
+            # W6: condition indicator pill next to the OVR pill, plus an
+            # injury pill alongside when the player is hurt.
+            try:
+                import condition_ui as _cu
+                _cond = _cu.get_condition(self.player)
+                cond_pill = PillBadge(pills,
+                                      text=f"{_cond} {_cu.condition_label(_cond)}",
+                                      bg=AppColors.BG_ELEVATED,
+                                      fg=_cu.condition_color(_cond))
+                cond_pill.pack(side="left", padx=(8, 0))
+                _inj = _cu.injury_status(self.player)
+                if _inj:
+                    inj_pill = PillBadge(pills, text=_inj,
+                                         bg=AppColors.BG_ELEVATED,
+                                         fg=AppColors.DANGER)
+                    inj_pill.pack(side="left", padx=(8, 0))
+            except Exception:
+                pass
+            # Within-line differentiation (leverage): heater/cold indicator
+            # pill next to the condition pill. Reads mesh_form (the same
+            # streak-form input leverage_score uses): >= 0.5 is a genuine
+            # hot hand, <= -0.5 is ice cold. Defensive: never raises.
+            try:
+                _form = float(getattr(self.player, "mesh_form", 0) or 0)
+                _form01 = _form / 100.0 if abs(_form) > 1.0 else _form
+                if _form01 >= 0.5:
+                    _heat_pill = PillBadge(pills, text="🔥 Hot hand",
+                                           bg=AppColors.BG_ELEVATED,
+                                           fg="#ff9e4a")
+                    _heat_pill.pack(side="left", padx=(8, 0))
+                elif _form01 <= -0.5:
+                    _cold_pill = PillBadge(pills, text="❄ Cold",
+                                           bg=AppColors.BG_ELEVATED,
+                                           fg="#7aa2f7")
+                    _cold_pill.pack(side="left", padx=(8, 0))
+            except Exception:
+                pass
         except:
             pass
 
@@ -533,6 +571,24 @@ class PlayerProfile(InGamePopup):
                         fg=AppColors.TEXT_PRIMARY,
                         bg=card.card_bg)
         title.pack(anchor="w", pady=(0, 16))
+
+        # W6: one-row canonical Condition bar at the top of the Attributes
+        # card, color-coded on the shared condition scale.
+        try:
+            import condition_ui as _cu
+            _cond = _cu.get_condition(self.player)
+            self._create_attribute_bar(content, "Condition", _cond,
+                                       card.card_bg, compact=True,
+                                       fill_color=_cu.condition_color(_cond))
+            _inj = _cu.injury_status(self.player)
+            if _inj:
+                inj_row = tk.Label(content, text=f"Injury: {_inj}",
+                                   font=AppFonts.SMALL_BOLD,
+                                   fg=AppColors.DANGER,
+                                   bg=card.card_bg)
+                inj_row.pack(anchor="w", pady=(0, 6))
+        except Exception:
+            pass
 
         try:
             is_goalie = 'GOALIE' in str(self.player.primary_position).upper()
@@ -1182,8 +1238,13 @@ class PlayerProfile(InGamePopup):
                      font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
                      bg=card.card_bg).pack(anchor="w")
 
-    def _create_attribute_bar(self, parent, name, value, bg, compact=False):
-        """Create a visual attribute bar."""
+    def _create_attribute_bar(self, parent, name, value, bg, compact=False,
+                                fill_color=None):
+        """Create a visual attribute bar.
+
+        fill_color overrides the default accent fill (used for the
+        Condition bar so it follows the shared condition color scale).
+        """
         row = tk.Frame(parent, bg=bg)
         row.pack(fill="x", pady=3 if compact else 6)
 
@@ -1208,7 +1269,7 @@ class PlayerProfile(InGamePopup):
         pct = max(0.0, min(1.0, display_val / 100))
 
         # Bar fill
-        bar_fill = tk.Frame(bar_bg, bg=AppColors.ACCENT, height=8)
+        bar_fill = tk.Frame(bar_bg, bg=fill_color or AppColors.ACCENT, height=8)
         bar_fill.place(relx=0, rely=0, relwidth=pct, relheight=1)
 
         # Value

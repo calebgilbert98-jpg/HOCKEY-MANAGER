@@ -23,43 +23,24 @@ from game_classes import PlayerPosition
 def roll_game_injury(team):
     """Roll a single in-game injury for a team (shared by detailed + batch sims).
 
-    Weighted by injury_proneness and age; skips goalies and already-injured
-    players. Returns the injured Player, or None if nobody was hurt.
+    Delegates to injury_data.roll_general_injury -- the one shared injury
+    decision (W4, icetime-ecosystem). Keeps the historical contract: exactly
+    one victim is hurt per call (callers gate the per-team rate with
+    injury_data.QUICK_ENGINE_GENERAL_RATE); returns the injured Player, or
+    None when nobody was hurt. Severity, body-part mix, and concussion odds
+    come from the grounded tables; goalies are eligible at a reduced weight.
     """
-    import random
-    candidates = []
-    weights = []
-    for p in getattr(team, 'roster', []):
-        if getattr(p, 'is_injured', False):
-            continue
-        pos = getattr(p, 'primary_position', None)
-        if pos and pos.name == 'GOALIE':
-            continue
-        proneness = getattr(p, 'injury_proneness', 10) or 10
-        age = getattr(p, 'age', 25) or 25
-        age_factor = max(0.5, min(2.0, (age - 20) / 10))
-        candidates.append(p)
-        weights.append(proneness * age_factor)
-    if not candidates:
+    try:
+        import injury_data as _inj
+    except Exception:
         return None
-    injured = random.choices(candidates, weights=weights, k=1)[0]
-    # Severity: Minor 1-3 games (60%), Moderate 4-10 (30%), Severe 11-25 (10%)
-    severity_roll = random.random()
-    if severity_roll < 0.6:
-        games_missed = random.randint(1, 3)
-        injury_type = random.choice(['Bruised ribs', 'Minor sprain', 'Sore shoulder', 'Tweaked knee'])
-    elif severity_roll < 0.9:
-        games_missed = random.randint(4, 10)
-        injury_type = random.choice(['Sprained ankle', 'Pulled groin', 'Shoulder strain', 'Knee sprain'])
-    else:
-        games_missed = random.randint(11, 25)
-        injury_type = random.choice(['Broken collarbone', 'Torn MCL', 'Concussion', 'Broken wrist'])
-    injured.is_injured = True
-    injured.injury_type = injury_type
-    injured.games_remaining_injured = games_missed
-    injured.last_injury = injury_type
-    injured.injured_today = True  # recovery countdown starts with the NEXT game
-    return injured
+    # No internal gate: callers apply the per-team rate. base_prob=1.0 makes
+    # the shared decision always pick a victim (random() < 1.0 always).
+    victim, spec = _inj.roll_general_injury(team, base_prob=1.0)
+    if victim is None:
+        return None
+    _inj.apply_injury(victim, spec, team)
+    return victim
 
 
 def best_lines(team):
@@ -200,6 +181,83 @@ def best_lines(team):
     pk1_defense = defensive_defensemen[:2] if len(defensive_defensemen) >= 2 else defensive_defensemen + [None] * (2 - len(defensive_defensemen))
     pk2_defense = defensive_defensemen[2:4] if len(defensive_defensemen) >= 4 else defensive_defensemen[2:] + [None] * (2 - len(defensive_defensemen[2:]))
 
+    # --- TOI-forensics repair (icetime-ecosystem, 2026-09-29) ---
+    # Never emit None skater slots in the even-strength lines. A None slot
+    # used to mean "the sim's per-tick fill-in dresses the best available
+    # player by overall" -- genuine double-shift ice time that W3's per-tick
+    # ledger recorded faithfully but W2's unit-based ledger never credited
+    # (it only credits nominal slot holders), leaving the 30-min governor
+    # blind: a double-shifting star could skate 32-38 min while the governor
+    # saw ~18 and never bound him (found via W2/W3 ledger divergence on
+    # short-benched rosters). Filling the slot explicitly with the same
+    # best-available skater the fill-in would dress changes no on-ice
+    # behavior -- it just makes selection, execution, and both ledgers
+    # agree. Defense pairs fall back to any skater (emergency D, exactly
+    # what the fill-in dressed). PP/PK units intentionally untouched (a
+    # separate known seam, out of scope for this repair).
+    def _repair_es_slots():
+        try:
+            assigned = []
+            seen = set()
+            use_count = {}
+            for _line in fw_lines:
+                for _p in (_line or []):
+                    if _p is not None and id(_p) not in seen:
+                        seen.add(id(_p))
+                        assigned.append(_p)
+                    if _p is not None:
+                        use_count[id(_p)] = use_count.get(id(_p), 0) + 1
+            for _pair in def_pairs:
+                for _p in (_pair or []):
+                    if _p is not None and id(_p) not in seen:
+                        seen.add(id(_p))
+                        assigned.append(_p)
+                    if _p is not None:
+                        use_count[id(_p)] = use_count.get(id(_p), 0) + 1
+            try:
+                _ovr = {}
+                for _p in assigned:
+                    try:
+                        _ovr[id(_p)] = float(_p.overall_rating())
+                    except Exception:
+                        _ovr[id(_p)] = 0.0
+            except Exception:
+                _ovr = {}
+            if not assigned:
+                return
+
+            def _best_for(_unit):
+                # Spread the emergency load: fewest existing assignments
+                # first, best overall breaks ties (mirrors the fill-in's
+                # best-available preference without stacking one star on
+                # every hole). Never two copies of a player in one unit.
+                _ids = {id(_q) for _q in (_unit or []) if _q is not None}
+                _cands = [p for p in assigned if id(p) not in _ids]
+                if not _cands:
+                    return None
+                _cands.sort(key=lambda p: (use_count.get(id(p), 0),
+                                           -_ovr.get(id(p), 0.0)))
+                _fill = _cands[0]
+                use_count[id(_fill)] = use_count.get(id(_fill), 0) + 1
+                return _fill
+
+            for _line in fw_lines:
+                for _ji in range(len(_line or [])):
+                    if _line[_ji] is None:
+                        _fill = _best_for(_line)
+                        if _fill is not None:
+                            _line[_ji] = _fill
+            for _pair in def_pairs:
+                for _ji in range(len(_pair or [])):
+                    if _pair[_ji] is None:
+                        _fill = _best_for(_pair)
+                        if _fill is not None:
+                            _pair[_ji] = _fill
+        except Exception:
+            pass
+
+    _repair_es_slots()
+
     # Build the complete lineup
     lines = {
         'Forwards': fw_lines,
@@ -296,6 +354,53 @@ def flatten_lineup(lineup):
     return lineup
 
 
+def resolve_game_lineup(team):
+    """The one shared lineup-resolution decision (one decision, two
+    fidelities). Previously a closure inside AdvancedGameSim.__init__;
+    GameSim resolves the same way, so both engines dress from the same
+    decision instead of two copies.
+
+    Precedence:
+      1. suspension scrub (mutates the stored team.lineup in place);
+      2. GM lines: user_controlled_lines() (line_control == 'gm' with a
+         stored user-set lineup -- the GM's set lines are the law);
+      3. the team's stored lineup (e.g. user team arranged in the editor);
+      4. best_lines(team) coach fallback -- the fix path for AI teams that
+         never get a lineup built in the season/batch-sim path;
+      5. defensive backfill: a stored lineup missing any of
+         ['Forwards', 'Defense', 'Goalies'] gets just those keys from
+         best_lines() (notably NOT PP/PK/flat keys -- same as before).
+    Pure contract: best_lines()/user_controlled_lines() are module-level
+    helpers already; the suspension scrub is lazy-imported, preserving the
+    no-module-level-cross-import convention.
+    """
+    # Suspended players can't dress: scrub them from a stored
+    # lineup before the sim reads it (fresh builds already filter
+    # via best_lines' _healthy).
+    try:
+        from narrative_incidents import _scrub_suspended_from_lineup
+        _scrub_suspended_from_lineup(team)
+    except Exception:
+        pass
+    # Item 5: the GM holds the pen -> his set lines are the law.
+    # user_controlled_lines() returns None unless the flag is 'gm'
+    # with stored user lines, so every other case keeps today's
+    # behavior byte-for-byte.
+    _gm_lines = user_controlled_lines(team)
+    lineup = (_gm_lines if _gm_lines is not None
+              else getattr(team, 'lineup', None))
+    if not lineup or not isinstance(lineup, dict):
+        return best_lines(team)
+    # Defensive: fill missing keys with best_lines
+    keys = ['Forwards', 'Defense', 'Goalies']
+    missing = [k for k in keys if k not in lineup]
+    if missing:
+        base = best_lines(team)
+        for k in missing:
+            lineup[k] = base[k]
+    return lineup
+
+
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
@@ -359,33 +464,11 @@ class AdvancedGameSim:
         from coordinate_simulation import CoordinateSimEngine
         self.coordinate_engine = CoordinateSimEngine()
 
-        # Defensive: always ensure lineup dict has required keys
+        # Defensive: always ensure lineup dict has required keys.
+        # Shared decision with GameSim (resolve_game_lineup): one decision,
+        # two fidelities -- the closure body now lives at module level.
         def ensure_lineup(team):
-            # Suspended players can't dress: scrub them from a stored
-            # lineup before the sim reads it (fresh builds already filter
-            # via best_lines' _healthy).
-            try:
-                from narrative_incidents import _scrub_suspended_from_lineup
-                _scrub_suspended_from_lineup(team)
-            except Exception:
-                pass
-            # Item 5: the GM holds the pen -> his set lines are the law.
-            # user_controlled_lines() returns None unless the flag is 'gm'
-            # with stored user lines, so every other case keeps today's
-            # behavior byte-for-byte.
-            _gm_lines = user_controlled_lines(team)
-            lineup = (_gm_lines if _gm_lines is not None
-                      else getattr(team, 'lineup', None))
-            if not lineup or not isinstance(lineup, dict):
-                return best_lines(team)
-            # Defensive: fill missing keys with best_lines
-            keys = ['Forwards', 'Defense', 'Goalies']
-            missing = [k for k in keys if k not in lineup]
-            if missing:
-                base = best_lines(team)
-                for k in missing:
-                    lineup[k] = base[k]
-            return lineup
+            return resolve_game_lineup(team)
 
         self.lineups = {
             home_team.team_name: ensure_lineup(home_team),
@@ -1430,17 +1513,24 @@ class AdvancedGameSim:
 
     def _process_gameplay_injuries(self):
         """Process potential injuries from gameplay.
-        
-        NHL averages roughly 1 man-game lost to injury per 3-4 games.
-        Injury-prone players (high injury_proneness) are more likely to get hurt.
+
+        Grounded rate (W4, injury_data.QUICK_ENGINE_GENERAL_RATE): 0.31 per
+        team per game -- Rotowire 2024-25 (819 injuries / 32 teams / 82
+        games). The quick engines have no hit-injury path, so the general
+        roll carries the full load. Victim/severity via the shared decision.
         """
         import random
-        
-        # ~13% chance per team per game -> ~25% chance of at least one injury per game
+        try:
+            import injury_data as _inj
+            _rate = _inj.QUICK_ENGINE_GENERAL_RATE
+        except Exception:
+            _rate = 0.31
+
+        # One roll per team per game -> ~0.31 injuries per team-game.
         # Pick an injury victim from either team's healthy skaters
         victims = []
         for team in [self.home_team, self.away_team]:
-            if random.random() > 0.13:
+            if random.random() > _rate:
                 continue
             v = roll_game_injury(team)
             if v is not None:

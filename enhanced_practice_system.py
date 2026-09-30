@@ -28,6 +28,39 @@ def _sfont(family, size, weight=""):
         return (family, size, weight) if weight else (family, size)
 
 
+def _safe_condition_text(player):
+    """W6: canonical condition display text, e.g. '82 (Good)'; never raises."""
+    try:
+        import condition_ui
+        return condition_ui.condition_text(player)
+    except Exception:
+        try:
+            return str(int(getattr(player, "condition", 100)))
+        except Exception:
+            return "100"
+
+
+def _safe_condition_value(player):
+    """W6: canonical 0-100 condition; never raises (100 fallback)."""
+    try:
+        import condition_ui
+        return condition_ui.get_condition(player)
+    except Exception:
+        try:
+            return int(getattr(player, "condition", 100))
+        except Exception:
+            return 100
+
+
+def _safe_injury(player):
+    """W6: injury status string or None; never raises."""
+    try:
+        import condition_ui
+        return condition_ui.injury_status(player)
+    except Exception:
+        return None
+
+
 class PracticeType(Enum):
     """Types of practice sessions available"""
     SKATING = "skating"
@@ -677,6 +710,7 @@ class DevelopmentOverviewView(ctk.CTkFrame):
             'overall': ('Overall', 60),
             'potential': ('Potential', 70),
             'fatigue': ('Fatigue', 60),
+            'condition': ('Condition', 80),
             'sessions': ('Sessions', 60),
             'status': ('Status', 70)
         }
@@ -1127,6 +1161,7 @@ class DevelopmentOverviewView(ctk.CTkFrame):
                 player.overall_rating(),
                 potential,
                 f"{history.current_fatigue}%",
+                _safe_condition_text(player),
                 history.total_sessions,
                 status
             )
@@ -1241,6 +1276,12 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         
         # Current status
         status_text = f"Fatigue Level: {history.current_fatigue}%\n"
+        # W6: canonical condition alongside fatigue (both kept)
+        _inj = _safe_injury(player)
+        status_text += f"Condition: {_safe_condition_text(player)}"
+        if _inj:
+            status_text += f" • {_inj}"
+        status_text += "\n"
         status_text += f"Total Practice Sessions: {history.total_sessions}\n"
         
         if history.current_schedule:
@@ -1897,6 +1938,7 @@ class PracticeCenterView(ctk.CTkFrame):
             'position': ('Position', 80),
             'overall': ('Overall', 70),
             'fatigue': ('Fatigue', 70),
+            'condition': ('Condition', 80),
             'practice': ('Current Practice', 120)
         }
         
@@ -1937,6 +1979,7 @@ class PracticeCenterView(ctk.CTkFrame):
                 player.primary_position.value,
                 player.overall_rating(),
                 f"{history.current_fatigue}%",
+                _safe_condition_text(player),
                 current_practice
             ), tags=(player.id,))
             
@@ -2036,7 +2079,8 @@ class PracticeCenterView(ctk.CTkFrame):
                  style='Subtitle.TLabel').pack()
         
         history = self.practice_engine.get_player_history(self.selected_player.id)
-        ttk.Label(player_frame, text=f"Current Fatigue: {history.current_fatigue}%",
+        ttk.Label(player_frame, text=f"Current Fatigue: {history.current_fatigue}%"
+                                     f" • Condition: {_safe_condition_text(self.selected_player)}",
                  style='Content.TLabel').pack()
         
         # Current schedule info

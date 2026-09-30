@@ -20,6 +20,41 @@ from player_archetypes import (
     ARCHETYPE_FIT, ARCHETYPE_TO_ROLE_NAME, attribute_value as _arch_attr,
 )
 from player_traits import get_sim_bonus as _trait_bonus
+try:
+    import physicality as _physicality  # W5: officiating, dirty hits, fighting, heat, statement goals, receipts
+except ImportError:
+    # Defensive fallback: if physicality.py is absent from the checkout,
+    # the engine runs WITHOUT the W5 physicality layer instead of
+    # crashing. Every _physicality call site below is try/except-guarded;
+    # the stub just supplies the module attributes they touch so the
+    # guards' fallback paths engage cleanly.
+    import types as _phy_types
+    _physicality = _phy_types.SimpleNamespace(
+        DIRTY_INFRACTIONS=frozenset(),
+        init_crew=lambda sim: 0.0,
+        crew_accuracy=lambda sim: 0.0,
+        is_missed_call=lambda sim, name: False,
+        apply_missed_call=lambda *a, **k: {"missed": False},
+        note_dirty_watch=lambda *a, **k: None,
+        decay_heat=lambda *a, **k: None,
+        tick_receipts=lambda *a, **k: None,
+        settle_receipts=lambda *a, **k: None,
+        maybe_open_receipt=lambda *a, **k: None,
+        mark_stevens=lambda *a, **k: None,
+        stevens_fight_mult=lambda sim: 1.0,
+        stevens_impact_bump=lambda sim, hitter, impact: impact,
+        choose_hit_type=lambda *a, **k: None,
+        pick_fight_instigator=lambda *a, **k: None,
+        pick_willing_combatant=lambda *a, **k: None,
+        fight_outcome=lambda a, b: (a, b, "decision"),
+        apply_fight_spark=lambda *a, **k: None,
+        fight_spark_mult=lambda sim, team: 1.0,
+        store_fight=lambda *a, **k: None,
+        rivalry_heat_between=lambda *a, **k: 0.0,
+        check_statement_goal=lambda *a, **k: None,
+        build_hit_context=lambda *a, **k: None,
+        set_last_hit_context=lambda *a, **k: None,
+    )
 
 class ShotType(Enum):
     WRIST_SHOT = "wrist_shot"
@@ -481,6 +516,23 @@ class GameSim:
             _scrub_suspended_from_lineup(away_team)
         except Exception:
             pass
+        # Part A (icetime-ecosystem): per-game lineup resolution -- the same
+        # shared decision AdvancedGameSim makes (resolve_game_lineup), so AI
+        # teams that never get a lineup built now dress real 4-line/3-pair
+        # lineups via the best_lines() coach fallback. GM/user-set lines keep
+        # precedence via user_controlled_lines(). Resolved per game (not
+        # stashed on the team object) so mid-season trades/call-ups can't
+        # leave stale players dressed. Lazy import honors the
+        # no-module-level-cross-import convention between
+        # simulation.py and quick_sim.py.
+        try:
+            from quick_sim import resolve_game_lineup
+            self.lineups = {
+                home_team.team_name: resolve_game_lineup(home_team),
+                away_team.team_name: resolve_game_lineup(away_team),
+            }
+        except Exception:
+            self.lineups = {}
         # Part B: bounded assist-pairs ledger (passer_id, scorer_id,
         # team_name) for the analytics_hub / advanced_stats_analytics
         # line-combination views. Attached to the analytics game record
@@ -537,6 +589,21 @@ class GameSim:
         self._opening_brawl = None     # team_name if a premeditated opening-draw
                                        # brawl is scripted (see _evaluate_punishment_orders)
         self._retaliation_mod = 1.0
+        # --- W5 physicality state (additive; inert when unused) ---
+        # Per-game officiating crew accuracy (mostly high, never perfect);
+        # fight bench-spark windows keyed by team name; dirty-play watches
+        # for statement goals; the game's persistent fight log.
+        self._crew_accuracy = 0.0      # dealt by physicality.init_crew below
+        self._fight_spark = {}         # team_name -> {"until": elapsed, "mult": float}
+        self._dirty_watch = {}         # victim team_name -> {...} (statement goals)
+        self._fight_log = []           # per-game fight records (who/winner/when)
+        self._receipts = []            # W5 retaliation debts ("receipts")
+        self._stevens = {}             # W5 grudge marks by hitter id
+        self._last_missed_dirty = None  # W5 officiating link for intent reads
+        try:
+            _physicality.init_crew(self)
+        except Exception:
+            pass
         # --- Impact-tier engine (additive; inert when unused) ---
         # Coach instructions keyed by team name (e.g. "play_harder").
         # Derived automatically from coach makeup + game state when unset;
@@ -1908,11 +1975,19 @@ class GameSim:
         )
         fatigue_factor = (100 - self.player_fatigue.get(player_id, 100)) / 100
         usage_intensity = current_stats['possession_time'] / max(1, self.clock)
+        # W3: the canonical fatigue->injury-risk multiplier (condition_system)
+        # now feeds the score, so the telemetry and the live injury decisions
+        # share one fatigue/risk decision. Fresh players -> 1.0 (unchanged).
+        try:
+            from condition_system import fatigue_injury_risk_mult as _w3_risk
+            fatigue_mult = _w3_risk(player)
+        except Exception:
+            fatigue_mult = 1.0
         
         # Calculate risk score
         base_risk = 0.05  # 5% baseline risk
         physical_risk = physical_load * 0.01
-        fatigue_risk = fatigue_factor * 0.15
+        fatigue_risk = fatigue_factor * 0.15 * fatigue_mult
         usage_risk = usage_intensity * 0.05
         
         total_risk = min(0.95, base_risk + physical_risk + fatigue_risk + usage_risk)
@@ -1932,6 +2007,7 @@ class GameSim:
             'factors': {
                 'physical_load': physical_load,
                 'fatigue': fatigue_factor,
+                'fatigue_mult': round(fatigue_mult, 3),
                 'usage': usage_intensity
             },
             'timestamp': self.clock
@@ -2187,6 +2263,11 @@ class GameSim:
             if p in (1, 2):
                 # Coaches who own the whiteboard adjust between periods.
                 self._ai_tactics_intermission()
+                # W3: intermission breather -- stamina-scaled energy recovery.
+                try:
+                    self._apply_intermission_recovery()
+                except Exception:
+                    pass
 
         if self.home_score == self.away_score:
             self._handle_overtime()
@@ -2205,7 +2286,7 @@ class GameSim:
         # Falls back to full roster only if lineup is empty (shouldn't happen
         # in normal app flow, but keeps standalone sims working).
         for team in (self.home_team, self.away_team):
-            lineup = getattr(team, 'lineup', None) or {}
+            lineup = self._game_lineup(team)
             dressed = []
             goalie_played_ids = set()
             # First, find which goalies actually played (from game_stats)
@@ -2367,6 +2448,20 @@ class GameSim:
         except Exception:
             pass
 
+        # -- Injury system (W4, additive): the general (non-hit) injury roll.
+        # Same shared decision the quick engines make; GameSim's rate covers
+        # the non-hit mechanism share (the hit path covers body checks).
+        try:
+            self._process_general_injuries()
+        except Exception:
+            pass
+
+        # W5: unpaid retaliation debts feed the rivalry store's long-term
+        # memory before telemetry, so the story survives into the next game.
+        try:
+            _physicality.settle_receipts(self)
+        except Exception:
+            pass
         self._emit_telemetry()
 
         return winner, loser, (self.home_score, self.away_score), self.game_log, self.notable_events
@@ -2396,6 +2491,38 @@ class GameSim:
             st['faceoff_win_percentage'] = round(won / total * 100, 1) if total else 0.0
             # Possession time: per-team seconds tracked in the tick loop
             st['possession_time'] = round(self._team_poss_time.get(tn, 0.0), 1)
+    def _process_general_injuries(self):
+        """General (non-hit) in-game injuries for GameSim.
+
+        W4 (icetime-ecosystem): GameSim previously generated injuries ONLY
+        from hits; the quick engines roll general injuries (strains, pulls,
+        puck hits, incidental contact). This is the SAME shared decision
+        (injury_data.roll_general_injury -- one decision, two fidelities),
+        called here with GameSim's calibrated rate covering the non-hit
+        mechanism share (injury_data.GENERAL_INJURY_BASE_RATE); the hit path
+        covers body-check injuries. Runs once per team at the final whistle.
+        Never raises.
+        """
+        try:
+            import injury_data as _injg
+        except Exception:
+            return
+        for team in (self.home_team, self.away_team):
+            try:
+                victim, spec = _injg.roll_general_injury(
+                    team, base_prob=_injg.GENERAL_INJURY_BASE_RATE)
+                if victim is None:
+                    continue
+                _injg.apply_injury(victim, spec, team)
+                try:
+                    self._log_event(
+                        f"{victim.full_name} injured ({victim.injury_type}, "
+                        f"~{victim.games_remaining_injured} games)", "INJURY")
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
 
     def _emit_telemetry(self):
         """Append this game's stats to the local beta-telemetry log.
@@ -2501,6 +2628,18 @@ class GameSim:
             self._game_elapsed += time_elapsed
             self.zone_time += time_elapsed
             self.possession_time += time_elapsed
+            # W5: live heat decays with game time -- long calm stretches
+            # cool the room, so a chippy first period stops inflating fight
+            # odds all night. Spikes (fights, majors, missed calls, brawls)
+            # still land on top of the decay.
+            # W5 retaliation engine: due debts get gated (coach/player
+            # policing, enforcer trigger, escalation ladder); unanswered
+            # debts settle into rivalry memory at game end.
+            try:
+                _physicality.decay_heat(self, time_elapsed)
+                _physicality.tick_receipts(self)
+            except Exception:
+                pass
             # Tick-local log indices: used below to spread this tick's
             # elapsed game time across the events logged during the tick,
             # so sequential plays get distinct chronological timestamps.
@@ -2843,7 +2982,33 @@ class GameSim:
         """
         Stage 2: Update player fatigue based on ice time and intensity.
         Phase 1 shift engine: benched skaters recover; TOI accumulates.
+
+        W3 (icetime-ecosystem, additive): keeps the canonical per-game energy
+        pool (condition_system.game_energy) in sync for W2/W4/W5 readers and
+        accumulates a per-game TOI-seconds ledger (player_toi_seconds) for
+        post-game wear. Stamina differentiation comes from E6 below; the W3
+        accumulation blend is intentionally NOT applied here to avoid
+        double-counting stamina (see condition_system.fatigue_accumulation_mult).
         """
+        # W3 per-game setup (additive): reset the canonical energy pool and
+        # start the TOI ledger on the first tick.
+        if not getattr(self, '_w3_fatigue_init', False):
+            self._w3_fatigue_init = True
+            self.player_toi_seconds = {}
+            self._w3_game_seconds = 0.0  # total sim seconds (goalie TOI)
+            try:
+                from condition_system import reset_game_fatigue as _w3_reset
+                for _p in self.home_team.roster + self.away_team.roster:
+                    _w3_reset(_p)
+            except Exception:
+                pass
+        if getattr(self, 'player_toi_seconds', None) is None:
+            self.player_toi_seconds = {}
+        self._w3_game_seconds = getattr(self, '_w3_game_seconds', 0.0) + time_elapsed
+        try:
+            from condition_system import sync_game_energy as _w3_sync
+        except Exception:
+            _w3_sync = None
         on_ice_ids = set()
         for player in self.home_on_ice + self.away_on_ice:
             on_ice_ids.add(player.id)
@@ -2873,12 +3038,59 @@ class GameSim:
 
                 # Apply fatigue
                 fatigue_loss = fatigue_rate * time_elapsed
-                self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
+                new_energy = max(0, self.player_fatigue[player.id] - fatigue_loss)
+                self.player_fatigue[player.id] = new_energy
+                # W3 (additive): keep the canonical per-game pool in sync.
+                if _w3_sync is not None:
+                    try:
+                        _w3_sync(player, new_energy)
+                    except Exception:
+                        pass
+                # W3 (additive): TOI ledger for post-game wear (seconds).
+                try:
+                    self.player_toi_seconds[player.id] = \
+                        self.player_toi_seconds.get(player.id, 0.0) + time_elapsed
+                except Exception:
+                    pass
             # TOI accounting (G4)
             self.player_toi[player.id] = self.player_toi.get(player.id, 0) + time_elapsed
             if player.id in self.game_stats:
                 self.game_stats[player.id]['time_on_ice'] = \
                     self.game_stats[player.id].get('time_on_ice', 0) + time_elapsed
+
+    def _apply_intermission_recovery(self):
+        """W3: intermission breather -- stamina-scaled energy recovery.
+
+        GameSim previously had no intermission recovery at all (the only
+        restoration was the goalie-pull timeout +8). Every rostered player
+        recovers INTERMISSION_RECOVERY x fatigue_recovery_mult energy
+        (capped at 100); goalies recover through their own pool. Additive.
+        """
+        try:
+            from condition_system import (
+                INTERMISSION_RECOVERY as _W3_IR,
+                fatigue_recovery_mult as _w3_rec,
+                sync_game_energy as _w3_sync,
+            )
+        except Exception:
+            return
+        _gf = getattr(self, 'goaltender_fatigue', {}) or {}
+        for player in self.home_team.roster + self.away_team.roster:
+            try:
+                rec = _W3_IR * _w3_rec(player)
+                pid = player.id
+                if pid in _gf:
+                    new_energy = min(100.0, _gf[pid] + rec)
+                    _gf[pid] = new_energy
+                elif pid in self.player_fatigue:
+                    new_energy = min(100.0, self.player_fatigue[pid] + rec)
+                    self.player_fatigue[pid] = new_energy
+                else:
+                    continue
+                _w3_sync(player, new_energy)
+            except Exception:
+                continue
+
 
     def _should_change_lines(self):
         """Determine if lines should be changed based on shift state.
@@ -4148,10 +4360,19 @@ class GameSim:
             else:
                 got_open = off > dfn
             if got_open and nd is not None:
-                # shake the checker: step away into space, drift dangerous
+                # shake the checker: step away into space, drift dangerous.
+                # (Part B 2026-09-29: cap the backward drift -- a receiver
+                # shaking directly away from a goal-side checker was walking
+                # 7ft backward per pass, and 3-4 setup passes carried the puck
+                # ~48ft out of the zone, turning keep-ins into neutral-zone
+                # regathers. Max 3ft backward from the shake; the forward
+                # drift still applies.)
                 nx_, ny_ = self._ppos_get(nd)
                 ang = math.atan2(my - ny_, mx - nx_)
-                mx2 = mx + math.cos(ang) * 7 + (adir * 4 if kind in ("cycle", "attack") else 0)
+                _dx_shake = math.cos(ang) * 7
+                if _dx_shake * adir < -3:
+                    _dx_shake = -3 * adir
+                mx2 = mx + _dx_shake + (adir * 4 if kind in ("cycle", "attack") else 0)
                 my2 = my + math.sin(ang) * 7
                 self._ppos_place(m, mx2, my2, jitter=1.0)
                 mx, my = self.player_positions[m.id]
@@ -5290,6 +5511,17 @@ class GameSim:
         # controversy momentum channel -- not part of any capped budget.
         expected_goal = min(0.95, expected_goal * self._situation_xg_factor(
             attacking_team))
+
+        # W5 bench spark: a won fight lifts the winner's bench for ~5 game
+        # minutes -- their finishing ticks up (+5%, +7% in heated/rivalry
+        # games). Own explicit channel, never inside momentum.py (which
+        # stays read-only by design); 1.0 when nothing is burning.
+        try:
+            expected_goal = min(0.95, expected_goal
+                                * _physicality.fight_spark_mult(
+                                    self, attacking_team))
+        except Exception:
+            pass
 
         # Tie-game late tightening (additive): protecting the point is real
         # hockey -- tied in the 3rd under 10:00 left, both teams trade
@@ -6431,6 +6663,39 @@ class GameSim:
         else:
             name, penalty_length, detail = infraction
 
+        _fight_opponent = None  # personality-picked dance partner, Fighting only
+        # W5 officiating accuracy: dirty plays are usually penalized, but a
+        # whiffed call on a REAL infraction goes unwhistled and feeds the
+        # heat engine instead of the box. Fights are always called.
+        try:
+            if name in _physicality.DIRTY_INFRACTIONS:
+                _physicality.note_dirty_watch(self, player, team, name)
+            if _physicality.is_missed_call(self, name):
+                _physicality.apply_missed_call(self, player, team, name)
+                return "missed"
+        except Exception:
+            pass
+        # W5 personality-scaled fighting: when the draw says Fighting, the
+        # gloves come off for the willing -- not whoever happened to be
+        # nearest. The rat starts it, the enforcer answers it.
+        if name == "Fighting":
+            try:
+                _opp_team = (self.away_team if team is self.home_team
+                             else self.home_team)
+                _cands = [p for p in self._get_on_ice(team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+                _inst = _physicality.pick_fight_instigator(
+                    _cands, heat=self._live_heat,
+                    rivalry=_physicality.rivalry_heat_between(
+                        self.rivalries, self.home_team, self.away_team))
+                if _inst is not None:
+                    player = _inst
+                _opp_cands = [p for p in self._get_on_ice(_opp_team)
+                              if p.primary_position != PlayerPosition.GOALIE]
+                _fight_opponent = _physicality.pick_willing_combatant(_opp_cands)
+            except Exception:
+                _fight_opponent = None
+
         if (name != "Fighting"
                 and getattr(self, "_delayed_penalty", None) is None
                 and getattr(self, "possession_team", None) is not None
@@ -6450,13 +6715,19 @@ class GameSim:
                            away_score=self.away_score)
             return
 
-        self._whistle_penalty(player, team, name, penalty_length, detail)
+        self._whistle_penalty(player, team, name, penalty_length, detail,
+                             opponent=_fight_opponent)
 
-    def _whistle_penalty(self, player, team, name, penalty_length, detail):
+    def _whistle_penalty(self, player, team, name, penalty_length, detail,
+                         opponent=None):
         """Book a penalty and blow the whistle immediately (faceoff in the
         offending team's defensive zone). Used for immediate calls and for
-        forcing a delayed call at a period boundary."""
-        self._book_penalty(player, team, name, penalty_length, detail)
+        forcing a delayed call at a period boundary.
+
+        opponent: for Fighting, the personality-picked dance partner (None
+        lets _book_fight_pair fall back to its own pick)."""
+        self._book_penalty(player, team, name, penalty_length, detail,
+                           opponent=opponent)
         # Whistle: play stops, faceoff in the offending team's defensive zone
         self._forced_faceoff_team = team
         self.possession_team = self._resolve_faceoff(reason="penalty",
@@ -6624,15 +6895,31 @@ class GameSim:
     def _fight_weight_mult(self):
         """Scale the Fighting draw weight so the sim's fight rate tracks the
         tension meter. Base sim: ~0.175 fights/game; target comes from the
-        NHL-grounded fight_probability()."""
+        NHL-grounded fight_probability(). W5: the roster-personality layer
+        (rats fight more than choirboys at the same tension) multiplies in
+        via personnel_mult -- 1.0 for a league-average room."""
         try:
             from reputation_system import fight_probability
             ordered = any(o.get("ordered") for o in
                           getattr(self, "_punishment_orders", {}).values())
+            _pm = 1.0
+            try:
+                _pm = _physicality.personnel_fight_mult(
+                    getattr(self.home_team, "roster", []),
+                    getattr(self.away_team, "roster", []))
+            except Exception:
+                pass
             target = fight_probability(self._live_tension(),
                                        is_playoff=self.is_playoff,
                                        ordered=ordered,
-                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0))
+                                       retaliation_mod=getattr(self, "_retaliation_mod", 1.0),
+                                       personnel_mult=_pm)
+            # W5 Scott Stevens long memory: grudges held within the game
+            # make the room chippier than the same tension otherwise would.
+            try:
+                target *= _physicality.stevens_fight_mult(self)
+            except Exception:
+                pass
             return max(0.25, min(4.0, target / 0.175))
         except Exception:
             return 1.0
@@ -6774,10 +7061,50 @@ class GameSim:
                 "FIGHT")
         else:
             self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
-        self._emit_pbp("fight", player=player, team=team.team_name)
+        # W5: fights have winners now, and winning matters. The winner's
+        # bench gets a short-term spark (explicit finishing lift, bigger in
+        # heated/rivalry games); the barn's intensity rises with the heat;
+        # and the fight is STORED -- rivalry record, game fight log, and a
+        # deeper grudge floor so the feud decays slower.
+        _winner, _method = player, "decision"
+        _winner_team = team
+        try:
+            _w, _l, _m = _physicality.fight_outcome(player, opponent)
+            _winner, _method = _w, _m
+            _wt = self._get_player_team(_winner)
+            if _wt is not None:
+                _winner_team = _wt
+        except Exception:
+            pass
+        try:
+            _rheat = _physicality.rivalry_heat_between(
+                self.rivalries, self.home_team, self.away_team)
+            _heated = _rheat >= 40.0 or self._live_tension() >= 65.0
+            _physicality.apply_fight_spark(self, _winner_team, heated=_heated)
+            _physicality.store_fight(self, player, team, opponent,
+                                     opposing_team, _winner, _method)
+            if opponent is not None:
+                _wname = getattr(_winner, "full_name", "?")
+                self._log_event(
+                    f"{_wname} takes the fight ({_method}) -- the "
+                    f"{_winner_team.team_name} bench is buzzing.", "FIGHT")
+        except Exception:
+            pass
+        try:
+            for _fp in (player, opponent):
+                if _fp is not None and getattr(_fp, "id", None) in self.game_stats:
+                    self.game_stats[_fp.id]['fights'] = \
+                        self.game_stats[_fp.id].get('fights', 0) + 1
+        except Exception:
+            pass
+        self._emit_pbp("fight", player=player, team=team.team_name,
+                       opponent=getattr(opponent, "full_name", None),
+                       winner=getattr(_winner, "full_name", None),
+                       method=_method,
+                       winner_team=getattr(_winner_team, "team_name", ""))
         try:
             from momentum import observe as _mom_observe4
-            _mom_observe4(self, "fight", team)
+            _mom_observe4(self, "fight", _winner_team)
         except Exception:
             pass
         self.fights_called += 1
@@ -6792,7 +7119,14 @@ class GameSim:
             self.home_penalties_called += 1
             self.home_pim_called += 5
         if not self._in_brawl:
-            self._live_heat = min(40.0, self._live_heat + 6.0)
+            # Heated/rivalry games: the same fight lands harder on the room.
+            _heat_add = 6.0
+            try:
+                if _heated:
+                    _heat_add = 8.0
+            except Exception:
+                pass
+            self._live_heat = min(40.0, self._live_heat + _heat_add)
             self._maybe_brawl("fight")
 
     def _book_misconduct(self, player, team):
@@ -6808,9 +7142,13 @@ class GameSim:
         else:
             self.away_pim_called += 10
 
-    def _book_penalty(self, player, team, name, penalty_length, detail):
+    def _book_penalty(self, player, team, name, penalty_length, detail,
+                      opponent=None):
         """Record a penalty (box time, PIM, PP/PK bookkeeping, PBP) without
-        stopping play. The whistle/faceoff is the caller's job."""
+        stopping play. The whistle/faceoff is the caller's job.
+
+        opponent: Fighting only -- the willing combatant picked by
+        personality (falls back to the old pick inside _book_fight_pair)."""
         opposing_team = self.away_team if team is self.home_team else self.home_team
         team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
         opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
@@ -6826,7 +7164,7 @@ class GameSim:
 
         if name == "Fighting":
             # Coincidental fighting majors: both combatants get 5, teams stay 5v5.
-            self._book_fight_pair(player, team)
+            self._book_fight_pair(player, team, opponent, None)
             self.penalties_called += 1  # second penalty of the pair
         else:
             player.stats.penalties_in_minutes += penalty_length
@@ -7117,6 +7455,15 @@ class GameSim:
         try:
             from momentum import observe as _mom_observe
             _mom_observe(self, "goal", scoring_team)
+        except Exception:
+            pass
+        # W5 statement goals: the victim's team answering a dirty play on
+        # the scoresheet. check_statement_goal applies the heat spike, the
+        # rivalry wound (+grudge floor), the headline spec and the log line,
+        # then clears the watch. A goal by the offending team first kills
+        # the watch quietly.
+        try:
+            _physicality.check_statement_goal(self, scoring_team, shooter)
         except Exception:
             pass
         try:
@@ -7410,14 +7757,20 @@ class GameSim:
         A nearby forechecker can still blow it up (rare).
         """
         import random as _r
+        # BUG-026 (icetime-ecosystem, 2026-09-29): players are LEFT_DEFENSE /
+        # RIGHT_DEFENSE, never the generic DEFENSE -- the old check matched
+        # nothing, dmen was always empty, and every keep-in auto-failed
+        # (measured 0.0% success, 35 zone exits/game). Check all D slots.
+        _D_POS = (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                  PlayerPosition.RIGHT_DEFENSE)
         dmen = [p for p in self._get_on_ice(attacking_team)
-                if p.primary_position == PlayerPosition.DEFENSE]
+                if p.primary_position in _D_POS]
         if not dmen:
             # Fallback: anyone on the roster who plays the point.
             try:
                 dmen = [p for p in attacking_team.roster
                         if getattr(p, "primary_position", None)
-                        == PlayerPosition.DEFENSE][:2]
+                        in _D_POS][:2]
             except Exception:
                 dmen = []
         if not dmen:
@@ -7432,7 +7785,12 @@ class GameSim:
             pincher = _r.choice(dmen)
         skill = (pincher.defensive_awareness + pincher.puck_handling
                  + pincher.composure) / 3.0
-        keep_prob = max(0.40, min(0.80, 0.60 + (skill - 68.0) * 0.012))
+        # Part B (icetime-ecosystem, 2026-09-29): keep-in recalibrated to
+        # its design intent -- good puck-moving D hold ~2 in 3, pylons ~1
+        # in 3. The old 0.60 base underdelivered (measured 43% for average
+        # D after the forechecker blow-up; 35 zone exits/game starving
+        # shot volume). Attribute-driven, never guaranteed.
+        keep_prob = max(0.40, min(0.85, 0.68 + (skill - 68.0) * 0.012))
         # A forechecker bearing down contests the keep -- if he wins the
         # battle he takes the puck (turnover), not just the zone exit.
         try:
@@ -7444,9 +7802,11 @@ class GameSim:
             if _fc is not None:
                 _fskill = (_fc.forechecking + _fc.checking
                            + _fc.anticipation) / 3.0
-                # Forechecker wins outright ~1 in 4 contested keeps.
-                if _r.random() < max(0.10, min(0.40,
-                                               0.25 + (_fskill - 68.0) * 0.010)):
+                # Forechecker wins outright ~1 in 8 contested keeps
+                # (was 1 in 4 -- too punitive; NHL forecheckers don't blow
+                # up the point 25% of the time). Skill-scaled, floored.
+                if _r.random() < max(0.05, min(0.30,
+                                               0.13 + (_fskill - 68.0) * 0.010)):
                     self._log_event(
                         f"{_fc.full_name} blows up the keep-in, takes the puck.",
                         "TURNOVER")
@@ -7743,8 +8103,12 @@ class GameSim:
             # ~5 in 6 (the defense is scrambling, not set).
             _fr = random.random()
             if _fr < 0.85:
+                # BUG-026 companion: exclude LEFT/RIGHT_DEFENSE too, not
+                # just the generic DEFENSE (which never occurs on players).
+                _D = (PlayerPosition.DEFENSE, PlayerPosition.LEFT_DEFENSE,
+                      PlayerPosition.RIGHT_DEFENSE)
                 _fwds = [p for p in attacking_skaters
-                         if p.primary_position != PlayerPosition.DEFENSE
+                         if p.primary_position not in _D
                          and p.primary_position != PlayerPosition.GOALIE]
                 _fs = (self._weighted_skater_choice(_fwds, "shoot")
                        if _fwds else
@@ -8019,6 +8383,24 @@ class GameSim:
             goalie = self._selected_goalie(self.home_team)
             self.notable_events.append({'player': goalie, 'event': 'earns a shutout'})
 
+    def _game_lineup(self, team):
+        """Per-game resolved lineup (Part A) -- the single authority every
+        GameSim read site dresses from. Mirrors
+        AdvancedGameSim.lineups: GM/user-set lines win via
+        user_controlled_lines(); the fallback is the coach's best_lines().
+        Never reads or writes team.lineup itself."""
+        try:
+            lu = self.lineups or {}
+            d = lu.get(team.team_name)
+            if d is None:
+                # Stable empty dict (not a fresh {} per call) so the
+                # _get_on_ice fast-path cache key stays stable even when
+                # resolution found no lineup for the team.
+                d = lu.setdefault(team.team_name, {})
+            return d
+        except Exception:
+            return {}
+
     def _selected_goalie(self, team):
         """The goalie selected in the lineup (G1), falling back to the best
         goalie on the roster. Single authority for who is in net."""
@@ -8031,7 +8413,7 @@ class GameSim:
         'Defense': [[L,R]xN]} while the sim reads flat keys; this keeps both
         working so user lines always reach the ice.
         """
-        lineup = getattr(team, 'lineup', None) or {}
+        lineup = self._game_lineup(team)
         player = lineup.get(flat_key)
         if player:
             return player
@@ -8079,7 +8461,7 @@ class GameSim:
                 getattr(self, '_frozen_line', 0),
                 getattr(self, '_frozen_d_pair', 0),
                 tuple(sorted(getattr(self, 'goalie_pulled', ()))),
-                id(getattr(team, 'lineup', None)),
+                id(self._game_lineup(team)),
             )
             _cache = self.__dict__.setdefault('_on_ice_cache', {})
             if len(_cache) > 1024:
@@ -8154,19 +8536,54 @@ class GameSim:
         # Regular-season 3v3 OT (period 4, not playoff) is the only exception:
         # playoff OT is 5v5, so PP/PK units dress normally there.
         special_unit = None
+        # Soft-cap governor state (icetime-ecosystem, additive): initialized
+        # here so the top-up and fill-in below can also respect it.
+        _st_governed = False
+        _st_raw_toi = None
+        _ST_CAP = 30 * 60
         if not (self.period == 4 and not self.is_playoff):
             if len(penalized_skaters) < len(opp_mp_skaters):
                 special_unit = f"PP{st['PP']['unit']}"
             elif len(penalized_skaters) > len(opp_mp_skaters):
                 special_unit = f"PK{st['PK']['unit']}"
         if special_unit:
-            unit = (getattr(team, 'lineup', None) or {}).get(special_unit) or {}
+            unit = self._game_lineup(team).get(special_unit) or {}
+            # Soft-cap governor (icetime-ecosystem): a skater at/over the
+            # ~30-min cap sits out special teams too. His ES line is already
+            # bound by soft_cap_adjust_shares; without this, PP/PK shifts
+            # (dressed here, not by the shift engine) skate him 2-5 min past
+            # the cap in high-penalty games. Short-bench games govern at the
+            # 35-min second-tier cap; must-win playoff games and OT marathons
+            # ride.
+            try:
+                from deployment_policy import (
+                    _raw_toi as _st_raw_toi,
+                    _game_state_from_sim as _st_gs,
+                    soft_cap_exceptions as _st_exc,
+                    SOFT_CAP_S as _ST_CAP,
+                    SOFT_CAP_SHORT_S as _ST_CAP_SHORT,
+                )
+                _st_exc_d = _st_exc(_st_gs(self, team))
+                if _st_exc_d.get("must_win_playoff") or _st_exc_d.get("ot_marathon"):
+                    _st_governed = False
+                else:
+                    _st_governed = True
+                    if _st_exc_d.get("bench_depleted"):
+                        _ST_CAP = _ST_CAP_SHORT
+            except Exception:
+                _st_governed = False
             for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
                 # Clamp to exact manpower: never dress more skaters than the
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
                 if len(on_ice) >= num_skaters:
                     break
                 if p and p.id not in penalized_ids and p.id not in on_ice_ids:
+                    if _st_governed:
+                        try:
+                            if _st_raw_toi(self, p.id) >= _ST_CAP:
+                                continue
+                        except Exception:
+                            pass
                     on_ice.append(p)
                     on_ice_ids.add(p.id)
 
@@ -8185,6 +8602,14 @@ class GameSim:
 
             player = self._lineup_player(team, f"F{current_line}_{pos}")
             if player and player.id not in penalized_ids and player.id not in on_ice_ids:
+                # Soft-cap: during special teams, the top-up must not
+                # re-dress a skater the PP/PK filter just sat out.
+                if _st_governed and special_unit:
+                    try:
+                        if _st_raw_toi(self, player.id) >= _ST_CAP:
+                            continue
+                    except Exception:
+                        pass
                 on_ice.append(player)
                 on_ice_ids.add(player.id)
 
@@ -8200,6 +8625,12 @@ class GameSim:
 
             player = self._lineup_player(team, f"D{current_d_pair}_{pos}")
             if player and player.id not in penalized_ids and player.id not in on_ice_ids:
+                if _st_governed and special_unit:
+                    try:
+                        if _st_raw_toi(self, player.id) >= _ST_CAP:
+                            continue
+                    except Exception:
+                        pass
                 on_ice.append(player)
                 on_ice_ids.add(player.id)
         
@@ -8215,8 +8646,25 @@ class GameSim:
                 # the 6th skater is a forward -- never dress the goalie
                 pool = [pl for pl in pool
                         if pl.primary_position != PlayerPosition.GOALIE]
-            best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
-                                    reverse=True)
+            # Soft-cap: deprioritize capped skaters in the fill-in so a
+            # minute-managed star isn't re-dressed through the back door.
+            # Capped players sort last but remain eligible, so the team
+            # never dresses short.
+            if _st_governed and special_unit:
+                def _fill_key(pl):
+                    try:
+                        capped = 1 if _st_raw_toi(self, pl.id) >= _ST_CAP else 0
+                    except Exception:
+                        capped = 0
+                    try:
+                        ovr = -float(pl.overall_rating())
+                    except Exception:
+                        ovr = 0.0
+                    return (capped, ovr)
+                best_available = sorted(pool, key=_fill_key)
+            else:
+                best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
+                                        reverse=True)
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         if pulled:
@@ -8901,7 +9349,19 @@ class GameSim:
             near=self._ppos_get(puck_carrier) if puck_carrier else None)
         if potential_hitter is None:
             return None
-        hit_result = self._attempt_hit(potential_hitter, puck_carrier, HitType.BODY_CHECK)
+        # W5: the hit type is a decision now, not a constant. Body checks
+        # by default; the canonical dirty cases (enforcer hot-head vs
+        # small star at center ice with speed = charging; hot-head along
+        # the boards = boarding) fire where the context fits.
+        _hit_type = HitType.BODY_CHECK
+        try:
+            _chosen = _physicality.choose_hit_type(potential_hitter,
+                                                   puck_carrier, sim=self)
+            if _chosen is not None:
+                _hit_type = _chosen
+        except Exception:
+            pass
+        hit_result = self._attempt_hit(potential_hitter, puck_carrier, _hit_type)
         if hit_result == HitResult.TURNOVER_CAUSED:
             return self._resolve_turnover(puck_carrier, potential_hitter, TurnoverType.FORCED_ERROR)
         elif hit_result == HitResult.PENALTY_DRAWN:
@@ -8989,10 +9449,28 @@ class GameSim:
         except Exception:
             hit_impact = 1
 
+        # W5 Scott Stevens long memory: grudge-holding hitters finish a
+        # little more punishingly (small capped chance to lift the tier).
+        # Additive: the shared impact classifier above is never retuned.
+        try:
+            hit_impact = _physicality.stevens_impact_bump(
+                self, hitting_player, hit_impact)
+        except Exception:
+            pass
         try:
             from momentum import observe as _mom_observe5
             if hit_successful and hit_impact == 2:
                 _mom_observe5(self, "big_hit", _hteam)
+        except Exception:
+            pass
+        # W5: expose the attempt's context for W4's injury code -- who, how
+        # dirty, how fast, where on the ice. Set before the result resolves
+        # so the circumstance is captured even when the hit injures.
+        try:
+            _physicality.set_last_hit_context(
+                self, _physicality.build_hit_context(
+                    hitting_player, target_player, hit_type, hit_impact,
+                    sim=self))
         except Exception:
             pass
         if hit_successful:
@@ -9096,11 +9574,51 @@ class GameSim:
             ]
         except Exception:
             pass
+        # -- Injury-system calibration (W4, additive): the hit pipeline (W5)
+        # owns hit frequency and physics; the injury system owns the injury
+        # conversion rate. Measured 2026-09-29 (60-GameSim-game probe):
+        # unscaled weights produce ~0.57 injuries/team-game from hits alone
+        # at mean 2.29 games -- ~6x the hit path's mechanism share of the
+        # grounded total (~0.31/team-game across ALL mechanisms, Rotowire
+        # 2024-25; body checks the largest single category but a minority
+        # overall, Knapik Fig. 5 -> hit target ~0.09). Scale ONLY the
+        # INJURY_CAUSED weight; every other hit outcome is untouched.
+        try:
+            import injury_data as _injcal
+            _hscale = _injcal.HIT_INJURY_PROB_SCALE
+            results = [
+                (r, p * _hscale if r == HitResult.INJURY_CAUSED else p)
+                for r, p in results
+            ]
+        except Exception:
+            pass
         rand = random.random()
         cumulative = 0
         for result, prob in results:
             cumulative += prob
             if rand < cumulative:
+                # -- W3 condition/injury-proneness (additive): a tired, worn,
+                #    or injury-prone VICTIM gets hurt more often. The base
+                #    roll above has no victim-side terms -- and scaling the
+                #    trailing INJURY_CAUSED weight cannot move its cumulative
+                #    probability -- so the risk multiplier is applied as a
+                #    second-chance injury roll: P += (mult - 1) x base.
+                #    Fresh, average-proneness victims (mult == 1.0) see a
+                #    byte-identical roll. Hit/fight event generation above is
+                #    untouched; this is the multiplier W4/W5 consume.
+                if result != HitResult.INJURY_CAUSED:
+                    try:
+                        from condition_system import (
+                            fatigue_injury_risk_mult, injury_proneness_mult)
+                        _vm = (fatigue_injury_risk_mult(target_player)
+                               * injury_proneness_mult(target_player))
+                        if _vm > 1.0:
+                            _bp = next((p for r, p in results
+                                        if r == HitResult.INJURY_CAUSED), 0.05)
+                            if random.random() < (_vm - 1.0) * _bp:
+                                return HitResult.INJURY_CAUSED
+                    except Exception:
+                        pass
                 return result
         
         return HitResult.SUCCESSFUL
@@ -9186,6 +9704,21 @@ class GameSim:
             self._apply_hit_injury(target_player, hitting_player,
                                    hitting_team, target_team,
                                    hit_type, impact)
+            # W5 retaliation engine ("receipts"): a perceived-intent injury
+            # opens a debt owed by the offending team. Additive: the injury
+            # event itself is generated exactly as before.
+            try:
+                _physicality.maybe_open_receipt(self, hitting_player,
+                                                target_player, hit_type,
+                                                impact)
+            except Exception:
+                pass
+        # W5 Scott Stevens long memory: high-aggression/high-determination
+        # hitters hold grudges within a game on dirty or big-impact hits.
+        try:
+            _physicality.mark_stevens(self, hitting_player, hit_type, impact)
+        except Exception:
+            pass
 
     def _apply_hit_injury(self, victim, hitter, hitting_team, target_team,
                           hit_type, impact):
@@ -9202,27 +9735,66 @@ class GameSim:
         try:
             dirty = hit_type in (HitType.CHARGING, HitType.BOARDING)
             big = impact == 2
+            # Base bands (W4 calibration): the general-injury path is
+            # grounded at mean ~9.3 games [R2]; hit injuries are the ~29%
+            # mechanism share and run milder, but the COMBINED stream must
+            # still average ~8 games [R1: 8.04]. Measured 2026-09-29: the
+            # old 1-4/2-6/4-10 bands gave a combined mean of ~4.8 --
+            # stars never missed real time. These bands + the circumstance
+            # bumps below land the combined mean at ~8.
             if dirty:
-                lo, hi = 4, 10
+                lo, hi = 5, 12
             elif big:
-                lo, hi = 2, 6
+                lo, hi = 3, 8
             else:
-                lo, hi = 1, 4
+                lo, hi = 2, 5
             games_missed = random.randint(lo, hi)
-            if games_missed >= 8:
-                injury_type = random.choice(
-                    ['Separated shoulder', 'Concussion', 'Broken jaw'])
-            elif games_missed >= 4:
-                injury_type = random.choice(
-                    ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
-            else:
-                injury_type = random.choice(
-                    ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
-            victim.is_injured = True
-            victim.injury_type = injury_type
-            victim.games_remaining_injured = games_missed
-            victim.last_injury = injury_type
-            victim.injured_today = True
+            # W3: the victim's injury_proneness scales severity -- fragile
+            # players miss more time. (quick_sim's roll_game_injury already
+            # weights by it; GameSim never consulted it.) The diagnosis bands
+            # below key off the scaled value, so prone players also get worse
+            # diagnoses. Hit dirtiness still sets the base band.
+            try:
+                from condition_system import injury_proneness_mult as _w3_ipm
+                games_missed = max(1, int(round(games_missed * _w3_ipm(victim))))
+            except Exception:
+                pass
+            # W4 (icetime-ecosystem): circumstance-scaled severity. The hit
+            # pipeline (W5) is only READ here -- hit_type / impact / hitter &
+            # victim attributes / zone -- never written back into hit
+            # resolution. Dirty hits, enforcer-vs-small-star mismatches, and
+            # open-ice (neutral-zone, big-impact) collisions bump severity;
+            # concussion becomes a real protocol injury instead of flavor
+            # text; the type comes from the shared grounded tables. Medical
+            # staff scale the diagnosed absence via apply_injury().
+            try:
+                import injury_data as _injh
+                _ctx = _injh.hit_circumstance(hitter, victim, hit_type,
+                                              impact, sim=self)
+                _spec_games, injury_type, _conc = _injh.hit_injury_spec(
+                    games_missed, _ctx, victim=victim)
+                games_missed = _injh.apply_injury(
+                    victim,
+                    {"games": _spec_games, "type": injury_type,
+                     "concussion": _conc,
+                     "region": "HEAD" if _conc else "HIT"},
+                    target_team)
+            except Exception:
+                # Fallback: the pre-W4 behavior (duration-keyed flavor).
+                if games_missed >= 8:
+                    injury_type = random.choice(
+                        ['Separated shoulder', 'Concussion', 'Broken jaw'])
+                elif games_missed >= 4:
+                    injury_type = random.choice(
+                        ['Sprained knee', 'Shoulder strain', 'High ankle sprain'])
+                else:
+                    injury_type = random.choice(
+                        ['Bruised ribs', 'Charley horse', 'Cut needing stitches'])
+                victim.is_injured = True
+                victim.injury_type = injury_type
+                victim.games_remaining_injured = games_missed
+                victim.last_injury = injury_type
+                victim.injured_today = True
             try:
                 self._log_event(
                     f"{victim.full_name} injured ({injury_type}, "
@@ -9861,6 +10433,10 @@ class GameSim:
     def _update_goaltender_fatigue(self, goaltender, shot_difficulty):
         """
         Stage 5: Update goaltender fatigue based on saves and shot difficulty.
+
+        W3: stamina/endurance/durability blend scales accumulation (same
+        shared decision as skaters -- fatigue_accumulation_mult, neutral at
+        resistance 70), and the canonical per-game pool stays in sync.
         """
         if goaltender.id in self.goaltender_fatigue:
             # Base fatigue loss per shot
@@ -9871,9 +10447,25 @@ class GameSim:
                 fatigue_loss += 0.3
             elif shot_difficulty == 'medium':
                 fatigue_loss += 0.1
+
+            # W3: high-stamina goalies wear down slower.
+            try:
+                from condition_system import (
+                    fatigue_accumulation_mult as _w3_accum,
+                    sync_game_energy as _w3_sync,
+                )
+                fatigue_loss *= _w3_accum(goaltender)
+            except Exception:
+                _w3_sync = None
             
-            self.goaltender_fatigue[goaltender.id] = max(0, 
+            new_energy = max(0,
                 self.goaltender_fatigue[goaltender.id] - fatigue_loss)
+            self.goaltender_fatigue[goaltender.id] = new_energy
+            if _w3_sync is not None:
+                try:
+                    _w3_sync(goaltender, new_energy)
+                except Exception:
+                    pass
 
     def _adjust_goaltender_positioning(self, goaltender, shot_location, situation):
         """

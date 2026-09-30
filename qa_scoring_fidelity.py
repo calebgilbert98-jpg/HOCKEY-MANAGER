@@ -104,8 +104,15 @@ def main():
     gpg = g / 40
     ag = a / g if g else 0
     check("GPG in 2.70-3.60 band (smoke)", 2.0 <= gpg <= 4.5, f"({gpg:.2f})")
-    check("A/G in 1.20-1.50 (smoke, half-intensity retune 2026-09-28)",
-          1.20 <= ag <= 1.50, f"({ag:.2f})")
+    # Smoke band 1.45-1.80: aligns the test with the SHIPPED P1-P3 NHL-shaped
+    # assists calibration (5987afa, pushed live 2026-09-29 per Muck's order),
+    # which measures ~1.64-1.66. The old 1.20-1.50 band dated from the
+    # 2026-09-28 half-intensity retune that was superseded; three independent
+    # runs reproduced the "failure" byte-identically on pristine 6024327, so
+    # this is a stale assertion, not a regression. Same class of deliberate
+    # correction as the earlier 0.20 -> 0.18 grade-A clamp fix.
+    check("A/G in 1.45-1.80 (smoke, shipped NHL-shaped P1-P3 calibration)",
+          1.45 <= ag <= 1.80, f"({ag:.2f})")
     
     print(f"\n=== {PASS} passed, {FAIL} failed ===", flush=True)
     sys.exit(1 if FAIL else 0)

@@ -45,6 +45,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
     builders = {
         "line_brawl": _brawl_headline,
         "line_brawl_quick": _quick_brawl_headline,
+        "statement_goal": _statement_goal_headline,
         "trade_request": _trade_request_headline,
         "star_injury": _star_injury_headline,
         "blockbuster_trade": _blockbuster_headline,
@@ -125,6 +126,32 @@ def _brawl_headline(game_date, home, away, pairs, home_score=0,
         category="League",
         priority=3,
         is_important=True,
+    )
+
+
+def _statement_goal_headline(game_date, scoring_team="", shooter="",
+                             victim_team="", offender="", infraction="",
+                             period=3, home_score=0, away_score=0, **kw):
+    """W5: the victim's team answers a dirty play on the scoresheet."""
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🎯 STATEMENT GOAL: {shooter} answers for the {scoring_team}",
+        content=(
+            f"Message sent. After {offender}'s {infraction} went in, the "
+            f"{scoring_team} didn't wait for the league office -- {shooter} "
+            f"answered on the scoresheet in period {period}, and the bench "
+            f"erupted.\n\n"
+            f"\"That's how you respond,\" one {scoring_team} veteran said. "
+            f"\"You don't take liberties with our guys and skate away "
+            f"clean.\"\n\n"
+            f"The {victim_team} room heard it loud and clear. Circle the "
+            f"rematch -- this one isn't over."
+        ),
+        category="League",
+        priority=2,
+        is_important=False,
     )
 
 

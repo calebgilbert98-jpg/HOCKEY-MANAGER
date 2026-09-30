@@ -135,9 +135,10 @@ def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
     margin = abs(home_score - away_score)
 
     # Fights: Poisson-ish count around the per-game probability. The count
-    # feeds the hollow-overhype grader. Fights alone are NOT stored --
-    # they're common (~0.26/game league-wide); only true line brawls earn
-    # a place in the rivalry record (rolled below).
+    # feeds the hollow-overhype grader. W5: fights ARE stored now -- one
+    # incident per game with at least one fight (not one per fight; they're
+    # common at ~0.26/game league-wide) -- so they feed the rivalry store's
+    # long-term memory and the grudge floors, like the live engine's.
     try:
         p_fight = float(fight_probability(tension, is_playoff=is_playoff))
         lam = max(0.0, p_fight) * 1.15
@@ -148,6 +149,15 @@ def _roll_incidents(home: Any, away: Any, home_score: int, away_score: int,
             _k += 1
             _p *= random.random()
         out["fights"] = max(0, _k - 1)
+        if out["fights"] > 0:
+            from reputation_system import feed_grudge as _fg
+            record_game_incident(
+                rivalries, home, away, "fight",
+                f"{out['fights']} fight(s) -- {home_score}-{away_score} final")
+            try:
+                _fg(rivalries, home, away, grudge=2)
+            except Exception:
+                pass
     except Exception:
         pass
 

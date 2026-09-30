@@ -127,13 +127,30 @@ def use_timeout(sim, team, reason):
         except Exception:
             _goalie = None
         try:
+            try:
+                from condition_system import (
+                    TIMEOUT_RECOVERY as _W3_TR,
+                    fatigue_recovery_mult as _w3_rec,
+                    sync_game_energy as _w3_sync,
+                )
+            except Exception:
+                _W3_TR, _w3_rec, _w3_sync = 8.0, None, None
             for p in sim._get_on_ice(team):
                 if _goalie is not None and \
                         getattr(p, "primary_position", None) == _goalie:
                     continue
                 pf = getattr(sim, "player_fatigue", None)
                 if pf is not None:
-                    pf[p.id] = min(100.0, float(pf.get(p.id, 80)) + 8.0)
+                    # W3: timeout breather scales with the stamina blend --
+                    # high-stamina players get more out of the rest.
+                    _rec = _W3_TR * (_w3_rec(p) if _w3_rec else 1.0)
+                    _new = min(100.0, float(pf.get(p.id, 80)) + _rec)
+                    pf[p.id] = _new
+                    if _w3_sync is not None:
+                        try:
+                            _w3_sync(p, _new)
+                        except Exception:
+                            pass
         except Exception:
             pass
         sim.__dict__.setdefault("_timeout_faceoff_boost", {})[team.team_name] = True

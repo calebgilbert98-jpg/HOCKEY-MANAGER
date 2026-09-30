@@ -12,6 +12,36 @@ from player_development_system import PlayerDevelopmentEngine, initialize_player
 from game_classes import Player, PlayerPosition, to_100_scale
 from player_context_menu import PlayerContextMenu
 
+
+def _safe_condition(player):
+    """W6: canonical condition readout; never raises (100 fallback)."""
+    try:
+        import condition_ui
+        return condition_ui.get_condition(player)
+    except Exception:
+        try:
+            return int(getattr(player, "condition", 100))
+        except Exception:
+            return 100
+
+
+def _safe_condition_text(player):
+    """W6: '82 (Good)' display text; never raises."""
+    try:
+        import condition_ui
+        return condition_ui.condition_text(player)
+    except Exception:
+        return f"{_safe_condition(player)}"
+
+
+def _safe_injury(player):
+    """W6: injury status string or None; never raises."""
+    try:
+        import condition_ui
+        return condition_ui.injury_status(player)
+    except Exception:
+        return None
+
 class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
@@ -289,6 +319,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             'pos': ('Pos', 50),
             'age': ('Age', 50),
             'overall': ('OVR', 50),
+            'condition': ('Cond', 80),
             'potential': ('POT', 50),
             'potential_grade': ('Grade', 60),
             'development_stage': ('Stage', 100),
@@ -507,6 +538,20 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                               font=('Segoe UI', 10),
                               foreground=self.colors['secondary'])
         info_label.pack(anchor='w')
+
+        # W6: canonical condition + injury state under the player info line
+        try:
+            _cond_text = _safe_condition_text(player)
+            _inj = _safe_injury(player)
+            _cond_line = f"Condition: {_cond_text}"
+            if _inj:
+                _cond_line += f"  •  {_inj}"
+            ttk.Label(header_frame,
+                      text=_cond_line,
+                      font=('Segoe UI', 10),
+                      foreground=self.colors['secondary']).pack(anchor='w')
+        except Exception:
+            pass
         
         # Development summary card
         self._create_development_summary_card(player)
@@ -770,6 +815,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                     'pos': player.primary_position.value,
                     'age': player.age,
                     'overall': player.overall_rating(),
+                    'condition': _safe_condition(player),
                     'potential': getattr(player, 'potential', 10),
                     'potential_grade': pot_grade,
                     'development_stage': summary.get('development_stage', 'Unknown'),
@@ -783,6 +829,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                     'pos': player.primary_position.value,
                     'age': player.age,
                     'overall': player.overall_rating(),
+                    'condition': _safe_condition(player),
                     'potential': getattr(player, 'potential', 10),
                     'potential_grade': 'C',
                     'development_stage': 'Unknown',
@@ -866,6 +913,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                 player_data['pos'],
                 player_data['age'],
                 player_data['overall'],
+                _safe_condition_text(player_data.get('player')),
                 player_data['potential'],
                 player_data['potential_grade'],
                 player_data['development_stage'],
@@ -894,6 +942,10 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             self.filtered_players.sort(key=lambda x: pos_order.get(x['pos'], 6), reverse=reverse)
         elif col in ['age', 'overall', 'potential']:
             self.filtered_players.sort(key=lambda x: x[col], reverse=reverse)
+        elif col == 'condition':
+            # W6: condition stored as int at load time
+            self.filtered_players.sort(key=lambda x: x.get('condition', 100),
+                                       reverse=reverse)
         elif col == 'potential_grade':
             # Sort grades: A+, A, B+, B, C+, C, D+, D
             grade_order = {'A+': 8, 'A': 7, 'B+': 6, 'B': 5, 'C+': 4, 'C': 3, 'D+': 2, 'D': 1}

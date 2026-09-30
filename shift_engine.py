@@ -9,6 +9,12 @@ Design doc: docs/SHIFT_ENGINE_DESIGN.md
 Engine boundary: this changes WHO is on the ice and WHEN they change. It does
 NOT touch goal probabilities, shot math, save logic, tactics multipliers, or
 fatigue drain rates.
+
+Rotation is policy-driven (icetime-ecosystem, W2): the next line/pair comes
+from deployment_policy.deployment_weights -- coaching style, morale, score
+state, talent, attitude, archetype fit, relationships, honored GM advice --
+with a ~30-min soft-cap governor. Per-game TOI is credited at every change
+via deployment_policy's accumulator.
 """
 
 import random
@@ -70,6 +76,9 @@ def get_shift_state(sim: Any, team: Any) -> ShiftState:
         st.d_shift_start = clock
         st.st_shift_start = clock
         st._period = period
+        # W2 (icetime-ecosystem): TOI accounting anchor -- the goalie credit
+        # clock starts when the state is created.
+        st._toi_flush_clock = clock
         states[key] = st
     # Period boundary: the clock resets to 1200 each period. A shift can't
     # span the intermission — reset the shift clocks so ages stay sane.
@@ -80,9 +89,18 @@ def get_shift_state(sim: Any, team: Any) -> ShiftState:
             st.record_shift(st.f_shift_start - 0)  # clock hit 0; length unknown, skip
         except Exception:
             pass
+        # W2 (icetime-ecosystem): credit the truncated shift to the horn so
+        # per-game TOI stays exact across periods. deployment_policy owns
+        # the accounting; this is just the hook.
+        try:
+            from deployment_policy import flush_team_toi_at_clock
+            flush_team_toi_at_clock(sim, team, st, 0.0)
+        except Exception:
+            pass
         st.f_shift_start = clock
         st.d_shift_start = clock
         st.st_shift_start = clock
+        st._toi_flush_clock = clock
         st._period = period
     return st
 
@@ -170,22 +188,220 @@ def _sustained_oz_pressure(sim: Any, team: Any) -> bool:
         return False
 
 
+def _credit_outgoing(sim: Any, team: Any, st: ShiftState, clock: float,
+                   side: str) -> None:
+    """Hook: credit the outgoing unit's elapsed ice time before it changes.
+
+    Delegates to deployment_policy (manpower-aware: PP/PK time credits the
+    special-teams unit the sim actually dressed). Never raises.
+    """
+    try:
+        from deployment_policy import (credit_forwards_elapsed,
+                                        credit_defense_elapsed)
+        if side == "F":
+            credit_forwards_elapsed(sim, team, st, clock)
+        else:
+            credit_defense_elapsed(sim, team, st, clock)
+    except Exception:
+        pass
+
+
+def _policy_next_line(sim: Any, team: Any, st: ShiftState, side: str,
+                      reason: str = "rotation",
+                      leverage_mode: Optional[str] = None) -> int:
+    """Next line/pair by coaching deployment policy (weighted rotation).
+
+    Replaces the fixed 1->2->3->4 round-robin: shares come from
+    deployment_policy.deployment_weights (coach style, morale, score state,
+    talent, fit, relationships, honored advice), then the ~30-min soft-cap
+    governor downweights lines whose skaters hit the cap. A change means a
+    change -- the unit coming off is excluded from the pick. Falls back to
+    plain round-robin if the policy is unavailable.
+
+    leverage_mode ("attack" | "defend" | None) is within-line differentiation:
+    after the soft-cap governor, each line's share is multiplied by its mean
+    leverage (attack: premium offensive minutes -- OZ starts, hot scorers) or
+    defensive trust (defend: trusted checkers soak DZ draws). This changes
+    WHICH minutes a line gets, never WHO plays -- the soft-cap zeroing and
+    the quantity shares are untouched, and the quantity clamp [0.95, 1.05]
+    still binds minutes. None = pre-leverage behavior.
+    """
+    n = 4 if side == "F" else 3
+    current = st.f_line if side == "F" else st.d_pair
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        soft_cap_adjust_shares,
+                                        pick_weighted_line,
+                                        LEVERAGE_ENABLED,
+                                        line_leverage, line_trust)
+        weights = deployment_weights_for_game(sim, team)
+        shares = list(weights["F" if side == "F" else "D"])
+        shares = soft_cap_adjust_shares(sim, team, side, shares)
+        if leverage_mode and LEVERAGE_ENABLED:
+            kind = "F" if side == "F" else "D"
+            mults = []
+            for i in range(1, n + 1):
+                if leverage_mode == "attack":
+                    mults.append(line_leverage(sim, team, kind, i))
+                else:
+                    mults.append(line_trust(sim, team, kind, i))
+            shares = [s * m for s, m in zip(shares, mults)]
+            tot = sum(shares)
+            shares = [s / tot for s in shares] if tot > 0 else shares
+        return pick_weighted_line(shares, n, exclude=current)
+    except Exception:
+        return _next_in_rotation(current, n)
+
+
+def _policy_pick_from(sim: Any, team: Any, side: str,
+                      candidates: Tuple[int, ...]) -> int:
+    """Weighted pick among explicit candidate lines (chase/protect calls).
+
+    Unlike _policy_next_line this is the coach's explicit call, so the
+    current line is NOT excluded -- sending the top line back out to chase
+    a game is the whole point.
+    """
+    n = 4 if side == "F" else 3
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        soft_cap_adjust_shares,
+                                        pick_weighted_line)
+        weights = deployment_weights_for_game(sim, team)
+        shares = list(weights["F" if side == "F" else "D"])
+        shares = soft_cap_adjust_shares(sim, team, side, shares)
+        sub = [shares[c - 1] if 1 <= c <= n else 0.0 for c in candidates]
+        if sum(sub) <= 0:
+            sub = [1.0 / len(candidates)] * len(candidates)
+        pick = random.choices(list(candidates), weights=sub, k=1)[0]
+        return pick
+    except Exception:
+        return random.choice(list(candidates))
+
+
+def _leverage_pick_from(sim: Any, team: Any, side: str,
+                        candidates: Tuple[int, ...],
+                        mode: str, log_key: str = "") -> int:
+    """Weighted pick among candidate lines, leverage-weighted (clutch calls).
+
+    Like _policy_pick_from, but each candidate's share is multiplied by its
+    mean leverage (mode "attack": chase/empty-net -- the hot scorers get the
+    call) or defensive trust (mode "defend": protect-lead -- the trusted
+    checkers close it out). The current line is NOT excluded (explicit coach
+    call). Falls back to the plain pick when leverage is off or unavailable.
+
+    A narrative line goes to the broadcast feed when a genuinely hot
+    (leverage >= 1.15) line gets the call -- throttled per game.
+    """
+    n = 4 if side == "F" else 3
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        soft_cap_adjust_shares,
+                                        LEVERAGE_ENABLED,
+                                        line_leverage, line_trust,
+                                        line_leverage_leader,
+                                        log_leverage)
+        if not LEVERAGE_ENABLED:
+            return _policy_pick_from(sim, team, side, candidates)
+        weights = deployment_weights_for_game(sim, team)
+        shares = list(weights["F" if side == "F" else "D"])
+        shares = soft_cap_adjust_shares(sim, team, side, shares)
+        kind = "F" if side == "F" else "D"
+        sub = []
+        for c in candidates:
+            s = shares[c - 1] if 1 <= c <= n else 0.0
+            m = (line_leverage(sim, team, kind, c) if mode == "attack"
+                 else line_trust(sim, team, kind, c))
+            sub.append(max(0.0, s) * m)
+        if sum(sub) <= 0:
+            return _policy_pick_from(sim, team, side, candidates)
+        pick = random.choices(list(candidates), weights=sub, k=1)[0]
+        # Narrative: a genuinely hot line getting the clutch call.
+        try:
+            if mode == "attack" and log_key:
+                lev = line_leverage(sim, team, kind, pick)
+                if lev >= 1.15:
+                    leader = line_leverage_leader(sim, team, kind, pick)
+                    pname = getattr(leader, "full_name",
+                                    getattr(leader, "name", "?"))
+                    tname = getattr(team, "team_name", "?")
+                    log_leverage(sim, team, f"{log_key}_{pick}",
+                                  f"{tname}: riding the hot hand -- {pname} "
+                                  f"over the boards ({log_key}).")
+        except Exception:
+            pass
+        return pick
+    except Exception:
+        return _policy_pick_from(sim, team, side, candidates)
+
+
+def _leverage_best_line(sim: Any, team: Any,
+                        candidates: Tuple[int, ...]) -> Optional[int]:
+    """Candidate line (1-based) with the highest mean leverage.
+
+    Used for mismatch exploitation: when the away team declares its 4th
+    line, the HOTTEST scoring line (not just "line 1") gets the mismatch.
+    Returns None when leverage is off or unavailable (caller keeps the
+    default pick).
+    """
+    try:
+        from deployment_policy import LEVERAGE_ENABLED, line_leverage
+        if not LEVERAGE_ENABLED:
+            return None
+        scored = [(line_leverage(sim, team, "F", c), c) for c in candidates]
+        if not scored:
+            return None
+        return max(scored)[1]
+    except Exception:
+        return None
+
+
+def _policy_score_thresholds(sim: Any, team: Any) -> Tuple[int, int]:
+    """(chase_at, protect_at) goal-diff thresholds, parameterized by policy.
+
+    Defaults (-2, +2) preserve the historical behavior; an aggressive coach
+    (high concentration) trailing late starts chasing at -1.
+    """
+    try:
+        from deployment_policy import (deployment_weights_for_game,
+                                        score_state_thresholds)
+        weights = deployment_weights_for_game(sim, team)
+        gs = weights.get("meta", {})
+        concentration = float(gs.get("concentration", 0.40))
+        return score_state_thresholds(
+            {"period": getattr(sim, "period", 1),
+             "clock": getattr(sim, "clock", 1200),
+             "score_diff": _goal_diff_for(sim, team,
+                                          team is getattr(sim, "home_team",
+                                                           None))},
+            concentration)
+    except Exception:
+        return -2, 2
+
+
 def change_lines(sim: Any, team: Any, st: ShiftState,
                  change_f: bool = True, change_d: bool = True,
-                 reason: str = "rotation") -> Dict[str, Any]:
-    """Execute a line change. Returns info about what changed."""
+                 reason: str = "rotation",
+                 leverage_mode: Optional[str] = None) -> Dict[str, Any]:
+    """Execute a line change. Returns info about what changed.
+
+    leverage_mode ("attack" | "defend" | None) is threaded to the policy
+    pick: within-line differentiation on the rotation path (OZ draws get
+    leverage-weighted lines; DZ draws get trust-weighted lines).
+    """
     clock = getattr(sim, "clock", 0)
     result = {"forwards": False, "defense": False, "wholesale": False}
 
     if change_f:
+        _credit_outgoing(sim, team, st, clock, "F")
         st.record_shift(st.f_age(clock))
-        st.f_line = _next_in_rotation(st.f_line, 4)
+        st.f_line = _policy_next_line(sim, team, st, "F", reason, leverage_mode)
         st.f_shift_start = clock
         result["forwards"] = True
 
     if change_d:
+        _credit_outgoing(sim, team, st, clock, "D")
         st.record_shift(st.d_age(clock))
-        st.d_pair = _next_in_rotation(st.d_pair, 3)
+        st.d_pair = _policy_next_line(sim, team, st, "D", reason, leverage_mode)
         st.d_shift_start = clock
         result["defense"] = True
 
@@ -241,20 +457,58 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
     target_pair = None
     if is_home and away_line is not None:
         target_line, target_pair = _matching_response(away_line, sim, team)
+        # Within-line differentiation -- mismatch sheltering: when the away
+        # team declares its 4th line, the HOTTEST scoring line gets the
+        # mismatch, not just "line 1". Only the auto exploit path (a user
+        # "Match to line" pref always wins).
+        try:
+            prefs = getattr(team, "line_matchups", None) or {}
+            f_prefs = list(prefs.get("F") or [])[:4]
+            pref_hit = any(w == away_line for w in f_prefs if w)
+            if (away_line == 4 and target_line == 1 and not pref_hit):
+                best = _leverage_best_line(sim, team, (1, 2))
+                if best is not None and best != target_line:
+                    from deployment_policy import (line_leverage_leader,
+                                                    log_leverage)
+                    target_line = best
+                    leader = line_leverage_leader(sim, team, "F", best)
+                    pname = getattr(leader, "full_name",
+                                    getattr(leader, "name", "?"))
+                    tname = getattr(team, "team_name", "?")
+                    log_leverage(sim, team, f"shelter_{best}",
+                                 f"{tname}: {pname}'s line gets the mismatch "
+                                 f"-- hot scorers out against the fourth line.")
+        except Exception:
+            pass
     elif not is_home:
         # Away team rolls rotation (no last change on the road)
         pass
 
-    # Score-state layer (existing behavior, preserved):
-    # trailing by 2+ -> shorten to top six; leading by 2+ -> bottom six.
-    # This overrides matching.
+    # Score-state layer (deployment policy, was fixed +-2 for every coach):
+    # trailing -> shorten to top six; leading -> bottom six / checkers.
+    # Thresholds AND the pick among the short-bench lines now come from the
+    # coach's deployment policy. This overrides matching. The pick itself is
+    # leverage-weighted: chasing -> the hot scorers; protecting -> the
+    # trusted checkers. 6-on-5 (goalie pulled) is the most aggressive state
+    # and overrides everything.
     goal_diff = _goal_diff_for(sim, team, is_home)
-    if goal_diff <= -2:
-        target_line = 1 if random.random() < 0.5 else 2
+    chase_at, protect_at = _policy_score_thresholds(sim, team)
+    if goal_diff <= chase_at:
+        target_line = _leverage_pick_from(sim, team, "F", (1, 2), "attack",
+                                          "chasing late")
         result["reason"] = "chase_game"
-    elif goal_diff >= 2:
-        target_line = 3 if random.random() < 0.5 else 4
+    elif goal_diff >= protect_at:
+        target_line = _leverage_pick_from(sim, team, "F", (3, 4), "defend")
         result["reason"] = "protect_lead"
+    try:
+        _pulled = team.team_name in (getattr(sim, "goalie_pulled", None)
+                                     or set())
+    except Exception:
+        _pulled = False
+    if _pulled and goal_diff <= 0:
+        target_line = _leverage_pick_from(sim, team, "F", (1, 2), "attack",
+                                          "net empty")
+        result["reason"] = "empty_net_attack"
 
     # Decide changes
     change_f = must_change_f or (target_line is not None and target_line != st.f_line)
@@ -268,24 +522,33 @@ def stoppage_change(sim: Any, team: Any, st: ShiftState,
         if random.random() < 0.6:
             change_d = True
 
+    # Within-line differentiation on the rotation path: OZ draws weight the
+    # pick toward high-leverage (hot) lines; DZ draws toward trusted
+    # defensive units. Neutral-zone stoppages roll the plain shares.
+    _zone_leverage = ("attack" if zone == "offensive"
+                      else "defend" if zone == "defensive" else None)
     if target_line is not None and change_f:
+        _credit_outgoing(sim, team, st, clock, "F")
         st.record_shift(st.f_age(clock))
         st.f_line = target_line
         st.f_shift_start = clock
         result["forwards"] = True
     elif change_f:
         info = change_lines(sim, team, st, change_f=True, change_d=False,
-                            reason=result["reason"])
+                            reason=result["reason"],
+                            leverage_mode=_zone_leverage)
         result["forwards"] = info["forwards"]
 
     if target_pair is not None and change_d:
+        _credit_outgoing(sim, team, st, clock, "D")
         st.record_shift(st.d_age(clock))
         st.d_pair = target_pair
         st.d_shift_start = clock
         result["defense"] = True
     elif change_d:
         info = change_lines(sim, team, st, change_f=False, change_d=True,
-                            reason=result["reason"])
+                            reason=result["reason"],
+                            leverage_mode=_zone_leverage)
         result["defense"] = info["defense"]
 
     result["wholesale"] = result["forwards"] and result["defense"]
