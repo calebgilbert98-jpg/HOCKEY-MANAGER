@@ -227,6 +227,19 @@ class HomeDashboard:
         except Exception:
             pass
         # --- end season-meeting banner ---------------------------------------
+        # --- Coach check-in pending banner (coach_checkin_window, additive) --
+        # Eastside gating: while a quarterly coach check-in is pending, a
+        # persistent entry point sits at the top of the dashboard. NON-
+        # BLOCKING by design -- the copy says the day advances normally.
+        # Guarded so a missing/broken check-in module can never break home.
+        try:
+            from coach_checkin_window import build_coach_checkin_banner
+            _ck_banner = build_coach_checkin_banner(content, self.parent)
+            if _ck_banner is not None:
+                _ck_banner.pack(fill="x", pady=(0, 12))
+        except Exception:
+            pass
+        # --- end coach check-in banner -------------------------------------
         self._create_stat_strip(content)
         self._create_section_nav(content)
         self._create_main_grid(content)

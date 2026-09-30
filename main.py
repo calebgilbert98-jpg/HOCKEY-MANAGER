@@ -6794,6 +6794,17 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
+            # Quarterly coach check-ins: after games ~20/40/60 the GM's
+            # club arms a RESUMABLE check-in conversation (never blocks
+            # the day; expires when the next quarter arms). AI clubs
+            # resolve immediately -- no UI, never skipped. Season- and
+            # mandate-idempotent, and never raises.
+            try:
+                from coach_checkins import on_day_advanced
+                on_day_advanced(getattr(self, "game_manager", None) or self)
+            except Exception:
+                pass
+
             # Offer-sheet match windows: a sheet whose 7-day clock ran out
             # unanswered resolves as a decline -- the player goes to the
             # offering club at the sheet terms (real CBA rule). Idempotent;

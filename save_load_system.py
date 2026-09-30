@@ -421,6 +421,11 @@ class GameSaveManager:
                 'season_mandate': dict(getattr(team, 'season_mandate', None) or {}),
                 'season_meeting_pending': bool(getattr(team, 'season_meeting_pending', False)),
                 'season_meeting_context': dict(getattr(team, 'season_meeting_context', None) or {}),
+                # Quarterly coach check-ins: the pending flag (+ transient
+                # UI context). History lives on the mandate dict above.
+                'checkin_pending': bool(getattr(team, 'checkin_pending', False)),
+                'checkin_quarter': getattr(team, 'checkin_quarter', None),
+                'checkin_context': dict(getattr(team, 'checkin_context', None) or {}),
                 'buyout_cap_hits': dict(getattr(team, 'buyout_cap_hits', {}) or {}),
                 # In-game retained-salary ledger (real NHL retained
                 # transactions). Absent in old saves -> empty.
@@ -1629,6 +1634,18 @@ class GameSaveManager:
                 team.season_meeting_context = dict(team_data.get('season_meeting_context') or {})
             except Exception:
                 team.season_meeting_context = {}
+            # Quarterly coach check-ins. Absent in old saves -> nothing
+            # pending; the history arrives inside season_mandate.
+            team.checkin_pending = bool(team_data.get('checkin_pending', False))
+            try:
+                _cq = team_data.get('checkin_quarter')
+                team.checkin_quarter = int(_cq) if _cq is not None else None
+            except (TypeError, ValueError):
+                team.checkin_quarter = None
+            try:
+                team.checkin_context = dict(team_data.get('checkin_context') or {})
+            except Exception:
+                team.checkin_context = {}
             # Annual staff payroll budget. Absent in old saves -> market-tier
             # default so existing leagues get the rule without a wipe.
             try:
