@@ -1936,6 +1936,21 @@ class AdvancedGameSim:
         # Scoring volume is thus held constant while the block rate
         # becomes attribute-driven and truthful in structure.
         shot_chance *= 1.03
+        # --- attribute composites (additive, bounded) ---
+        # Finishing vs goalie-save: the same decision GameSim applies --
+        # the shooter's finishing toolkit against the goalie's broad save
+        # toolkit. Scoring-sensitive rails [0.97, 1.03] on both sides (the
+        # goalie side is inverted: a better save composite lowers the goal
+        # chance). One decision, two fidelities.
+        try:
+            from attribute_composites import apply_amplifier as _ac_qs
+            shot_chance = _ac_qs(shot_chance, shooter, "finishing", sim=self,
+                                 team=puck_team_name, energy=fatigue_factor * 100)
+            if goalie:
+                shot_chance = _ac_qs(shot_chance, goalie, "goalie_save",
+                                    sim=self, team=opp_team_name, invert=True)
+        except Exception:
+            pass
         # Heater shutdown REMOVED (2026-09-29, per Muck): the damper below cut
         # a hot player's finishing up to -50% when mesh_form heat > 0.60.
         # That fought the seize-the-moment vision -- a heater should feel
@@ -2462,6 +2477,17 @@ class AdvancedGameSim:
         distance_factor = max(0.3, 1.0 - (distance_to_shot / 30))  # Reduced effectiveness beyond 30 feet
         
         final_block_chance = base_block_chance * (block_skill / 15) * distance_factor
+        # --- attribute composites (additive, bounded) ---
+        # Defensive-play composite on the blocker's block chance.
+        # Rails [0.94, 1.06].
+        try:
+            from attribute_composites import apply_amplifier as _ac_qsb
+            final_block_chance = _ac_qsb(final_block_chance, closest_defender,
+                                        "defensive_play", sim=self,
+                                        team=opp_team_name,
+                                        energy=fatigue_factor * 100)
+        except Exception:
+            pass
         
         if random.random() < final_block_chance:
             self.events.append({
@@ -2497,6 +2523,16 @@ class AdvancedGameSim:
             getattr(defender, 'defensive_awareness', 10) * 0.3 +
             getattr(defender, 'aggressiveness', 10) * 0.2
         ) * fatigue_factor
+        # --- attribute composites (additive, bounded) ---
+        # Defensive-play composite on the blocker's skill before the
+        # >15 gate. Rails [0.94, 1.06].
+        try:
+            from attribute_composites import apply_amplifier as _ac_qsb2
+            block_skill = _ac_qsb2(block_skill, defender, "defensive_play",
+                                  sim=self, team=defending_team,
+                                  energy=fatigue_factor * 100)
+        except Exception:
+            pass
         
         if block_skill > 15:  # Made it harder to block (was 12, now 15)
             self.events.append({
@@ -2589,6 +2625,15 @@ class AdvancedGameSim:
             getattr(deker, 'agility', 10) * 0.3 +
             getattr(deker, 'anticipation', 10) * 0.3
         ) * fatigue_factor
+        # --- attribute composites (additive, bounded) ---
+        # Skating composite on deke success. Rails [0.95, 1.05].
+        try:
+            from attribute_composites import apply_amplifier as _ac_deke
+            deke_skill = _ac_deke(deke_skill, deker, "skating", sim=self,
+                                 team=puck_team_name,
+                                 energy=fatigue_factor * 100)
+        except Exception:
+            pass
         
         if deke_skill > 12:
             self.events.append({
@@ -2620,6 +2665,17 @@ class AdvancedGameSim:
             getattr(p2, 'work_rate', 10) * 0.2 +
             getattr(p2, 'loose_puck', 10) * 0.15
         ) * fatigue_factor
+        # --- attribute composites (additive, bounded) ---
+        # Puck-retrieval composite: the full battle toolkit on both
+        # sides. Rails [0.94, 1.06].
+        try:
+            from attribute_composites import apply_amplifier as _ac_qpb
+            p1_skill = _ac_qpb(p1_skill, p1, "puck_retrieval", sim=self,
+                              team=puck_team_name, energy=fatigue_factor * 100)
+            p2_skill = _ac_qpb(p2_skill, p2, "puck_retrieval", sim=self,
+                              team=puck_team_name, energy=fatigue_factor * 100)
+        except Exception:
+            pass
         
         winner = p1 if p1_skill >= p2_skill else p2
         self.events.append({
@@ -2745,6 +2801,17 @@ class AdvancedGameSim:
             _disc = _mm.get("home_discipline" if _mh else "away_discipline", 1.0)
             penalty_chance *= max(0.5, min(1.5, 2.0 - _disc))
             penalty_chance = min(0.06, max(0.005, penalty_chance))
+        except Exception:
+            pass
+        # --- attribute composites (additive, bounded) ---
+        # Discipline (inverted): composed decision-makers foul less often.
+        # Rails [0.96, 1.04], inverted.
+        try:
+            from attribute_composites import apply_amplifier as _ac_qpen
+            penalty_chance = _ac_qpen(penalty_chance, penalized,
+                                     "discipline", sim=self,
+                                     team=puck_team_name,
+                                     energy=fatigue_factor * 100, invert=True)
         except Exception:
             pass
 

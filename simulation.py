@@ -3601,6 +3601,17 @@ class GameSim:
             aws = (ab.strength * 0.45 + ab.balance * 0.25 + ab.checking * 0.20
                    + ab.anticipation * 0.10 + random.randint(-12, 12))
             aws *= _trait_bonus(ab, "puck_battle_mult")
+            # --- attribute composites (additive, bounded) ---
+            # Puck-retrieval composite: the full battle toolkit on both
+            # sides. Rails [0.94, 1.06].
+            try:
+                from attribute_composites import apply_amplifier as _ac_pb
+                hs = _ac_pb(hs, hb, "puck_retrieval", sim=self,
+                            team=self.home_team)
+                aws = _ac_pb(aws, ab, "puck_retrieval", sim=self,
+                             team=self.away_team)
+            except Exception:
+                pass
             winner, loser = (hb, ab) if hs >= aws else (ab, hb)
         wteam = self.home_team if winner.id in [p.id for p in self._get_on_ice(self.home_team)] \
             else self.away_team
@@ -4536,6 +4547,19 @@ class GameSim:
         attacker_roll = attacker.skating + attacker.deking + attacker.offensive_awareness + random.randint(-10, 10)
         defender_roll = defender.checking + defender.strength + defender.defensive_awareness + random.randint(-10, 10)
 
+        # --- attribute composites (additive, bounded) ---
+        # Skating vs defensive_play on the 1v1 rush: mobility to beat the
+        # checker, the defensive toolkit to break it up. Rails [0.95, 1.05]
+        # and [0.94, 1.06]; the base rolls above are never retuned.
+        try:
+            from attribute_composites import apply_amplifier as _ac_rush
+            attacker_roll = _ac_rush(attacker_roll, attacker, "skating",
+                                    sim=self, team=attacking_team)
+            defender_roll = _ac_rush(defender_roll, defender, "defensive_play",
+                                    sim=self, team=defending_team)
+        except Exception:
+            pass
+
         if attacker_roll > defender_roll:
             self._resolve_scoring_chance(attacker, attacking_team, defending_team)
             return "Scoring Chance", attacking_team 
@@ -4548,7 +4572,16 @@ class GameSim:
                     defending_team).get("discipline", 1.0)
             except Exception:
                 _disc = 1.0
-            if random.random() < (defender.hitting_tendency / 1000.0) * max(0.5, min(1.5, 2.0 - _disc)) and (100 - defender.discipline) / 5 > random.randint(1, 20):
+            # --- attribute composites (additive, bounded) ---
+            # Discipline (inverted): composed decision-makers foul less
+            # often when they lose the 1v1. Rails [0.96, 1.04], inverted.
+            try:
+                from attribute_composites import apply_amplifier as _ac_pen
+                _pen_mult = _ac_pen(1.0, defender, "discipline",
+                                   sim=self, team=defending_team, invert=True)
+            except Exception:
+                _pen_mult = 1.0
+            if random.random() < (defender.hitting_tendency / 1000.0) * max(0.5, min(1.5, 2.0 - _disc)) * _pen_mult and (100 - defender.discipline) / 5 > random.randint(1, 20):
                 self._resolve_penalty(defender, defending_team)
                 return "Penalty", attacking_team 
             
@@ -4765,6 +4798,15 @@ class GameSim:
         # block; snipers and offensive defensemen rarely do.
         try:
             block_chance *= get_tendency(best_blocker, "block")
+        except Exception:
+            pass
+        # --- attribute composites (additive, bounded) ---
+        # Defensive-play composite: the blocker's full defensive toolkit.
+        # Rails [0.94, 1.06]; applied before the 50% cap.
+        try:
+            from attribute_composites import apply_amplifier as _ac_blk
+            block_chance = _ac_blk(block_chance, best_blocker, "defensive_play",
+                                  sim=self, team=defending_team)
         except Exception:
             pass
         block_chance = min(block_chance, 0.5)  # Cap at 50%
@@ -5672,6 +5714,23 @@ class GameSim:
         except Exception:
             pass
 
+        # --- attribute composites (additive, bounded) ---
+        # Finishing vs goalie-save: the shooter's finishing toolkit against
+        # the goalie's broad save toolkit. Scoring-sensitive rails
+        # [0.97, 1.03] on both sides (the goalie side is inverted: a better
+        # save composite lowers goal probability). Applied on goal_prob like
+        # the tilt/contest blocks above; existing weights never retuned.
+        try:
+            from attribute_composites import apply_amplifier as _ac_fin
+            _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter, "finishing",
+                           sim=self, team=attacking_team)
+            if not empty_net:
+                _fgp = _ac_fin(_fgp, goalie, "goalie_save", sim=self,
+                               team=defending_team, invert=True)
+            adjusted_save_prob = 1.0 - min(0.98, max(0.0, _fgp))
+        except Exception:
+            pass
+
         # -- Impact scaling (additive): apply the classified tier on top
         # of the existing math, exactly like the scoring-level preference
         # above. Big shots beat goalies cleaner; tired ones are easier.
@@ -6333,7 +6392,17 @@ class GameSim:
             base_skill += 3  # Slight advantage on power play
         elif self._is_team_on_penalty_kill(team):
             base_skill += 5  # Bigger advantage when shorthanded (more important)
-        
+
+        # --- attribute composites (additive, bounded) ---
+        # Faceoff composite: draw skill, tie-up strength, big-draw
+        # composure. Rails [0.94, 1.06].
+        try:
+            from attribute_composites import apply_amplifier as _ac_fo
+            base_skill = _ac_fo(base_skill, player, "faceoff", sim=self,
+                               team=team)
+        except Exception:
+            pass
+
         return base_skill
 
     def _update_faceoff_stats(self, home_player, away_player, winner_player, outcome):
@@ -9420,7 +9489,19 @@ class GameSim:
         
         # Physical intensity affects hit frequency
         success_chance *= self.physical_intensity
-        
+
+        # --- attribute composites (additive, bounded) ---
+        # Physicality composite: the hitter's full hitting toolkit.
+        # hitting_tendency gates WHO throws (selection), not success --
+        # the composite deliberately excludes it. Rails [0.94, 1.06].
+        try:
+            from attribute_composites import apply_amplifier as _ac_hit
+            _hteam = self._get_player_team(hitting_player)
+            success_chance = _ac_hit(success_chance, hitting_player,
+                                     "physicality", sim=self, team=_hteam)
+        except Exception:
+            pass
+
         hit_successful = random.random() < success_chance
         
         # -- Impact tier (additive): tired / normal / big hit, from
