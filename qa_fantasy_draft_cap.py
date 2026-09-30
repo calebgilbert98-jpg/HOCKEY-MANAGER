@@ -98,6 +98,10 @@ _give_picks(mgr, ta, [_mk_player(f"qa-ta-{i}", 80, 4_500_000)
                       for i in range(20)])
 _give_picks(mgr, tb, [_mk_player(f"qa-tb-{i}", 80, 1_000_000)
                       for i in range(20)])
+# _give_picks fills slots directly (bypassing make_pick); advance the
+# cursor past the 40 hand-filled slots so the manager's invariant
+# (cursor points at the first empty slot) holds for the checks below.
+mgr.current_pick = 40
 
 star = next(p for p in pool if p.id == "qa-star")
 depth = next(p for p in pool if p.id == "qa-depth")

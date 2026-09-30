@@ -5652,6 +5652,12 @@ class DraftView(ctk.CTkFrame):
         self.draft_order = []          # [round, team, draft_pick]
         self.picks_made = []           # (team_name, overall, player)
         self._draft_started = False    # re-entry guard for start_draft()
+        # BUG-2 fix: the session is league-owned (league.entry_draft_session,
+        # draft_night.EntryDraftSession). The view attributes above are
+        # working copies materialized from it; the session is the durable
+        # journal. Destroying this view detaches without touching it.
+        self._session = None
+        self._reentry_issues = []
         # Per-team draft boards (team_draft_boards.build_team_boards):
         # {team_name: [prospects in that team's order]}. None until
         # start_draft() builds them; AI falls back to consensus when
@@ -6300,12 +6306,68 @@ class DraftView(ctk.CTkFrame):
         # replace the boards mid-draft. Fresh views start unflagged.
         if getattr(self, '_draft_started', False):
             return
+        # BUG-2 fix: the draft session is league-owned
+        # (league.entry_draft_session, draft_night.EntryDraftSession). A
+        # rebuilt view re-attaches to the live session and resumes exactly
+        # where the draft left off -- it never starts a fresh draft over
+        # committed picks. A year already conducted shows its completed
+        # state, never a new draft.
+        league = self.app.league
+        current_year = league.season_year
+        # BUG-2 fix: a saved journal the load couldn't honor degrades to an
+        # honest unavailable state -- never a fresh draft over committed
+        # picks.
+        try:
+            _why = getattr(league, 'entry_draft_unavailable_reason', None)
+        except Exception:
+            _why = None
+        if _why:
+            self._show_unavailable_state(str(_why))
+            return
+        try:
+            _sess = getattr(league, 'entry_draft_session', None)
+        except Exception:
+            _sess = None
+        try:
+            _sess_year = int(getattr(_sess, 'year', 0) or 0)
+        except Exception:
+            _sess_year = 0
+        # BUG-2 fix: a parked in-progress session owns the war room --
+        # whatever the calendar says. The session is the authoritative
+        # draft; re-entry resumes it exactly where it left off, never a
+        # fresh build over committed picks.
+        if _sess is not None and not _sess.is_complete():
+            self._attach_session(_sess)
+            return
+        try:
+            _conducted = self.dn._conducted_years(league)
+        except Exception:
+            _conducted = set()
+        try:
+            _cond_years = {int(y) for y in _conducted}
+        except Exception:
+            _cond_years = set()
+        if int(current_year) in _cond_years:
+            self._show_conducted_state(current_year)
+            return
+        # BUG-2 fix: a session whose slots are all picked but never
+        # finalized (save/load edge) is finalized idempotently for the
+        # SESSION's year -- never re-drafted. resume_entry_draft_session
+        # replays nothing (every overall is already journaled) and runs
+        # the standard finalize: conducted stamp, grades, session release.
+        if _sess is not None and _sess_year and _sess.is_complete():
+            try:
+                self.dn.resume_entry_draft_session(
+                    league, _sess, app=self.app)
+            except Exception:
+                pass
+            self._show_conducted_state(_sess_year)
+            return
         # Make sure every team owns its picks (idempotent if already done)
         try:
             self.app.league.initialize_all_draft_picks()
         except Exception:
             pass
-        current_year = self.app.league.season_year
         self.draft_order = []
         try:
             order = self.app.league.get_draft_order(current_year)
@@ -6367,8 +6429,273 @@ class DraftView(ctk.CTkFrame):
         self.ticker.delete(0, tk.END)
         self._ticker("Welcome to draft night. The floor is buzzing.")
         self._refresh_shortlist()
+        # BUG-2 fix: league-own the session. The view may be destroyed at
+        # any time; the draft lives on in league.entry_draft_session and a
+        # rebuilt view resumes from it. If the session can't be created,
+        # the draft must NOT proceed sessionless (picks would commit with
+        # no journal, and a later re-entry would start fresh over them):
+        # honest unavailable instead.
+        try:
+            self._session = self.dn.EntryDraftSession.begin(
+                self.app.league, current_year, self.draft_order,
+                self.team_reports, self._draft_rng)
+            self.app.league.entry_draft_session = self._session
+        except Exception as _e:
+            self._session = None
+            try:
+                self.app.league.entry_draft_unavailable_reason = (
+                    "The draft session couldn't be created "
+                    f"({_e}). No draft was started.")
+            except Exception:
+                pass
+            self._show_unavailable_state(
+                "The draft session couldn't be created "
+                f"({_e}). No draft was started.")
+            return
         self.process_draft_pick()
         self._draft_started = True
+
+    # ------------------------------------------------------------------
+    # BUG-2 fix: league-owned draft session. These methods re-attach a
+    # rebuilt view to the live session (resume), or present an honest
+    # terminal state (conducted / unavailable). They never start a fresh
+    # draft over committed picks.
+    # ------------------------------------------------------------------
+    def _attach_session(self, session):
+        """Re-entry: materialize view state from the league-owned session
+        and resume the draft exactly where it left off."""
+        league = self.app.league
+        self._session = session
+        # The session's draft class must still be the live one. If the
+        # calendar advanced a full year past a parked draft, the class
+        # was regenerated and the remaining slots can't be filled
+        # faithfully -- honest unavailable, never a silent wrong-year
+        # draft. (Unverifiable when the class isn't year-stamped: allow.)
+        try:
+            _class_year = int(getattr(league, 'draft_prospects_year', 0)
+                              or 0)
+            _syear = int(getattr(session, 'year', 0) or 0)
+        except Exception:
+            _class_year, _syear = 0, 0
+        if _class_year and _syear and _class_year != _syear:
+            self._show_unavailable_state(
+                f"This {_syear} draft was parked past its draft class "
+                f"(the {_class_year} class is now live). Its "
+                f"{len(getattr(session, 'picks', None) or [])} completed "
+                "picks stand, but the remaining slots can't be filled "
+                "faithfully -- no new draft was started.")
+            return
+        # Revalidate owners against the live pick objects: a pick traded
+        # mid-draft while the war room was closed repoints here. Committed
+        # picks keep their selecting team in the journal.
+        try:
+            session.sync_owners_from_league(league)
+        except Exception:
+            pass
+        try:
+            self._reentry_issues = session.audit(league)
+        except Exception:
+            self._reentry_issues = []
+        order = session.materialize_order(league)
+        # Defensive: every slot needs a live team. If one no longer
+        # resolves (post-load corruption), degrade honestly rather than
+        # crash or silently restart.
+        _missing = [str(s.get('overall', '?')) for s, e in
+                    zip(session.slots, order)
+                    if e[1] is None]
+        if _missing:
+            self._show_unavailable_state(
+                "Draft session can't be resumed: "
+                f"{len(_missing)} pick slot(s) no longer resolve to a "
+                f"team ({', '.join(_missing[:6])}"
+                f"{'…' if len(_missing) > 6 else ''}). No new draft was "
+                "started.")
+            return
+        self.draft_order = order
+        self.team_boards = session.materialize_boards(league)
+        # Rebuild the minimal team_reports the scouting tab needs for the
+        # user's club: the persisted board plus projected picks for the
+        # REMAINING slots the user still owns.
+        try:
+            uname = getattr(getattr(self.app, 'user_team', None),
+                            'team_name', '')
+            uboard = (self.team_boards or {}).get(uname) or []
+            _proj = []
+            for _i in range(int(session.current_pick or 0), len(order)):
+                try:
+                    _r, _t, _dp = order[_i]
+                    if _t is None or getattr(_t, 'team_name', '') != uname:
+                        continue
+                    _ov = _i + 1
+                    _pl = uboard[_ov - 1] if _ov - 1 < len(uboard) else None
+                    _proj.append({'round': int(_r or 0), 'overall': _ov,
+                                  'prospect': _pl})
+                except Exception:
+                    continue
+            self.team_reports = {uname: {'board': list(uboard),
+                                         'projected_picks': _proj}}
+        except Exception:
+            self.team_reports = None
+        self.picks_made = session.materialize_picks(league)
+        try:
+            self.current_pick = int(session.current_pick or 0)
+        except Exception:
+            self.current_pick = 0
+        # Restore the RNG stream exactly where it was (getstate/setstate),
+        # so the resumed draft is the SAME draft, not a lookalike.
+        try:
+            self._draft_rng = random.Random()
+            self._draft_rng.setstate(session.rng_state)
+        except Exception:
+            self._draft_rng = random.Random(
+                self.dn.stable_draft_seed(session.year))
+        # current_round follows the cursor (1-based, clamp to last round).
+        try:
+            if 0 <= self.current_pick < len(self.draft_order):
+                self.current_round = int(
+                    self.draft_order[self.current_pick][0] or 1)
+            else:
+                self.current_round = 7
+        except Exception:
+            self.current_round = 7
+        self._rebuild_results_from_session()
+        try:
+            self._render_scouting_report()
+        except Exception:
+            pass
+        self._ticker("Welcome back. The draft resumes where it left off -- "
+                     f"pick #{self.current_pick + 1} "
+                     f"({len(self.picks_made)} of {len(self.draft_order)} "
+                     "made).")
+        for _issue in (self._reentry_issues or [])[:5]:
+            self._ticker("Re-entry check: " + str(_issue))
+        try:
+            self._refresh_shortlist()
+        except Exception:
+            pass
+        self._draft_started = True
+        self.process_draft_pick()
+
+    def _rebuild_results_from_session(self):
+        """Rebuild the results tree from the session's pick journal."""
+        try:
+            self.draft_results_tree.delete(
+                *self.draft_results_tree.get_children())
+        except Exception:
+            return
+        try:
+            _maps = self.app.tree_maps.setdefault(
+                self.draft_results_tree, {})
+        except Exception:
+            _maps = {}
+        for team_name, overall, player in sorted(
+                self.picks_made, key=lambda t: t[1]):
+            # Mirror execute_pick's insert exactly (5 columns, pot tag).
+            try:
+                pos = player.primary_position.value
+            except Exception:
+                pos = "?"
+            try:
+                pot_grade = self._GRADE_BASE.get(
+                    str(getattr(player, 'potential_grade', 'C')).strip(),
+                    'C')
+            except Exception:
+                pot_grade = 'C'
+            try:
+                _iid = self.draft_results_tree.insert(
+                    '', 0,
+                    values=(overall, team_name,
+                            getattr(player, 'full_name', '?'), pos,
+                            getattr(player, 'potential_grade', '?')),
+                    tags=(f"pot_{pot_grade}",))
+                try:
+                    _maps[_iid] = player
+                except Exception:
+                    pass
+            except Exception:
+                continue
+
+    def _sync_session_owners(self):
+        """Mirror mid-draft pick trades into the session journal so a
+        re-entry sees the same owners this view does."""
+        try:
+            sess = self._session
+            if sess is None:
+                return
+            for i, entry in enumerate(self.draft_order or []):
+                try:
+                    _r, _t, _dp = entry
+                    name = str(getattr(_t, 'team_name', '') or '')
+                except Exception:
+                    continue
+                try:
+                    if name and i < len(sess.slots):
+                        sess.slots[i]['owner'] = name
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _show_conducted_state(self, year):
+        """Honest terminal state for a year already conducted (war room or
+        headless): never start a fresh draft over it."""
+        self._draft_started = True
+        try:
+            self.draft_status_label.configure(
+                text=f"{year} Draft Complete")
+        except Exception:
+            pass
+        try:
+            self.clock_label.configure(text="--")
+            self.pick_info_label.configure(
+                text="This draft was already conducted.")
+        except Exception:
+            pass
+        for _b in ('draft_button', 'auto_button', 'trade_pick_button',
+                    'sim_pick_button'):
+            try:
+                getattr(self, _b).configure(state='disabled')
+            except Exception:
+                pass
+        try:
+            self.grades_button.configure(state='normal')
+        except Exception:
+            pass
+        self._ticker(f"The {year} NHL Entry Draft was already conducted. "
+                     "Use Draft Grades to review it -- no new draft was "
+                     "started.")
+        # Grades come from history, never recomputed: recomputing from the
+        # empty pick log of a re-attached view would overwrite the
+        # persisted grades with nothing.
+        try:
+            _hist = getattr(self.app.league, 'draft_grades_history',
+                            None) or {}
+            _grades = [tuple(g) for g in (_hist.get(str(int(year))) or [])]
+        except Exception:
+            _grades = []
+        if _grades:
+            self._show_grades_popup(_grades)
+
+    def _show_unavailable_state(self, reason):
+        """Honest degraded state: the draft can't run, so say so and stop.
+        Never silently restart."""
+        self._draft_started = True
+        try:
+            self.draft_status_label.configure(text="Draft Unavailable")
+        except Exception:
+            pass
+        try:
+            self.clock_label.configure(text="--")
+            self.pick_info_label.configure(text=str(reason))
+        except Exception:
+            pass
+        for _b in ('draft_button', 'auto_button', 'trade_pick_button',
+                    'sim_pick_button'):
+            try:
+                getattr(self, _b).configure(state='disabled')
+            except Exception:
+                pass
+        self._ticker(str(reason))
 
     # ------------------------------------------------------------------
     def _ticker(self, line):
@@ -6410,7 +6737,7 @@ class DraftView(ctk.CTkFrame):
         self.shortlist.selection_clear(0, tk.END)
         self.shortlist.selection_set(idx)
         player = self._shortlist_players[idx]
-        PlayerContextMenu(self.parent).show_context_menu(event, player)
+        PlayerContextMenu(self.master).show_context_menu(event, player)
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
@@ -6620,6 +6947,9 @@ class DraftView(ctk.CTkFrame):
             try:
                 from draft_day_trades import on_clock_check
                 if on_clock_check(self):
+                    # The call may have moved the pick; mirror the new
+                    # owners into the session journal.
+                    self._sync_session_owners()
                     return True  # order changed; step again
             except Exception:
                 pass
@@ -6669,6 +6999,9 @@ class DraftView(ctk.CTkFrame):
                 if on_clock_check(self):
                     round_num, team_on_clock, _dp = \
                         self.draft_order[self.current_pick]
+                    # The call may have moved the pick; mirror the new
+                    # owners into the session journal.
+                    self._sync_session_owners()
             except Exception:
                 pass
         if round_num != self.current_round:
@@ -6684,7 +7017,9 @@ class DraftView(ctk.CTkFrame):
             try:
                 from draft_day_trades import incoming_offer_for_user
                 incoming_offer_for_user(self)
-                # The call may have moved the pick; re-read the clock.
+                # The call may have moved the pick; re-read the clock and
+                # mirror the new owners into the session journal.
+                self._sync_session_owners()
                 if self.current_pick < len(self.draft_order):
                     _r2, team_on_clock, _dp = \
                         self.draft_order[self.current_pick]
@@ -6973,6 +7308,19 @@ class DraftView(ctk.CTkFrame):
             return False
 
     def execute_pick(self, team, player, reach=False, steal=False):
+        # BUG-2 fix: transactional commit -- the overall pick number is the
+        # idempotency key. A repeat call for an already-committed overall
+        # (stale re-entry, double event) is rejected, never double-applied.
+        try:
+            _ov = int(self.current_pick) + 1
+        except Exception:
+            return False
+        try:
+            _sess = self._session
+            if _sess is not None and _sess.has_pick(_ov):
+                return False
+        except Exception:
+            pass
         round_num, _t, _dp = self.draft_order[self.current_pick]
         overall = self.current_pick + 1
         if self._redraft_banned(team, player):
@@ -7009,7 +7357,7 @@ class DraftView(ctk.CTkFrame):
             overall, team.team_name, player.full_name, pos,
             getattr(player, 'potential_grade', '?')),
             tags=(f"pot_{pot_grade}",))
-        self.parent.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
+        self.app.tree_maps.setdefault(self.draft_results_tree, {})[_drid] = player
         self._ticker(self.dn.ticker_line(overall, team.team_name, player,
                                          round_num, reach=reach, steal=steal,
                                          rng=self._draft_rng))
@@ -7042,6 +7390,20 @@ class DraftView(ctk.CTkFrame):
         except Exception:
             pass
         self.current_pick += 1
+        # BUG-2 fix: journal the commit on the league-owned session (the
+        # durable record across view destruction). record_pick is
+        # idempotent per overall; the cursor and RNG stream persist too.
+        try:
+            if self._session is not None:
+                self._session.record_pick(
+                    overall, team.team_name, getattr(player, 'id', None))
+                self._session.current_pick = self.current_pick
+                try:
+                    self._session.rng_state = self._draft_rng.getstate()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         self.selected_prospect = None
         self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
@@ -7056,6 +7418,7 @@ class DraftView(ctk.CTkFrame):
         # next pick is scheduled/driven from here.
         if not self._sim_active:
             self.process_draft_pick()
+        return True
 
     # ------------------------------------------------------------------
     def trade_current_pick(self):
@@ -7336,6 +7699,16 @@ class DraftView(ctk.CTkFrame):
                 _lg, _dy, self.picks_made)
         except Exception:
             grades = self.dn.draft_grades(self.picks_made)
+        self._show_grades_popup(grades)
+
+    def _show_grades_popup(self, grades):
+        """Render the Draft Grades dialog from precomputed `grades`.
+
+        Split out of show_grades so a completed draft's persisted grades
+        can be shown without recomputing (recomputing from an empty pick
+        log would overwrite the history with nothing).
+        """
+        ct = self._ct
         dlg = InGamePopup(self)
         dlg.title("Draft Grades")
         dlg.geometry("560x680")
@@ -7460,6 +7833,18 @@ class DraftView(ctk.CTkFrame):
             _dy = int(getattr(_lg, 'draft_prospects_year', None)
                       or getattr(_lg, 'season_year', 0) or 0)
             self.dn.mark_draft_conducted(_lg, _dy)
+            # BUG-2 fix: the draft is done -- close the league-owned
+            # session so any re-entry shows the conducted state, never a
+            # fresh draft.
+            try:
+                if self._session is not None:
+                    self._session.completed = True
+            except Exception:
+                pass
+            try:
+                _lg.entry_draft_session = None
+            except Exception:
+                pass
         except Exception:
             pass
         # Stop the single-player draft clock (item 1).
