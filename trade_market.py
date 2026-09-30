@@ -797,6 +797,20 @@ def _find_bidders(app, league, listing, today, ramp):
                         except Exception:
                             pass
             bidders.append(team)
+        # User-declined interest (TradeBlockWindow Interest tab): the user told
+        # this listing they don't want that club's interest. Honor it in the
+        # real machinery too -- a declined team never bids on this listing
+        # again. Additive no-op for listings without the key. Never raises.
+        try:
+            _declined = set(listing.get("declined_teams") or [])
+        except Exception:
+            _declined = set()
+        if _declined:
+            try:
+                bidders = [b for b in bidders
+                           if getattr(b, "team_name", "") not in _declined]
+            except Exception:
+                pass
         return bidders
     except Exception:
         return []
