@@ -16145,7 +16145,61 @@ class HockeyManagerGUI(tk.Tk):
         'dressing_room': 'refresh',
         'manager_hub': 'refresh',
         'settings': 'refresh',
+        # Gating Phase 1: save/load screens are cacheable too, but only
+        # when constructed with their static kwargs (open_save_window /
+        # open_load_window always pass mode='save'/'load'). The quit-flow
+        # save carries an extra on_done callback and is never cached --
+        # see _SCREEN_CACHE_STATIC_KWARGS.
+        'save_game': 'refresh',
+        'load_game': 'refresh',
     }
+    # Static constructor kwargs per cached screen id. A cache hit is only
+    # allowed when the show_screen call's kwargs exactly match these, so a
+    # screen built for one mode can never be re-shown for another.
+    _SCREEN_CACHE_STATIC_KWARGS = {
+        'save_game': {'mode': 'save'},
+        'load_game': {'mode': 'load'},
+    }
+
+    @property
+    def negotiation_sessions(self):
+        """Thin alias (gating Phase 1): contract-negotiation state now
+        lives in ``app.pending_sessions`` (kind "contract_negotiation").
+        Returns a ``{player_key: session}`` view so legacy readers keep
+        working; prefer ``popup_system.get_negotiation_session``.
+        """
+        out = {}
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            for sid, sess in list(sessions.items()):
+                if (isinstance(sess, dict)
+                        and sess.get("kind") == "contract_negotiation"):
+                    out[sess.get("player_key", sid)] = sess
+        except Exception:
+            pass
+        return out
+
+    @negotiation_sessions.setter
+    def negotiation_sessions(self, value):
+        try:
+            sessions = getattr(self, "pending_sessions", None)
+            if sessions is None:
+                sessions = {}
+                self.pending_sessions = sessions
+            for sid in [s for s, e in list(sessions.items())
+                        if isinstance(e, dict)
+                        and e.get("kind") == "contract_negotiation"]:
+                del sessions[sid]
+            for key, entry in list((value or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                entry = dict(entry)
+                entry.setdefault("kind", "contract_negotiation")
+                entry.setdefault("id", "negotiation:%s" % (key,))
+                entry.setdefault("player_key", key)
+                sessions[entry["id"]] = entry
+        except Exception:
+            pass
 
     def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
         """Teleport to a full-screen view instead of opening a popup card.
@@ -16175,8 +16229,18 @@ class HockeyManagerGUI(tk.Tk):
         # Cache hit: re-show the live view instead of rebuilding it.
         # Refresh re-populates data into the existing widgets; if the
         # refresh fails for any reason we fall through and rebuild fresh.
-        if not fresh and not args and not kwargs:
-            hit = self._get_cached_screen(screen_id, view_cls)
+        # Gating Phase 1: screens with registered static kwargs
+        # (save_game/load_game <-> mode) may also hit, but only when the
+        # call's kwargs exactly match the static set -- a save-mode view
+        # can never be re-shown for load mode. getattr: bare-Tk test
+        # doubles don't carry the map, and behave as before.
+        _static_kwargs = (getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None)
+                          or {}).get(screen_id)
+        _kwargs_ok = (not kwargs or (_static_kwargs is not None
+                                     and dict(kwargs) == _static_kwargs))
+        if not fresh and not args and _kwargs_ok:
+            hit = self._get_cached_screen(screen_id, view_cls,
+                                          require_static=bool(kwargs))
             if hit is not None:
                 holder, view = hit
                 self._teardown_screen()
@@ -16219,6 +16283,17 @@ class HockeyManagerGUI(tk.Tk):
         if callable(chips_fn):
             chips_fn(navbar, screen_id)
         view = view_cls(holder, app=self, *args, **kwargs)
+        # Gating Phase 1: tag views built with a screen's static kwargs so
+        # teardown knows they are safe to park (a quit-flow save carrying
+        # a per-invocation on_done is never parked).
+        try:
+            _static_kwargs = (getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None)
+                              or {}).get(screen_id)
+            if (_static_kwargs is not None and not args
+                    and dict(kwargs) == _static_kwargs):
+                view._cache_static_ok = True
+        except Exception:
+            pass
         view._close_screen = self.show_dashboard
         view.grid(row=1, column=0, sticky='nsew')
         self._current_screen = {'id': screen_id, 'holder': holder, 'view': view}
@@ -16239,7 +16314,18 @@ class HockeyManagerGUI(tk.Tk):
         neutral -- the chip brings the exact session back).
         """
         try:
-            sessions = getattr(self, "negotiation_sessions", None) or {}
+            # Gating Phase 1: negotiation state lives in pending_sessions
+            # (kind "contract_negotiation"); app.negotiation_sessions
+            # remains as a thin alias for legacy readers.
+            sessions = {}
+            try:
+                for _sid, _sess in list(
+                        (getattr(self, "pending_sessions", None) or {}).items()):
+                    if (isinstance(_sess, dict)
+                            and _sess.get("kind") == "contract_negotiation"):
+                        sessions[_sess.get("player_key", _sid)] = _sess
+            except Exception:
+                pass
             # Parked team talks: unanswered sessions for the current screen
             # set. Never chip the talk on its own screen (it's not parked
             # there -- it's showing).
@@ -16311,11 +16397,14 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-    def _get_cached_screen(self, screen_id, view_cls):
+    def _get_cached_screen(self, screen_id, view_cls, require_static=False):
         """Pop a cached (screen_id -> (holder, view)) entry, or None.
 
         Validates the holder still exists and the view is the requested
-        class; anything stale is destroyed and treated as a miss.
+        class; anything stale is destroyed and treated as a miss. When
+        require_static is set (the hit call passed kwargs), the cached
+        view must carry the _cache_static_ok tag -- i.e. it was built
+        with exactly the screen's registered static kwargs.
         """
         cache = getattr(self, '_screen_cache', None)
         if not cache or screen_id not in cache:
@@ -16324,7 +16413,9 @@ class HockeyManagerGUI(tk.Tk):
         try:
             ok = (holder.winfo_exists()
                   and isinstance(view, view_cls)
-                  and screen_id in self._SCREEN_CACHE_REFRESH)
+                  and screen_id in self._SCREEN_CACHE_REFRESH
+                  and (not require_static
+                       or getattr(view, '_cache_static_ok', False)))
         except Exception:
             ok = False
         if not ok:
@@ -16378,8 +16469,16 @@ class HockeyManagerGUI(tk.Tk):
                 del self.open_windows[cur['id']]
         except Exception:
             pass
+        # Gating Phase 1: screens with static kwargs are only parked when
+        # built with exactly those kwargs (a quit-flow save carrying
+        # on_done is destroyed, never parked). getattr: bare-Tk test
+        # doubles don't carry the map, and behave as before.
+        _needs_static = cur['id'] in (
+            getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None) or {})
         cacheable = (cur['id'] in self._SCREEN_CACHE_REFRESH
-                     and not getattr(cur['view'], '_never_cache', False))
+                     and not getattr(cur['view'], '_never_cache', False)
+                     and (not _needs_static
+                          or getattr(cur['view'], '_cache_static_ok', False)))
         if cacheable:
             try:
                 if cur['holder'].winfo_exists():

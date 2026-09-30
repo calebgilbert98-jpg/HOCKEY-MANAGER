@@ -2668,6 +2668,23 @@ class SaveLoadView(ctk.CTkFrame):
         else:
             self.destroy()
 
+    def refresh(self):
+        """Re-entrant refresh for screen-cache hits (gating Phase 1).
+
+        Mode is fixed per screen id ('save_game' <-> mode='save',
+        'load_game' <-> mode='load'), so the refresh only re-syncs the
+        save lists -- a parked view never shows stale saves. In-progress
+        input (typed save name, open confirm panels) is left alone.
+        """
+        try:
+            self._refresh_file_list()
+        except Exception:
+            pass
+        try:
+            self._refresh_quick_save_slots()
+        except Exception:
+            pass
+
     def _notify_done(self, result):
         """Fire the on_done callback (blocking-flow replacement)."""
         cb = getattr(self, 'on_done', None)
