@@ -5600,7 +5600,6 @@ NHL League Office""",
         """Generate additional players to ensure 40 rounds worth of picks"""
         from game_classes import Player, PlayerPosition, Contract
         import random
-        import uuid
         
         debug_print(f"DEBUG: Generating {num_needed} additional players for deep draft")
         
@@ -5647,13 +5646,13 @@ NHL League Office""",
             else:  # Bottom 40% - developing players
                 skill_base = random.randint(4, 12)
             
-            # Generate player
+            # Generate player (id auto-assigns from the Player counter;
+            # first/last are separate fields -- full_name is a property)
             player = Player(
-                id=str(uuid.uuid4()),
-                full_name=f"{random.choice(first_names)} {random.choice(last_names)}",
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
                 age=random.randint(18, 35),
                 primary_position=position,
-                overall_rating_cache=None  # Will be calculated
             )
             
             # Set attributes with some variation
