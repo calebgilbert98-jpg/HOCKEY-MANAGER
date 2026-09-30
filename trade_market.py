@@ -760,12 +760,11 @@ def _find_bidders(app, league, listing, today, ramp):
                 pass
             if not need_fit:
                 continue
-            # Bitter rivals don't deal.
-            try:
-                if tsl._rivalry_intensity(app, tname, sname) >= 50:
-                    continue
-            except Exception:
-                pass
+            # Rivalry is a minuscule factor, never a veto (never-blocked rule,
+            # Muck 2026-09-29): even the most stubborn GMs deal, because
+            # winning is the objective. The tiny friction lives in build_bid
+            # as a ~2% max rivalry tax — an offer they can't refuse still
+            # gets done.
             # Clause: piece must be movable to this bidder (or waivable).
             # One conversation per destination: granted waivers are recorded
             # on the listing (no double-rolls, no single-string collisions
@@ -1594,6 +1593,19 @@ def build_bid(app, league, bidder, player, seller, ask_points):
             _wf = 1.0
         target = ask_points * eagerness * (1.0 + 0.30 * _desp) * \
             max(0.5, min(1.2, _pf)) * _wf
+        # Rivalry tax (never-blocked rule, Muck 2026-09-29): a bitter rival
+        # pays a minuscule premium — max +2% at max rivalry intensity,
+        # scaling up from the old 50 threshold with no cliff. Winning is
+        # the objective, so this never blocks a deal; an overwhelming
+        # offer clears it without noticing.
+        try:
+            _sname = getattr(seller, "team_name", "")
+            _bname = getattr(bidder, "team_name", "")
+            _ri = float(tsl._rivalry_intensity(app, _bname, _sname) or 0)
+        except Exception:
+            _ri = 0.0
+        if _ri >= 50:
+            target *= 1.0 + 0.02 * min(1.0, max(0.0, (_ri - 50.0) / 50.0))
         # Candidate assets: own tradeable picks (round 1-4), prospects,
         # then roster depth. Never the untouchable core (top-3 by value).
         cands = []
