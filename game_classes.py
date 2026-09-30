@@ -2066,7 +2066,10 @@ class Staff:
     mental_coaching: int = field(default_factory=lambda: _staff_attr_100())
     technical_coaching: int = field(default_factory=lambda: _staff_attr_100())
 
-    # Morale (1-100 scale, display-only; the sim engine does not read staff morale)
+    # Morale (1-100 scale). Living system as of the 2026-09-30 staff morale
+    # audit: staff_morale.staff_morale_tick moves it monthly toward a target
+    # from results/job security/contract/ambition/controversy, and the sim
+    # reads it (parity coach quality, assistant drift, practice ratings).
     morale: int = field(default_factory=lambda: max(10, min(99, int(random.gauss(60, 15)))))
     
     # Contract Information

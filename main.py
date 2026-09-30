@@ -1919,6 +1919,16 @@ NHL League Office""",
                         notable.append("\U0001f4cb " + _line)
             except Exception:
                 pass
+            # Staff morale audit (2026-09-30): morale is a living system now
+            # -- drifts toward its target from results, job security,
+            # contract, ambition fit, controversy. See staff_morale.
+            try:
+                import staff_morale as _sm
+                for _line in _sm.staff_morale_tick(team, win_pct=_wp):
+                    if team == self.user_team:
+                        notable.append("\U0001f4cb " + _line)
+            except Exception:
+                pass
             for roster_name in ('roster', 'prospects'):
                 for player in getattr(team, roster_name, []) or []:
                     # team= enables the archetype/system coaching

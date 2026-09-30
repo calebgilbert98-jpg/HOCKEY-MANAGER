@@ -193,6 +193,8 @@ def assistants_monthly_tick(team: Any, win_pct: Optional[float] = None) -> List[
       mesh      chemistry >= 70: +1.5 | < 45: -2.5
       system    familiarity >= 80: +1 | < 60: -1.5 (part of a working system)
       shelf     3+ years with the team: -1/month (the message gets stale)
+      morale    staffer morale >= 75: +1 | <= 40: -1.5 (staff_morale audit:
+                a checked-out assistant's message lands softer)
     Icons skip drift entirely: legacy cemented, regardless of results.
 
     Morale push (everyone, icons included): the roster's morale moves
@@ -235,6 +237,14 @@ def assistants_monthly_tick(team: Any, win_pct: Optional[float] = None) -> List[
                 d += 1.0 if fam >= 80 else (-1.5 if fam < 60 else 0.0)
                 if (getattr(ac, "years_with_team", 0) or 0) >= 3:
                     d -= 1.0
+                # Staff morale audit (2026-09-30): the assistant's own
+                # morale moves his effectiveness -- a checked-out voice
+                # lands softer, a thriving one carries further.
+                try:
+                    _m = float(getattr(ac, "morale", 60) or 60)
+                    d += 1.0 if _m >= 75 else (-1.5 if _m <= 40 else 0.0)
+                except Exception:
+                    pass
                 new_eff = _clamp(eff + d, 20.0, 99.0)
                 ac.assistant_effect = new_eff
                 if eff >= 55 and new_eff < 55:

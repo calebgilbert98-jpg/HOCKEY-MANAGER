@@ -270,6 +270,18 @@ def coach_drill_rating(coach: Any, player: Any,
     elif spec >= 70 and adapt >= 65:
         rating += 3.0
         drivers.append("adapts the drill to the player")
+    # Staff morale audit (2026-09-30): an inspired teacher teaches better,
+    # a checked-out one phones it in. Bounded +/-8%, additive.
+    try:
+        import staff_morale as _sm
+        _mf = _sm.morale_factor(getattr(coach, "morale", 60))
+        if abs(_mf - 1.0) >= 0.03:
+            drivers.append(
+                f"{'coaching on a high' if _mf > 1.0 else 'going through the motions'} "
+                f"(morale {float(getattr(coach, 'morale', 60) or 60):.0f})")
+        rating *= max(0.92, min(1.08, _mf))
+    except Exception:
+        pass
     return _clamp(rating, 1.0, 100.0), drivers
 
 

@@ -124,14 +124,24 @@ def _coach_key(team: Any) -> Optional[str]:
 
 
 def _coach_quality(team: Any) -> float:
-    """0..1 from motivating + man_management (1-100 scale)."""
+    """0..1 from motivating + man_management (1-100 scale).
+
+    Scaled by the head coach's morale (staff_morale, additive): a
+    miserable elite motivator no longer coaches exactly like a happy one.
+    """
     try:
         c = getattr(team, "head_coach", None)
         if c is None:
             return 0.5
         mot = float(getattr(c, "motivating", 50) or 50)
         man = float(getattr(c, "man_management", 50) or 50)
-        return max(0.0, min(1.0, (mot + man) / 200.0))
+        q = max(0.0, min(1.0, (mot + man) / 200.0))
+        try:
+            import staff_morale as _sm
+            q *= _sm.head_coach_morale_factor(team)
+        except Exception:
+            pass
+        return max(0.0, min(1.0, q))
     except Exception:
         return 0.5
 
