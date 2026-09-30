@@ -1125,6 +1125,160 @@ def player_trade_value(player) -> int:
     return max(10, int(base))
 
 
+def player_trade_value_breakdown(player):
+    """R3(b) (UI repairs): reasoning breakdown behind player_trade_value().
+
+    Returns (total, components) where total == player_trade_value(player)
+    and components is a list of dicts in computation order:
+        {'label': str, 'delta': int (pick-points vs running total),
+         'detail': str (the specific input that drove it)}
+
+    Additive and read-only: the engine function above is untouched; this
+    recomputes the identical math while recording each step so the
+    "Analyze Trade Value" dialog can show WHY a player is worth what he
+    is (attributes/OVR, age curve, potential, contract efficiency,
+    volatility, goalie premium, RFA-impasse rights). Never raises --
+    returns ([], total) best-effort on weird inputs.
+    """
+    comps = []
+    try:
+        ovr = player.overall_rating()
+    except Exception:
+        ovr = 70
+    try:
+        base = max(0, (ovr - 62) * 50)
+    except Exception:
+        base = 0
+    running = base
+    comps.append({
+        'label': 'Base value',
+        'delta': int(base),
+        'detail': (f"{ovr} OVR -> ({ovr}-62) x 50 pick-points "
+                   f"(a 1st-round pick ~= 1000)"),
+    })
+
+    try:
+        age = getattr(player, 'age', 27)
+    except Exception:
+        age = 27
+    try:
+        grade = getattr(player, 'potential_grade', 'F')
+        pot = POTENTIAL_BONUS.get(grade, 0)
+    except Exception:
+        grade, pot = 'F', 0
+    _pot_add = 0
+    if age <= 23:
+        _pot_add = pot
+    elif age <= 26:
+        _pot_add = pot // 2
+    if _pot_add:
+        running += _pot_add
+        comps.append({
+            'label': 'Potential premium',
+            'delta': int(_pot_add),
+            'detail': (f"potential grade {grade} at age {age} "
+                       f"({'full' if age <= 23 else 'half'} premium)"),
+        })
+
+    _age_mult, _age_why = 1.0, ""
+    if age <= 21:
+        _age_mult, _age_why = 1.3, "21-and-under"
+    elif 24 <= age <= 29:
+        _age_mult, _age_why = 1.2, "prime age 24-29"
+    elif age >= 35:
+        _age_mult, _age_why = 0.5, "35+ decline"
+    elif age >= 33:
+        _age_mult, _age_why = 0.8, "33-34 decline"
+    if _age_mult != 1.0:
+        _new = running * _age_mult
+        comps.append({
+            'label': 'Age curve',
+            'delta': int(_new - running),
+            'detail': f"{_age_why}: x{_age_mult:g}",
+        })
+        running = _new
+
+    try:
+        _contract = getattr(player, "contract", None)
+        salary = int(getattr(_contract, "salary", 0) or 0)
+    except Exception:
+        salary = 0
+    try:
+        from salary_cap_system import league_minimum_salary as _min_fn
+        _MIN_SAL = _min_fn()
+    except Exception:
+        _MIN_SAL = 775_000
+    try:
+        expected = max(_MIN_SAL, (ovr - 60) * 250_000)
+    except Exception:
+        expected = _MIN_SAL
+    _cap_mult, _cap_why = 1.0, ""
+    if salary > expected * 1.5:
+        _cap_mult = 0.85
+        _cap_why = (f"overpaid: ${salary:,} cap hit vs "
+                    f"~${int(expected):,} expected for {ovr} OVR")
+    elif salary < expected * 0.6 and ovr >= 70:
+        _cap_mult = 1.1
+        _cap_why = (f"bargain deal: ${salary:,} cap hit vs "
+                    f"~${int(expected):,} expected for {ovr} OVR")
+    if _cap_mult != 1.0:
+        _new = running * _cap_mult
+        comps.append({
+            'label': 'Contract efficiency',
+            'delta': int(_new - running),
+            'detail': f"{_cap_why}: x{_cap_mult:g}",
+        })
+        running = _new
+
+    try:
+        import reputation_system as _rs
+        _vol_mult = float(_rs.volatility_trade_discount(player))
+    except Exception:
+        _vol_mult = 1.0
+    if _vol_mult != 1.0:
+        _new = running * _vol_mult
+        comps.append({
+            'label': 'Volatility / character',
+            'delta': int(_new - running),
+            'detail': f"reputation volatility discount: x{_vol_mult:.2f}",
+        })
+        running = _new
+
+    try:
+        from game_classes import PlayerPosition
+        _is_goalie = (player.primary_position == PlayerPosition.GOALIE
+                      and ovr >= 82)
+    except Exception:
+        _is_goalie = False
+    if _is_goalie:
+        _new = running * 1.15
+        comps.append({
+            'label': 'Starting-goalie premium',
+            'delta': int(_new - running),
+            'detail': "82+ OVR goalie: x1.15 (few roster spots)",
+        })
+        running = _new
+
+    try:
+        import rfa_system as _rfa_mod
+        _impasse = bool(_rfa_mod.rfa_rights_at_impasse(player))
+    except Exception:
+        _impasse = False
+    if _impasse:
+        _new = running * RFA_IMPASSE_RIGHTS_MULT
+        comps.append({
+            'label': 'RFA-impasse rights',
+            'delta': int(_new - running),
+            'detail': (f"unsigned RFA at a signing impasse: "
+                       f"x{RFA_IMPASSE_RIGHTS_MULT:g} (buyer must still "
+                       f"sign a player who refused his own club)"),
+        })
+        running = _new
+
+    total = max(10, int(running))
+    return total, comps
+
+
 # ---------------------------------------------------------------------------
 # Trade-deadline freeze
 # ---------------------------------------------------------------------------
@@ -1612,6 +1766,18 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         return AIResponse('reject',
                           f"We can't make the money work under the cap.")
 
+    # R3(c): system-grounded rationale for every AI answer below. The
+    # decisions are untouched -- only the message text gains specific,
+    # real-input reasoning (needs, window, cap, age fit, rivalry).
+    def _why_tail():
+        try:
+            pts = trade_talking_points(
+                partner_team, user_assets, partner_assets,
+                partner=user_team, situational=situational)
+            return (" " + " ".join(pts)) if pts else ""
+        except Exception:
+            return ""
+
     # Trade protection: the AI GM knows his own room. A clause player the
     # user demands must agree to waive for the user's team -- if he won't,
     # the deal is dead, and the AI says so plainly.
@@ -1656,7 +1822,7 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     greed *= sit_mult
 
     if effective >= greed:
-        return AIResponse('accept', "You've got a deal.")
+        return AIResponse('accept', "You've got a deal." + _why_tail())
 
     # Build a counter: find the smallest user asset that balances it
     user_roster = [p for p in getattr(user_team, 'roster', [])
@@ -1687,7 +1853,8 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         if asset_value(c) >= shortfall * 0.7:
             return AIResponse(
                 'counter',
-                f"Not quite. Throw in {asset_label(c)} and we have a deal.",
+                f"Not quite. Throw in {asset_label(c)} and we have a deal."
+                + _why_tail(),
                 want_added=[c])
 
     # Or the AI offers to sweeten from its side if you're close
@@ -1711,11 +1878,178 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                         pass
                 return AIResponse(
                     'counter',
-                    f"We're close. If you take {asset_label(s)} too, I'll do it.",
+                    f"We're close. If you take {asset_label(s)} too, "
+                    f"I'll do it." + _why_tail(),
                     will_add=[s])
 
+    # Value reject: say specifically what doesn't work for us (needs).
+    _need_gap = ""
+    try:
+        _needs_now = team_needs(partner_team)[:2]
+        _got = set()
+        for _a in user_assets:
+            try:
+                if not _is_pick(_a):
+                    _got.add(_a.primary_position.value)
+            except Exception:
+                pass
+        _missing = [n for n in _needs_now if n not in _got]
+        if _missing:
+            _need_gap = (f" None of these pieces address our needs at "
+                         f"{', '.join(_missing)}.")
+    except Exception:
+        pass
     return AIResponse('reject',
-                      "We're too far apart on value. Come back with a real offer.")
+                      "We're too far apart on value. Come back with a real "
+                      "offer." + _need_gap + _why_tail())
+
+
+# ---------------------------------------------------------------------------
+# R3(c) (UI repairs): system-grounded trade rationale
+# ---------------------------------------------------------------------------
+def trade_talking_points(team, incoming, outgoing, partner=None,
+                         situational=None, app=None):
+    """Specific, system-grounded rationale sentences for a trade, from
+    TEAM's perspective: INCOMING assets arrive, OUTGOING assets leave.
+
+    Grounded in real inputs, never filler:
+      - team_needs(): which positional needs the incoming pieces fill
+      - contention window: situational notes (buyer/seller/bubble stance,
+        streaks, deadline urgency) from trade_storylines
+      - cap situation: cap-hit delta of the deal
+      - roster construction: age/window fit of what's coming vs going
+      - relationships/rivalry: rivalry-intensity + GM heat notes
+
+    Returns a list of short sentences (possibly empty). Additive and
+    read-only: it never changes any evaluation, only narrates it.
+    Never raises.
+    """
+    points = []
+    try:
+        tname = getattr(team, 'team_name', '') or ''
+        incoming = [a for a in (incoming or []) if a is not None]
+        outgoing = [a for a in (outgoing or []) if a is not None]
+
+        # Situational notes (stance, streaks, rivalry, deadline, GM heat).
+        notes = []
+        try:
+            if isinstance(situational, dict):
+                notes = list(situational.get('notes', []) or [])
+            elif app is not None:
+                import trade_storylines as _ts
+                _ctx = _ts.situational_context(app, team, partner)
+                notes = list((_ctx or {}).get('notes', []) or [])
+        except Exception:
+            notes = []
+
+        # -- Team needs: who fills what -----------------------------------
+        try:
+            needs = team_needs(team)[:2]
+        except Exception:
+            needs = []
+        _filled = []
+        try:
+            from game_classes import DraftPick
+            for a in incoming:
+                if isinstance(a, DraftPick):
+                    continue
+                try:
+                    pos = a.primary_position.value
+                except Exception:
+                    continue
+                if pos in needs and pos not in [f[0] for f in _filled]:
+                    _filled.append((pos, getattr(a, 'full_name',
+                                                str(a))))
+        except Exception:
+            pass
+        for pos, nm in _filled:
+            points.append(
+                f"{nm} fills our biggest need at {pos}.")
+
+        # -- Contention window ---------------------------------------------
+        for n in notes:
+            _nl = str(n).lower()
+            if 'cup run' in _nl:
+                points.append("We're buying for a Cup run.")
+                break
+            if _nl.startswith('selling'):
+                points.append("We're selling and stockpiling futures.")
+                break
+            if 'playoff hunt' in _nl:
+                points.append("We're in the playoff hunt.")
+                break
+        # Streak / deadline urgency notes, verbatim-flavored but short.
+        for n in notes:
+            _nl = str(n).lower()
+            if 'skid' in _nl and 'shake-up' in _nl:
+                points.append(f"We're {n.split('--')[0].strip()} -- "
+                              f"something has to change.")
+                break
+            if 'deadline looming' in _nl:
+                points.append("The deadline is looming -- we're motivated.")
+                break
+
+        # -- Cap situation --------------------------------------------------
+        try:
+            _in_hit = sum(_player_cap_hit(p) for p in incoming)
+            _out_hit = sum(_player_cap_hit(p) for p in outgoing)
+            _delta = _in_hit - _out_hit
+            if _delta <= -1_000_000:
+                points.append(f"It clears ${_delta * -1 / 1e6:.1f}M "
+                              f"off our books.")
+            elif _delta >= 2_000_000:
+                points.append(f"It adds ${_delta / 1e6:.1f}M to our cap, "
+                              f"which we can absorb.")
+        except Exception:
+            pass
+
+        # -- Roster construction: age/window fit -----------------------------
+        try:
+            from game_classes import DraftPick as _DP
+            _in_ages = [int(getattr(p, 'age', 27) or 27)
+                        for p in incoming
+                        if not isinstance(p, _DP)]
+            _out_ages = [int(getattr(p, 'age', 27) or 27)
+                         for p in outgoing
+                         if not isinstance(p, _DP)]
+            _in_picks = sum(1 for p in incoming
+                            if isinstance(p, _DP))
+            if _in_ages and _out_ages:
+                _d = (sum(_out_ages) / len(_out_ages)
+                      - sum(_in_ages) / len(_in_ages))
+                if _d >= 3:
+                    points.append("It gets us younger where it matters.")
+                elif _d <= -3:
+                    points.append("It adds win-now, prime-age talent.")
+            if _in_picks and not _in_ages:
+                points.append("It's about the futures coming back.")
+        except Exception:
+            pass
+
+        # -- Relationships / rivalry ----------------------------------------
+        for n in notes:
+            _nl = str(n).lower()
+            if 'rival' in _nl:
+                _pn = getattr(partner, 'team_name', '') or 'you'
+                points.append(f"Dealing with {_pn} isn't easy for us -- "
+                              f"the hockey fit has to win out.")
+                break
+        for n in notes:
+            _nl = str(n).lower()
+            if 'respect' in _nl or 'heat' in _nl or 'grudge' in _nl:
+                points.append("There's history between our front offices, "
+                              "which cuts both ways.")
+                break
+
+        # De-dupe while preserving order; cap at 3 sentences.
+        seen, uniq = set(), []
+        for p in points:
+            if p not in seen:
+                seen.add(p)
+                uniq.append(p)
+        return uniq[:3]
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------

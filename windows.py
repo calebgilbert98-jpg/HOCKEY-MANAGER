@@ -4279,7 +4279,7 @@ class TradeWindow(InGamePopup):
 
     def __init__(self, parent, preset=None):
         from ctk_theme import (
-            init_ctk_theme, CTkOfferList,
+            init_ctk_theme, CTkOfferList, CTkPlayerList,
             primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
@@ -4332,6 +4332,12 @@ class TradeWindow(InGamePopup):
         hist_btn = secondary_button(header, text="Trade History",
                                     command=self._toggle_history)
         hist_btn.pack(side='right', padx=14)
+        # R8(ii): busy/loading indicator for heavy ops (roster rebuilds,
+        # partner switches). Mirrors the dashboard's set_continue_busy
+        # pattern: visible status + wait cursor, painted BEFORE the work.
+        self._busy_label = body(header, "", dim=True)
+        self._busy_label.configure(font=("Segoe UI", 10, "italic"))
+        self._busy_label.pack(side='right', padx=(0, 6))
 
         # Partner selector row
         partner_row = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
@@ -4537,41 +4543,75 @@ class TradeWindow(InGamePopup):
             players = getattr(team, 'roster', [])
         return sorted(players, key=lambda p: p.overall_rating(), reverse=True)
 
+    def _set_busy(self, busy, msg="Loading..."):
+        """R8(ii): busy/loading feedback for heavy trade-center ops.
+
+        Mirrors dashboard_home.set_continue_busy: visible status text plus
+        a wait cursor, with a forced paint BEFORE the heavy work starts so
+        the user sees it. The window stays non-modal (click-out dismiss
+        still works) -- this is feedback, not a lock. Never raises.
+        """
+        try:
+            if busy:
+                self._busy_label.configure(text=msg)
+                self.configure(cursor="watch")
+            else:
+                self._busy_label.configure(text="")
+                self.configure(cursor="")
+            # Force a real paint before the heavy list rebuilds start.
+            self.update_idletasks()
+            self.update()
+        except Exception:
+            pass
+
     def _refresh_user_list(self):
-        _lvl = self._user_level.get()
-        _badge = (lambda _p: ("PROSPECT", "#a1a1aa")) \
-            if _lvl == "Prospects" else None
-        self.user_list.set_players(
-            self._level_roster(self.parent.user_team, _lvl), badge_fn=_badge)
+        self._set_busy(True, "Loading roster...")
+        try:
+            _lvl = self._user_level.get()
+            _badge = (lambda _p: ("PROSPECT", "#a1a1aa")) \
+                if _lvl == "Prospects" else None
+            self.user_list.set_players(
+                self._level_roster(self.parent.user_team, _lvl),
+                badge_fn=_badge)
+        finally:
+            self._set_busy(False)
 
     def update_views(self):
-        self._refresh_user_list()
-        self.update_trade_partner_roster()
-        self._refresh_offer_lists()
-        self._update_meter()
+        self._set_busy(True, "Loading rosters...")
+        try:
+            self._refresh_user_list()
+            self.update_trade_partner_roster()
+            self._refresh_offer_lists()
+            self._update_meter()
+        finally:
+            self._set_busy(False)
 
     def update_trade_partner_roster(self, event=None):
-        name = self.partner_combo.get()
-        team = next((t for t in self.parent.league.teams
-                     if t.team_name == name), None)
-        if team:
-            lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
-            self.partner_title.configure(text=f"{team.team_name} ({lvl})")
-            try:
-                _badge_fn = gm_trade_value_badges(
-                    self.parent.ai_manager, team,
-                    app=self.parent, level=lvl)
-            except Exception:
-                _badge_fn = None
-            self.partner_list.set_players(self._level_roster(team, lvl),
-                                          badge_fn=_badge_fn)
-            needs = self.te.team_needs(team)[:3]
-            self.needs_label.configure(text="  ".join(needs) if needs else "—")
-        # Partner changed -> clear their side of the deal
-        self.trade_offers['partner'] = []
-        self._asset_levels['partner'] = {}
-        self._refresh_offer_lists()
-        self._update_meter()
+        self._set_busy(True, "Loading trade partner...")
+        try:
+            name = self.partner_combo.get()
+            team = next((t for t in self.parent.league.teams
+                         if t.team_name == name), None)
+            if team:
+                lvl = self._partner_level.get() if hasattr(self, '_partner_level') else "NHL"
+                self.partner_title.configure(text=f"{team.team_name} ({lvl})")
+                try:
+                    _badge_fn = gm_trade_value_badges(
+                        self.parent.ai_manager, team,
+                        app=self.parent, level=lvl)
+                except Exception:
+                    _badge_fn = None
+                self.partner_list.set_players(self._level_roster(team, lvl),
+                                              badge_fn=_badge_fn)
+                needs = self.te.team_needs(team)[:3]
+                self.needs_label.configure(text="  ".join(needs) if needs else "—")
+            # Partner changed -> clear their side of the deal
+            self.trade_offers['partner'] = []
+            self._asset_levels['partner'] = {}
+            self._refresh_offer_lists()
+            self._update_meter()
+        finally:
+            self._set_busy(False)
 
     def _refresh_offer_lists(self):
         for side, lst in (('user', self.user_offer_list),
@@ -13088,7 +13128,155 @@ class MandatoryCaptainsView(SetCaptainsView):
     through GameManager._persist_captaincy_pick, the manual tool's
     by-name flow. There is no cancel path -- the hosting window refuses
     to close until a legal pick is confirmed.
+
+    R1: candidates are sorted by leadership (best first) and each name
+    carries its current letter ("Name (C)" / "Name (A)") so nobody is
+    demoted by accident. The Confirm button is live-gated -- it enables
+    only when the current pick validates -- and the same validation
+    path backs the click, so the gate and the verdict can never
+    disagree. Dropdown -> player mapping is by label->player dict, never
+    by parsing the display string.
     """
+
+    # -- R1(b)(c): candidates ------------------------------------------------
+    @staticmethod
+    def _leadership_of(p) -> int:
+        try:
+            return int(getattr(p, "leadership", 50) or 50)
+        except Exception:
+            return 50
+
+    @staticmethod
+    def _label_for(p) -> str:
+        """Display label for a candidate: name plus its current letter,
+        e.g. "Tyler St-Pierre (C)", so the user sees who holds what."""
+        name = getattr(p, "full_name", "") or ""
+        letter = getattr(p, "captaincy", "") or ""
+        if letter == "C":
+            return f"{name} (C)"
+        if letter == "A":
+            return f"{name} (A)"
+        return name
+
+    def _build_candidates(self):
+        """Roster sorted by leadership (best first), with letter-marked
+        labels. Returns (labels, label->player). Duplicate full names
+        keep the same first-wins rule as the by-name validators."""
+        roster = list(
+            getattr(getattr(self.app, "user_team", None), "roster", None)
+            or [])
+        ordered = sorted(
+            roster,
+            key=lambda p: (-self._leadership_of(p),
+                           getattr(p, "full_name", "") or ""))
+        labels, mapping = [], {}
+        for p in ordered:
+            lab = self._label_for(p)
+            labels.append(lab)
+            mapping.setdefault(lab, p)
+        return labels, mapping
+
+    # -- R1(d): confirm gate -------------------------------------------------
+    def _resolve_pick(self):
+        """Map the three dropdown labels back to plain full names for the
+        by-name GameManager validators. Unknown labels (unreachable with
+        readonly combos, but cheap to guard) fall back to a robust
+        trailing-marker strip, else "" so validation reports them."""
+        names = []
+        for var in (self.captain_var, self.alternate1_var,
+                    self.alternate2_var):
+            try:
+                lab = (var.get() or "").strip()
+            except Exception:
+                lab = ""
+            p = self._label_to_player.get(lab)
+            if p is not None:
+                names.append(getattr(p, "full_name", "") or "")
+                continue
+            base = lab
+            if base.endswith(" (C)") or base.endswith(" (A)"):
+                base = base[:-4].rstrip()
+            names.append(base)
+        return names[0], names[1], names[2]
+
+    def _current_pick_error(self):
+        """The live confirm gate: None when the current pick is legal,
+        else the specific reason it is not. Fail-open (None) on
+        unexpected errors -- the click-time check is the backstop."""
+        try:
+            gm = getattr(self.app, "game_manager", None) or self.app
+            c, a1, a2 = self._resolve_pick()
+            return gm._validate_captaincy_pick(
+                self.app.user_team, c, a1, a2)
+        except Exception:
+            return None
+
+    def _refresh_gate(self):
+        """Enable Confirm only for a legal pick; narrate the specific
+        problem otherwise. Stays quiet until the user starts picking so
+        a fresh dialog doesn't open with a red error already showing."""
+        err = self._current_pick_error()
+        try:
+            picked_any = any(
+                (v.get() or "").strip() for v in
+                (self.captain_var, self.alternate1_var, self.alternate2_var))
+        except Exception:
+            picked_any = True
+        try:
+            self.error_var.set(err if (err and picked_any) else "")
+        except Exception:
+            pass
+        try:
+            btn = getattr(self, "_confirm_btn", None)
+            if btn is not None:
+                btn.state(["!disabled"] if err is None else ["disabled"])
+        except Exception:
+            pass
+
+    def _confirm_current_pick(self) -> bool:
+        """Validate and persist the current dropdown picks. True when a
+        legal pick was confirmed (dialog closed); False when rejected
+        with the specific reason shown inline."""
+        gm = getattr(self.app, 'game_manager', None) or self.app
+        c, a1, a2 = self._resolve_pick()
+        err = gm._validate_captaincy_pick(self.app.user_team, c, a1, a2)
+        if err:
+            self.error_var.set(err)
+            try:
+                self.error_label.update_idletasks()
+            except Exception:
+                pass
+            self._refresh_gate()
+            return False
+        gm._persist_captaincy_pick(self.app.user_team, c, a1, a2)
+        try:
+            self.app.update_all_views()
+        except Exception:
+            pass
+        self.close_view()
+        return True
+
+    def load_captains(self):
+        """Preset the dropdowns to the club's current letters, using the
+        letter-marked labels so the selection mapping stays exact."""
+        labels = getattr(self, "_label_to_player", None) or {}
+        roster = list(
+            getattr(getattr(self.app, "user_team", None), "roster", None)
+            or [])
+        for p in roster:
+            try:
+                lab = self._label_for(p)
+                if lab not in labels:
+                    continue
+                if getattr(p, "captaincy", "") == "C":
+                    self.captain_var.set(lab)
+                elif getattr(p, "captaincy", "") == "A":
+                    if not self.alternate1_var.get():
+                        self.alternate1_var.set(lab)
+                    else:
+                        self.alternate2_var.set(lab)
+            except Exception:
+                pass
 
     def _create_widgets(self):
         self.grid_rowconfigure(0, weight=1)
@@ -13116,7 +13304,10 @@ class MandatoryCaptainsView(SetCaptainsView):
             wraplength=540, justify='left'
         ).pack(anchor='w', pady=(0, 14))
 
-        players = [p.full_name for p in self.app.user_team.roster]
+        # R1(b)(c): leadership-sorted candidates, each showing its
+        # current letter so nobody is demoted by accident.
+        self._cand_labels, self._label_to_player = self._build_candidates()
+        players = self._cand_labels
 
         ttk.Label(main_frame, text="Captain (C):", style='Card.TLabel',
                   font=_sfont(self.app.FONT_FAMILY, 11, 'bold')
@@ -13149,32 +13340,25 @@ class MandatoryCaptainsView(SetCaptainsView):
             foreground='#e5484d', wraplength=540, justify='left')
         self.error_label.pack(anchor='w', pady=(2, 8))
 
-        ttk.Button(main_frame, text="Confirm Captains",
-                   command=self.save_captains).pack(pady=(6, 4))
+        self._confirm_btn = ttk.Button(main_frame, text="Confirm Captains",
+                                      command=self.save_captains)
+        self._confirm_btn.pack(pady=(6, 4))
+        # R1(d): live confirm gate -- the button enables only when the
+        # current pick validates; the error line narrates why not.
+        for _var in (self.captain_var, self.alternate1_var,
+                     self.alternate2_var):
+            try:
+                _var.trace_add("write",
+                               lambda *_a: self._refresh_gate())
+            except Exception:
+                pass
+        self._refresh_gate()
 
     def save_captains(self):
         """Validate, then persist exactly like the manual tool. Invalid
         picks are rejected with an inline message -- never silently
         fixed, and the blocker stays open."""
-        gm = getattr(self.app, 'game_manager', None) or self.app
-        err = gm._validate_captaincy_pick(
-            self.app.user_team, self.captain_var.get(),
-            self.alternate1_var.get(), self.alternate2_var.get())
-        if err:
-            self.error_var.set(err)
-            try:
-                self.error_label.update_idletasks()
-            except Exception:
-                pass
-            return
-        gm._persist_captaincy_pick(
-            self.app.user_team, self.captain_var.get(),
-            self.alternate1_var.get(), self.alternate2_var.get())
-        try:
-            self.app.update_all_views()
-        except Exception:
-            pass
-        self.close_view()
+        self._confirm_current_pick()
 
 
 class MandatoryCaptainsWindow(InGamePopup):
@@ -13205,11 +13389,21 @@ class MandatoryCaptainsWindow(InGamePopup):
             pass
 
     def _refuse_close(self):
-        """The blocker has no cancel path: nudge the user back to the form."""
+        """The blocker has no cancel path -- but R1(d): when the picks
+        already sitting in the dropdowns are legal, honor the close as
+        a confirm instead of flashing a misleading "pick your captains"
+        error at a user who already did. Anything else nudges back to
+        the form with the SPECIFIC reason the pick is illegal."""
         try:
+            if self._view._confirm_current_pick():
+                return
+        except Exception:
+            pass
+        try:
+            err = self._view._current_pick_error()
             self._view.error_var.set(
-                "Pick exactly one captain (C) and two alternates (A) "
-                "to continue.")
+                err or "Pick exactly one captain (C) and two alternates (A) "
+                       "to continue.")
         except Exception:
             pass
 

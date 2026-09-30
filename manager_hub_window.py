@@ -479,19 +479,113 @@ class ManagerHubView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def _build_profile_tab(self, notebook):
+        # R8 (UI repairs): busy cursor while the Profile tab builds.
+        try:
+            from ctk_theme import busy_cursor
+            _cm = busy_cursor(self)
+            _cm.__enter__()
+        except Exception:
+            _cm = None
+        try:
+            self._build_profile_tab_inner(notebook)
+        finally:
+            try:
+                if _cm is not None:
+                    _cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def _build_profile_tab_inner(self, notebook):
         frame = ttk.Frame(notebook, padding=15)
         notebook.add(frame, text="  Profile  ")
         prof = self.career.profile
-        ttk.Label(frame, text="Manager Profile",
+        gmp = getattr(getattr(self.app, "user_team", None), "gm_profile", None)
+
+        name = getattr(gmp, "name", None) or "Manager"
+        ttk.Label(frame, text=f"Manager Profile \u2014 {name}",
                   font=("Helvetica", 14, "bold")).pack(anchor="w")
-        ttk.Label(frame, font=("Helvetica", 12),
-                  text=f"Reputation: {prof.reputation}/100 — {prof.level}").pack(anchor="w", pady=5)
-        ttk.Label(frame, font=("Helvetica", 11), justify="left",
-                  text=(f"Career record: {prof.career_wins}W - {prof.career_losses}L - {prof.career_otl}OTL\n"
+
+        cols = ttk.Frame(frame)
+        cols.pack(fill="x", pady=(6, 0))
+        left = ttk.Frame(cols)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 16))
+        right = ttk.Frame(cols)
+        right.pack(side="left", fill="both", expand=True)
+
+        # ---- left: personal details, style, background ----
+        ttk.Label(left, text="Personal",
+                  font=("Helvetica", 11, "bold")).pack(anchor="w")
+        if gmp is not None:
+            for line in (
+                f"Age: {getattr(gmp, 'age', '?')}",
+                f"Birthplace: {getattr(gmp, 'birthplace', '?')}",
+                f"Nationality: {getattr(gmp, 'nationality', '?')}",
+                f"Education: {getattr(gmp, 'education_level', '?')}",
+            ):
+                ttk.Label(left, font=("Helvetica", 10), text=line).pack(anchor="w")
+            ttk.Label(left, text="Management style:",
+                      font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(8, 0))
+            for line in (
+                f"Style: {getattr(gmp, 'management_style', '?')}",
+                f"Risk tolerance: {getattr(gmp, 'risk_tolerance', '?')}",
+                f"Loyalty to players: {getattr(gmp, 'loyalty_to_players', '?')}",
+                f"Media savvy: {getattr(gmp, 'media_savvy', '?')}",
+            ):
+                ttk.Label(left, font=("Helvetica", 10), text=line).pack(anchor="w")
+            bits = []
+            if getattr(gmp, "former_player", False):
+                bits.append(
+                    f"Former {getattr(gmp, 'playing_position', 'player')}: "
+                    f"{getattr(gmp, 'nhl_games_played', 0)} NHL games, "
+                    f"{getattr(gmp, 'career_points', 0)} career points.")
+            if getattr(gmp, "coaching_experience", False):
+                bits.append(
+                    f"{getattr(gmp, 'years_coaching', 0)} years coaching experience.")
+            if getattr(gmp, "assistant_gm_experience", False):
+                bits.append(
+                    f"{getattr(gmp, 'years_as_assistant', 0)} years as an assistant GM.")
+            if bits:
+                ttk.Label(left, text="Background:",
+                          font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(8, 0))
+                for b in bits:
+                    ttk.Label(left, font=("Helvetica", 10), text=f"\u2022 {b}",
+                              wraplength=340, justify="left").pack(anchor="w")
+        else:
+            ttk.Label(left, font=("Helvetica", 10),
+                      text="No manager biography on file.").pack(anchor="w")
+        club = getattr(getattr(self.app, "user_team", None), "team_name", None)
+        start = getattr(self.career, "career_start_date", "") or ""
+        if club or start:
+            ttk.Label(left, text="Appointment:",
+                      font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(8, 0))
+            if club:
+                ttk.Label(left, font=("Helvetica", 10),
+                          text=f"Club: {club}").pack(anchor="w")
+            if start:
+                ttk.Label(left, font=("Helvetica", 10),
+                          text=f"In charge since: {start}").pack(anchor="w")
+
+        # ---- right: reputation + career record ----
+        ttk.Label(right, text="Reputation",
+                  font=("Helvetica", 11, "bold")).pack(anchor="w")
+        ttk.Label(right, font=("Helvetica", 12),
+                  text=f"{prof.reputation}/100 \u2014 {prof.level}").pack(anchor="w", pady=5)
+        ttk.Label(right, text="Career record",
+                  font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(8, 0))
+        board = getattr(self.career, "board", None)
+        season_line = ""
+        if board is not None:
+            season_line = (f"\nCurrent season: {board.season_wins}W - "
+                           f"{board.season_losses}L - {board.season_otl}OTL")
+        ttk.Label(right, font=("Helvetica", 11), justify="left",
+                  text=(f"Career: {prof.career_wins}W - {prof.career_losses}L - "
+                        f"{prof.career_otl}OTL{season_line}\n"
                         f"Titles won: {prof.titles_won}\n"
                         f"Playoff appearances: {prof.playoff_appearances}\n"
                         f"Seasons managed: {prof.seasons_managed}")).pack(anchor="w", pady=5)
-        ttk.Label(frame, text="Media prompts:",
+
+        # ---- preferences (full width) ----
+        ttk.Label(frame, text="Preferences:",
                   font=("Helvetica", 11, "bold")).pack(anchor="w", pady=(10, 2))
         self.prompts_var = tk.BooleanVar(value=self.career.prompts_enabled)
 

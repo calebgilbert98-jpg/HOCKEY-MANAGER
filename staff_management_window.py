@@ -440,6 +440,24 @@ class StaffManagementView(ctk.CTkFrame):
 
     def update_current_staff_view(self):
         """Update the current staff treeview with trade-block-style interaction."""
+        # R8 (UI repairs): busy cursor while the staff list rebuilds.
+        try:
+            from ctk_theme import busy_cursor
+            _cm = busy_cursor(self)
+            _cm.__enter__()
+        except Exception:
+            _cm = None
+        try:
+            self._update_current_staff_view_inner()
+        finally:
+            try:
+                if _cm is not None:
+                    _cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+    def _update_current_staff_view_inner(self):
+        """Inner staff-list rebuild (wrapped with a busy cursor above)."""
         # Clear existing items
         for item in self.current_staff_tree.get_children():
             self.current_staff_tree.delete(item)
@@ -483,6 +501,8 @@ class StaffManagementView(ctk.CTkFrame):
             salary_str = f"${staff.salary:,}"
             contract_str = f"{staff.contract_years}y"
 
+            # Staff morale is a 1-100 scale (game_classes.Staff.morale); the
+            # denominator must match that scale, not a 0-20 rating.
             values = (
                 sel,
                 staff.full_name,
@@ -492,21 +512,21 @@ class StaffManagementView(ctk.CTkFrame):
                 f"{staff.experience}y",
                 salary_str,
                 contract_str,
-                f"{morale}/20",
+                f"{morale}/100",
                 status,
                 key_skills
             )
 
-            # Determine tags for visual styling
+            # Determine tags for visual styling (morale is 1-100)
             tags = []
             if staff.id in self.selected_staff:
                 tags.append('selected')
             rating_tag = self._rating_tag(staff.overall_rating)
             if rating_tag:
                 tags.append(rating_tag)
-            if morale >= 15:
+            if morale >= 75:
                 tags.append('high_morale')
-            elif morale <= 5:
+            elif morale <= 40:
                 tags.append('low_morale')
 
             item_id = self.current_staff_tree.insert('', 'end', values=values, tags=tags)
@@ -877,17 +897,17 @@ class StaffManagementView(ctk.CTkFrame):
         return user_team.staff if user_team else []
 
     def get_staff_status(self, staff):
-        """Determine staff status based on various factors."""
-        morale = getattr(staff, 'morale', 10)
+        """Determine staff status based on various factors (morale is 1-100)."""
+        morale = getattr(staff, 'morale', 60)
         years_left = staff.contract_years
 
         if years_left <= 1:
             return "Expiring"
-        elif morale >= 15:
+        elif morale >= 75:
             return "Happy"
-        elif morale >= 10:
+        elif morale >= 55:
             return "Content"
-        elif morale >= 5:
+        elif morale >= 35:
             return "Concerned"
         else:
             return "Unhappy"
@@ -923,6 +943,10 @@ class StaffManagementView(ctk.CTkFrame):
                                  command=self.negotiate_selected_staff)
         context_menu.add_command(label="Reassign Role",
                                  command=self.reassign_selected_staff)
+        # R6 (UI repairs): personal beefs are declared from the person's
+        # card -- the Morale window's DeclareRivalPopup already points here.
+        context_menu.add_command(label="Declare Rival",
+                                 command=lambda: self._declare_rival_staff(staff))
         context_menu.add_separator()
         context_menu.add_command(label="Release Staff",
                                  command=self.release_selected_staff)
@@ -931,6 +955,83 @@ class StaffManagementView(ctk.CTkFrame):
             context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             context_menu.grab_release()
+
+    def _declare_rival_staff(self, staff):
+        """Declare a personal rivalry with a staff member (R6).
+
+        Wires the staff table into the EXISTING rivalry system
+        (reputation_system.declare_rivalry) -- the same entry point the
+        Morale window's DeclareRivalPopup uses. Staff on the user's own
+        club are refused with an explanation; feed + inbox go through
+        headlines.announce_rivalry_declaration. Never raises.
+        """
+        try:
+            gm = getattr(self.app, 'game_manager', None) or self.app
+            league = getattr(gm, 'league', None)
+            team = self._get_user_team()
+            if league is None or team is None:
+                messagebox.showwarning(
+                    "Declare Rival",
+                    "No active league to declare a rivalry in.")
+                return
+            own_ids = {getattr(s, "id", None)
+                       for s in self.get_current_team_staff()}
+            if getattr(staff, "id", None) in own_ids:
+                messagebox.showinfo(
+                    "Declare Rival",
+                    f"{getattr(staff, 'full_name', 'They')} work for your "
+                    "club.\n\nDeclare rival is for opposing staff -- "
+                    "right-click their card to start a personal beef.")
+                return
+            import reputation_system as rs
+            try:
+                existing = rs.rivalry_between(
+                    getattr(league, "rivalries", None) or [],
+                    rs.gm_persona(team), staff, kind="gm_coach")
+            except Exception:
+                existing = None
+            if existing and existing.get("user_declared"):
+                messagebox.showinfo(
+                    "Declare Rival",
+                    f"You already declared "
+                    f"{getattr(staff, 'full_name', 'them')} a personal "
+                    f"rival (heat {existing.get('intensity', 0):.0f}).")
+                return
+            # NOTE: kind="gm_coach" is the existing personal-beef kind the
+            # rivalry system already understands (GM vs a person); _ekey
+            # keys staff as ('staff', id) so it never collides.
+            rec = rs.declare_rivalry(league, rs.gm_persona(team), staff,
+                                     kind="gm_coach")
+            if not rec:
+                messagebox.showwarning("Declare Rival",
+                                       "Could not register the rivalry.")
+                return
+            try:
+                import headlines as hl
+                gui = self.app if hasattr(self.app, "add_news") else (
+                    getattr(self.app, "app", None) or self.app)
+                target_team_name = "?"
+                for t in (getattr(league, "teams", None) or []):
+                    if any(getattr(s, "id", None) == getattr(staff, "id", None)
+                           for s in (getattr(t, "staff", None) or [])):
+                        target_team_name = getattr(t, "team_name", "?")
+                        break
+                hl.announce_rivalry_declaration(
+                    gui, getattr(team, "team_name", "?"), target_team_name,
+                    getattr(staff, "full_name", "?"), "coach")
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Rival Declared",
+                f"Declared: {getattr(staff, 'full_name', '?')} "
+                f"(heat {rec.get('intensity', 70):.0f}). "
+                "Those games just got personal.")
+        except Exception as e:
+            try:
+                messagebox.showerror("Declare Rival",
+                                     f"Could not declare rival: {e}")
+            except Exception:
+                pass
 
     def view_selected_staff(self):
         """View details of selected staff members."""
@@ -1957,6 +2058,8 @@ class StaffManagementView(ctk.CTkFrame):
 
         ctk.CTkLabel(main_frame, text="New Role:",
                      font=self._sfont(10), text_color=ct['TEXT_DIM']).pack(anchor='w')
+        # Every reassignable role is listed (not just the current one); the
+        # unique-role guard (GM / Head Coach) runs at confirm time.
         role_combo = ctk.CTkComboBox(
             main_frame, values=[role.value for role in StaffRole],
             state='readonly',
@@ -1964,7 +2067,7 @@ class StaffManagementView(ctk.CTkFrame):
             button_color=ct['PANEL'], button_hover_color=ct['BORDER'],
             dropdown_fg_color=ct['PANEL'], dropdown_text_color=ct['TEXT'],
             dropdown_hover_color=ct['ROW_HOVER'], text_color=ct['TEXT'])
-        role_combo.set(staff.role.value)
+        role_combo.set("Select new role\u2026")
         role_combo.pack(fill='x', pady=(4, 0))
 
         def confirm_reassignment():
@@ -2038,7 +2141,9 @@ class StaffManagementView(ctk.CTkFrame):
                 button_color=ct['PANEL'], button_hover_color=ct['BORDER'],
                 dropdown_fg_color=ct['PANEL'], dropdown_text_color=ct['TEXT'],
                 dropdown_hover_color=ct['ROW_HOVER'], text_color=ct['TEXT'])
-            role_combo.set(staff.role.value)
+            # Neutral prompt: the full role list is one click away, and the
+            # closed combo no longer reads as "only the current role".
+            role_combo.set("Select new role\u2026")
             role_combo.pack(side='right')
             role_combos[staff.id] = role_combo
 

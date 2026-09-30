@@ -115,6 +115,11 @@ class GameSaveManager:
                 # serialized: every load unassigned all scouts.
                 'scout_region_assignments': dict(
                     getattr(self.game_manager, 'scout_region_assignments', {}) or {}),
+                # Recently-viewed players for the EHM/FM24-style comparison
+                # tool (R2 revised). Stored as player IDs; old saves lack
+                # the key and start with an empty list.
+                'recently_viewed_players': list(
+                    getattr(self.game_manager, 'recently_viewed_players', None) or []),
                 # Fantasy-draft captaincy deferral: no captains until the
                 # first preseason game day arms the picker. Old saves
                 # default to False (no deferral window open).
@@ -1019,6 +1024,18 @@ class GameSaveManager:
             # Restore league
             if 'league' in save_data:
                 self._restore_league(save_data['league'])
+
+            # R5 (UI repairs, expanded): old saves were generated before
+            # the full 24-role staff template existed -- backfill every
+            # club's staff and the free-agent staff pool additively so old
+            # saves load with complete, hireable staffs. Never raises.
+            try:
+                from database_generator import backfill_team_staff
+                _league = getattr(self.game_manager, 'league', None)
+                if _league is not None:
+                    backfill_team_staff(_league)
+            except Exception as _bse:
+                print(f"staff backfill skipped (non-fatal): {_bse}")
             
             # Restore user team
             if 'user_team' in save_data and save_data['user_team']:
@@ -1105,7 +1122,8 @@ class GameSaveManager:
             for key in ['player_stats_history', 'team_stats_history', 'draft_classes',
                        'scouting_reports', 'scout_region_assignments', 'waiver_claims', 'trade_history',
                        'contract_negotiations', 'inbox_messages', 'news_stories',
-                       'training_programs', '_fantasy_draft_captaincy_deferred']:
+                       'training_programs', '_fantasy_draft_captaincy_deferred',
+                       'recently_viewed_players']:
                 if key in save_data:
                     setattr(self.game_manager, key, save_data[key])
 

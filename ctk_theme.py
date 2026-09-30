@@ -127,6 +127,38 @@ def body(parent, text, size=12, dim=False, **kw):
     return ctk.CTkLabel(parent, text=text, **kw)
 
 
+class busy_cursor:
+    """Show a wait cursor while a heavy UI build runs, then restore it.
+
+    Additive R8 helper: wrap list/window construction that can take a
+    beat (staff trees, comparison window, hub tabs) so the user sees the
+    app is working. Forces a paint on entry so the cursor change is
+    visible before the heavy work starts. Never raises. Usable as
+    ``with busy_cursor(widget):`` or via manual __enter__/__exit__.
+    """
+
+    def __init__(self, widget):
+        self._widget = widget
+
+    def __enter__(self):
+        try:
+            self._widget.config(cursor="watch")
+        except Exception:
+            pass
+        try:
+            self._widget.update_idletasks()
+        except Exception:
+            pass
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            self._widget.config(cursor="")
+        except Exception:
+            pass
+        return False
+
+
 class CTkPlayerList(ctk.CTkScrollableFrame):
     """Modern selectable player list — a CTk-native replacement for the
     two-column (name / OVR) ttk.Treeview used in trade-style windows.

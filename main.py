@@ -1505,6 +1505,29 @@ NHL League Office""",
             return True
         return any(self._cap_letter_is_goalie(p) for p in alts)
 
+    def _captaincy_mandatory_window_open(self, team) -> bool:
+        """True only while the mandatory captains picker may still fire
+        for this club: before its first REGULAR-SEASON game of the
+        season. R1(a): the dialog must never interrupt a season in
+        progress -- past opening night, missing letters are repaired
+        quietly via _ensure_captaincy instead.
+
+        Signal: league.standings is rebuilt to 0-0-0 at season init and
+        preseason exhibitions never touch it, so W+L+OTL > 0 means this
+        club has started its regular season. Display-free, headless-QA
+        safe. Fail-open (True) when the standings are unavailable so a
+        weird state can never silently skip the pre-season prompt.
+        """
+        try:
+            standings = getattr(getattr(self, "league", None),
+                                "standings", None) or {}
+            st = standings.get(getattr(team, "team_name", ""), None) or {}
+            gp = (int(st.get("W", 0) or 0) + int(st.get("L", 0) or 0)
+                  + int(st.get("OTL", 0) or 0))
+            return gp == 0
+        except Exception:
+            return True
+
     def _validate_captaincy_pick(self, team, captain_name,
                                  alt1_name, alt2_name):
         """Validate a 1C+2A pick. Returns an error string when the pick is
@@ -1576,10 +1599,23 @@ NHL League Office""",
         was made and persisted. When no display/popup manager is available
         (headless new-game setup), arms _captaincy_choice_pending instead
         so the GUI raises the blocker on startup -- never crashes.
+
+        R1(a): the modal fires only before the club's first game of the
+        season. Past that point the picker is never raised; missing
+        letters are repaired quietly via _ensure_captaincy so the dialog
+        can never interrupt a season in progress.
         """
         if not self._captaincy_needs_choice(team):
             self._captaincy_choice_pending = False
             return True
+        if not self._captaincy_mandatory_window_open(team):
+            try:
+                self._ensure_captaincy(team)
+            except Exception:
+                pass
+            ok = not self._captaincy_needs_choice(team)
+            self._captaincy_choice_pending = not ok
+            return ok
         app = getattr(self, "app", None)
         mgr = getattr(app, "popup_manager", None) if app is not None else None
         if mgr is None:
@@ -4285,6 +4321,13 @@ class HockeyManagerGUI(tk.Tk):
 
     def update_all_views(self):
         """Update all views with current data"""
+        # R8(i): keep the top-nav Continue pill live -- blockers can
+        # appear/disappear from any action (trades -> cap, waivers, ...),
+        # and the pill was only painted once at startup.
+        try:
+            self.refresh_next_day_button()
+        except Exception:
+            pass
         # Update the modern dashboard instead of legacy UI elements
         if hasattr(self, 'dashboard') and self.dashboard:
             current_date = self.current_date.strftime("%a, %b %d, %Y") if hasattr(self, 'current_date') else "Season Start"
@@ -5883,15 +5926,27 @@ class HockeyManagerGUI(tk.Tk):
                 if _ut is not None and (
                         getattr(gm, '_captaincy_choice_pending', False)
                         or gm._captaincy_needs_choice(_ut)):
-                    blockers.append({
-                        'id': 'captaincy_choice',
-                        'title': 'Name your captains',
-                        'detail': ('NHL Rule 6.1: your club needs exactly one '
-                                   'captain (C) and two alternates (A) before '
-                                   'the season can continue.'),
-                        'action': ('Choose Captains',
-                                   lambda: gm._require_captaincy_choice(_ut)),
-                    })
+                    if not gm._captaincy_mandatory_window_open(_ut):
+                        # R1(a): season already underway -- the mandatory
+                        # picker must never fire mid-season, so it can
+                        # never block day advancement either. Repair
+                        # quietly (idempotent) instead of appending a
+                        # blocker.
+                        try:
+                            gm._ensure_captaincy(_ut)
+                        except Exception:
+                            pass
+                        gm._captaincy_choice_pending = False
+                    else:
+                        blockers.append({
+                            'id': 'captaincy_choice',
+                            'title': 'Name your captains',
+                            'detail': ('NHL Rule 6.1: your club needs exactly one '
+                                       'captain (C) and two alternates (A) before '
+                                       'the season can continue.'),
+                            'action': ('Choose Captains',
+                                       lambda: gm._require_captaincy_choice(_ut)),
+                        })
         except Exception:
             pass
         if blockers:
@@ -5983,6 +6038,13 @@ class HockeyManagerGUI(tk.Tk):
                     action[1]()
                 except Exception as e:
                     print(f"Blocker action failed: {e}")
+            # R8(i): the blocker may just have been resolved (e.g. the
+            # captains picker) -- the top-nav pill must re-read the live
+            # continue state instead of staying "Continue (1)".
+            try:
+                self.refresh_next_day_button()
+            except Exception:
+                pass
 
         if action:
             AppButton(btn_row, text=action[0], command=_go,
@@ -6863,6 +6925,14 @@ class HockeyManagerGUI(tk.Tk):
             # "Processing..." state and re-apply the smart Continue/Next Day
             # label (blockers may have appeared or cleared).
             self._set_continue_feedback(False)
+            # R8(i): the top-nav pill is NOT covered by the dashboard
+            # helper above -- refresh it too, or "Continue (1)" goes stale
+            # after the blocker is resolved (and "Next Day" goes stale
+            # when a blocker appears mid-session).
+            try:
+                self.refresh_next_day_button()
+            except Exception:
+                pass
 
     # --- MULTIPLAYER (Phase 2): EHM-style advance sync -------------------
     # Eastside Hockey Manager network play: the day advances only when
@@ -16662,6 +16732,14 @@ class HockeyManagerGUI(tk.Tk):
         Args:
             player: The player object to display
         """
+        # R2 (UI repairs): record recently-viewed players for the
+        # EHM/FM24-style comparison tool. Additive; never raises.
+        try:
+            from player_context_menu import record_recently_viewed
+            record_recently_viewed(self, player)
+        except Exception:
+            pass
+
         screen_error = None
         try:
             team = getattr(self, "user_team", None)

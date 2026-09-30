@@ -257,6 +257,7 @@ class MoraleView(ctk.CTkFrame):
     def _do_bag_skate(self):
         if self._mp_send("team_event", {"event": "bag_skate"}):
             return
+        self._set_busy(True, "Skating them\u2026")
         try:
             team = self.app.user_team
             coach = self._head_coach(team)
@@ -266,10 +267,13 @@ class MoraleView(ctk.CTkFrame):
             self.refresh()
         except Exception:
             pass
+        finally:
+            self._set_busy(False)
 
     def _do_speech(self):
         if self._mp_send("team_event", {"event": "inspiring_speech"}):
             return
+        self._set_busy(True, "Giving the speech\u2026")
         try:
             team = self.app.user_team
             coach = self._head_coach(team)
@@ -279,10 +283,13 @@ class MoraleView(ctk.CTkFrame):
             self.refresh()
         except Exception:
             pass
+        finally:
+            self._set_busy(False)
 
     def _do_practice(self):
         if self._mp_send("team_event", {"event": "great_practice"}):
             return
+        self._set_busy(True, "Running practice\u2026")
         try:
             team = self.app.user_team
             coach = self._head_coach(team)
@@ -292,11 +299,14 @@ class MoraleView(ctk.CTkFrame):
             self.refresh()
         except Exception:
             pass
+        finally:
+            self._set_busy(False)
 
     def _do_back_room(self):
         """GM goes on the record for his people. Small, honest lift."""
         if self._mp_send("team_event", {"event": "gm_backing"}):
             return
+        self._set_busy(True, "Going on the record\u2026")
         try:
             import media_engine
             team = self.app.user_team
@@ -306,6 +316,8 @@ class MoraleView(ctk.CTkFrame):
             self.refresh()
         except Exception:
             pass
+        finally:
+            self._set_busy(False)
 
     def _open_line_control_popup(self):
         try:
@@ -350,6 +362,45 @@ class MoraleView(ctk.CTkFrame):
     # Refresh
     # ------------------------------------------------------------------
     def refresh(self):
+        """Public refresh: shows the busy indicator around the heavy room
+        recompute (chemistry, hierarchy, issues, feed render)."""
+        self._set_busy(True, "Reading the room\u2026")
+        try:
+            self._refresh_inner()
+        finally:
+            self._set_busy(False)
+
+    def _set_busy(self, busy=True, text="Working\u2026"):
+        """Small local loading indicator for heavy operations on this
+        screen: a centered status label plus the watch cursor. Safe to
+        call when the window is half-built; never raises."""
+        try:
+            label = getattr(self, "_busy_label", None)
+            if busy:
+                if label is None:
+                    label = ctk.CTkLabel(self, text=text,
+                                         font=('Segoe UI', 12, 'bold'))
+                    self._busy_label = label
+                else:
+                    label.configure(text=text)
+                label.place(relx=0.5, rely=0.5, anchor="center")
+                label.lift()
+                try:
+                    self.configure(cursor="watch")
+                except Exception:
+                    pass
+                self.update_idletasks()
+            else:
+                if label is not None:
+                    label.place_forget()
+                try:
+                    self.configure(cursor="")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _refresh_inner(self):
         ct = self._ct
         try:
             team = self.app.user_team
@@ -826,17 +877,6 @@ class DeclareRivalPopup(InGamePopup):
         self._team_names = sorted(
             getattr(t, 'team_name', '') for t in (getattr(league, 'teams', []) or [])
             if getattr(t, 'team_name', '') and getattr(t, 'team_name', '') != getattr(team, 'team_name', ''))
-        # coach display -> team name
-        self._coach_map = {}
-        for t in (getattr(league, 'teams', []) or []):
-            tn = getattr(t, 'team_name', '')
-            if not tn or tn == getattr(team, 'team_name', ''):
-                continue
-            for stf in getattr(t, 'staff', []) or []:
-                if 'Head Coach' in str(getattr(getattr(stf, 'role', None), 'value', '')):
-                    disp = f"{getattr(stf, 'full_name', 'Coach')} ({tn})"
-                    self._coach_map[disp] = tn
-                    break
 
         # -- team rival --
         tframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
@@ -851,16 +891,21 @@ class DeclareRivalPopup(InGamePopup):
                              anchor='w', padx=10, pady=(0, 8))
 
         # -- personal rival --
+        # No dropdown here by design: personal beefs are declared from the
+        # person's card. Right-click any opposing player or staff card and
+        # choose "Declare rival".
         pframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
         pframe.pack(fill='x', padx=16, pady=(0, 10))
-        ctk.CTkLabel(pframe, text="Personal rival -- an opposing head coach:",
+        ctk.CTkLabel(pframe, text="Personal rival -- make it personal:",
                      font=('Segoe UI', 11, 'bold')).pack(anchor='w', padx=10, pady=(8, 2))
-        self._coach_pick = ctk.CTkOptionMenu(pframe,
-                                             values=sorted(self._coach_map) or ["(no coaches)"])
-        self._coach_pick.pack(fill='x', padx=10, pady=4)
-        secondary_button(pframe, text="Declare personal rival",
-                         command=lambda: self._declare("coach")).pack(
-                             anchor='w', padx=10, pady=(0, 8))
+        ctk.CTkLabel(pframe,
+                     text=("No list to pick from -- and that's the point. "
+                           "Right-click any opposing player or staff card "
+                           "and choose \"Declare rival\" to start a personal "
+                           "beef with them directly."),
+                     font=('Segoe UI', 11), text_color=TEXT_DIM,
+                     justify='left', wraplength=480).pack(
+                         anchor='w', padx=10, pady=(0, 8))
 
         # -- renounce --
         rframe = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
@@ -902,10 +947,11 @@ class DeclareRivalPopup(InGamePopup):
         return None
 
     def _declare(self, kind):
-        if kind == "team":
-            target_team_name = self._team_pick.get()
-        else:
-            target_team_name = self._coach_map.get(self._coach_pick.get(), "")
+        # This modal only declares team rivalries now; personal beefs are
+        # declared from the person's card (right-click -> "Declare rival").
+        if kind != "team":
+            return
+        target_team_name = self._team_pick.get()
         if not target_team_name:
             return
         if self._mp_send("declare_rivalry",
@@ -957,9 +1003,19 @@ class DeclareRivalPopup(InGamePopup):
             if kind == "team":
                 target_team_name = r['b_name'] if r['a'] in my_keys else r['a_name']
             else:
-                for disp, tn in self._coach_map.items():
-                    if disp.rsplit(" (", 1)[0] == other:
-                        target_team_name = tn
+                # coach-kind: find the club currently employing that coach,
+                # matching the record's stored staff id (name as fallback).
+                key = r['b'] if r['a'] in my_keys else r['a']
+                cid = key[1] if isinstance(key, tuple) and len(key) > 1 else None
+                for t in (getattr(self._league, 'teams', []) or []):
+                    try:
+                        c = dr_room._room_head_coach(t)
+                    except Exception:
+                        c = None
+                    if c is not None and (
+                            getattr(c, 'id', None) == cid
+                            or getattr(c, 'full_name', '') == other):
+                        target_team_name = getattr(t, 'team_name', '')
                         break
             btn = secondary_button(
                 self._renounce_frame, text=f"Renounce vs {other}",

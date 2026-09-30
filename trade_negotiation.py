@@ -401,6 +401,29 @@ def incoming_offer(app, partner_team, package, player_wanted=None) -> TradeNegot
     """AI GM opens talks: lands in the inbox, never a popup."""
     today = _today(app)
     pname = getattr(partner_team, "team_name", str(partner_team))
+    # R3(c): purposeful proposals -- the AI's rationale is grounded in
+    # real systems (its positional needs, contention window, cap, age
+    # fit, rivalry), never generic filler.
+    _rationale = ""
+    try:
+        import trade_engine as _te
+        _pts = _te.trade_talking_points(
+            partner_team,
+            [player_wanted] if player_wanted else [],
+            list(package or []),
+            partner=getattr(app, "user_team", None),
+            app=app)
+        if _pts:
+            _rationale = " Our thinking: " + " ".join(_pts)
+    except Exception:
+        _rationale = ""
+    _wanted_txt = ""
+    try:
+        if player_wanted is not None:
+            import trade_engine as _te2
+            _wanted_txt = f" We're specifically after {_te2.asset_label(player_wanted)}."
+    except Exception:
+        _wanted_txt = ""
     neg = TradeNegotiation(
         partner_team_name=pname,
         direction="incoming",
@@ -414,14 +437,16 @@ def incoming_offer(app, partner_team, package, player_wanted=None) -> TradeNegot
         created=today,
         history=[{"date": today.isoformat(), "by": "ai",
                   "summary": f"{pname} opened talks"}],
-        last_message=f"{pname} are interested in making a deal.",
+        last_message=(f"{pname} have put a proposal on the table."
+                      f"{_wanted_txt}{_rationale}"),
     )
     _store(app).append(neg)
     neg.inbox_message_id = _deliver(
         app,
         subject=f"Trade proposal from {pname}",
-        content=(f"{pname} have put a proposal on the table. Open this "
-                 f"message to review it -- no rush, it will wait for you."),
+        content=(f"{pname} have put a proposal on the table.{_wanted_txt}"
+                 f"{_rationale} Open this message to review it -- no rush, "
+                 f"it will wait for you."),
         sender=f"{pname} GM",
         action_type="trade_offer",
         action_data={"negotiation_id": neg.id},

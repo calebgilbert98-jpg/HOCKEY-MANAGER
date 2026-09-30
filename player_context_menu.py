@@ -6,6 +6,79 @@ Provides consistent right-click player interactions across all windows
 import tkinter as tk
 from popup_system import messagebox, InGamePopup
 
+# R2 (UI repairs, revised): the comparison tool works EHM/FM24-style --
+# the "Compare with" list defaults to recently-viewed players plus the
+# user's own club (NHL/AHL/prospects). Recently-viewed player IDs are
+# recorded on player-card open (see main.open_player_profile hook),
+# capped, and persisted on the save via save_load_system.
+RECENTLY_VIEWED_CAP = 15
+
+
+def record_recently_viewed(app, player):
+    """Record a player-card view for the comparison tool. Additive; never raises."""
+    try:
+        pid = getattr(player, "id", None)
+        if not pid:
+            return
+        gm = getattr(app, "game_manager", None) or app
+        seen = getattr(gm, "recently_viewed_players", None)
+        if not isinstance(seen, list):
+            seen = []
+        seen = [x for x in seen if x != pid]
+        seen.insert(0, pid)
+        gm.recently_viewed_players = seen[:RECENTLY_VIEWED_CAP]
+    except Exception:
+        pass
+
+
+def get_recently_viewed_players(app, exclude=None):
+    """Resolve recently-viewed IDs to player objects, most-recent first.
+
+    IDs that no longer resolve (traded away, retired) are skipped.
+    Never raises.
+    """
+    try:
+        gm = getattr(app, "game_manager", None) or app
+        ids = list(getattr(gm, "recently_viewed_players", None) or [])
+        if not ids:
+            return []
+        league = getattr(gm, "league", None)
+        by_id = {}
+        try:
+            pool = list(league.get_all_players()) if hasattr(league, "get_all_players") else []
+        except Exception:
+            pool = []
+        if not pool:
+            for t in (getattr(league, "teams", None) or []):
+                for attr in ("roster", "ahl_roster", "prospects"):
+                    pool.extend(getattr(t, attr, None) or [])
+        for p in pool:
+            _pid = getattr(p, "id", None)
+            if _pid is not None and _pid not in by_id:
+                by_id[_pid] = p
+        excl_id = getattr(exclude, "id", None)
+        out = []
+        for _pid in ids:
+            p = by_id.get(_pid)
+            if p is None or _pid == excl_id:
+                continue
+            out.append(p)
+        return out
+    except Exception:
+        return []
+
+
+def _player_sort_key(p):
+    """OVR desc, then name -- most comparable players surface first."""
+    try:
+        ovr = int(p.overall_rating())
+    except Exception:
+        ovr = -1
+    return (-ovr,
+            getattr(p, "last_name", "") or "",
+            getattr(p, "first_name", "") or "")
+
+
 class PlayerContextMenu:
     """Universal player context menu for consistent player interactions across all windows"""
     
@@ -73,6 +146,13 @@ class PlayerContextMenu:
             label="Compare with Another Player",
             command=lambda: self._compare_players(player)
         )
+
+        # R6 (UI repairs): personal beefs are declared from the person's
+        # card -- the Morale window's DeclareRivalPopup already points here.
+        context_menu.add_command(
+            label="Declare Rival",
+            command=lambda: self._declare_rival(player)
+        )
         
         context_menu.add_separator()
         
@@ -98,6 +178,14 @@ class PlayerContextMenu:
         context_menu.add_command(
             label="Propose Trade",
             command=lambda: self._propose_trade(player)
+        )
+
+        # R3(b) (UI repairs): surface the trade-value system's reasoning
+        # for any player -- right-click in the trade interface and on
+        # player names inside email bodies both land here.
+        context_menu.add_command(
+            label="Analyze Trade Value",
+            command=lambda: self._analyze_trade_value(player)
         )
         
         # Check if player is on user's team for team-specific options
@@ -152,11 +240,11 @@ class PlayerContextMenu:
         try:
             messagebox.showinfo(
                 "Player Profile", 
-                f"Player: {player.full_name}\\n"
-                f"Position: {player.primary_position.value}\\n"
-                f"Age: {player.age}\\n"
-                f"Overall Rating: {player.overall_rating()}\\n"
-                f"Potential: {getattr(player, 'potential', 'Unknown')}\\n\\n"
+                f"Player: {player.full_name}\n"
+                f"Position: {player.primary_position.value}\n"
+                f"Age: {player.age}\n"
+                f"Overall Rating: {player.overall_rating()}\n"
+                f"Potential: {getattr(player, 'potential', 'Unknown')}\n\n"
                 f"Team: {getattr(player, 'team_name', 'Free Agent')}"
             )
         except Exception:
@@ -178,11 +266,11 @@ class PlayerContextMenu:
 
                 messagebox.showinfo(
                     "Existing Scouting Report",
-                    f"Scout Report: {player.full_name}\\n\\n"
-                    f"Scout: {report.scout.full_name if hasattr(report, 'scout') else 'Unknown'}\\n"
-                    f"Accuracy: {accuracy}%\\n"
-                    f"Viewings: {viewings}\\n"
-                    f"Potential: {potential}\\n\\n"
+                    f"Scout Report: {player.full_name}\n\n"
+                    f"Scout: {report.scout.full_name if hasattr(report, 'scout') else 'Unknown'}\n"
+                    f"Accuracy: {accuracy}%\n"
+                    f"Viewings: {viewings}\n"
+                    f"Potential: {potential}\n\n"
                     f"Status: {'Complete' if viewings >= 3 else 'In Progress'}"
                 )
                 return
@@ -264,7 +352,7 @@ class PlayerContextMenu:
             assign_btn.pack(pady=10)
         else:
             # No scouts available
-            no_scouts = tk.Label(dialog, text="No scouts available\\nHire scouts in the Staff Management section",
+            no_scouts = tk.Label(dialog, text="No scouts available\nHire scouts in the Staff Management section",
                                fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
                                bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
             no_scouts.pack(pady=20)
@@ -442,7 +530,98 @@ class PlayerContextMenu:
     
     def _compare_players(self, player):
         """Open enhanced player comparison tool"""
-        self._create_enhanced_comparison_window(player)
+        # R8 (UI repairs): busy cursor while the comparison window builds.
+        try:
+            from ctk_theme import busy_cursor
+            with busy_cursor(self.parent):
+                self._create_enhanced_comparison_window(player)
+        except Exception:
+            self._create_enhanced_comparison_window(player)
+
+    def _declare_rival(self, player):
+        """Declare a personal rivalry with an opposing player (R6).
+
+        Wires the context menu into the EXISTING rivalry system
+        (reputation_system.declare_rivalry) -- the same entry point the
+        Morale window's DeclareRivalPopup uses for team/coach declarations.
+        Own-club players are refused with an explanation. Feed + inbox go
+        through headlines.announce_rivalry_declaration like every other
+        declaration. Never raises.
+        """
+        try:
+            app = self._app()
+            gm = getattr(app, "game_manager", None) or app
+            league = getattr(gm, "league", None)
+            team = getattr(app, "user_team", None)
+            if league is None or team is None:
+                messagebox.showwarning(
+                    "Declare Rival",
+                    "No active league to declare a rivalry in.")
+                return
+            own_ids = set()
+            for attr in ("roster", "ahl_roster", "prospects"):
+                for p in (getattr(team, attr, None) or []):
+                    own_ids.add(getattr(p, "id", None))
+            if getattr(player, "id", None) in own_ids:
+                messagebox.showinfo(
+                    "Declare Rival",
+                    f"{getattr(player, 'full_name', 'That player')} plays "
+                    "for your club.\n\nDeclare rival is for opposing players "
+                    "and staff -- right-click their card to start a "
+                    "personal beef.")
+                return
+            import reputation_system as rs
+            try:
+                existing = rs.rivalry_between(
+                    getattr(league, "rivalries", None) or [],
+                    rs.gm_persona(team), player, kind="gm_coach")
+            except Exception:
+                existing = None
+            if existing and existing.get("user_declared"):
+                messagebox.showinfo(
+                    "Declare Rival",
+                    f"You already declared "
+                    f"{getattr(player, 'full_name', 'them')} a personal "
+                    f"rival (heat {existing.get('intensity', 0):.0f}).")
+                return
+            # NOTE: kind="gm_coach" is the existing personal-beef kind the
+            # rivalry system already understands (GM vs a person); _ekey
+            # keys the player as ('player', id) so it never collides with
+            # a coach record.
+            rec = rs.declare_rivalry(league, rs.gm_persona(team), player,
+                                     kind="gm_coach")
+            if not rec:
+                messagebox.showwarning("Declare Rival",
+                                       "Could not register the rivalry.")
+                return
+            try:
+                import headlines as hl
+                gui = app if hasattr(app, "add_news") else (
+                    getattr(app, "app", None) or app)
+                target_team_name = "?"
+                for t in (getattr(league, "teams", None) or []):
+                    rosters = [getattr(t, a, None) or []
+                               for a in ("roster", "ahl_roster", "prospects")]
+                    if any(getattr(p, "id", None) == getattr(player, "id", None)
+                           for r in rosters for p in r):
+                        target_team_name = getattr(t, "team_name", "?")
+                        break
+                hl.announce_rivalry_declaration(
+                    gui, getattr(team, "team_name", "?"), target_team_name,
+                    getattr(player, "full_name", "?"), "coach")
+            except Exception:
+                pass
+            messagebox.showinfo(
+                "Rival Declared",
+                f"Declared: {getattr(player, 'full_name', '?')} "
+                f"(heat {rec.get('intensity', 70):.0f}). "
+                "Those games just got personal.")
+        except Exception as e:
+            try:
+                messagebox.showerror("Declare Rival",
+                                     f"Could not declare rival: {e}")
+            except Exception:
+                pass
     
     def _show_comparison_results(self, player1, player2, compare_window):
         """Legacy entry point: render results into a frame in the given window."""
@@ -693,7 +872,7 @@ class PlayerContextMenu:
         def assign_training():
             if focus_var.get():
                 messagebox.showinfo("Training Assigned", 
-                                  f"{player.full_name} assigned to {intensity_var.get().lower()} {focus_var.get().lower()} training!\\n\\n"
+                                  f"{player.full_name} assigned to {intensity_var.get().lower()} {focus_var.get().lower()} training!\n\n"
                                   f"Training will continue for 2 weeks.")
                 dialog.destroy()
         
@@ -708,12 +887,12 @@ class PlayerContextMenu:
         """Show player development history"""
         messagebox.showinfo(
             "Development History",
-            f"Development History - {player.full_name}\\n\\n"
-            f"Current Stage: Developing\\n"
-            f"Recent Activities:\\n"
-            f"• Completed skating training program\\n"
-            f"• Overall rating progress tracked\\n"
-            f"• Regular practice participation\\n\\n"
+            f"Development History - {player.full_name}\n\n"
+            f"Current Stage: Developing\n"
+            f"Recent Activities:\n"
+            f"• Completed skating training program\n"
+            f"• Overall rating progress tracked\n"
+            f"• Regular practice participation\n\n"
             f"Next Steps: Continue current development path"
         )
     
@@ -742,10 +921,10 @@ class PlayerContextMenu:
                 
             messagebox.showinfo(
                 "Contract Details",
-                f"Contract Information - {player.full_name}\\n\\n"
-                f"Salary: {salary}\\n"
-                f"Contract Length: {years} year(s) remaining\\n"
-                f"Contract Type: {contract_type}\\n"
+                f"Contract Information - {player.full_name}\n\n"
+                f"Salary: {salary}\n"
+                f"Contract Length: {years} year(s) remaining\n"
+                f"Contract Type: {contract_type}\n"
                 f"Status: Active"
             )
     
@@ -762,15 +941,89 @@ class PlayerContextMenu:
         
         messagebox.showinfo(
             "Roster Management",
-            f"Roster Management - {player.full_name}\\n\\n"
-            f"Current Roster: {current_roster}\\n\\n"
-            f"Available Actions:\\n"
-            f"• Move to NHL Roster\\n"
-            f"• Move to AHL Roster\\n"
-            f"• Move to Prospects\\n\\n"
+            f"Roster Management - {player.full_name}\n\n"
+            f"Current Roster: {current_roster}\n\n"
+            f"Available Actions:\n"
+            f"• Move to NHL Roster\n"
+            f"• Move to AHL Roster\n"
+            f"• Move to Prospects\n\n"
             f"This functionality will be implemented in roster management."
         )
     
+    def _analyze_trade_value(self, player):
+        """R3(b): show the trade-value reasoning breakdown for a player.
+
+        Surfaces trade_engine.player_trade_value_breakdown(): what drives
+        the value -- OVR base, age curve, potential, contract efficiency,
+        volatility, goalie premium, RFA-impasse rights. Read-only; never
+        raises (falls back to a plain note when the engine is unhappy).
+        """
+        total, comps = None, []
+        try:
+            import trade_engine as _te
+            total, comps = _te.player_trade_value_breakdown(player)
+        except Exception:
+            total, comps = None, []
+        pname = getattr(player, 'full_name', str(player))
+        dialog = InGamePopup(self.parent)
+        dialog.title(f"Trade Value - {pname}")
+        dialog.geometry("520x480")
+        _bg = getattr(self.parent, 'BG_COLOR', '#1E1E1E')
+        _fg = getattr(self.parent, 'TEXT_COLOR', 'white')
+        _dim = getattr(self.parent, 'TEXT_SECONDARY', '#a1a1aa')
+        _acc = getattr(self.parent, 'ACCENT_COLOR', '#4FC3F7')
+        dialog.configure(bg=_bg)
+
+        tk.Label(dialog, text=f"{pname}",
+                 font=('Segoe UI', 13, 'bold'), fg=_fg, bg=_bg
+                 ).pack(anchor='w', padx=20, pady=(16, 2))
+        try:
+            _pos = player.primary_position.value
+            _age = getattr(player, 'age', '?')
+            _sub = f"{_pos} - age {_age}"
+        except Exception:
+            _sub = ""
+        if _sub:
+            tk.Label(dialog, text=_sub, font=('Segoe UI', 10),
+                     fg=_dim, bg=_bg).pack(anchor='w', padx=20)
+
+        if total is None:
+            tk.Label(dialog, text="Value analysis unavailable.",
+                     font=('Segoe UI', 11), fg=_dim, bg=_bg,
+                     wraplength=460, justify='left'
+                     ).pack(anchor='w', padx=20, pady=16)
+        else:
+            tk.Label(dialog, text=f"Trade value: {total} pick-points",
+                     font=('Segoe UI', 12, 'bold'), fg=_acc, bg=_bg
+                     ).pack(anchor='w', padx=20, pady=(8, 2))
+            tk.Label(dialog, text="(a 1st-round pick ~= 1000)",
+                     font=('Segoe UI', 9), fg=_dim, bg=_bg
+                     ).pack(anchor='w', padx=20, pady=(0, 8))
+            body = tk.Frame(dialog, bg=_bg)
+            body.pack(fill='both', expand=True, padx=20, pady=(0, 8))
+            for c in comps:
+                row = tk.Frame(body, bg=_bg)
+                row.pack(fill='x', pady=3)
+                _d = c.get('delta', 0)
+                _sign = "+" if _d >= 0 else ""
+                tk.Label(row, text=f"{_sign}{_d}",
+                         font=('Segoe UI', 10, 'bold'),
+                         fg='#6fcf7f' if _d >= 0 else '#e5484d',
+                         bg=_bg, width=7, anchor='e'
+                         ).pack(side='left')
+                tk.Label(row, text=c.get('label', ''),
+                         font=('Segoe UI', 10, 'bold'), fg=_fg, bg=_bg,
+                         anchor='w').pack(side='left', padx=(8, 0))
+                tk.Label(body, text=c.get('detail', ''),
+                         font=('Segoe UI', 9), fg=_dim, bg=_bg,
+                         wraplength=460, justify='left'
+                         ).pack(anchor='w', padx=(52, 0), pady=(0, 4))
+
+        tk.Button(dialog, text="Close", command=dialog.destroy,
+                  font=('Segoe UI', 10, 'bold'),
+                  bg=_acc, fg='white', relief='flat',
+                  padx=18, pady=6).pack(pady=(4, 16))
+
     def _propose_trade(self, player):
         """Open the Trade Center with this player pre-loaded on the table."""
         try:
@@ -834,9 +1087,9 @@ class PlayerContextMenu:
         info_frame = tk.Frame(dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
         info_frame.pack(fill='x', padx=20, pady=10)
         
-        info_text = f"Position: {player.primary_position.value}\\n"
-        info_text += f"Overall: {player.overall_rating()}\\n"
-        info_text += f"Age: {player.age}\\n"
+        info_text = f"Position: {player.primary_position.value}\n"
+        info_text += f"Overall: {player.overall_rating()}\n"
+        info_text += f"Age: {player.age}\n"
         
         if hasattr(player, 'contract') and player.contract:
             salary = getattr(player.contract, 'salary', 750000)
@@ -895,7 +1148,7 @@ class PlayerContextMenu:
         def send_proposal():
             if team_var.get():
                 messagebox.showinfo("Trade Proposal Sent", 
-                                  f"Trade proposal for {player.full_name} sent to {team_var.get()}!\\n\\n"
+                                  f"Trade proposal for {player.full_name} sent to {team_var.get()}!\n\n"
                                   f"You will receive a response within 24-48 hours.")
                 dialog.destroy()
         
@@ -951,13 +1204,14 @@ class PlayerContextMenu:
                 fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
                 bg=getattr(self.parent, 'CONTENT_BG', '#2A2A2A')).pack(anchor='w', pady=5)
         
-        # Get all available players
-        all_players = self._get_all_players()
+        # Get all available players (recently-viewed + own club first,
+        # R2 revised; subject excluded at the source).
+        all_players = self._get_all_players(exclude=player1)
         
         from tkinter import ttk
         compare_var = tk.StringVar()
         compare_combo = ttk.Combobox(selection_frame, textvariable=compare_var,
-                                   values=[p.full_name for p in all_players if p != player1],
+                                   values=[p.full_name for p in all_players],
                                    state='readonly', width=40, font=('Segoe UI', 10))
         compare_combo.pack(anchor='w', pady=5, fill='x')
         
@@ -1011,12 +1265,12 @@ class PlayerContextMenu:
         same_position_players.sort(key=lambda p: p.overall_rating(), reverse=True)
         
         # Display top 10 peers
-        peers_text = f"Top {min(10, len(same_position_players))} {player.primary_position.value} players:\\n\\n"
+        peers_text = f"Top {min(10, len(same_position_players))} {player.primary_position.value} players:\n\n"
         
         for i, peer in enumerate(same_position_players[:10], 1):
-            peers_text += f"{i:2}. {peer.full_name:<25} OVR: {peer.overall_rating():2} Age: {peer.age:2}\\n"
+            peers_text += f"{i:2}. {peer.full_name:<25} OVR: {peer.overall_rating():2} Age: {peer.age:2}\n"
         
-        peers_text += f"\\n{player.full_name} ranks approximately #{same_position_players.index(player) + 1 if player in same_position_players else 'Unknown'} among {player.primary_position.value} players."
+        peers_text += f"\n{player.full_name} ranks approximately #{same_position_players.index(player) + 1 if player in same_position_players else 'Unknown'} among {player.primary_position.value} players."
         
         from tkinter import scrolledtext
         peers_display = scrolledtext.ScrolledText(content_frame, wrap=tk.WORD, width=80, height=20,
@@ -1027,42 +1281,65 @@ class PlayerContextMenu:
         peers_display.insert('1.0', peers_text)
         peers_display.config(state='disabled')
     
-    def _get_all_players(self):
-        """Get all available players from various sources"""
-        all_players = []
-        
-        # Try to get players from parent's user team
-        if hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'user_team'):
-            team = self.parent.parent.user_team
-            all_players.extend(getattr(team, 'roster', []))
-            all_players.extend(getattr(team, 'ahl_roster', []))
-            all_players.extend(getattr(team, 'prospects', []))
-        elif hasattr(self.parent, 'user_team'):
-            team = self.parent.user_team
-            all_players.extend(getattr(team, 'roster', []))
-            all_players.extend(getattr(team, 'ahl_roster', []))
-            all_players.extend(getattr(team, 'prospects', []))
-        
-        # If still no players, create some sample data
-        if not all_players:
-            # This is a fallback - in real implementation, you'd access the league's player pool
-            pass
-            
-        return all_players[:100]  # Limit to first 100 players for performance
-    
+    def _get_all_players(self, exclude=None):
+        """EHM/FM24-style default compare list (R2 revised).
+
+        Order: recently-viewed players first (most-recent first), then the
+        user's own club -- NHL roster, AHL, prospects -- sorted by OVR
+        desc. Falls back to the league pool when the user team is
+        unavailable so the dropdown is never empty. De-duped, capped at
+        200 for performance.
+        """
+        app = self._app()
+        team = getattr(app, "user_team", None) if app is not None else None
+        excl_id = getattr(exclude, "id", None)
+
+        ordered, seen = [], set()
+
+        def _add(p):
+            pid = getattr(p, "id", None)
+            key = pid if pid is not None else id(p)
+            if key in seen or (pid is not None and pid == excl_id):
+                return
+            seen.add(key)
+            ordered.append(p)
+
+        # 1. Recently viewed -- the FM24/EHM default.
+        for rp in get_recently_viewed_players(app, exclude=exclude):
+            _add(rp)
+
+        # 2. Own club: NHL + AHL + prospects, best first.
+        club = []
+        if team is not None:
+            for attr in ("roster", "ahl_roster", "prospects"):
+                club.extend(getattr(team, attr, None) or [])
+        if not club and app is not None:
+            try:
+                gm = getattr(app, "game_manager", None) or app
+                league = getattr(gm, "league", None)
+                for t in (getattr(league, "teams", None) or []):
+                    club.extend(getattr(t, "roster", None) or [])
+            except Exception:
+                pass
+        club.sort(key=_player_sort_key)
+        for cp in club:
+            _add(cp)
+
+        return ordered[:200]
+
     def _generate_detailed_analysis(self, player):
         """Generate detailed player analysis text"""
-        analysis = f"DETAILED PLAYER ANALYSIS\\n"
-        analysis += f"{'='*50}\\n\\n"
+        analysis = f"DETAILED PLAYER ANALYSIS\n"
+        analysis += f"{'='*50}\n\n"
         
-        analysis += f"Player: {player.full_name}\\n"
-        analysis += f"Position: {player.primary_position.value}\\n"
-        analysis += f"Age: {player.age}\\n"
-        analysis += f"Overall Rating: {player.overall_rating()}\\n\\n"
+        analysis += f"Player: {player.full_name}\n"
+        analysis += f"Position: {player.primary_position.value}\n"
+        analysis += f"Age: {player.age}\n"
+        analysis += f"Overall Rating: {player.overall_rating()}\n\n"
         
         # Attributes analysis
-        analysis += f"ATTRIBUTES BREAKDOWN\\n"
-        analysis += f"{'-'*25}\\n"
+        analysis += f"ATTRIBUTES BREAKDOWN\n"
+        analysis += f"{'-'*25}\n"
         
         attributes = [
             ('Skating', getattr(player, 'skating', 'N/A')),
@@ -1076,10 +1353,10 @@ class PlayerContextMenu:
         for attr_name, value in attributes:
             if value != 'N/A':
                 rating = "Elite" if value >= 18 else "Excellent" if value >= 16 else "Good" if value >= 14 else "Average" if value >= 12 else "Below Average"
-                analysis += f"{attr_name:<15}: {value:2} ({rating})\\n"
+                analysis += f"{attr_name:<15}: {value:2} ({rating})\n"
         
-        analysis += f"\\nSTRENGTHS & WEAKNESSES\\n"
-        analysis += f"{'-'*25}\\n"
+        analysis += f"\nSTRENGTHS & WEAKNESSES\n"
+        analysis += f"{'-'*25}\n"
         
         # Determine strengths and weaknesses
         strengths = []
@@ -1093,22 +1370,22 @@ class PlayerContextMenu:
                     weaknesses.append(attr_name)
         
         if strengths:
-            analysis += f"Strengths: {', '.join(strengths)}\\n"
+            analysis += f"Strengths: {', '.join(strengths)}\n"
         if weaknesses:
-            analysis += f"Weaknesses: {', '.join(weaknesses)}\\n"
+            analysis += f"Weaknesses: {', '.join(weaknesses)}\n"
         
-        analysis += f"\\nDEVELOPMENT RECOMMENDATION\\n"
-        analysis += f"{'-'*25}\\n"
+        analysis += f"\nDEVELOPMENT RECOMMENDATION\n"
+        analysis += f"{'-'*25}\n"
         
         if player.age <= 20:
-            analysis += "High development potential due to young age.\\n"
+            analysis += "High development potential due to young age.\n"
         elif player.age <= 25:
-            analysis += "Good development potential in prime years.\\n"
+            analysis += "Good development potential in prime years.\n"
         else:
-            analysis += "Limited development potential due to age.\\n"
+            analysis += "Limited development potential due to age.\n"
         
         if weaknesses:
-            analysis += f"Focus training on: {', '.join(weaknesses[:2])}\\n"
+            analysis += f"Focus training on: {', '.join(weaknesses[:2])}\n"
         
         return analysis
 

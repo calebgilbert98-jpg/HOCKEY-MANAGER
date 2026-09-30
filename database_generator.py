@@ -4,9 +4,89 @@
 
 import random
 from typing import (List, Dict, Optional)
-from game_classes import (Player, Team, League, PlayerPosition, Contract, debug_print)
+from game_classes import (Player, Team, League, PlayerPosition, Contract, debug_print,
+                                StaffRole)
 from dataclasses import dataclass
 import mesh_system
+
+# ---------------------------------------------------------------------------
+# R5 (UI repairs, expanded): staff role design.
+#
+# HIREABLE_STAFF_ROLES -- roles with real game value (coaches, scouts,
+# analytics). These appear in the free-agent staff pool with real depth so
+# hiring is actually possible.
+#
+# BACKGROUND_STAFF_ROLES -- physio-type support roles. They are auto-filled
+# on every club (no hiring needed) and never appear in the FA pool or the
+# Hire Staff flow. Their ratings still matter where read (e.g. medical
+# staff feed the injury-recovery modifier in injury_data).
+# ---------------------------------------------------------------------------
+HIREABLE_STAFF_ROLES = (
+    StaffRole.GENERAL_MANAGER,
+    StaffRole.ASSISTANT_GENERAL_MANAGER,
+    StaffRole.HEAD_COACH,
+    StaffRole.ASSOCIATE_COACH,
+    StaffRole.ASSISTANT_COACH,
+    StaffRole.GOALIE_COACH,
+    StaffRole.POWER_PLAY_COACH,
+    StaffRole.PENALTY_KILL_COACH,
+    StaffRole.VIDEO_COACH,
+    StaffRole.SKILLS_COACH,
+    StaffRole.SKATING_COACH,
+    StaffRole.CONDITIONING_COACH,
+    StaffRole.STRENGTH_COACH,
+    StaffRole.HEAD_SCOUT,
+    StaffRole.PROFESSIONAL_SCOUT,
+    StaffRole.AMATEUR_SCOUT,
+    StaffRole.EUROPEAN_SCOUT,
+    StaffRole.ADVANCE_SCOUT,
+    StaffRole.ANALYTICS_DIRECTOR,
+)
+
+BACKGROUND_STAFF_ROLES = (
+    StaffRole.TEAM_DOCTOR,
+    StaffRole.PHYSIOTHERAPIST,
+    StaffRole.EQUIPMENT_MANAGER,
+    StaffRole.STATISTICIAN,
+    StaffRole.MEDIA_RELATIONS,
+)
+
+# R5 (UI repairs, expanded): full hockey-ops org template.
+# Each entry is (role, count, base salary). Shared by new-game
+# generation and the old-save backfill so they never drift.
+TEAM_STAFF_TEMPLATE = [
+    # Management
+    (StaffRole.GENERAL_MANAGER, 1, 700_000),
+    (StaffRole.ASSISTANT_GENERAL_MANAGER, 1, 300_000),
+    # Coaching staff
+    (StaffRole.HEAD_COACH, 1, 600_000),
+    (StaffRole.ASSOCIATE_COACH, 1, 350_000),
+    (StaffRole.ASSISTANT_COACH, 2, 275_000),
+    (StaffRole.GOALIE_COACH, 1, 250_000),
+    (StaffRole.POWER_PLAY_COACH, 1, 250_000),
+    (StaffRole.PENALTY_KILL_COACH, 1, 250_000),
+    (StaffRole.VIDEO_COACH, 1, 125_000),
+    # Development staff
+    (StaffRole.SKILLS_COACH, 1, 160_000),
+    (StaffRole.SKATING_COACH, 1, 150_000),
+    (StaffRole.CONDITIONING_COACH, 1, 150_000),
+    (StaffRole.STRENGTH_COACH, 1, 150_000),
+    # Scouting staff
+    (StaffRole.HEAD_SCOUT, 1, 275_000),
+    (StaffRole.PROFESSIONAL_SCOUT, 2, 125_000),
+    (StaffRole.AMATEUR_SCOUT, 2, 110_000),
+    (StaffRole.EUROPEAN_SCOUT, 1, 125_000),
+    (StaffRole.ADVANCE_SCOUT, 1, 110_000),
+    # Analytics
+    (StaffRole.ANALYTICS_DIRECTOR, 1, 250_000),
+    # Medical & support (background: auto-filled, never hireable)
+    (StaffRole.TEAM_DOCTOR, 1, 200_000),
+    (StaffRole.PHYSIOTHERAPIST, 1, 100_000),
+    (StaffRole.EQUIPMENT_MANAGER, 1, 80_000),
+    # Analytics & media (background: auto-filled, never hireable)
+    (StaffRole.STATISTICIAN, 1, 75_000),
+    (StaffRole.MEDIA_RELATIONS, 1, 90_000),
+]
 
 @dataclass
 class DatabaseConfig:
@@ -387,8 +467,9 @@ class DatabaseGenerator:
         main_league.free_agents.extend(free_agents)
         players_created += len(free_agents)
         
-        # Generate free agent staff
-        free_agent_staff_count = max(100, int(len(main_league.teams) * 2))  # ~2 staff per team as free agents
+        # Generate free agent staff (R5 expanded: denser pool, bounded).
+        # 19 hireable roles x 6 minimum = 114 guaranteed, filled to the cap.
+        free_agent_staff_count = max(180, int(len(main_league.teams) * 6))
         free_agent_staff = self._generate_free_agent_staff(free_agent_staff_count)
         main_league.free_agent_staff.extend(free_agent_staff)
 
@@ -733,14 +814,7 @@ class DatabaseGenerator:
         """Generate coaching staff and management for all teams."""
         from game_classes import Staff, StaffRole, default_staff_budget
 
-        # Staff positions and their frequency
-        staff_positions = [
-            (StaffRole.HEAD_COACH, 1),  # Each team needs 1 head coach
-            (StaffRole.ASSISTANT_COACH, 2),  # 2 assistant coaches
-            (StaffRole.GOALIE_COACH, 1),  # 1 goalie coach
-            (StaffRole.GENERAL_MANAGER, 1),  # 1 GM
-            (StaffRole.PROFESSIONAL_SCOUT, 3),  # 3 scouts
-        ]
+        staff_positions = list(TEAM_STAFF_TEMPLATE)
 
         first_names = [
             "Adam", "Alex", "Andrew", "Anthony", "Brian", "Bruce", "Carl", "Chris", "Craig", "Dan",
@@ -761,10 +835,12 @@ class DatabaseGenerator:
         # two assistants, and a GM running the farm. They count against the
         # staff budget and can only be approached by other clubs in the
         # offseason (real-world rule).
+        # AHL salaries are tiered by role (farm pay runs well below NHL
+        # equivalents) so the full org fits the small-market staff budget.
         ahl_positions = [
-            (StaffRole.HEAD_COACH, 1),
-            (StaffRole.ASSISTANT_COACH, 2),
-            (StaffRole.GENERAL_MANAGER, 1),
+            (StaffRole.HEAD_COACH, 1, 200_000),
+            (StaffRole.ASSISTANT_COACH, 2, 120_000),
+            (StaffRole.GENERAL_MANAGER, 1, 150_000),
         ]
 
         for team in teams:
@@ -772,12 +848,14 @@ class DatabaseGenerator:
             # League-wide staff budget, tiered by market size.
             team.staff_budget = default_staff_budget(team.team_name)
 
-            for role, count in staff_positions:
+            for role, count, salary in staff_positions:
                 for _ in range(count):
                     first_name = random.choice(first_names)
                     last_name = random.choice(last_names)
 
-                    # Create staff member using the dataclass constructor
+                    # Create staff member using the dataclass constructor.
+                    # Tiered salary keeps the full staff inside the
+                    # small-market budget with room to hire.
                     staff_member = Staff(
                         first_name=first_name,
                         last_name=last_name,
@@ -785,12 +863,13 @@ class DatabaseGenerator:
                         age=random.randint(35, 65),
                         experience=random.randint(1, 20),
                         assignment="nhl",
+                        salary=salary + random.randint(-20_000, 20_000),
                     )
 
                     # Add to team staff
                     team.staff.append(staff_member)
 
-            for role, count in ahl_positions:
+            for role, count, salary in ahl_positions:
                 for _ in range(count):
                     staff_member = Staff(
                         first_name=random.choice(first_names),
@@ -799,34 +878,27 @@ class DatabaseGenerator:
                         age=random.randint(30, 60),
                         experience=random.randint(1, 15),
                         assignment="ahl",
-                        # AHL salaries run lower than NHL equivalents.
-                        salary=random.randint(150000, 400000),
+                        salary=salary + random.randint(-15_000, 15_000),
                     )
                     team.staff.append(staff_member)
     
     def _generate_free_agent_staff(self, count):
-        """Generate unemployed staff members available for hiring."""
-        from game_classes import Staff, StaffRole
-        
+        """Generate unemployed staff members available for hiring.
+
+        R5 (UI repairs, expanded): real depth. Every hireable role
+        (HIREABLE_STAFF_ROLES) is guaranteed a minimum bench so hiring is
+        actually possible for any position; the rest of the pool is
+        weighted toward coaches/scouts, the roles clubs churn most.
+        Background roles (physio-type) are never free agents by design.
+        Bounded: the caller caps the total.
+        """
+        from game_classes import Staff
+
         free_agent_staff = []
-        
+
         # Staff roles that could be available as free agents
-        available_roles = [
-            StaffRole.HEAD_COACH,
-            StaffRole.ASSISTANT_COACH,
-            StaffRole.ASSOCIATE_COACH,
-            StaffRole.GOALIE_COACH,
-            StaffRole.GENERAL_MANAGER,
-            StaffRole.ASSISTANT_GENERAL_MANAGER,
-            StaffRole.HEAD_SCOUT,
-            StaffRole.PROFESSIONAL_SCOUT,
-            StaffRole.AMATEUR_SCOUT,
-            StaffRole.EUROPEAN_SCOUT,
-            StaffRole.ANALYTICS_DIRECTOR,
-            StaffRole.SKILLS_COACH,
-            StaffRole.CONDITIONING_COACH
-        ]
-        
+        available_roles = list(HIREABLE_STAFF_ROLES)
+
         first_names = [
             "Adam", "Alex", "Andrew", "Anthony", "Brian", "Bruce", "Carl", "Chris", "Craig", "Dan",
             "Dave", "David", "Doug", "Eric", "Frank", "Gary", "Glen", "Greg", "Jack", "James",
@@ -842,22 +914,36 @@ class DatabaseGenerator:
             "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker"
         ]
         
-        for _ in range(count):
-            role = random.choice(available_roles)
-            first_name = random.choice(first_names)
-            last_name = random.choice(last_names)
-            
+        def _make(role):
             # Free agent staff tend to be experienced but currently unemployed
             # This could be due to recent firing, retirement from previous role, etc.
-            staff_member = Staff(
-                first_name=first_name,
-                last_name=last_name,
+            return Staff(
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
                 role=role,
                 age=random.randint(30, 70),  # Wider age range for free agents
                 experience=random.randint(5, 25)  # Generally experienced
             )
-            
-            free_agent_staff.append(staff_member)
+
+        # Guarantee a minimum bench per hireable role so no position is
+        # ever unfillable...
+        per_role_min = 6
+        for role in available_roles:
+            for _ in range(per_role_min):
+                free_agent_staff.append(_make(role))
+
+        # ...then fill to the cap, weighted toward the churn roles.
+        from game_classes import StaffRole as _SR
+        weighted = (
+            [_SR.HEAD_COACH] * 4 + [_SR.ASSISTANT_COACH] * 4
+            + [_SR.ASSOCIATE_COACH] * 3 + [_SR.GOALIE_COACH] * 3
+            + [_SR.PROFESSIONAL_SCOUT] * 3 + [_SR.AMATEUR_SCOUT] * 3
+            + [_SR.HEAD_SCOUT] * 2 + [_SR.SKILLS_COACH] * 2
+            + [_SR.ANALYTICS_DIRECTOR] * 2
+        )
+        while len(free_agent_staff) < count:
+            role = random.choice(weighted or available_roles)
+            free_agent_staff.append(_make(role))
 
         return free_agent_staff
 
@@ -1484,6 +1570,107 @@ class DatabaseGenerator:
 def get_database_options() -> Dict[str, DatabaseConfig]:
     """Return available database configuration options"""
     return DATABASE_CONFIGURATIONS
+
+
+def backfill_team_staff(league):
+    """Additive old-save backfill for the R5 staff redesign.
+
+    Saves generated before the full 24-role TEAM_STAFF_TEMPLATE get every
+    club topped up to the template counts and the free-agent staff pool
+    topped up to the per-role minimums. Existing staff are never removed,
+    modified, or duplicated; unique roles (GM, head coach) are never
+    doubled. Never raises -- a failed backfill just leaves the save as it
+    was.
+    """
+    try:
+        from game_classes import Staff, default_staff_budget
+    except Exception:
+        return
+    try:
+        teams = list(getattr(league, "teams", None) or [])
+        if not teams:
+            return
+        first_names = ["Adam", "Alex", "Andrew", "Brian", "Chris", "Dan",
+                       "Dave", "Eric", "Frank", "Jack", "James", "Joe",
+                       "John", "Kevin", "Mark", "Mike", "Paul", "Scott",
+                       "Steve", "Tim", "Todd", "Tom"]
+        last_names = ["Anderson", "Brown", "Clark", "Davis", "Harris",
+                      "Johnson", "Jones", "Lewis", "Martin", "Miller",
+                      "Moore", "Smith", "Taylor", "Thomas", "Thompson",
+                      "White", "Williams", "Wilson", "Young"]
+
+        def _make(role, salary):
+            return Staff(
+                first_name=random.choice(first_names),
+                last_name=random.choice(last_names),
+                role=role,
+                age=random.randint(35, 65),
+                experience=random.randint(1, 20),
+                salary=int(salary) + random.randint(-20_000, 20_000),
+            )
+
+        unique_roles = {StaffRole.GENERAL_MANAGER, StaffRole.HEAD_COACH}
+        for team in teams:
+            staff = getattr(team, "staff", None)
+            if not isinstance(staff, list):
+                try:
+                    team.staff = staff = []
+                except Exception:
+                    continue
+            if getattr(team, "staff_budget", None) is None:
+                try:
+                    team.staff_budget = default_staff_budget(
+                        getattr(team, "team_name", ""))
+                except Exception:
+                    pass
+            have = {}
+            for s in staff:
+                r = getattr(s, "role", None)
+                have[r] = have.get(r, 0) + 1
+            for role, count, salary in TEAM_STAFF_TEMPLATE:
+                try:
+                    missing = int(count) - int(have.get(role, 0))
+                except Exception:
+                    missing = 0
+                if missing <= 0:
+                    continue
+                if role in unique_roles and have.get(role, 0) >= 1:
+                    continue  # never double the GM / head coach
+                for _ in range(missing):
+                    try:
+                        staff.append(_make(role, salary))
+                    except Exception:
+                        break
+                    have[role] = have.get(role, 0) + 1
+
+        # Free-agent pool: guarantee the per-role minimums for hireable
+        # roles so old saves can hire into any position.
+        try:
+            pool = getattr(league, "free_agent_staff", None)
+            if not isinstance(pool, list):
+                pool = []
+                league.free_agent_staff = pool
+            pool_have = {}
+            for s in pool:
+                r = getattr(s, "role", None)
+                pool_have[r] = pool_have.get(r, 0) + 1
+            for role in HIREABLE_STAFF_ROLES:
+                need = 6 - int(pool_have.get(role, 0))
+                for _ in range(max(0, need)):
+                    try:
+                        pool.append(Staff(
+                            first_name=random.choice(first_names),
+                            last_name=random.choice(last_names),
+                            role=role,
+                            age=random.randint(30, 70),
+                            experience=random.randint(5, 25),
+                        ))
+                    except Exception:
+                        break
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 def generate_database(config_name: str) -> League:
     """Generate a database using the specified configuration"""

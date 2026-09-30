@@ -1153,12 +1153,48 @@ def gm_public_backing(league: Any, team: Any, target: str = "room",
     elif target == "room":
         _bump(roster, "happiness", 2)
         _bump(roster, "morale", 1)
-        _record(team, "gm_backing",
-                f"{gm_name} went on the record for the room: the group "
-                f"in there is the group he believes in.",
-                morale_delta=2, tone="up")
-        result.update({"quote": ("“I believe in the twenty-three guys in "
-                                 "that room. That's my statement.”")})
+        # One backing, several ways to say it -- the wording follows the
+        # room's temperature. (The feed dedupes identical same-day entries,
+        # so repeats never spam.)
+        try:
+            mood_vals = [float(getattr(p, "happiness", 70) or 70)
+                         for p in roster]
+            mood = sum(mood_vals) / len(mood_vals) if mood_vals else 70.0
+        except Exception:
+            mood = 70.0
+        _variants = [
+            (3.0,
+             f"{gm_name} went on the record for the room: the group "
+             f"in there is the group he believes in.",
+             "\u201cI believe in the twenty-three guys in "
+             "that room. That's my statement.\u201d"),
+            (2.0,
+             f"{gm_name} told the press the panic is outside the "
+             f"building, not in it.",
+             "\u201cThe noise is out there. In here, we're "
+             "fine.\u201d"),
+            (2.0 if mood < 60 else 0.5,
+             f"{gm_name} backed the group -- then challenged them to "
+             f"prove him right.",
+             "\u201cI believe in them. Now it's on them to show "
+             "it.\u201d"),
+            (1.5,
+             f"{gm_name} kept it brief: he believes in this group, "
+             f"full stop.",
+             "\u201cI believe in this group. Next question.\u201d"),
+        ]
+        _eligible = [(w, t, q) for (w, t, q) in _variants if w > 0]
+        _total = sum(w for w, _, _ in _eligible)
+        _roll = rng.random() * _total
+        _acc = 0.0
+        _text, _quote = _eligible[0][1], _eligible[0][2]
+        for _w, _t, _q in _eligible:
+            _acc += _w
+            if _roll < _acc:
+                _text, _quote = _t, _q
+                break
+        _record(team, "gm_backing", _text, morale_delta=2, tone="up")
+        result.update({"quote": _quote})
     else:
         # A specific player.
         player = target

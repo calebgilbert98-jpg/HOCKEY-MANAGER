@@ -1464,13 +1464,74 @@ def _team_log(team: Any) -> list:
 
 def record_team_event(team: Any, event_type: str, text: str,
                       morale_delta: int = 0, tone: str = "neutral") -> Dict[str, Any]:
-    """Append a dynamics event. tone: 'up' | 'down' | 'neutral'."""
+    """Append a dynamics event. tone: 'up' | 'down' | 'neutral'.
+
+    Defense against double-fires: an identical entry (same date, same text,
+    same tone -- the tone picks the feed icon) is recorded only once per
+    day; the existing entry is returned instead of appending a twin.
+    Genuinely distinct events always append.
+    """
     log = _team_log(team)
-    event = {"date": date.today().isoformat(), "type": event_type,
+    today = date.today().isoformat()
+    for ev in log:
+        if (ev.get("date") == today and ev.get("text") == text
+                and ev.get("tone") == tone):
+            return ev
+    event = {"date": today, "type": event_type,
              "text": text, "morale_delta": morale_delta, "tone": tone}
     log.append(event)
     del log[:-100]  # keep the story readable
     return event
+
+
+def _same_day_event(team: Any, event_type: str,
+                    text: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """The team's dynamics entry for this event type recorded today, if any.
+    Pass text to match one exact rendering; omit it to match any entry of
+    the type (used for once-per-day guards on repeatable GM actions)."""
+    today = date.today().isoformat()
+    for ev in reversed(_team_log(team)):
+        if ev.get("date") == today and ev.get("type") == event_type \
+                and (text is None or ev.get("text") == text):
+            return ev
+    return None
+
+
+def _room_mood(roster: List[Any]) -> float:
+    """0-100 average happiness of the room; 70 when unknown."""
+    try:
+        vals = [float(getattr(p, "happiness", 70) or 70) for p in roster]
+        return sum(vals) / len(vals) if vals else 70.0
+    except Exception:
+        return 70.0
+
+
+def _weighted_variant(variants: List[Tuple[float, str, int, str]]
+                      ) -> Tuple[str, int, str]:
+    """Pick (text, morale_delta, tone) from weighted variants.
+
+    Zero-weight entries are ineligible (used to gate variants on coach
+    style or room mood). Deterministic under random.seed().
+    """
+    eligible = [(w, t, d, tn) for (w, t, d, tn) in variants if w > 0]
+    if not eligible:
+        _, t, d, tn = variants[0]
+        return t, d, tn
+    total = sum(w for w, _, _, _ in eligible)
+    roll = random.random() * total
+    acc = 0.0
+    for w, t, d, tn in eligible:
+        acc += w
+        if roll < acc:
+            return t, d, tn
+    return eligible[-1][1], eligible[-1][2], eligible[-1][3]
+
+
+def _coach_style_key(coach: Any) -> str:
+    try:
+        return str(coach_style(coach).get("key", "balanced"))
+    except Exception:
+        return "balanced"
 
 
 def get_dynamics_feed(team: Any, limit: int = 30) -> List[Dict[str, Any]]:
@@ -1494,43 +1555,165 @@ def _shift_happiness(roster: List[Any], delta: int,
 
 def apply_bag_skate(team: Any, coach: Any, roster: List[Any]) -> Dict[str, Any]:
     """Bag skate after a loss. Discipline message; the room hates it.
-    Drill sergeants get a pass -- their rooms expect it."""
-    style = coach_style(coach)["key"]
-    if style == "drill_sergeant":
-        n = _shift_happiness(roster, -1)
-        text = (f"{getattr(coach, 'full_name', 'Coach')} bag-skated the team after the loss. "
-                f"Business as usual under a drill sergeant ({n} affected).")
-        delta = -1
-    else:
-        n = _shift_happiness(roster, -3)
-        # Young wild players take it hardest.
-        _shift_happiness(roster, -2, lambda p: (getattr(p, "age", 26) or 26) <= 23)
-        text = (f"{getattr(coach, 'full_name', 'Coach')} bag-skated the team after the loss. "
-                f"The room is fuming ({n} affected).")
-        delta = -3
-    return record_team_event(team, "bag_skate", text, morale_delta=delta, tone="down")
+    Drill sergeants get a pass -- their rooms expect it.
+
+    The skate itself is always a skate; how the room reads it depends on
+    who's blowing the whistle and who's gasping for air.
+    """
+    style = _coach_style_key(coach)
+    cname = getattr(coach, 'full_name', 'Coach')
+    n = _shift_happiness(roster, -1 if style == "drill_sergeant" else -3)
+    delta = -1 if style == "drill_sergeant" else -3
+    # Young wild players take it hardest.
+    _shift_happiness(roster, -2, lambda p: (getattr(p, "age", 26) or 26) <= 23)
+    mood = _room_mood(roster)
+    young_room = False
+    try:
+        ages = [getattr(p, "age", 26) or 26 for p in roster]
+        young_room = bool(ages) and sum(ages) / len(ages) < 25
+    except Exception:
+        pass
+    variants = [
+        (3.0 if style == "drill_sergeant" else 0.5,
+         f"{cname} bag-skated the team after the loss. "
+         f"Business as usual under a drill sergeant ({n} affected).",
+         -1, "down"),
+        (1.5 if style == "drill_sergeant" else 0.0,
+         f"{cname} skated them until the ice crew came out. "
+         f"The veterans barely blinked ({n} affected).",
+         -1, "down"),
+        (0.5 if style == "drill_sergeant" else 3.0,
+         f"{cname} bag-skated the team after the loss. "
+         f"The room is fuming ({n} affected).",
+         -3, "down"),
+        (2.0 if style == "players_coach" else 0.0,
+         f"Even {cname} snapped -- a rare bag skate, and the room knows "
+         f"it crossed a line ({n} affected).",
+         -4, "down"),
+        (1.5 if style == "tactician" else 0.0,
+         f"{cname} skated them through systems reps at full pace. "
+         f"Punishment disguised as practice ({n} affected).",
+         -2, "down"),
+        (2.0 if young_room else 0.0,
+         f"{cname} bag-skated the team after the loss. The kids were "
+         f"gassed; the vets just shook their heads ({n} affected).",
+         -3, "down"),
+        (1.5 if mood < 55 else 0.0,
+         f"{cname} bag-skated a room that was already fragile. "
+         f"You could hear the groans from the press box ({n} affected).",
+         -4, "down"),
+    ]
+    text, vdelta, tone = _weighted_variant(variants)
+    # The text carries the variant's delta; the happiness shift above used
+    # the style baseline, so reconcile any difference here.
+    if vdelta != delta:
+        _shift_happiness(roster, vdelta - delta)
+        delta = vdelta
+    return record_team_event(team, "bag_skate", text,
+                             morale_delta=delta, tone=tone)
 
 
 def apply_inspiring_speech(team: Any, coach: Any, roster: List[Any]) -> Dict[str, Any]:
-    """Locker-room speech. Lands only if the coach can actually move a room."""
+    """Locker-room speech. Lands only if the coach can actually move a room.
+
+    What "moving a room" sounds like depends on the voice: a motivator
+    sets pulses racing, a drill sergeant sets a standard, a tactician
+    sells the plan. A coach without the gift reaches for it anyway --
+    and the room knows.
+    """
     mot = getattr(coach, "motivating", 50) or 50
     lead = getattr(coach, "leadership", 50) or 50
-    if mot >= 70 or lead >= 70:
-        _shift_happiness(roster, 5)
-        text = (f"{getattr(coach, 'full_name', 'Coach')} gave an inspiring locker-room speech. "
-                f"The room is buzzing.")
-        return record_team_event(team, "speech", text, morale_delta=5, tone="up")
-    _shift_happiness(roster, 1)
-    text = (f"{getattr(coach, 'full_name', 'Coach')} tried a speech. It fell flat.")
-    return record_team_event(team, "speech", text, morale_delta=1, tone="neutral")
+    lands = mot >= 70 or lead >= 70
+    style = _coach_style_key(coach)
+    cname = getattr(coach, 'full_name', 'Coach')
+    mood = _room_mood(roster)
+    variants = [
+        (3.0 if lands else 0.0,
+         f"{cname} gave an inspiring locker-room speech. "
+         f"The room is buzzing.",
+         5, "up"),
+        (2.5 if (lands and style == "motivator") else 0.0,
+         f"{cname} lit into them -- then built them back up. "
+         f"Goosebumps in the room.",
+         6, "up"),
+        (2.0 if (lands and style == "drill_sergeant") else 0.0,
+         f"{cname} didn't raise his voice. He didn't have to -- "
+         f"the standard was set.",
+         4, "up"),
+        (2.0 if (lands and style == "tactician") else 0.0,
+         f"{cname} laid out exactly how they win the next one. "
+         f"The room believes the plan.",
+         4, "up"),
+        (2.0 if (lands and style == "players_coach") else 0.0,
+         f"{cname} spoke quietly and honestly. The room would run "
+         f"through a wall for him right now.",
+         6, "up"),
+        (1.5 if (lands and mood < 55) else 0.0,
+         f"{cname} found the words a fragile room needed. Shoulders "
+         f"are back up.",
+         5, "up"),
+        (3.0 if not lands else 0.0,
+         f"{cname} tried a speech. It fell flat.",
+         1, "neutral"),
+        (1.5 if (not lands and mood < 50) else 0.0,
+         f"{cname} reached for the big speech. The room stared at "
+         f"the floor.",
+         0, "neutral"),
+    ]
+    text, delta, tone = _weighted_variant(variants)
+    _shift_happiness(roster, delta)
+    return record_team_event(team, "speech", text,
+                             morale_delta=delta, tone=tone)
 
 
 def apply_great_practice(team: Any, coach: Any, roster: List[Any]) -> Dict[str, Any]:
-    """Sharp practice after a loss. Small, honest bounce."""
-    _shift_happiness(roster, 2)
-    text = (f"Great practice after the loss -- {getattr(coach, 'full_name', 'Coach')} "
-            f"had them sharp and focused.")
-    return record_team_event(team, "practice", text, morale_delta=2, tone="up")
+    """Sharp practice after a loss. Small, honest bounce.
+
+    Fires once per day: hammering the button replays the same session, so
+    a repeat click returns today's entry without stacking the morale lift
+    or spamming the dynamics feed. What the session looks like depends on
+    the coach's personality and the room's mood.
+    """
+    existing = _same_day_event(team, "practice")
+    if existing is not None:
+        return existing
+    style = _coach_style_key(coach)
+    cname = getattr(coach, 'full_name', 'Coach')
+    mood = _room_mood(roster)
+    variants = [
+        (3.0,
+         f"Great practice after the loss -- {cname} "
+         f"had them sharp and focused.",
+         2, "up"),
+        (2.0 if style == "players_coach" else 0.5,
+         f"Great practice after the loss -- {cname} turned the skate "
+         f"into a battle-drill competition; the room's laughing again.",
+         3, "up"),
+        (2.0 if style == "drill_sergeant" else 0.5,
+         f"Great practice after the loss -- {cname} ran a hard, "
+         f"no-nonsense skate. Nobody enjoyed it; nobody dogged it either.",
+         1, "up"),
+        (2.0 if style == "tactician" else 0.5,
+         f"Great practice after the loss -- {cname} spent half the "
+         f"session on the whiteboard; the systems are tightening up.",
+         2, "up"),
+        (2.0 if style == "motivator" else 0.5,
+         f"Great practice after the loss -- {cname} closed it with a "
+         f"full-ice sprint challenge; the bench was on its feet.",
+         3, "up"),
+        (2.0 if style == "developer" else 0.5,
+         f"Great practice after the loss -- {cname} gave the kids the "
+         f"prime reps; the veterans watched and nodded.",
+         2, "up"),
+        (2.5 if mood < 55 else 0.0,
+         f"Great practice after the loss -- {cname} tried to lift the "
+         f"mood. A few smiles, mostly going through the motions.",
+         1, "neutral"),
+    ]
+    text, delta, tone = _weighted_variant(variants)
+    _shift_happiness(roster, delta)
+    return record_team_event(team, "practice", text,
+                             morale_delta=delta, tone=tone)
 
 
 def apply_mistreat_player(team: Any, coach: Any, player: Any,
@@ -2509,7 +2692,16 @@ def _head_coach_of(team: Any) -> Optional[Any]:
                     return stf
                 if asg != "ahl" and fallback is None:
                     fallback = stf
-        return fallback
+        if fallback is not None:
+            return fallback
+        # Lenient fallback: pre-enum saves store the role as a plain string
+        # ("Head Coach") with no .value. Same assignment rule as above.
+        for stf in getattr(team, "staff", []) or []:
+            role = getattr(stf, "role", None)
+            if isinstance(role, str) and "Head Coach" in role:
+                asg = str(getattr(stf, "assignment", "") or "").lower()
+                if asg != "ahl":
+                    return stf
     except Exception:
         pass
     return None
