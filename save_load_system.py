@@ -110,7 +110,12 @@ class GameSaveManager:
                 
                 # Draft and prospects
                 'draft_classes': getattr(self.game_manager, 'draft_classes', {}),
-                'scouting_reports': getattr(self.game_manager, 'scouting_reports', {}),
+                # Scouting reports: ALL live writes go to user_team.scouting_reports
+                # (beats, assignments, scout tab reads). game_manager.scouting_reports
+                # is never written, so serializing it silently dropped every report
+                # on save. Stored as pickle-free dicts; player/scout re-linked by id
+                # on load because the league rebuilds Player/Staff objects.
+                'scouting_reports': self._serialize_scouting_reports(),
                 # Scout region assignments (set_scout_region). Were never
                 # serialized: every load unassigned all scouts.
                 'scout_region_assignments': dict(
@@ -628,7 +633,70 @@ class GameSaveManager:
         except Exception as e:
             print(f"Error serializing team stats: {e}")
             return {}
-    
+
+    def _serialize_scouting_reports(self) -> Dict[str, Any]:
+        """Serialize the LIVE scouting reports (user_team.scouting_reports).
+
+        All live writes — regional beats, pro beats, user assignments — go to
+        user_team.scouting_reports; game_manager.scouting_reports is never
+        written. Reports become pickle-free dicts with player/scout stored by
+        id (see ScoutingReport.to_dict)."""
+        try:
+            user_team = getattr(self.game_manager, 'user_team', None)
+            reports = getattr(user_team, 'scouting_reports', None) or {}
+            out: Dict[str, Any] = {}
+            for pid, rep in reports.items():
+                try:
+                    out[str(pid)] = rep.to_dict()
+                except Exception:
+                    continue
+            return out
+        except Exception as e:
+            print(f"Error serializing scouting reports: {e}")
+            return {}
+
+    def _restore_scouting_reports(self, data: Any) -> None:
+        """Rebuild user_team.scouting_reports from plain dicts.
+
+        Re-links player/scout by id against the freshly restored league (which
+        rebuilds Player/Staff objects, so pickled live refs would identity-split).
+        Entries whose player or scout no longer exists are dropped."""
+        try:
+            from game_classes import ScoutingReport
+            user_team = getattr(self.game_manager, 'user_team', None)
+            if user_team is None:
+                return
+            # Index every player the restored league knows about.
+            players: Dict[Any, Any] = {}
+            league = getattr(self.game_manager, 'league', None)
+            if league is not None:
+                for team in getattr(league, 'teams', []) or []:
+                    for attr in ('roster', 'ahl_roster', 'prospects'):
+                        for p in getattr(team, attr, None) or []:
+                            players[getattr(p, 'id', None)] = p
+                for p in getattr(league, 'draft_prospects', None) or []:
+                    players[getattr(p, 'id', None)] = p
+            for p in getattr(self.game_manager, 'free_agents', None) or []:
+                players[getattr(p, 'id', None)] = p
+            staff_by_id = {getattr(s, 'id', None): s
+                           for s in getattr(user_team, 'staff', None) or []}
+            restored: Dict[Any, Any] = {}
+            for pid_key, rep_data in (data or {}).items():
+                if not isinstance(rep_data, dict):
+                    continue
+                player = players.get(rep_data.get('player_id'))
+                scout = staff_by_id.get(rep_data.get('scout_id'))
+                if player is None or scout is None:
+                    continue
+                rep = ScoutingReport.from_dict_with_refs(rep_data, player, scout)
+                if rep is None:
+                    continue
+                # Key by the live player id so lookups match report.player.id.
+                restored[getattr(player, 'id', pid_key)] = rep
+            user_team.scouting_reports = restored
+        except Exception as e:
+            print(f"Error restoring scouting reports: {e}")
+
     def _serialize_schedule(self) -> list:
         """Serialize the game schedule"""
         try:
@@ -1124,7 +1192,14 @@ class GameSaveManager:
                        'contract_negotiations', 'inbox_messages', 'news_stories',
                        'training_programs', '_fantasy_draft_captaincy_deferred',
                        'recently_viewed_players']:
-                if key in save_data:
+                if key not in save_data:
+                    continue
+                if key == 'scouting_reports':
+                    # Reports live on user_team (all live writes go there); the
+                    # serialized form stores ids, re-linked against the restored
+                    # league. Never restore onto game_manager (dead dict).
+                    self._restore_scouting_reports(save_data[key])
+                else:
                     setattr(self.game_manager, key, save_data[key])
 
             # Re-mirror restored training programs into the Development

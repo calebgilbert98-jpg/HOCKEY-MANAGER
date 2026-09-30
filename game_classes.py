@@ -2669,6 +2669,80 @@ class ScoutingReport:
             return True
         return False
 
+    def to_dict(self) -> dict:
+        """Pickle-free dict form for save files.
+
+        The league rebuilds Player/Staff objects on load, so live refs are
+        stored as IDs and re-linked by from_dict_with_refs()."""
+        return {
+            'player_id': getattr(self.player, 'id', None),
+            'scout_id': getattr(self.scout, 'id', None),
+            'scouted_attributes': dict(self.scouted_attributes or {}),
+            'scouted_potential': self.scouted_potential,
+            'viewings': self.viewings,
+            'accuracy': self.accuracy,
+            'last_viewed': self.last_viewed.isoformat()
+                           if getattr(self, 'last_viewed', None) else None,
+            'reliability': self.reliability,
+            'notes': self.notes,
+            'region_coverage': self.region_coverage,
+            'competition_level': self.competition_level,
+            'strengths': list(self.strengths or []),
+            'weaknesses': list(self.weaknesses or []),
+            'comparable_players': list(self.comparable_players or []),
+            'injury_history_known': self.injury_history_known,
+            'personality_assessment': self.personality_assessment,
+            'coachability_rating': self.coachability_rating,
+            'interview_conducted': self.interview_conducted,
+            'projected_draft_position': self.projected_draft_position,
+            'projected_nhl_arrival': self.projected_nhl_arrival,
+            'ceiling_rating': self.ceiling_rating,
+            'floor_rating': self.floor_rating,
+        }
+
+    @classmethod
+    def from_dict_with_refs(cls, data: dict, player, scout):
+        """Rebuild from to_dict() with re-linked live refs.
+
+        Returns None when data is unusable or either end is missing — callers
+        should drop such reports (player retired / scout departed)."""
+        if player is None or scout is None:
+            return None
+        try:
+            d = dict(data or {})
+            last_viewed = d.get('last_viewed')
+            if isinstance(last_viewed, str):
+                try:
+                    last_viewed = datetime.fromisoformat(last_viewed)
+                except ValueError:
+                    last_viewed = None
+            return cls(
+                player=player,
+                scout=scout,
+                scouted_attributes=dict(d.get('scouted_attributes') or {}),
+                scouted_potential=d.get('scouted_potential'),
+                viewings=int(d.get('viewings') or 0),
+                accuracy=d.get('accuracy') or 'F',
+                last_viewed=last_viewed,
+                reliability=float(d.get('reliability') or 0.0),
+                notes=d.get('notes') or '',
+                region_coverage=d.get('region_coverage') or 'Unknown',
+                competition_level=d.get('competition_level') or 'Unknown',
+                strengths=list(d.get('strengths') or []),
+                weaknesses=list(d.get('weaknesses') or []),
+                comparable_players=list(d.get('comparable_players') or []),
+                injury_history_known=bool(d.get('injury_history_known')),
+                personality_assessment=d.get('personality_assessment') or '',
+                coachability_rating=int(d.get('coachability_rating') or 0),
+                interview_conducted=bool(d.get('interview_conducted')),
+                projected_draft_position=d.get('projected_draft_position'),
+                projected_nhl_arrival=d.get('projected_nhl_arrival'),
+                ceiling_rating=int(d.get('ceiling_rating') or 0),
+                floor_rating=int(d.get('floor_rating') or 0),
+            )
+        except Exception:
+            return None
+
 # --- Email and Inbox System (EHM-style) ---
 @dataclass
 class EmailMessage:
