@@ -4429,13 +4429,11 @@ class GameSim:
             defending_team, pressurer=pressurer,
             pressure_dist=pressure_dist)
 
-        # Check if shot misses the net
-        if self._check_shot_miss(shooter, shot_quality, distance):
-            self._handle_missed_shot(shooter, attacking_team, shot_location, shot_type)
-            self._record_chance_grade(shooter, chance_grade, False)
-            return
-
-        # Shot is on goal - resolve against goalie
+        # Shot is on goal - resolve against goalie. The miss decision
+        # (D11: mesh_system.shot_miss_prob) is rolled AFTER the goal check
+        # inside _resolve_shot_on_goal -- fate never changes P(goal|attempt).
+        # This matches quick_sim's ordering (one decision, two fidelities)
+        # and honors the 42aa695 contract.
         self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance, grade=chance_grade)
 
     def _determine_shot_location(self, shooter, attacking_team):
@@ -5692,6 +5690,20 @@ class GameSim:
                 self._handle_missed_shot(shooter, attacking_team, location,
                                          shot_type)
                 return
+            # Not a goal: roll the shared miss decision (D11). Fate never
+            # changes P(goal|attempt) -- this only decides whether the
+            # non-goal is recorded as a MISS (off-net) or a SAVE. Matches
+            # quick_sim's ordering (one decision, two fidelities).
+            try:
+                from mesh_system import shot_miss_prob as _d11_smp2
+                if random.random() < _d11_smp2(shooter, grade=grade,
+                                              distance=distance):
+                    self._handle_missed_shot(shooter, attacking_team, location,
+                                             shot_type)
+                    self._record_chance_grade(shooter, grade, False)
+                    return
+            except Exception:
+                pass
             # Save made
             shot_power = random.randint(1, 10)  # Shot power factor
             rebound_control = self._determine_rebound_control(goalie, save_type, shot_type, shot_power)
