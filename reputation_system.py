@@ -343,7 +343,7 @@ def update_player_reputation(
     if target > player.reputation:
         player.reputation = target
         player.reputation_history.append({
-            "date": date.today().isoformat(),
+            "date": _now().isoformat(),
             "reputation": player.reputation,
             "reason": "season_update",
         })
@@ -370,7 +370,7 @@ def update_staff_reputation(staff: Any, team_win_pct: float = 0.5,
         if target != current:
             staff.career_reputation = target
             staff.reputation_history.append({
-                "date": date.today().isoformat(),
+                "date": _now().isoformat(),
                 "reputation": staff.career_reputation,
                 "reason": "season_update",
             })
@@ -556,7 +556,7 @@ def award_championship(entity: Any, season_year: int = None) -> int:
             return entity.career_reputation
         entity.reputation = min(REPUTATION_MAX, (entity.reputation or 0) + 8)
         entity.reputation_history.append({
-            "date": date.today().isoformat(),
+            "date": _now().isoformat(),
             "reputation": entity.reputation,
             "reason": "stanley_cup",
         })
