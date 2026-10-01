@@ -154,6 +154,38 @@ class GameManager:
         # Game calendar date. The GUI syncs its own current_date here on
         # startup; default keeps headless/engine paths working.
         self.current_date = START_DATE
+        # D10: reputation_system stamps everything in GAME time. Register
+        # the providers once here; the module falls back to wall-clock
+        # when headless/unregistered.
+        try:
+            import reputation_system as _rs10
+
+            def _gm_date():
+                try:
+                    return self.current_date
+                except Exception:
+                    from datetime import date as _d
+                    return _d.today()
+
+            def _gm_games_elapsed():
+                try:
+                    today = self.current_date
+                    played = 0
+                    for _e in (getattr(self.league, "schedule", None) or []):
+                        try:
+                            if _e and _e[0] <= today:
+                                played += 1
+                        except Exception:
+                            pass
+                    # 32 clubs, 2 per game: per-team average = played / 16.
+                    return played // 16
+                except Exception:
+                    return 0
+
+            _rs10.register_date_provider(_gm_date)
+            _rs10.register_games_provider(_gm_games_elapsed)
+        except Exception:
+            pass
         
         # Initialize records system lazily to avoid blocking startup
         self._record_manager = None
