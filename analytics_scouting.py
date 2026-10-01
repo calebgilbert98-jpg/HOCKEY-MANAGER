@@ -1652,6 +1652,13 @@ def ai_scout_staff_review(league: Any, date_str: str, rng=None) -> Dict[str, int
                 calls, hits = _record(s)
                 if calls >= 10 and (hits / calls) < 0.40:
                     # Exposed by the ledger: the famous veteran can fail.
+                    # P15: AI clubs pay severance too -- one firing
+                    # mechanic for everyone.
+                    try:
+                        from game_classes import process_staff_severance
+                        process_staff_severance(team, s)
+                    except Exception:
+                        pass
                     try:
                         team.staff.remove(s)
                     except Exception:

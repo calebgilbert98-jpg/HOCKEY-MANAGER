@@ -3519,10 +3519,18 @@ class Team:
     staff_budget: int = 10_000_000
 
     def staff_payroll(self) -> int:
-        """Current annual staff payroll (all employed staff)."""
+        """Current annual staff payroll (all employed staff).
+
+        Includes staff-severance dead money (P15): money owed to fired
+        staffers counts against the budget until it expires.
+        """
         try:
-            return sum(int(getattr(s, "salary", 0) or 0)
+            live = sum(int(getattr(s, "salary", 0) or 0)
                        for s in (self.staff or []))
+            dead = sum(int((e or {}).get("amount", 0) or 0)
+                       for e in (getattr(self, "staff_severance", None)
+                                 or []))
+            return live + dead
         except Exception:
             return 0
 
@@ -3539,6 +3547,11 @@ class Team:
     # Counts as dead cap in salary_cap_system.total_cap_charge(); ticks down
     # in League.end_of_season().
     retained_salary: list = field(default_factory=list)
+    # Staff-severance ledger (P15 mitigation): firing a staffer is no
+    # longer free. Each entry: {"staff_name", "amount", "seasons_remaining"}.
+    # Counts as dead money in staff_payroll(); ticks down in
+    # League.end_of_season() like retained salary.
+    staff_severance: list = field(default_factory=list)
     
     # Team tactics (connected to strategy UI and sim engine)
     # Even strength: 'Offensive', 'Balanced', 'Defensive'
@@ -3951,6 +3964,57 @@ class Team:
             round_counts[pick.round] = round_counts.get(pick.round, 0) + 1
         
         return round_counts
+
+
+# ---------------------------------------------------------------------------
+# Staff severance (P15 exploit mitigation)
+# ---------------------------------------------------------------------------
+# Firing staff used to be free -- no cost, no consequence, and the
+# league's poach pass could take the user's people while the user had no
+# equivalent move. This helper is the shared firing mechanic for user
+# and AI clubs alike.
+_SEVERANCE_RATE = 0.5      # club owes half the remaining contract value
+_SEVERANCE_TRUST_DENT = 8  # remaining staff lose this much gm_trust
+
+
+def process_staff_severance(team, staff) -> dict:
+    """Book severance + morale shock for firing a staffer. Never raises.
+
+    Returns the severance ledger entry ({} when nothing was owed --
+    e.g. an expired contract). The entry counts as dead money in
+    staff_payroll() until League.end_of_season() ticks it out.
+    """
+    entry = {}
+    try:
+        salary = int(getattr(staff, "salary", 0) or 0)
+        years = int(getattr(staff, "contract_years", 0) or 0)
+        if salary > 0 and years > 0:
+            name = (f"{getattr(staff, 'first_name', '')} "
+                    f"{getattr(staff, 'last_name', '')}").strip() or "staffer"
+            entry = {"staff_name": name,
+                     "amount": int(salary * _SEVERANCE_RATE),
+                     "seasons_remaining": max(1, years)}
+            ledger = getattr(team, "staff_severance", None)
+            if ledger is None:
+                team.staff_severance = ledger = []
+            ledger.append(entry)
+        # The room notices: a firing dents the remaining staff's trust
+        # in the GM (staff_morale models job security through gm_trust).
+        # Only for real firings -- letting an expired deal lapse is not
+        # the same thing.
+        if years > 0:
+            for s in list(getattr(team, "staff", None) or []):
+                if s is staff:
+                    continue
+                try:
+                    trust = int(getattr(s, "gm_trust", 70) or 0)
+                    s.gm_trust = max(0, trust - _SEVERANCE_TRUST_DENT)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return entry
+
 
 # ---------------------------------------------------------------------------
 # Prospect development tracks (new-CBA junior assignment rules live here so
@@ -7352,6 +7416,21 @@ class League:
                         kept.append(e)
                         _live_retained_ids.add(e.get("player_id"))
                 team.retained_salary = kept
+        # Tick down staff-severance ledgers (P15): dead money owed to
+        # fired staffers expires with the remaining term of their deal.
+        for team in self.teams:
+            sledger = getattr(team, "staff_severance", None)
+            if sledger:
+                skept = []
+                for e in sledger:
+                    try:
+                        e["seasons_remaining"] = int(
+                            e.get("seasons_remaining", 0)) - 1
+                    except Exception:
+                        e["seasons_remaining"] = 0
+                    if e["seasons_remaining"] > 0:
+                        skept.append(e)
+                team.staff_severance = skept
         if _live_retained_ids is not None:
             try:
                 for p in self.get_all_players():

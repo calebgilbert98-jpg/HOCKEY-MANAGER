@@ -12,8 +12,9 @@ Bounds (so the carousel never churns cartoonishly):
   * each staffer is approached at most once per offseason
   * league-wide cap: 4 successful moves
 
-The user club can be poached from too -- that news goes to the inbox
-with the contract-expiry news. Never raises.
+Parity (P15): the user's club is never a poach victim -- poachers
+already excluded the user's club, and the victim pool now matches
+(one mechanic for everyone). Never raises.
 """
 
 from __future__ import annotations
@@ -124,8 +125,14 @@ def offseason_staff_poach(league, user_team=None) -> list:
                 break
             vacancy = not _has_head_coach(poacher)
             # Find one candidate on one rival club.
+            # P15: the user is never a poach victim -- poachers already
+            # exclude the user's club, and the victim pool matches
+            # (one mechanic for everyone; the fuller fix -- a user
+            # poach action -- is a feature decision for Chris/Caleb).
             rivals = [t for t in (getattr(league, "teams", None) or [])
-                      if t is not None and t is not poacher]
+                      if t is not None and t is not poacher
+                      and t is not user_team
+                      and not getattr(t, "is_user_controlled", False)]
             random.shuffle(rivals)
             done = False
             for rival in rivals:

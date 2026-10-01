@@ -542,6 +542,13 @@ class AITeamManager:
             except Exception:
                 old_gm = None
             if old_gm is not None:
+                # P15: AI clubs pay severance too -- one firing
+                # mechanic for everyone.
+                try:
+                    from game_classes import process_staff_severance
+                    process_staff_severance(team, old_gm)
+                except Exception:
+                    pass
                 try:
                     team.staff.remove(old_gm)
                 except Exception:

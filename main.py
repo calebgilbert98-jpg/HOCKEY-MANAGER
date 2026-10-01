@@ -1410,14 +1410,37 @@ NHL League Office""",
             return False
 
     def release_staff(self, staff):
-        """Release a staffer from the user's team back to the free-agent pool."""
+        """Release a staffer from the user's team back to the free-agent pool.
+
+        P15: firing is no longer free -- the club owes severance (dead
+        money against the staff budget) and the room's trust in the GM
+        takes a hit. See game_classes.process_staff_severance.
+        """
         try:
             team = getattr(self, "user_team", None)
             league = getattr(self, "league", None)
             if team is None or staff is None:
                 return False
             if staff in list(getattr(team, "staff", []) or []):
+                try:
+                    from game_classes import process_staff_severance
+                    _sev = process_staff_severance(team, staff)
+                except Exception:
+                    _sev = {}
                 team.staff.remove(staff)
+                try:
+                    _sname = (f"{getattr(staff, 'first_name', '')} "
+                              f"{getattr(staff, 'last_name', '')}").strip()
+                    if _sev and hasattr(self, "news_log"):
+                        self.news_log.append({
+                            "date": self.current_date,
+                            "story": (f"📋 {_sname or 'Staffer'} released -- "
+                                      f"${_sev.get('amount', 0):,} in "
+                                      f"severance counts against the staff "
+                                      f"budget."),
+                        })
+                except Exception:
+                    pass
             pool = getattr(league, "free_agent_staff", None)
             if pool is not None and staff not in pool:
                 pool.append(staff)
@@ -9208,6 +9231,13 @@ class HockeyManagerGUI(tk.Tk):
                 break
         if staffer is None:
             return False, "That staffer isn't on your club."
+        # P15: same firing mechanic as release_staff -- severance +
+        # trust shock, never free.
+        try:
+            from game_classes import process_staff_severance
+            process_staff_severance(team, staffer)
+        except Exception:
+            pass
         try:
             team.staff.remove(staffer)
         except Exception:

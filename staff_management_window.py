@@ -1614,6 +1614,13 @@ class StaffManagementView(ctk.CTkFrame):
             released_count = 0
             for staff in selected_staff_list:
                 if staff in user_team.staff:
+                    # P15: same firing mechanic as release_staff --
+                    # severance + trust shock, never free.
+                    try:
+                        from game_classes import process_staff_severance
+                        process_staff_severance(user_team, staff)
+                    except Exception:
+                        pass
                     user_team.staff.remove(staff)
                     released_count += 1
 
