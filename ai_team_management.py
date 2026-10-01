@@ -418,6 +418,14 @@ class AITeamManager:
             # Trade offers remain proposals (they go through negotiation).
             self._execute_decisions(team, team_decisions)
 
+            # D46 (Wave B): the salary floor is a hard league rule. An AI
+            # club that slipped under it (salary dump, UFAs walking) signs
+            # its way back up the same day -- never left illegal overnight.
+            try:
+                self._enforce_salary_floor(team, free_agents, current_date)
+            except Exception:
+                pass
+
             decisions.extend(team_decisions)
 
         self.last_decision_date = current_date
@@ -1420,6 +1428,151 @@ class AITeamManager:
                     ahl.append(p)
             except Exception:
                 continue
+
+    def _enforce_salary_floor(self, team: Team, free_agents,
+                              current_date) -> int:
+        """Sign the AI club back up to the salary floor (D46, Wave B).
+
+        The floor is a hard league rule: a club that slipped under it
+        (salary dump, UFAs walking) signs its way back the same day on
+        1-year deals at the player's ask. Signing mechanics mirror the
+        core of _execute_free_agent_signing (contract, pool removal,
+        roster add, rivalry transfer, room cascade, news line); the
+        position-needs gate is relaxed because floor compliance is a
+        league rule, not a hockey-fit choice -- needs-matching targets
+        are still preferred. Returns the number of signings made.
+        """
+        try:
+            from salary_cap_system import (SALARY_CAP_FLOOR,
+                                           total_cap_charge,
+                                           league_minimum_salary)
+        except Exception:
+            return 0
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return 0
+        fa_pool = getattr(league, "free_agents", None)
+        if not isinstance(fa_pool, list) or not fa_pool:
+            return 0
+        try:
+            shortfall = int(SALARY_CAP_FLOOR) - int(total_cap_charge(team) or 0)
+        except Exception:
+            return 0
+        if shortfall <= 0:
+            return 0
+        roster = getattr(team, "roster", None) or []
+        if len(roster) >= 23:
+            return 0  # 23-man limit is a real NHL rule; can't add bodies
+        strategy = self.team_strategies.get(team.team_name)
+        budget = None
+        needs = ()
+        if strategy is not None:
+            try:
+                budget = int(getattr(strategy, "budget_limit", 0) or 0)
+            except Exception:
+                budget = None
+            try:
+                needs = tuple(getattr(strategy, "position_needs", None) or ())
+            except Exception:
+                needs = ()
+        try:
+            season_year = int(getattr(league, "season_year",
+                                     current_date.year))
+        except (TypeError, ValueError):
+            season_year = current_date.year
+        try:
+            _min = int(league_minimum_salary(season_year) or 0)
+        except Exception:
+            _min = 850_000
+        if budget is not None and budget < int(SALARY_CAP_FLOOR):
+            return 0  # budget can't reach the floor; nothing legal to do
+
+        def _ask(p):
+            try:
+                return max(int(self._player_ask(p, league=league) or 0), _min)
+            except Exception:
+                return _min
+
+        cands = []
+        for p in list(fa_pool):
+            try:
+                if getattr(p, "retired", False):
+                    continue
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    continue
+            except Exception:
+                pass
+            cands.append(p)
+        # Fewest signings that cover the shortfall: biggest asks first,
+        # needs-matching positions preferred over warm bodies.
+        def _sort_key(p):
+            try:
+                _need_hit = (getattr(p, "primary_position", None) in needs)
+            except Exception:
+                _need_hit = False
+            return (0 if _need_hit else 1, -_ask(p))
+        cands.sort(key=_sort_key)
+
+        made = 0
+        for p in cands:
+            if shortfall <= 0 or len(roster) >= 23:
+                break
+            if p not in fa_pool:
+                continue
+            salary = _ask(p)
+            if budget is not None:
+                try:
+                    current = sum(int(getattr(getattr(x, "contract", None),
+                                              "salary", 0) or 0)
+                                  for x in roster)
+                except Exception:
+                    current = 0
+                if current + salary > budget:
+                    continue
+            try:
+                p.salary = salary
+                p.contract_years = 1
+                try:
+                    import trade_engine as _te_clr
+                    _te_clr.clear_retention_state(p)
+                except Exception:
+                    pass
+                _contract = getattr(p, "contract", None)
+                if _contract is not None:
+                    _contract.salary = salary
+                    _contract.years_remaining = 1
+                fa_pool.remove(p)
+                team.add_player(p, "roster")
+                roster = getattr(team, "roster", None) or []
+                try:
+                    from reputation_system import on_player_transfer as _opt
+                    _rivs = getattr(league, "rivalries", None)
+                    if isinstance(_rivs, list):
+                        _opt(_rivs, p, from_team=None, to_team=team)
+                except Exception:
+                    pass
+                try:
+                    import dressing_room as _dr_arr
+                    _dr_arr.cascade_on_arrival(team, p, how="signing")
+                except Exception:
+                    pass
+                try:
+                    _pname = getattr(p, "full_name", "Unknown")
+                    _pend = getattr(self, "_pending_news", None)
+                    if not isinstance(_pend, list):
+                        _pend = self._pending_news = []
+                    _pend.append(
+                        f"The {team.team_name} have signed {_pname} to a "
+                        f"1-year, ${salary:,} contract to reach the salary "
+                        f"floor.")
+                except Exception:
+                    pass
+                shortfall -= salary
+                made += 1
+            except Exception:
+                continue
+        return made
 
     def _execute_veteran_trade_offer(self, team: Team, decision: AIDecision,
                                      league) -> None:

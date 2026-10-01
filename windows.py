@@ -10808,10 +10808,11 @@ class FinancesView(ctk.CTkFrame):
 
         Uses the canonical cap_breakdown(): active-roster hits + buried
         one-way money in the minors + all dead cap (buyouts, seeded
-        penalties, retained), minus any cap dollars temporarily shed by
-        players sitting on the waiver wire. This is the same charge the
-        Next Day compliance check and trade validation enforce, so the
-        finance screens can never disagree with them.
+        penalties, retained). Players on the waiver wire count their full
+        hit until their waiver clears (Wave B D45 -- the old wire shed is
+        gone). This is the same charge the Next Day compliance check and
+        trade validation enforce, so the finance screens can never
+        disagree with them.
         """
         try:
             from salary_cap_system import cap_breakdown
@@ -10824,14 +10825,8 @@ class FinancesView(ctk.CTkFrame):
                 total += player.contract.salary
             elif hasattr(player, 'salary'):
                 total += player.salary
-        # Waiver shed: players on the wire temporarily don't count, so an
-        # over-cap club sees its real cap space here (matches the Next Day
-        # compliance check and trade validation).
-        try:
-            from salary_cap_system import waiver_shed_charge
-            total -= waiver_shed_charge(self.app.user_team)
-        except Exception:
-            pass
+        # D45: the waiver-wire shed is retired -- wire players count their
+        # full hit (real NHL). No subtraction here.
         return max(0, total)
 
     def calculate_ahl_payroll(self):

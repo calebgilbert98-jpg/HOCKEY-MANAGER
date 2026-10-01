@@ -6263,17 +6263,28 @@ class HockeyManagerGUI(tk.Tk):
         Uses the central cap accounting (roster salaries + all dead-cap
         penalties), so the blocker agrees with trade validation and the
         cap UI -- AI and user see identical numbers.
+
+        Wave B D45 (waiver-aware): players on the wire count their FULL
+        hit in the accounting (real NHL -- the shed is gone), but an
+        in-flight corrective waive is not a day-advance hard block. When
+        the overage resolves once the wire clears (burial rule), the
+        blocker stands down; the wire clock is doing its job.
         """
         team = getattr(self, 'user_team', None)
         if team is None:
             return None
         try:
-            from salary_cap_system import cap_breakdown
+            from salary_cap_system import cap_breakdown, compliance_charge
             bd = cap_breakdown(team)
         except Exception:
             return None
         if not bd["over_cap"]:
             return None
+        try:
+            if int(compliance_charge(team)) <= int(bd["cap"]):
+                return None  # pending wire resolves it -- not a hard block
+        except Exception:
+            pass
         over = -bd["space"]
         detail = (f"Cap charge ${bd['total']/1e6:.2f}M is ${over/1e6:.2f}M over "
                   f"the ${bd['cap']/1e6:.2f}M cap "
@@ -6291,6 +6302,36 @@ class HockeyManagerGUI(tk.Tk):
     def is_over_cap(self):
         """True when the user's total cap charge exceeds the cap."""
         return self._cap_compliance_blocker() is not None
+
+    def _floor_compliance_blocker(self):
+        """Return a blocker dict if the NHL roster sits under the salary
+        floor (D46, Wave B).
+
+        The floor is a hard league rule (real NHL): the day can't advance
+        while the club is under it. The action sends the user to free
+        agency -- signing is the fix. AI clubs never reach this state:
+        ai_consider_trade rejects self-inflicted floor breaches and
+        _enforce_salary_floor signs them back up the same day.
+        """
+        team = getattr(self, 'user_team', None)
+        if team is None:
+            return None
+        try:
+            from salary_cap_system import cap_breakdown
+            bd = cap_breakdown(team)
+        except Exception:
+            return None
+        if not bd.get("under_floor"):
+            return None
+        short = int(bd.get("floor", 0)) - int(bd.get("total", 0))
+        return {
+            'id': 'salary_floor',
+            'title': 'Roster under the salary floor',
+            'detail': (f"Payroll ${bd['total']/1e6:.2f}M is ${short/1e6:.2f}M "
+                       f"under the ${bd['floor']/1e6:.2f}M salary floor. "
+                       f"Sign free agents to reach the floor before advancing."),
+            'action': ('Open Free Agency', self.open_free_agency_window),
+        }
 
     def get_continue_state(self):
         """Football Manager-style continue state.
@@ -6323,6 +6364,14 @@ class HockeyManagerGUI(tk.Tk):
             cap_blocker = self._cap_compliance_blocker()
             if cap_blocker:
                 blockers.append(cap_blocker)
+        except Exception:
+            pass
+        # D46 (Wave B): the salary floor is a hard league rule -- the day
+        # can't advance while the club sits under it.
+        try:
+            floor_blocker = self._floor_compliance_blocker()
+            if floor_blocker:
+                blockers.append(floor_blocker)
         except Exception:
             pass
         # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --

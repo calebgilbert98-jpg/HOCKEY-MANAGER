@@ -1631,19 +1631,16 @@ def _player_cap_hit(p) -> int:
 def _effective_outgoing_hit(p) -> int:
     """Cap relief a club actually gets from moving this player.
 
-    A player sitting on the waiver wire already counts $0 against the
-    cap (the waiver shed), so trading him away frees $0 -- not his full
-    salary. Using the full hit here let an over-cap club "shed" phantom
-    dollars: waive an $8M player, trade him for a $6M player, and the
-    check saw a $2M reduction while the real burden ROSE $6M.
+    Wave B D45: always the player's full cap hit. A player on the waiver
+    wire counts his full hit until his waiver clears (real NHL -- the old
+    $0-while-on-wire shed was a loophole: waive the $8M problem Monday,
+    trade Tuesday at phantom space, reclaim Thursday). The wire branch
+    that returned $0 here is gone with the shed itself.
     """
     try:
-        if bool(getattr(p, "on_waivers", False)) and \
-                int(getattr(p, "waiver_days", 0) or 0) > 0:
-            return 0
+        return _player_cap_hit(p)
     except Exception:
-        pass
-    return _player_cap_hit(p)
+        return 0
 
 
 def _retention_adjustment(assets, retention) -> int:
@@ -2076,6 +2073,34 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                          retention=retention):
         return AIResponse('reject',
                           f"We can't make the money work under the cap.")
+
+    # D46 (Wave B): the salary floor is a hard league rule -- the AI never
+    # trades ITSELF under it. (The user gets the day-advance floor gate
+    # instead: he may dump salary intending to sign a replacement.) Only
+    # the downward crossing counts: a club already under the floor isn't
+    # made worse by a payroll-neutral move, and its compliance is owned
+    # by the day gate (user) / _enforce_salary_floor (AI).
+    try:
+        from salary_cap_system import SALARY_CAP_FLOOR as _FLOOR46
+        _pre = _post = None
+        try:
+            from salary_cap_system import total_cap_charge as _tcc46
+            _pre = int(_tcc46(partner_team) or 0)
+            _post = _pre
+            _post -= sum(_effective_outgoing_hit(a) for a in partner_assets
+                         if not _is_pick(a))
+            _post += sum(_player_cap_hit(a) for a in user_assets
+                         if not _is_pick(a))
+        except Exception:
+            _pre = _post = None
+        if (_pre is not None and _pre >= int(_FLOOR46)
+                and _post < int(_FLOOR46)):
+            return AIResponse(
+                'reject',
+                f"That drops us under the salary floor -- the league "
+                f"office won't allow it.")
+    except Exception:
+        pass
 
     # R3(c): system-grounded rationale for every AI answer below. The
     # decisions are untouched -- only the message text gains specific,
