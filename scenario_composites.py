@@ -471,15 +471,13 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
     team converts that attention into denial.
     """
     try:
-        # Tier-based (Muck 2026-10-01): the schemed-against gate reads the
-        # tier representative through the same floor+ramp curve (Elite rep
-        # 90 -> ~0.0, Generational rep 95 -> ~0.71). No 1-point reads.
+        # Granular (Muck 2026-10-01: schemed-against is 90+). The gate reads
+        # the TRUE 1-point overall, not the tier proxy — the tier proxy
+        # mapped Elite (88-91) to rep 90, which sat exactly on the
+        # floor (90.0) and gated to 0.0, silently disabling scheming
+        # for 90-91 players and hard-cliffing at 91.9->92.0.
         try:
-            from attribute_composites import tier_proxy_overall as _tpo_st
-            _ovr = float(_tpo_st(float(shooter.overall_rating())))
-        except Exception:
-            try:
-                _ovr = float(shooter.overall_rating())
+            _ovr = float(shooter.overall_rating())
             except Exception:
                 return 1.0, 1.0
         if _ovr < _SCHEME_THREAT_FLOOR:

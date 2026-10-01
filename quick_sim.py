@@ -905,13 +905,18 @@ def approx_shot_fate(shooter, defenders, grade="B", location=None,
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
-    def __init__(self, home_team, away_team, atmosphere=None, league=None):
+    def __init__(self, home_team, away_team, atmosphere=None, league=None, is_playoff=False):
         self.home_team = home_team
         self.away_team = away_team
         # League passthrough (ot_drama): enables rivalry heat, which reads
         # league.rivalries and is otherwise always 0 in headless use.
         # Default None = today's behavior exactly.
         self.league = league
+        # L1 (Muck 2026-10-01): playoff context for lineup parity with GameSim.
+        # GameSim passes {"playoffs": bool(is_playoff)} to resolve_game_lineup;
+        # quick_sim passed nothing, making D24 playoff load-management dead
+        # on the quick-sim path. One decision, two fidelities.
+        self.is_playoff = bool(is_playoff)
         # §5.1 (2026-09-30, Muck): converge on ONE rivalry mechanism. The
         # shared circumstance_shift read resolves sim.rivalries — expose it
         # here from the league passthrough (the same source the mesh path
@@ -1002,8 +1007,9 @@ class AdvancedGameSim:
         # Defensive: always ensure lineup dict has required keys.
         # Shared decision with GameSim (resolve_game_lineup): one decision,
         # two fidelities -- the closure body now lives at module level.
+        # L1: pass playoff context (GameSim passes {"playoffs": bool(is_playoff)}).
         def ensure_lineup(team):
-            return resolve_game_lineup(team)
+            return resolve_game_lineup(team, {"playoffs": self.is_playoff})
 
         self.lineups = {
             home_team.team_name: ensure_lineup(home_team),
@@ -1011,6 +1017,13 @@ class AdvancedGameSim:
         }
         self.score = {home_team.team_name: 0, away_team.team_name: 0}
         self.events = []
+        # Analytics integration (2026-10-01): lightweight per-shot log
+        # for the Analytics Hub -- grade, xg (from grade), outcome, and
+        # the scenario/composite chance context. quick_sim never had
+        # shot-level analytics; this is the fast approximation of
+        # GameSim._analytics_record_shot (same record shape, minimal
+        # fields). Additive; never affects engine decisions.
+        self._analytics_shots = []
         self.stats = {
             home_team.team_name: {p.id: {'goals': 0, 'assists': 0, 'shots': 0, 'toi': 0, 'fatigue': 0} for p in home_team.roster},
             away_team.team_name: {p.id: {'goals': 0, 'assists': 0, 'shots': 0, 'toi': 0, 'fatigue': 0} for p in away_team.roster}
@@ -2475,6 +2488,7 @@ class AdvancedGameSim:
             self._record_mesh_performances()
             # Shootout => the game went past regulation.
             self._record_parity_result(winner, scores, went_ot=True)
+            self._persist_analytics_game(scores)
             return winner, loser, scores, self.events, notable_events
         if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
             winner, loser = self.home_team, self.away_team
@@ -2488,8 +2502,40 @@ class AdvancedGameSim:
         self._record_mesh_performances()
         self._record_parity_result(winner, scores,
                                    went_ot=self.period > 3)
+        self._persist_analytics_game(scores)
 
         return winner, loser, scores, self.events, notable_events
+
+    def _persist_analytics_game(self, scores):
+        """Persist the lightweight shot log for the Analytics Hub
+        (module 04). Analytics integration (2026-10-01): quick_sim never
+        fed the hub -- now each game appends a record in the same shape
+        GameSim writes (shots with grade/xg/chance_context, score tuple),
+        capped at 10 per team. Additive; never raises; never touches
+        engine state.
+        """
+        try:
+            _shots = list(getattr(self, "_analytics_shots", None) or [])
+            _rec = {
+                "date": "",
+                "home": getattr(self.home_team, "team_name", ""),
+                "away": getattr(self.away_team, "team_name", ""),
+                "score": (int(scores[0]), int(scores[1])) if scores else (0, 0),
+                "shots": _shots,
+                "entries": [],
+                "momentum": [],
+                "engine": "quick_sim",
+            }
+            for _team in (self.home_team, self.away_team):
+                try:
+                    _lst = list(getattr(_team, "analytics_games", None) or [])
+                    _lst.append(_rec)
+                    del _lst[:-10]
+                    _team.analytics_games = _lst
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _record_parity_result(self, winner, scores, went_ot=False):
         """Feed the finished result into the parity engine (cross-game team
@@ -3613,6 +3659,42 @@ class AdvancedGameSim:
             if shot_result == 'GOAL':
                 _gk = f'grade_{_ag.lower()}_goals'
                 _st[_gk] = _st.get(_gk, 0) + 1
+        except Exception:
+            pass
+        # Analytics integration (2026-10-01): lightweight shot-level log
+        # for the Analytics Hub -- the fast approximation of GameSim's
+        # shot records. Grade, xg from the canonical grade value, the
+        # scenario/composite chance context, and the outcome. Additive.
+        try:
+            from mesh_system import grade_xg_value as _gxv_qs
+            _qxg = _gxv_qs(_ag)
+        except Exception:
+            _qxg = 0.08
+        try:
+            _qcctx = dict(getattr(self, "_last_chance_context", None) or {})
+        except Exception:
+            _qcctx = {}
+        try:
+            _qoutcome = {"GOAL": "goal", "SAVE": "save",
+                         "MISS": "miss"}.get(shot_result, "blocked")
+            self._analytics_shots.append({
+                "shooter_id": getattr(shooter, "id", None),
+                "shooter": getattr(shooter, "full_name",
+                                   getattr(shooter, "name", "?")),
+                "team": puck_team_name,
+                "opp": opp_team_name,
+                "period": int(getattr(self, "period", 1) or 1),
+                "clock": round(float(getattr(self, "time", 0) or 0), 1),
+                "location": str(shot_type or ""),
+                "x": 0.0, "y": 0.0,
+                "distance": 0.0,
+                "shot_type": str(shot_type or ""),
+                "xg": round(float(_qxg), 3),
+                "grade": _ag,
+                "chance_context": _qcctx,
+                "outcome": _qoutcome,
+                "line": "-",
+            })
         except Exception:
             pass
         
