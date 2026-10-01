@@ -455,6 +455,18 @@ class AITeamManager:
             # no more placeholder identity with the old Staff silently
             # staying on the roster. New GM, new ledger (D48): the
             # predecessor's respect/heat does not transfer.
+            _outgoing = getattr(team, "gm_name", "") or ""
+            # League news: the firing is visible too, not just the hire.
+            try:
+                _pend = getattr(self, "_pending_news", None)
+                if not isinstance(_pend, list):
+                    _pend = self._pending_news = []
+                if _outgoing:
+                    _pend.append(
+                        f"The {team.team_name} have fired general manager "
+                        f"{_outgoing}.")
+            except Exception:
+                pass
             new_gm = self._hire_replacement_gm(team)
             identity = gm_identity_from_staff(team.team_name, new_gm)
             self.gm_identities[team.team_name] = identity

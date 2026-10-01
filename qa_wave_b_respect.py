@@ -400,9 +400,16 @@ def test_d20_firing_branch():
     check("identity rebuilt from the new hire",
           mgr.gm_identities["X"].gm_name == teamx.gm_name,
           mgr.gm_identities["X"].gm_name)
-    # NOTE (design observation, not a failure): the firing itself posts no
-    # news item -- only the replacement hire is announced. If the game
-    # wants the firing as its own headline, the gm_fired branch needs one.
+    check("firing news recorded",
+          any("fired" in str(n).lower() and "Old GM" in str(n)
+              for n in mgr._pending_news),
+          mgr._pending_news)
+    check("firing news precedes hire news",
+          [i for i, n in enumerate(mgr._pending_news)
+           if "fired" in str(n).lower()][0]
+          < [i for i, n in enumerate(mgr._pending_news)
+             if "hired" in str(n).lower()][0],
+          mgr._pending_news)
     check("hire news recorded",
           any("hired" in str(n).lower() and "New Guy" in str(n)
               for n in mgr._pending_news),
