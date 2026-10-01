@@ -5,6 +5,7 @@ Professional scouting system with comprehensive features
 Includes: Scout management, player evaluation, assignments, reports, and draft analysis
 """
 
+from attribute_composites import talent_tier
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
@@ -277,7 +278,7 @@ class ModernScoutingView(ctk.CTkFrame):
         list_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Create treeview
-        columns = ['Name', 'Position', 'Age', 'Team', 'Overall', 'Scouted']
+        columns = ['Name', 'Position', 'Age', 'Team', 'Tier', 'Scouted']
         self.players_tree = ttk.Treeview(list_frame, columns=columns, show='headings', height=20)
         
         # Configure columns
@@ -535,7 +536,7 @@ class ModernScoutingView(ctk.CTkFrame):
         list_wrap.pack(fill='both', expand=True)
 
         if columns is None:
-            columns = ['Player', 'Pos', 'Age', 'Ovr', 'Team',
+            columns = ['Player', 'Pos', 'Age', 'Tier', 'Team',
                        'Source', 'Note']
         if widths is None:
             widths = [170, 60, 50, 60, 150, 140, 420]
@@ -639,7 +640,8 @@ class ModernScoutingView(ctk.CTkFrame):
             except Exception:
                 pos = '?'
             try:
-                ovr = f"{displayed_overall(player, self._user_team()):.0f}"
+                talent_tier(displayed_overall(player, self._user_team()))  # tier of the
+                # fogged estimate -- Muck's directive 2026-10-01: never numeric
             except Exception:
                 ovr = '?'
             team_name = getattr(team, 'team_name', '—') if team else '—'
@@ -698,7 +700,7 @@ class ModernScoutingView(ctk.CTkFrame):
         search_entry = ttk.Entry(search_frame, textvariable=search_var, width=30)
         search_entry.pack(side='left')
 
-        columns = ('Name', 'Pos', 'Age', 'Ovr', 'Team')
+        columns = ('Name', 'Pos', 'Age', 'Tier', 'Team')
         picker = ttk.Treeview(frame, columns=columns, show='headings', height=14)
         for col, w in zip(columns, (200, 60, 50, 60, 180)):
             picker.heading(col, text=col)
@@ -741,7 +743,7 @@ class ModernScoutingView(ctk.CTkFrame):
                 except Exception:
                     ovr = '?'
                 iid = picker.insert('', 'end', values=(
-                    name, pos, getattr(p, 'age', '?'), ovr,
+                    name, pos, getattr(p, 'age', '?'), talent_tier(ovr),
                     getattr(t, 'team_name', '?')))
                 rowmap[iid] = p
 
@@ -926,7 +928,7 @@ class ModernScoutingView(ctk.CTkFrame):
 
     def _configure_player_columns(self, with_match):
         """Rebuild treeview columns; adds a Match column when profiling."""
-        cols = ['Name', 'Position', 'Age', 'Team', 'Overall', 'Scouted']
+        cols = ['Name', 'Position', 'Age', 'Team', 'Tier', 'Scouted']
         widths = [200, 80, 60, 150, 80, 80]
         if with_match:
             cols.append('Match')
@@ -977,8 +979,10 @@ class ModernScoutingView(ctk.CTkFrame):
                     player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position),
                     player.age,
                     getattr(player, 'team_name', 'Free Agent'),
-                    # Fog of war: unscouted players show a noisy estimate
-                    displayed_overall(player, self._user_team()),
+                    # Fog of war: unscouted players show a noisy estimate;
+                    # the tier is derived from the noisy value (Muck's
+                    # directive 2026-10-01 -- never the numeric overall)
+                    talent_tier(displayed_overall(player, self._user_team())),
                     scouted
                 )
                 if profile_active:
@@ -1276,7 +1280,7 @@ Name: {player.full_name}
 Position: {player.primary_position.value if hasattr(player.primary_position, 'value') else str(player.primary_position)}
 Age: {player.age}
 Team: {getattr(player, 'team_name', 'Free Agent')}
-Overall: {displayed_overall(player, self._user_team()):.0f}
+Tier: {talent_tier(displayed_overall(player, self._user_team()))}
 
 Attributes:
 Skating: {to_100_scale(displayed_attribute(player, 'skating', self._user_team())):.0f}

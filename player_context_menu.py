@@ -1439,8 +1439,12 @@ class PlayerContextMenu:
         # Display top 10 peers
         peers_text = f"Top {min(10, len(same_position_players))} {player.primary_position.value} players:\n\n"
         
+        # Talent tiers (Muck's directive 2026-10-01: numeric overall is
+        # never shown to the user).
+        from attribute_composites import talent_tier_for_player
         for i, peer in enumerate(same_position_players[:10], 1):
-            peers_text += f"{i:2}. {peer.full_name:<25} OVR: {peer.overall_rating():2} Age: {peer.age:2}\n"
+            peers_text += (f"{i:2}. {peer.full_name:<25} "
+                           f"{talent_tier_for_player(peer):<12} Age: {peer.age:2}\n")
         
         peers_text += f"\n{player.full_name} ranks approximately #{same_position_players.index(player) + 1 if player in same_position_players else 'Unknown'} among {player.primary_position.value} players."
         

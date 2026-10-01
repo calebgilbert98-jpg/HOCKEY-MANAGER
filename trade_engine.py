@@ -1146,6 +1146,14 @@ def player_trade_value_breakdown(player):
         ovr = player.overall_rating()
     except Exception:
         ovr = 70
+    # User-facing tier label (Muck's directive 2026-10-01: the numeric
+    # overall is never shown -- the math below stays numeric, only the
+    # dialog text uses this).
+    try:
+        from attribute_composites import talent_tier as _tier_fn
+        _tier = _tier_fn(ovr)
+    except Exception:
+        _tier = "Decent"
     try:
         base = max(0, (ovr - 62) * 50)
     except Exception:
@@ -1154,7 +1162,7 @@ def player_trade_value_breakdown(player):
     comps.append({
         'label': 'Base value',
         'delta': int(base),
-        'detail': (f"{ovr} OVR -> ({ovr}-62) x 50 pick-points "
+        'detail': (f"{_tier} talent -> pick-points from talent tier "
                    f"(a 1st-round pick ~= 1000)"),
     })
 
@@ -1217,11 +1225,11 @@ def player_trade_value_breakdown(player):
     if salary > expected * 1.5:
         _cap_mult = 0.85
         _cap_why = (f"overpaid: ${salary:,} cap hit vs "
-                    f"~${int(expected):,} expected for {ovr} OVR")
+                    f"~${int(expected):,} expected for a {_tier} player")
     elif salary < expected * 0.6 and ovr >= 70:
         _cap_mult = 1.1
         _cap_why = (f"bargain deal: ${salary:,} cap hit vs "
-                    f"~${int(expected):,} expected for {ovr} OVR")
+                    f"~${int(expected):,} expected for a {_tier} player")
     if _cap_mult != 1.0:
         _new = running * _cap_mult
         comps.append({
@@ -1256,7 +1264,7 @@ def player_trade_value_breakdown(player):
         comps.append({
             'label': 'Starting-goalie premium',
             'delta': int(_new - running),
-            'detail': "82+ OVR goalie: x1.15 (few roster spots)",
+            'detail': "Good-or-better goalie: x1.15 (few roster spots)",
         })
         running = _new
 
@@ -1479,10 +1487,23 @@ def asset_label(asset) -> str:
         except Exception:
             _proj = 0
         if _proj:
-            label += f" [proj. #{_proj}]"
+            try:
+                from attribute_composites import talent_tier as _tier_fn2
+                _ptier = _tier_fn2(_proj)
+            except Exception:
+                _ptier = "Decent"
+            label += f" [proj. {_ptier}]"
         return label
+    # Talent tier (Muck's directive 2026-10-01: the numeric overall is
+    # never shown to the user -- this label appears in AI dialogue and
+    # trade summaries).
     try:
-        label = f"{asset.full_name} ({asset.primary_position.value}, {asset.overall_rating()} OVR)"
+        from attribute_composites import talent_tier_for_player as _ttfp4
+        _atier = _ttfp4(asset)
+    except Exception:
+        _atier = "Decent"
+    try:
+        label = f"{asset.full_name} ({asset.primary_position.value}, {_atier})"
     except Exception:
         return str(asset)
     try:

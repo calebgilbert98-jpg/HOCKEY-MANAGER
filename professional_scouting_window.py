@@ -1173,6 +1173,13 @@ class ProfessionalScoutingView(ctk.CTkFrame):
     
     def _show_basic_player_info(self, player):
         """Show basic player information dialog"""
+        # Talent tier (Muck's directive 2026-10-01: numeric overall is never
+        # shown to the user).
+        try:
+            from attribute_composites import talent_tier_for_player as _ttfp2
+            _pinfo_tier = _ttfp2(player)
+        except Exception:
+            _pinfo_tier = "Decent"
         info = f"""
 PLAYER PROFILE
 ═══════════════════
@@ -1184,7 +1191,7 @@ Age: {player.age}
 Team: {getattr(player, 'team_name', 'Free Agent')}
 
 Performance Ratings:
-Overall: {to_100_scale(player.overall_rating())}
+Tier: {_pinfo_tier}
 Potential: {getattr(player, 'potential', 'Unknown')}
 
 Key Attributes:

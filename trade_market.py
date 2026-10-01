@@ -385,15 +385,18 @@ def _player_label(player):
         name = player.full_name
     except Exception:
         name = "?"
+    # Talent tier (Muck's directive 2026-10-01: the numeric overall is
+    # never shown to the user -- this label appears in trade news).
     try:
-        ovr = player.overall_rating()
+        from attribute_composites import talent_tier_for_player as _ttfp5
+        _tier = _ttfp5(player)
     except Exception:
-        ovr = "?"
+        _tier = "Decent"
     try:
         pos = str(player.primary_position).split(".")[-1]
     except Exception:
         pos = "?"
-    return f"{name} ({pos}, {ovr})"
+    return f"{name} ({pos}, {_tier})"
 
 
 # ---------------------------------------------------------------------------

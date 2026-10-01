@@ -1107,8 +1107,15 @@ class HomeDashboard:
             except Exception:
                 pos = str(getattr(p, "primary_position", "?"))
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+            # Talent tier (Muck's directive 2026-10-01: numeric overall is
+            # never shown to the user).
+            try:
+                from attribute_composites import talent_tier_for_player as _ttfp
+                _dtier = _ttfp(p)
+            except Exception:
+                _dtier = "Decent"
             detail = (f"Age {getattr(p, 'age', '?')} · {pos} · "
-                      f"OVR {getattr(p, 'overall_rating', lambda: '?')()} · "
+                      f"{_dtier} · "
                       f"POT {getattr(p, 'potential_grade', '?')}")
             row = tk.Frame(content, bg=bg)
             row.pack(fill="x", pady=2)

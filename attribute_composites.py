@@ -444,3 +444,94 @@ def apply_amplifier(prob, player, key, sim=None, team=None, energy=None,
 
 #: Stable composite key list (UI / QA introspection).
 COMPOSITE_KEYS = tuple(_COMPOSITES.keys())
+
+
+# ---------------------------------------------------------------------------
+# TALENT TIERS (Muck's directive 2026-10-01): the numeric overall rating is
+# NEVER shown to the user. talent_tier() maps a player's numeric overall to
+# one of five talent bands for ALL user-facing display. Boundaries are
+# Muck-adjustable; the table lives HERE AND ONLY HERE -- do not copy these
+# ranges anywhere else, import and call talent_tier() instead.
+#
+#   92+        -> Generational
+#   88-91      -> Elite
+#   84-87      -> Very good
+#   80-83      -> Good
+#   below 80   -> Decent
+#
+# Ranges are inclusive and gapless: every int in [0, 99] maps to exactly
+# one tier. The numeric overall is STILL the engine/AI currency (lineup
+# choice, trade valuation, scouting accuracy, chemistry all keep calling
+# overall_rating()); the tier is presentation only, for human eyes.
+# ---------------------------------------------------------------------------
+
+#: (tier label, min overall inclusive, max overall inclusive), top to bottom.
+TALENT_TIERS = (
+    ("Generational", 92, 99),
+    ("Elite",        88, 91),
+    ("Very good",    84, 87),
+    ("Good",         80, 83),
+    ("Decent",       0,  79),
+)
+
+#: Tier label -> index (0 = top). Used for tier-change indicators.
+_TIER_INDEX = {name: i for i, (name, _, _) in enumerate(TALENT_TIERS)}
+
+#: Tasteful tier accent colors (dark-theme safe, no rainbow). Generational
+#: gold matches ctk_theme.GOLD; the rest step down in prominence.
+TALENT_TIER_COLORS = {
+    "Generational": "#e8b93c",  # gold
+    "Elite":        "#c3ccd6",  # platinum
+    "Very good":    "#7aa3c7",  # muted steel blue
+    "Good":         "#9aa3ad",  # neutral gray
+    "Decent":       "#6e747c",  # dim gray
+}
+
+
+def talent_tier(overall) -> str:
+    """Return the user-facing talent tier label for a numeric overall.
+
+    Single source of truth for the overall->tier mapping. Out-of-range or
+    non-numeric input falls back to "Decent" rather than raising.
+    """
+    try:
+        ovr = int(overall)
+    except (TypeError, ValueError):
+        return "Decent"
+    for name, lo, hi in TALENT_TIERS:
+        if lo <= ovr <= hi:
+            return name
+    return "Decent"
+
+
+def talent_tier_color(tier: str) -> str:
+    """Accent color for a tier label (dark-theme safe)."""
+    return TALENT_TIER_COLORS.get(tier, TALENT_TIER_COLORS["Good"])
+
+
+def talent_tier_for_player(player) -> str:
+    """Tier label for a player object (calls player.overall_rating())."""
+    try:
+        return talent_tier(player.overall_rating())
+    except Exception:
+        return "Decent"
+
+
+def tier_index(tier: str) -> int:
+    """Ordinal of a tier label (0 = Generational). Unknown -> bottom."""
+    return _TIER_INDEX.get(tier, len(TALENT_TIERS) - 1)
+
+
+def tier_change_arrow(old_overall, new_overall) -> str:
+    """Tier-change indicator for development/progression UI.
+
+    Returns "▲" if the tier improved, "▼" if it dropped, "–" if the tier is
+    unchanged (even when the underlying number moved within the band).
+    """
+    old_i = tier_index(talent_tier(old_overall))
+    new_i = tier_index(talent_tier(new_overall))
+    if new_i < old_i:
+        return "\u25b2"   # tier up
+    if new_i > old_i:
+        return "\u25bc"   # tier down
+    return "\u2013"       # same tier

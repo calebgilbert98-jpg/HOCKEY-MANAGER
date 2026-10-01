@@ -438,13 +438,16 @@ class ProfessionalWidgets:
             stats_frame = ttk.Frame(card, style='Card.TFrame')
             stats_frame.pack(fill='x', pady=(8, 0))
             
-            # Overall rating with color coding
-            ovr = player.overall_rating()
-            ovr_color = self.theme.get_stat_color(ovr)
+            # Talent tier (Muck's directive 2026-10-01: numeric overall is
+            # never shown to the user -- display the tier label).
+            from attribute_composites import (talent_tier_color,
+                                              talent_tier_for_player)
+            tier = talent_tier_for_player(player)
+            ovr_color = talent_tier_color(tier)
             
             ovr_label = tk.Label(
                 stats_frame,
-                text=f"OVR: {ovr}",
+                text=tier,
                 bg=self.theme.colors.tertiary_bg,
                 fg=ovr_color,
                 font=self.theme.fonts['subheading']

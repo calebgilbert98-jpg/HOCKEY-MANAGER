@@ -115,6 +115,15 @@ def make_pill_group(parent, options, on_select, font_family='Segoe UI'):
 def _qol_sort_value(val):
     """Convert a treeview cell value to something sortable (numeric-aware)."""
     if isinstance(val, str):
+        # Talent tier labels sort by tier order (Generational first), not
+        # alphabetically (Muck's directive 2026-10-01).
+        _tv = val.strip().removesuffix(' \u2b50').strip()
+        try:
+            from attribute_composites import TALENT_TIERS, tier_index
+            if any(_tv == _name for _name, _lo, _hi in TALENT_TIERS):
+                return tier_index(_tv)
+        except Exception:
+            pass
         cleaned = (val.replace('$', '').replace(',', '').replace('#', '')
                       .replace('%', '').rstrip('yY').strip())
         try:
@@ -125,6 +134,19 @@ def _qol_sort_value(val):
             except (ValueError, TypeError):
                 return val.lower()
     return val
+
+
+def _tier_label(player):
+    """User-facing talent tier label for a player (never the numeric overall).
+
+    Muck's directive 2026-10-01: the numeric overall is presentation-hidden
+    everywhere; the tier table lives in attribute_composites only.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
 
 
 def make_tree_sortable(tree):
@@ -491,7 +513,7 @@ class RosterView(ctk.CTkFrame):
             'name': ('Name', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 40),
-            'ovr': ('OVR', 45),
+            'ovr': ('Tier', 80),
             'pot': ('Pot', 45),
             'salary': ('Salary', 100),
             'contract': ('Contract', 80),
@@ -520,7 +542,7 @@ class RosterView(ctk.CTkFrame):
             'name': ('Name', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 40),
-            'ovr': ('OVR', 45),
+            'ovr': ('Tier', 80),
             'pot': ('Pot', 45),
             'salary': ('Salary', 100),
             'contract': ('Contract', 80),
@@ -547,7 +569,7 @@ class RosterView(ctk.CTkFrame):
             'name': ('Name', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 40),
-            'ovr': ('OVR', 45),
+            'ovr': ('Tier', 80),
             'pot': ('Pot', 45),
             'draft_year': ('Draft Year', 80),
             'draft_round': ('Round', 60),
@@ -656,10 +678,12 @@ class RosterView(ctk.CTkFrame):
                                     font=("Segoe UI", 10, "bold"),
                                     text_color=ct['TEXT'])
             name_lbl.pack(pady=(6, 0))
+            from attribute_composites import talent_tier_color
+            _dtier = _tier_label(player)
             sub_lbl = ctk.CTkLabel(
                 tile,
-                text=f"{slot_label}  ·  {to_100_scale(player.overall_rating())} OVR",
-                font=("Segoe UI", 9), text_color=ct['TEAL'])
+                text=f"{slot_label}  ·  {_dtier}",
+                font=("Segoe UI", 9), text_color=talent_tier_color(_dtier))
             sub_lbl.pack(pady=(0, 6))
 
             def _open(_event, p=player):
@@ -1386,9 +1410,11 @@ class RosterView(ctk.CTkFrame):
             if _susp_n > 0:
                 injury_status = f"SUSPENDED ({_susp_n})"
 
-            # Basic values for all roster types
+            # Basic values for all roster types (tier label, never numeric --
+            # Muck's directive 2026-10-01; `overall` stays numeric for the
+            # elite/star row-tag thresholds below, which are internal)
             values = [checkbox, getattr(player, 'jersey_number', ''), name, position,
-                     age, overall, potential, f"${salary:,}", f"{contract_years}y", morale]
+                     age, _tier_label(player), potential, f"${salary:,}", f"{contract_years}y", morale]
 
             # Add roster-specific columns
             if roster_type == 'nhl':
@@ -1676,7 +1702,15 @@ class RosterView(ctk.CTkFrame):
                 return order.get(str(value).strip().upper(), -1)
 
             # Handle numeric columns
-            if col in ['age', 'ovr']:
+            if col == 'ovr':
+                # Tier labels sort by tier order (Generational first), not
+                # alphabetically (Muck's directive 2026-10-01).
+                try:
+                    from attribute_composites import tier_index
+                    return tier_index(str(value).strip())
+                except Exception:
+                    return 99
+            if col in ['age']:
                 try:
                     return int(value)
                 except:
@@ -1719,18 +1753,16 @@ class RosterView(ctk.CTkFrame):
             selected_count = len(self.selected_players['nhl'])
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
-            avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
 
-            summary = f"Players: {len(players)}/23 | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
+            summary = f"Players: {len(players)}/23 | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f}"
             self.nhl_summary_label.configure(text=summary)
 
         elif roster_type == 'ahl':
             players = self.app.user_team.ahl_roster
             selected_count = len(self.selected_players['ahl'])
             avg_age = sum(p.age for p in players) / len(players) if players else 0
-            avg_overall = sum(to_100_scale(p.overall_rating()) for p in players) / len(players) if players else 0
 
-            summary = f"Players: {len(players)}/20 | Selected: {selected_count} | Avg Age: {avg_age:.1f} | Avg OVR: {avg_overall:.1f}"
+            summary = f"Players: {len(players)}/20 | Selected: {selected_count} | Avg Age: {avg_age:.1f}"
             self.ahl_summary_label.configure(text=summary)
 
         elif roster_type == 'prospects':
@@ -2103,7 +2135,7 @@ class RosterView(ctk.CTkFrame):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    to_100_scale(player.overall_rating()),
+                    _tier_label(player),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -2124,7 +2156,7 @@ class RosterView(ctk.CTkFrame):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    to_100_scale(player.overall_rating()),
+                    _tier_label(player),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -2145,7 +2177,7 @@ class RosterView(ctk.CTkFrame):
                     player.full_name,
                     str(player.primary_position),
                     player.age,
-                    to_100_scale(player.overall_rating()),
+                    _tier_label(player),
                     f"${salary:,}",
                     years_remaining,
                     getattr(player, 'games_played', 0),
@@ -2156,7 +2188,7 @@ class RosterView(ctk.CTkFrame):
                 ])
 
             # Write to CSV
-            headers = ["Level", "Name", "Position", "Age", "Overall", "Salary", "Years Left",
+            headers = ["Level", "Name", "Position", "Age", "Tier", "Salary", "Years Left",
                       "GP", "G", "A", "PTS", "+/-"]
 
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
@@ -2521,10 +2553,12 @@ class FreeAgencyView(ctk.CTkFrame):
             tree.column(col, width=width,
                         anchor='w' if col == 'name' else 'center')
 
-        # OVR tier tags -- match the Trade Center / CTkPlayerList color scale
-        tree.tag_configure('tier_elite', foreground=ct['GREEN'])  # 85+
-        tree.tag_configure('tier_top', foreground=ct['TEAL'])     # 78-84
-        tree.tag_configure('tier_mid', foreground=ct['GOLD'])     # 70-77
+        # Talent-tier tags (Muck's directive 2026-10-01): accent color per
+        # tier label, from the single tier table in attribute_composites.
+        from attribute_composites import TALENT_TIERS, talent_tier_color
+        for _tname, _lo, _hi in TALENT_TIERS:
+            tree.tag_configure('tier_' + _tname.lower().replace(' ', '_'),
+                               foreground=talent_tier_color(_tname))
 
         v_scroll = ttk.Scrollbar(table_frame, orient="vertical",
                                  command=tree.yview,
@@ -2540,14 +2574,10 @@ class FreeAgencyView(ctk.CTkFrame):
 
     @staticmethod
     def _ovr_tag(ovr):
-        """Tier tag for OVR color-coding (matches CTkPlayerList scale)."""
-        if ovr >= 85:
-            return 'tier_elite'
-        if ovr >= 78:
-            return 'tier_top'
-        if ovr >= 70:
-            return 'tier_mid'
-        return ''
+        """Row tag for talent-tier color-coding (Muck's directive 2026-10-01:
+        numeric overall is never shown; rows carry the tier label)."""
+        from attribute_composites import talent_tier
+        return 'tier_' + talent_tier(ovr).lower().replace(' ', '_')
 
     # ------------------------------------------------------------------
     # Player tab
@@ -2626,7 +2656,7 @@ class FreeAgencyView(ctk.CTkFrame):
             'name': ('Name', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 50),
-            'ovr': ('OVR', 50),
+            'ovr': ('Tier', 95),
             'pot': ('Pot', 50),
             'salary': ('Salary', 100),
             'years': ('Years', 60),
@@ -2932,7 +2962,7 @@ class FreeAgencyView(ctk.CTkFrame):
         top_players = sorted(position_players,
                              key=lambda p: p.overall_rating(), reverse=True)[:5]
 
-        columns = {'name': ('Player', 130), 'ovr': ('OVR', 44), 'age': ('Age', 44)}
+        columns = {'name': ('Player', 130), 'ovr': ('Tier', 80), 'age': ('Age', 44)}
         top_tree = ttk.Treeview(parent_frame, columns=list(columns.keys()),
                                 show='headings', height=6, style='FA.Treeview')
         for col, (text, width) in columns.items():
@@ -2945,7 +2975,7 @@ class FreeAgencyView(ctk.CTkFrame):
             ovr = to_100_scale(player.overall_rating())
             tag = self._ovr_tag(ovr)
             top_tree.insert('', 'end',
-                            values=[player.full_name, ovr, player.age],
+                            values=[player.full_name, _tier_label(player), player.age],
                             tags=(tag,) if tag else ())
 
         top_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -3045,7 +3075,7 @@ class FreeAgencyView(ctk.CTkFrame):
                 elif age_filter == '36+' and age < 36:
                     continue
 
-            # Rating filter (1-100 display scale, matching the OVR column)
+            # Rating filter (1-100 display scale, matching the Tier column)
             if rating_filter != 'All':
                 rating = to_100_scale(player.overall_rating())
                 if rating_filter == '90+' and rating < 90:
@@ -3111,7 +3141,7 @@ class FreeAgencyView(ctk.CTkFrame):
                 player.full_name,
                 player.primary_position.value,
                 player.age,
-                ovr,
+                _tier_label(player),
                 player.potential_grade,
                 f"${salary:,}",
                 f"{contract_years}y",
@@ -4030,7 +4060,7 @@ class FreeAgencyView(ctk.CTkFrame):
         self._heading(card, text=f"Market Analysis - {player.full_name}",
                       size=14).pack(anchor="w", padx=16, pady=(12, 4))
         self._body(card, text=f"{player.primary_position.value} \u2022 Age {player.age} \u2022 "
-                              f"OVR {to_100_scale(player.overall_rating())}",
+                              f"{_tier_label(player)}",
                    dim=True, size=11).pack(anchor="w", padx=16, pady=(0, 8))
 
         tabview = ctk.CTkTabview(card, fg_color=ct['CARD'], corner_radius=10,
@@ -4101,7 +4131,7 @@ class FreeAgencyView(ctk.CTkFrame):
         comparable = self.find_comparable_players(player)
 
         columns = {'name': ('Player', 150), 'age': ('Age', 50),
-                   'ovr': ('OVR', 50), 'salary': ('Salary', 100),
+                   'ovr': ('Tier', 95), 'salary': ('Salary', 100),
                    'value': ('Value Score', 100)}
         comp_tree = ttk.Treeview(parent, columns=list(columns.keys()),
                                  show='headings', height=10, style='FA.Treeview')
@@ -4116,7 +4146,8 @@ class FreeAgencyView(ctk.CTkFrame):
             ovr = to_100_scale(comp_player.overall_rating())
             tag = self._ovr_tag(ovr)
             comp_tree.insert('', 'end',
-                             values=[comp_player.full_name, comp_player.age, ovr,
+                             values=[comp_player.full_name, comp_player.age,
+                                     _tier_label(comp_player),
                                      f"${salary:,}", f"{score:.1f}"],
                              tags=(tag,) if tag else ())
 
@@ -4326,7 +4357,7 @@ class FreeAgencyView(ctk.CTkFrame):
             try:
                 with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
                     writer = csv.writer(csvfile)
-                    writer.writerow(['Type', 'Name', 'Position/Role', 'Age', 'Rating',
+                    writer.writerow(['Type', 'Name', 'Position/Role', 'Age', 'Tier',
                                      'Salary', 'Contract Years', 'Nationality'])
 
                     for player in self.app.game_manager.free_agents:
@@ -4334,7 +4365,7 @@ class FreeAgencyView(ctk.CTkFrame):
                         years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
                         writer.writerow(['Player', player.full_name,
                                          player.primary_position.value, player.age,
-                                         to_100_scale(player.overall_rating()),
+                                         _tier_label(player),
                                          salary, years, getattr(player, 'nationality', 'Unknown')])
 
                     for staff in self.app.league.free_agent_staff:
@@ -10440,7 +10471,7 @@ class FinancesView(ctk.CTkFrame):
             'name': ('Player', 180),
             'position': ('Pos', 50),
             'age': ('Age', 50),
-            'ovr': ('OVR', 50),
+            'ovr': ('Tier', 95),
             'salary': ('Salary', 100),
             'years': ('Years', 60),
             'status': ('Status', 80),
@@ -10516,7 +10547,7 @@ class FinancesView(ctk.CTkFrame):
             'name': ('Player', 180),
             'position': ('Pos', 50),
             'age': ('Age', 50),
-            'ovr': ('OVR', 50),
+            'ovr': ('Tier', 95),
             'salary': ('Current Salary', 120),
             'years_left': ('Years Left', 80),
             'status': ('Status', 100),
@@ -10987,7 +11018,7 @@ class FinancesView(ctk.CTkFrame):
                 player.full_name,
                 position,
                 str(getattr(player, 'age', 22)),
-                str(player.overall_rating()),
+                _tier_label(player),
                 f"${salary:,}",
                 str(years),
                 status,
@@ -11065,7 +11096,7 @@ Expiring Contracts:   {len(expiring_players)} players
                 player.full_name,
                 position[:1] if position in ['CENTER', 'LEFT_WING', 'RIGHT_WING'] else position[:1],
                 str(getattr(player, 'age', 22)),
-                str(player.overall_rating()),
+                _tier_label(player),
                 f"${current_salary:,}",
                 str(years_left),
                 status,
@@ -11309,12 +11340,11 @@ DETAILED POSITION BREAKDOWN
             report += f"Total Salary: ${total_salary:,}\n"
             report += f"Average Salary: ${avg_salary:,.0f}\n"
             report += f"Average Age: {avg_age:.1f}\n"
-            report += f"Average OVR: {avg_ovr:.1f}\n"
             report += "-" * 30 + "\n"
 
             for player in sorted(players, key=lambda p: getattr(p.contract, 'salary', 0) if hasattr(p, 'contract') else getattr(p, 'salary', 0), reverse=True):
                 salary = getattr(player.contract, 'salary', 0) if hasattr(player, 'contract') else getattr(player, 'salary', 0)
-                report += f"  {player.full_name:<20} {getattr(player, 'age', 22):2} yrs  OVR {player.overall_rating():2}  ${salary:>8,}\n"
+                report += f"  {player.full_name:<20} {getattr(player, 'age', 22):2} yrs  {_tier_label(player):<12}  ${salary:>8,}\n"
 
         self.report_text.insert(tk.END, report)
 
@@ -11356,7 +11386,6 @@ AGE GROUP BREAKDOWN
             report += f"\nAGE {group_name}\n"
             report += f"Players: {len(players)}\n"
             report += f"Total Salary: ${total_salary:,}\n"
-            report += f"Average OVR: {avg_ovr:.1f}\n"
             report += "-" * 25 + "\n"
 
             for player in players:
@@ -11374,7 +11403,7 @@ PERFORMANCE vs SALARY ANALYSIS
 
 VALUE ANALYSIS
 --------------
-(Players ranked by value: OVR rating vs salary cost)
+(Players ranked by value: talent vs salary cost)
 """
 
         # Calculate value scores
@@ -11396,17 +11425,17 @@ VALUE ANALYSIS
 
         report += "\nBEST VALUE CONTRACTS\n" + "-" * 25 + "\n"
         for i, (player, ovr, salary, value) in enumerate(player_values[:10], 1):
-            report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
+            report += f"{i:2}. {player.full_name:<20} {_tier_label(player):<12} ${salary:>8,} (Value: {value:.1f})\n"
 
         report += "\nHIGHEST PAID PLAYERS\n" + "-" * 25 + "\n"
         highest_paid = sorted(player_values, key=lambda x: x[2], reverse=True)[:10]
         for i, (player, ovr, salary, value) in enumerate(highest_paid, 1):
-            report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
+            report += f"{i:2}. {player.full_name:<20} {_tier_label(player):<12} ${salary:>8,} (Value: {value:.1f})\n"
 
         report += "\nPOTENTIAL OVERPAYS\n" + "-" * 25 + "\n"
         potential_overpays = [pv for pv in player_values if pv[2] > 3_000_000 and pv[3] < 50][:5]
         for i, (player, ovr, salary, value) in enumerate(potential_overpays, 1):
-            report += f"{i:2}. {player.full_name:<20} OVR {ovr:2} ${salary:>8,} (Value: {value:.1f})\n"
+            report += f"{i:2}. {player.full_name:<20} {_tier_label(player):<12} ${salary:>8,} (Value: {value:.1f})\n"
 
         self.report_text.insert(tk.END, report)
 
@@ -12205,7 +12234,7 @@ class ContractNegotiationView(ctk.CTkFrame):
                   font=(app.FONT_FAMILY, 16, "bold")).pack(anchor="w")
         ttk.Label(header,
                   text=f"{pos}  •  Age {getattr(p, 'age', '?')}  •  "
-                       f"OVR {ovr}  •  POT {getattr(p, 'potential_grade', '?')}",
+                       f"{_tier_label(p)}  •  POT {getattr(p, 'potential_grade', '?')}",
                   style="Secondary.TLabel",
                   font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
         if self.is_extension:
@@ -12589,8 +12618,9 @@ class ContractNegotiationView(ctk.CTkFrame):
         comps = self._comparables()
         if not comps:
             lines.append("  (no close comparables found)")
+        from attribute_composites import talent_tier
         for _, name, sal, yrs, ovr in comps:
-            lines.append(f"  {name} ({ovr} OVR): ${sal:,}/yr × {yrs}")
+            lines.append(f"  {name} ({talent_tier(ovr)}): ${sal:,}/yr × {yrs}")
         self.context_box.configure(state="normal")
         self.context_box.delete("1.0", "end")
         self.context_box.insert("end", "\n".join(lines))
@@ -12844,7 +12874,7 @@ class WaiversView(ctk.CTkFrame):
         
         # My players tab
         columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50), 
-                  'ovr': ('OVR', 50), 'games': ('NHL Games', 80), 
+                  'ovr': ('Tier', 95), 'games': ('NHL Games', 80), 
                   'salary': ('Salary', 100), 'actions': ('Actions', 150)}
         
         self.eligible_tree = self.app._create_treeview(my_players_frame, columns, 20)
@@ -12868,7 +12898,7 @@ class WaiversView(ctk.CTkFrame):
             font=_sfont(self.app.FONT_FAMILY, 9))
         self._priority_label.pack(anchor='w', padx=5, pady=4)
         wire_columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50),
-                       'ovr': ('OVR', 50), 'games': ('NHL Games', 80),
+                       'ovr': ('Tier', 95), 'games': ('NHL Games', 80),
                        'salary': ('Salary', 100), 'team': ('Current Team', 150),
                        'days': ('Days Left', 70),
                        'actions': ('Actions', 150)}
@@ -12914,7 +12944,7 @@ class WaiversView(ctk.CTkFrame):
                 player.full_name,
                 player.age,
                 player.primary_position.name,
-                player.overall_rating(),
+                _tier_label(player),
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",
                 "Place on Waivers"
@@ -12938,7 +12968,7 @@ class WaiversView(ctk.CTkFrame):
                 player.full_name,
                 player.age,
                 player.primary_position.name,
-                player.overall_rating(),
+                _tier_label(player),
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",
                 player.team_name,
@@ -13291,7 +13321,7 @@ class ContractExtensionsView(ctk.CTkFrame):
         
         # Expiring contracts tab
         columns = {'name': ('Player', 200), 'age': ('Age', 40), 'pos': ('Pos', 50), 
-                  'ovr': ('OVR', 50), 'pot': ('POT', 50), 'salary': ('Current Salary', 120), 
+                  'ovr': ('Tier', 95), 'pot': ('POT', 50), 'salary': ('Current Salary', 120), 
                   'market': ('Market Value', 120), 'actions': ('Actions', 150)}
         
         self.expiring_tree = parent._create_treeview(expiring_frame, columns, 20)
@@ -13333,7 +13363,7 @@ class ContractExtensionsView(ctk.CTkFrame):
                 player.full_name,
                 player.age,
                 player.primary_position.value,
-                player.overall_rating(),
+                _tier_label(player),
                 player.potential_grade,
                 f"${player.contract.salary:,}",
                 f"${market_value:,}",
@@ -13663,7 +13693,7 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         left_col.pack(side='left', fill='x', expand=True)
         
         ttk.Label(left_col, text=f"Age: {player.age}", style='Info.TLabel').pack(anchor='w', pady=2)
-        ttk.Label(left_col, text=f"Overall Rating: {to_100_scale(player.overall_rating())}", style='Info.TLabel').pack(anchor='w', pady=2)
+        ttk.Label(left_col, text=f"Tier: {_tier_label(player)}", style='Info.TLabel').pack(anchor='w', pady=2)
         ttk.Label(left_col, text=f"Potential: {player.potential_grade}", style='Info.TLabel').pack(anchor='w', pady=2)
         
         # Right column

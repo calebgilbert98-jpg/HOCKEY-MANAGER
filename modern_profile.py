@@ -462,15 +462,14 @@ class PlayerProfile(InGamePopup):
                                  fg=AppColors.TEXT_SECONDARY)
             age_pill.pack(side="left", padx=(0, 8))
 
-            # Overall (1-100 display scale)
-            try:
-                from game_classes import to_100_scale
-                overall = to_100_scale(self.player.overall_rating())
-            except Exception:
-                overall = '?'
-            ovr_pill = PillBadge(pills, text=f"{overall} OVR",
+            # Talent tier (Muck's directive 2026-10-01: the numeric overall is
+            # never shown to the user -- display the talent tier label).
+            from attribute_composites import (talent_tier_color,
+                                              talent_tier_for_player)
+            _tier = talent_tier_for_player(self.player)
+            ovr_pill = PillBadge(pills, text=_tier,
                                  bg=AppColors.BG_ELEVATED,
-                                 fg=AppColors.TEXT_PRIMARY)
+                                 fg=talent_tier_color(_tier))
             ovr_pill.pack(side="left")
 
             # W6: condition indicator pill next to the OVR pill, plus an

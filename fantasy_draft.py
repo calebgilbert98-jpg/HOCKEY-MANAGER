@@ -14,6 +14,19 @@ from dataclasses import dataclass
 from game_classes import Player, Team, PlayerPosition, to_100_scale
 from game_classes import debug_print
 
+
+def _tier_label(player):
+    """User-facing talent tier label (never the numeric overall).
+
+    Muck's directive 2026-10-01: numeric overall is presentation-hidden
+    everywhere; the tier table lives in attribute_composites only.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
+
 @dataclass
 class DraftPick:
     """Represents a single draft pick"""
@@ -1865,7 +1878,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'team': ('Team', 200),
             'player': ('Player Name', 250),
             'position': ('Pos', 80),
-            'rating': ('Rating', 80),
+            'rating': ('Tier', 95),
             'age': ('Age', 60)
         }
         
@@ -1938,7 +1951,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             ('round_num', 'Round', 45),
             ('player_name', 'Player Name', 140),
             ('position', 'Position', 50),
-            ('overall', 'Overall', 50),
+            ('overall', 'Tier', 95),
             ('age', 'Age', 40),
             ('salary', 'Salary', 80)
         ]
@@ -2218,13 +2231,13 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Configure columns
         self.integrated_players_tree.heading('Name', text='Player Name')
         self.integrated_players_tree.heading('Position', text='Pos')
-        self.integrated_players_tree.heading('Overall', text='OVR')
+        self.integrated_players_tree.heading('Overall', text='Tier')
         self.integrated_players_tree.heading('Age', text='Age')
         self.integrated_players_tree.heading('Former Team', text='Former Team')
         
         self.integrated_players_tree.column('Name', width=200)
         self.integrated_players_tree.column('Position', width=60)
-        self.integrated_players_tree.column('Overall', width=60)
+        self.integrated_players_tree.column('Overall', width=95)
         self.integrated_players_tree.column('Age', width=50)
         self.integrated_players_tree.column('Former Team', width=150)
         
@@ -2440,7 +2453,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 item_id = self.integrated_players_tree.insert('', 'end', values=(
                     player.full_name,
                     player.primary_position.value,
-                    player.overall_rating(),
+                    _tier_label(player),
                     player.age,
                     former_team
                 ))
@@ -2489,14 +2502,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                         self.integrated_info_label.configure(
                             text=f"Ready to Draft: {self.selected_player.full_name} "
                                  f"({self.selected_player.primary_position.value}, "
-                                 f"OVR {self.selected_player.overall_rating()})")
+                                 f"{_tier_label(self.selected_player)})")
                     else:
                         self.integrated_draft_btn.configure(state='disabled')
                         if current_pick:
                             self.integrated_info_label.configure(
                                 text=f"Selected: {self.selected_player.full_name} "
                                      f"({self.selected_player.primary_position.value}, "
-                                     f"OVR {self.selected_player.overall_rating()}) "
+                                     f"{_tier_label(self.selected_player)}) "
                                      f"- Wait for {current_pick.team.team_name} to pick")
                         else:
                             self.integrated_info_label.configure(text="Draft complete")
@@ -2562,7 +2575,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             f"🎯 DRAFT CONFIRMATION\n\n"
             f"Player: {player.full_name}\n"
             f"Position: {player.primary_position.value}\n"
-            f"Overall Rating: {player.overall_rating()}\n"
+            f"Tier: {_tier_label(player)}\n"
             f"Age: {player.age}\n"
             f"Former Team: {former_team}\n\n"
             f"Pick #{current_pick.overall_pick} - Round {current_pick.round_num}\n"
@@ -2952,7 +2965,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
         
-        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {to_100_scale(player.overall_rating())}", 
+        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • {_tier_label(player)}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
         position_label.pack(pady=(2, 0))
         
@@ -3217,7 +3230,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
         
-        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • Overall: {to_100_scale(player.overall_rating())}", 
+        position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • {_tier_label(player)}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
         position_label.pack(pady=(2, 0))
         
@@ -3322,7 +3335,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         position_combo.bind('<<ComboboxSelected>>', self.filter_players)
         
         # Rating filter
-        ttk.Label(filter_row1, text="Min OVR:", style='TLabel').pack(side=tk.LEFT)
+        ttk.Label(filter_row1, text="Min Rating:", style='TLabel').pack(side=tk.LEFT)
         self.min_rating_var = tk.StringVar(value="0")
         rating_spinbox = tk.Spinbox(filter_row1, from_=0, to=99, textvariable=self.min_rating_var, 
                                    width=5, command=self.filter_players)
@@ -3377,7 +3390,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         columns = {
             'name': ('Player Name', 180),
             'position': ('Pos', 50),
-            'overall': ('OVR', 50), 
+            'overall': ('Tier', 95), 
             'age': ('Age', 45),
             'former_team': ('Former Team', 120),
             'potential': ('POT', 50)
@@ -3507,7 +3520,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         columns = {
             'name': ('Player', 200),
             'position': ('Pos', 60),
-            'overall': ('OVR', 60),
+            'overall': ('Tier', 95),
             'age': ('Age', 50),
             'team': ('Former Team', 120)
         }
@@ -3554,7 +3567,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'team': ('Team', 120),
             'player': ('Player', 150),
             'position': ('Pos', 60),
-            'overall': ('OVR', 60)
+            'overall': ('Tier', 95)
         }
         
         self.recent_picks_tree = self.app._create_treeview(recent_frame, columns, height=20)
@@ -3581,7 +3594,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             'pick': ('Pick', 60),
             'player': ('Player', 150),
             'position': ('Pos', 60),
-            'overall': ('OVR', 60),
+            'overall': ('Tier', 95),
             'age': ('Age', 50)
         }
         
@@ -3747,7 +3760,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 item = self.players_tree.insert('', 'end', values=(
                     player.full_name,
                     player.primary_position.value,
-                    player.overall_rating(),
+                    _tier_label(player),
                     player.age,
                     former_team,
                     potential
@@ -3756,14 +3769,9 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 # Store player reference
                 self.app.tree_maps[item] = player
                 
-                # Color coding based on overall rating
-                rating = player.overall_rating()
-                if rating >= 90:
-                    self.players_tree.set(item, 'overall', f"{rating} ⭐")
-                elif rating >= 85:
-                    self.players_tree.set(item, 'overall', f"{rating} 🔥")
-                elif rating >= 80:
-                    self.players_tree.set(item, 'overall', f"{rating} 💎")
+                # Tier marker for the top band (numeric overall hidden)
+                if _tier_label(player) == "Generational":
+                    self.players_tree.set(item, 'overall', "Generational ⭐")
                     
             except Exception as e:
                 debug_print(f"DEBUG: Error adding player {i}: {e}")
@@ -3819,7 +3827,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         ttk.Label(name_frame, text=player.full_name, 
                  style='Header.TLabel', font=(self.app.FONT_FAMILY, 14, 'bold')).pack()
         
-        info_text = f"{player.primary_position.value} • {player.age} years old • OVR {player.overall_rating()}"
+        info_text = f"{player.primary_position.value} • {player.age} years old • {_tier_label(player)}"
         ttk.Label(name_frame, text=info_text, 
                  style='Info.TLabel', font=(self.app.FONT_FAMILY, 10)).pack()
         
@@ -3933,14 +3941,14 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                         if next_pick.team == self.user_team:
                             messagebox.showinfo("Your Turn!", 
                                               f"✅ {current_pick.team.team_name} selected {ai_pick.full_name}\n"
-                                              f"   ({ai_pick.primary_position.value}, OVR {ai_pick.overall_rating()})\n\n"
+                                              f"   ({ai_pick.primary_position.value}, {_tier_label(ai_pick)})\n\n"
                                               f"🎯 Now it's your turn!\n"
                                               f"Pick #{next_pick.overall_pick} - Round {next_pick.round_num}\n\n"
                                               f"Select a player and click 'DRAFT SELECTED PLAYER'")
                             if hasattr(self, 'simple_status_label'):
                                 self.simple_status_label.configure(text=f"YOUR TURN - Pick #{next_pick.overall_pick} - Select a player to draft!")
                         else:
-                            status_text = f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} → {ai_pick.full_name} ({ai_pick.primary_position.value}, {ai_pick.overall_rating()})"
+                            status_text = f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} → {ai_pick.full_name} ({ai_pick.primary_position.value}, {_tier_label(ai_pick)})"
                             if hasattr(self, 'draft_status_label'):
                                 self.draft_status_label.configure(text=status_text)
                             if hasattr(self, 'simple_status_label'):
@@ -4725,7 +4733,7 @@ NHL League Office""",
                         pick.team.team_name,
                         pick.player.full_name,
                         pick.player.primary_position.value,
-                        pick.player.overall_rating(),
+                        _tier_label(pick.player),
                         pick.player.age
                     ), tags=tags)
                 
@@ -4941,10 +4949,13 @@ NHL League Office""",
                              font=('Segoe UI', 10, 'bold'))
         pos_label.pack(side=tk.LEFT)
         
-        ovr_label = ttk.Label(badges_frame, 
-                             text=f"OVR: {to_100_scale(player.overall_rating())}", 
+        from attribute_composites import talent_tier_color, talent_tier_for_player
+        _ptier = talent_tier_for_player(player)
+        ovr_label = ttk.Label(badges_frame,
+                             text=_ptier,
                              style='Rating.TLabel',
-                             font=('Segoe UI', 12, 'bold'))
+                             font=('Segoe UI', 12, 'bold'),
+                             foreground=talent_tier_color(_ptier))
         ovr_label.pack(side=tk.LEFT, padx=(10, 0))
         
         age_label = ttk.Label(badges_frame,
@@ -5191,7 +5202,7 @@ NHL League Office""",
                 getattr(pick, 'round_num', '?'), 
                 player.full_name,
                 player.primary_position.value,
-                player.overall_rating(),
+                _tier_label(player),
                 player.age,
                 f"${salary:,}",
                 getattr(player, 'team_name', 'Free Agent')
@@ -5205,9 +5216,8 @@ NHL League Office""",
         # Update stats display
         num_picks = len(team_drafted_players)
         if num_picks > 0:
-            avg_overall = sum(pick.player.overall_rating() for pick in team_drafted_players) / num_picks
             self.roster_stats_label.config(
-                text=f"Drafted: {num_picks} players | Avg Overall: {avg_overall:.1f} | Total Salary: ${total_salary:,}"
+                text=f"Drafted: {num_picks} players | Total Salary: ${total_salary:,}"
             )
             
             # Update position summary
@@ -5239,9 +5249,9 @@ NHL League Office""",
             elif pos in ['LD', 'RD']:  # Defense  
                 return f"Checking: {player.checking}, Passing: {player.passing}"
             else:
-                return f"Overall: {to_100_scale(player.overall_rating())}"
+                return _tier_label(player)
         except Exception as e:
-            return f"OVR: {to_100_scale(player.overall_rating())}"
+            return _tier_label(player)
     
     def show_roster_player_details(self, event):
         """Show detailed player information when double-clicking roster entry"""
@@ -5344,7 +5354,7 @@ NHL League Office""",
                 player.full_name,
                 player.primary_position.value,
                 player.age,
-                player.overall_rating(),
+                _tier_label(player),
                 getattr(player, 'former_team', 'Free Agent')
             ))
             
@@ -5462,7 +5472,7 @@ NHL League Office""",
                              style='Info.TLabel', font=('Segoe UI', 11, 'bold'))
         pos_label.pack(side=tk.LEFT)
         
-        overall_label = ttk.Label(pos_overall_frame, text=f"Overall: {to_100_scale(player.overall_rating())}", 
+        overall_label = ttk.Label(pos_overall_frame, text=_tier_label(player), 
                                  style='Info.TLabel', font=('Segoe UI', 11, 'bold'),
                                  foreground=self.app.ACCENT_COLOR)
         overall_label.pack(side=tk.RIGHT)

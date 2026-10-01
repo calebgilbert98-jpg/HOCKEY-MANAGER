@@ -61,6 +61,15 @@ def compensation_pick_status(user_team, year, picks):
     return lines, missing
 
 
+def _tier_label(player):
+    """User-facing talent tier for a player (never the numeric overall)."""
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
+
+
 class OfferSheetWindow(ctk.CTkFrame):
     """Sign a rival club's unsigned RFA to an offer sheet.
 
@@ -174,7 +183,7 @@ class OfferSheetWindow(ctk.CTkFrame):
         self._tree = ttk.Treeview(left, columns=cols, show="headings",
                                   height=22)
         for c, w, label in (("player", 170, "Player"), ("age", 45, "Age"),
-                            ("pos", 55, "Pos"), ("ovr", 50, "OVR"),
+                            ("pos", 55, "Pos"), ("ovr", 80, "Tier"),
                             ("team", 150, "Club"),
                             ("value", 100, "Est. value")):
             self._tree.heading(c, text=label)
@@ -352,13 +361,9 @@ class OfferSheetWindow(ctk.CTkFrame):
             except Exception:
                 pass
             pos = getattr(getattr(p, "primary_position", None), "name", "?")
-            try:
-                ovr = p.overall_rating()
-            except Exception:
-                ovr = "?"
             self._detail_var.set(
                 f"{getattr(p, 'full_name', '?')} — {pos}, age "
-                f"{getattr(p, 'age', '?')}, {ovr} OVR\n"
+                f"{getattr(p, 'age', '?')}, {_tier_label(p)}\n"
                 f"Rights held by: {getattr(team, 'team_name', '?')}\n"
                 f"(restored your parked sheet)")
             self._update_preview()
@@ -410,7 +415,7 @@ class OfferSheetWindow(ctk.CTkFrame):
                 self._tree.insert("", "end", values=(
                     getattr(p, "full_name", getattr(p, "name", "?")),
                     getattr(p, "age", "?"), str(pos),
-                    p.overall_rating(),
+                    _tier_label(p),
                     getattr(team, "team_name", "?"),
                     _money(market)), tags=(str(id(p)),))
             except Exception:
@@ -451,12 +456,11 @@ class OfferSheetWindow(ctk.CTkFrame):
         p, team, market = self._selected
         try:
             pos = getattr(getattr(p, "primary_position", None), "name", "?")
-            ovr = p.overall_rating()
         except Exception:
-            pos, ovr = "?", "?"
+            pos = "?"
         self._detail_var.set(
             f"{getattr(p, 'full_name', '?')} — {pos}, age "
-            f"{getattr(p, 'age', '?')}, {ovr} OVR\n"
+            f"{getattr(p, 'age', '?')}, {_tier_label(p)}\n"
             f"Rights held by: {getattr(team, 'team_name', '?')}\n"
             f"Engine's market read: {_money(market)}/yr")
         # Start the AAV at his market read.
