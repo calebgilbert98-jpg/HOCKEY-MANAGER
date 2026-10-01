@@ -2492,6 +2492,18 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                              board_a=board)
     except Exception:
         pass
+    # D4: trading away a star is a board headline (star_leaves fuel).
+    # One headline per trade, even in a multi-star blockbuster.
+    try:
+        from game_classes import DraftPick as _DP4
+        from reputation_system import note_star_departure as _nsd4
+        for _a4 in list(user_assets or []):
+            if isinstance(_a4, _DP4):
+                continue
+            if _nsd4(board, _a4):
+                break
+    except Exception:
+        pass
     # Authoritative post-trade integration point: EVERY completed trade
     # path (user deals, AI deadline deals) flows through here.
     #  - Fresh start: rescued players get their morale payoff.

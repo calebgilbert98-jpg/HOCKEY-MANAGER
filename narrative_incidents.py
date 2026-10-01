@@ -942,6 +942,17 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
                 morale_delta=1, tone="up")
         except Exception:
             pass
+        # D4: your club in a line brawl is a board-level scandal
+        # (scandal fuel) -- the room is bonded, the owners are furious.
+        try:
+            _utn = (getattr(user_team, "team_name", "")
+                    if user_team is not None else "")
+            if _utn and _utn in (_team_name(home), _team_name(away)):
+                import reputation_system as _rs4b
+                _rs4b.note_scandal(
+                    getattr(getattr(app, "career", None), "board", None))
+        except Exception:
+            pass
         drama.append({"kind": "line_brawl", "live": False,
                       "home": _team_name(home), "away": _team_name(away),
                       "home_score": home_score, "away_score": away_score})
@@ -1013,6 +1024,19 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
                 morale_delta=1, tone="up")
         except Exception:
             pass
+        # D4: YOUR player getting suspended is a board-level scandal
+        # (scandal fuel). The review itself stays user-blind (parity);
+        # the headline is applied here, at the aftermath layer.
+        try:
+            _utn4 = (getattr(user_team, "team_name", "")
+                     if user_team is not None else "")
+            if (suspended_games > 0 and _utn4
+                    and hitter_team_name == _utn4):
+                import reputation_system as _rs4s
+                _rs4s.note_scandal(
+                    getattr(getattr(app, "career", None), "board", None))
+        except Exception:
+            pass
         drama.append({"kind": "controversial_hit", "live": False,
                       "hitter": hitter, "hitter_team": hitter_team_name,
                       "victim": victim, "victim_team": victim_team_name,
@@ -1025,6 +1049,17 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
         drama.append({"kind": "line_brawl", "live": True,
                       "home": _team_name(home), "away": _team_name(away),
                       "home_score": home_score, "away_score": away_score})
+        # D4: your club in a live GameSim brawl is a board-level scandal
+        # (scandal fuel), same as the rolled-brawl path above.
+        try:
+            _utn4b = (getattr(user_team, "team_name", "")
+                      if user_team is not None else "")
+            if _utn4b and _utn4b in (_team_name(home), _team_name(away)):
+                import reputation_system as _rs4b
+                _rs4b.note_scandal(
+                    getattr(getattr(app, "career", None), "board", None))
+        except Exception:
+            pass
 
     # Stash for the press: the post-match presser reads the club's most
     # recent drama and asks about it.

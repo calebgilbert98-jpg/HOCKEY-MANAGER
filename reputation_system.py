@@ -5931,6 +5931,63 @@ def gm_staff_accept_delta(team: Any) -> float:
     return 0.0
 
 
+# ---------------------------------------------------------------------------
+# D4 (2026-09-30): headline-event fuel for the board's record_big_event
+# kinds (manager_career.BoardSystem). Production callers for 'star_signing',
+# 'star_leaves' and 'scandal' -- the three kinds that previously had zero
+# production fuel. Small predicates so each call site is a one-liner;
+# every helper is defensive and never raises.
+# ---------------------------------------------------------------------------
+
+#: overall_rating() (native 1-100) at/above which a player counts as a
+#: "star" for headline purposes. Same line as gm_fa_accept_delta's star
+#: convention.
+STAR_OVR = 85
+
+
+def is_star_player(player: Any) -> bool:
+    """True when the player is a headline-grade star. Never raises."""
+    try:
+        return float(player.overall_rating()) >= STAR_OVR
+    except Exception:
+        return False
+
+
+def note_star_signing(board: Any, player: Any) -> bool:
+    """Board headline: a star just signed. Returns True when it fired."""
+    try:
+        if board is not None and is_star_player(player):
+            board.record_big_event("star_signing")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def note_star_departure(board: Any, player: Any) -> bool:
+    """Board headline: a star just left (trade / buyout / release).
+    Returns True when it fired."""
+    try:
+        if board is not None and is_star_player(player):
+            board.record_big_event("star_leaves")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def note_scandal(board: Any) -> bool:
+    """Board headline: a genuine scandal (DoPS suspension of your player,
+    your club in a line brawl, ...). Returns True when it fired."""
+    try:
+        if board is not None:
+            board.record_big_event("scandal")
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
                          board_a: Any = None) -> Dict[str, Any]:
     """Score a completed trade's fallout. Never raises.

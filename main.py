@@ -19103,6 +19103,14 @@ class HockeyManagerGUI(tk.Tk):
                     date_str=str(getattr(self, "current_date", "")))
             except Exception:
                 pass
+            # D4: signing a star is a board headline (star_signing fuel).
+            try:
+                import reputation_system as _rs4
+                _rs4.note_star_signing(
+                    getattr(getattr(self, "career", None), "board", None),
+                    person)
+            except Exception:
+                pass
         self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
 
         # Generate media event for signing (if media system enabled)
@@ -19324,6 +19332,14 @@ class HockeyManagerGUI(tk.Tk):
                         self.league, team, person,
                         season_year=season_year)
                     ok = True
+                    # D4: buying out a star is a board headline.
+                    try:
+                        import reputation_system as _rs4b
+                        _rs4b.note_star_departure(
+                            getattr(getattr(self, "career", None),
+                                    "board", None), person)
+                    except Exception:
+                        pass
                     try:
                         self.add_news(
                             f"✂️ You bought out "

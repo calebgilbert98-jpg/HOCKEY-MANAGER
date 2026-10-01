@@ -16547,6 +16547,13 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                    f"{p.full_name} has been bought out and is now a free "
                    f"agent. Dead cap: ${annual:,.0f}/yr for "
                    f"{byears} years.", secondary=True)
+        # D4: buying out a star is a board headline (star_leaves fuel).
+        try:
+            import reputation_system as _rs4b
+            _rs4b.note_star_departure(
+                getattr(getattr(self.app, "career", None), "board", None), p)
+        except Exception:
+            pass
         # rebuild listbox + active buyouts
         self.lb.delete(0, tk.END)
         self._players = sorted(team.roster,
