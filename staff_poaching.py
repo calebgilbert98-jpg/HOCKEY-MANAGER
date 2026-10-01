@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Offseason staff poaching (D5): the coaching carousel has a heartbeat.
 
 Once per offseason, AI clubs may approach EXPIRING staff (contract_years
