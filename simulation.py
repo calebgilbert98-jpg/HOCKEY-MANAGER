@@ -7882,7 +7882,7 @@ class GameSim:
                     _as += 1
                 if _hs == _as:
                     from drama_events import record_late_equalizer as _rle
-                    _rle(self, scoring_team.team_name, scorer,
+                    _rle(self, scoring_team.team_name, shooter,
                          pull_clock_remaining=getattr(self, "_pull_clock", {}).get(
                              scoring_team.team_name))
         except Exception:
