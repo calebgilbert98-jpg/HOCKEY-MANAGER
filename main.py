@@ -2664,8 +2664,13 @@ class HockeyManagerGUI(tk.Tk):
                 # Item 7 follow-up: the user names this club's captains --
                 # reclaim it from setup auto-repair and raise the picker.
                 # (This window runs after the __init__ pending check.)
+                # NOTE: must be after(), not after_idle(): the dashboard
+                # build below calls update_idletasks() (via _create_nav_pill),
+                # which flushes idle callbacks -- after_idle would raise the
+                # modal mid-construction and hang/crash startup (same as
+                # the 5259ebd fix for the __init__ pending check).
                 self.game_manager._claim_user_team_captaincy(user_team)
-                self.after_idle(self._raise_captaincy_blocker_if_pending)
+                self.after(250, self._raise_captaincy_blocker_if_pending)
                 self.title(f"{user_team.team_name} - Puck Dynasty")
                 self._update_team_colors()
                 
