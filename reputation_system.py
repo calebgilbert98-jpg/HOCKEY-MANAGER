@@ -1234,11 +1234,21 @@ def room_implications(status: Dict[str, Any], entity: Any,
                 add("personnel", "Captaincy under review: strip the C?", 1)
         else:
             add("personnel", "Ownership pressure: win or else", 1)
+            if kind == "coach":
+                # D9: the monthly tick only evaluates head coaches, so
+                # without this the _room_trade_risk_mult stamp in
+                # _apply_room_fallout was unreachable -- the headlines
+                # trade-request consumer was wired to a dead producer.
+                add("trade", "Fracturing room: trade-request risk x1.5",
+                    1.5)
     else:  # Lost
         add("chemistry", "Lost room: chemistry collapse", -15)
         if kind == "coach":
             add("personnel", f"Recommend termination: {name} should be fired", 1)
             add("media", "Firing watch: every loss is the lead story", 20)
+            # D9: same as above -- a lost room means players want out.
+            add("trade", "Lost room: players want out -- trade-request "
+                         "risk x2", 2.0)
         elif kind == "gm":
             add("personnel", f"Ownership review: {name}'s job in danger", 1)
         else:
