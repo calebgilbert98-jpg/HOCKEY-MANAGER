@@ -536,10 +536,18 @@ def shooter_choice_weight(player) -> float:
         # archetype-only. SHOT_VOLUME_TALENT_POINTS curve, NO CAPS (per Muck
         # 2026-09-29): steep at the star band so elite volume separates by
         # mechanics, gentle below so depth still shoots. Never a wall.
+        # 2026-10-01: Gate on FINISHING, not overall. Shot volume must follow
+        # scoring ability -- a 82-ovr playmaker with 70 finishing must not
+        # take star-level shots (the 105G cartoon: 74-finisher on 740 attempts).
+        # Finishing orders who shoots; overall still matters via the tendency.
         try:
-            _ovr = float(player.overall_rating())
+            from mesh_system import finishing_rating as _fr
+            _ovr = float(_fr(player))
         except Exception:
-            _ovr = float(getattr(player, "overall", 82.0) or 82.0)
+            try:
+                _ovr = float(player.overall_rating())
+            except Exception:
+                _ovr = float(getattr(player, "overall", 82.0) or 82.0)
         _talent_gate = _piecewise_tilt(_ovr, SHOT_VOLUME_TALENT_POINTS)
         return max(0.05, _w * _talent_gate)
     except Exception:
