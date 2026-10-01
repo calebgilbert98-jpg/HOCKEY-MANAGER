@@ -1954,12 +1954,22 @@ def personal_grade_ceiling(player, grade, shot_tool=None, scenario_mult=1.0):
     lifted by scenario_mult (heat, linemates, chemistry, scheme relief)
     up to the envelope max. League max unchanged (95+ finishing -> the
     full envelope). Never raises.
+
+    The scenario lift is ADDITIVE with diminishing returns (Muck
+    2026-10-01): a hot 70-finisher gets a window, but cannot leapfrog
+    a cold 82-finisher. Multiplicative lifts flatten the hierarchy --
+    additive lifts preserve it. Separation by probability, not caps.
     """
     try:
         _lo, _hi = chance_grade_clamp(grade)
         _frac = finishing_ceiling_fraction(
             finishing_rating(player, shot_tool))
-        _frac = min(1.0, _frac * max(1.0, float(scenario_mult or 1.0)))
+        # Additive lift: fills a portion of the headroom. A 0.4-base
+        # with 0.8 lift -> 0.4 + 0.8*0.6*0.5 = 0.64. A 0.65-base with
+        # no lift stays 0.65. Hierarchy preserved.
+        _sm = max(1.0, float(scenario_mult or 1.0))
+        _lift = _sm - 1.0  # 0.0 to 0.8
+        _frac = min(1.0, _frac + _lift * (1.0 - _frac) * 0.5)
         return (_lo, _lo + (_hi - _lo) * _frac)
     except Exception:
         return chance_grade_clamp(grade)
