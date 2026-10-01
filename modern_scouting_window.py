@@ -600,7 +600,7 @@ class ModernScoutingView(ctk.CTkFrame):
         if user_team is None or league is None:
             return
         try:
-            entries = trade_market.get_unified_targets()
+            entries = trade_market.get_unified_targets(league)
         except Exception:
             entries = []
         maps = getattr(self.app, 'tree_maps', None) or {}
@@ -758,7 +758,8 @@ class ModernScoutingView(ctk.CTkFrame):
                 if player is None:
                     continue
                 if trade_market.add_to_shortlist(user_team, player,
-                                                 added_by="user"):
+                                                 added_by="user",
+                                                 league=league):
                     added += 1
             self._populate_targets()
             dialog.destroy()
@@ -778,6 +779,7 @@ class ModernScoutingView(ctk.CTkFrame):
         except Exception:
             return
         user_team = self._targets_user_team()
+        league = self._targets_league()
         if user_team is None:
             return
         selection = self.targets_tree.selection()
@@ -789,7 +791,8 @@ class ModernScoutingView(ctk.CTkFrame):
             player = self.app.tree_maps.get('targets_tree', {}).get(iid)
             if player is None:
                 continue
-            trade_market.remove_from_shortlist(user_team, player.id)
+            trade_market.remove_from_shortlist(user_team, player.id,
+                                               league=league)
         self._populate_targets()
 
     def _find_nhl_player_by_name(self, league, name):
