@@ -1841,17 +1841,19 @@ def chance_grade_clamp(grade: str):
 def finishing_ceiling_fraction(finishing: float) -> float:
     """Map a 1-100 finishing rating to [0, 1] of the grade envelope.
 
-    Linear (exponent 1.0, anchored at 40): stars (90+) keep ~95-100% of
-    the envelope, a 75-finishing shooter keeps 70%, a 60-finishing
-    shooter 40%. finishing >= 95 -> 1.0, so the league maximum is
-    unchanged. Lifted 2026-10-01: the 1.1/45 curve suppressed league
-    scoring below Muck's 2.70 GPG floor (QS 2.45, GS 1.66) -- the
-    absolute level was too low even though the hierarchy was right.
-    Separation by probability, not caps. Never raises.
+    Linear (exponent 1.0, anchored at 35): stars (90+) keep ~95-100% of
+    the envelope, a 75-finishing shooter keeps 80%, a 60-finishing
+    shooter 50%. finishing >= 95 -> 1.0, so the league maximum is
+    unchanged. Lifted 2026-10-01 (was 40): the 40-anchor curve left QS
+    at 2.43 GPG, ~0.27 short of Muck's 2.70 floor -- the absolute level
+    was still too low. The scenario-window cap was tightened at the
+    same time (1.8 -> 1.5) so the level lift comes from talent-ordered
+    base, not wider windows. Separation by probability, not caps.
+    Never raises.
     """
     try:
         _f = max(1.0, min(100.0, float(finishing)))
-        _x = max(0.0, min(1.0, (_f - 40.0) / 50.0))
+        _x = max(0.0, min(1.0, (_f - 35.0) / 50.0))
         return _x ** 1.0
     except Exception:
         return 1.0
@@ -1862,7 +1864,7 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
 
     The base ceiling is pure talent (finishing). But hockey has windows:
     a heater, elite linemates, great chemistry, schemed-against relief.
-    Each factor >= 1.0; product capped at 1.8. Stars (95+) are already at
+    Each factor >= 1.0; product capped at 1.5. Stars (95+) are already at
     the envelope max, so the lift only creates windows for the middle --
     separation by probability, not caps. Line FIT gates the linemate
     lifts: an elite linemate only opens your window if you actually fit
@@ -1943,7 +1945,7 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
                         _mult *= 1.0 + 0.10 * min(1.0, (_fit01 - 0.65) / 0.35)
             except Exception:
                 pass
-        return min(1.8, _mult)
+        return min(1.5, _mult)
     except Exception:
         return 1.0
 
@@ -1969,7 +1971,7 @@ def personal_grade_ceiling(player, grade, shot_tool=None, scenario_mult=1.0):
         # with 0.8 lift -> 0.4 + 0.8*0.6*0.5 = 0.64. A 0.65-base with
         # no lift stays 0.65. Hierarchy preserved.
         _sm = max(1.0, float(scenario_mult or 1.0))
-        _lift = _sm - 1.0  # 0.0 to 0.8
+        _lift = _sm - 1.0  # 0.0 to 0.5 (cap 1.5)
         _frac = min(1.0, _frac + _lift * (1.0 - _frac) * 0.5)
         return (_lo, _lo + (_hi - _lo) * _frac)
     except Exception:
