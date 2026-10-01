@@ -10299,8 +10299,12 @@ class GameSim:
             from reputation_system import record_game_incident as _rgi
             hname = getattr(hitter, 'full_name', 'An opponent')
             vname = getattr(victim, 'full_name', 'a player')
+            # D13 (fixed 2026-09-30): Player has no .overall attribute --
+            # only overall_rating(). The old getattr read was always 0,
+            # so the weight-25 star_injured incident NEVER fired and every
+            # star injury downgraded to the generic weight-12 incident.
             try:
-                star = float(getattr(victim, 'overall', 0) or 0) >= 85
+                star = float(victim.overall_rating()) >= 85
             except Exception:
                 star = False
             kind = "star_injured" if star else "player_injured"
