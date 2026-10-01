@@ -6397,11 +6397,23 @@ class HockeyManagerGUI(tk.Tk):
             bd = cap_breakdown(team)
         except Exception:
             return None
+        # R1 (roster limits): the league exception -- emergency fill-ins are
+        # cap-exempt at the day gate (summonable even over the cap, per
+        # Chris's deadlock ruling). Subtract their charge before judging
+        # compliance; zero when no fillers are on the roster.
+        try:
+            import roster_limits as _rl
+            _filler_charge = int(_rl.emergency_filler_charge(team) or 0)
+        except Exception:
+            _filler_charge = 0
         if not bd["over_cap"]:
             return None
         try:
-            if int(compliance_charge(team)) <= int(bd["cap"]):
-                return None  # pending wire resolves it -- not a hard block
+            # Pending wire resolves it -- not a hard block. The filler
+            # charge is excluded first (the league exception: emergency
+            # fill-ins are cap-exempt at the day gate).
+            if int(compliance_charge(team)) - _filler_charge <= int(bd["cap"]):
+                return None
         except Exception:
             pass
         over = -bd["space"]
@@ -6505,6 +6517,15 @@ class HockeyManagerGUI(tk.Tk):
             floor_blocker = self._floor_compliance_blocker()
             if floor_blocker:
                 blockers.append(floor_blocker)
+        except Exception:
+            pass
+        # R1 (roster limits, true NHL): 23-man max, 50 SPC max, and the
+        # dressed-lineup minimum (18+2) are hard day gates for the user --
+        # the AI side is kept compliant by ai_roster_compliance. Guarded
+        # import so a roster_limits bug can never break day advancement.
+        try:
+            import roster_limits as _rl
+            blockers.extend(_rl.roster_limit_blockers(self))
         except Exception:
             pass
         # Item 7 follow-up: the human club must wear exactly 1 C + 2 As --
@@ -8761,6 +8782,15 @@ class HockeyManagerGUI(tk.Tk):
         to the AHL; everyone else must clear the wire. The client's word
         is never trusted -- eligibility is computed host-side.
         """
+        # R1 (roster limits): same dressed-minimum rule as single-player.
+        try:
+            import roster_limits as _rl
+            if _rl.would_break_dress_minimum(team, [player]):
+                return False, ("Demoting him would leave the club unable to "
+                               "dress a legal lineup (18 skaters + 2 "
+                               "goalies).")
+        except Exception:
+            pass
         try:
             _needs = _player_needs_waivers(player)
         except Exception:
@@ -10673,6 +10703,14 @@ class HockeyManagerGUI(tk.Tk):
                             _peng.recover_fatigue(_pid, days=1)
                     except Exception:
                         continue
+        except Exception:
+            pass
+
+        # R1 (roster limits): Dec-1 RFA ineligibility stamping + emergency
+        # filler auto-release, league-wide. Guarded: never breaks the day.
+        try:
+            import roster_limits as _rl
+            _rl.daily_roster_tick(self)
         except Exception:
             pass
 
@@ -19009,6 +19047,23 @@ class HockeyManagerGUI(tk.Tk):
         return None
         
     def send_to_ahl(self, player):
+        # R1 (roster limits): the club must always be able to dress 18+2.
+        # A demotion that breaks the dressed minimum is refused up front.
+        try:
+            import roster_limits as _rl
+            if _rl.would_break_dress_minimum(self.user_team, [player]):
+                try:
+                    messagebox.showwarning(
+                        "Demotion refused",
+                        f"Demoting {player.full_name} would leave the club "
+                        f"unable to dress a legal lineup (18 skaters + 2 "
+                        f"goalies). Call up a replacement first -- or summon "
+                        f"emergency fill-ins.")
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
         # Real NHL: demoting a veteran isn't a quiet roster move -- it's
         # waivers, and an NMC blocks it without the player's consent. The
         # waiver wire is not optional (MP already enforces this; SP now
@@ -19401,6 +19456,19 @@ class HockeyManagerGUI(tk.Tk):
         return True, ""
 
     def handle_contract_offer(self, person, extension=False, notify="popup"):
+        # R1 (roster limits): Dec-1 ineligible RFAs can't sign anywhere --
+        # refuse the offer up front with the real reason.
+        try:
+            import roster_limits as _rl
+            _ok, _why = _rl.can_sign_player(person)
+            if not _ok:
+                try:
+                    messagebox.showwarning("Can't sign", _why)
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            pass
         # NHL contract rules (cap-relative: uses the live league cap):
         # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
         # inbox message; counter-offers become interactive), "quiet" (no

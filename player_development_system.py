@@ -262,6 +262,13 @@ class PlayerDevelopmentEngine:
         ``team`` (optional) enables the archetype/system coaching
         dimensions; without it the legacy formula runs unchanged.
         """
+        # R1 (roster limits): emergency fill-ins never develop -- they're
+        # replacement-level by design, not a backdoor for cheap talent.
+        try:
+            if bool(getattr(player, "emergency_filler", False)):
+                return 0
+        except Exception:
+            pass
         if not hasattr(player, 'potential'):
             return 0
         
@@ -381,6 +388,13 @@ class PlayerDevelopmentEngine:
         ``team`` (optional) enables the archetype/system coaching
         dimensions; without it the legacy formula runs unchanged.
         """
+        # R1 (roster limits): emergency fill-ins never develop -- they're
+        # replacement-level by design, not a backdoor for cheap talent.
+        try:
+            if bool(getattr(player, "emergency_filler", False)):
+                return {}
+        except Exception:
+            pass
         if not hasattr(player, 'potential'):
             # Initialize potential if missing
             player.potential = PlayerPotential()

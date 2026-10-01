@@ -375,6 +375,15 @@ class AITeamManager:
         if (current_date - self.last_decision_date).days < self.decision_frequency:
             return decisions
         
+        # R1 (roster limits): AI clubs obey the same roster rules as the user
+        # -- 23-man max via paper-down, dressed-minimum via emergency
+        # fillers, unneeded fillers released. Guarded: never breaks AI.
+        try:
+            import roster_limits as _rl
+            _rl.ai_roster_compliance(team, None)
+        except Exception:
+            pass
+
         for team in teams:
             if is_human_managed(team):
                 continue
@@ -1541,6 +1550,12 @@ class AITeamManager:
         roster = getattr(team, "roster", None) or []
         if len(roster) >= 23:
             return 0  # 23-man limit is a real NHL rule; can't add bodies
+        try:
+            import roster_limits as _rl
+            if not _rl.ai_can_sign_spc(team):
+                return 0  # R1: 50-contract limit is hard, even for the floor
+        except Exception:
+            pass
         strategy = self.team_strategies.get(team.team_name)
         budget = None
         needs = ()

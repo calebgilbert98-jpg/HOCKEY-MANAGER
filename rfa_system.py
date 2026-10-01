@@ -459,6 +459,17 @@ def _market_value(player) -> int:
 
 
 def _sign_player(team, player, aav: int, years: int) -> None:
+    # R1 (roster limits): Dec-1 ineligible RFAs can't sign anywhere, and
+    # emergency fill-ins can't take standard deals. Refuse, don't corrupt.
+    try:
+        import roster_limits as _rl
+        _ok, _why = _rl.can_sign_player(player)
+        if not _ok:
+            raise ValueError(_why)
+    except ValueError:
+        raise
+    except Exception:
+        pass
     c = getattr(player, "contract", None)
     if c is not None:
         c.salary = int(aav)
@@ -835,6 +846,23 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     # enter the season over the cap, so no unsolvable states exist.
     for team in ai_teams:
         _ai_cap_compliance_sweep(team)
+
+    # --- 6d. July 1: unsigned UFAs leave (R1, true NHL) -------------------
+    # Expired UFA deals come off the roster AND off the cap -- for the user
+    # team too. This is the structural fix for Sim A's $31.36M phantom
+    # overage (nothing ever moved expired deals). RFAs are untouched:
+    # rights retained, the QO flow owns them. Emergency fillers never
+    # carry over the summer either.
+    try:
+        import roster_limits as _rl
+        for team in list(getattr(league, "teams", None) or []):
+            try:
+                _rl.release_all_fillers(team)
+            except Exception:
+                continue
+        _rl.july_release_unsigned_ufas(league, app)
+    except Exception:
+        pass
 
     # --- 7. User team: queue qualifying decisions ----------------------------
     if user_team is not None and app is not None:
@@ -2278,10 +2306,17 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
     roster = getattr(team, "roster", None)
     if roster is None:
         return
+    try:
+        import roster_limits as _rl
+    except Exception:
+        _rl = None
     prospects = sorted(getattr(team, "prospects", []) or [],
                        key=_ovr, reverse=True)
     for p in prospects:
         if len(roster) >= target:
+            break
+        # R1: never take a 51st contract -- the 50-SPC limit is hard.
+        if _rl is not None and not _rl.ai_can_sign_spc(team):
             break
         # ELC promotions are how real cap-strapped teams fill holes --
         # allowed to dip into the reserve, but never below roster math.
@@ -2300,6 +2335,9 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
     guard = 0
     while len(roster) < target and pool and guard < 40:
         guard += 1
+        # R1: never take a 51st contract.
+        if _rl is not None and not _rl.ai_can_sign_spc(team):
+            break
         budget = _spending_budget(team, incoming=True)
         best = None
         for p in sorted(pool, key=_market_value):

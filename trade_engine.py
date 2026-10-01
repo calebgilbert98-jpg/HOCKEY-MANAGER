@@ -2921,6 +2921,33 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                 return _blocked(
                     f"{_pname} isn't on {_sname}'s roster.")
 
+    # R1 (roster limits): emergency fill-ins are league-exception recalls,
+    # not trade assets -- they can never be moved. And neither club may be
+    # left unable to dress a legal lineup (18 skaters + 2 goalies).
+    try:
+        import roster_limits as _rl
+        for _src_team, _assets in ((user_team, user_assets),
+                                   (partner_team, partner_assets)):
+            for a in _assets or []:
+                if isinstance(a, DraftPick):
+                    continue
+                if _rl.is_emergency_filler(a):
+                    _pname = getattr(a, "full_name", "The emergency fill-in")
+                    return _blocked(
+                        f"{_pname} is an emergency fill-in -- league-exception "
+                        f"recalls can't be traded. No assets moved.")
+        for _src_team, _assets in ((user_team, user_assets),
+                                   (partner_team, partner_assets)):
+            _out = [a for a in (_assets or [])
+                    if not isinstance(a, DraftPick)]
+            if _out and _rl.would_break_dress_minimum(_src_team, _out):
+                _sname = getattr(_src_team, "team_name", "?")
+                return _blocked(
+                    f"{_sname} would be unable to dress a legal lineup (18 "
+                    f"skaters + 2 goalies) after this deal. No assets moved.")
+    except Exception:
+        pass
+
     # Retention preflight -- every term validated BEFORE anything moves.
     # An illegal term (over 50%, no slot left, 15% aggregate breached,
     # third retaining club, no cap hit to retain) kills the deal instead
