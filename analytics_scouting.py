@@ -108,6 +108,32 @@ def _skater_value_signals(p, team_pct: float) -> Tuple[float, List[str], List[st
         signals.append(f"Due for goals: {m.ixg:.0f} ixG vs {goals} actual "
                        f"({ixg_gap:.0f} goals of bad finishing luck)")
 
+    # 1b. Shot-quality ground truth (analytics integration 2026-10-01):
+    # the engines grade every chance A/B/C -- a skater whose grade-based
+    # ixG beats his actual goals is generating real looks, not just
+    # volume. Uses the observed grade ledger, not the modeled ixG.
+    try:
+        _ixgg = float(getattr(m, "ixg_grade", 0) or 0)
+    except Exception:
+        _ixgg = 0.0
+    _grade_gap = _ixgg - goals
+    if _grade_gap >= 6 and gp >= 25 and _ixgg > 0:
+        score += min(20.0, _grade_gap * 1.5)
+        signals.append(f"Quality chances, no finish: {m.ixg_grade:.0f} "
+                       f"grade-ixG vs {goals} actual "
+                       f"({_grade_gap:.0f} goals of bad luck on real looks)")
+    # 1c. Elite shot quality: lives in the high-danger areas.
+    try:
+        _ash = float(getattr(m, "grade_a_share", 0) or 0)
+        _ags = int(getattr(m, "grade_a_shots", 0) or 0)
+    except Exception:
+        _ash, _ags = 0.0, 0
+    if _ash >= 0.22 and _ags >= 20 and gp >= 25:
+        score += min(12.0, (_ash - 0.22) * 100.0)
+        signals.append(f"High-danger driver: {m.grade_a_share:.1%} of shots "
+                       f"grade A ({m.grade_a_shots} looks) -- shot quality "
+                       f"is real")
+
     # 2. Snake-bitten driver: elite process, terrible luck.
     if m.pdo < 0.985 and m.xgf_pct >= 52.0 and gp >= 25:
         unluck = (0.985 - m.pdo) * 1000

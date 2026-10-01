@@ -2874,6 +2874,7 @@ class AdvancedGameSim:
             except Exception:
                 pass
             # -- roll ---------------------------------------------------
+            _ctxq = {}
             _grade = _rcg(
                 _loc, _contest01, shooter,
                 defenders=_defenders, goalie=goalie,
@@ -2905,7 +2906,8 @@ class AdvancedGameSim:
                     "team_d_weakness": _team_d_weak,
                     "six_on_five_tilt": _tilt65,
                     "ot_3v3_tilt": _tilt3v3,
-                })
+                },
+                context_out=_ctxq)
             shot_chance = shot_chance * _cgfm(_grade)
             # Schemed-against factor (scenario battle): applied to the
             # grade-A chance, never to finishing. Multiplicative, bounded.
@@ -3000,6 +3002,13 @@ class AdvancedGameSim:
             shot_chance = max(0.04, min(0.16, shot_chance))
             _grade = "B"
         self._last_chance_grade = _grade
+        # Analytics integration (2026-10-01): stash the scenario/
+        # composite context that drove this grade -- recorded on the
+        # lightweight shot log. Additive; never affects the grade.
+        try:
+            self._last_chance_context = dict(_ctxq)
+        except Exception:
+            pass
         return shot_chance
 
     def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):

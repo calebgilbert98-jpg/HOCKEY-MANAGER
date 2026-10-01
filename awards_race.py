@@ -277,8 +277,22 @@ def hart_race(players: List[Any], team_pct: Dict[str, float],
         team_factor = 0.75 + 0.5 * min(1.0, max(0.0, (pct - 0.400) / 0.250))
         score = (pts + 0.4 * goals) * team_factor
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
+        # Analytics integration (2026-10-01): surface the new systems'
+        # shot-quality data on the ballot -- grade-based ixG and grade-A
+        # share, so voters (and the UI) can see who's driving real
+        # chances vs riding volume. Visible only; the score is untouched.
+        _ixgg, _ash = 0.0, 0.0
+        try:
+            import advanced_metrics as _am_h
+            _mm = _am_h.skater_advanced(p)
+            _ixgg = float(getattr(_mm, "ixg_grade", 0) or 0)
+            _ash = float(getattr(_mm, "grade_a_share", 0) or 0)
+        except Exception:
+            pass
         out.append({"player": p, "score": score, "points": pts,
-                    "goals": goals, "team_pct": pct})
+                    "goals": goals, "team_pct": pct,
+                    "ixg_grade": round(_ixgg, 1),
+                    "grade_a_share": round(_ash, 3)})
     out.sort(key=lambda r: r["score"], reverse=True)
     return out
 
@@ -327,9 +341,19 @@ def art_ross_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
             continue
         score = _pts(p)
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
+        _ixgg, _ash = 0.0, 0.0
+        try:
+            import advanced_metrics as _am_a
+            _mm = _am_a.skater_advanced(p)
+            _ixgg = float(getattr(_mm, "ixg_grade", 0) or 0)
+            _ash = float(getattr(_mm, "grade_a_share", 0) or 0)
+        except Exception:
+            pass
         out.append({"player": p, "score": score, "points": _pts(p),
                     "goals": _stat(p, "goals") or 0,
-                    "assists": _stat(p, "assists") or 0})
+                    "assists": _stat(p, "assists") or 0,
+                    "ixg_grade": round(_ixgg, 1),
+                    "grade_a_share": round(_ash, 3)})
     out.sort(key=lambda r: (r["score"], r["goals"]), reverse=True)
     return out
 
@@ -342,9 +366,19 @@ def rocket_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
             continue
         score = _stat(p, "goals") or 0
         score += _star_race_bonus(score, p)  # Item 8: 3-star recognition
+        _ixgg, _ash = 0.0, 0.0
+        try:
+            import advanced_metrics as _am_r
+            _mm = _am_r.skater_advanced(p)
+            _ixgg = float(getattr(_mm, "ixg_grade", 0) or 0)
+            _ash = float(getattr(_mm, "grade_a_share", 0) or 0)
+        except Exception:
+            pass
         out.append({"player": p, "score": score,
                     "goals": _stat(p, "goals") or 0,
-                    "points": _pts(p)})
+                    "points": _pts(p),
+                    "ixg_grade": round(_ixgg, 1),
+                    "grade_a_share": round(_ash, 3)})
     out.sort(key=lambda r: (r["score"], r["points"]), reverse=True)
     return out
 

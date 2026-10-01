@@ -4826,6 +4826,41 @@ class GameSim:
                 _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
             except Exception:
                 _crowd_edge = 0.0
+            # -- schemed-against superstars (2026-09-30, Muck) ----------
+            # (moved to _resolve_shot_on_goal: the factor applies to the
+            # goal probability there, alongside the other shared tilts.)
+            # -- 6v5 scramble tilt (workstream B, 2026-09-30) ---------------
+            # Generation side only: the six-man unit's net-front chaos
+            # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+            # earns grade A. Finishing constants/clamps untouched.
+            _tilt65 = 1.0
+            try:
+                if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import grade_tilt_ctx as _gtc65
+                    _opp65g = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt65 = _gtc65(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp65g)
+                                     ).get("six_on_five_tilt", 1.0)
+            except Exception:
+                pass
+            # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+            # Generation side only: 3v3 OT's open ice tilts grade-A earning
+            # by the on-ice units' skating/chance-creation. The live lever
+            # for (e), alongside the volume bump in
+            # _apply_situation_modifiers.
+            _tilt3v3 = 1.0
+            try:
+                if getattr(self, "_ot_sudden_death", False) and not getattr(
+                        self, "is_playoff", False):
+                    from six_on_five import ot_open_ice_tilt as _ot33
+                    _opp3v3 = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt3v3 = _ot33(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp3v3))
+            except Exception:
+                pass
+            _ctx65 = {}
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,
@@ -4845,7 +4880,18 @@ class GameSim:
                     "is_playoff": bool(getattr(self, "is_playoff", False)),
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
-                })
+                    "six_on_five_tilt": _tilt65,
+                    "ot_3v3_tilt": _tilt3v3,
+                },
+                context_out=_ctx65)
+            # Analytics integration (2026-10-01): stash the scenario/
+            # composite context that drove this grade -- recorded on the
+            # shot log by _analytics_record_shot. Additive; never affects
+            # the grade.
+            try:
+                self._last_chance_context = dict(_ctx65)
+            except Exception:
+                pass
         except Exception:
             pass
         return _grade
@@ -7287,7 +7333,8 @@ class GameSim:
             return "-"
 
     def _analytics_record_shot(self, shooter, attacking_team, defending_team,
-                               location, distance, shot_type, xg, grade=None):
+                               location, distance, shot_type, xg, grade=None,
+                               chance_context=None):
         """Log one shot attempt for the Analytics Hub (module 04)."""
         try:
             shots, _ = self._analytics_logs()
@@ -7301,6 +7348,22 @@ class GameSim:
                     _gr = None
             except Exception:
                 _gr = None
+            # Analytics integration (2026-10-01): scenario/composite
+            # context -- which hard gate fired, the active situation flags,
+            # and the game_ctx inputs that drove the grade. Falls back to
+            # the stashed context from _roll_chance_grade when not passed
+            # explicitly. Pure recording; never affects engine decisions.
+            _cctx = chance_context
+            if _cctx is None:
+                try:
+                    _cctx = dict(getattr(self, "_last_chance_context", None)
+                                 or {})
+                except Exception:
+                    _cctx = {}
+            try:
+                _cctx = {str(k): v for k, v in dict(_cctx or {}).items()}
+            except Exception:
+                _cctx = {}
             shots.append({
                 "shooter_id": getattr(shooter, "id", None),
                 "shooter": getattr(shooter, "full_name",
@@ -7315,6 +7378,7 @@ class GameSim:
                 "shot_type": getattr(shot_type, "name", str(shot_type)),
                 "xg": round(float(xg or 0), 3),
                 "grade": _gr,
+                "chance_context": _cctx,
                 "outcome": "pending",
                 "line": self._analytics_line_of(shooter, attacking_team),
             })
