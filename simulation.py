@@ -7019,7 +7019,7 @@ class GameSim:
             # Workstream B(e), 2026-09-30: 3v3 OT is very open -- widen
             # the live chance engine (volume + the ot_3v3_tilt on grade).
             # Never a synthetic "decide it in OT" roll.
-            modifier = 2.00
+            modifier = 2.50
         
         return base_chance * modifier
 

@@ -27,11 +27,11 @@ _STYLES = {
     # down1/down2: pull windows in seconds remaining; nz_draw: pull for a
     # neutral-zone draw after a timeout; timeout_eager: probability of
     # burning the timeout when the spot is right.
-    "aggressive": {"down1": 150, "down2": 75, "nz_draw": True,
+    "aggressive": {"down1": 180, "down2": 75, "nz_draw": True,
                    "timeout_eager": 0.85},
-    "balanced": {"down1": 120, "down2": 60, "nz_draw": False,
+    "balanced": {"down1": 140, "down2": 60, "nz_draw": False,
                  "timeout_eager": 0.55},
-    "conservative": {"down1": 90, "down2": 45, "nz_draw": False,
+    "conservative": {"down1": 105, "down2": 45, "nz_draw": False,
                      "timeout_eager": 0.30},
 }
 
