@@ -1095,7 +1095,7 @@ def pk_denial_factor(defending_unit: List[Any], coach: Any = None,
     """The defending PK unit's scheme coverage as a chance multiplier.
 
     A great PK ([shot-blockers, faceoff men, clearers, sticks] all covered)
-    shaves up to 6% off the chance; a malformed one shaves nothing. Always
+    shaves up to 4% off the chance; a malformed one shaves nothing. Always
     <= 1.0. Both engines apply it at the same point as unit_efficiency.
     """
     try:
@@ -1103,8 +1103,12 @@ def pk_denial_factor(defending_unit: List[Any], coach: Any = None,
         if coach is None:
             coach = _resolve_coach(team, sim)
         fit01, _ = _pk_fit(skaters, coach=coach)
-        # Below-average coverage shaves nothing; a perfect PK shaves 6%.
-        return _clamp(1.0 - 0.06 * _clamp((fit01 - 0.45) / 0.55, 0.0, 1.0),
+        # Below-average coverage shaves nothing; a perfect PK shaves 4%.
+        # Recalibrated 2026-10-01 (workstream A2, D11 re-tune): league PK%
+        # sat ~84-85 vs the NHL ~78.4 bar -- the denial was too strong.
+        # Softening it moves PK% down toward the bar and lifts PP
+        # conversion (same lever, both bars, correct direction).
+        return _clamp(1.0 - 0.04 * _clamp((fit01 - 0.45) / 0.55, 0.0, 1.0),
                       _DENY_MIN, _DENY_MAX)
     except Exception:
         return 1.0
@@ -1129,8 +1133,16 @@ def pk_denial_factor(defending_unit: List[Any], coach: Any = None,
 # governance), not the PP1 paper mean -- the channel must be ~1.0 for the
 # average unit actually deployed, or it weakens the league's PPs outright.
 # Re-measured 2026-09-30 (workstream A, 120 games): fit01_mean 0.7481.
-PP_FIT_ANCHOR = 0.75
-_PP_SUS_MIN, _PP_SUS_MAX = 0.75, 1.25
+# Re-measured 2026-10-01 (workstream A2, D11 tree, 10 games, n=268):
+# fit01_mean 0.703 -- the deployed mean drifted down the stack, and the
+# 0.75 anchor was throttling the channel to ~0.86 on average.
+PP_FIT_ANCHOR = 0.70
+# Slope 2.6 (2026-10-01, workstream A2): measured best on both engines
+# (120g: QS 17.92 / GS 17.90 at 2.6, vs QS 16.78 at 2.0 and QS 14.91 /
+# GS 14.87 at 3.0) -- the asymmetric clamp lets the upside run while the
+# floor clips the downside, so 2.6 maximizes the mean multiplier.
+# Still mean-anchored.
+_PP_SUS_MIN, _PP_SUS_MAX = 0.70, 1.35
 
 
 def pp_zone_sustenance(unit: List[Any], sim: Any = None,
@@ -1146,7 +1158,7 @@ def pp_zone_sustenance(unit: List[Any], sim: Any = None,
         fit01 = float(getattr(rep, "fit01", PP_FIT_ANCHOR))
     except Exception:
         fit01 = PP_FIT_ANCHOR
-    return _clamp(1.0 + 2.0 * (fit01 - PP_FIT_ANCHOR),
+    return _clamp(1.0 + 2.6 * (fit01 - PP_FIT_ANCHOR),
                   _PP_SUS_MIN, _PP_SUS_MAX)
 
 # ---------------------------------------------------------------------------

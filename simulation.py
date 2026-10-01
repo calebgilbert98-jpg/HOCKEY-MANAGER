@@ -2881,7 +2881,7 @@ class GameSim:
                            + _hunter.skating) / 3.0
                 _cskill = (puck_carrier.puck_handling + puck_carrier.composure
                            + puck_carrier.skating) / 3.0
-                _strip = (_hskill / max(1.0, _hskill + _cskill)) * 0.95 * _sus_n
+                _strip = (_hskill / max(1.0, _hskill + _cskill)) * 1.08 * _sus_n
                 if random.random() < _strip:
                     self._log_event(
                         f"{_hunter.full_name} strips the puck on the forecheck.",
@@ -2954,7 +2954,7 @@ class GameSim:
                               + _carrier_dz.skating) / 3.0
                 else:
                     _cs_dz = 70.0
-                _strip_dz = (_hs_dz / max(1.0, _hs_dz + _cs_dz)) * 0.70 * _sus_dz
+                _strip_dz = (_hs_dz / max(1.0, _hs_dz + _cs_dz)) * 0.85 * _sus_dz
                 if random.random() < _strip_dz:
                     self._log_event(
                         f"{_hunter_dz.full_name} strips the puck on the forecheck.",
@@ -3091,8 +3091,8 @@ class GameSim:
                     from line_chemistry import pp_zone_sustenance as _pzs_r
                     _unit_r = [pl for pl in self._get_on_ice(defending_team)
                                if pl.primary_position != PlayerPosition.GOALIE]
-                    def_roll *= 1.0 + 0.25 * (_pzs_r(_unit_r, sim=self,
-                                                     team=defending_team) - 0.75)
+                    def_roll *= 1.0 + 0.42 * (_pzs_r(_unit_r, sim=self,
+                                                     team=defending_team) - 0.68)
             except Exception:
                 pass
 
@@ -3629,7 +3629,7 @@ class GameSim:
             if self._is_team_on_power_play(defending_team):
                 from line_chemistry import pp_zone_sustenance as _pzs_b
                 _unit_b = [pl for pl in forecheckers if pl is not None]
-                pressure = pressure * _pzs_b(_unit_b, sim=self, team=defending_team) + 16.0
+                pressure = pressure * _pzs_b(_unit_b, sim=self, team=defending_team) + 22.0
         except Exception:
             pass
 
@@ -8437,7 +8437,7 @@ class GameSim:
                               + _carrier_sw.skating) / 3.0
                 else:
                     _cs_sw = 70.0
-                _strip_sw = (_hs_sw / max(1.0, _hs_sw + _cs_sw)) * 1.00 * _sus_sw
+                _strip_sw = (_hs_sw / max(1.0, _hs_sw + _cs_sw)) * 1.15 * _sus_sw
                 if random.random() < _strip_sw:
                     self._log_event(
                         f"{_hunter_sw.full_name} swarms the puck carrier shorthanded.",
@@ -8445,7 +8445,7 @@ class GameSim:
                     return self._turnover_possession(defending_team)
                 # Even when the swarm doesn't strip it, the 5-man pressure
                 # forces the kill to fire it down -- they can't hold it.
-                if random.random() < 0.50 * _sus_sw:
+                if random.random() < 0.68 * _sus_sw:
                     return self._zone_clear(attacking_team)
             except Exception:
                 pass
