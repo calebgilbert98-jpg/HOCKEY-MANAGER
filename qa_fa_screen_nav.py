@@ -132,6 +132,8 @@ class Harness:
                 roster=[], salary_cap=88000000,
                 inbox=StubInbox()),
         )
+        gm.league = SimpleNamespace(
+            teams=[], free_agent_staff=[], free_agents=gm.free_agents)
         self.game_manager = gm
         self.app = self
         self.league = SimpleNamespace(free_agent_staff=[])
