@@ -14851,11 +14851,20 @@ class HockeyManagerGUI(tk.Tk):
                         if not getattr(w, 'playoff_bracket', None):
                             w._generate_bracket()
                         w._simulate_all_playoffs()
-                        # Cup decided in bulk: send the awarding recap now.
-                        try:
-                            self._maybe_send_cup_recap()
-                        except Exception:
-                            pass
+                    else:
+                        # No GUI window (headless bulk sim): drive the
+                        # bracket directly. Added 2026-10-01 (playthrough
+                        # B2): without this the try block silently skipped,
+                        # _playoffs_complete() stayed False, and the season
+                        # stalled forever. Mirrors
+                        # PlayoffView._generate_bracket (league-attached
+                        # bracket) + the headless _run_games loop.
+                        self._simulate_playoffs_headless()
+                    # Cup decided in bulk: send the awarding recap now.
+                    try:
+                        self._maybe_send_cup_recap()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 if self._playoffs_complete():
@@ -15106,6 +15115,51 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return False
+
+    def _simulate_playoffs_headless(self):
+        """Generate + simulate the playoff bracket without a GUI window.
+
+        Headless fallback for the bulk-sim season-end path (playthrough
+        B2, 2026-10-01). Mirrors PlayoffView._generate_bracket (bracket
+        attached to the league, app set for date-aware sim paths) and the
+        synchronous _run_games loop from _simulate_all_playoffs; the
+        existing _playoffs_complete() then sees the league bracket's
+        champion. Additive: the windowed path is untouched.
+        """
+        from playoff_system import PlayoffBracket
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        bracket = getattr(league, "playoff_bracket", None)
+        if bracket is None or not getattr(bracket, "playoff_series", None):
+            bracket = PlayoffBracket(league)
+            try:
+                bracket.app = self
+            except Exception:
+                pass
+            bracket.generate_playoff_bracket()
+            try:
+                league.playoff_bracket = bracket
+            except Exception:
+                pass
+        try:
+            rounds = PlayoffBracket.ROUND_ORDER
+        except Exception:
+            rounds = ()
+        for round_name in rounds:
+            try:
+                bracket.current_round = round_name
+                for series in (bracket.playoff_series.get(round_name) or []):
+                    while not series.is_complete:
+                        bracket.simulate_playoff_game(series)
+                bracket.advance_to_next_round(round_name)
+            except Exception:
+                break
+        try:
+            import headlines
+            headlines.drain_bracket_headlines(self, bracket)
+        except Exception:
+            pass
 
     def _maybe_send_cup_recap(self) -> bool:
         """Send the Stanley Cup awarding recap to the inbox, once.
