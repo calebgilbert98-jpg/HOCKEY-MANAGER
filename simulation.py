@@ -5764,22 +5764,17 @@ class GameSim:
                    if p.primary_position != PlayerPosition.GOALIE]
         _team_name = getattr(attacking_team, "team_name", "")
 
-        # Primary: given passer, else select the setup man.
+        # Primary: given passer, else select the setup man via the ONE
+        # shared decision (mesh_system.select_setup_man -- WS2 parity;
+        # GameSim's playmaking_score path is canonical). Never a local copy.
         _primary = passer
         if _primary is None:
             _pool = [p for p in _on_ice if p != shooter]
             if _pool and random.random() < 0.75:
                 try:
-                    _pw = []
-                    for _pp in _pool:
-                        _w = _pms(_pp) * _relm(_pp, shooter)
-                        try:
-                            _w *= _mcf(_pp, [shooter], attacking_team,
-                                        is_playoff=_iso)
-                        except Exception:
-                            pass
-                        _pw.append(max(1.0, _w))
-                    _primary = random.choices(_pool, weights=_pw, k=1)[0]
+                    from mesh_system import select_setup_man as _ssm
+                    _primary = _ssm(_pool, shooter, attacking_team,
+                                    is_playoff=_iso)
                 except Exception:
                     _primary = None
         if _primary is not None:
@@ -6362,7 +6357,25 @@ class GameSim:
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, _gp))
         except Exception:
             pass
-        
+
+        # D29 (Muck DECIDED 2026-10-01): the grade clamp applies on GameSim
+        # too -- one decision, two fidelities. Same shared
+        # mesh_system.chance_grade_clamp that quick-sim applies in
+        # _apply_chance_grade; never a second copy. Bounds the final
+        # conversion by grade (A reaches NHL high-danger, C suppressed).
+        # Empty-net shots skip it (no goalie to beat -- the gimme/flub
+        # branch below is the decision there, same as quick-sim where the
+        # EN roll bypasses the clamp).
+        if not empty_net:
+            try:
+                from mesh_system import chance_grade_clamp as _cgc_gs
+                _lo_gs, _hi_gs = _cgc_gs(grade)
+                _gp_gs = 1.0 - adjusted_save_prob
+                _gp_gs = max(_lo_gs, min(_hi_gs, _gp_gs))
+                adjusted_save_prob = 1.0 - _gp_gs
+            except Exception:
+                pass
+
         # Resolve the shot
         if random.random() > adjusted_save_prob:
             # Goal scored

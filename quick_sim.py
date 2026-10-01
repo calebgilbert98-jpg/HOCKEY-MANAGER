@@ -2619,48 +2619,20 @@ class AdvancedGameSim:
         # ledger was producing A/G 1.49-1.53, just under the 1.55-1.70
         # band; +0.05 primary lifts A/G into the band without touching
         # finishing constants.
+        #
+        # WS2 parity: the setup-man SELECTION is the ONE shared decision
+        # (mesh_system.select_setup_man -- GameSim's playmaking_score path
+        # is canonical). The per-engine rate gate (0.65 here vs 0.75 on
+        # GameSim) is calibration for different mechanical-passer
+        # frequencies, not the decision; the decision never has a copy.
         if not assist_ids:
             _pool = [p for p in _skaters if p.id != shooter.id]
             if _pool and random.random() < 0.65:
                 _passer = None
                 try:
-                    from mesh_system import (primary_assist_score as _pas,
-                                             relationship_mult as _relm4,
-                                             mesh_chance_factor as _mcf4,
-                                             pass_lane_contest_mult as _plcm,
-                                             recipient_openness_mult as _rom)
+                    from mesh_system import select_setup_man as _ssm4
                     _iso4 = bool(getattr(self, "is_playoff", False))
-                    # Defender lane contest (shared): sticks/awareness
-                    _def_team4 = (self.away_team if team_name == self.home_team.team_name
-                                  else self.home_team)
-                    _d_onice4 = [d for d in (self.on_ice.get(_def_team4.team_name, {}) or {}).get("Defense", []) if d]
-                    _lane = _plcm(_d_onice4)
-                    # Recipient openness (shared): off_the_puck
-                    _open = _rom(shooter)
-                    _pw = []
-                    for _pp in _pool:
-                        # Passing LEADS (0.55) + awareness/composure/vision
-                        _w = _pas(_pp) * _relm4(_pp, shooter) * _lane * _open
-                        # Position role: forwards are the primary setup men
-                        # in the offensive zone; D distribute from the point
-                        # (secondary). Applied OUTSIDE the shared harmonic
-                        # gate -- the gate's attribute hierarchy is untouched.
-                        try:
-                            _pos = getattr(_pp, 'primary_position', None)
-                            _posn = getattr(_pos, 'name', '') or str(_pos)
-                            if 'DEFENSE' in _posn or 'DEFENCE' in _posn:
-                                _w *= 0.70
-                            elif 'GOALIE' not in _posn:
-                                _w *= 1.25
-                        except Exception:
-                            pass
-                        try:
-                            _w *= _mcf4(_pp, [shooter], team,
-                                        is_playoff=_iso4)
-                        except Exception:
-                            pass
-                        _pw.append(max(1.0, _w))
-                    _passer = random.choices(_pool, weights=_pw, k=1)[0]
+                    _passer = _ssm4(_pool, shooter, team, is_playoff=_iso4)
                 except Exception:
                     _passer = None
                 if _passer is not None:
@@ -2675,36 +2647,31 @@ class AdvancedGameSim:
                     except Exception:
                         pass
 
-        # Secondary assist: another on-ice teammate.
-        # Restored 2026-09-29 (scoring calibration): 0.55 -> 0.78, the
-        # pre-parity intensity. With the 0.60 primary above, targets
-        # assists/goal ~1.6-1.7. Selection stays attribute-weighted (below),
-        # not a dice roll -- the hierarchy (attributes first) is unchanged,
-        # only the rate. Same decision GameSim makes.
-        if random.random() < 0.78:
+        # Secondary assist: another on-ice teammate. WS2 parity: the SAME
+        # decision GameSim makes -- tuned rate with the trait bonus applied
+        # once and capped, selection via shared assist_weight x trait
+        # bonus. Attribute-weighted, not a dice roll; the hierarchy
+        # (attributes first) is unchanged, only the rate.
+        from player_traits import get_sim_bonus as _tb3
+        _sec_chance = 0.78
+        for p in _skaters:
+            if p.id not in (shooter.id, *assist_ids):
+                try:
+                    _sec_chance *= _tb3(p, "assist_chance_mult")
+                except Exception:
+                    pass
+                break  # Only apply once (highest bonus)
+        if random.random() < min(0.92, _sec_chance):
             candidates = [p for p in _skaters
                           if p.id not in (shooter.id, *assist_ids)]
             if candidates:
                 try:
                     from mesh_system import assist_weight as _aw3
                     _iso3 = bool(getattr(self, "is_playoff", False))
-                    _w3 = []
-                    for p in candidates:
-                        _w = max(0.05, _aw3(p, shooter, team,
-                                            is_playoff=_iso3))
-                        # Secondary: D point involvement is real, but the
-                        # forwards drive the play. Gentle role tilt outside
-                        # the shared gate.
-                        try:
-                            _pos3 = getattr(p, 'primary_position', None)
-                            _pn3 = getattr(_pos3, 'name', '') or str(_pos3)
-                            if 'DEFENSE' in _pn3 or 'DEFENCE' in _pn3:
-                                _w *= 0.85
-                            elif 'GOALIE' not in _pn3:
-                                _w *= 1.10
-                        except Exception:
-                            pass
-                        _w3.append(_w)
+                    _w3 = [max(0.05, _aw3(p, shooter, team,
+                                           is_playoff=_iso3)
+                               * _tb3(p, "assist_chance_mult"))
+                           for p in candidates]
                     second = random.choices(candidates, weights=_w3, k=1)[0]
                 except Exception:
                     second = random.choice(candidates)
