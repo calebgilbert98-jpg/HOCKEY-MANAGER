@@ -1009,6 +1009,18 @@ class AdvancedGameSim:
             home_team.team_name: ensure_lineup(home_team),
             away_team.team_name: ensure_lineup(away_team)
         }
+        # WS1 parity: the canonical per-game energy pool starts at 100 for
+        # both clubs -- the shared reset_game_fatigue GameSim calls on its
+        # first tick (simulation._update_fatigue). Without it, a previous
+        # watched game's drained pool would leak into a quick-simmed game.
+        # Never raises.
+        try:
+            from condition_system import reset_game_fatigue as _rgf
+            for _t in (home_team, away_team):
+                for _p in getattr(_t, "roster", None) or []:
+                    _rgf(_p)
+        except Exception:
+            pass
         self.score = {home_team.team_name: 0, away_team.team_name: 0}
         self.events = []
         self.stats = {
@@ -1472,31 +1484,101 @@ class AdvancedGameSim:
     def _line_governor_factor(self, team_name, line, state):
         """Wave A: gradient share-factor for this unit's binding skater
         (1.0 fresh -> 0.25 at full gradient bite -> 0.0 at the backstop).
-        Mirrors deployment_policy.soft_cap_adjust_shares' TOI gradient
-        (AdvGS tracks per-shift TOI; the live condition/injury-risk terms
-        are GameSim per-tick readings with no AdvGS equivalent -- same
-        decision, speed-optimized approximation)."""
+        Mirrors deployment_policy.soft_cap_adjust_shares' full factor --
+        TOI gradient x the shared condition governor
+        (_condition_governor_mult) x the shared injury-risk governor
+        (_injury_risk_governor_mult), all read off the same binding skater
+        (max game TOI) GameSim's soft_cap_adjust_shares binds on. AdvGS
+        tracks per-shift TOI and per-shift canonical energy (see
+        _apply_shift_energy) instead of per-tick readings -- same decision,
+        speed-optimized approximation. Fresh legs -> 1.0 x 1.0 x 1.0, so
+        today's behavior is byte-identical when nobody is tired."""
         try:
-            from deployment_policy import _smoothstep as _ss
+            from deployment_policy import (
+                _smoothstep as _ss,
+                _condition_governor_mult as _cgm,
+                _injury_risk_governor_mult as _rgm,
+            )
             start_s, full_s, backstop_s = state
             _st = self.stats.get(team_name, {})
             worst = 0.0
+            star = None
             for p in line or []:
                 if not p:
                     continue
                 try:
-                    _t = _st.get(getattr(p, "id", None), {}).get("toi", 0)
-                    worst = max(worst, float(_t or 0))
+                    _t = float(_st.get(getattr(p, "id", None), {})
+                               .get("toi", 0) or 0)
+                    if _t > worst:
+                        worst, star = _t, p
                 except Exception:
                     continue
             if worst >= backstop_s:
                 return 0.0
             if worst <= start_s:
-                return 1.0
-            bite = _ss((worst - start_s) / max(1.0, full_s - start_s))
-            return max(0.05, 1.0 - 0.75 * bite)
+                toi_g = 1.0
+            else:
+                bite = _ss((worst - start_s) / max(1.0, full_s - start_s))
+                toi_g = 1.0 - 0.75 * bite
+            # WS1 parity: the shared governors, same binding skater as
+            # GameSim. Never raises (the shared functions return 1.0 on
+            # failure); the 0.05 floor matches soft_cap_adjust_shares.
+            cond_f = _cgm(star) if star is not None else 1.0
+            risk_f = _rgm(star) if star is not None else 1.0
+            return max(0.05, toi_g * cond_f * risk_f)
         except Exception:
             return 1.0
+
+    def _apply_shift_energy(self, team_name, fw, df, shift_s=45.0):
+        """WS1 parity: per-shift canonical energy accounting.
+
+        Speed-optimized approximation of GameSim's per-tick energy loop
+        (simulation._update_fatigue): on-ice skaters drain through the
+        shared shift_energy_drain (same base rate, stamina term, PK/PP
+        terms as the tick loop); benched skaters recover
+        BENCH_RECOVERY_PER_S x fatigue_recovery_mult -- the D23 0.22/s
+        bench regen at shift granularity. Both sides sync the canonical
+        game_energy pool both fidelities' governors read. Goalies are
+        excluded (own pool, never drained on this path). Never raises.
+        """
+        try:
+            from condition_system import (
+                shift_energy_drain as _drain,
+                BENCH_RECOVERY_PER_S as _brs,
+                fatigue_recovery_mult as _rec,
+                get_game_energy as _ge,
+                sync_game_energy as _sync,
+            )
+        except Exception:
+            return
+        try:
+            team = (self.home_team
+                    if team_name == self.home_team.team_name
+                    else self.away_team)
+            on_ice_ids = {getattr(p, "id", None)
+                          for p in (fw or []) + (df or []) if p}
+            on_ice_ids.discard(None)
+            pk = (self.pk_team == team_name)
+            pp = (self.pp_team == team_name)
+            for p in getattr(team, "roster", None) or []:
+                try:
+                    if p is None:
+                        continue
+                    pos = getattr(p, "primary_position", None)
+                    if getattr(pos, "name", "") == "GOALIE":
+                        continue  # goalies have their own pool
+                    cur = _ge(p)
+                    if getattr(p, "id", None) in on_ice_ids:
+                        new = max(0.0, cur - _drain(p, shift_s,
+                                                   on_pk=pk, on_pp=pp))
+                    else:
+                        new = min(100.0,
+                                  cur + _brs * _rec(p) * shift_s)
+                    _sync(p, new)
+                except Exception:
+                    continue
+        except Exception:
+            pass
 
     def _select_lines_idx(self, team_name):
         """Least-fatigued unit. Returns (fw, df, goalie, fw_idx, df_idx).
@@ -1513,13 +1595,43 @@ class AdvancedGameSim:
         goalies = lineup['Goalies']
         _gov = self._governor_state(team_name)
 
+        # WS1 parity: the shared D17 condition->deployment read. GameSim's
+        # _player_deployment_score multiplies every skater's weight by
+        # condition_deployment_mult (gassed 0.85 / worn 0.94 / fresh 1.03,
+        # playing hurt x0.90); AdvGS's quantity decision is the rotation
+        # pick, so the line's mean shared mult scales its pick score the
+        # same direction (worse condition -> picked later). Cached per
+        # player id for the call -- persistent condition only moves between
+        # games. Never raises.
+        try:
+            from condition_system import condition_deployment_mult as _cdm
+        except Exception:
+            _cdm = None
+        _cdm_cache = {}
+
+        def _line_cdm(_line):
+            if _cdm is None:
+                return 1.0
+            _vals = []
+            for _p in _line or []:
+                if not _p:
+                    continue
+                _pid = getattr(_p, "id", None)
+                if _pid not in _cdm_cache:
+                    try:
+                        _cdm_cache[_pid] = float(_cdm(_p))
+                    except Exception:
+                        _cdm_cache[_pid] = 1.0
+                _vals.append(_cdm_cache[_pid])
+            return sum(_vals) / len(_vals) if _vals else 1.0
+
         def _pick(lines):
             _best, _best_f = None, float("inf")
             _fb, _fb_f = None, float("inf")
             for i, _line in enumerate(lines):
                 _f = self._line_fatigue(team_name, _line)
                 _g = self._line_governor_factor(team_name, _line, _gov)
-                _score = _f + (1.0 - _g) * 8.0
+                _score = (_f + (1.0 - _g) * 8.0) / _line_cdm(_line)
                 if _f < _fb_f:
                     _fb_f, _fb = _f, i
                 if _g > 0.0 and _score < _best_f:
@@ -1690,6 +1802,31 @@ class AdvancedGameSim:
                 pass
             # The net is never empty across a horn.
             self._return_all_goalies()
+            # WS1 parity: intermission breather -- the shared
+            # INTERMISSION_RECOVERY x fatigue_recovery_mult both fidelities
+            # apply between regulation periods
+            # (GameSim._apply_intermission_recovery). Skaters only: goalies
+            # have their own pool, never drained on this path. Never raises.
+            if old_period in (1, 2):
+                try:
+                    from condition_system import (
+                        INTERMISSION_RECOVERY as _ir,
+                        fatigue_recovery_mult as _rec,
+                        get_game_energy as _ge,
+                        sync_game_energy as _sync,
+                    )
+                    for _t in (self.home_team, self.away_team):
+                        for _p in getattr(_t, "roster", None) or []:
+                            try:
+                                _pos = getattr(_p, "primary_position", None)
+                                if getattr(_pos, "name", "") == "GOALIE":
+                                    continue
+                                _sync(_p, min(100.0,
+                                              _ge(_p) + _ir * _rec(_p)))
+                            except Exception:
+                                continue
+                except Exception:
+                    pass
             if old_period == 2 and self.period == 3:
                 # Second intermission: dressing-room words move the
                 # third-period needle (module 03).
@@ -1813,6 +1950,9 @@ class AdvancedGameSim:
                 if g.id not in self.stats[team_name]:
                     self.stats[team_name][g.id] = {'goals':0,'assists':0,'shots':0,'saves':0,'penalties':0,'toi':0,'fatigue':0}
                 self.stats[team_name][g.id]['toi'] += 45
+            # WS1 parity: per-shift canonical energy accounting (the 45s
+            # shift matches the TOI credit above).
+            self._apply_shift_energy(team_name, fw, df, shift_s=45.0)
 
         # Last-change edge for this shift: the home coach got his matchup,
         # the away's top line got checked. Small, on its own channel.
