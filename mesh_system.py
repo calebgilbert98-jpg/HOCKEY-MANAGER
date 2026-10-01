@@ -1841,17 +1841,18 @@ def chance_grade_clamp(grade: str):
 def finishing_ceiling_fraction(finishing: float) -> float:
     """Map a 1-100 finishing rating to [0, 1] of the grade envelope.
 
-    Convex (exponent 1.1, anchored at 45): stars (90+) keep ~85-100% of
-    the envelope, a 75-finishing shooter keeps about 57%, a
-    60-finishing shooter about 27%. finishing >= 95 -> 1.0, so the
-    league maximum is unchanged. Softened 2026-10-01 (was 1.3): the
-    60-80 band was too compressed -- Muck wants windows for breakouts,
-    not a structural cap. Never raises.
+    Linear (exponent 1.0, anchored at 40): stars (90+) keep ~95-100% of
+    the envelope, a 75-finishing shooter keeps 70%, a 60-finishing
+    shooter 40%. finishing >= 95 -> 1.0, so the league maximum is
+    unchanged. Lifted 2026-10-01: the 1.1/45 curve suppressed league
+    scoring below Muck's 2.70 GPG floor (QS 2.45, GS 1.66) -- the
+    absolute level was too low even though the hierarchy was right.
+    Separation by probability, not caps. Never raises.
     """
     try:
         _f = max(1.0, min(100.0, float(finishing)))
-        _x = max(0.0, min(1.0, (_f - 45.0) / 50.0))
-        return _x ** 1.1
+        _x = max(0.0, min(1.0, (_f - 40.0) / 50.0))
+        return _x ** 1.0
     except Exception:
         return 1.0
 
