@@ -64,6 +64,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "milestone_hit": _milestone_headline,
         "lottery_results": _lottery_headline,
         "international_results": _intl_headline,
+        "line_chemistry": _line_chemistry_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -641,6 +642,41 @@ def _intl_headline(game_date, title="", year=0, summary="", **kw):
         category="League",
         priority=2,
         is_important=True,
+    )
+
+
+_SITUATION_LABELS = {"ev": "even strength", "pp": "the power play",
+                     "pk": "the penalty kill"}
+
+
+def _line_chemistry_headline(game_date, hook="", text="", situation="ev",
+                             **kw):
+    """Line-chemistry notebook item (UI surface for line_chemistry).
+
+    The engine payload carries a raw "efficiency" number -- it is
+    deliberately dropped here and never reaches the EmailMessage, so the
+    story stays narrative-only (analytics stay a puzzle, never a cheat
+    sheet). Only the hockey-language story text is rendered.
+    """
+    from game_classes import EmailMessage
+    kw.pop("efficiency", None)  # numeric leak: never rendered, ever
+    hook = str(hook or "clicking").strip() or "clicking"
+    story = str(text or "").strip()
+    if not story:
+        return None
+    sit = _SITUATION_LABELS.get(str(situation or "ev").lower(),
+                                "even strength")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"📓 CHEMISTRY WATCH: a {hook} unit at {sit}",
+        content=(
+            f"{story}\n\n"
+            f"One {sit} unit is turning heads around the league -- the "
+            f"kind of thing coaches notice long before the scoresheet does."
+        ),
+        category="League",
+        priority=2,
     )
 
 

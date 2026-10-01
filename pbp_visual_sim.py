@@ -2703,6 +2703,19 @@ class PBPVisualSim(InGamePopup):
                 sim = self.sim
                 if cb is not None:
                     self.after(500, lambda: cb(sim))
+        elif et == "line_chemistry":
+            # Narrative-only unit-chemistry note (line_chemistry module).
+            # The story text is hockey language; no numbers are rendered.
+            _lc_txt = str(ev.get("text", "")).strip()
+            if _lc_txt:
+                self._feed(f"📓 {_lc_txt}", tag="info", ev=ev)
+        else:
+            # Generic fallback: an event kind with narrative text is never
+            # silently dropped. Kinds without text stay silent, preserving
+            # the old behavior for internal bookkeeping events.
+            _fb_txt = ev.get("text")
+            if isinstance(_fb_txt, str) and _fb_txt.strip():
+                self._feed(_fb_txt.strip(), tag="info", ev=ev)
 
     def _on_skate(self, ev):
         """Sim movement snapshot: the sim's tactical engine positions every
