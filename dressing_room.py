@@ -1677,7 +1677,8 @@ def _coach_influence(team: Any) -> int:
 
 
 def give_talk(team: Any, tone: str, context: Dict[str, Any],
-              speaker: str = "coach", rng: Any = None) -> Dict[str, Any]:
+              speaker: str = "coach", rng: Any = None,
+              day_key: Any = None) -> Dict[str, Any]:
     """Deliver a team talk. Returns the outcome dict and queues momentum.
 
     tone: calm | fired-up | cautious.
@@ -1685,6 +1686,14 @@ def give_talk(team: Any, tone: str, context: Dict[str, Any],
               leading|trailing|tied, rival: bool, streak: int}.
     speaker: coach | captain.
     Outcome tiers: landed (+2) / steady (+1) / flat (0) / backfired (-1).
+
+    Cap / cooldown: the room tunes out repeats. A pending, unconsumed talk
+    for the same situation means today's words were already heard -- the
+    new talk still replaces the pending record (the latest tone is what
+    the sim reads) but grants no further morale. The sim consumes (clears)
+    the record at game start / second intermission, so the next game's
+    talk is fresh again. A pending talk stamped with an older day_key is
+    stale, not a repeat.
     """
     rng = rng or random
     tone = tone if tone in TONES else "calm"
@@ -1728,14 +1737,29 @@ def give_talk(team: Any, tone: str, context: Dict[str, Any],
         outcome, boost, room = "backfired", -1, -2
         note = "A few eye-rolls. Wrong tone, wrong moment."
 
+    dr = ensure_dressing_room_fields(team)
+    # Repeat cooldown (see docstring): a pending, unconsumed talk for the
+    # same situation means the room already heard today's words.
+    pending = dr.get("intermission") if situation == "intermission" \
+        else dr.get("pregame")
+    repeat = isinstance(pending, dict)
+    if repeat and day_key is not None:
+        prev_day = pending.get("day_key")
+        if prev_day is not None and prev_day != day_key:
+            repeat = False  # stale pending talk from an earlier day
+    if repeat:
+        room = 0
+        note = (f"{note} The room has heard enough for now -- "
+                f"no further lift.")
+
     # The room absorbs it.
     for p in _roster(team):
         _bump(p, room)
 
-    dr = ensure_dressing_room_fields(team)
     record = {"tone": tone, "speaker": speaker, "speaker_name": speaker_name,
               "outcome": outcome, "boost": boost, "note": note,
-              "context": dict(context)}
+              "context": dict(context), "day_key": day_key,
+              "repeat": bool(repeat)}
     try:
         if situation == "intermission":
             dr["intermission"] = record
@@ -1748,12 +1772,13 @@ def give_talk(team: Any, tone: str, context: Dict[str, Any],
     return record
 
 
-def auto_talk(team: Any, context: Dict[str, Any], rng: Any = None
-              ) -> Dict[str, Any]:
+def auto_talk(team: Any, context: Dict[str, Any], rng: Any = None,
+              day_key: Any = None) -> Dict[str, Any]:
     """The AI path: the coach addresses the room through give_talk().
 
     Same mechanics as a user talk -- tone chosen by a simple read of the
-    situation, effectiveness from real coach influence.
+    situation, effectiveness from real coach influence. Same repeat
+    cooldown as a user talk (see give_talk).
     """
     rng = rng or random
     state = str(context.get("score_state", "tied"))
@@ -1764,7 +1789,8 @@ def auto_talk(team: Any, context: Dict[str, Any], rng: Any = None
         tone = "cautious" if situation == "intermission" else "calm"
     else:
         tone = "calm"
-    return give_talk(team, tone, context, speaker="coach", rng=rng)
+    return give_talk(team, tone, context, speaker="coach", rng=rng,
+                     day_key=day_key)
 
 
 def consume_pregame_boost(team: Any) -> int:
@@ -2374,6 +2400,12 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
         return {"situation": situation, "score_state": state,
                 "rival": rival, "streak": streak}
 
+    def _day_key(self):
+        try:
+            return self.app.current_date.isoformat()
+        except Exception:
+            return None
+
     def _give_pregame_talk(self):
         team = self._team()
         if team is None:
@@ -2384,7 +2416,7 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
         except Exception:
             tone, speaker = "calm", "coach"
         outcome = give_talk(team, tone, self._talk_context("pregame"),
-                            speaker=speaker)
+                            speaker=speaker, day_key=self._day_key())
         self._show_outcome(self.talk_result, outcome)
         self.refresh()
 
@@ -2398,7 +2430,7 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
         except Exception:
             tone, speaker = "calm", "coach"
         outcome = give_talk(team, tone, self._talk_context("intermission"),
-                            speaker=speaker)
+                            speaker=speaker, day_key=self._day_key())
         self._show_outcome(self.italk_result, outcome)
         self.refresh()
 

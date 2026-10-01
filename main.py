@@ -2696,8 +2696,13 @@ class HockeyManagerGUI(tk.Tk):
                 # Item 7 follow-up: the user names this club's captains --
                 # reclaim it from setup auto-repair and raise the picker.
                 # (This window runs after the __init__ pending check.)
+                # NOTE: must be after(), not after_idle(): the dashboard
+                # build below calls update_idletasks() (via _create_nav_pill),
+                # which flushes idle callbacks -- after_idle would raise the
+                # modal mid-construction and hang/crash startup (same as
+                # the 5259ebd fix for the __init__ pending check).
                 self.game_manager._claim_user_team_captaincy(user_team)
-                self.after_idle(self._raise_captaincy_blocker_if_pending)
+                self.after(250, self._raise_captaincy_blocker_if_pending)
                 self.title(f"{user_team.team_name} - Puck Dynasty")
                 self._update_team_colors()
                 
@@ -16626,7 +16631,23 @@ class HockeyManagerGUI(tk.Tk):
         chips_fn = getattr(self, "_navbar_session_chips", None)
         if callable(chips_fn):
             chips_fn(navbar, screen_id)
-        view = view_cls(holder, app=self, *args, **kwargs)
+        try:
+            view = view_cls(holder, app=self, *args, **kwargs)
+        except Exception:
+            # A view that fails mid-construction must not strand the user on
+            # a half-built screen (orphaned holder + navbar, dashboard
+            # hidden, no current screen). Tear the orphans down, restore the
+            # dashboard, then re-raise so the traceback still surfaces.
+            for _w in (holder, navbar):
+                try:
+                    _w.destroy()
+                except Exception:
+                    pass
+            try:
+                self._dashboard_frame.grid(**self._dashboard_grid)
+            except Exception:
+                pass
+            raise
         # Gating Phase 1: tag views built with a screen's static kwargs so
         # teardown knows they are safe to park (a quit-flow save carrying
         # a per-invocation on_done is never parked).
