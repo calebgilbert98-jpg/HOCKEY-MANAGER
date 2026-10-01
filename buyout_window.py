@@ -333,8 +333,16 @@ def _queue_user_buyout_message(league, team, app, season_year):
         lines.append("Your finance team flagged these contracts:")
         for cd in cards:
             flag = " ⚠️ DEAD WEIGHT" if cd["dead_weight"] else ""
+            # Talent tier (Muck's directive 2026-10-01: the numeric
+            # overall is never shown to the user; the card keeps the
+            # numeric value internally for sorting).
+            try:
+                from attribute_composites import talent_tier as _tier_fn3
+                _btier = _tier_fn3(cd['overall'])
+            except Exception:
+                _btier = "Decent"
             lines.append(
-                f"• {cd['name']} (age {cd['age']}, {cd['overall']} ovr): "
+                f"• {cd['name']} (age {cd['age']}, {_btier}): "
                 f"{_money(cd['cap_hit'])}/yr × {cd['years_left']} left — "
                 f"buyout costs {_money(cd['buyout_cost'])}, dead cap "
                 f"{_money(cd['annual_dead'])}/yr × {cd['dead_years']}, "

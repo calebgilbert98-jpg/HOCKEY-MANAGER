@@ -2157,10 +2157,19 @@ def detect_dynamics_issues(team: Any, team_context: Optional[Dict[str, Any]],
         for p in roster:
             try:
                 val = coach_archetype_valuation(coach, p)
-                ovr = p.overall_rating() if hasattr(p, "overall_rating") else 60
+                # Tier-based (Muck 2026-10-01): "elite" = Good+ tier.
+                try:
+                    from attribute_composites import talent_tier as _tt_r
+                    from attribute_composites import tier_index as _tix_r
+                    _elite = _tix_r(_tt_r(p.overall_rating()
+                                          if hasattr(p, "overall_rating")
+                                          else 60)) <= 3
+                except Exception:
+                    _elite = (p.overall_rating()
+                              if hasattr(p, "overall_rating") else 60) >= 70
                 rep = getattr(p, "reputation", 50) or 50
                 pot = (getattr(p, "potential_grade", "") or "").upper()
-                elite = ovr >= 70 or rep >= 60 or pot == "A"
+                elite = _elite or rep >= 60 or pot == "A"
                 if elite and val < 0.9:
                     base = getattr(p, "base_controversy", 50)
                     if base is None:
@@ -5134,8 +5143,15 @@ def _player_volatility_offset(p: Any, team: Any = None, coach: Any = None,
         reasons.append("miserable on a loser (+6)")
 
     # Just got paid -- security calms. Underpaid and knows it -- doesn't.
+    # Tier-based (Muck 2026-10-01): expected pay from the tier's market
+    # band, not the 1-point overall.
     try:
         ovr = p.overall_rating() if hasattr(p, "overall_rating") else 40
+        try:
+            from attribute_composites import tier_proxy_overall as _tpo_mo
+            ovr = _tpo_mo(ovr)
+        except Exception:
+            pass
         salary = getattr(p, "salary", 0) or 0
         expected = max(750_000, (ovr - 38) * 750_000)
         if salary >= expected * 1.2:
@@ -5217,11 +5233,18 @@ def coach_market_appeal(coach: Any, hiring_org: tuple = ()) -> Dict[str, Any]:
 
 def volatility_trade_discount(player: Any) -> float:
     """Talent-personality-volatility balance for trade value: hotheads cost
-    less, but a superstar is worth the headache."""
+    less, but a superstar is worth the headache. Tier-based (Muck
+    2026-10-01): star gradient from the tier, not 1-point overall."""
     try:
         c = getattr(player, "controversy", 0) or 0
-        ovr = player.overall_rating() if hasattr(player, "overall_rating") else 40
-        star = max(0.0, min(1.0, (ovr - 40) / 24.0))
+        try:
+            from attribute_composites import talent_tier as _tt_v
+            from attribute_composites import tier_index as _tix_v
+            _t = _tix_v(_tt_v(player.overall_rating()
+                              if hasattr(player, "overall_rating") else 40))
+        except Exception:
+            _t = 4
+        star = max(0.0, min(1.0, 1.0 - _t / 4.0))
         discount = (c / 100.0) * 0.25 * (1.15 - star)
         return round(max(0.70, 1 - discount), 3)
     except Exception:
@@ -5946,10 +5969,16 @@ def gm_fa_accept_delta(team: Any, player: Any) -> float:
     """
     try:
         rep = gm_stature(team)
+        # Tier-based (Muck 2026-10-01): a "star" FA is Very good+.
         try:
-            star = player.overall_rating() >= 85
+            from attribute_composites import talent_tier as _tt_fa
+            from attribute_composites import tier_index as _tix_fa
+            star = _tix_fa(_tt_fa(player.overall_rating())) <= 2
         except Exception:
-            star = False
+            try:
+                star = player.overall_rating() >= 85
+            except Exception:
+                star = False
         scale = 1.0 if star else 0.4
         if rep >= 75:
             return round(0.05 * scale, 3)
@@ -5998,18 +6027,23 @@ def gm_staff_accept_delta(team: Any) -> float:
 # every helper is defensive and never raises.
 # ---------------------------------------------------------------------------
 
-#: overall_rating() (native 1-100) at/above which a player counts as a
-#: "star" for headline purposes. Same line as gm_fa_accept_delta's star
-#: convention.
-STAR_OVR = 85
+#: talent tier at/above which a player counts as a "star" for headline
+#: purposes. Tier-based (Muck 2026-10-01): Very good+ (the old 85 line).
+#: Same line as gm_fa_accept_delta's star convention.
+STAR_TIER_MAX_INDEX = 2
 
 
 def is_star_player(player: Any) -> bool:
     """True when the player is a headline-grade star. Never raises."""
     try:
-        return float(player.overall_rating()) >= STAR_OVR
+        from attribute_composites import talent_tier_for_player as _ttf_s
+        from attribute_composites import tier_index as _tix_s
+        return _tix_s(_ttf_s(player)) <= STAR_TIER_MAX_INDEX
     except Exception:
-        return False
+        try:
+            return float(player.overall_rating()) >= 85
+        except Exception:
+            return False
 
 
 def note_star_signing(board: Any, player: Any) -> bool:

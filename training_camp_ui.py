@@ -21,6 +21,28 @@ except Exception:
     _tc = None
 
 
+def _tier_label(player):
+    """User-facing talent tier label (never the numeric overall).
+
+    Muck's directive 2026-10-01: the numeric overall is presentation-hidden
+    everywhere; the tier table lives in attribute_composites only.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
+
+
+def _tier_of(overall):
+    """Tier label for a raw numeric overall."""
+    try:
+        from attribute_composites import talent_tier
+        return talent_tier(overall)
+    except Exception:
+        return "Decent"
+
+
 class TrainingCampWindow(InGamePopup):
     """Popup wrapper: the user's training camp report."""
 
@@ -105,12 +127,12 @@ class TrainingCampWindow(InGamePopup):
             status = ""
         self._status.configure(text=status)
 
-        # Ratings table: Player | Age | Pos | OVR | S1..Sn | Avg | Cond | Note
+        # Ratings table: Player | Age | Pos | Tier | S1..Sn | Avg | Cond | Note
         cols = ["name", "age", "pos", "ovr"] + \
             [f"S{i+1}" for i in range(n_games)] + ["avg", "cond", "note"]
         self._ratings_tree["columns"] = cols
         headers = {"name": ("Player", 190), "age": ("Age", 45),
-                   "pos": ("Pos", 60), "ovr": ("OVR", 50),
+                   "pos": ("Pos", 60), "ovr": ("Tier", 95),
                    "avg": ("Avg", 55), "cond": ("Cond", 70),
                    "note": ("Note", 130)}
         for c in cols:
@@ -129,7 +151,7 @@ class TrainingCampWindow(InGamePopup):
                         getattr(p, "age", "?"),
                         getattr(getattr(p, "primary_position", None),
                                 "name", ""),
-                        p.overall_rating()]
+                        _tier_label(p)]
                 for i in range(n_games):
                     vals.append(f"{ratings[i]:.1f}" if i < len(ratings)
                                 else "--")

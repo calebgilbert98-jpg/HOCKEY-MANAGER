@@ -136,7 +136,13 @@ v_worst = te.pick_trade_value(worst_pk)
 plain = g.DraftPick(year=2028, round=1, original_team="Z", current_team="Z")
 v_plain = te.pick_trade_value(plain)
 check("projected lottery 1st valued above blind #16 default", v_worst > v_plain)
-check("label shows projection", "[proj. #" in te.asset_label(worst_pk))
+# Talent tiers (Muck's directive 2026-10-01): the pick projection is shown
+# as a tier, never the numeric overall.
+_proj_label = te.asset_label(worst_pk)
+from attribute_composites import TALENT_TIERS as _TT
+check("label shows projection",
+      "[proj. " in _proj_label
+      and any(_name in _proj_label for _name, _lo, _hi in _TT))
 # real order clears stale projections
 stub_lg.get_draft_order = lambda y: [("x",)] if y == 2027 else []
 te.project_pick_slots(stub_lg)

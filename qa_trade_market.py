@@ -1008,8 +1008,11 @@ def t_buyer_risk():
         2028: [mk_pick("Buyer1", 2028, 2), mk_pick("Buyer1", 2028, 3),
                mk_pick("Buyer1", 2028, 3)],
     }
+    # Tier-based (Muck 2026-10-01): a 77 is Decent tier, so his market band
+    # is the tier rep ($2.57M) -- $2.5M keeps the fixture fairly-paid, as
+    # the test's $4M was under the old 1-100 math.
     piece = mk_exact("Target", "Man", PlayerPosition.CENTER, 27, 70,
-                     4_000_000, yrs=2)
+                     2_500_000, yrs=2)
     seller.roster.append(piece)
     with patch.object(tm, "_buyer_desperation", return_value=1.0), \
          patch.object(tsl, "situational_context",
@@ -1069,9 +1072,11 @@ def t_player_conscious():
     seller, seller1 = league.teams[0], league.teams[1]
     # Two 81-OVR defensemen (attr 70): buyers need LD second behind RW.
     # The slumper only draws teams with a glaring hole -- none here.
-    prod = mk_exact("Hot", "Hand", PlayerPosition.LEFT_DEFENSE, 26, 70,
+    # Age 28 (not 26): keeps the pair clear of the young-headliner package
+    # overlay (Good+ at <=26), so this test measures perception only.
+    prod = mk_exact("Hot", "Hand", PlayerPosition.LEFT_DEFENSE, 28, 70,
                     4_500_000, yrs=3)
-    slump = mk_exact("Cold", "Snap", PlayerPosition.LEFT_DEFENSE, 26, 70,
+    slump = mk_exact("Cold", "Snap", PlayerPosition.LEFT_DEFENSE, 28, 70,
                      4_500_000, yrs=3)
     check("fixture 81 ovr pair",
           prod.overall_rating() == 81 and slump.overall_rating() == 81)

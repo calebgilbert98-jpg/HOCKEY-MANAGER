@@ -444,3 +444,159 @@ def apply_amplifier(prob, player, key, sim=None, team=None, energy=None,
 
 #: Stable composite key list (UI / QA introspection).
 COMPOSITE_KEYS = tuple(_COMPOSITES.keys())
+
+
+# ---------------------------------------------------------------------------
+# TALENT TIERS (Muck's directive 2026-10-01): the numeric overall rating is
+# NEVER shown to the user. talent_tier() maps a player's numeric overall to
+# one of five talent bands for ALL user-facing display. Boundaries are
+# Muck-adjustable; the table lives HERE AND ONLY HERE -- do not copy these
+# ranges anywhere else, import and call talent_tier() instead.
+#
+#   92+        -> Generational
+#   88-91      -> Elite
+#   84-87      -> Very good
+#   80-83      -> Good
+#   below 80   -> Decent
+#
+# Ranges are inclusive and gapless: every int in [0, 99] maps to exactly
+# one tier. The tier is the shared quick gauge for human AND AI (Muck
+# 2026-10-01: "AI sees tiers too, equal playing field"). AI value-proxy
+# decisions (trade valuation, lineup sorting, FA/draft targeting,
+# comparators) go through tier_index()/tier_proxy_overall()/ai_perceived_tier()
+# below -- never the raw 1-point overall. The attribute-vs-attribute engine
+# core never used overalls and stays precise.
+# ---------------------------------------------------------------------------
+
+#: (tier label, min overall inclusive, max overall inclusive), top to bottom.
+TALENT_TIERS = (
+    ("Generational", 92, 99),
+    ("Elite",        88, 91),
+    ("Very good",    84, 87),
+    ("Good",         80, 83),
+    ("Decent",       0,  79),
+)
+
+#: Tier label -> index (0 = top). Used for tier-change indicators.
+_TIER_INDEX = {name: i for i, (name, _, _) in enumerate(TALENT_TIERS)}
+
+#: Tasteful tier accent colors (dark-theme safe, no rainbow). Generational
+#: gold matches ctk_theme.GOLD; the rest step down in prominence.
+TALENT_TIER_COLORS = {
+    "Generational": "#e8b93c",  # gold
+    "Elite":        "#c3ccd6",  # platinum
+    "Very good":    "#7aa3c7",  # muted steel blue
+    "Good":         "#9aa3ad",  # neutral gray
+    "Decent":       "#6e747c",  # dim gray
+}
+
+
+def talent_tier(overall) -> str:
+    """Return the user-facing talent tier label for a numeric overall.
+
+    Single source of truth for the overall->tier mapping. Out-of-range or
+    non-numeric input falls back to "Decent" rather than raising.
+    """
+    try:
+        ovr = int(overall)
+    except (TypeError, ValueError):
+        return "Decent"
+    for name, lo, hi in TALENT_TIERS:
+        if lo <= ovr <= hi:
+            return name
+    return "Decent"
+
+
+def talent_tier_color(tier: str) -> str:
+    """Accent color for a tier label (dark-theme safe)."""
+    return TALENT_TIER_COLORS.get(tier, TALENT_TIER_COLORS["Good"])
+
+
+def talent_tier_for_player(player) -> str:
+    """Tier label for a player object (calls player.overall_rating())."""
+    try:
+        return talent_tier(player.overall_rating())
+    except Exception:
+        return "Decent"
+
+
+def tier_index(tier: str) -> int:
+    """Ordinal of a tier label (0 = Generational). Unknown -> bottom."""
+    return _TIER_INDEX.get(tier, len(TALENT_TIERS) - 1)
+
+
+def tier_change_arrow(old_overall, new_overall) -> str:
+    """Tier-change indicator for development/progression UI.
+
+    Returns "▲" if the tier improved, "▼" if it dropped, "–" if the tier is
+    unchanged (even when the underlying number moved within the band).
+    """
+    old_i = tier_index(talent_tier(old_overall))
+    new_i = tier_index(talent_tier(new_overall))
+    if new_i < old_i:
+        return "\u25b2"   # tier up
+    if new_i > old_i:
+        return "\u25bc"   # tier down
+    return "\u2013"       # same tier
+
+
+# ---------------------------------------------------------------------------
+# AI tier parity (Muck 2026-10-01 ~00:59 EDT): "AI sees tiers too, equal
+# playing field for everyone." Overalls are a dead number -- the tier is the
+# shared quick gauge for human AND AI. The AI must not make decisions on
+# 1-point overall differences the human can't even see.
+#
+# Two rules:
+#   1. Comparisons / sorting / thresholds on talent -> tier_index() (coarse).
+#   2. Valuation math that needs a NUMBER (trade value, salary curves) ->
+#      tier_proxy_overall() (tier representative, no false precision).
+# The attribute-vs-attribute engine core never used overalls and is untouched.
+# ---------------------------------------------------------------------------
+
+#: Tier -> representative overall for AI value-proxy math. Midpoints; Decent
+#: compresses to 70 by design (the human's gauge can't split 79 from 62
+#: either -- both read "Decent").
+TIER_REPRESENTATIVE_OVR = {
+    "Generational": 95,
+    "Elite": 90,
+    "Very good": 86,
+    "Good": 82,
+    "Decent": 70,
+}
+
+
+def tier_proxy_overall(overall) -> int:
+    """Quantized overall for AI value math: the tier's representative number.
+
+    Trade valuation, salary curves, and other AI math that needs a number
+    go through here instead of the raw overall -- no 1-point decisions the
+    human can't see.
+    """
+    return TIER_REPRESENTATIVE_OVR.get(talent_tier(overall), 70)
+
+
+def ai_perceived_tier(player, perceiver_team=None) -> str:
+    """The talent tier an AI GM perceives for a player (fog-of-war parity).
+
+    Own-team players (roster/prospects/scouted): the true tier. Everyone
+    else: the tier of the fogged overall -- the SAME fog the human's UI
+    applies via scouting_profiles.displayed_overall. The AI never peeks at
+    a true numeric overall the human can't see.
+    """
+    try:
+        if perceiver_team is None:
+            return talent_tier_for_player(player)
+        from scouting_profiles import displayed_overall as _do
+        return talent_tier(_do(player, perceiver_team))
+    except Exception:
+        try:
+            return talent_tier_for_player(player)
+        except Exception:
+            return "Decent"
+
+
+def ai_perceived_proxy_ovr(player, perceiver_team=None) -> int:
+    """Quantized numeric overall the AI may use for a player: the tier
+    representative of what it perceives (fogged for other teams' players)."""
+    return TIER_REPRESENTATIVE_OVR.get(
+        ai_perceived_tier(player, perceiver_team), 70)

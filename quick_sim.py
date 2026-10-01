@@ -63,13 +63,20 @@ def best_lines(team):
     defensemen = _healthy([p for p in team.roster if p.primary_position in [PlayerPosition.LEFT_DEFENSE, PlayerPosition.RIGHT_DEFENSE, PlayerPosition.DEFENSE]])
     goalies = _healthy([p for p in team.roster if p.primary_position == PlayerPosition.GOALIE])
 
-    # Sort by overall rating
-    forwards = sorted(forwards, key=lambda p: p.overall_rating(), reverse=True)[:13]  # Changed to 13 to ensure line 4 gets players
+    # Sort by talent tier (Muck 2026-10-01): the AI dresses what the human
+    # sees -- tier bands, not 1-point overall differences.
+    try:
+        from attribute_composites import talent_tier_for_player as _ttf
+        from attribute_composites import tier_index as _tix
+        _tkey = lambda p: _tix(_ttf(p))
+    except Exception:
+        _tkey = lambda p: 0
+    forwards = sorted(forwards, key=_tkey)[:13]  # Changed to 13 to ensure line 4 gets players
     # NOTE: do NOT truncate defensemen here. The 3-pair loop below picks
     # position-aware; truncating to 6 first can cut a natural RD/LD and leave
     # a pair short. Keep the full healthy pool so the fallback can fill in.
-    defensemen = sorted(defensemen, key=lambda p: p.overall_rating(), reverse=True)
-    goalies = sorted(goalies, key=lambda p: p.overall_rating(), reverse=True)[:2]
+    defensemen = sorted(defensemen, key=_tkey)
+    goalies = sorted(goalies, key=_tkey)[:2]
 
     # Build forward lines
     fw_lines = []
@@ -2196,9 +2203,14 @@ class AdvancedGameSim:
                     pl = by_id.get(pid)
                     if pl is None:
                         continue
+                    # Goalies: feed saves/shots-against so the last-10
+                    # performance ledger grades on save% (Muck 2026-10-01).
+                    _sv = ps.get('saves', 0) or 0
+                    _ga = ps.get('goals_against', 0) or 0
                     note = record_performance(
                         pl, ps.get('goals', 0), ps.get('assists', 0),
-                        team=team, is_playoff=is_po)
+                        team=team, is_playoff=is_po,
+                        saves=_sv, shots_against=_sv + _ga)
                     if note:
                         try:
                             self.events.append({
@@ -3183,6 +3195,14 @@ class AdvancedGameSim:
             self._crowd_on_goal(puck_team_name)
             # Update stats
             self.stats[puck_team_name][shooter.id]['goals'] = self.stats[puck_team_name][shooter.id].get('goals', 0) + 1
+            # Charge the goal to the beaten goalie's game line (empty-netters
+            # don't count) -- feeds the last-10 performance grade ledger.
+            if not _empty_net and goalie is not None:
+                try:
+                    _gd = self.stats[opp_team_name][goalie.id]
+                    _gd['goals_against'] = _gd.get('goals_against', 0) + 1
+                except Exception:
+                    pass
             # Goalie personality: charge the goal to the beaten goalie --
             # bounce-back clock starts, tilt check for shelled battlers.
             # Same shared decision as GameSim (empty-netters don't count).
@@ -3462,6 +3482,13 @@ class AdvancedGameSim:
                         self.goalie_personality_state[goalie.id] = _st2
                     _gp2r.record_goal_allowed(_st2)
                     _gp2r.check_tilt(goalie, _st2)
+                except Exception:
+                    pass
+                # Same game-line charge as the main goal path (rebound goals
+                # never beat an empty net): feeds the performance ledger.
+                try:
+                    _gd = self.stats[opp_team_name][goalie.id]
+                    _gd['goals_against'] = _gd.get('goals_against', 0) + 1
                 except Exception:
                     pass
             # Assists: the finisher is the scorer of the rebound goal.

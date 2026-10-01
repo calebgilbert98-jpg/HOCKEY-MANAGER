@@ -491,9 +491,14 @@ class ManagerHubView(ctk.CTkFrame):
                     name = p.full_name
                 except Exception:
                     name = "Unknown"
+                try:
+                    from attribute_composites import talent_tier as _tt
+                    _ptier = _tt(_ovr(p))
+                except Exception:
+                    _ptier = "Decent"
                 box.insert("end",
                            f"• {name}, {age} — {pos} "
-                           f"(OVR {_ovr(p)}, POT {grade})\n")
+                           f"({_ptier}, POT {grade})\n")
         box.config(state="disabled")
 
     # ------------------------------------------------------------------

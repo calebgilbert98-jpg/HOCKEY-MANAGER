@@ -3995,11 +3995,14 @@ class PBPVisualSim(InGamePopup):
                  font=_vfont(13, "bold"), wraplength=240).pack(pady=(10, 0))
         pos = getattr(getattr(p, "primary_position", None), "name",
                       "?").replace("_", " ")
+        # Talent tier (Muck's directive 2026-10-01: numeric overall is
+        # never shown to the user).
         try:
-            ovr = int(round(p.overall_rating()))
+            from attribute_composites import talent_tier as _tt3
+            _ptier = _tt3(p.overall_rating())
         except Exception:
-            ovr = "?"
-        tk.Label(win, text=f"{team} · {pos} · {ovr} OVR", bg="#16161a",
+            _ptier = "?"
+        tk.Label(win, text=f"{team} · {pos} · {_ptier}", bg="#16161a",
                  fg=col, font=_vfont(10, "bold")).pack(pady=(0, 8))
         body = tk.Frame(win, bg="#16161a")
         body.pack(fill="both", expand=True, padx=14)

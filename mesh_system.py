@@ -566,9 +566,32 @@ def _expected_points(player) -> float:
     return 0.15 + 1.1 * t * t
 
 
+def _append_game_grade(player, grade: float) -> None:
+    """Append one 0-100 game grade to the player's last-10 ledger.
+
+    Capped at 15 entries; never raises. Both sim paths call this through
+    record_performance() at the final whistle.
+    """
+    try:
+        grades = getattr(player, "recent_game_grades", None)
+        if not isinstance(grades, list):
+            grades = []
+            player.recent_game_grades = grades
+        grades.append(round(max(0.0, min(100.0, float(grade))), 1))
+        del grades[:-15]
+    except Exception:
+        pass
+
+
 def record_performance(player, goals: int, assists: int, team=None,
-                       is_playoff=False) -> str | None:
+                       is_playoff=False, saves: int = 0,
+                       shots_against: int = 0) -> str | None:
     """Feed a finished game's line into the mesh form tracker.
+
+    Also appends one 0-100 game grade to the player's recent_game_grades
+    ledger (Muck 2026-10-01): skaters graded on points vs expectation,
+    goalies on save% vs the .905 league line. The roster "Performance"
+    column averages the last 10 -- recent form, never overall.
 
     Returns a storyline string when something notable happens (streak alive,
     breakout), else None. Probabilistic throughout: heaters are earned, never
@@ -579,18 +602,34 @@ def record_performance(player, goals: int, assists: int, team=None,
     except Exception:
         points = 0.0
 
-    # Skaters only: points aren't a goaltender's currency.
+    # Goaltenders: graded on save%, not points. Skipped when they saw no
+    # rubber (didn't play) -- no grade appended.
     try:
         from game_classes import PlayerPosition
-        if getattr(player, "primary_position", None) == PlayerPosition.GOALIE:
-            return None
+        _is_goalie = (getattr(player, "primary_position", None)
+                      == PlayerPosition.GOALIE)
     except Exception:
-        pass
+        _is_goalie = False
+    if _is_goalie:
+        try:
+            _sa = int(shots_against or 0)
+            _sv = int(saves or 0)
+        except Exception:
+            _sa, _sv = 0, 0
+        if _sa > 0:
+            _svpct = _sv / _sa
+            _append_game_grade(player, 50.0 + (_svpct - 0.905) * 1000.0)
+        return None
 
     # Surprise relative to talent expectation; underdogs move the needle more.
     expected = _expected_points(player)
     surprise = (points - expected) / max(0.5, expected)
     tilt = 1.0 + (1.0 - talent_norm(player)) * _UNDERDOG_TILT
+
+    # Game grade: 50 for meeting expectation, +/-25 per unit of surprise
+    # (clamped to the mesh form's [-1.5, 2.0] window). A point-per-game
+    # player going scoreless grades ~25; a 2-point night grades ~88.
+    _append_game_grade(player, 50.0 + 25.0 * max(-1.5, min(2.0, surprise)))
 
     form = getattr(player, "mesh_form", 0.0) or 0.0
     try:
@@ -1420,12 +1459,17 @@ def _chance_matchup_tilt(shooter, defenders, goalie,
         pass
     try:
         # Bad goalie matchup: shooters get cleaner looks against a
-        # struggling netminder (overall vs ~88 league starter par).
+        # struggling netminder (tier rep vs ~88 league starter par).
+        # Tier-based (Muck 2026-10-01): the goalie read is coarse.
         _govr = _chance_attr(goalie, "overall", 88.0)
         try:
-            _govr = float(goalie.overall_rating())
+            from attribute_composites import tier_proxy_overall as _tpo_gm
+            _govr = float(_tpo_gm(float(goalie.overall_rating())))
         except Exception:
-            pass
+            try:
+                _govr = float(goalie.overall_rating())
+            except Exception:
+                pass
         _tilt *= max(0.90, min(1.15, 1.0 + (88.0 - _govr) * 0.008))
     except Exception:
         pass

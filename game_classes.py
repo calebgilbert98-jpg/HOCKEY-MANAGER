@@ -567,6 +567,15 @@ class Player:
     # moments -> streaks -> (sometimes) breakouts. Defaults keep old saves fine.
     mesh_form: float = 0.0
     mesh_streak: int = 0
+
+    # Last-10-games performance grades (0-100 per game, most recent last).
+    # Written by mesh_system.record_performance() at the final whistle of
+    # every game on both sim paths; read by the roster "Performance" column
+    # (windows.py), which averages the last 10. Capped at 15 entries.
+    # Muck 2026-10-01: the column shows recent form, not overall -- kills
+    # the overall leak and makes the column honest. Defaults keep old
+    # saves fine (empty -> column shows "-").
+    recent_game_grades: list = field(default_factory=list)
     
     # SEASON STATISTICS - Reset each season
     games_played: int = 0

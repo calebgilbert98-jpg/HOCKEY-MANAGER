@@ -366,7 +366,14 @@ def _opportunity_factor(player, to_team):
     try:
         group = _position_group(player)
         age = int(getattr(player, "age", 28) or 28)
-        mine = float(player.overall_rating())
+        # Tier-based (Muck 2026-10-01): "at his level" means his tier.
+        # The perceiver here is the PLAYER himself -- this feeds his private
+        # no-trade list -- so it is his TRUE tier. He knows his own level;
+        # the destination's fogged scouting grade of him is not his business.
+        from attribute_composites import ai_perceived_tier as _apt
+        from attribute_composites import talent_tier_for_player as _ttp
+        from attribute_composites import tier_index as _ti
+        mine = _ti(_ttp(player))
         mates = [p for p in (getattr(to_team, "roster", None) or [])
                  if _position_group(p) == group]
     except Exception:
@@ -379,7 +386,7 @@ def _opportunity_factor(player, to_team):
                 return 0.75, "he'd own the crease there"
             return 1.0, ""
         ahead = sum(1 for m in mates
-                    if float(m.overall_rating()) >= mine - 5)
+                    if _ti(_apt(m, to_team)) <= mine)
         if age <= 27 and ahead >= 6:
             return 1.45, "buried on their depth chart"
         if ahead <= 1:
@@ -1046,11 +1053,21 @@ def apply_retention(retaining_team, player, pct, trade_date=None,
 RFA_IMPASSE_RIGHTS_MULT = 0.75
 
 
-def player_trade_value(player) -> int:
-    """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000)."""
-    ovr = player.overall_rating()
-    # 100-point scale: 68 OVR depth -> 300, 74 OVR starter -> 600,
-    # 83 OVR elite -> 1050 (before age/potential multipliers)
+def player_trade_value(player, perceiver_team=None) -> int:
+    """Trade value of a player in 'pick points' (a 1st-round pick ~= 1000).
+
+    Tier-based (Muck 2026-10-01: "AI sees tiers too, equal playing field").
+    The base comes from the tier representative, not the 1-point overall:
+    Generational 95 -> 1650, Elite 90 -> 1400, Very good 86 -> 1200,
+    Good 82 -> 1000, Decent 70 -> 400 (before age/potential multipliers).
+    perceiver_team fogs other teams' players exactly like the human's
+    scouting fog -- the AI never peeks at a true overall the human can't
+    see. Own-team players are always valued truly.
+    """
+    from attribute_composites import ai_perceived_tier as _apt
+    from attribute_composites import TIER_REPRESENTATIVE_OVR as _rep
+    _tier = _apt(player, perceiver_team)
+    ovr = _rep.get(_tier, 70)
     base = max(0, (ovr - 62) * 50)
 
     # Potential premium (matters most for young players)
@@ -1092,7 +1109,7 @@ def player_trade_value(player) -> int:
     expected = max(_MIN_SAL, (ovr - 60) * 250_000)
     if salary > expected * 1.5:
         base *= 0.85
-    elif salary < expected * 0.6 and ovr >= 70:
+    elif salary < expected * 0.6 and _tier != "Decent":
         base *= 1.1  # bargain deal
 
     # Volatility tax: hotheads cost less, but a superstar is worth the headache.
@@ -1102,10 +1119,10 @@ def player_trade_value(player) -> int:
     except Exception:
         pass
 
-    # Goalies: fewer roster spots, slight premium for starters
+    # Goalies: fewer roster spots, slight premium for starters (Good tier+).
     try:
         from game_classes import PlayerPosition
-        if player.primary_position == PlayerPosition.GOALIE and ovr >= 82:
+        if player.primary_position == PlayerPosition.GOALIE and _tier != "Decent":
             base *= 1.15
     except Exception:
         pass
@@ -1126,13 +1143,16 @@ def player_trade_value(player) -> int:
     return max(10, int(base))
 
 
-def player_trade_value_breakdown(player):
+def player_trade_value_breakdown(player, perceiver_team=None):
     """R3(b) (UI repairs): reasoning breakdown behind player_trade_value().
 
-    Returns (total, components) where total == player_trade_value(player)
-    and components is a list of dicts in computation order:
+    Returns (total, components) where total == player_trade_value(player,
+    perceiver_team) and components is a list of dicts in computation order:
         {'label': str, 'delta': int (pick-points vs running total),
          'detail': str (the specific input that drove it)}
+
+    Tier-quantized like the engine function (Muck 2026-10-01): the base and
+    salary curve use the tier representative, never the 1-point overall.
 
     Additive and read-only: the engine function above is untouched; this
     recomputes the identical math while recording each step so the
@@ -1142,19 +1162,24 @@ def player_trade_value_breakdown(player):
     returns ([], total) best-effort on weird inputs.
     """
     comps = []
+    # Tier-quantized base (mirrors player_trade_value): the dialog shows
+    # the same number the engine uses, through the perceiver's eyes.
     try:
-        ovr = player.overall_rating()
+        from attribute_composites import ai_perceived_tier as _apt_fn
+        from attribute_composites import TIER_REPRESENTATIVE_OVR as _rep_fn
+        _tier = _apt_fn(player, perceiver_team)
+        _qovr = _rep_fn.get(_tier, 70)
     except Exception:
-        ovr = 70
+        _tier, _qovr = "Decent", 70
     try:
-        base = max(0, (ovr - 62) * 50)
+        base = max(0, (_qovr - 62) * 50)
     except Exception:
         base = 0
     running = base
     comps.append({
         'label': 'Base value',
         'delta': int(base),
-        'detail': (f"{ovr} OVR -> ({ovr}-62) x 50 pick-points "
+        'detail': (f"{_tier} talent -> pick-points from talent tier "
                    f"(a 1st-round pick ~= 1000)"),
     })
 
@@ -1210,18 +1235,18 @@ def player_trade_value_breakdown(player):
     except Exception:
         _MIN_SAL = 775_000
     try:
-        expected = max(_MIN_SAL, (ovr - 60) * 250_000)
+        expected = max(_MIN_SAL, (_qovr - 60) * 250_000)
     except Exception:
         expected = _MIN_SAL
     _cap_mult, _cap_why = 1.0, ""
     if salary > expected * 1.5:
         _cap_mult = 0.85
         _cap_why = (f"overpaid: ${salary:,} cap hit vs "
-                    f"~${int(expected):,} expected for {ovr} OVR")
-    elif salary < expected * 0.6 and ovr >= 70:
+                    f"~${int(expected):,} expected for a {_tier} player")
+    elif salary < expected * 0.6 and _tier != "Decent":
         _cap_mult = 1.1
         _cap_why = (f"bargain deal: ${salary:,} cap hit vs "
-                    f"~${int(expected):,} expected for {ovr} OVR")
+                    f"~${int(expected):,} expected for a {_tier} player")
     if _cap_mult != 1.0:
         _new = running * _cap_mult
         comps.append({
@@ -1248,7 +1273,7 @@ def player_trade_value_breakdown(player):
     try:
         from game_classes import PlayerPosition
         _is_goalie = (player.primary_position == PlayerPosition.GOALIE
-                      and ovr >= 82)
+                      and _tier != "Decent")
     except Exception:
         _is_goalie = False
     if _is_goalie:
@@ -1256,7 +1281,7 @@ def player_trade_value_breakdown(player):
         comps.append({
             'label': 'Starting-goalie premium',
             'delta': int(_new - running),
-            'detail': "82+ OVR goalie: x1.15 (few roster spots)",
+            'detail': "Good-or-better goalie: x1.15 (few roster spots)",
         })
         running = _new
 
@@ -1479,10 +1504,23 @@ def asset_label(asset) -> str:
         except Exception:
             _proj = 0
         if _proj:
-            label += f" [proj. #{_proj}]"
+            try:
+                from attribute_composites import talent_tier as _tier_fn2
+                _ptier = _tier_fn2(_proj)
+            except Exception:
+                _ptier = "Decent"
+            label += f" [proj. {_ptier}]"
         return label
+    # Talent tier (Muck's directive 2026-10-01: the numeric overall is
+    # never shown to the user -- this label appears in AI dialogue and
+    # trade summaries).
     try:
-        label = f"{asset.full_name} ({asset.primary_position.value}, {asset.overall_rating()} OVR)"
+        from attribute_composites import talent_tier_for_player as _ttfp4
+        _atier = _ttfp4(asset)
+    except Exception:
+        _atier = "Decent"
+    try:
+        label = f"{asset.full_name} ({asset.primary_position.value}, {_atier})"
     except Exception:
         return str(asset)
     try:
@@ -1494,9 +1532,11 @@ def asset_label(asset) -> str:
     return label
 
 
-def asset_value(asset) -> int:
+def asset_value(asset, perceiver_team=None) -> int:
     from game_classes import DraftPick
-    return pick_trade_value(asset) if isinstance(asset, DraftPick) else player_trade_value(asset)
+    if isinstance(asset, DraftPick):
+        return pick_trade_value(asset)
+    return player_trade_value(asset, perceiver_team=perceiver_team)
 
 
 # ---------------------------------------------------------------------------
@@ -1504,9 +1544,17 @@ def asset_value(asset) -> int:
 # ---------------------------------------------------------------------------
 
 def team_needs(team) -> List[str]:
-    """Return position groups sorted weakest-first, e.g. ['C', 'RD', 'G']."""
+    """Return position groups sorted weakest-first, e.g. ['C', 'RD', 'G'].
+
+    Tier-based (Muck 2026-10-01): positional strength from tier
+    representatives -- the AI reads its own roster the way the human does.
+    """
     from game_classes import PlayerPosition
     groups = {'LW': [], 'C': [], 'RW': [], 'LD': [], 'RD': [], 'G': []}
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo
+    except Exception:
+        _tpo = None
     for p in getattr(team, 'roster', []):
         try:
             pos = p.primary_position.value
@@ -1514,7 +1562,11 @@ def team_needs(team) -> List[str]:
             continue
         key = 'G' if pos == 'G' else pos
         if key in groups:
-            groups[key].append(p.overall_rating())
+            try:
+                _ov = _tpo(p.overall_rating()) if _tpo else p.overall_rating()
+            except Exception:
+                _ov = 70
+            groups[key].append(_ov)
     strength = {}
     for pos, ovrs in groups.items():
         ovrs = sorted(ovrs, reverse=True)
@@ -1559,7 +1611,7 @@ def scout_adjusted_value(player, team) -> int:
     trusts the surface numbers. Each club keeps its own formula --
     the league never converges.
     """
-    base = player_trade_value(player)
+    base = player_trade_value(player, perceiver_team=team)
     try:
         pid = getattr(player, "id", id(player))
         buy_tips = getattr(team, "scout_buy_tips", None) or {}
@@ -1586,9 +1638,19 @@ def scout_adjusted_value(player, team) -> int:
 
 
 def evaluate_trade(user_assets, partner_assets,
-                   user_team=None, partner_team=None) -> TradeEvaluation:
-    user_value = sum(asset_value(a) for a in user_assets)
-    partner_value = sum(asset_value(a) for a in partner_assets)
+                   user_team=None, partner_team=None,
+                   perceiver_team=None) -> TradeEvaluation:
+    """Valuation from the perceiver's eyes (fog-of-war parity).
+
+    perceiver_team: the team doing the evaluating. The AI passes itself
+    (its own players valued truly, the other side's fogged); the trade UI
+    passes the human's team for the mirror image. None = neutral bookkeeping
+    (true tiers, e.g. reputation fallout).
+    """
+    user_value = sum(asset_value(a, perceiver_team=perceiver_team)
+                     for a in user_assets)
+    partner_value = sum(asset_value(a, perceiver_team=perceiver_team)
+                        for a in partner_assets)
     diff = user_value - partner_value
     ratio = (user_value / partner_value) if partner_value else 0.0
     if not user_assets or not partner_assets:
@@ -1737,7 +1799,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     like a real GM pricing retained money.
     """
     from game_classes import DraftPick
-    ev = evaluate_trade(user_assets, partner_assets)
+    # The AI evaluates through its own eyes: its players truly, the human's
+    # fogged (same scouting fog the human gets). Tier-quantized throughout.
+    ev = evaluate_trade(user_assets, partner_assets,
+                        perceiver_team=partner_team)
 
     # Scout-adjusted valuation: the AI GM sees tipped players through
     # their scouts' eyes, exactly like a human reading the news feed.
@@ -2112,15 +2177,20 @@ def clause_demand_score(player, team=None, league=None):
         pass
     score = 0.0
     try:
-        ovr = player.overall_rating()
+        from attribute_composites import talent_tier as _tier_fn3
+        from attribute_composites import tier_index as _ti_fn3
+        _p_tier = _tier_fn3(player.overall_rating())
+        _p_tidx = _ti_fn3(_p_tier)
     except Exception:
-        ovr = 70
+        _p_tidx = 4
     age = getattr(player, "age", 27)
-    if ovr >= 85:
+    # Tier-based star bands (was 85/80/75 raw): a player knows his own
+    # standing coarsely -- Generational/Elite/Very good, Good, Decent.
+    if _p_tidx <= 2:
         score += 0.45
-    elif ovr >= 80:
+    elif _p_tidx == 3:
         score += 0.25
-    elif ovr >= 75:
+    else:
         score += 0.10
     if age >= 32:
         score += 0.25
@@ -2153,7 +2223,9 @@ def clause_annual_value(player, kind):
         return 0
     try:
         from salary_cap_system import league_minimum_salary as _min_fn2
-        base = max(_min_fn2(), (player.overall_rating() - 60) * 250_000)
+        from attribute_composites import tier_proxy_overall as _tpo2
+        _q = _tpo2(player.overall_rating())
+        base = max(_min_fn2(), (_q - 60) * 250_000)
     except Exception:
         base = 1_000_000
     frac = _CLAUSE_FRAC.get(kind, 0.0)

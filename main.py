@@ -2055,6 +2055,35 @@ def clamp(val, minv, maxv):
     return min(max(val, minv), maxv)
     return max(minv, min(maxv, val))
 
+
+def _tier_label(player):
+    """User-facing talent tier label for a player (never the numeric overall).
+
+    Muck's directive 2026-10-01: the numeric overall is presentation-hidden
+    everywhere; the tier table lives in attribute_composites only.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
+
+
+def _tier_sort_value(val):
+    """Sort key for a tier cell: tier order (Generational first), with a
+    numeric fallback for anything that isn't a tier label."""
+    try:
+        from attribute_composites import TALENT_TIERS, tier_index
+        _tv = str(val).strip().removesuffix(' \u2b50').strip()
+        if any(_tv == _name for _name, _lo, _hi in TALENT_TIERS):
+            return (0, tier_index(_tv))
+    except Exception:
+        pass
+    try:
+        return (1, float(str(val).replace('$', '').replace(',', '')))
+    except (ValueError, TypeError):
+        return (2, str(val).lower())
+
 # --- Advanced Simulation Engine ---
 
 
@@ -4249,12 +4278,12 @@ class HockeyManagerGUI(tk.Tk):
         # Create compact stat boxes
         self.player_stats_labels = {}
         
-        # Row 1: Age, OVR, Salary
+        # Row 1: Age, Tier, Salary
         ttk.Label(stats_frame, text="Age:", style='Info.TLabel', font=(self.FONT_FAMILY, 8)).grid(row=0, column=0, sticky='w')
         self.player_stats_labels['age'] = ttk.Label(stats_frame, text="-", style='PlayerInfo.TLabel', font=(self.FONT_FAMILY, 9, 'bold'))
         self.player_stats_labels['age'].grid(row=1, column=0, sticky='w')
         
-        ttk.Label(stats_frame, text="OVR:", style='Info.TLabel', font=(self.FONT_FAMILY, 8)).grid(row=0, column=1, sticky='w')
+        ttk.Label(stats_frame, text="Tier:", style='Info.TLabel', font=(self.FONT_FAMILY, 8)).grid(row=0, column=1, sticky='w')
         self.player_stats_labels['ovr'] = ttk.Label(stats_frame, text="-", style='PlayerInfo.TLabel', font=(self.FONT_FAMILY, 9, 'bold'))
         self.player_stats_labels['ovr'].grid(row=1, column=1, sticky='w')
         
@@ -4594,7 +4623,7 @@ class HockeyManagerGUI(tk.Tk):
         
         # Populate with roster players
         for player in sorted(self.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
-            display_text = f"{player.full_name} ({player.overall_rating()} OVR)"
+            display_text = f"{player.full_name} ({_tier_label(player)})"
             listbox.insert(tk.END, display_text)
         
         listbox.pack(side='left', fill='both', expand=True)
@@ -5678,7 +5707,7 @@ class HockeyManagerGUI(tk.Tk):
             f"{focused_player.full_name}\n"
             f"{focused_player.primary_position.name}\n"
             f"Age: {focused_player.age}\n"
-            f"OVR: {focused_player.overall_rating()}"
+            f"{_tier_label(focused_player)}"
         )
         self.player_focus_label.config(text=info_text)
 
@@ -6145,7 +6174,7 @@ class HockeyManagerGUI(tk.Tk):
             
             info_text = (
                 f"Position: {focus_player.primary_position.value}\n"
-                f"Age: {focus_player.age} | Overall: {focus_player.overall_rating()}/20\n"
+                f"Age: {focus_player.age} | {_tier_label(focus_player)}\n"
                 f"Contract: {contract_info}\n"
                 f"Stats: {stats_info}\n"
                 f"Status: Healthy"
@@ -10253,8 +10282,10 @@ class HockeyManagerGUI(tk.Tk):
 
         def _p(p):
             c = f" [{p.get('clause')}]" if p.get("clause") else ""
+            from attribute_composites import talent_tier
+            _ptier = talent_tier(p.get('ovr', 0))
             return (f"{p.get('name', '?')} ({p.get('pos', '?')}, "
-                    f"OVR {p.get('ovr', '?')}, "
+                    f"{_ptier}, "
                     f"${p.get('salary', 0):,}){c}")
 
         def _k(k):
@@ -18470,6 +18501,11 @@ class HockeyManagerGUI(tk.Tk):
         # Clean and convert value for sorting
         def get_sort_value(item, col_idx):
             val = item[0][col_idx]
+            # Talent tier labels sort by tier order, not alphabetically
+            # (Muck's directive 2026-10-01).
+            _tv = _tier_sort_value(val)
+            if isinstance(_tv, tuple) and _tv[0] == 0:
+                return _tv
             # Try to convert to number if possible
             if isinstance(val, str):
                 # Remove special characters for numeric conversion
@@ -20114,7 +20150,7 @@ class CleanEditLinesView(ctk.CTkFrame):
         self._refresh_selection_visuals()
 
     def create_player_row(self, parent, player, prev_info):
-        """Sleeper-style player row: face, name + pos pill, big OVR. Click to select."""
+        """Sleeper-style player row: face, name + pos pill, big tier. Click to select."""
         outer = tk.Frame(parent, bg=self.C_BG)
         outer.pack(fill='x', pady=3)
         card = tk.Frame(outer, bg=self.C_CARD)
@@ -20152,8 +20188,10 @@ class CleanEditLinesView(ctk.CTkFrame):
 
         right = tk.Frame(card, bg=self.C_CARD)
         right.pack(side='right', padx=(4, 10))
-        ovr_l = tk.Label(right, text=str(player.overall_rating()), bg=self.C_CARD,
-                         fg=self.C_TEXT, font=self._font(18, 'bold'))
+        from attribute_composites import talent_tier_color
+        _row_tier = _tier_label(player)
+        ovr_l = tk.Label(right, text=_row_tier, bg=self.C_CARD,
+                         fg=talent_tier_color(_row_tier), font=self._font(13, 'bold'))
         ovr_l.pack(anchor='e')
         cond = getattr(player, 'condition', 100)
         cond_l = tk.Label(right, text=f"{cond}%", bg=self.C_CARD, fg=self.C_TER,
@@ -21167,9 +21205,11 @@ class CleanEditLinesView(ctk.CTkFrame):
                              padx=5, pady=1)
             off_l.pack(side='left', padx=(6, 0))
 
-        ovr_l = tk.Label(card, text=str(to_100_scale(player.overall_rating())),
-                         bg=self.C_CARD2, fg=self.C_TEXT,
-                         font=self._font(16, 'bold'))
+        from attribute_composites import talent_tier_color as _ttc3
+        _card_tier = _tier_label(player)
+        ovr_l = tk.Label(card, text=_card_tier,
+                         bg=self.C_CARD2, fg=_ttc3(_card_tier),
+                         font=self._font(11, 'bold'))
         ovr_l.pack(side='right', padx=(4, 8))
 
         clear_l = tk.Label(card, text="\u00d7", bg=self.C_CARD2, fg=self.C_TER,
@@ -21272,7 +21312,7 @@ class CleanEditLinesView(ctk.CTkFrame):
             label.config(cursor="")
 
     def _update_st_unit_ratings(self, prefix):
-        """Average-OVR big numeral for PP/PK units."""
+        """Average-talent big label for PP/PK units (tier, never numeric)."""
         if prefix == 'PP':
             var_sets, bigs = self.powerplay_vars, self.pp_rating_big
         else:
@@ -21285,7 +21325,9 @@ class CleanEditLinesView(ctk.CTkFrame):
                 continue
             if players:
                 avg = sum(p.overall_rating() for p in players) / len(players)
-                big.config(text=f"{avg:.1f}")
+                from attribute_composites import talent_tier, talent_tier_color
+                _utier = talent_tier(round(avg))
+                big.config(text=_utier, fg=talent_tier_color(_utier))
             else:
                 big.config(text="--")
 
@@ -22435,7 +22477,7 @@ class TradeBlockWindow(tk.Frame):
             'number': ('#', 40),
             'name': ('Player', 180),
             'pos': ('Pos', 70),
-            'ovr': ('OVR', 60),
+            'ovr': ('Tier', 90),
             'age': ('Age', 50),
             'salary': ('Salary', 100),
             'contract': ('Contract', 80),
@@ -22645,7 +22687,7 @@ class TradeBlockWindow(tk.Frame):
                 f"#{player.jersey_number}",
                 player.full_name,
                 player.primary_position.name,
-                player.overall_rating(),
+                _tier_label(player),
                 player.age,
                 salary_str,
                 contract_status,
@@ -22669,6 +22711,9 @@ class TradeBlockWindow(tk.Frame):
         # Sort player_map by column
         def get_val(item_id):
             val = self.tree.set(item_id, col)
+            # Tier column sorts by tier order (Muck's directive 2026-10-01).
+            if col == 'ovr':
+                return _tier_sort_value(val)
             try:
                 return int(val.replace("✔", "").replace("☑", "").replace("☐", "").replace("#", "").replace("$", "").replace(",", ""))
             except:
@@ -22755,7 +22800,7 @@ class TradeBlockWindow(tk.Frame):
             discounted_value = int(player_value * 0.85)  # Trade block discount
             
             text.insert('end', f"Player: {player.full_name}\n", 'heading')
-            text.insert('end', f"Position: {player.primary_position.name}  |  OVR: {player.overall_rating()}  |  " +
+            text.insert('end', f"Position: {player.primary_position.name}  |  {_tier_label(player)}  |  " +
                              f"Age: {player.age}  |  Potential: {player.potential_grade}\n\n")
             
             text.insert('end', f"Market Value: ${player_value:,}\n")
@@ -22821,7 +22866,7 @@ class TradeBlockWindow(tk.Frame):
                             for i, p in enumerate(potential_offer):
                                 if i > 0:
                                     text.insert('end', ", ")
-                                text.insert('end', f"{p.full_name} ({p.overall_rating()})")
+                                text.insert('end', f"{p.full_name} ({_tier_label(p)})")
                             text.insert('end', "\n")
                             
                 text.insert('end', "\n")
@@ -22952,9 +22997,8 @@ class TradeBlockWindow(tk.Frame):
     def _update_summary(self):
         block = self.parent.trade_block
         n_block = len(block)
-        avg_ovr = int(sum(p.overall_rating() for p in block) / n_block) if n_block else 0
         cap_freed = sum(p.contract.salary for p in block if p.contract.years_remaining > 0)
-        self.summary_label.config(text=f"Players on block: {n_block}   Avg OVR: {avg_ovr}   Cap space freed: ${cap_freed:,}")
+        self.summary_label.config(text=f"Players on block: {n_block}   Cap space freed: ${cap_freed:,}")
 
     def simulate_trade_offers(self):
         """Manually trigger trade offers for players on the trade block."""
@@ -23709,7 +23753,7 @@ class ContractExtensionsView(ctk.CTkFrame):
             'name': ('Name', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 50),
-            'ovr': ('OVR', 50),
+            'ovr': ('Tier', 90),
             'pot': ('Potential', 80),
             'salary': ('Current Salary', 120),
             'years': ('Years Left', 80),
@@ -23926,7 +23970,7 @@ class ContractExtensionsView(ctk.CTkFrame):
                 player.full_name,
                 player.primary_position.name,
                 player.age,
-                player.overall_rating(),
+                _tier_label(player),
                 player.potential_grade,
                 salary_str,
                 years_left,

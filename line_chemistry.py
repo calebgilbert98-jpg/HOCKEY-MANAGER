@@ -149,8 +149,13 @@ def _comp(p: Any, key: str) -> float:
             return max(0.0, min(100.0, float(_raw_composite(p, key))))
     except Exception:
         pass
-    # Fallback: overall as a flat proxy (keeps the module total even if the
-    # composites module is unavailable).
+    # Fallback: tier representative as a flat proxy (keeps the module total
+    # even if the composites module is unavailable; Muck 2026-10-01).
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo_cf
+        return max(0.0, min(100.0, float(_tpo_cf(p.overall_rating()))))
+    except Exception:
+        pass
     try:
         return max(0.0, min(100.0, float(p.overall_rating())))
     except Exception:
@@ -158,6 +163,14 @@ def _comp(p: Any, key: str) -> float:
 
 
 def _overall(p: Any) -> float:
+    """Talent read for chemistry math (Muck 2026-10-01): the tier
+    representative, never the 1-point overall. Guards, means, and the
+    talent multiplier all read the same coarse gauge the human sees."""
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo_lc
+        return max(1.0, min(99.0, float(_tpo_lc(p.overall_rating()))))
+    except Exception:
+        pass
     try:
         return max(1.0, min(99.0, float(p.overall_rating())))
     except Exception:

@@ -43,6 +43,28 @@ def _safe_injury(player):
     except Exception:
         return None
 
+def _tier_label(player):
+    """User-facing talent tier label (never the numeric overall).
+
+    Muck's directive 2026-10-01: the numeric overall is presentation-hidden
+    everywhere; the tier table lives in attribute_composites only.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player
+        return talent_tier_for_player(player)
+    except Exception:
+        return "Decent"
+
+
+def _tier_of(overall):
+    """Tier label for a raw numeric overall."""
+    try:
+        from attribute_composites import talent_tier
+        return talent_tier(overall)
+    except Exception:
+        return "Decent"
+
+
 class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
     def __init__(self, parent, app=None):
         ctk.CTkFrame.__init__(self, parent)
@@ -319,7 +341,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             'name': ('Player', 180),
             'pos': ('Pos', 50),
             'age': ('Age', 50),
-            'overall': ('OVR', 50),
+            'overall': ('Tier', 95),
             'condition': ('Cond', 80),
             'potential': ('POT', 50),
             'potential_grade': ('Grade', 60),
@@ -533,7 +555,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
         # Make player name clickable with right-click context menu
         name_label.bind('<Button-3>', lambda e: self._show_details_context_menu(e, player))
         
-        info_text = f"{player.primary_position.value} • Age {player.age} • {player.overall_rating()} OVR"
+        info_text = f"{player.primary_position.value} • Age {player.age} • {_tier_label(player)}"
         info_label = ttk.Label(header_frame,
                               text=info_text,
                               font=('Segoe UI', 10),
@@ -581,13 +603,13 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             current_pot_frame.pack(fill='x', pady=(0, 10))
             
             current_label = ttk.Label(current_pot_frame,
-                                    text=f"Current Rating: {to_100_scale(player.overall_rating())}",
+                                    text=f"Current: {_tier_label(player)}",
                                     font=('Segoe UI', 11, 'bold'))
             current_label.pack(side='left')
             
             pot_rating = self.dev_engine.calculate_potential_overall(player)
             potential_label = ttk.Label(current_pot_frame,
-                                      text=f"Potential: {pot_rating}",
+                                      text=f"Potential: {_tier_of(pot_rating)}",
                                       font=('Segoe UI', 11, 'bold'),
                                       foreground=self.colors['success'])
             potential_label.pack(side='right')
@@ -913,7 +935,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                 player_data['name'],
                 player_data['pos'],
                 player_data['age'],
-                player_data['overall'],
+                _tier_of(player_data['overall']),
                 _safe_condition_text(player_data.get('player')),
                 player_data['potential'],
                 player_data['potential_grade'],
@@ -942,6 +964,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             pos_order = {'Center': 1, 'Left Wing': 2, 'Right Wing': 3, 'Defense': 4, 'Goalie': 5}
             self.filtered_players.sort(key=lambda x: pos_order.get(x['pos'], 6), reverse=reverse)
         elif col in ['age', 'overall', 'potential']:
+            # Internal numeric store: display shows tiers, sort stays numeric
             self.filtered_players.sort(key=lambda x: x[col], reverse=reverse)
         elif col == 'condition':
             # W6: condition stored as int at load time
@@ -1219,7 +1242,6 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
         metrics = [
             ("Total Players", f"{total_players}"),
             ("Average Age", f"{avg_age:.1f}"),
-            ("Average Overall", f"{avg_overall:.1f}"),
             ("Average Potential", f"{avg_potential:.1f}")
         ]
         
@@ -1273,8 +1295,8 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                      font=('Segoe UI', 10, 'bold')).pack(side='left')
             ttk.Label(pos_row, text=f"{len(players)} players",
                      width=12, anchor='w').pack(side='left')
-            ttk.Label(pos_row, text=f"Avg: {avg_rating:.1f}",
-                     width=12, anchor='w').pack(side='left')
+            # (Average overall hidden: numeric overall is never shown to
+            # the user -- Muck's directive 2026-10-01)
             ttk.Label(pos_row, text=f"Pot: {avg_potential:.1f}",
                      width=12, anchor='w').pack(side='left')
     
@@ -1416,7 +1438,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                               f"Viewing profile for {player.full_name}\n\n"
                               f"Position: {player.primary_position.value}\n"
                               f"Age: {player.age}\n"
-                              f"Overall: {player.overall_rating()}")
+                              f"Tier: {_tier_label(player)}")
     
     def _scout_player(self, player):
         """Scout player functionality"""

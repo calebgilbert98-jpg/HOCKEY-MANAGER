@@ -829,12 +829,17 @@ class FreeAgencyFrenzy(EventDayHubView):
                      font=('Segoe UI', 10)).pack(side='right')
             mid = tk.Frame(card, bg=self.CARD)
             mid.pack(fill='x', padx=10, pady=(2, 8))
+            # Talent tier (Muck's directive 2026-10-01: numeric overall is
+            # never shown to the user).
             try:
-                ovr = p.overall_rating()
+                from attribute_composites import (talent_tier as _tt,
+                                                  talent_tier_color as _ttc)
+                _etier = _tt(p.overall_rating())
             except Exception:
-                ovr = None
-            tk.Label(mid, text=f"OVR {ovr}" if ovr is not None else "OVR \u2014",
-                     bg=self.CARD, fg=self.GOLD,
+                _etier = None
+            tk.Label(mid, text=_etier if _etier is not None else "\u2014",
+                     bg=self.CARD,
+                     fg=_ttc(_etier) if _etier else self.GOLD,
                      font=('Segoe UI', 10, 'bold')).pack(side='left')
             tk.Label(mid, text=f"  {self._season_line(p)}", bg=self.CARD, fg=self.MUTED,
                      font=('Segoe UI', 10)).pack(side='left')
@@ -850,7 +855,12 @@ class FreeAgencyFrenzy(EventDayHubView):
                 pos = self._pos_code(p)
                 ovr = p.overall_rating()
                 age = getattr(p, 'age', '?')
-                lines.append(f"{i}. {name}  ({pos}, {age})  OVR {ovr}")
+                try:
+                    from attribute_composites import talent_tier as _tt2
+                    _ftier = _tt2(ovr)
+                except Exception:
+                    _ftier = "Decent"
+                lines.append(f"{i}. {name}  ({pos}, {age})  {_ftier}")
             except Exception:
                 continue
         return lines or ["No free agents on the market."]

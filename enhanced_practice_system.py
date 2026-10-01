@@ -1268,7 +1268,14 @@ class DevelopmentOverviewView(ctk.CTkFrame):
                               style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 16, 'bold'))
         name_label.pack()
         
-        basic_info = f"{player.primary_position.value} • Age {player.age} • Overall: {player.overall_rating()}"
+        # Talent tier (Muck's directive 2026-10-01: numeric overall is never
+        # shown to the user).
+        try:
+            from attribute_composites import talent_tier_for_player as _ttfp3
+            _prac_tier = _ttfp3(player)
+        except Exception:
+            _prac_tier = "Decent"
+        basic_info = f"{player.primary_position.value} • Age {player.age} • {_prac_tier}"
         basic_label = ttk.Label(header_frame, text=basic_info, 
                                style='Content.TLabel', font=_sfont(self.app.FONT_FAMILY, 12))
         basic_label.pack()

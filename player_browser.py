@@ -56,10 +56,15 @@ class PlayerBrowserView(ctk.CTkFrame):
         for p in players:
             try:
                 rating = p.overall_rating()
+                # Talent tier (Muck's directive 2026-10-01: numeric overall is
+                # never shown to the user). Fog-of-war noise still applies --
+                # the tier is derived from the fogged value, so unscouted
+                # players can still show the wrong tier.
+                from attribute_composites import talent_tier
                 self._all_rows.append((p, (
                     p.full_name,
                     p.primary_position.value,
-                    f"{displayed_overall(p, user_team):.0f}",
+                    talent_tier(displayed_overall(p, user_team)),
                     p.age,
                     getattr(p, 'former_team', 'Unknown'),
                 ), rating))
@@ -144,7 +149,7 @@ class PlayerBrowserView(ctk.CTkFrame):
         # Configure columns
         self.tree.heading('Name', text='Player Name')
         self.tree.heading('Position', text='Pos')
-        self.tree.heading('Overall', text='OVR')
+        self.tree.heading('Overall', text='Tier')
         self.tree.heading('Age', text='Age')
         self.tree.heading('Former Team', text='Former Team')
         
@@ -305,9 +310,13 @@ class PlayerBrowserView(ctk.CTkFrame):
                 if 0 <= player_index < len(self.filtered_players):
                     self.selected_player = self.filtered_players[player_index]
                     self.draft_btn.configure(state='normal')
+                    # Tier (not numeric OVR) -- Muck's directive 2026-10-01.
+                    from attribute_composites import talent_tier
+                    _tier = talent_tier(displayed_overall(
+                        self.selected_player, self._user_team()))
                     self.info_label.configure(text=f"Selected: {self.selected_player.full_name} "
                                             f"({self.selected_player.primary_position.value}, "
-                                            f"OVR {self.selected_player.overall_rating()})")
+                                            f"{_tier})")
                 else:
                     self.selected_player = None
                     self.draft_btn.configure(state='disabled')
@@ -351,7 +360,7 @@ class PlayerBrowserView(ctk.CTkFrame):
         confirm_card(self, "Draft Player",
                      f"Draft {self.selected_player.full_name}?\n\n"
                      f"Position: {self.selected_player.primary_position.value}\n"
-                     f"Overall: {self.selected_player.overall_rating()}\n"
+                     f"Tier: {talent_tier(displayed_overall(self.selected_player, self._user_team()))}\n"
                      f"Age: {self.selected_player.age}",
                      on_yes=_do_draft)
         

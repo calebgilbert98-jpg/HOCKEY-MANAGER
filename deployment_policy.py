@@ -306,19 +306,38 @@ def _direction_from_roster(team: Any) -> str:
             return "neutral"
         ovrs = []
         ages = []
+        tier_idxs = []
+        try:
+            from attribute_composites import talent_tier as _tt_d
+            from attribute_composites import tier_index as _tix_d
+        except Exception:
+            _tt_d, _tix_d = None, None
         for p in skaters:
             try:
                 ovrs.append(float(p.overall_rating()))
             except Exception:
                 continue
+            try:
+                tier_idxs.append(_tix_d(_tt_d(p.overall_rating()))
+                                if _tt_d else 99)
+            except Exception:
+                tier_idxs.append(99)
             ages.append(float(_attr100(p, "age", 26)))
         if not ovrs:
             return "neutral"
-        # Core = top 12 skaters by talent (the players who decide direction).
-        order = sorted(range(len(ovrs)), key=lambda i: ovrs[i], reverse=True)
+        # Core = top 12 skaters by talent tier (Muck 2026-10-01: the
+        # players who decide direction, read on the human's gauge).
+        order = sorted(range(len(ovrs)),
+                       key=lambda i: tier_idxs[i])
         core = order[:12]
         avg_age = sum(ages[i] for i in core) / len(core)
-        avg_ovr = sum(ovrs[i] for i in core) / len(core)
+        # Tier-based (Muck 2026-10-01): direction reads the core's average
+        # tier representative, not 1-point overalls.
+        try:
+            from attribute_composites import tier_proxy_overall as _tpo_d
+            avg_ovr = sum(_tpo_d(ovrs[i]) for i in core) / len(core)
+        except Exception:
+            avg_ovr = sum(ovrs[i] for i in core) / len(core)
         if avg_age <= 26.0 and avg_ovr < 80.0:
             return "seller"
         if avg_age >= 28.5 and avg_ovr >= 79.0:
@@ -493,9 +512,13 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
     it. Form is counted ONCE (B1): the old heater bonus inside the vibe
     product double-counted it.
     Every other factor is a bounded modulator inside a style-dependent
-    vibe clamp, and vibes alone can never flip a real talent gap at equal
-    form -- the widest clamp spread (6.4%) stays below the 85-vs-93 gap
-    (8.4%). Crossing needs genuine heat; how much heat is the style's
+    vibe clamp. NOTE (tiers, 2026-10-01): the clamp spread (6.4%) was tuned
+    against 1-point overall gaps; under tier representatives an adjacent
+    tier step is ~3.6-4.5% of base, so at equal form vibes alone can now
+    flip adjacent tiers. Whether that stands is a Wave-A tuning call --
+    the invariant "vibes never flip a real talent gap" needs re-anchoring
+    to tier steps.
+    Crossing needs genuine heat; how much heat is the style's
     signature (drill sergeant: effectively never; players' coach: sooner).
 
     Coaching style + adaptability modulate how strongly each factor bites
@@ -509,9 +532,16 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
     """
     try:
         try:
-            ovr = float(player.overall_rating())
+            # Tier-based (Muck 2026-10-01): the coach reads the same
+            # talent gauge as the human -- tier representative, never
+            # the 1-point overall.
+            from attribute_composites import tier_proxy_overall as _tpo_dp
+            ovr = float(_tpo_dp(player.overall_rating()))
         except Exception:
-            ovr = 60.0
+            try:
+                ovr = float(player.overall_rating())
+            except Exception:
+                ovr = 60.0
         if ovr <= 0:
             ovr = 5.0
         form01 = _norm_form01(player)
@@ -703,7 +733,7 @@ def _fallback_lines(team: Any) -> Dict[str, List[Any]]:
                   if not _is_goalie(p)
                   and not getattr(p, "injured", False)
                   and not getattr(p, "suspended", False)]
-        roster.sort(key=lambda p: _safe_ovr(p), reverse=True)
+        roster.sort(key=lambda p: _safe_tier_rep(p), reverse=True)
         fw = [p for p in roster if not _is_defenseman(p)]
         df = [p for p in roster if _is_defenseman(p)]
         lines = {"F": [fw[i * 3:(i + 1) * 3] for i in range(4)],
@@ -715,11 +745,17 @@ def _fallback_lines(team: Any) -> Dict[str, List[Any]]:
                 "PP": [[], []], "PK": [[], []]}
 
 
-def _safe_ovr(player: Any) -> float:
+def _safe_tier_rep(player: Any) -> float:
+    """Tier representative overall, never the 1-point raw (Muck 2026-10-01:
+    deployment decides on the same gauge the human reads)."""
     try:
-        return float(player.overall_rating())
+        from attribute_composites import tier_proxy_overall as _tpo
+        return float(_tpo(player.overall_rating()))
     except Exception:
-        return 0.0
+        try:
+            return float(player.overall_rating())
+        except Exception:
+            return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -780,10 +816,10 @@ def _team_shape(team: Any) -> Dict[str, Any]:
     try:
         fw = [p for p in (getattr(team, "roster", None) or [])
               if not _is_goalie(p) and not _is_defenseman(p)]
-        fw.sort(key=_safe_ovr, reverse=True)
+        fw.sort(key=_safe_tier_rep, reverse=True)
         if len(fw) >= 12:
-            top6 = sum(_safe_ovr(p) for p in fw[:6]) / 6.0
-            nxt6 = sum(_safe_ovr(p) for p in fw[6:12]) / 6.0
+            top6 = sum(_safe_tier_rep(p) for p in fw[:6]) / 6.0
+            nxt6 = sum(_safe_tier_rep(p) for p in fw[6:12]) / 6.0
             shape["top6_gap"] = top6 - nxt6
             shape["superteam"] = (top6 + nxt6) / 2.0 >= 80.0 and \
                 shape["top6_gap"] <= 6.0

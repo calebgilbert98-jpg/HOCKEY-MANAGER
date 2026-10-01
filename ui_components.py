@@ -303,12 +303,17 @@ class PlayerProfileView(ctk.CTkFrame):
         ttk.Label(row2_frame, text=f"Weight: {getattr(self.player, 'weight', 'N/A')}", style='PlayerInfo.TLabel').pack(side='left', padx=(0, 20))
         ttk.Label(row2_frame, text=f"Shoots: {getattr(self.player, 'handedness', 'Unknown')}", style='PlayerInfo.TLabel').pack(side='left')
         
-        # Overall rating with visual bar
+        # Talent tier with visual bar (Muck's directive 2026-10-01: the
+        # numeric overall is never shown to the user -- the bar keeps its
+        # proportional fill, but the caption is the tier label)
         rating_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')
         rating_frame.grid(row=0, column=2, sticky='ns', padx=(15, 15))
         
-        ttk.Label(rating_frame, text="Overall Rating", style='PlayerSubheader.TLabel').pack()
+        ttk.Label(rating_frame, text="Talent Tier", style='PlayerSubheader.TLabel').pack()
         overall = self.player.overall_rating()
+        from attribute_composites import (talent_tier as _tier_fn,
+                                          talent_tier_color as _tier_color_fn)
+        _tier = _tier_fn(overall)
         
         # Create visual rating bar
         rating_canvas = tk.Canvas(rating_frame, width=90, height=130, bg=self.app.BG_COLOR, highlightthickness=1, highlightbackground=self.app.TEXT_COLOR)
@@ -320,14 +325,14 @@ class PlayerProfileView(ctk.CTkFrame):
         # Draw rating bar fill (1-100 display scale)
         overall_100 = _to_100_scale(overall)
         bar_height = int(overall_100)  # bar is 100px tall
-        bar_color = self._get_rating_color(overall)
+        bar_color = _tier_color_fn(_tier)
         if bar_height > 0:
             rating_canvas.create_rectangle(27, 115-bar_height, 63, 113, fill=bar_color, outline="")
         
         # Draw scale markings and text
         rating_canvas.create_text(45, 10, text="100", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
         rating_canvas.create_text(45, 120, text="0", fill=self.app.TEXT_COLOR, font=(self.app.FONT_FAMILY, 9))
-        rating_canvas.create_text(45, 125, text=str(overall_100), fill=self.app.HEADER_COLOR, font=(self.app.FONT_FAMILY, 14, 'bold'))
+        rating_canvas.create_text(45, 125, text=_tier, fill=self.app.HEADER_COLOR, font=(self.app.FONT_FAMILY, 11, 'bold'))
         
         # Contract status indicator
         contract_frame = ttk.Frame(header_frame, style='PlayerTab.TFrame')

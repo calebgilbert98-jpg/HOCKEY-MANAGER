@@ -124,10 +124,16 @@ def _cap_hit(p):
 
 
 def _ovr(p):
+    """Tier representative (Muck 2026-10-01): waiver decisions read the
+    same gauge as the human -- never the 1-point overall."""
     try:
-        return int(p.overall_rating())
+        from attribute_composites import tier_proxy_overall as _tpo_w
+        return int(_tpo_w(p.overall_rating()))
     except Exception:
-        return 70
+        try:
+            return int(p.overall_rating())
+        except Exception:
+            return 70
 
 
 def _candidate_rows(team):

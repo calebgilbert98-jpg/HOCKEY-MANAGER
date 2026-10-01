@@ -79,7 +79,10 @@ def drafted_player_value(player) -> int:
     grade = getattr(player, 'potential_grade', 'C') or 'C'
     base = _POT_VALUES.get(grade.strip(), 520)
     try:
-        base += max(0, (player.overall_rating() - 35) * 8)
+        # Tier-based (Muck 2026-10-01): drafted-player value from the tier
+        # representative, not the 1-point overall.
+        from attribute_composites import tier_proxy_overall as _tpo_dv
+        base += max(0, (_tpo_dv(player.overall_rating()) - 35) * 8)
     except Exception:
         pass
     return base

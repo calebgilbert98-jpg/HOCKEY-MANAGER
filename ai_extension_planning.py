@@ -85,12 +85,27 @@ def _grade_index(grade: str) -> int:
     return 0
 
 
-def _gut_grade_index(player) -> int:
-    """The GM's own eyes: current overall mapped onto the grade ladder.
+#: The GM's gut grade ladder, by talent tier (Muck 2026-10-01). The old
+#: ladder was calibrated on 1-100 overall (66->F, ~74->C, ~80->B-, ~85->A-,
+#: 90+->A+); the tier version keeps the ladder's meaning at each tier's
+#: center and compresses only within-tier variance -- the tier philosophy.
+#: Decent->C (a 74 guts as C, exactly as before), Good->B, Very good->A-,
+#: Elite->A, Generational->A+.
+_GUT_GRADE_BY_TIER_INDEX = {0: 11, 1: 10, 2: 9, 3: 7, 4: 4}
 
-    What an old-school GM trusts -- the player in front of him, not the
-    report. 66 -> F, ~74 -> C, ~80 -> B-, ~85 -> A-, 90+ -> A+.
+
+def _gut_grade_index(player) -> int:
+    """The GM's own eyes: talent tier mapped onto the grade ladder.
+
+    Tier-based (Muck 2026-10-01): what an old-school GM trusts -- the
+    player in front of him, read coarsely, not the 1-point overall.
     """
+    try:
+        from attribute_composites import talent_tier_for_player as _ttf_g
+        from attribute_composites import tier_index as _tix_g
+        return _GUT_GRADE_BY_TIER_INDEX[_tix_g(_ttf_g(player))]
+    except Exception:
+        pass
     try:
         ovr = float(player.overall_rating())
     except Exception:
@@ -98,7 +113,10 @@ def _gut_grade_index(player) -> int:
     return max(0, min(11, int(round((ovr - 66.0) / 2.2))))
 
 _PIECE_SCORE_THRESHOLD = 50.0
-_STAR_OVERRIDE_OVR = 86  # 86+ overall is a star by any measure
+#: Tier-based (Muck 2026-10-01): Elite/Generational (the old 86 line sat
+#: inside Very-good; the clean tier read is Elite+) is a star by any
+#: measure -- even a rebuilding GM won't shop a true superstar.
+_STAR_TIER_MAX_INDEX = 1  # Generational/Elite
 
 
 def _ovr100(player) -> int:
@@ -181,8 +199,16 @@ def franchise_score(player, identity=None, strategy=None) -> float:
     except Exception:
         patience = loyalty = aggression = 0.5
 
-    # Face value: what he is right now.
-    star_part = max(0.0, min(1.0, (ovr - 75) / 20.0)) * 55.0
+    # Face value: what he is right now. Tier-based (Muck 2026-10-01):
+    # the star read comes from the tier representative, not the 1-point
+    # overall. Decent -> 0, Good -> ~19, Very good -> ~30, Elite -> ~41,
+    # Generational -> 55.
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo_fs
+        _qovr = _tpo_fs(_ovr100(player))
+    except Exception:
+        _qovr = ovr
+    star_part = max(0.0, min(1.0, (_qovr - 75) / 20.0)) * 55.0
     # An aggressive GM only respects the finished product.
     star_part *= 0.85 + 0.3 * aggression
 
@@ -251,8 +277,14 @@ def franchise_score(player, identity=None, strategy=None) -> float:
 
 def is_franchise_piece(player, identity=None, strategy=None) -> bool:
     """True when this GM treats the player as core -- now or in the future."""
-    if _ovr100(player) >= _STAR_OVERRIDE_OVR:
-        return True
+    try:
+        from attribute_composites import talent_tier as _tt_fp
+        from attribute_composites import tier_index as _tix_fp
+        if _tix_fp(_tt_fp(_ovr100(player))) <= _STAR_TIER_MAX_INDEX:
+            return True
+    except Exception:
+        if _ovr100(player) >= 86:
+            return True
     return franchise_score(player, identity, strategy) >= _PIECE_SCORE_THRESHOLD
 
 
@@ -442,15 +474,25 @@ def plan(team, identity=None, strategy=None,
 
     # -- 1. who is core -------------------------------------------------
     scored = []
+    try:
+        from attribute_composites import talent_tier as _tt_ep
+        from attribute_composites import tier_index as _tix_ep
+    except Exception:
+        _tt_ep, _tix_ep = None, None
     for p in roster:
         try:
             if getattr(p, "contract", None) is None:
                 continue
             s = franchise_score(p, identity, strategy)
-            piece = s >= _PIECE_SCORE_THRESHOLD or _ovr100(p) >= _STAR_OVERRIDE_OVR
+            try:
+                _is_star = _tix_ep(_tt_ep(_ovr100(p))) <= _STAR_TIER_MAX_INDEX \
+                    if _tt_ep else _ovr100(p) >= 86
+            except Exception:
+                _is_star = False
+            piece = s >= _PIECE_SCORE_THRESHOLD or _is_star
             # A rebuilder's "core" is the kids; a 33-year-old 84 is an asset.
             if piece and strat == "REBUILD" and _age(p) > 28 \
-                    and _ovr100(p) < _STAR_OVERRIDE_OVR:
+                    and not _is_star:
                 piece = False
             scored.append((p, s, piece))
         except Exception:

@@ -385,15 +385,18 @@ def _player_label(player):
         name = player.full_name
     except Exception:
         name = "?"
+    # Talent tier (Muck's directive 2026-10-01: the numeric overall is
+    # never shown to the user -- this label appears in trade news).
     try:
-        ovr = player.overall_rating()
+        from attribute_composites import talent_tier_for_player as _ttfp5
+        _tier = _ttfp5(player)
     except Exception:
-        ovr = "?"
+        _tier = "Decent"
     try:
         pos = str(player.primary_position).split(".")[-1]
     except Exception:
         pos = "?"
-    return f"{name} ({pos}, {ovr})"
+    return f"{name} ({pos}, {_tier})"
 
 
 # ---------------------------------------------------------------------------
@@ -722,12 +725,24 @@ def _find_bidders(app, league, listing, today, ramp):
             except Exception:
                 pos = ""
             try:
-                ovr = player.overall_rating()
+                _need_tidx = None
+                try:
+                    from attribute_composites import talent_tier as _tt_nf
+                    from attribute_composites import tier_index as _tix_nf
+                    _need_tidx = _tix_nf(_tt_nf(player.overall_rating()))
+                except Exception:
+                    pass
+                if _need_tidx is None:
+                    try:
+                        ovr = player.overall_rating()
+                    except Exception:
+                        ovr = 0
+                    _need_tidx = 2 if ovr >= 84 else 4
             except Exception:
-                ovr = 0
+                _need_tidx = 4
             need_fit = (pos in needs) or \
                 (pos == "D" and any(n in ("LD", "RD") for n in needs)) or \
-                (ovr >= 84)
+                (_need_tidx <= 2)
             # Marquee attention: contenders kick the tires on a star even
             # without a glaring hole; bold bubble GMs opportunistically join
             # the fray. Non-stars keep strict need-fit matching only.
@@ -824,12 +839,17 @@ def _find_bidders(app, league, listing, today, ramp):
 # market-layer overlay only.
 # ---------------------------------------------------------------------------
 def _is_headliner(player):
-    """A Quinn Hughes-caliber piece: 85+ overall, or 83+ at age <= 26."""
+    """A Quinn Hughes-caliber piece: Very good+ tier, or Good+ at age <= 26.
+
+    Tier-based (Muck 2026-10-01): the old 85+ / 83+-young cutoffs become
+    tier reads -- the same gauge the human sees on the trade screen.
+    """
     try:
-        ovr = player.overall_rating()
+        from attribute_composites import talent_tier_for_player as _ttf_h
+        from attribute_composites import tier_index as _tix_h
+        tidx = _tix_h(_ttf_h(player))
         age = getattr(player, "age", 99)
-        return ovr >= HEADLINER_OVR or (age <= HEADLINER_YOUNG_AGE
-                                       and ovr >= HEADLINER_YOUNG_OVR)
+        return tidx <= 2 or (age <= HEADLINER_YOUNG_AGE and tidx <= 3)
     except Exception:
         return False
 
@@ -862,10 +882,13 @@ def _headliner_package_ok(app, league, player, seller, bidder, assets):
         if not _is_headliner(player):
             return True, "not a headliner"
         live = [a for a in assets if a is not None]
+        # Tier-based (Muck 2026-10-01): the 1-for-1 "hockey trade"
+        # exception needs same-tier pieces (the old <=6 overall gap).
         try:
-            piece_ovr = player.overall_rating()
+            from attribute_composites import talent_tier_for_player as _ttf_p
+            piece_tier = _ttf_p(player)
         except Exception:
-            piece_ovr = 0
+            piece_tier = None
         try:
             piece_yrs = getattr(getattr(player, "contract", None),
                                 "years_remaining", 99) or 99
@@ -883,9 +906,12 @@ def _headliner_package_ok(app, league, player, seller, bidder, assets):
         if len(live) == 1 and not _is_pick(live[0]):
             a = live[0]
             try:
-                ovr = a.overall_rating()
+                from attribute_composites import talent_tier_for_player \
+                    as _ttf_a
+                _same_tier = (_ttf_a(a) == piece_tier
+                              if piece_tier else False)
             except Exception:
-                ovr = 0
+                _same_tier = False
             try:
                 yrs = getattr(getattr(a, "contract", None),
                               "years_remaining", 0) or 0
@@ -897,7 +923,7 @@ def _headliner_package_ok(app, league, player, seller, bidder, assets):
                 need0 = None
             if (getattr(a, "age", 99) <= HEADLINER_EXCEPTION_AGE
                     and yrs >= HEADLINER_EXCEPTION_YEARS
-                    and abs(ovr - piece_ovr) <= HEADLINER_EXCEPTION_OVR_GAP
+                    and _same_tier
                     and _need_hit(need0, a)):
                 return True, "one-for-one exception"
         prospects = [a for a in live if not _is_pick(a)
@@ -1031,15 +1057,23 @@ MIN_BIDDERS_FOR_MARQUEE_WAR = 2  # war rumor bar is lower for stars
 
 
 def is_marquee(listing, player):
-    """True when a listing deserves league-wide attention: an 86+ OVR star,
-    an elite-reputation name, or an 82+ player who asked out. Never raises."""
+    """True when a listing deserves league-wide attention: a Very good+
+    tier star, an elite-reputation name, or a Good+ player who asked out.
+    Tier-based (Muck 2026-10-01): the old 86+/82+ bars become tier reads.
+    Never raises."""
     try:
-        ovr = 0
+        tidx = 99
         try:
-            ovr = player.overall_rating()
+            from attribute_composites import talent_tier_for_player as _ttf_m
+            from attribute_composites import tier_index as _tix_m
+            tidx = _tix_m(_ttf_m(player))
         except Exception:
-            pass
-        if ovr >= MARQUEE_OVR:
+            try:
+                ovr = player.overall_rating()
+            except Exception:
+                ovr = 0
+            tidx = 2 if ovr >= MARQUEE_OVR else 4
+        if tidx <= 2:
             return True
         try:
             if float(getattr(player, "reputation", 0) or 0) >= MARQUEE_REP:
@@ -1050,7 +1084,7 @@ def is_marquee(listing, player):
             req = bool(getattr(player, "transfer_requested", False))
             src = (listing or {}).get("source", "")
             if (req or src in ("trade_request", "agitator")) \
-                    and ovr >= MARQUEE_REQUEST_OVR:
+                    and tidx <= 3:
                 return True
         except Exception:
             pass
@@ -1409,12 +1443,19 @@ def _recent_ppg(league, player, games=PERCEPTION_WINDOW_GAMES):
 
 
 def _expected_ppg(player):
-    """Points/game the league expects from this name: OVR-based, with a
-    reputation floor (a big name is expected to produce). Never raises."""
+    """Points/game the league expects from this name: tier-based, with a
+    reputation floor (a big name is expected to produce). Tier-quantized
+    (Muck 2026-10-01) before the table interpolation -- no 1-point reads.
+    Never raises."""
     try:
         ovr = 0
         try:
             ovr = player.overall_rating()
+        except Exception:
+            pass
+        try:
+            from attribute_composites import tier_proxy_overall as _tpo_ep
+            ovr = _tpo_ep(ovr)
         except Exception:
             pass
         try:
@@ -1496,6 +1537,13 @@ def contract_worth(player):
             ovr = player.overall_rating()
         except Exception:
             ovr = 75
+        try:
+            # Tier-based (Muck 2026-10-01): worth judged against the tier's
+            # market band, not the 1-point overall.
+            from attribute_composites import tier_proxy_overall as _tpo_cw
+            ovr = _tpo_cw(ovr)
+        except Exception:
+            pass
         try:
             age = int(getattr(player, "age", 27) or 27)
         except Exception:
@@ -2329,12 +2377,19 @@ def _resolve_trade_requests(app, league, market, today, ramp):
                                f"{tname} after a quiet deadline.", rumor=True)
                     continue
                 # Path 4 -- PULLED: seller pulls a core piece pre-deadline.
+                # Tier-based (Muck 2026-10-01): Very good+ reads "core".
                 if not deadline_gone and not ramp:
                     try:
-                        ovr = player.overall_rating()
+                        from attribute_composites import \
+                            talent_tier_for_player as _ttf_pl
+                        from attribute_composites import tier_index as _tix_pl
+                        _is_core = _tix_pl(_ttf_pl(player)) <= 2
                     except Exception:
-                        ovr = 0
-                    if ovr >= 85 and random.random() < 0.02:
+                        try:
+                            _is_core = player.overall_rating() >= 85
+                        except Exception:
+                            _is_core = False
+                    if _is_core and random.random() < 0.02:
                         listing["status"] = "pulled"
                         listing["note"] = "seller pulled"
                         try:
@@ -2382,9 +2437,21 @@ def ambition_agitation_tick(app):
                     amb = getattr(p, "ambition", "")
                     if amb not in ("cup", "stanley_cup"):
                         continue
-                    ovr = p.overall_rating()
-                    if ovr < 82:
-                        continue
+                    # Tier-based (Muck 2026-10-01): Good+ (80+) reads
+                    # "cup-chasing star".
+                    try:
+                        from attribute_composites import \
+                            talent_tier_for_player as _ttf_cc
+                        from attribute_composites import tier_index as _tix_cc
+                        if _tix_cc(_ttf_cc(p)) > 3:
+                            continue
+                    except Exception:
+                        try:
+                            ovr = p.overall_rating()
+                        except Exception:
+                            ovr = 0
+                        if ovr < 82:
+                            continue
                     # Cup-chasing star, losing team: monthly agitation roll.
                     if random.random() < 0.25:
                         p.transfer_requested = True
