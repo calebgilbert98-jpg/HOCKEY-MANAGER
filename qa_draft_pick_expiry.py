@@ -25,7 +25,7 @@ def check(name, cond, detail=""):
 
 from game_classes import DraftPick, set_pick_value_anchor_year
 
-ANCHOR = 2027  # the playthrough's live season_year
+ANCHOR = 2028  # the playthrough's upcoming draft year (live season_year 2027 + 1)
 set_pick_value_anchor_year(ANCHOR)
 
 expired = DraftPick(year=2026, round=1, original_team="CHI",

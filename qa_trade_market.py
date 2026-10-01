@@ -999,9 +999,14 @@ def t_buyer_risk():
         p = tm._buyer_desperation(app, buyer)
     check("patient: buyer + even keel", p <= 0.2, f"d={p:.2f}")
     # build_bid: same ask, the desperate buyer sizes above it.
+    # (2028 picks: one draft beyond the upcoming 2027 draft, so they
+    # carry the single-year distance discount -- 2nd=450, 3rd=200 --
+    # the valuations this bid-sizing check was calibrated on. 2027
+    # picks are the upcoming draft's own and carry no discount since
+    # the F12 anchor fix.)
     buyer.draft_picks = {
-        2027: [mk_pick("Buyer1", 2027, 2), mk_pick("Buyer1", 2027, 3),
-               mk_pick("Buyer1", 2027, 3)],
+        2028: [mk_pick("Buyer1", 2028, 2), mk_pick("Buyer1", 2028, 3),
+               mk_pick("Buyer1", 2028, 3)],
     }
     piece = mk_exact("Target", "Man", PlayerPosition.CENTER, 27, 70,
                      4_000_000, yrs=2)

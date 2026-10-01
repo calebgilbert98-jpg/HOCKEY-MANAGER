@@ -3315,16 +3315,18 @@ class EmailGenerator:
             priority=2
         )
 
-# Anchor year for draft-pick future discounting (DraftPick.value). The app
-# sets this from the league's live season so a 2029 pick in a 2029 save
-# isn't discounted as if it were five drafts away; it defaults to the
-# current calendar year. (Previously hardcoded to 2024, which silently
-# deepened the discount every season a save ran.)
+# Anchor year for draft-pick future discounting (DraftPick.value): the
+# UPCOMING (next unheld) draft year. The app sets this to
+# league.season_year + 1 -- during season S the S draft was already held
+# in June, so the next live draft is S+1 and the anchor year's own picks
+# carry no distance discount (F12). It defaults to the current calendar
+# year when no league has set it. (Previously hardcoded to 2024, which
+# silently deepened the discount every season a save ran.)
 _PICK_VALUE_ANCHOR_YEAR = None
 
 
 def set_pick_value_anchor_year(year):
-    """Pin the future-pick discount anchor to the live season year."""
+    """Pin the future-pick discount anchor to the upcoming draft year."""
     global _PICK_VALUE_ANCHOR_YEAR
     try:
         _PICK_VALUE_ANCHOR_YEAR = int(year)
@@ -3387,10 +3389,12 @@ class DraftPick:
         the draft never consumed/pruned picks, so expired picks stayed
         tradeable at full value forever (the AI even asked for them)."""
         try:
-            # <= : during season S (season_year=S) the S draft was already
-            # held in June, so S picks are dead. The next live draft is
-            # always season_year+1.
-            return int(self.year) <= int(_pick_value_anchor())
+            # The anchor is the upcoming (next unheld) draft year, so a
+            # pick is dead paper only once its draft year is strictly
+            # behind it. During season S the anchor is S+1: the S draft
+            # was already held in June and the S+1 draft is next. (F12:
+            # the anchor year's own picks are live, never expired.)
+            return int(self.year) < int(_pick_value_anchor())
         except Exception:
             return False
 
@@ -3405,9 +3409,9 @@ class DraftPick:
         base_values = {1: 1000, 2: 500, 3: 250, 4: 125, 5: 100, 6: 75, 7: 50}
         base_value = base_values.get(self.round, 25)
 
-        # Decrease value for future years (anchored to the live season --
-        # a hardcoded 2024 here deepened the discount every year a save
-        # ran, undervaluing every future pick in long saves).
+        # Decrease value for future years (anchored to the upcoming draft
+        # year -- a hardcoded 2024 here deepened the discount every year
+        # a save ran, undervaluing every future pick in long saves).
         year_penalty = max(0, (self.year - _pick_value_anchor()) * 50)
 
         # Conditional picks are worth less
@@ -4129,10 +4133,12 @@ class League:
     
     def __post_init__(self):
         self.setup_nhl_teams()
-        # Pin the draft-pick future discount to this save's season so
-        # long-running saves don't undervalue future picks.
+        # Pin the draft-pick future discount to this save's upcoming draft
+        # (season_year+1 -- this season's draft was already held in June,
+        # so the next live draft is next year's; the anchor year's own
+        # picks carry no distance discount).
         try:
-            set_pick_value_anchor_year(self.season_year)
+            set_pick_value_anchor_year(int(self.season_year) + 1)
         except Exception:
             pass
 
@@ -7280,9 +7286,11 @@ class League:
                         _rbox.extend(_news)
         except Exception:
             pass
-        # Keep the draft-pick future discount anchored to the live season.
+        # Keep the draft-pick future discount anchored to the upcoming
+        # draft (the just-held draft's year is now behind the anchor, so
+        # its picks read as expired dead paper).
         try:
-            set_pick_value_anchor_year(self.season_year)
+            set_pick_value_anchor_year(int(self.season_year) + 1)
         except Exception:
             pass
 
