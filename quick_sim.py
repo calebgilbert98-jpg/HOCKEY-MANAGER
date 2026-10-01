@@ -2121,17 +2121,17 @@ class AdvancedGameSim:
                     "quick_release": shot_type == "one-timer",
                     "screened_goalie": bool(screened_now),
                     "won_spot": False,
-                    # D12 (2026-09-30): this engine generates no discrete
-                    # rebound event -- rebounds are folded into the graded
-                    # shot stream. The shared rebound decision lives in two
-                    # places: roll_chance_grade hard-gates any rebound
-                    # situation to grade A (set "rebound": True here if a
-                    # discrete rebound event is ever generated), and
-                    # mesh_system.netfront_finish_chance() is the net-front
-                    # finish probability GameSim._resolve_rebound_chance
-                    # calls directly. Wiring it here would invent a rebound
-                    # event -- new sim behavior, not wiring -- so this
-                    # stays False.
+                    # D12 (2026-09-30): quick_sim DOES generate a discrete
+                    # rebound event now -- _resolve_rebound_event, fired off
+                    # real saves in _resolve_shot_event. It is the fast
+                    # approximation of GameSim._resolve_rebound_chance:
+                    # the same rebound-control trigger ladder, the same
+                    # anticipation+offensive_awareness finisher pick, and
+                    # the SHARED mesh_system.netfront_finish_chance
+                    # decision (never a different formula). The graded
+                    # stream itself never emits rebound situations, so
+                    # this stays False; roll_chance_grade hard-gates any
+                    # rebound situation to grade A regardless.
                     "rebound": False,
                     "tip": shot_type in ("tip", "deflection"),
                 },
@@ -2733,6 +2733,13 @@ class AdvancedGameSim:
                 self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
             # Add shot/save event
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
+            # D12 discrete rebound event (2026-09-30, Muck: quick sim must
+            # behave the SAME as the watched sim): a real save (not a miss)
+            # can kick out a rebound -- the fast approximation of
+            # GameSim._resolve_rebound_chance, wired below.
+            if shot_result == 'SAVE':
+                self._resolve_rebound_event(goalie, puck_team_name,
+                                            opp_team_name, shot_type, shooters)
         else:
             shot_result = 'MISS'
             # Add missed shot event
@@ -2782,7 +2789,208 @@ class AdvancedGameSim:
                     'faceoff_pos': (50, 25)
                 }
             })
-    
+
+    def _resolve_rebound_event(self, goalie, puck_team_name, opp_team_name,
+                               shot_type, shooters):
+        """Discrete rebound event (D12 quick-sim wiring, 2026-09-30, Muck).
+
+        Fast approximation of GameSim._resolve_rebound_chance -- the SAME
+        trigger ladder, the SAME finisher pick and net-front battle, and
+        the SHARED mesh_system.netfront_finish_chance decision (never a
+        different formula). Rebounds are grade A by the shared hard gate.
+        Returns True when a rebound chance resolved (goal or save).
+        """
+        # --- finisher pool: on-ice attackers, goalie excluded -----------
+        _attackers = [p for p in (shooters or [])
+                      if p is not None
+                      and getattr(getattr(p, "primary_position", None),
+                                  "name", "") != "GOALIE"]
+        if not _attackers:
+            return False
+
+        # --- trigger: GameSim's rebound-control ladder, fast form -------
+        # GameSim._determine_rebound_control computes control_probability
+        # and fires the rebound chance on WEAK_REBOUND/DANGEROUS_REBOUND
+        # (P = 1 - control_probability). Rungs resolve as plain indices
+        # here (the enum lives in simulation.py); the ladder math is
+        # identical: absorbed < cp*0.45, controlled < cp*0.75,
+        # deflected_away < cp, weak < cp + (1-cp)*0.7, else dangerous.
+        _rc = float(getattr(goalie, "rebound_control", 69.0) or 69.0) \
+            if goalie is not None else 69.0
+        _base = min(0.97, max(0.50, 0.80 + (_rc - 69.0) * 0.008))
+        # PROXY (documented): quick_sim does not model save types, so the
+        # GameSim save-type modifier (0.4-1.3 across glove/chest/stick/
+        # pad/blocker/desperation/diving) is replaced by its expected
+        # value over GameSim's own save-type distribution (base: glove
+        # .2/chest .15/stick .1/pad .3/blocker .2/desperation .04/diving
+        # .01 -> 1.3*.2+1.2*.15+0.7*.1+0.8*.3+0.6*.2+0.4*.04+0.5*.01
+        # = 0.89). The shot-type modifier mirrors GameSim's table
+        # exactly (slap 0.7, one-timer 0.6, tip 0.5, deflection 0.4).
+        _shot_mod = {"slap shot": 0.7, "one-timer": 0.6,
+                     "tip": 0.5, "deflection": 0.4}.get(shot_type, 1.0)
+        _cp = min(_base * 0.89 * _shot_mod, 0.97)
+        _r = random.random()
+        _rung = (0 if _r < _cp * 0.45 else
+                 1 if _r < _cp * 0.75 else
+                 2 if _r < _cp else
+                 3 if _r < _cp + (1.0 - _cp) * 0.7 else 4)
+        # Goalie personality: the same rebound_shift GameSim applies --
+        # athletic scramblers kick out more second chances, technicians
+        # swallow pucks. Shifts the outcome one rung up/down the ladder.
+        try:
+            import goalie_personality as _gp_rb
+            _shift = (float(_gp_rb.rebound_shift(goalie))
+                      if goalie is not None else 0.0)
+            if _shift > 0 and random.random() < _shift:
+                _rung = min(4, _rung + 1)
+            elif _shift < 0 and random.random() < -_shift:
+                _rung = max(0, _rung - 1)
+        except Exception:
+            pass
+        if _rung < 3:
+            return False  # controlled: no rebound, play continues
+
+        # --- the goalie kicked this puck out: he created the rebound ----
+        # (mirrors GameSim: debited before the scramble, on both
+        # branches; never raises on goalie-less synthetic setups)
+        if goalie is not None:
+            _gst = self.stats[opp_team_name].setdefault(goalie.id, {})
+            _gst['rebounds_created'] = _gst.get('rebounds_created', 0) + 1
+
+        # --- finisher pick + net-front battle (GameSim's formula) -------
+        # Same weights GameSim uses (no proxy needed: shooters IS the
+        # on-ice attacking group): anticipation + offensive_awareness.
+        # Then the same scramble: attacker roll vs best defender roll --
+        # the forward-vs-defense half of forward vs (defense + goalie).
+        _finisher = random.choices(
+            _attackers,
+            weights=[max(1.0,
+                         float(getattr(p, "anticipation", 10) or 10)
+                         + float(getattr(p, "offensive_awareness", 10) or 10))
+                     for p in _attackers],
+            k=1)[0]
+        try:
+            _d_onice = ((self.on_ice.get(opp_team_name, {}) or {})
+                        .get("Defense", []))
+            _defenders = [d for d in _d_onice if d is not None]
+        except Exception:
+            _defenders = []
+        _best_def = (max(_defenders,
+                         key=lambda p: (float(getattr(p, "anticipation", 10)
+                                              or 10)
+                                        + float(getattr(p, "defensive_awareness",
+                                                        10) or 10)))
+                     if _defenders else None)
+        _att_roll = (float(getattr(_finisher, "anticipation", 10) or 10)
+                     + float(getattr(_finisher, "offensive_awareness", 10)
+                             or 10) + random.randint(1, 10))
+        _def_roll = ((float(getattr(_best_def, "anticipation", 10) or 10)
+                      + float(getattr(_best_def, "defensive_awareness", 10)
+                              or 10) + random.randint(1, 10))
+                     if _best_def is not None else 0)
+        if not (_att_roll > _def_roll):
+            return False  # defender clears it: play continues, nothing
+                          # invented (quick_sim has no possession model
+                          # on this path)
+
+        # --- the shared decision: forward vs goalie --------------------
+        # goalie_skill is computed exactly as in GameSim's D12 hunk
+        # (overall_rating, 60.0 fallback); netfront_finish_chance never
+        # raises and returns within [0.05, 0.55].
+        try:
+            from mesh_system import netfront_finish_chance as _nffc
+            _gs = 60.0
+            try:
+                _ov = getattr(goalie, "overall_rating", None)
+                if callable(_ov):
+                    _gs = float(_ov())
+                elif _ov is not None:
+                    _gs = float(_ov)
+            except Exception:
+                pass
+            _nf_p = float(_nffc(_finisher, goalie, _gs))
+        except Exception:
+            _nf_p = 0.22
+        _reb_goal = random.random() < _nf_p
+
+        # --- the rebound is its own shot: grade A by the hard gate -----
+        _fst = self.stats[puck_team_name].setdefault(_finisher.id, {})
+        _fst['shots'] = _fst.get('shots', 0) + 1
+        _fst['grade_a_shots'] = _fst.get('grade_a_shots', 0) + 1
+        self.events.append({'time': self.time, 'period': self.period,
+                            'team': puck_team_name, 'player': _finisher,
+                            'event': 'Shot'})
+
+        if _reb_goal:
+            # Rebound goal -- credited exactly as the quick_sim goal path.
+            _fst['goals'] = _fst.get('goals', 0) + 1
+            _fst['grade_a_goals'] = _fst.get('grade_a_goals', 0) + 1
+            _fst['rebounds_scored'] = _fst.get('rebounds_scored', 0) + 1
+            self.score[puck_team_name] += 1
+            # The net is never empty across a goal: both goalies return.
+            self._return_all_goalies()
+            # Crowd: the building swings on every goal.
+            self._crowd_on_goal(puck_team_name)
+            # Goalie personality: charge the goal to the beaten goalie --
+            # bounce-back clock starts, tilt check for shelled battlers.
+            if goalie is not None:
+                try:
+                    import goalie_personality as _gp2r
+                    _st2 = self.goalie_personality_state.get(goalie.id)
+                    if _st2 is None:
+                        _st2 = _gp2r.new_game_state()
+                        self.goalie_personality_state[goalie.id] = _st2
+                    _gp2r.record_goal_allowed(_st2)
+                    _gp2r.check_tilt(goalie, _st2)
+                except Exception:
+                    pass
+            # Assists: the finisher is the scorer of the rebound goal.
+            assist_ids, assist_players = self._credit_assists(_finisher,
+                                                              puck_team_name)
+            self.events.append({'time': self.time, 'period': self.period,
+                                'team': puck_team_name, 'player': _finisher,
+                                'event': 'Goal', 'assists': assist_players})
+            if self.pp_team == puck_team_name:
+                _strength = 'PP'
+            elif self.pk_team == puck_team_name:
+                _strength = 'SH'
+            else:
+                _strength = 'EV'
+            _in_period = max(0.0, self.time - 1200 * (self.period - 1))
+            self.event_log.append({
+                'timestamp': self.time,
+                'duration': 1.0,
+                'type': 'GOAL_ADVANCED',
+                'details': {
+                    'scorer_id': _finisher.id,
+                    'assist_ids': assist_ids,
+                    'goaltender_id': goalie.id if goalie else None,
+                    'goal_type': 'rebound',
+                    'period': self.period,
+                    'strength': _strength,
+                    'time_str': f"{int(_in_period // 60)}:{int(_in_period % 60):02d}",
+                }
+            })
+            # PP ends when the PP team scores (NHL rule)
+            if self.pp_team == puck_team_name:
+                self.pp_team = None
+                self.pk_team = None
+                self.pp_end_time = None
+            self.event_log.append({
+                'timestamp': self.time + 1.0,
+                'duration': 2.0,
+                'type': 'STOPPAGE',
+                'details': {'reason': 'Goal Scored', 'faceoff_pos': (50, 25)}
+            })
+        else:
+            # Rebound saved -- the goalie stops the second chance too
+            # (GameSim credits this save on its rebound path); play
+            # continues, no invented second-order events.
+            if goalie is not None:
+                _gst2 = self.stats[opp_team_name].setdefault(goalie.id, {})
+                _gst2['saves'] = _gst2.get('saves', 0) + 1
+        return True
+
     def _calculate_goalie_save_skill(self, goalie, shot_type, danger_level=None, distance=None, situation=None):
         """Enhanced goalie skill calculation with coordinate-based danger awareness.
 
