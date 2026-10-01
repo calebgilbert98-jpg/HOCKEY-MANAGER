@@ -460,9 +460,12 @@ COMPOSITE_KEYS = tuple(_COMPOSITES.keys())
 #   below 80   -> Decent
 #
 # Ranges are inclusive and gapless: every int in [0, 99] maps to exactly
-# one tier. The numeric overall is STILL the engine/AI currency (lineup
-# choice, trade valuation, scouting accuracy, chemistry all keep calling
-# overall_rating()); the tier is presentation only, for human eyes.
+# one tier. The tier is the shared quick gauge for human AND AI (Muck
+# 2026-10-01: "AI sees tiers too, equal playing field"). AI value-proxy
+# decisions (trade valuation, lineup sorting, FA/draft targeting,
+# comparators) go through tier_index()/tier_proxy_overall()/ai_perceived_tier()
+# below -- never the raw 1-point overall. The attribute-vs-attribute engine
+# core never used overalls and stays precise.
 # ---------------------------------------------------------------------------
 
 #: (tier label, min overall inclusive, max overall inclusive), top to bottom.
@@ -535,3 +538,65 @@ def tier_change_arrow(old_overall, new_overall) -> str:
     if new_i > old_i:
         return "\u25bc"   # tier down
     return "\u2013"       # same tier
+
+
+# ---------------------------------------------------------------------------
+# AI tier parity (Muck 2026-10-01 ~00:59 EDT): "AI sees tiers too, equal
+# playing field for everyone." Overalls are a dead number -- the tier is the
+# shared quick gauge for human AND AI. The AI must not make decisions on
+# 1-point overall differences the human can't even see.
+#
+# Two rules:
+#   1. Comparisons / sorting / thresholds on talent -> tier_index() (coarse).
+#   2. Valuation math that needs a NUMBER (trade value, salary curves) ->
+#      tier_proxy_overall() (tier representative, no false precision).
+# The attribute-vs-attribute engine core never used overalls and is untouched.
+# ---------------------------------------------------------------------------
+
+#: Tier -> representative overall for AI value-proxy math. Midpoints; Decent
+#: compresses to 70 by design (the human's gauge can't split 79 from 62
+#: either -- both read "Decent").
+TIER_REPRESENTATIVE_OVR = {
+    "Generational": 95,
+    "Elite": 90,
+    "Very good": 86,
+    "Good": 82,
+    "Decent": 70,
+}
+
+
+def tier_proxy_overall(overall) -> int:
+    """Quantized overall for AI value math: the tier's representative number.
+
+    Trade valuation, salary curves, and other AI math that needs a number
+    go through here instead of the raw overall -- no 1-point decisions the
+    human can't see.
+    """
+    return TIER_REPRESENTATIVE_OVR.get(talent_tier(overall), 70)
+
+
+def ai_perceived_tier(player, perceiver_team=None) -> str:
+    """The talent tier an AI GM perceives for a player (fog-of-war parity).
+
+    Own-team players (roster/prospects/scouted): the true tier. Everyone
+    else: the tier of the fogged overall -- the SAME fog the human's UI
+    applies via scouting_profiles.displayed_overall. The AI never peeks at
+    a true numeric overall the human can't see.
+    """
+    try:
+        if perceiver_team is None:
+            return talent_tier_for_player(player)
+        from scouting_profiles import displayed_overall as _do
+        return talent_tier(_do(player, perceiver_team))
+    except Exception:
+        try:
+            return talent_tier_for_player(player)
+        except Exception:
+            return "Decent"
+
+
+def ai_perceived_proxy_ovr(player, perceiver_team=None) -> int:
+    """Quantized numeric overall the AI may use for a player: the tier
+    representative of what it perceives (fogged for other teams' players)."""
+    return TIER_REPRESENTATIVE_OVR.get(
+        ai_perceived_tier(player, perceiver_team), 70)

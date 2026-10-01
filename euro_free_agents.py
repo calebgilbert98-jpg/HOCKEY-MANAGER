@@ -338,18 +338,33 @@ def generate_euro_free_agents(league, year: int,
 
 
 def euro_fa_news_items(players: List[Player]) -> List[str]:
-    """Short news strings for the notable ones only (gambles + impact)."""
+    """Short news strings for the notable ones only (gambles + impact).
+
+    Tier-based (Muck 2026-10-01): impact = Very good+ (the old 84-89
+    band), notable = Good+ (the old 78+ line)."""
     items = []
+    try:
+        from attribute_composites import talent_tier_for_player as _ttf_e
+        from attribute_composites import tier_index as _tix_e
+    except Exception:
+        _ttf_e, _tix_e = None, None
     for p in players:
-        lo, hi = IMPACT_OVERALL
-        ovr = p.overall_rating()
+        try:
+            tidx = _tix_e(_ttf_e(p)) if _ttf_e else 99
+        except Exception:
+            try:
+                _o = p.overall_rating()
+            except Exception:
+                _o = 0
+            lo, hi = IMPACT_OVERALL
+            tidx = 2 if lo <= _o <= hi else (3 if _o >= 78 else 4)
         name = p.full_name
         src = getattr(p, "source_league", "Europe")
-        if lo <= ovr <= hi:
+        if tidx <= 2:
             items.append(
                 f"{src} star {name} ({p.age}) is signing in North America "
                 f"as a free agent -- a potential impact addition.")
-        elif ovr >= 78:
+        elif tidx == 3:
             items.append(
                 f"{name}, a {p.age}-year-old {p.primary_position.value} "
                 f"standout in the {src}, is coming over to North America "
@@ -395,9 +410,16 @@ def run_euro_free_agency(league, year: int, app=None) -> Dict:
                 continue
 
         news = euro_fa_news_items(players)
-        impact_players = [p for p in players
-                          if IMPACT_OVERALL[0] <= p.overall_rating()
-                          <= IMPACT_OVERALL[1]]
+        # Tier-based (Muck 2026-10-01): impact = Very good+ tier.
+        try:
+            from attribute_composites import talent_tier_for_player as _ttf_i
+            from attribute_composites import tier_index as _tix_i
+            impact_players = [p for p in players
+                              if _tix_i(_ttf_i(p)) <= 2]
+        except Exception:
+            impact_players = [p for p in players
+                              if IMPACT_OVERALL[0] <= p.overall_rating()
+                              <= IMPACT_OVERALL[1]]
         summary = {
             "added": len(players),
             "star": bool(impact_players),

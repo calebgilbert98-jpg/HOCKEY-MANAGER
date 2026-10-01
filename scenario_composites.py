@@ -471,10 +471,17 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
     team converts that attention into denial.
     """
     try:
+        # Tier-based (Muck 2026-10-01): the schemed-against gate reads the
+        # tier representative through the same floor+ramp curve (Elite rep
+        # 90 -> ~0.0, Generational rep 95 -> ~0.71). No 1-point reads.
         try:
-            _ovr = float(shooter.overall_rating())
+            from attribute_composites import tier_proxy_overall as _tpo_st
+            _ovr = float(_tpo_st(float(shooter.overall_rating())))
         except Exception:
-            return 1.0, 1.0
+            try:
+                _ovr = float(shooter.overall_rating())
+            except Exception:
+                return 1.0, 1.0
         if _ovr < _SCHEME_THREAT_FLOOR:
             return 1.0, 1.0
         _gate = min(1.0, (_ovr - _SCHEME_THREAT_FLOOR) / _SCHEME_THREAT_RAMP)
@@ -553,8 +560,19 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
         for _p in _unit:
             if _p is None or _p is shooter:
                 continue
+            # Tier-based (Muck 2026-10-01): the 90 floor reads the tier
+            # representative, not the 1-point overall.
             try:
-                if float(_p.overall_rating()) < _SCHEME_THREAT_FLOOR:
+                from attribute_composites import tier_proxy_overall \
+                    as _tpo_lm
+                _lm_ovr = float(_tpo_lm(float(_p.overall_rating())))
+            except Exception:
+                try:
+                    _lm_ovr = float(_p.overall_rating())
+                except Exception:
+                    continue
+            try:
+                if _lm_ovr < _SCHEME_THREAT_FLOOR:
                     continue
             except Exception:
                 continue

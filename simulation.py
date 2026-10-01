@@ -1912,9 +1912,15 @@ class GameSim:
         
         base_replacement = position_baselines.get(player.primary_position, 0.40)
         
-        # Adjust for player's overall rating relative to league average (assumed 75)
+        # Adjust for player's talent tier relative to league average.
+        # Tier-based (Muck 2026-10-01): no 1-point overall precision.
+        try:
+            from attribute_composites import tier_proxy_overall as _tpo_rl
+            _rl_ovr = _tpo_rl(player.overall_rating())
+        except Exception:
+            _rl_ovr = player.overall_rating()
         league_average = 75
-        rating_adjustment = (player.overall_rating() - league_average) / 100
+        rating_adjustment = (_rl_ovr - league_average) / 100
         
         return max(0.1, base_replacement + rating_adjustment)
 
@@ -2526,8 +2532,13 @@ class GameSim:
                 _pl = _stats.get('player')
                 if _pl is None:
                     continue
+                # Goalies: feed saves/shots-against so the last-10
+                # performance ledger grades on save% (Muck 2026-10-01).
                 _note = _rec(_pl, _stats.get('g', 0), _stats.get('a', 0),
-                             is_playoff=_is_po)
+                             is_playoff=_is_po,
+                             saves=_stats.get('saves', 0) or 0,
+                             shots_against=_stats.get('shots_against', 0)
+                             or 0)
                 if _note:
                     self.notable_events.append({'player': _pl, 'event': _note})
         except Exception:
@@ -9573,20 +9584,38 @@ class GameSim:
             # Capped players sort last but remain eligible, so the team
             # never dresses short.
             if _st_governed and special_unit:
+                # Tier-based (Muck 2026-10-01): fill by talent tier, not
+                # 1-point overall.
+                try:
+                    from attribute_composites import talent_tier_for_player \
+                        as _ttf_fill
+                    from attribute_composites import tier_index as _tix_fill
+                except Exception:
+                    _ttf_fill, _tix_fill = None, None
                 def _fill_key(pl):
                     try:
                         capped = 1 if _st_raw_toi(self, pl.id) >= _ST_CAP else 0
                     except Exception:
                         capped = 0
                     try:
-                        ovr = -float(pl.overall_rating())
+                        tix = _tix_fill(_ttf_fill(pl)) \
+                            if _ttf_fill else 99
                     except Exception:
-                        ovr = 0.0
-                    return (capped, ovr)
+                        tix = 99
+                    return (capped, tix)
                 best_available = sorted(pool, key=_fill_key)
             else:
-                best_available = sorted(pool, key=lambda pl: pl.overall_rating(),
-                                        reverse=True)
+                try:
+                    from attribute_composites import talent_tier_for_player \
+                        as _ttf_best
+                    from attribute_composites import tier_index as _tix_best
+                    best_available = sorted(
+                        pool,
+                        key=lambda pl: _tix_best(_ttf_best(pl)))
+                except Exception:
+                    best_available = sorted(
+                        pool, key=lambda pl: pl.overall_rating(),
+                        reverse=True)
             on_ice.extend(best_available[:num_skaters - len(on_ice)])
 
         if pulled:
@@ -10841,10 +10870,17 @@ class GameSim:
             # only overall_rating(). The old getattr read was always 0,
             # so the weight-25 star_injured incident NEVER fired and every
             # star injury downgraded to the generic weight-12 incident.
+            # Tier-based (Muck 2026-10-01): a "star" injury is Very good+
+            # (84+) -- the tier the human reads -- not a 1-point cutoff.
             try:
-                star = float(victim.overall_rating()) >= 85
+                from attribute_composites import talent_tier as _tt_si
+                from attribute_composites import tier_index as _tix_si
+                star = _tix_si(_tt_si(victim.overall_rating())) <= 2
             except Exception:
-                star = False
+                try:
+                    star = float(victim.overall_rating()) >= 85
+                except Exception:
+                    star = False
             kind = "star_injured" if star else "player_injured"
             detail = (f"{hname} injured {vname}"
                       + (f" ({injury_type})" if injury_type else "")

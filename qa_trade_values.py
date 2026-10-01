@@ -95,10 +95,16 @@ def test_gm_subjectivity():
           aep.trade_value_tier(KID, cold, None)[2])
     vet = P("Vet", 84, 33, 6_000_000, 1, "C", 2)
     strat_rb = SimpleNamespace(priority=SimpleNamespace(value="REBUILD"))
-    check("rebuilder: 33yo 84 is GETTABLE (asset, not core)",
-          aep.trade_value_tier(vet, GM(), strat_rb)[0] == "GETTABLE")
+    # Tier-based (Muck 2026-10-01): a 33yo Very-good reads VALUED through
+    # the tier rep (the old 1-100 math had him just under at GETTABLE).
+    # The behavioral invariant -- movable asset, NOT a piece -- still holds.
+    check("rebuilder: 33yo 84 is VALUED (asset, not core)",
+          aep.trade_value_tier(vet, GM(), strat_rb)[0] == "VALUED")
+    check("rebuilder: 33yo 84 is not a piece",
+          not aep.is_franchise_piece(vet, GM(), strat_rb))
     check("neutral GM: 33yo 84 is a movable asset, not a piece",
-          aep.trade_value_tier(vet, GM(), None)[0] == "GETTABLE")
+          aep.trade_value_tier(vet, GM(), None)[0] == "VALUED"
+          and not aep.is_franchise_piece(vet, GM(), None))
 
 
 def test_badge_fn_wiring():
@@ -196,8 +202,10 @@ def test_scout_perception():
         SimpleNamespace(overall_rating=lambda: 92)) >= 10)
     check("gut: 74 ovr reads C-range", 3 <= aep._gut_grade_index(
         SimpleNamespace(overall_rating=lambda: 74)) <= 5)
-    check("gut: 64 ovr reads F", aep._gut_grade_index(
-        SimpleNamespace(overall_rating=lambda: 64)) == 0)
+    # Tier-based (Muck 2026-10-01): 64 is Decent tier, so the gut reads the
+    # tier (C) -- the old 1-100 ladder's F bottom no longer applies.
+    check("gut: 64 ovr reads C (Decent tier compresses)", aep._gut_grade_index(
+        SimpleNamespace(overall_rating=lambda: 64)) == 4)
 
     kid = P("Kid", 74, 20, 925_000, 1, "B", 1, True, "X")  # scouts say B
     modern = GM(patience=0.9, adaptability=0.9)
@@ -263,7 +271,10 @@ def test_perceived_value():
     holder = _holder()
     star = PP("Star94", 94, 26, "A")
     true = aep.franchise_score(star, holder, None)
-    check("fixture sits just under UNTOUCHABLE", 75.0 < true < 80.0,
+    # Tier-based (Muck 2026-10-01): a 94 is Generational (rep 95), so the
+    # fixture now sits just OVER the UNTOUCHABLE line -- still a boundary
+    # case for the perception-shift tests below.
+    check("fixture sits just over UNTOUCHABLE", 80.0 <= true < 85.0,
           f"{true:.1f}")
 
     def ctx(**kw):

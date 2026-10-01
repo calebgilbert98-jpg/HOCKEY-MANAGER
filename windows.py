@@ -1470,13 +1470,23 @@ class RosterView(ctk.CTkFrame):
             set_tree_empty_state(tree, "No players on this roster")
 
     def calculate_performance_rating(self, player):
-        """Calculate performance rating for NHL players (1-100 display scale)."""
-        # Based on season performance; morale (1-10) nudges the rating
-        base_performance = to_100_scale(player.overall_rating())
-        morale_raw = int(getattr(player, 'morale', 7) or 7)
-        variation = (morale_raw - 10) * 2
-        performance = max(1, min(100, base_performance + variation))
-        return f"{performance}"
+        """Performance column: the player's average game grade over his
+        last 10 games (Muck 2026-10-01).
+
+        Written by mesh_system.record_performance() at every final whistle
+        on both sim paths -- skaters graded on points vs expectation,
+        goalies on save% vs the .905 league line. Recent form, never
+        overall: this kills the old overall-leak and makes the column
+        honest. "-" until he has played.
+        """
+        try:
+            grades = getattr(player, "recent_game_grades", None) or []
+            recent = [float(g) for g in grades[-10:]]
+            if not recent:
+                return "-"
+            return f"{sum(recent) / len(recent):.0f}"
+        except Exception:
+            return "-"
 
     def calculate_nhl_readiness(self, player):
         """NHL readiness for AHL players: talent grade adjusted by the

@@ -600,10 +600,16 @@ def calculate_draft_ranking(player: Player) -> float:
         "D": 60, "F": 50
     }
     potential_value = potential_values.get(player.potential_grade, 65)
-    
-    # Get current overall rating
-    current_rating = player.overall_rating()
-    
+
+    # Get current overall rating -- tier-quantized (Muck 2026-10-01): the
+    # draft board ranks on the same gauge the human reads, plus the
+    # existing scouting-variance noise below.
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo_dr
+        current_rating = _tpo_dr(player.overall_rating())
+    except Exception:
+        current_rating = player.overall_rating()
+
     # Calculate ranking score with some randomness
     ranking_score = (current_rating * 0.7) + (potential_value * 0.3)
     

@@ -37,7 +37,17 @@ def line_players(team: Any, unit: str = "F", num: int = 1) -> List[Any]:
 
 
 def line_strength(players: List[Any]) -> Optional[float]:
-    """Mean overall rating. None when the line is unknown/empty."""
+    """Mean tier representative. None when the line is unknown/empty.
+
+    Tier-based (Muck 2026-10-01): the matchup gauge reads the same
+    coarse talent the human sees, not 1-point overalls."""
+    try:
+        from attribute_composites import tier_proxy_overall as _tpo_ms
+        vals = [float(_tpo_ms(p.overall_rating())) for p in players
+                if hasattr(p, "overall_rating")]
+        return sum(vals) / len(vals) if vals else None
+    except Exception:
+        pass
     try:
         vals = [float(p.overall_rating()) for p in players
                 if hasattr(p, "overall_rating")]

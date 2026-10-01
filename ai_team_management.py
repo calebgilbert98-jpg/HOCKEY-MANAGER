@@ -279,7 +279,15 @@ class AITeamManager:
             }
         
         total_age = sum(player.age for player in team.roster)
-        total_overall = sum(player.overall_rating() for player in team.roster)
+        # Tier-based (Muck 2026-10-01): team strength from tier
+        # representatives -- the same gauge the human reads.
+        try:
+            from attribute_composites import tier_proxy_overall as _tpo2
+            total_overall = sum(_tpo2(player.overall_rating())
+                               for player in team.roster)
+        except Exception:
+            total_overall = sum(player.overall_rating()
+                               for player in team.roster)
         total_salary = sum(getattr(player, 'salary', 750000) for player in team.roster)
         
         return {
@@ -328,7 +336,13 @@ class AITeamManager:
             
             if pos not in position_quality:
                 position_quality[pos] = []
-            position_quality[pos].append(player.overall_rating())
+            # Tier representatives (Muck 2026-10-01), not 1-point overalls.
+            try:
+                from attribute_composites import tier_proxy_overall as _tpo3
+                position_quality[pos].append(
+                    _tpo3(player.overall_rating()))
+            except Exception:
+                position_quality[pos].append(player.overall_rating())
         
         needs = []
         
@@ -547,10 +561,15 @@ class AITeamManager:
 
         if strategy.priority == ManagementPriority.CONTEND:
             try:
+                # Tier-based (Muck 2026-10-01): "impact player" is a tier
+                # read (Very good+), not a 1-point overall cutoff.
+                from attribute_composites import talent_tier as _tt
+                from attribute_composites import tier_index as _tix
+                _is_impact = _tix(_tt(ovr)) <= 2
                 _needs = strategy.position_needs or []
                 _missing = (bool(_needs)
                             and player.primary_position == _needs[0]
-                            and ovr >= 85)
+                            and _is_impact)
             except Exception:
                 _missing = False
             if _missing:
@@ -690,7 +709,16 @@ class AITeamManager:
                 if strategy.prefer_experience and fa.age < strategy.min_roster_age:
                     continue
 
-                ovr = fa.overall_rating()
+                # Tier-quantized (Muck 2026-10-01): the AI targets what the
+                # human sees. raw_ovr feeds the shared player-demand
+                # machinery (same ask the user faces); ovr below is the
+                # quantized gauge for AI evaluation (sort, boldness, NTC).
+                raw_ovr = fa.overall_rating()
+                try:
+                    from attribute_composites import tier_proxy_overall as _tpo
+                    ovr = _tpo(raw_ovr)
+                except Exception:
+                    ovr = raw_ovr
                 # The offer: the player's ask, scaled by how bold this
                 # GM is feeling -- his risk tolerance, the seat he's in,
                 # whether this is the missing piece, and how comfortable
@@ -698,7 +726,7 @@ class AITeamManager:
                 # imports included: the AI may bid anything from just
                 # under the ask to a real overpay. Whether the player
                 # ACCEPTS is decided realistically at execution time.
-                ask = self._player_ask(fa, ovr)
+                ask = self._player_ask(fa, raw_ovr)
                 boldness = self._offer_boldness(team, strategy, fa, ovr,
                                                ask, available_budget)
                 # Analytics read: a progressive room pays for process
@@ -765,8 +793,18 @@ class AITeamManager:
         
         # Look for trade opportunities based on strategy
         if strategy.priority == ManagementPriority.REBUILD:
-            # Look to trade veterans for picks/prospects
-            veterans = [p for p in team.roster if p.age > 28 and p.overall_rating() > 75]
+            # Look to trade veterans for picks/prospects. Tier-based
+            # (Muck 2026-10-01): trade bait is Good-tier or better --
+            # the same gauge the human reads on the roster screen.
+            try:
+                from attribute_composites import talent_tier as _tt_v
+                from attribute_composites import tier_index as _tix_v
+                veterans = [p for p in team.roster
+                            if p.age > 28
+                            and _tix_v(_tt_v(p.overall_rating())) <= 3]
+            except Exception:
+                veterans = [p for p in team.roster
+                            if p.age > 28 and p.overall_rating() > 75]
             for veteran in veterans[:2]:  # Limit trade attempts
                 trade_decision = self._create_veteran_trade_offer(veteran, team, strategy, current_date)
                 if trade_decision:
@@ -789,10 +827,20 @@ class AITeamManager:
         if not hasattr(team, 'ahl_roster') or not hasattr(team, 'prospects'):
             return decisions
         
-        # Look for prospects ready for promotion
+        # Look for prospects ready for promotion. Tier-based (Muck
+        # 2026-10-01): Good-tier or better reads "NHL-ready", like the
+        # human's gauge.
         if hasattr(team, 'prospects'):
-            ready_prospects = [p for p in team.prospects 
-                             if p.age >= 20 and p.overall_rating() > 70]
+            try:
+                from attribute_composites import talent_tier as _tt_p
+                from attribute_composites import tier_index as _tix_p
+                ready_prospects = [p for p in team.prospects
+                                   if p.age >= 20
+                                   and _tix_p(_tt_p(p.overall_rating())) <= 3]
+            except Exception:
+                ready_prospects = [p for p in team.prospects
+                                   if p.age >= 20
+                                   and p.overall_rating() > 70]
             
             for prospect in ready_prospects[:2]:  # Limit promotions
                 decision = AIDecision(
@@ -858,14 +906,17 @@ class AITeamManager:
                 grade = str(getattr(p, "potential_grade", "C") or "C").strip()
                 deserve = self._GRADE_SIGNING_DESIRE.get(grade, 0.30)
                 try:
-                    ovr = float(p.overall_rating())
+                    from attribute_composites import talent_tier as _tt_e
+                    from attribute_composites import tier_index as _tix_e
+                    _tidx = _tix_e(_tt_e(p.overall_rating()))
                 except Exception:
-                    ovr = 60.0
+                    _tidx = 4
                 age = int(getattr(p, "age", 20) or 20)
                 # NHL-ready now: a user burns the ELC year for real help.
-                if ovr >= 75 and age >= 20:
+                # Tier-based (Muck 2026-10-01): Very good+ / Good bands.
+                if _tidx <= 2 and age >= 20:
                     deserve = min(1.0, deserve + 0.20)
-                elif ovr >= 70 and age >= 20:
+                elif _tidx == 3 and age >= 20:
                     deserve = min(1.0, deserve + 0.10)
                 # Fills a positional hole on the big club.
                 if p.primary_position in strategy.position_needs and ovr >= 68:
@@ -1403,20 +1454,28 @@ class AITeamManager:
 
             # Weakest roster spot at the needed position: the target of
             # the upgrade. No mates at the position -> nothing to seek.
+            # Tier-based (Muck 2026-10-01): weakest TIER, as the AI reads
+            # its own roster (true tiers -- same gauge as the human).
             try:
+                from attribute_composites import talent_tier as _tt_w
+                from attribute_composites import tier_index as _tix_w
                 mates = [p for p in (getattr(team, "roster", None) or [])
                          if _in_group(_pos_of(p))]
                 if not mates:
                     return
-                weakest = min(mates,
-                              key=lambda p: p.overall_rating()
-                              if hasattr(p, "overall_rating") else 0)
-                weak_ovr = float(weakest.overall_rating())
+                weakest = min(
+                    mates,
+                    key=lambda p: _tix_w(_tt_w(p.overall_rating()))
+                    if hasattr(p, "overall_rating") else 99)
+                weak_tidx = _tix_w(_tt_w(weakest.overall_rating()))
             except Exception:
                 return
             # Candidate pool: other AI clubs' trade blocks. Players already
             # on open market listings are handled by the market's own bidder
-            # matching -- no double approach.
+            # matching -- no double approach. Tier-based (Muck 2026-10-01):
+            # an upgrade is a strictly better TIER as this club perceives
+            # the candidate (fogged -- same fog the human gets on other
+            # clubs' players).
             try:
                 idx = tm._player_index(league)
                 listed_ids = {li.get("player_id")
@@ -1424,7 +1483,12 @@ class AITeamManager:
                 blocks = tm.get_trade_blocks(league) or {}
             except Exception:
                 return
-            best, best_owner, best_ovr = None, None, weak_ovr + 1.0
+            try:
+                from attribute_composites import ai_perceived_tier as _apt_b
+                from attribute_composites import tier_index as _tix_b
+            except Exception:
+                _apt_b, _tix_b = None, None
+            best, best_owner, best_tidx = None, None, weak_tidx
             for oname, pids in blocks.items():
                 if not oname or oname == tname:
                     continue
@@ -1456,9 +1520,13 @@ class AITeamManager:
                             sal = 0
                         if sal > max_salary:
                             continue
-                        ovr = float(cand.overall_rating())
-                        if ovr > best_ovr:
-                            best, best_owner, best_ovr = cand, owner, ovr
+                        try:
+                            _cand_tidx = _tix_b(_apt_b(cand, team)) \
+                                if _apt_b else 99
+                        except Exception:
+                            _cand_tidx = 99
+                        if _cand_tidx < best_tidx:
+                            best, best_owner, best_tidx = cand, owner, _cand_tidx
                     except Exception:
                         continue
             if best is None or best_owner is None:
@@ -1645,7 +1713,15 @@ class AITeamManager:
                     _ovr100 = int(to_100_scale(player.overall_rating()))
                 except Exception:
                     _ovr100 = 75
-                _young_star = player.age <= 24 and _ovr100 >= 90
+                # Tier-based (Muck 2026-10-01): a "young star" is Elite+
+                # (88+), the tier the human reads -- not a 1-point cutoff.
+                try:
+                    from attribute_composites import talent_tier as _tt_ys
+                    from attribute_composites import tier_index as _tix_ys
+                    _is_star = _tix_ys(_tt_ys(player.overall_rating())) <= 1
+                except Exception:
+                    _is_star = _ovr100 >= 90
+                _young_star = player.age <= 24 and _is_star
                 # A GM on the hot seat pushes extensions through faster --
                 # losing a star for nothing is a firing offense -- but only
                 # as far as his personality bends. A builder who trusts his
@@ -1821,7 +1897,14 @@ class AITeamManager:
             ovr100 = int(to_100_scale(player.overall_rating()))
         except Exception:
             ovr100 = 75
-        if player.age <= 24 and ovr100 >= 90:
+        # Tier-based (Muck 2026-10-01): young Elite+ gets max term.
+        try:
+            from attribute_composites import talent_tier as _tt_ct
+            from attribute_composites import tier_index as _tix_ct
+            _star_tier = _tix_ct(_tt_ct(ovr100)) <= 1
+        except Exception:
+            _star_tier = ovr100 >= 90
+        if player.age <= 24 and _star_tier:
             return random.randint(6, 8)  # Lock up the young star now
         if player.age < 26:
             return random.randint(2, 5)  # Bridge or long-term for youth
@@ -1860,9 +1943,16 @@ class AITeamManager:
     
     def _should_extend_player(self, player: Player, strategy: TeamStrategy) -> bool:
         """Determine if a player should be extended"""
-        # Core players (high overall) should usually be extended
-        if player.overall_rating() > 85:
-            return True
+        # Core players (high overall) should usually be extended.
+        # Tier-based (Muck 2026-10-01): Very good+ reads "core".
+        try:
+            from attribute_composites import talent_tier as _tt_x
+            from attribute_composites import tier_index as _tix_x
+            if _tix_x(_tt_x(player.overall_rating())) <= 2:
+                return True
+        except Exception:
+            if player.overall_rating() > 85:
+                return True
         
         # Age considerations
         if strategy.prefer_youth and player.age > 30:
