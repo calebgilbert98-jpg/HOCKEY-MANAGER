@@ -327,11 +327,11 @@ def _controversial_call_headline(game_date, event="disallowed_goal",
 
 
 def _media_fine_headline(game_date, name="", team="", amount=0,
-                         reason="", role="player", **kw):
+                         reason="", role="player", appealable=False, **kw):
     from game_classes import EmailMessage
     amt = f"${int(amount):,}"
     who = f"{role} {name}" if role == "coach" else name
-    return EmailMessage(
+    msg = EmailMessage(
         sender="League News Desk",
         sender_type="Media",
         subject=f"💸 FINED: {name} ({team}) -- {amt}",
@@ -344,6 +344,21 @@ def _media_fine_headline(game_date, name="", team="", amount=0,
         priority=3,
         is_important=True,
     )
+    # Wave C (D36): when the fine lands on a human-managed club, the GM
+    # gets to answer for it -- appeal (performative, 25% it gets reduced)
+    # or accept it and move on. Rendered by the inbox's
+    # media_fine_response action.
+    if appealable:
+        msg.action_type = "media_fine_response"
+        msg.action_data = {"fine_name": name, "fine_team": team,
+                           "fine_amount": int(amount or 0),
+                           "fine_reason": reason,
+                           "fine_role": role,
+                           "fine_date": (game_date.isoformat()
+                                         if hasattr(game_date, "isoformat")
+                                         else str(game_date)),
+                           "responded": False, "outcome": ""}
+    return msg
 
 
 def _suspension_headline(game_date, name="", team="", games=0,

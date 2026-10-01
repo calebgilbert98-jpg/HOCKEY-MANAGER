@@ -718,6 +718,8 @@ class AdvancedGameSim:
         self._crowd_home_mult = 1.0
         self._crowd_away_mult = 1.0
         self._init_crowd(atmosphere)
+        # Hostile homecomings (Wave C D39): same shared read as GameSim.
+        self._apply_homecoming_pregame()
 
         # Dressing-room talks (module 03): each side's pre-game words move
         # finishing a touch. Own channel -- never shares the legacy
@@ -959,6 +961,51 @@ class AdvancedGameSim:
                                    away_avg_age=away_age)
             self._crowd_home_mult = hm
             self._crowd_away_mult = am
+        except Exception:
+            pass
+
+    def _apply_homecoming_pregame(self):
+        """Hostile homecomings (Wave C D39), the same shared pregame read
+        GameSim uses (reputation_system.apply_homecoming_pregame): one
+        decision, two fidelities. First-timers get the big moment (consumed
+        here so it fires exactly once); simmering hate gets the smaller
+        every-visit booing. The returnee's morale dings with it."""
+        try:
+            from reputation_system import apply_homecoming_pregame
+            from arena_atmosphere import crowd_effects, roster_avg_age
+            _hate = apply_homecoming_pregame(
+                getattr(self, "rivalries", None) or [], self.home_team,
+                self.away_team) or {}
+            _changed = False
+            for _hit in (_hate.get("first_timers") or []):
+                _hp, _hr = _hit.get("player"), _hit.get("record") or {}
+                self._crowd_energy = min(100.0, self._crowd_energy + 15.0)
+                self._crowd_mood_home = min(100.0, self._crowd_mood_home + 10.0)
+                _changed = True
+                try:
+                    _m = getattr(_hp, "morale", 70) or 70
+                    _hp.morale = max(1, _m - min(6, 2 + int(
+                        float(_hr.get("intensity", 0) or 0) // 25)))
+                except Exception:
+                    pass
+            for _hit in (_hate.get("simmering") or []):
+                _hp = _hit.get("player")
+                _hi = float(_hit.get("intensity", 0) or 0)
+                self._crowd_energy = min(100.0, self._crowd_energy + 6.0)
+                self._crowd_mood_home = min(100.0, self._crowd_mood_home + 4.0)
+                _changed = True
+                try:
+                    _m = getattr(_hp, "morale", 70) or 70
+                    _hp.morale = max(1, _m - min(4, 1 + int(_hi // 30)))
+                except Exception:
+                    pass
+            if _changed:
+                away_age = roster_avg_age(self.away_team)
+                hm, am = crowd_effects(self._crowd_energy,
+                                       self._crowd_mood_home,
+                                       away_avg_age=away_age)
+                self._crowd_home_mult = hm
+                self._crowd_away_mult = am
         except Exception:
             pass
 

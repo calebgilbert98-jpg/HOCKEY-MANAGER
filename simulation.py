@@ -844,23 +844,65 @@ class GameSim:
             self._ai_coach_instructions()
         except Exception:
             pass
-        # Hostile homecomings: first game back in the old barn after a
-        # perceived betrayal. The building is rowdy -- crowd energy and mood
-        # carry it (the designed channel: mood moves finishing), and the
-        # tension breakdown above already added the driver. One night only.
+        # Hostile homecomings (Wave C D39): one shared pregame read, both
+        # sims (reputation_system.apply_homecoming_pregame). First-timers
+        # get the big moment -- consumed here so it fires exactly once no
+        # matter which sim style runs the game. Simmering (faced but
+        # still-alive) hate gets the smaller every-visit booing. The
+        # returnee feels it too -- a morale ding scaled by the hate.
         try:
-            import reputation_system as _rs_hc
-            for _hit in _rs_hc.consume_homecomings(
-                    self.rivalries, self.home_team, self.away_team):
-                _pname = getattr(_hit["player"], "full_name",
+            from reputation_system import apply_homecoming_pregame
+            _hate = apply_homecoming_pregame(
+                getattr(self, "rivalries", None) or [], self.home_team,
+                self.away_team) or {}
+            _barn = getattr(self.home_team, "team_name", "the old barn")
+            for _hit in (_hate.get("first_timers") or []):
+                _hp, _hr = _hit.get("player"), _hit.get("record") or {}
+                _pname = getattr(_hp, "full_name",
                                  "The returnee").strip() or "The returnee"
-                _barn = getattr(self.home_team, "team_name", "the old barn")
                 self._log_event(
                     f"Pregame -- {_pname} returns to {_barn} for the first "
                     f"time since the betrayal. Expect a hostile reception.",
                     "SITUATION")
                 self._crowd_energy = min(100.0, self._crowd_energy + 15.0)
                 self._crowd_mood = min(100.0, self._crowd_mood + 10.0)
+                try:
+                    _m = getattr(_hp, "morale", 70) or 70
+                    _hp.morale = max(1, _m - min(6, 2 + int(
+                        float(_hr.get("intensity", 0) or 0) // 25)))
+                except Exception:
+                    pass
+                try:
+                    _ph = getattr(self, "pending_headlines", None)
+                    if _ph is not None:
+                        _ph.append({
+                            "kind": "grudge_callback",
+                            "home": getattr(self.home_team, "team_name", ""),
+                            "away": getattr(self.away_team, "team_name", ""),
+                            "short": f"{_pname}'s return",
+                            "fans_line": (f"{_pname} hears it from the "
+                                          f"{_barn} faithful all night."),
+                            "media_line": ("The first game back is always "
+                                           "the loudest."),
+                            "first_meeting": True})
+                except Exception:
+                    pass
+            for _hit in (_hate.get("simmering") or []):
+                _hp = _hit.get("player")
+                _hi = float(_hit.get("intensity", 0) or 0)
+                _pname = _hit.get("player_name", "") or getattr(
+                    _hp, "full_name", "The returnee").strip()
+                self._log_event(
+                    f"Pregame -- {_pname} gets the Bronx cheer in {_barn}. "
+                    f"Still not forgiven.",
+                    "SITUATION")
+                self._crowd_energy = min(100.0, self._crowd_energy + 6.0)
+                self._crowd_mood = min(100.0, self._crowd_mood + 4.0)
+                try:
+                    _m = getattr(_hp, "morale", 70) or 70
+                    _hp.morale = max(1, _m - min(4, 1 + int(_hi // 30)))
+                except Exception:
+                    pass
         except Exception:
             pass
 

@@ -2965,7 +2965,11 @@ def decay_rivalries(rivalries: list, years: int = 1) -> int:
                 else (30 if r["origin"] == "regional" else 0)
             base = 8 * years
             slow = (1 - r["grudge"] / 150.0) * (1 - r["career_cost"] / 200.0)
-            r["intensity"] = max(floor, r["intensity"] - base * max(0.15, slow))
+            # Wave C (D39): a faced homecoming lets the story cool -- the
+            # catharsis happened, the booing said its piece. Un-faced hate
+            # festers instead.
+            mult = 1.5 if (r.get("kind") == "fan_player" and r.get("faced")) else 1.0
+            r["intensity"] = max(floor, r["intensity"] - base * max(0.15, slow) * mult)
             if r["intensity"] <= 5 and floor == 0:
                 rivalries.remove(r)
                 removed += 1
@@ -3957,6 +3961,7 @@ def on_player_transfer(rivalries: list, player: Any,
             _fk, _tk = _ekey(from_team), _ekey(to_team)
             _fn, _tn = _ename(from_team), _ename(to_team)
             _pn = _ename(player)
+            _betrayal = False
             _rival = rivalry_between(rivalries, from_team, to_team,
                                      "team_team")
             if _rival is not None and (_rival.get("intensity", 0) or 0) >= 50:
@@ -3965,6 +3970,7 @@ def on_player_transfer(rivalries: list, player: Any,
                     f"{_pn} defected to hated rival {_tn}. "
                     f"The {_fn} faithful boo him now.",
                     intensity=55, grudge=70)
+                _betrayal = True
             else:
                 for _r in (rivalries or []):
                     try:
@@ -3984,9 +3990,27 @@ def on_player_transfer(rivalries: list, player: Any,
                             f"{_pn} joined {_tn} -- the team that just ended "
                             f"{_fn}'s season. The faithful haven't forgiven him.",
                             intensity=45, grudge=60)
+                        _betrayal = True
                         break
                     except Exception:
                         continue
+            # Wave C (D39): media narrative memory -- a betrayal the fans
+            # remember goes into the ledger so the story survives the
+            # moment (memory_weight reads it on later matchups).
+            if _betrayal:
+                try:
+                    from narrative_ledger import active_ledger
+                    _led = active_ledger()
+                    if _led is not None:
+                        _led.record(
+                            "fan_hate", teams=[_fn, _tn],
+                            facts={"player": _pn, "from": _fn, "to": _tn,
+                                   "origin": "defection",
+                                   "story": f"{_pn} left {_fn} for {_tn} -- "
+                                            f"the faithful haven't forgiven him."},
+                            weight=70)
+                except Exception:
+                    pass
     except Exception:
         pass
     return {"carried": carried, "left_behind": left,
@@ -4021,6 +4045,78 @@ def consume_homecomings(rivalries: list, home_team: Any,
     except Exception:
         pass
     return out
+
+
+def simmering_hate(rivalries: list, home_team: Any,
+                   away_team: Any,
+                   min_intensity: float = 15.0) -> List[Dict[str, Any]]:
+    """The hate that didn't die after the first homecoming (D39).
+
+    Faced fan_player records whose intensity is still alive: the story has
+    cooled from a moment into a simmer, but the returnee still gets booed
+    every visit. Read-only -- the record is NOT marked or changed.
+    Returns [{player, player_name, record, intensity}], one per away
+    player (hottest record wins).
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        _hk = _ekey(home_team)
+        for _p in (getattr(away_team, "roster", None) or []):
+            _pk = _ekey(_p)
+            best = None
+            for _r in get_rivalries_for(rivalries, _p):
+                if _r.get("kind") != "fan_player" or not _r.get("faced"):
+                    continue
+                try:
+                    if float(_r.get("intensity", 0) or 0) < min_intensity:
+                        continue
+                except Exception:
+                    continue
+                _other = _r["b"] if _r.get("a") == _pk else _r.get("a")
+                if _other != _hk:
+                    continue
+                if _r.get("origin") not in ("defection", "elimination_defection",
+                                            "trade_demand"):
+                    continue
+                if best is None or _r.get("intensity", 0) > best.get("intensity", 0):
+                    best = _r
+            if best is not None:
+                out.append({
+                    "player": _p,
+                    "player_name": (f"{getattr(_p, 'first_name', '')} "
+                                    f"{getattr(_p, 'last_name', '')}").strip(),
+                    "record": best,
+                    "intensity": float(best.get("intensity", 0) or 0),
+                })
+    except Exception:
+        pass
+    return out
+
+
+def apply_homecoming_pregame(rivalries: list, home_team: Any,
+                             away_team: Any) -> Dict[str, Any]:
+    """One decision, two fidelities (D39): the shared pregame homecoming
+    read both sims use.
+
+    - first_timers: un-faced hate, consumed here (marks faced) -- the big
+      moment, fires exactly once no matter which sim style runs the game.
+    - simmering: faced but still-alive hate -- the smaller every-visit
+      booing, read-only.
+
+    Returns {"first_timers": [...], "simmering": [...]} with the same
+    dict shapes as consume_homecomings / simmering_hate. Never raises.
+    """
+    first = []
+    simm = []
+    try:
+        first = consume_homecomings(rivalries, home_team, away_team)
+    except Exception:
+        first = []
+    try:
+        simm = simmering_hate(rivalries, home_team, away_team)
+    except Exception:
+        simm = []
+    return {"first_timers": first, "simmering": simm}
 
 
 # ---------------------------------------------------------------------------

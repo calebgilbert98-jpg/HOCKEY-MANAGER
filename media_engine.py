@@ -1260,6 +1260,91 @@ def _tick_narrative(n: Narrative) -> bool:
 # Routing: turn events into headlines / news
 # ---------------------------------------------------------------------------
 
+def resolve_fine_appeal(app: Any, action_data: Dict[str, Any],
+                        choice: str = "appeal") -> str:
+    """Resolve a GM's answer to a league fine (Wave C D36).
+
+    Performative by design, per Muck's call: no cap teeth, no suspensions
+    changed. appeal: 25% the league halves the fine (min $1,000), otherwise
+    it stands and the league office notes the whining. accept: the fine is
+    paid, professionalism noted. Updates the media_fines ledger record and
+    stamps the action data. Returns the outcome text. Never raises.
+    """
+    import random
+    try:
+        data = action_data or {}
+        if data.get("responded"):
+            return str(data.get("outcome", ""))
+        name = str(data.get("fine_name", ""))
+        team = str(data.get("fine_team", ""))
+        amount = int(data.get("fine_amount", 0) or 0)
+        fdate = str(data.get("fine_date", ""))[:10]
+
+        league = getattr(getattr(app, "game_manager", None), "league", None)
+        record = None
+        try:
+            for f in (getattr(league, "media_fines", None) or []):
+                if str(f.get("name", "")) != name:
+                    continue
+                if str(f.get("team", "")) != team:
+                    continue
+                try:
+                    if int(f.get("amount", 0) or 0) != amount:
+                        continue
+                except Exception:
+                    continue
+                if str(f.get("date", ""))[:10] != fdate:
+                    continue
+                record = f
+                break
+        except Exception:
+            record = None
+
+        if choice == "accept":
+            outcome = (f"You accepted the ${amount:,} fine on {name}. Paid "
+                       f"in full, no further comment -- the league office "
+                       f"appreciates the professionalism.")
+            status = "accepted"
+        elif random.random() < 0.25:
+            new_amount = max(1000, amount // 2)
+            outcome = (f"Appeal heard. The league reduced {name}'s fine "
+                       f"from ${amount:,} to ${new_amount:,} -- a rare "
+                       f"moment of mercy from the head office.")
+            status = "reduced"
+            data["fine_amount"] = new_amount
+        else:
+            outcome = (f"Appeal denied. The league stands by the "
+                       f"${amount:,} fine on {name} -- and the head office "
+                       f"made a note of the complaining.")
+            status = "upheld"
+
+        if record is not None:
+            try:
+                record["appealed"] = True
+                record["status"] = status
+                if status == "reduced":
+                    record["amount"] = int(data.get("fine_amount", amount))
+            except Exception:
+                pass
+        data["responded"] = True
+        data["outcome"] = outcome
+        # A little media memory either way.
+        try:
+            if status in ("reduced", "upheld") and random.random() < 0.4:
+                add = getattr(app, "add_news", None)
+                if add is not None:
+                    add("Media notebook: " + (
+                        f"{team} won their appeal -- {name}'s fine cut in "
+                        f"half." if status == "reduced" else
+                        f"{team}'s appeal went nowhere -- {name} pays the "
+                        f"full ${amount:,}."))
+        except Exception:
+            pass
+        return outcome
+    except Exception:
+        return "The league office lost your paperwork. The fine stands."
+
+
 def route_events(app: Any, events: List[Dict[str, Any]],
                  game_date: Optional[date] = None) -> int:
     """Deliver cover_game events. Headlines for the spicy stuff, news feed
@@ -1274,6 +1359,16 @@ def route_events(app: Any, events: List[Dict[str, Any]],
                                  "beef": "media_beef",
                                  "shutdown": "narrative_shutdown"}[kind]}
                 spec.update({k: v for k, v in ev.items() if k != "kind"})
+                # Wave C (D36): a fine on a human-managed club is
+                # appealable -- the GM answers for it in the inbox.
+                if kind == "fine":
+                    try:
+                        _human = {getattr(t, "team_name", "")
+                                  for t in headlines.human_teams(app)}
+                        if spec.get("team") in _human:
+                            spec["appealable"] = True
+                    except Exception:
+                        pass
                 if headlines.deliver_spec(app, spec):
                     n += 1
             elif kind in ("quote", "outburst_room", "narrative_spawn",
