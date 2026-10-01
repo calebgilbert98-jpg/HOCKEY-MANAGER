@@ -1128,7 +1128,8 @@ def pk_denial_factor(defending_unit: List[Any], coach: Any = None,
 # Anchored at the measured on-ice PP-unit mean (PP1/PP2 rotation, soft-cap
 # governance), not the PP1 paper mean -- the channel must be ~1.0 for the
 # average unit actually deployed, or it weakens the league's PPs outright.
-PP_FIT_ANCHOR = 0.76
+# Re-measured 2026-09-30 (workstream A, 120 games): fit01_mean 0.7481.
+PP_FIT_ANCHOR = 0.75
 _PP_SUS_MIN, _PP_SUS_MAX = 0.75, 1.25
 
 
