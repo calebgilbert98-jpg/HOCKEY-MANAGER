@@ -1863,7 +1863,9 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
     a heater, elite linemates, great chemistry, schemed-against relief.
     Each factor >= 1.0; product capped at 1.8. Stars (95+) are already at
     the envelope max, so the lift only creates windows for the middle --
-    separation by probability, not caps. Never raises.
+    separation by probability, not caps. Line FIT gates the linemate
+    lifts: an elite linemate only opens your window if you actually fit
+    with him (Muck 2026-10-01). Never raises.
     """
     try:
         _mult = 1.0
@@ -1876,19 +1878,44 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
                 _mult *= 1.0 + 0.50 * (_h - 0.5)
         except Exception:
             pass
-        # 2-4. Linemate effects (need the on-ice unit).
+        # 2-5. Linemate effects (need the on-ice unit).
         if linemates:
             try:
                 _mates = [m for m in linemates if m is not None and m is not player]
                 if _mates:
-                    # 2. Elite linemate: a 90+ finisher on your line means
-                    #    better setups, more time/space. 90 -> 1.10,
-                    #    95 -> 1.15, 100 -> 1.20.
+                    # 2. Line fit: how well the shooter's role complements his
+                    #    linemates (0..1, 0.5 neutral). A sniper stapled to a
+                    #    playmaker fits; two puck-hogs with no distributor
+                    #    don't. Fit GATES the linemate lifts below -- a bad
+                    #    fit means the elite linemate doesn't open your
+                    #    window. (Muck 2026-10-01: "factor in whether
+                    #    someones a fit on the line".)
+                    _fit01 = 0.5
+                    try:
+                        from line_chemistry import _pair_complementarity as _pc
+                        from line_chemistry import _role_name as _rn
+                        _srole = _rn(player)
+                        if _srole:
+                            _fits = []
+                            for _m in _mates:
+                                _mr = _rn(_m)
+                                if _mr:
+                                    _fits.append(max(0.0, min(1.0,
+                                        (_pc(_srole, _mr) + 10.0) / 22.0)))
+                            if _fits:
+                                _fit01 = sum(_fits) / len(_fits)
+                    except Exception:
+                        pass
+                    # 3. Elite linemate, SCALED BY FIT: a 90+ finisher on your
+                    #    line means better setups, more time/space -- but only
+                    #    if you fit with him. 90 -> up to 1.10, 95 -> up to
+                    #    1.15, 100 -> up to 1.20, all × fit01.
                     _best = max((finishing_rating(m) for m in _mates),
                                 default=0.0)
                     if _best >= 90.0:
-                        _mult *= 1.0 + 0.20 * min(1.0, (_best - 90.0) / 10.0 + 0.5)
-                    # 3. Line chemistry: great chemistry lifts everyone.
+                        _raw = 0.20 * min(1.0, (_best - 90.0) / 10.0 + 0.5)
+                        _mult *= 1.0 + _raw * _fit01
+                    # 4. Line chemistry: great chemistry lifts everyone.
                     try:
                         from line_chemistry import line_chemistry_score as _lcs
                         _chem = float(_lcs([player] + _mates))
@@ -1896,17 +1923,23 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
                             _mult *= 1.0 + 0.12 * min(1.0, (_chem - 70.0) / 30.0)
                     except Exception:
                         pass
-                    # 4. Schemed-against relief: a star linemate drawing the
-                    #    shutdown coverage leaves easier looks for you.
+                    # 5. Schemed-against relief, SCALED BY FIT: a star linemate
+                    #    drawing the shutdown coverage leaves easier looks --
+                    #    but only if you're a fit to exploit them.
                     try:
                         from line_chemistry import chemistry_relief_share as _crs
                         _stars = [m for m in _mates if finishing_rating(m) >= 90.0]
                         if _stars:
                             _relief = max(_crs(player, _s, [player] + _mates)
                                          for _s in _stars)
-                            _mult *= 1.0 + 0.15 * max(0.0, min(1.0, _relief))
+                            _mult *= (1.0 + 0.15
+                                      * max(0.0, min(1.0, _relief)) * _fit01)
                     except Exception:
                         pass
+                    # 6. Pure fit bonus: a great fit alone opens a small
+                    #    window even without an elite linemate.
+                    if _fit01 > 0.65:
+                        _mult *= 1.0 + 0.10 * min(1.0, (_fit01 - 0.65) / 0.35)
             except Exception:
                 pass
         return min(1.8, _mult)
