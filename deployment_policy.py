@@ -24,10 +24,13 @@ This module provides:
   line change (the shift engine calls into this module; this module never
   touches the sim's read paths). :func:`get_game_toi` flushes pending shift
   time first, so it is exact whenever it is read.
-* A soft-cap governor (~30 min/game for elite skaters) with ONLY the
-  sanctioned exceptions (must-win playoff games, injury-depleted bench,
-  OT marathons). When the cap binds, deployment shifts to the next lines --
-  the coach's decision, logged on the game object.
+* A gradient governor (Wave A, 2026-10-01): the old binary ~30-min cliff is
+  a smooth ramp -- TOI starts biting at 24:00 and strengthens to 30:00,
+  with condition (D17) and live injury risk (D24) biting alongside TOI.
+  Tired lines shed share multiplicatively (never hard-benched as a unit);
+  only the sanctioned exceptions (must-win playoff games, OT marathons)
+  ride, and short-bench games shift the gradient up. A hard backstop at
+  38:00 covers pathological cases only. Logged on the game object.
 
 Consumption contract (never re-derive): morale/happiness/leadership,
 ``coach_bonds``, ``coach_player_fit``, ``coach_archetype_valuation``,
@@ -247,7 +250,107 @@ def _honored_advice(team: Any) -> Dict[str, Any]:
             keys.add("shorten_bench")
     except Exception:
         pass
+    # D19 (Wave A, 2026-10-01, Muck): the feature boost is form-gated, not
+    # season-long -- reassess before returning the honored advice.
+    _reassess_featured(team)
     return {"keys": keys, "featured_ids": featured}
+
+
+#: D19 -- games of the player's own GP between feature reviews (~monthly).
+FEATURED_REVIEW_GAMES = 10
+
+
+def _featured_log(team: Any, text: str) -> None:
+    """Dynamics-feed line for feature reviews (the story stays visible)."""
+    try:
+        from reputation_system import record_team_event as _rte
+        _rte(team, "gm_advice", text, morale_delta=0, tone="neutral")
+    except Exception:
+        pass
+
+
+def _reassess_featured(team: Any) -> None:
+    """D19 (2026-10-01, Muck): usage_featured x1.50 must decay realistically.
+
+    Every FEATURED_REVIEW_GAMES of the player's own games-played the coach
+    reviews the feature against form (mesh_form, -1..1):
+      * earning it (form01 >= 0.15): keeps the full 1.50, clock resets;
+      * middling (-0.25..0.15): decays to 1.25, clock resets;
+      * slumping (< -0.25): decays to 1.10, then the feature is rescinded
+        on a second consecutive bad review (back to the coach's call,
+        small happiness dip -- he noticed).
+    Legacy flags granted before stamping get stamped, not punished.
+    Reviews are logged -- best for story/immersion/dynamic playthrough
+    effects, per Muck. Never raises.
+    """
+    try:
+        roster = getattr(team, "roster", None) or []
+        for p in roster:
+            if not getattr(p, "usage_featured", False):
+                continue
+            try:
+                gp = int(getattr(getattr(p, "stats", None),
+                                 "games_played", 0) or 0)
+            except Exception:
+                gp = 0
+            since = getattr(p, "usage_featured_since_gp", None)
+            if since is None:
+                # Legacy flag (granted before stamping existed): stamp
+                # now, review later -- no retroactive punishment.
+                p.usage_featured_since_gp = gp
+                if not getattr(p, "usage_featured_mult", None):
+                    p.usage_featured_mult = 1.50
+                continue
+            try:
+                if gp - int(since) < FEATURED_REVIEW_GAMES:
+                    continue
+            except Exception:
+                continue
+            try:
+                form01 = _norm_form01(p)
+            except Exception:
+                form01 = 0.0
+            try:
+                mult = float(getattr(p, "usage_featured_mult", 1.50)
+                             or 1.50)
+            except Exception:
+                mult = 1.50
+            pname = getattr(p, "full_name", "The player")
+            if form01 >= 0.15:
+                p.usage_featured_mult = 1.50
+                p.usage_featured_since_gp = gp
+                _featured_log(
+                    team,
+                    f"{pname} is still earning the feature -- the coach "
+                    f"keeps riding him.")
+            elif form01 >= -0.25:
+                p.usage_featured_mult = 1.25
+                p.usage_featured_since_gp = gp
+                _featured_log(
+                    team,
+                    f"{pname}'s feature is on a shorter leash -- the "
+                    f"coach wants more.")
+            else:
+                if mult <= 1.25:
+                    p.usage_featured = False
+                    p.usage_featured_mult = 1.0
+                    _featured_log(
+                        team,
+                        f"The coach rescinds the feature on {pname} -- "
+                        f"back to earning his ice.")
+                    try:
+                        p.happiness = max(
+                            1, (getattr(p, "happiness", 70) or 70) - 6)
+                    except Exception:
+                        pass
+                else:
+                    p.usage_featured_mult = 1.10
+                    p.usage_featured_since_gp = gp
+                    _featured_log(
+                        team,
+                        f"{pname} is slumping and the feature is fading.")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +682,16 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         vibe = max(1.0 - clamp_half, min(1.0 + clamp_half, vibe))
         score = base * vibe
 
+        # D17 (Wave A, 2026-10-01, Muck): condition reads BACK into
+        # deployment. A physical fact, not a vibe -- applied outside the
+        # vibe clamp: gassed players genuinely lose shifts, fresh legs get
+        # the nod. Playing-hurt (D24) sheds further.
+        try:
+            from condition_system import condition_deployment_mult as _cdm
+            score *= _cdm(player)
+        except Exception:
+            pass
+
         # Honored GM advice (suggest-to-coach). The gate already ran at
         # advise time; these flags MEAN the coach agreed. Deliberate
         # decisions -- applied outside the vibe clamp.
@@ -586,7 +699,15 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
         keys = advice.get("keys", set())
         if pid in advice.get("featured_ids", set()):
             # "Feature a player (more ice time)": the flagship promise.
-            score *= 1.50
+            # D19 (Wave A): form-gated -- usage_featured_mult decays
+            # 1.50 -> 1.25 -> 1.10 -> rescinded on repeated bad reviews,
+            # so the triple-dip can't run all season untouched.
+            try:
+                _fm = float(getattr(player, "usage_featured_mult", 1.50)
+                            or 1.50)
+            except Exception:
+                _fm = 1.50
+            score *= max(1.0, min(1.50, _fm))
         if "play_the_kids" in keys and (_attr100(player, "age", 26) <= 23):
             score *= 1.25
         if "free_the_skill" in keys and (_attr100(player, "flair", 50) >= 68):
@@ -924,14 +1045,18 @@ def deployment_weights(team: Any, coach_style: Dict[str, Any],
         # Per-line deployment scores from per-player scores.
         f_scores, d_scores, pp_scores, pk_scores = [], [], [], []
         featured_lines: List[int] = []
+        featured_mult: Dict[int, float] = {}
         for i in (1, 2, 3, 4):
             players = [p for p in _line("F", i) if not _is_goalie(p)]
             s = sum(_player_deployment_score(p, coach, style_key, advice, team=team)
                     for p in players)
             f_scores.append(s if players else 0.0)
-            if any(getattr(p, "id", None) in advice["featured_ids"]
-                   for p in players):
+            _fmults = [float(getattr(p, "usage_featured_mult", 1.50) or 1.50)
+                       for p in players
+                       if getattr(p, "id", None) in advice["featured_ids"]]
+            if _fmults:
                 featured_lines.append(i)
+                featured_mult[i] = max(_fmults)
         for i in (1, 2, 3):
             players = [p for p in _line("D", i) if not _is_goalie(p)]
             s = sum(_player_deployment_score(p, coach, style_key, advice, team=team)
@@ -949,10 +1074,13 @@ def deployment_weights(team: Any, coach_style: Dict[str, Any],
 
         # Featured-line bump: the "top-six minutes" promise made concrete.
         # A featured player outside the top two lines lifts his line's
-        # share outright (on top of his 1.5x score already in the blend).
+        # share outright (on top of his score multiplier already in the
+        # blend). D19: the bump scales with the (possibly decayed) feature
+        # mult -- a fading feature lifts less.
         for ln in featured_lines:
             if ln > 2 and 0 <= ln - 1 < len(f_shares):
-                f_shares[ln - 1] += 0.05
+                _fm = max(1.0, min(1.50, featured_mult.get(ln, 1.50)))
+                f_shares[ln - 1] += 0.05 * (_fm - 1.0) / 0.5
         s = sum(f_shares)
         if s > 0:
             f_shares = [x / s for x in f_shares]
@@ -1360,22 +1488,106 @@ def soft_cap_exceptions(game_state: Dict[str, Any]) -> Dict[str, bool]:
             "ot_marathon": bool(gs.get("ot_marathon"))}
 
 
+#: Wave A gradient-governor tuning (2026-10-01, Muck D17/D18/D24).
+#: The binary 30:00 cliff is gone: the gradient starts biting at 24:00 and
+#: strengthens smoothly to 30:00, so there is no learnable "sit at 29:xx"
+#: exploit. Condition (D17) and live injury risk (D24) bite alongside TOI.
+GOV_GRADIENT_START_S = 24 * 60
+GOV_GRADIENT_FULL_S = 30 * 60
+#: Pathological backstop only: a share zeroes here. Unreachable in
+#: regulation with the gradient working; exists so deployment never skates
+#: a 40-minute man in a normal game. Short-bench games shift it up by the
+#: same 4 minutes as the gradient.
+GOV_HARD_BACKSTOP_S = 38 * 60
+#: Short-bench relief: the whole gradient (and backstop) slides up.
+GOV_SHORT_BENCH_SHIFT_S = 4 * 60
+
+
+def _smoothstep(x: float) -> float:
+    """0..1 smooth ramp (no cliff to game). Never raises."""
+    try:
+        t = max(0.0, min(1.0, float(x)))
+        return t * t * (3.0 - 2.0 * t)
+    except Exception:
+        return 0.0
+
+
+def _condition_governor_mult(player: Any) -> float:
+    """D17 in-game: the binding skater's body sheds his line's share.
+
+    In-game energy is the sharp edge (gassed <35 -> down toward 0.5);
+    persistent condition below 70 costs more; playing hurt (D24) sheds
+    further. Fresh legs are never penalized -- the gradient only ever
+    takes share away from tired bodies, which is how fresh legs "get the
+    nod". Never raises.
+    """
+    try:
+        from condition_system import (
+            get_condition as _gc, get_game_energy as _ge)
+        m = 1.0
+        try:
+            energy = _ge(player)
+        except Exception:
+            energy = 100.0
+        if energy < 35.0:
+            m *= 0.5 + 0.5 * (max(0.0, energy) / 35.0)
+        try:
+            cond = _gc(player)
+        except Exception:
+            cond = 100.0
+        if cond < 50.0:
+            m *= 0.70
+        elif cond < 70.0:
+            m *= 0.85
+        if getattr(player, "playing_hurt", False):
+            m *= 0.85
+        return max(0.30, m)
+    except Exception:
+        return 1.0
+
+
+def _injury_risk_governor_mult(player: Any) -> float:
+    """D24: the live injury-risk assessment drives a real deployment
+    decision. fatigue_injury_risk_mult above 1.5 (gassed / worn / sore
+    from heavy last-game minutes) sheds the line's share -- load
+    management, not telemetry. Fresh players (1.0) see no change.
+    Never raises.
+    """
+    try:
+        from condition_system import fatigue_injury_risk_mult as _rm
+        r = float(_rm(player) or 1.0)
+        if r <= 1.5:
+            return 1.0
+        return max(0.50, 1.5 / r)
+    except Exception:
+        return 1.0
+
+
 def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
                            shares: List[float]) -> List[float]:
-    """Apply the ~30-min soft cap to one group's shares.
+    """Wave A gradient governor (2026-10-01, Muck D17/D18/D24).
 
-    For each line/pair, the binding skater is the one with the most TOI so
-    far; when his TOTAL (ES + special teams) hits the cap (and no exception
-    applies) his ES line is excluded from the rotation and its ice
-    redistributes to the next lines -- the coach's decision, logged once
-    per line per game. Exclusion (not a relative downweight): if every
-    line bound at once, a multiplier would renormalize back to the original
-    ratios and nobody would ever sit. If all lines are capped, the least-
-    capped line stays available so deployment never stalls. Never raises;
-    returns the input shares unchanged on any failure.
+    Replaces the old binary 30:00 cliff (whole-line exclusion, learnable
+    at 29:xx, zero condition awareness). For each line/pair, the binding
+    skater is still the one with the most TOI -- but instead of zeroing
+    the line at a cliff, his line's share is multiplied by a smooth
+    gradient:
 
-    Short-bench games (bench_depleted) bind at 35:00 rather than standing
-    down entirely; must-win playoff games and OT marathons still ride.
+      * TOI gradient: no bite under 24:00, ramping (smoothstep) to x0.25
+        at 30:00. No cliff to game.
+      * Condition gradient (D17): gassed/worn binding skaters shed share;
+        fresh legs never lose any -- they gain relatively.
+      * Injury-risk gradient (D24): live risk above 1.5x sheds share.
+
+    Multiplicative (not exclusionary): a tired star's line still skates
+    sometimes, his linemates are never hard-benched as collateral, and
+    the shares always renormalize so deployment never stalls. A hard
+    backstop (38:00, 42:00 short-bench) zeroes only pathological cases.
+
+    Exceptions: must-win playoff games and OT marathons ride (governor
+    off); short-bench games shift the whole gradient up 4 minutes.
+    Logged once per line per game when the shed is meaningful; never
+    raises -- returns the input shares unchanged on any failure.
     """
     try:
         shares = list(shares)
@@ -1386,66 +1598,86 @@ def soft_cap_adjust_shares(sim: Any, team: Any, side: str,
         exc = soft_cap_exceptions(gs)
         if exc.get("must_win_playoff") or exc.get("ot_marathon"):
             return shares  # exceptions: ride the horses
-        cap_s = SOFT_CAP_SHORT_S if exc.get("bench_depleted") else SOFT_CAP_S
-        short_bench = cap_s > SOFT_CAP_S
+        shift = (GOV_SHORT_BENCH_SHIFT_S if exc.get("bench_depleted")
+                 else 0)
+        start_s = GOV_GRADIENT_START_S + shift
+        full_s = GOV_GRADIENT_FULL_S + shift
+        backstop_s = GOV_HARD_BACKSTOP_S + shift
         lineup = _game_lineup_for(sim, team)
         kind = "F" if side == "F" else "D"
-        bound = []
+        factors: List[float] = []
+        notes: List[tuple] = []  # (line_no, factor, player_name, reasons)
         for i in range(n):
             players = [p for p in _unit_players(lineup, kind, i + 1)
                        if not _is_goalie(p)]
             if not players:
+                factors.append(1.0)
                 continue
             tois = [(_raw_toi(sim, getattr(p, "id", None)), p)
                     for p in players]
             worst_s, star = max(tois, key=lambda t: t[0])
-            if worst_s >= cap_s:
-                bound.append((i + 1, worst_s, star))
-        if not bound:
-            return shares
-        bound_lines = {line_no for line_no, _, _ in bound}
-        if len(bound_lines) >= n:
-            # Everyone is capped: keep the least-capped line skating so
-            # deployment never stalls; the soft cap has done all it can.
-            least = min(bound, key=lambda b: b[1])[0]
-            bound_lines.discard(least)
-        for line_no in bound_lines:
-            shares[line_no - 1] = 0.0
+            reasons = []
+            if worst_s >= backstop_s:
+                factors.append(0.0)
+                notes.append((i + 1, 0.0, getattr(star, "full_name",
+                                                 "a skater"),
+                              [f"backstop {backstop_s / 60:.0f}:00"]))
+                continue
+            # TOI gradient.
+            if worst_s <= start_s:
+                toi_f = 1.0
+            else:
+                bite = _smoothstep((worst_s - start_s)
+                                   / max(1.0, full_s - start_s))
+                toi_f = 1.0 - 0.75 * bite
+                if bite > 0.05:
+                    reasons.append(f"TOI {worst_s / 60.0:.1f}min")
+            # Condition gradient (D17).
+            cond_f = _condition_governor_mult(star)
+            if cond_f < 0.99:
+                reasons.append("gassed/worn")
+            # Live injury-risk load management (D24).
+            risk_f = _injury_risk_governor_mult(star)
+            if risk_f < 0.99:
+                reasons.append("injury-risk")
+            factor = max(0.05, toi_f * cond_f * risk_f)
+            factors.append(factor)
+            if factor < 0.85:
+                notes.append((i + 1, factor,
+                              getattr(star, "full_name", "a skater"),
+                              reasons))
+        shares = [s * f for s, f in zip(shares, factors)]
         total = sum(shares)
         if total > 0:
             shares = [s / total for s in shares]
         else:
-            # Safety net (should be unreachable: all-capped keeps one
-            # line): fall back to even shares rather than stalling.
+            # Safety net (should be unreachable: the 0.05 floor keeps
+            # every line alive): fall back to even shares rather than
+            # stalling.
             shares = [1.0 / n] * n
         # Log once per line per game (no feed spam across 60 minutes).
         logged = getattr(sim, "_soft_cap_logged", None)
         if logged is None:
             sim._soft_cap_logged = logged = set()
         tname = getattr(team, "team_name", "?")
-        for line_no, worst_s, star in bound:
+        for line_no, factor, pname, reasons in notes:
             key = (tname, side, line_no)
             if key in logged:
                 continue
             logged.add(key)
-            pname = getattr(star, "full_name", "a skater")
             unit = "line" if side == "F" else "pair"
-            cap_label = "35 (short bench)" if short_bench else "30"
-            cap_trigger = "35:00" if short_bench else "30:00"
+            why = ", ".join(reasons) if reasons else "load management"
             _log_deployment(sim, team, {
-                "event": "soft_cap_bind",
+                "event": "governor_gradient",
                 "line": line_no, "side": side,
                 "player": pname,
-                "toi_min": round(worst_s / 60.0, 1),
-                "action": (f"{pname} at {worst_s / 60.0:.1f} min "
-                           f"(soft-cap trigger {cap_trigger}, cap ~{cap_label}) -- deployment "
-                           f"shifts to next "
-                           f"{'lines' if side == 'F' else 'pairs'}"),
-                "text": (f"{tname}: {pname} hits the "
-                         f"{'35-min short-bench' if short_bench else '~30-min'} "
-                         f"soft cap; "
-                         f"the {line_no}{_ordinal(line_no)} {unit} sits "
-                         f"while the next units take the ice."),
+                "share_factor": round(factor, 2),
+                "action": (f"{pname}'s {unit} shed to "
+                           f"{factor:.0%} share ({why}) -- gradient "
+                           f"governor, no hard benching"),
+                "text": (f"{tname}: load management -- {pname}'s "
+                         f"{line_no}{_ordinal(line_no)} {unit} sheds "
+                         f"shifts ({why})."),
             })
         return shares
     except Exception:

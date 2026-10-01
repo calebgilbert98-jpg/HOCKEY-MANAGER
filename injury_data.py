@@ -94,6 +94,10 @@ HIT_INJURY_PROB_SCALE = 0.15
 # re-injury" -- this wires the mechanic behind the warning).
 REINJURY_WINDOW_GAMES = 10
 REINJURY_MULT = 1.6
+#: D24 (Wave A): playing hurt is allowed -- but it has risks. A tagged
+#: skater's general-injury weight rises 1.5x on top of any re-injury
+#: multiplier. The tag is per-game (cleared by resolve_game_lineup).
+PLAYING_HURT_MULT = 1.5
 # Goalie victim weight vs skaters (design, informed by [R3]: goalies are
 # ~4.6% of concussions despite ~10% of dressed players).
 GOALIE_VICTIM_WEIGHT = 0.35
@@ -295,6 +299,12 @@ def roll_general_injury(team, base_prob=GENERAL_INJURY_BASE_RATE):
                     gsr = getattr(p, "games_since_return", 999)
                     if gsr is not None and gsr < REINJURY_WINDOW_GAMES:
                         w *= REINJURY_MULT
+                except Exception:
+                    pass
+                try:
+                    # D24 (Wave A): playing hurt carries re-injury risk.
+                    if getattr(p, "playing_hurt", False):
+                        w *= PLAYING_HURT_MULT
                 except Exception:
                     pass
                 if _is_goalie(p):

@@ -2247,6 +2247,16 @@ def advise_coach(coach: Any, advice_key: str, team: Any = None,
             if advice_key == "feature_player" and target_player is not None:
                 pname = getattr(target_player, "full_name", "The player")
                 target_player.usage_featured = True
+                # D19 (Wave A): stamp the grant -- the feature is form-gated
+                # and reviewed every FEATURED_REVIEW_GAMES of his own GP
+                # (deployment_policy._reassess_featured), not season-long.
+                target_player.usage_featured_mult = 1.50
+                try:
+                    _fgp = getattr(getattr(target_player, "stats", None),
+                                   "games_played", 0) or 0
+                    target_player.usage_featured_since_gp = int(_fgp)
+                except Exception:
+                    target_player.usage_featured_since_gp = 0
                 target_player.happiness = min(100, (getattr(target_player, "happiness", 70) or 70) + 6)
                 text = (f"{pname} is getting top-six minutes and a bigger role at the GM's request. "
                         f"He noticed.")
