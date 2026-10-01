@@ -1287,6 +1287,31 @@ class AdvancedGameSim:
 
     def _simulate_event(self):
         puck_team_name = self.home_team.team_name if random.random() < 0.5 else self.away_team.team_name
+        # 6-on-5 (workstream B, 2026-09-30): the pulled-goalie unit camps in
+        # the zone -- the shared OZ-sustenance fidelity for this engine
+        # weights puck-event retention toward the pulling team (personnel-
+        # scaled, ~0.56-0.78), replacing the 50/50 coin flip. The power-play
+        # override below still takes precedence when both apply.
+        try:
+            _gp65 = set(getattr(self, "goalie_pulled", set()) or set())
+            if _gp65 and puck_team_name not in _gp65:
+                from six_on_five import oz_possession_retention as _ret65
+                _pteam = (self.home_team if puck_team_name == self.home_team.team_name
+                          else self.away_team)
+                _pull_tn = next(iter(_gp65))
+                _pull_team = (self.home_team if _pull_tn == self.home_team.team_name
+                              else self.away_team)
+                if _pull_team is not _pteam:
+                    _po = self.on_ice.get(_pull_tn, {}) or {}
+                    _pu65 = [p for p in (_po.get("Forwards", [])
+                                         + _po.get("Defense", [])) if p]
+                    _do = self.on_ice.get(puck_team_name, {}) or {}
+                    _du65 = [p for p in (_do.get("Forwards", [])
+                                         + _do.get("Defense", [])) if p]
+                    if random.random() < _ret65(_pu65, _du65):
+                        puck_team_name = _pull_tn
+        except Exception:
+            pass
         opp_team_name = self.away_team.team_name if puck_team_name == self.home_team.team_name else self.home_team.team_name
         if self.pp_team:
             puck_team_name = self.pp_team
@@ -1504,13 +1529,29 @@ class AdvancedGameSim:
         # makes in _apply_situation_modifiers.
         if getattr(self, "_ot_3v3", False):
             shot_prob *= 1.25
-        # 6-on-5 (divergence #13): the pulled-goalie extra attacker --
-        # 2.2x shot volume, the same decision GameSim makes on its volume
-        # gate. (No conversion boost on either side.)
+        # 6-on-5 (divergence #13, workstream B, 2026-09-30): the pulled-goalie
+        # extra attacker. The flat 2.2x is replaced by the shared
+        # generation-side 6v5 model (six_on_five.six_on_five_volume): the
+        # six-man unit's personnel-scaled volume edge (net-front/shooting/
+        # IQ vs the defense's box-out, ~1.30-1.90). Same decision GameSim
+        # makes on its volume gate -- one decision, two fidelities.
+        # (No conversion boost on either side.)
         try:
             if (team is not None and getattr(team, "team_name", "")
                     in getattr(self, "goalie_pulled", set())):
-                shot_prob *= 2.2
+                from six_on_five import six_on_five_volume as _v65
+                _tn65 = team.team_name
+                _a_on65 = self.on_ice.get(_tn65, {}) or {}
+                _a_u65 = [p for p in (_a_on65.get("Forwards", [])
+                                      + _a_on65.get("Defense", []))
+                          if p is not None]
+                _opp65 = (self.away_team if team is self.home_team
+                          else self.home_team)
+                _d_on65 = self.on_ice.get(_opp65.team_name, {}) or {}
+                _d_u65 = [p for p in (_d_on65.get("Forwards", [])
+                                      + _d_on65.get("Defense", []))
+                          if p is not None]
+                shot_prob *= _v65(_a_u65, _d_u65)
         except Exception:
             pass
         # sh_threat (divergence #15): unified on the VOLUME channel. An
@@ -2141,6 +2182,22 @@ class AdvancedGameSim:
                                    def_team=opp_team_name)
             except Exception:
                 _schemed_f = 1.0
+            # -- 6v5 scramble tilt (workstream B, 2026-09-30) -------------
+            # Generation side only: the six-man unit's net-front chaos
+            # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+            # earns grade A. Finishing constants/clamps untouched.
+            _tilt65 = 1.0
+            try:
+                if puck_team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import grade_tilt_ctx as _gtc65q
+                    _a_onice = self.on_ice.get(puck_team_name, {}) or {}
+                    _a_unit = [p for p in (_a_onice.get("Forwards", [])
+                                           + _a_onice.get("Defense", []))
+                               if p is not None]
+                    _tilt65 = _gtc65q(_a_unit, _d_unit
+                                      ).get("six_on_five_tilt", 1.0)
+            except Exception:
+                pass
             # -- roll ---------------------------------------------------
             _grade = _rcg(
                 _loc, _contest01, shooter,
@@ -2160,6 +2217,7 @@ class AdvancedGameSim:
                     "is_playoff": bool(getattr(self, "is_playoff", False)),
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
+                    "six_on_five_tilt": _tilt65,
                 })
             shot_chance = shot_chance * _cgfm(_grade)
             # Schemed-against factor (scenario battle): applied to the

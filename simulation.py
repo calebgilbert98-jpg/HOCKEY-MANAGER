@@ -5247,6 +5247,21 @@ class GameSim:
             # -- schemed-against superstars (2026-09-30, Muck) ----------
             # (moved to _resolve_shot_on_goal: the factor applies to the
             # goal probability there, alongside the other shared tilts.)
+            # -- 6v5 scramble tilt (workstream B, 2026-09-30) ---------------
+            # Generation side only: the six-man unit's net-front chaos
+            # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+            # earns grade A. Finishing constants/clamps untouched.
+            _tilt65 = 1.0
+            try:
+                if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import grade_tilt_ctx as _gtc65
+                    _opp65g = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt65 = _gtc65(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp65g)
+                                     ).get("six_on_five_tilt", 1.0)
+            except Exception:
+                pass
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,
@@ -5266,6 +5281,7 @@ class GameSim:
                     "is_playoff": bool(getattr(self, "is_playoff", False)),
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
+                    "six_on_five_tilt": _tilt65,
                 })
         except Exception:
             pass
@@ -8603,18 +8619,32 @@ class GameSim:
                 shot_chance *= 1.0 + iq_factor * 1.2
             else:
                 shot_chance *= 1.0 - iq_factor * 0.8
+            # 6-on-5 (divergence #13, workstream B, 2026-09-30): the
+            # pulled-goalie extra attacker. The canonical flat 2.2x lived in
+            # the dead _apply_special_situation_modifiers (zero callers);
+            # revived on the live volume gate -- but raw post-clamp
+            # multiplication forced every 6v5 tick into a shot, starving the
+            # mix (and the live turnovers that feed honest empty-net risk).
+            # Replaced with the shared generation-side 6v5 model
+            # (six_on_five.apply_6v5_mix): a personnel-scaled volume edge
+            # (net-front/shooting/IQ vs box-out, ~1.30-1.90) plus OZ
+            # sustenance shifting turnover mass into the cycle, so turnovers
+            # -- and the leading team's real EN threat -- stay in the mix.
+            # Applied BEFORE the clamp below so engine texture still binds.
+            # Gated on the ATTACKING team -- when the other side has the puck
+            # it's an empty-net situation for them, not a 6v5.
+            try:
+                if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import apply_6v5_mix as _m65
+                    _att65 = self._get_on_ice(attacking_team)
+                    _opp65 = (self.away_team if attacking_team is self.home_team
+                              else self.home_team)
+                    shot_chance, turnover_chance, cycle_chance = _m65(
+                        shot_chance, turnover_chance, cycle_chance,
+                        _att65, self._get_on_ice(_opp65))
+            except Exception:
+                pass
             shot_chance = max(0.2, min(0.85, shot_chance))
-        # 6-on-5 (divergence #13): the pulled-goalie extra attacker. The
-        # canonical 2.2x lived in the dead _apply_special_situation_modifiers
-        # (zero callers); revived here on the live volume gate, AFTER the
-        # 0.85 clamp so the boost survives it. Gated on the ATTACKING team --
-        # when the other side has the puck it's an empty-net situation for
-        # them, not a 6v5.
-        try:
-            if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
-                shot_chance *= 2.2
-        except Exception:
-            pass
         # Proportional split: the 0.85 clamp used to push shot+turnover
         # past 1.0, silently killing the cycle/maintain branches (and any
         # follow-up attached to them). Now the non-shot outcomes split

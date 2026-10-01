@@ -1360,7 +1360,9 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         won_spot, rebound, tip (bools).
     game_ctx: dict with optional keys rivalry_heat (0-100), morale
         (1-100), clutch (bool), crowd_edge (-1..1, + = behind shooter),
-        is_playoff (bool), d_fatigue (0-100), team_d_weakness (mult).
+        is_playoff (bool), d_fatigue (0-100), team_d_weakness (mult),
+        six_on_five_tilt (mult, workstream B), ot_3v3_tilt (mult,
+        workstream B).
 
     Hard gates (chance quality is honest): breakaways, rebounds and won
     net-front spots are grade A; smothered perimeter/point shots are
@@ -1426,6 +1428,17 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
             clutch=bool(_gc.get("clutch", False)),
             crowd_edge=_gc.get("crowd_edge", 0.0),
             is_playoff=bool(_gc.get("is_playoff", False)))
+        # 6v5 scramble (workstream B, 2026-09-30): the pulled-goalie
+        # segment's net-front chaos tilts grade-A EARNING -- who gets the
+        # look -- never finishing. Generation side only; the protected
+        # finishing mults/clamps below are untouched. Bounds [0.85, 1.50]
+        # keep the scramble from swamping the talent gradient.
+        _tilt *= max(0.85, min(1.50, float(_gc.get("six_on_five_tilt", 1.0)
+                                          or 1.0)))
+        # 3v3 OT (workstream B, 2026-09-30): open ice tilts grade-A earning
+        # by the on-ice unit's skill -- generation side, same rule.
+        _tilt *= max(0.90, min(1.40, float(_gc.get("ot_3v3_tilt", 1.0)
+                                          or 1.0)))
         _tilt = max(0.25, min(3.20, _tilt))
 
         _pA = _pA * _tilt
