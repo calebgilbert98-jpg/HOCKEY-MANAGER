@@ -2091,7 +2091,12 @@ class AdvancedGameSim:
                 _loc = "breakaway"
             elif shot_type in ("tip", "deflection"):
                 _loc = "netfront"
-            elif _is_d and shot_type == "slap shot":
+            elif _is_d and shot_type in ("slap shot", "one-timer"):
+                # Classification fix (2026-09-30, workstream C2, Muck):
+                # a defenseman's one-timer comes from the point -- it
+                # used to fall through to "slot" (slot priors + the
+                # slot+QR+clean grade-A hard gate), which GameSim never
+                # did (location-based). Now parity: point is point.
                 _loc = "point"
             else:
                 _loc = "slot"
@@ -2264,7 +2269,25 @@ class AdvancedGameSim:
                                 team=puck_team_name)
                 if _lc_eff != 1.0:
                     shot_chance *= _lc_eff
-                # detect_situation returns the ATTACKING team's view: the
+            except Exception:
+                _lc_eff = 1.0
+            # STACKING (2026-09-30, workstream C, Muck): the opportunity
+            # amplifiers on one chance — grade boost, schemed relief,
+            # chemistry — combine sub-multiplicatively (strongest keeps
+            # full value, further boosts keep 30% of their excess), not
+            # freely multiplicative. Denials (PK denial, defensive
+            # contest) are applied separately and keep full
+            # multiplicative power — honest brakes, never muted.
+            try:
+                from scenario_composites import (
+                    combine_stacked_amplifiers as _csa)
+                _gm = _cgfm(_grade)
+                _free = _gm * _schemed_f * _lc_eff
+                if _free != 0.0:
+                    shot_chance *= _csa(_gm, _schemed_f, _lc_eff) / _free
+            except Exception:
+                pass
+            try:
                 # defending PK unit's denial applies when the attack is on
                 # the PP ("pp"), not when the attack is shorthanded.
                 if _sit_lc == "pp":
@@ -2333,6 +2356,16 @@ class AdvancedGameSim:
         # better one-timer tool = more one-timer looks (feeds find him).
         # Bounded and modest; the d_to_d_onetimer scenario resolves them.
         _ot_prob = max(0.0, min(0.20, (float(one_timer_val) - 60.0) / 200.0))
+        # Spotlight talent gate (2026-09-30, workstream C, Muck): who
+        # EARNS the one-timer volume -- elite trigger + awareness +
+        # finishing ~1.0, average ~0.4, below-average ~0.15. The looks
+        # concentrate on the shooters, never a participation trophy.
+        # (PP one-timer rate is the tuning crew's lane -- untouched.)
+        try:
+            from scenario_composites import onetimer_talent_gate as _otg
+            _ot_prob *= _otg(shooter)
+        except Exception:
+            pass
         if self.pp_team and random.random() < 0.3:  # More one-timers on PP
             shooting_base = one_timer_val
             shot_type = "one-timer"
@@ -2442,6 +2475,17 @@ class AdvancedGameSim:
                                         "d_to_d_onetimer", sim=self,
                                         off_team=puck_team_name,
                                         def_team=opp_team_name)
+                # Point-shot feeder gate (2026-09-30, workstream C2,
+                # Muck): the play design feeds the look, the SHOOTER's
+                # own shooting tools + hockey IQ decide what it becomes.
+                # Smooth 0.85..1.0 -- mediocre shooters don't mint goals
+                # off play design alone.
+                try:
+                    from scenario_composites import (
+                        point_shot_talent_gate as _pstg)
+                    shot_chance *= _pstg(shooter)
+                except Exception:
+                    pass
             else:
                 from attribute_composites import apply_amplifier as _ac_qs
                 shot_chance = _ac_qs(shot_chance, shooter, "finishing", sim=self,

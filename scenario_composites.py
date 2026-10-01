@@ -477,8 +477,18 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
         if _ovr < _SCHEME_THREAT_FLOOR:
             return 1.0, 1.0
         _gate = min(1.0, (_ovr - _SCHEME_THREAT_FLOOR) / _SCHEME_THREAT_RAMP)
-        _commit = _scheme_team_commitment(defending_onice, sim=sim,
-                                          team=def_team)
+        # The star's denial battle. The denial FOLLOWS THE STAR
+        # (Muck 2026-09-30): the coach puts his best shutdown pair on him,
+        # so the commitment is anchored on the top D pair (pair 0), with
+        # the on-ice unit's support blended in.
+        try:
+            _q1 = _d_pair_quality(defending_onice, sim=sim, team=def_team,
+                                  pair=0)
+        except Exception:
+            _q1 = _BASELINE
+        _commit = (0.70 * _q1
+                   + 0.30 * _scheme_team_commitment(defending_onice, sim=sim,
+                                                    team=def_team))
         # Wheelhouse: the scheme shades his spots. Off-wheelhouse, only a
         # fraction of the commitment actually finds him.
         try:
@@ -516,16 +526,18 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
                                def_team=None):
     """Single factor to multiply one shooter's grade-A chance. If the
     shooter is elite, the star suppression; if he's a linemate of an
-    elite, his CHEMISTRY-WEIGHTED share of the zero-sum relief budget;
+    elite, his matchup-ladder relief (one rung down, IQ-gated);
     otherwise exactly 1.0. This is the call-site helper — one factor per
     chance, never stacked.
 
-    Relief flows through line_chemistry.chemistry_relief_share: the budget
-    is split across the unit by archetype fit with the star (the net-front
-    guy next to a schemed playmaker eats; a redundant second sniper gets
-    scraps), so the unit-wide dividend can never exceed the budget no
-    matter the unit size. Defensive import — if line_chemistry is
-    unavailable, falls back to an even split of the budget."""
+    Matchup ladder (Muck 2026-09-30): the star draws the BEST defensive
+    matchup -- it does NOT leave his linemate wide open. The linemate's
+    matchup improves by exactly ONE RUNG, and how much he converts it
+    scales with HIS OWN hockey IQ / awareness / finishing. Archetype
+    complementarity weights who gets the freed looks through
+    line_chemistry.chemistry_relief_share (the Raffl fix). Defensive
+    import — if line_chemistry is unavailable, falls back to an even
+    split."""
     try:
         _unit = _as_list(attacking_onice)
         _star, _ = apply_schemed_threat(shooter, attacking_onice,
@@ -534,10 +546,9 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
                                         def_team=def_team)
         if _star < 1.0:
             return _star
-        # Not the star — find the elite linemate drawing the shade and the
-        # unit-wide relief budget his suppression funds.
-        _best_budget = 0.0
+        # Not the star — find the elite linemate drawing the shade.
         _best_star = None
+        _best_suppression = 0.0
         for _p in _unit:
             if _p is None or _p is shooter:
                 continue
@@ -546,25 +557,239 @@ def schemed_factor_for_shooter(shooter, attacking_onice, defending_onice,
                     continue
             except Exception:
                 continue
-            _, _r = apply_schemed_threat(_p, attacking_onice,
+            _s, _ = apply_schemed_threat(_p, attacking_onice,
                                          defending_onice, location,
                                          sim=sim, off_team=off_team,
                                          def_team=def_team)
-            _budget = _r - 1.0
-            if _budget > _best_budget:
-                _best_budget = _budget
+            _supp = 1.0 - _s
+            if _supp > _best_suppression:
+                _best_suppression = _supp
                 _best_star = _p
-        if _best_budget <= 0.0 or _best_star is None:
+        if _best_star is None or _best_suppression <= 0.0:
             return 1.0
+        # Matchup ladder (Muck 2026-09-30): the star draws the BEST
+        # defensive matchup -- it does NOT leave his linemate wide open.
+        # The linemate's matchup improves by exactly ONE RUNG (2nd pair
+        # instead of 1st), a modest help, and how much of it he converts
+        # scales with HIS OWN hockey IQ / awareness / finishing -- "it
+        # just helps their looks if they know what they're doing." A
+        # low-awareness plug converts almost nothing; a smart finisher
+        # converts most of it.
+        try:
+            _q1 = _d_pair_quality(defending_onice, sim=sim, team=def_team,
+                                  pair=0)
+            _q2 = _d_pair_quality(defending_onice, sim=sim, team=def_team,
+                                  pair=1)
+        except Exception:
+            _q1, _q2 = _BASELINE, _BASELINE
+        _rung_delta = max(0.0, _q1 - _q2)
+        # The freed half-step: the rung gap, scaled by the suppression
+        # actually felt (no shade, no freed ice). Smooth, tiny, additive.
+        _relief_pool = ((_rung_delta / 100.0) * 0.60
+                        * min(1.0, _best_suppression / 0.05))
+        # Who converts it: archetype fit with the star (kept: the Raffl
+        # fix -- fit-weighted, never flat) TIMES his own IQ/awareness/
+        # finishing gate.
         try:
             from line_chemistry import chemistry_relief_share as _crs
             _share = _crs(shooter, _best_star, _unit)
         except Exception:
             _n = max(1, len([p for p in _unit if p is not None]) - 1)
             _share = 1.0 / _n
-        return 1.0 + _best_budget * max(0.0, min(1.0, _share))
+        _iq = _linemate_iq_gate(shooter)
+        return 1.0 + _relief_pool * max(0.0, min(1.0, _share)) * _iq
     except Exception:
         return 1.0
+
+
+# ---------------------------------------------------------------------------
+# Stacked-amplifier combining + matchup ladder + talent gates
+# (2026-09-30, workstream C stacking audit, Muck).
+#
+# C1 combining rule: opportunity AMPLIFIERS combine sub-multiplicatively
+# (strongest-wins + allowance). Suppressors / denials keep multiplying
+# fully -- they are honest brakes, never muted.
+# ---------------------------------------------------------------------------
+
+_STACK_ALLOWANCE = 0.30
+
+
+def combine_stacked_amplifiers(*factors, allowance=_STACK_ALLOWANCE):
+    """Combine opportunity amplifiers sub-multiplicatively.
+
+    Rule: the strongest BOOST keeps its full value; every further
+    boost contributes only `allowance` (default 0.30) of its excess.
+    Denials (<1) are NOT softened -- they multiply at full power, exactly
+    as before: suppressors are honest brakes, never muted. Boosts and
+    denials combine independently inside their own direction; the two
+    directions then multiply normally.
+
+    Properties:
+      - single factor      -> identity (no behavior change alone),
+      - smooth, unbounded  -> no caps, no ceilings, no cliffs,
+      - denials untouched   -> multiplicative, full power.
+
+    Examples:
+      combine(1.75)            == 1.75
+      combine(1.75, 1.14)      == 1.75 * 1.14**0.30  ~= 1.820  (free: 1.995)
+      combine(1.75, 1.14, 1.05)
+                               == 1.75 * 1.14**0.30 * 1.05**0.30 ~= 1.847
+                                  (free multiplicative: 2.095)
+      combine(0.90, 0.65)      == 0.585  (denials: full multiplicative)
+      combine(1.75, 1.14, 0.65)
+                               == 1.820 * 0.65      ~= 1.183
+    """
+    try:
+        _ups = []
+        _downs = []
+        for _f in factors:
+            try:
+                _f = float(_f)
+            except (TypeError, ValueError):
+                continue
+            if _f <= 0.0:
+                continue
+            if _f > 1.0:
+                _ups.append(_f)
+            elif _f < 1.0:
+                _downs.append(_f)
+        _out = 1.0
+        if _ups:
+            _ups.sort(reverse=True)
+            _out *= _ups[0]
+            for _f in _ups[1:]:
+                _out *= _f ** allowance
+        if _downs:
+            for _f in _downs:
+                _out *= _f
+        return _out
+    except Exception:
+        return 1.0
+
+
+# Matchup-ladder internals -------------------------------------------------
+#
+# Muck's design directive (2026-09-30): a schemed-against superstar draws
+# the BEST defensive matchup -- the denial follows the star. His linemate's
+# matchup improves by exactly ONE rung (2nd pair instead of 1st), a modest
+# help, and how much of it he converts scales with his OWN hockey IQ /
+# awareness / finishing -- "it just helps their looks if they know what
+# they're doing." This structurally kills the cartoon-linemate failure
+# (no more 75-ovr 138-point seasons off the star's gravity).
+
+def _resolve_team_obj(sim, team):
+    """Resolve a team object from a name/string via the sim's league."""
+    try:
+        if team is not None and not isinstance(team, str):
+            return team
+        if sim is None or team is None:
+            return None
+        _lg = getattr(sim, "league", None)
+        if _lg is None:
+            return None
+        for _t in getattr(_lg, "teams", []) or []:
+            if getattr(_t, "team_name", None) == team:
+                return _t
+    except Exception:
+        pass
+    return None
+
+
+def _d_pair_quality(defending_onice, sim=None, team=None, pair=0):
+    """Defensive quality of the defending team's D pair `pair`.
+
+    pair=0 is the top shutdown pair (the unit the scheme puts on the
+    star); pair=1 is the next pair down -- one rung lower on the ladder.
+    Resolved from the team's D corps (defensive_play composite); cached
+    per game. Falls back to the on-ice pair (which, by scheme design, is
+    the shutdown pair) plus a rung down.
+    """
+    try:
+        _cache = getattr(sim, "_scheme_rung_cache", None) if sim else None
+        if _cache is None and sim is not None:
+            _cache = {}
+            try:
+                sim._scheme_rung_cache = _cache
+            except Exception:
+                pass
+        _team_obj = _resolve_team_obj(sim, team)
+        _key = (getattr(_team_obj, "team_name", None) or str(team), pair)
+        if isinstance(_cache, dict) and _key in _cache:
+            return _cache[_key]
+        _q = None
+        if _team_obj is not None:
+            _dmen = [p for p in getattr(_team_obj, "roster", []) or []
+                     if str(getattr(getattr(p, "primary_position", None),
+                                    "name", "")).upper()
+                     in ("DEFENSE", "LEFT_DEFENSE", "RIGHT_DEFENSE", "D",
+                         "LD", "RD")]
+            _dmen.sort(key=lambda p: scenario_rating(p, {"defensive_play": 1.0}),
+                       reverse=True)
+            _seg = _dmen[pair * 2:pair * 2 + 2]
+            if len(_seg) == 2:
+                _q = sum(scenario_rating(p, {"defensive_play": 1.0})
+                         for p in _seg) / 2.0
+        if _q is None:
+            # Fallback: the on-ice D IS the shutdown pair by scheme design.
+            _onice_d = [p for p in _as_list(defending_onice)
+                        if str(getattr(getattr(p, "primary_position", None),
+                                       "name", "")).upper()
+                        in ("DEFENSE", "LEFT_DEFENSE", "RIGHT_DEFENSE",
+                            "D", "LD", "RD")]
+            if _onice_d:
+                _q1 = sum(scenario_rating(p, {"defensive_play": 1.0})
+                          for p in _onice_d) / len(_onice_d)
+                _q = _q1 if pair == 0 else (_BASELINE + (_q1 - _BASELINE) * 0.55)
+            else:
+                _q = _BASELINE
+        if isinstance(_cache, dict):
+            _cache[_key] = _q
+        return _q
+    except Exception:
+        return _BASELINE
+
+
+def _linemate_iq_gate(shooter):
+    """0..1: how much of the freed half-step THIS shooter converts.
+
+    HIS OWN hockey IQ / awareness / finishing. An aware 82-ovr converts
+    most of it; a 75-ovr with poor awareness converts almost nothing --
+    the help only lands on looks he can actually finish.
+    """
+    try:
+        _iq = (float(getattr(shooter, "hockey_iq", 70)) * 0.40
+               + float(getattr(shooter, "offensive_awareness", 70)) * 0.35
+               + float(_raw(shooter, "finishing")) * 0.25)
+    except Exception:
+        _iq = 70.0
+    return max(0.0, min(1.0, (_iq - 55.0) / 35.0))
+
+
+def point_shot_talent_gate(shooter):
+    """0.85..1.0: a defenseman's point-shot value scales with HIS OWN
+    shooting tools and hockey IQ. Elite point shooters ~1.0; mediocre
+    shooters ~0.85. Smooth, never a wall -- play design feeds the looks,
+    talent decides what they become."""
+    try:
+        _tool = (float(getattr(shooter, "slapshot", 70)) * 0.45
+                 + float(getattr(shooter, "one_timer", 70)) * 0.30
+                 + float(getattr(shooter, "hockey_iq", 70)) * 0.25)
+    except Exception:
+        _tool = 70.0
+    return 0.85 + 0.15 * max(0.0, min(1.0, (_tool - 60.0) / 30.0))
+
+
+def onetimer_talent_gate(shooter):
+    """0..1: who EARNS the one-timer spotlight volume. Elite trigger +
+    awareness + finishing ~1.0; average ~0.4; below-average ~0.15. The
+    design can feed looks, but the looks concentrate on the shooters."""
+    try:
+        _t = (float(getattr(shooter, "one_timer", 60)) * 0.50
+              + float(getattr(shooter, "offensive_awareness", 60)) * 0.25
+              + float(_raw(shooter, "finishing")) * 0.25)
+    except Exception:
+        _t = 60.0
+    return max(0.0, min(1.0, (_t - 55.0) / 35.0))
 
 
 # ---------------------------------------------------------------------------

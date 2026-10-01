@@ -1447,6 +1447,24 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         # returns emerge naturally from the normalization below (_tot grows
         # with _pA), not from a hand-placed ceiling. (Hard gates above
         # return before this; breakaways stay automatic.)
+        # Classification (2026-09-30, workstream C2, Muck): a clean point
+        # shot is a contested perimeter look, not a grade-A chance.
+        # Unscreened, untipped point shots fold their grade-A mass into
+        # B/C; the screened bomb (screened_goalie) and the tipped point
+        # shot keep the honest path. This is CLASSIFICATION (what grade a
+        # chance earns) -- the grade multipliers and clamps are untouched.
+        _point_clean = (_loc == "point"
+                        and not _sit.get("screened_goalie", False)
+                        and not _tip and not _rb)
+        if _point_clean and _pA > 0.0:
+            _fold = _pA
+            _pA = 0.0
+            _bc = _pB + _pC
+            if _bc > 0.0:
+                _pB += _fold * (_pB / _bc)
+                _pC += _fold * (_pC / _bc)
+            else:
+                _pC += _fold
         _pC = _pC / max(0.40, _tilt ** 0.6)
         _tot = _pA + _pB + _pC
         if _tot <= 0:
