@@ -41,11 +41,11 @@ SIX_ON_FIVE_MODEL_ENABLED = True
 
 # -- tuning: all in one place -------------------------------------------
 # Base grade-A tilt from 6v5 chaos (net-front scramble, no structure).
-SCRAMBLE_BASE_TILT = 1.30
+SCRAMBLE_BASE_TILT = 1.45
 # Personnel edge mapping: +/-20 net-front edge -> tilt x1.18 / x0.85.
 SCRAMBLE_EDGE_SCALE = 0.009
 SCRAMBLE_TILT_MIN = 0.85
-SCRAMBLE_TILT_MAX = 1.50
+SCRAMBLE_TILT_MAX = 1.65
 # OZ sustenance: base share of turnover mass the six-man unit kills.
 SUSTAIN_BASE_KEEP = 0.62
 # Personnel edge mapping on the keep: +/-20 forecheck edge -> +/-0.10.
@@ -55,16 +55,16 @@ SUSTAIN_KEEP_MAX = 0.85
 # Freed turnover mass: this share flows to cycle, the rest to maintain.
 SUSTAIN_CYCLE_SHARE = 0.65
 # Honest volume: the six-man unit's shot-volume edge, personnel-scaled.
-VOLUME_BASE = 1.55
+VOLUME_BASE = 1.85
 VOLUME_EDGE_SCALE = 0.006
-VOLUME_MIN = 1.30
-VOLUME_MAX = 1.90
+VOLUME_MIN = 1.50
+VOLUME_MAX = 2.20
 # QS possession retention: probability a 6v5 event keeps the puck with the
 # pulling team (vs the 0.50 coin flip). Personnel-scaled.
-RETENTION_BASE = 0.66
+RETENTION_BASE = 0.72
 RETENTION_EDGE_SCALE = 0.004
 RETENTION_MIN = 0.56
-RETENTION_MAX = 0.78
+RETENTION_MAX = 0.82
 
 
 def _attr(p, name, default=50.0):
@@ -334,9 +334,9 @@ def grade_tilt_ctx(attacking_unit, defending_unit):
 # volume + better looks, never a synthetic "decide it in OT" roll.
 # ---------------------------------------------------------------------------
 
-OT_TILT_BASE = 1.15
+OT_TILT_BASE = 1.50
 OT_TILT_MIN = 0.90
-OT_TILT_MAX = 1.40
+OT_TILT_MAX = 1.75
 OT_TILT_EDGE_SCALE = 0.008
 
 

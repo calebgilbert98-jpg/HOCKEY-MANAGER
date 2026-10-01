@@ -50,7 +50,7 @@ SHOOTOUT_EDGE_MAX = 0.06          # max shootout probability nudge
 SHOOTOUT_EDGE_DAMP = 0.40         # shootouts are coin flips; edge matters less
 
 # Lever 1: pulled-goalie aggression.
-PULL_AGGRESSION_MAX_SECS = 45.0   # extra pull-window seconds at full drama
+PULL_AGGRESSION_MAX_SECS = 60.0   # extra pull-window seconds at full drama
 # Lever 2: OT 3v3 matchup tilt.
 MATCHUP_TILT_CLAMP = 0.05         # max |tilt| on OT goal probability
 MATCHUP_EDGE_FLOW = 0.25          # home_win_edge flows through at 1/4 strength

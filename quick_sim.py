@@ -1708,7 +1708,7 @@ class AdvancedGameSim:
         # THREE_ON_THREE branch makes in _apply_situation_modifiers.
         # The live lever for (e), with the ot_3v3_tilt on grade below.
         if getattr(self, "_ot_3v3", False):
-            shot_prob *= 2.00
+            shot_prob *= 2.50
         # 6-on-5 (divergence #13, workstream B, 2026-09-30): the pulled-goalie
         # extra attacker. The flat 2.2x is replaced by the shared
         # generation-side 6v5 model (six_on_five.six_on_five_volume): the
