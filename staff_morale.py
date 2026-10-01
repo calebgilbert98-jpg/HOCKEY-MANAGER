@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Staff morale as a living system.
 
 Audit (2026-09-30): ``Staff.morale`` was initialized once at creation and

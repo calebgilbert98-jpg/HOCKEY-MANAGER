@@ -4667,10 +4667,19 @@ class GameSim:
         # baseline, correctly weakening it.)
         try:
             from scenario_composites import apply_scenario as _asc_rush
-            attacker_roll = _asc_rush(attacker_roll, [attacker],
-                                      [defender], "rush_chance", sim=self,
-                                      off_team=attacking_team,
-                                      def_team=defending_team)
+            attacker_roll, _rush_info = _asc_rush(
+                attacker_roll, [attacker], [defender], "rush_chance",
+                sim=self, off_team=attacking_team, def_team=defending_team,
+                detail=True)
+            # Narrative only: a decisively-won battle earns media/pbp ink
+            # (scenario_narrative). detail=True returns the same probability
+            # plus the story layer -- the sim math above is unchanged.
+            try:
+                from scenario_narrative import note_scenario_moment as _nsn1
+                _nsn1(self, "rush_chance", attacking_team, defending_team,
+                      _rush_info)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -5998,10 +6007,18 @@ class GameSim:
                             and shot_type == ShotType.ONE_TIMER)
             if _is_break:
                 from scenario_composites import apply_scenario as _asc_br
-                _fgp = _asc_br(1.0 - adjusted_save_prob, [shooter],
-                               [goalie], "breakaway", sim=self,
-                               off_team=attacking_team,
-                               def_team=defending_team)
+                _fgp, _br_info = _asc_br(
+                    1.0 - adjusted_save_prob, [shooter], [goalie],
+                    "breakaway", sim=self, off_team=attacking_team,
+                    def_team=defending_team, detail=True)
+                # Narrative only: standout breakaway battles earn media/pbp
+                # ink (scenario_narrative). Sim math unchanged.
+                try:
+                    from scenario_narrative import note_scenario_moment as _nsn2
+                    _nsn2(self, "breakaway", attacking_team, defending_team,
+                          _br_info)
+                except Exception:
+                    pass
             elif _is_netfront or _is_onetimer:
                 from scenario_composites import apply_scenario as _asc_sp
                 _scn = ("netfront_scramble"
@@ -6024,10 +6041,18 @@ class GameSim:
                             _dside.append(_nd)
                     except Exception:
                         pass
-                _fgp = _asc_sp(1.0 - adjusted_save_prob, [shooter],
-                               _dside, _scn, sim=self,
-                               off_team=attacking_team,
-                               def_team=defending_team)
+                _fgp, _sp_info = _asc_sp(
+                    1.0 - adjusted_save_prob, [shooter], _dside, _scn,
+                    sim=self, off_team=attacking_team,
+                    def_team=defending_team, detail=True)
+                # Narrative only: standout net-front / one-timer battles earn
+                # media/pbp ink (scenario_narrative). Sim math unchanged.
+                try:
+                    from scenario_narrative import note_scenario_moment as _nsn3
+                    _nsn3(self, _scn, attacking_team, defending_team,
+                          _sp_info)
+                except Exception:
+                    pass
             else:
                 _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter,
                                "finishing", sim=self, team=attacking_team)

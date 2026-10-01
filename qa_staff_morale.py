@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Deterministic QA: staff morale as a living system (audit 2026-09-30).
 
 Proves, per factor: every morale driver moves the target; the monthly tick

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_line_chemistry.py — module QA for line_chemistry.py (Muck 2026-09-30).
 
 Attribution safety net: cheap, deterministic, per-build. Covers:

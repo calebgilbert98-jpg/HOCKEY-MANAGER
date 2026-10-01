@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Linemate chemistry + line efficiency (2026-09-30, Muck).
 
 One shared module, both engines (one decision, two fidelities). Scores how

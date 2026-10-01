@@ -2709,6 +2709,12 @@ class PBPVisualSim(InGamePopup):
             _lc_txt = str(ev.get("text", "")).strip()
             if _lc_txt:
                 self._feed(f"📓 {_lc_txt}", tag="info", ev=ev)
+        elif et == "scenario_moment":
+            # Standout scenario-composite battle (scenario_narrative).
+            # Decisive-band only, narrative-only.
+            _sm_txt = str(ev.get("text", "")).strip()
+            if _sm_txt:
+                self._feed(f"🎬 {_sm_txt}", tag="special", ev=ev)
         else:
             # Generic fallback: an event kind with narrative text is never
             # silently dropped. Kinds without text stay silent, preserving
