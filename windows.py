@@ -3482,6 +3482,7 @@ class FreeAgencyView(ctk.CTkFrame):
             self._fa_attr_row(scroll, attr_name, attr_value)
 
         self._staff_track_record_section(scroll, staff)
+        self._staff_personality_section(scroll, staff)
 
         ctk.CTkFrame(scroll, fg_color=ct['BORDER'], height=1).pack(fill="x", pady=10)
 
@@ -3562,6 +3563,97 @@ class FreeAgencyView(ctk.CTkFrame):
                     pass
             ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
         self._staff_open_reads_section(scroll, staff)
+
+    def _staff_personality_section(self, scroll, staff):
+        """Coaching style + attitude insights on the hiring card.
+
+        Mirrors the employed staff card's Personality tab
+        (staff_management_window._staff_personality_tab) so a hiring
+        decision sees the same who-he-is-behind-the-bench read: coaching
+        style, ambition, control need, motivating/discipline manner,
+        controversy, and icon status.
+        """
+        ct = self._ct
+        try:
+            import reputation_system as _rs
+        except Exception:
+            _rs = None
+        lines = []
+        style_label, style_desc = None, None
+        try:
+            if _rs is not None and "COACH" in str(
+                    getattr(getattr(staff, "role", None), "name", "")):
+                style = _rs.coach_style(staff)
+                if isinstance(style, dict):
+                    style_label = style.get("label")
+                    style_desc = style.get("description")
+        except Exception:
+            pass
+        ambition_text = {
+            "stanley_cup": "Burning to win the Stanley Cup.",
+            "climb": "Climbing -- wants a bigger chair.",
+            "developer": "Lives to develop young players.",
+            "hometown": "Dreams of coaching his hometown team.",
+            "lifer": "A lifer -- happy wherever the game takes him.",
+        }.get(str(getattr(staff, "ambition", "") or ""), "")
+        if ambition_text:
+            lines.append(f"Ambition: {ambition_text}")
+        try:
+            cn = float(getattr(staff, "control_need", 50))
+            if cn >= 75:
+                lines.append("Runs the room his way -- needs full control.")
+            elif cn >= 45:
+                lines.append("Comfortable sharing the room with his staff.")
+            else:
+                lines.append("Collaborative -- delegates freely to assistants.")
+        except Exception:
+            pass
+        try:
+            mot = float(getattr(staff, "motivating", 50))
+            disc = float(getattr(staff, "discipline", 50))
+            if mot >= 75 and disc >= 75:
+                lines.append("Demanding and inspiring in equal measure.")
+            elif mot >= 75 and disc < 60:
+                lines.append("An arm-around-the-shoulder motivator.")
+            elif disc >= 75 and mot < 60:
+                lines.append("A demanding disciplinarian.")
+            elif mot < 45 and disc < 45:
+                lines.append("Hands-off -- lets the leaders run the room.")
+        except Exception:
+            pass
+        try:
+            cont = float(getattr(staff, "controversy", 0) or 0)
+            if cont >= 60:
+                lines.append("Volatile -- brings headlines with him.")
+            elif cont >= 35:
+                lines.append("Outspoken -- not afraid of a microphone.")
+        except Exception:
+            pass
+        icon_level = str(getattr(staff, "icon_level", "") or "")
+        if icon_level in ("star", "icon"):
+            lines.append("Franchise icon as a player -- hiring him moves "
+                         "the room.")
+        fav = getattr(staff, "favorite_team", None)
+        if fav:
+            lines.append(f"Boyhood team: {fav}")
+        if not style_label and not lines:
+            return
+        box = ctk.CTkFrame(scroll, fg_color=ct['CARD'], corner_radius=8)
+        box.pack(fill="x", pady=(10, 4))
+        self._heading(box, text="Coaching Style & Personality",
+                      size=12).pack(anchor="w", padx=12, pady=(10, 2))
+        if style_label:
+            ctk.CTkLabel(box, text=style_label,
+                         font=("Segoe UI", 12, "bold"),
+                         text_color=ct['TEAL'],
+                         anchor="w").pack(anchor="w", padx=12, pady=(0, 2))
+            if style_desc:
+                self._body(box, text=style_desc, dim=True,
+                           size=10).pack(anchor="w", padx=12, pady=(0, 4))
+        for line in lines:
+            self._body(box, text=f"\u2022  {line}",
+                       size=10).pack(anchor="w", padx=12, pady=1)
+        ctk.CTkFrame(box, fg_color="transparent", height=6).pack()
 
     def _staff_open_reads_section(self, scroll, staff):
         """This scout's current open reads -- private to your club.
