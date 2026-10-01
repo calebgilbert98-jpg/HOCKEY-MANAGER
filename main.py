@@ -2170,6 +2170,119 @@ _RUSH_X_HOME_ICE_K = 0.0
 _HOME_ICE_EDGE = 0.05
 
 
+# Gating slice 4, Job 2B (Phase 4): the continue-blockers card is a
+# non-modal ask_card (Eastside grammar). Dismiss = defer: the blockers
+# persist until resolved and the top-nav pill re-reads the live continue
+# state. The named resolver below answers post-load re-presents by
+# blocker id against freshly recomputed blockers; the app reference is
+# kept module-side (same pattern as staff_management_window._chain_app).
+_BLOCKERS_APP = None
+
+
+def _set_blockers_app(app):
+    global _BLOCKERS_APP
+    _BLOCKERS_APP = app
+
+
+def _blockers_app():
+    app = _BLOCKERS_APP
+    if app is not None:
+        return app
+    try:
+        import tkinter as _tk
+        _root = _tk._default_root
+        if _root is not None and hasattr(_root, "get_continue_state"):
+            return _root
+    except Exception:
+        pass
+    return None
+
+
+def _continue_blockers_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['continue_blockers_answer']: the non-modal
+    continue-blockers card answered on a post-load re-present (the live
+    callback is gone). value is a blocker id (or '__close__'). Recomputes
+    the blockers live, runs the matching jump action, refreshes the pill.
+    Never raises."""
+    try:
+        app = _blockers_app()
+        if app is None or value == "__close__":
+            return False
+        try:
+            _label, _live = app.get_continue_state()
+        except Exception:
+            return False
+        for _b in _live or []:
+            if _b.get("id") == value:
+                _act = _b.get("action")
+                if _act:
+                    try:
+                        _act[1]()
+                    except Exception:
+                        pass
+                break
+        try:
+            app.refresh_next_day_button()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import (register_dialog_resolver as
+                              _blockers_reg_resolver)
+    _blockers_reg_resolver("continue_blockers_answer",
+                           _continue_blockers_answer)
+except Exception:
+    pass
+
+
+# -- Gating T2-Phase 3: playoffs-mode choice (end_of_season) ------------
+# Yes opens the interactive bracket; No quick-sims the tournament
+# headless and rolls to the offseason. Dismiss = defer (re-asked on the
+# next end_of_season entry; the guard below keeps it honest). The answer
+# survives save/load via resolver_args (season_year); a stale answer
+# (season already advanced or playoffs complete) is a no-op.
+_PLAYOFFS_MODE_APP = None
+
+
+def _set_playoffs_mode_app(app):
+    global _PLAYOFFS_MODE_APP
+    _PLAYOFFS_MODE_APP = app
+
+
+def _playoffs_mode_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['playoffs_mode_answer']."""
+    try:
+        app = _PLAYOFFS_MODE_APP
+        if app is None:
+            return False
+        league = getattr(app, "league", None)
+        if league is None:
+            return False
+        if str(getattr(league, "season_year", "")) != str(
+                kwargs.get("season_year", "")):
+            return False  # stale: season already advanced
+        if app._playoffs_complete():
+            return False  # already decided
+        if value:
+            app.open_playoffs_window()
+        else:
+            app._quick_sim_playoffs_headless()
+            app._start_offseason()
+        return True
+    except Exception:
+        return False
+
+
+try:
+    _blockers_reg_resolver("playoffs_mode_answer", _playoffs_mode_answer)
+except Exception:
+    pass
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -6224,6 +6337,45 @@ class HockeyManagerGUI(tk.Tk):
             pass
         if blockers:
             return ("Continue", blockers)
+        # Gating T2-Phase 2: the pending-items registry is the unified read
+        # path. BLOCKS_ADVANCE and PAUSES_DAY entries gate the day exactly
+        # like the hardcoded blockers above; RESUMABLE entries never block
+        # (they surface via resume chips). No Tier-2 dialog may register a
+        # BLOCKS_ADVANCE entry -- dialogs never block the day, their parent
+        # flows might.
+        try:
+            from popup_system import (get_pending_items as _gpi,
+                                      BLOCKS_ADVANCE as _BA,
+                                      PAUSES_DAY as _PD)
+            for _it in _gpi(self, kinds=(_BA, _PD)):
+                _iid = _it.get("id")
+                if any(b.get("id") == _iid for b in blockers):
+                    continue
+                _screen = _it.get("screen_id")
+
+                def _jump(_s=_screen):
+                    try:
+                        self.show_screen(_s)
+                    except Exception:
+                        pass
+                    # The question is waiting where it was left: re-present
+                    # any unanswered card parked for that screen.
+                    try:
+                        from popup_system import represent_screen_questions
+                        represent_screen_questions(self, _s, parent=self)
+                    except Exception:
+                        pass
+
+                blockers.append({
+                    "id": _iid,
+                    "title": _it.get("title", "Pending item"),
+                    "detail": _it.get("detail", ""),
+                    "action": ("Go to it", _jump),
+                })
+        except Exception:
+            pass
+        if blockers:
+            return ("Continue", blockers)
         # Trade deadline day: the day runs on a 30-minute game clock
         # (9:00 AM -> 3:00 PM ET). Each press advances the clock one
         # increment -- instant AI answers, league deals, countdown.
@@ -6250,9 +6402,13 @@ class HockeyManagerGUI(tk.Tk):
 
     def _show_continue_blockers(self, blockers):
         """Tell the user what is blocking day advancement and offer a jump
-        to the first blocking task. Never silently does nothing."""
+        to each blocking task. Eastside grammar (Phase 4): a non-modal
+        card with one jump button per blocker, never a grab_set modal.
+        Dismissing the card never clears the blockers -- they persist
+        until resolved, and the top-nav pill re-reads the live continue
+        state on every press."""
         try:
-            from modern_ui import AppColors, AppFonts, AppButton
+            from popup_system import ask_card
         except Exception:
             from popup_system import messagebox
             messagebox.showwarning(
@@ -6269,69 +6425,69 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast("Syncing with clients — one moment…")
             return
 
-        # Prevent multiple clicks by disabling button during simulation
-        dlg = InGamePopup(self)
-        dlg.title("Action Required")
-        dlg.configure(bg=AppColors.BG)
-        dlg.transient(self)
-        try:
-            dlg.grab_set()
-        except Exception:
-            pass
+        _set_blockers_app(self)
 
-        tk.Label(dlg, text="Action Required Before Advancing",
-                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
-                 bg=AppColors.BG).pack(padx=28, pady=(22, 6))
-        tk.Label(dlg, text="The following must be completed first:",
-                 font=AppFonts.BODY, fg=AppColors.TEXT_SECONDARY,
-                 bg=AppColors.BG).pack(padx=28, pady=(0, 12))
-
+        _lines = []
         for b in blockers:
-            card = tk.Frame(dlg, bg=AppColors.BG_ELEVATED,
-                            highlightbackground=AppColors.BORDER,
-                            highlightthickness=1)
-            card.pack(fill='x', padx=28, pady=6)
-            tk.Label(card, text=b.get('title', 'Pending task'),
-                     font=AppFonts.BODY_BOLD, fg=AppColors.ACCENT,
-                     bg=AppColors.BG_ELEVATED).pack(anchor='w', padx=14, pady=(10, 2))
-            tk.Label(card, text=b.get('detail', ''),
-                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
-                     bg=AppColors.BG_ELEVATED,
-                     wraplength=420, justify='left').pack(anchor='w', padx=14, pady=(0, 10))
+            _lines.append(b.get('title', 'Pending task'))
+            if b.get('detail'):
+                _lines.append(b.get('detail'))
+            _lines.append("")
+        _message = ("\n".join(_lines).rstrip()
+                    or "Something must be completed before the day advances.")
 
-        btn_row = tk.Frame(dlg, bg=AppColors.BG)
-        btn_row.pack(pady=(14, 22))
-        first = blockers[0] if blockers else {}
-        action = first.get('action')
+        _buttons = []
+        for b in blockers:
+            _act = b.get('action')
+            if _act:
+                _buttons.append((_act[0], b.get('id', _act[0]), "primary"))
+        _buttons.append(("Close", "__close__", "secondary"))
 
-        def _go():
-            dlg.destroy()
-            if action:
-                try:
-                    action[1]()
-                except Exception as e:
-                    print(f"Blocker action failed: {e}")
+        _blockers_snapshot = list(blockers)
+        _self = self
+
+        def _answer(_value):
+            if _value == "__close__":
+                return  # dismiss-safe: blockers persist; the pill re-reads
+            # The card may be stale (parked across navigation, then the
+            # world moved): re-read the LIVE blockers and jump by id,
+            # falling back to the card-time snapshot only if the id
+            # vanished entirely.
+            try:
+                _label, _live = _self.get_continue_state()
+            except Exception:
+                _live = _blockers_snapshot
+            _target = None
+            for _b in _live or []:
+                if _b.get('id') == _value:
+                    _target = _b
+                    break
+            if _target is None:
+                for _b in _blockers_snapshot:
+                    if _b.get('id') == _value:
+                        _target = _b
+                        break
+            if _target is not None:
+                _act = _target.get('action')
+                if _act:
+                    try:
+                        _act[1]()
+                    except Exception as e:
+                        print(f"Blocker action failed: {e}")
             # R8(i): the blocker may just have been resolved (e.g. the
             # captains picker) -- the top-nav pill must re-read the live
             # continue state instead of staying "Continue (1)".
             try:
-                self.refresh_next_day_button()
+                _self.refresh_next_day_button()
             except Exception:
                 pass
 
-        if action:
-            AppButton(btn_row, text=action[0], command=_go,
-                      style="primary", width=180, height=38).pack(side='left', padx=6)
-        AppButton(btn_row, text="Close", command=dlg.destroy,
-                  style="secondary", width=120, height=38).pack(side='left', padx=6)
-
-        dlg.update_idletasks()
-        try:
-            x = self.winfo_x() + (self.winfo_width() - dlg.winfo_reqwidth()) // 2
-            y = self.winfo_y() + (self.winfo_height() - dlg.winfo_reqheight()) // 2
-            dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        except Exception:
-            pass
+        ask_card(self, "Action Required", _message, _buttons,
+                 on_answer=_answer,
+                 default_on_dismiss="defer",
+                 session_id="continue_blockers", dialog_id="blockers_card",
+                 resolver="continue_blockers_answer",
+                 kind="warning", width=540, height=280)
 
     def _set_continue_feedback(self, busy, status=""):
         """Drive the dashboard Continue button's processing feedback.
@@ -14407,8 +14563,28 @@ class HockeyManagerGUI(tk.Tk):
                 if self._playoffs_complete():
                     self._start_offseason()
             else:
-                # Playoffs still in progress: focus the bracket, don't re-prompt.
-                self.open_playoffs_window()
+                # Re-entry with the choice deferred: re-present the card
+                # rather than opening the bracket (the user never chose).
+                # Playoffs actually in progress: focus the bracket.
+                _parked = False
+                try:
+                    _sess = (getattr(self, "pending_sessions", None) or {}).get(
+                        "playoffs_mode") or {}
+                    _dlg = (_sess.get("dialogs") or {}).get(
+                        "playoffs_mode_card") or {}
+                    _parked = bool(_dlg.get("parked")) and not _dlg.get(
+                        "answered")
+                except Exception:
+                    _parked = False
+                if _parked:
+                    try:
+                        from popup_system import represent_dialog
+                        represent_dialog("playoffs_mode", "playoffs_mode_card",
+                                         parent=self)
+                    except Exception:
+                        pass
+                else:
+                    self.open_playoffs_window()
             return
         self._season_end_handled_year = season_year
 
@@ -14425,11 +14601,32 @@ class HockeyManagerGUI(tk.Tk):
         if getattr(self, '_bulk_simming', False):
             result = True  # bulk sims auto-start playoffs, matching test behavior
         else:
-            result = messagebox.askyesno(
-                "Playoffs",
+            # Gating T2-Phase 3: non-modal choice card. Yes opens the
+            # bracket; No quick-sims headless. Dismiss = defer (the card
+            # is re-presented if end_of_season is re-entered; the
+            # _season_end_handled_year guard keeps it honest).
+            from popup_system import ask_card as _pm_ask_card
+            _set_playoffs_mode_app(self)
+
+            def _pm_on_answer(_ans, _self=self):
+                _playoffs_mode_answer(
+                    "playoffs_mode", "playoffs_mode_card", bool(_ans),
+                    season_year=season_year)
+
+            _pm_ask_card(
+                self, "Playoffs",
                 "Play through the Stanley Cup Playoffs?\n\n"
-                "Yes: open the bracket and sim it yourself.\n"
-                "No: quick-sim the tournament to crown a champion.")
+                "Play Interactive: open the bracket and sim it yourself.\n"
+                "Quick-Sim: the tournament is decided instantly and the "
+                "season rolls to the offseason.",
+                [("Play Interactive", True, "primary"),
+                 ("Quick-Sim", False, "secondary")],
+                on_answer=_pm_on_answer,
+                session_id="playoffs_mode", dialog_id="playoffs_mode_card",
+                resolver="playoffs_mode_answer",
+                resolver_args={"season_year": str(season_year)})
+            return
+
         if result:
             self.open_playoffs_window()
         else:
@@ -15987,19 +16184,12 @@ class HockeyManagerGUI(tk.Tk):
         return self.show_screen('free_agency', 'Free Agency', FreeAgencyView)
 
     def open_trade_window(self, preset=None):
-        if ('trade' not in self.open_windows
-                or not self.open_windows['trade'].winfo_exists()
-                or preset):
-            # A preset (negotiation counter, player-menu proposal) always
-            # opens a fresh workbench so the terms are exactly what was asked.
-            try:
-                old = self.open_windows.get('trade')
-                if old is not None and old.winfo_exists():
-                    old.destroy()
-            except Exception:
-                pass
-            self.open_windows['trade'] = TradeWindow(self, preset=preset)
-        self.open_windows['trade'].focus_set()
+        # Gating Phase 2: the Trade Center is a Tier-1 screen. The
+        # in-progress deal lives in app.pending_sessions["trade_deal"]
+        # (Tier B, write-through) and rebuilds on open, so a preset always
+        # opens a fresh workbench while plain opens resume the parked deal.
+        return self.show_screen("trade", "Trade Center", TradeWindow,
+                                preset=preset, fresh=bool(preset))
 
     def open_trade_deadline_center(self):
         """Open the Trade Deadline Center - only available on trade deadline day"""
@@ -16008,10 +16198,13 @@ class HockeyManagerGUI(tk.Tk):
                               "The Trade Deadline Center is only available on Trade Deadline Day.\n\n"
                               "Check back when the deadline approaches!")
             return
-            
-        if 'trade_deadline' not in self.open_windows or not self.open_windows['trade_deadline'].winfo_exists():
-            self.open_windows['trade_deadline'] = TradeDeadlineCenter(self)
-        self.open_windows['trade_deadline'].focus_set()
+
+        # Gating Phase 2: Tier-1 screen. show_screen registers the view in
+        # open_windows['trade_deadline'], so the clock-tick refresh path
+        # (open_windows.get('trade_deadline').refresh()) keeps working
+        # unchanged.
+        return self.show_screen("trade_deadline", "Trade Deadline Center",
+                                TradeDeadlineCenter)
 
     def open_draft_day_central(self):
         """Open Draft Day Central - the draft-day event hub"""
@@ -16176,7 +16369,61 @@ class HockeyManagerGUI(tk.Tk):
         'dressing_room': 'refresh',
         'manager_hub': 'refresh',
         'settings': 'refresh',
+        # Gating Phase 1: save/load screens are cacheable too, but only
+        # when constructed with their static kwargs (open_save_window /
+        # open_load_window always pass mode='save'/'load'). The quit-flow
+        # save carries an extra on_done callback and is never cached --
+        # see _SCREEN_CACHE_STATIC_KWARGS.
+        'save_game': 'refresh',
+        'load_game': 'refresh',
     }
+    # Static constructor kwargs per cached screen id. A cache hit is only
+    # allowed when the show_screen call's kwargs exactly match these, so a
+    # screen built for one mode can never be re-shown for another.
+    _SCREEN_CACHE_STATIC_KWARGS = {
+        'save_game': {'mode': 'save'},
+        'load_game': {'mode': 'load'},
+    }
+
+    @property
+    def negotiation_sessions(self):
+        """Thin alias (gating Phase 1): contract-negotiation state now
+        lives in ``app.pending_sessions`` (kind "contract_negotiation").
+        Returns a ``{player_key: session}`` view so legacy readers keep
+        working; prefer ``popup_system.get_negotiation_session``.
+        """
+        out = {}
+        try:
+            sessions = getattr(self, "pending_sessions", None) or {}
+            for sid, sess in list(sessions.items()):
+                if (isinstance(sess, dict)
+                        and sess.get("kind") == "contract_negotiation"):
+                    out[sess.get("player_key", sid)] = sess
+        except Exception:
+            pass
+        return out
+
+    @negotiation_sessions.setter
+    def negotiation_sessions(self, value):
+        try:
+            sessions = getattr(self, "pending_sessions", None)
+            if sessions is None:
+                sessions = {}
+                self.pending_sessions = sessions
+            for sid in [s for s, e in list(sessions.items())
+                        if isinstance(e, dict)
+                        and e.get("kind") == "contract_negotiation"]:
+                del sessions[sid]
+            for key, entry in list((value or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                entry = dict(entry)
+                entry.setdefault("kind", "contract_negotiation")
+                entry.setdefault("id", "negotiation:%s" % (key,))
+                entry.setdefault("player_key", key)
+                sessions[entry["id"]] = entry
+        except Exception:
+            pass
 
     def show_screen(self, screen_id, title, view_cls, *args, **kwargs):
         """Teleport to a full-screen view instead of opening a popup card.
@@ -16206,8 +16453,18 @@ class HockeyManagerGUI(tk.Tk):
         # Cache hit: re-show the live view instead of rebuilding it.
         # Refresh re-populates data into the existing widgets; if the
         # refresh fails for any reason we fall through and rebuild fresh.
-        if not fresh and not args and not kwargs:
-            hit = self._get_cached_screen(screen_id, view_cls)
+        # Gating Phase 1: screens with registered static kwargs
+        # (save_game/load_game <-> mode) may also hit, but only when the
+        # call's kwargs exactly match the static set -- a save-mode view
+        # can never be re-shown for load mode. getattr: bare-Tk test
+        # doubles don't carry the map, and behave as before.
+        _static_kwargs = (getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None)
+                          or {}).get(screen_id)
+        _kwargs_ok = (not kwargs or (_static_kwargs is not None
+                                     and dict(kwargs) == _static_kwargs))
+        if not fresh and not args and _kwargs_ok:
+            hit = self._get_cached_screen(screen_id, view_cls,
+                                          require_static=bool(kwargs))
             if hit is not None:
                 holder, view = hit
                 self._teardown_screen()
@@ -16250,12 +16507,31 @@ class HockeyManagerGUI(tk.Tk):
         if callable(chips_fn):
             chips_fn(navbar, screen_id)
         view = view_cls(holder, app=self, *args, **kwargs)
+        # Gating Phase 1: tag views built with a screen's static kwargs so
+        # teardown knows they are safe to park (a quit-flow save carrying
+        # a per-invocation on_done is never parked).
+        try:
+            _static_kwargs = (getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None)
+                              or {}).get(screen_id)
+            if (_static_kwargs is not None and not args
+                    and dict(kwargs) == _static_kwargs):
+                view._cache_static_ok = True
+        except Exception:
+            pass
         view._close_screen = self.show_dashboard
         view.grid(row=1, column=0, sticky='nsew')
         self._current_screen = {'id': screen_id, 'holder': holder, 'view': view}
         self.open_windows[screen_id] = view
         if not getattr(self, '_suppress_history', False):
             self._push_screen_history(screen_id)
+        # Gating T2-Phase 2: returning to a screen re-presents any
+        # unanswered question parked for it ("the question is waiting
+        # where you left it").
+        try:
+            from popup_system import represent_screen_questions
+            represent_screen_questions(self, screen_id, parent=self)
+        except Exception:
+            pass
         try:
             view.focus_set()
         except Exception:
@@ -16270,7 +16546,18 @@ class HockeyManagerGUI(tk.Tk):
         neutral -- the chip brings the exact session back).
         """
         try:
-            sessions = getattr(self, "negotiation_sessions", None) or {}
+            # Gating Phase 1: negotiation state lives in pending_sessions
+            # (kind "contract_negotiation"); app.negotiation_sessions
+            # remains as a thin alias for legacy readers.
+            sessions = {}
+            try:
+                for _sid, _sess in list(
+                        (getattr(self, "pending_sessions", None) or {}).items()):
+                    if (isinstance(_sess, dict)
+                            and _sess.get("kind") == "contract_negotiation"):
+                        sessions[_sess.get("player_key", _sid)] = _sess
+            except Exception:
+                pass
             # Parked team talks: unanswered sessions for the current screen
             # set. Never chip the talk on its own screen (it's not parked
             # there -- it's showing).
@@ -16292,6 +16579,36 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             if not sessions and not talk_chips:
+                return
+            # Gating T2-Phase 2: parked gating questions (unanswered dialogs
+            # with a registry spec) get answer chips. The question is never
+            # more than one click away; clicking re-presents the card
+            # non-modally where it was parked.
+            question_chips = []
+            try:
+                from popup_system import represent_dialog as _rep
+                _psessions = getattr(self, "pending_sessions", None) or {}
+                for _sid, _sess in list(_psessions.items()):
+                    if not isinstance(_sess, dict):
+                        continue
+                    for _did, _entry in list(
+                            (_sess.get("dialogs") or {}).items()):
+                        if not isinstance(_entry, dict):
+                            continue
+                        if _entry.get("answer") is not None:
+                            continue
+                        _spec = _entry.get("registry")
+                        if not isinstance(_spec, dict):
+                            continue
+                        _icon = ("📞 " if _spec.get("kind") == "PAUSES_DAY"
+                                 else "❓ ")
+                        question_chips.append(
+                            (_icon + str(_spec.get("title")
+                                         or "Pending question"),
+                             _sid, _did))
+            except Exception:
+                pass
+            if not sessions and not talk_chips and not question_chips:
                 return
             chips = ctk.CTkFrame(navbar, fg_color="transparent")
             chips._session_chips = True
@@ -16321,6 +16638,12 @@ class HockeyManagerGUI(tk.Tk):
                     command=lambda p=player, e=sess.get("is_extension", False):
                         self.open_contract_negotiation_window(p, is_extension=e)
                 ).pack(side='left', padx=3)
+            for _qlabel, _qsid, _qdid in question_chips:
+                secondary_button(
+                    chips, text=_qlabel, width=200, height=28,
+                    command=lambda s=_qsid, d=_qdid: _rep(
+                        s, d, parent=self)
+                ).pack(side='left', padx=3)
         except Exception:
             pass
 
@@ -16342,11 +16665,14 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-    def _get_cached_screen(self, screen_id, view_cls):
+    def _get_cached_screen(self, screen_id, view_cls, require_static=False):
         """Pop a cached (screen_id -> (holder, view)) entry, or None.
 
         Validates the holder still exists and the view is the requested
-        class; anything stale is destroyed and treated as a miss.
+        class; anything stale is destroyed and treated as a miss. When
+        require_static is set (the hit call passed kwargs), the cached
+        view must carry the _cache_static_ok tag -- i.e. it was built
+        with exactly the screen's registered static kwargs.
         """
         cache = getattr(self, '_screen_cache', None)
         if not cache or screen_id not in cache:
@@ -16355,7 +16681,9 @@ class HockeyManagerGUI(tk.Tk):
         try:
             ok = (holder.winfo_exists()
                   and isinstance(view, view_cls)
-                  and screen_id in self._SCREEN_CACHE_REFRESH)
+                  and screen_id in self._SCREEN_CACHE_REFRESH
+                  and (not require_static
+                       or getattr(view, '_cache_static_ok', False)))
         except Exception:
             ok = False
         if not ok:
@@ -16399,6 +16727,18 @@ class HockeyManagerGUI(tk.Tk):
             park_question_cards_for(self)
         except Exception:
             pass
+        # Gating: park the staff negotiate chain when its open negotiation
+        # screen is torn down without on_done firing (user navigated away
+        # mid-step). Between-step teardowns are ignored (step already
+        # cleared by the advancing callback).
+        try:
+            from staff_management_window import (
+                park_staff_negotiate_chain_if_needed)
+            _cur = getattr(self, "_current_screen", None)
+            _cid = _cur.get("id") if isinstance(_cur, dict) else None
+            park_staff_negotiate_chain_if_needed(self, _cid)
+        except Exception:
+            pass
         cur = getattr(self, '_current_screen', None)
         self._current_screen = None
         if cur is None:
@@ -16409,8 +16749,16 @@ class HockeyManagerGUI(tk.Tk):
                 del self.open_windows[cur['id']]
         except Exception:
             pass
+        # Gating Phase 1: screens with static kwargs are only parked when
+        # built with exactly those kwargs (a quit-flow save carrying
+        # on_done is destroyed, never parked). getattr: bare-Tk test
+        # doubles don't carry the map, and behave as before.
+        _needs_static = cur['id'] in (
+            getattr(self, "_SCREEN_CACHE_STATIC_KWARGS", None) or {})
         cacheable = (cur['id'] in self._SCREEN_CACHE_REFRESH
-                     and not getattr(cur['view'], '_never_cache', False))
+                     and not getattr(cur['view'], '_never_cache', False)
+                     and (not _needs_static
+                          or getattr(cur['view'], '_cache_static_ok', False)))
         if cacheable:
             try:
                 if cur['holder'].winfo_exists():
@@ -17836,17 +18184,15 @@ class HockeyManagerGUI(tk.Tk):
         return self.show_screen('practice_center', 'Practice Center', PracticeCenterView)
 
     def open_trade_block_window(self):
-        """Open the Trade Block management window."""
-        if 'trade_block' not in self.open_windows or not self.open_windows['trade_block'].winfo_exists():
-            self.open_windows['trade_block'] = TradeBlockWindow(self)
-        self.open_windows['trade_block'].focus_set()
+        """Open the Trade Block management screen (full-screen jump)."""
+        return self.show_screen("trade_block", "Trade Block",
+                                TradeBlockWindow)
 
     def open_offer_sheet_window(self):
-        """Open the Offer Sheet window (sign a rival RFA). BUG-020."""
-        if 'offer_sheet' not in self.open_windows or not self.open_windows['offer_sheet'].winfo_exists():
-            from offer_sheet_ui import OfferSheetWindow
-            self.open_windows['offer_sheet'] = OfferSheetWindow(self)
-        self.open_windows['offer_sheet'].focus_set()
+        """Open the Offer Sheet screen (sign a rival RFA). BUG-020."""
+        from offer_sheet_ui import OfferSheetWindow
+        return self.show_screen("offer_sheet", "Offer Sheets",
+                                OfferSheetWindow)
         
     def open_contract_extensions_window(self):
         """Open the Contract Extensions screen (full-screen jump)."""
@@ -18144,21 +18490,98 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             _kind, _detail = None, ""
         if _kind == "NMC":
-            _ask = messagebox.askyesno(
-                "No-movement clause",
-                f"{player.full_name} has a {_detail}.\n\n"
-                "He must approve the demotion. Ask him?")
-            if not _ask:
+            # Gating T2-Phase 2: NMC demotion consent is a question card,
+            # not a blocking dialog. Dismiss = defer (safe default: not
+            # asked, the player stays on the roster).
+            from popup_system import (ask_card, cards_available,
+                                      get_pending_session,
+                                      register_pending_item,
+                                      unregister_pending_item, RESUMABLE)
+            _sess_id = f"demote_nmc:{player.id}"
+            _sess = get_pending_session(self, _sess_id)
+            _sess["kind"] = "demote_nmc"
+            _sess["player_id"] = str(player.id)
+            _did = f"consent:{player.id}"
+            _item_id = f"q:{_sess_id}:{_did}"
+            _title = f"NMC consent: {player.full_name} \u2014 answer"
+            _detail = (f"{player.full_name} must approve the demotion "
+                       "before he can be sent down.")
+            _screen_id = None
+            try:
+                _screen_id = (getattr(self, "_current_screen", None)
+                              or {}).get("id")
+            except Exception:
+                pass
+            _nmc_msg = (f"{player.full_name} has a {_detail}.\n\n"
+                        "He must approve the demotion. Ask him?")
+
+            def _nmc_on_answer(ans, _pid=player.id,
+                               _sess_id=_sess_id, _item_id=_item_id):
+                try:
+                    unregister_pending_item(self, _item_id)
+                except Exception:
+                    pass
+                self._demote_nmc_answer(_sess_id, _pid, ans)
+
+            if not cards_available(self):
+                # Headless: legacy blocking path, identical branches.
+                _nmc_on_answer(messagebox.askyesno(
+                    "No-movement clause", _nmc_msg))
                 return
-            _lg = getattr(getattr(self, 'game_manager', None),
-                          'league', None) or getattr(self, 'league', None)
-            _ok, _why = _te.will_waive_ntc(
-                player, self.user_team, None, _lg, context="waivers")
-            if not _ok:
-                messagebox.showwarning(
-                    "Demotion refused",
-                    f"{_why}\n\nHe's staying on the roster.")
-                return
+            register_pending_item(
+                self, _item_id, kind=RESUMABLE, title=_title,
+                detail=_detail, screen_id=_screen_id)
+            ask_card(self, "No-movement clause", _nmc_msg,
+                     [("Ask him", True, "primary"),
+                      ("Not now", False, "secondary")],
+                     on_answer=_nmc_on_answer,
+                     default_on_dismiss="defer",
+                     session_id=_sess_id, dialog_id=_did,
+                     resolver="deposition_answer",
+                     resolver_args={"player_id": str(player.id)})
+            try:
+                _sess["dialogs"][_did]["registry"] = {
+                    "item_id": _item_id, "kind": RESUMABLE,
+                    "title": _title, "detail": _detail,
+                    "screen_id": _screen_id}
+            except Exception:
+                pass
+            return
+        self._send_to_ahl_after_consent(player)
+
+    def _demote_nmc_answer(self, _sess_id, _pid, _ans):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self, _sess_id)
+        _player = next((p for p in self.user_team.roster
+                        if str(p.id) == str(_pid)), None)
+        try:
+            if (isinstance(getattr(self, "pending_sessions", None), dict)
+                    and _sess_id in self.pending_sessions):
+                del self.pending_sessions[_sess_id]
+        except Exception:
+            pass
+        if _ans is not True:
+            # No or dismiss: safe default -- not asked, stays on roster.
+            return
+        if _player is None:
+            messagebox.showwarning(
+                "Player unavailable",
+                "The player is no longer on the roster. The demotion "
+                "stopped.")
+            return
+        import trade_engine as _te
+        _lg = getattr(getattr(self, 'game_manager', None),
+                      'league', None) or getattr(self, 'league', None)
+        _ok, _why = _te.will_waive_ntc(
+            _player, self.user_team, None, _lg, context="waivers")
+        if not _ok:
+            messagebox.showwarning(
+                "Demotion refused",
+                f"{_why}\n\nHe's staying on the roster.")
+            return
+        self._send_to_ahl_after_consent(_player)
+
+    def _send_to_ahl_after_consent(self, player):
         # Waiver eligibility: non-exempt players (25+ or 160+ NHL games)
         # must clear the wire -- no quiet burial of veterans. Shared with
         # the multiplayer demotion path so both use one rulebook.
@@ -21615,35 +22038,64 @@ class TacticsWindow(InGamePopup):
         return InGamePopup.__getattr__(self, name)
 
 
-class TradeBlockWindow(InGamePopup):
+class TradeBlockWindow(tk.Frame):
     """
     Enhanced Trade Block window with filtering, sorting, bulk actions, context menu, and summary.
+
+    Gating Phase 2: a Tier-1 screen (``show_screen("trade_block", ...)``).
+    Filter pills, the active tab, checkbox selection, and the other-teams
+    browser selection live in ``app.pending_sessions["trade_block_ui"]``
+    (Tier B, write-through). The block itself is model state
+    (``app.trade_block`` + the ``trade_market`` store) and is always read
+    live, so the screen rebuilds honestly on every open.
     """
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.parent = parent
-        self.title("Manage Trade Block")
-        self.geometry("900x700")
-        self.configure(bg=parent.BG_COLOR)
-        self.resizable(False, False)
+    # -- screen shims: Toplevel API the old popup code still calls -------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def resizable(self, _w=None, _h=None):
+        return None
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def __init__(self, parent, app=None):
+        tk.Frame.__init__(self, parent)
+        _app = app if app is not None else parent
+        self.app = _app
+        # Historical: this whole class reads self.parent.<app attribute>.
+        self.parent = _app
+        self._close_screen = None  # set by show_screen()
+        self.configure(bg=self.parent.BG_COLOR)
 
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
-        self.style.configure('Panel.TFrame', background=parent.CONTENT_BG)
-        self.style.configure('TitleBar.TFrame', background=parent.TITLE_BAR_COLOR)
-        self.style.configure('Title.TLabel', background=parent.TITLE_BAR_COLOR, foreground=parent.HEADER_COLOR, font=(parent.FONT_FAMILY, 13, 'bold'))
-        self.style.configure('TButton', font=(parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
-        self.style.map('TButton', background=[('active', parent.ACCENT_ACTIVE), ('hover', parent.ACCENT_HOVER)])
-        self.style.configure('Summary.TLabel', background=parent.CONTENT_BG, foreground=parent.ACCENT_COLOR, font=(parent.FONT_FAMILY, 12, 'bold'))
+        self.style.configure('Panel.TFrame', background=self.parent.CONTENT_BG)
+        self.style.configure('TitleBar.TFrame', background=self.parent.TITLE_BAR_COLOR)
+        self.style.configure('Title.TLabel', background=self.parent.TITLE_BAR_COLOR, foreground=self.parent.HEADER_COLOR, font=(self.parent.FONT_FAMILY, 13, 'bold'))
+        self.style.configure('TButton', font=(self.parent.FONT_FAMILY, 11, 'bold'), foreground='white', background=self.parent.ACCENT_COLOR, padding=(10, 6), borderwidth=0)
+        self.style.map('TButton', background=[('active', self.parent.ACCENT_ACTIVE), ('hover', self.parent.ACCENT_HOVER)])
+        self.style.configure('Summary.TLabel', background=self.parent.CONTENT_BG, foreground=self.parent.ACCENT_COLOR, font=(self.parent.FONT_FAMILY, 12, 'bold'))
 
         # --- Title bar ---
         title_bar = ttk.Frame(self, style='TitleBar.TFrame')
         title_bar.pack(fill="x")
         # Team logo (placeholder)
-        logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=parent.TITLE_BAR_COLOR, highlightthickness=0)
+        logo_canvas = tk.Canvas(title_bar, width=40, height=40, bg=self.parent.TITLE_BAR_COLOR, highlightthickness=0)
         logo_canvas.pack(side="right", padx=8)
-        logo_canvas.create_text(20, 20, text="LOGO", fill="white", font=(parent.FONT_FAMILY, 8, 'bold'))
+        logo_canvas.create_text(20, 20, text="LOGO", fill="white", font=(self.parent.FONT_FAMILY, 8, 'bold'))
 
         # --- Summary panel ---
         self.summary_panel = ttk.Frame(self, style='Panel.TFrame', padding=8)
@@ -21657,9 +22109,9 @@ class TradeBlockWindow(InGamePopup):
         # generate/decline interest and express interest all read/write
         # league.trade_market, never fabricated data. ---
         try:
-            self.style.configure('Block.TNotebook', background=parent.CONTENT_BG)
+            self.style.configure('Block.TNotebook', background=self.parent.CONTENT_BG)
             self.style.configure('Block.TNotebook.Tab',
-                                 font=(parent.FONT_FAMILY, 11, 'bold'),
+                                 font=(self.parent.FONT_FAMILY, 11, 'bold'),
                                  padding=(12, 6))
         except Exception:
             pass
@@ -21672,6 +22124,9 @@ class TradeBlockWindow(InGamePopup):
         notebook.add(interest_tab, text="Trade Interest")
         notebook.add(others_tab, text="Other Teams")
         self._tb_notebook = notebook
+        # Gating Phase 2: tab switches write through to the Tier-B session.
+        notebook.bind("<<NotebookTabChanged>>",
+                      lambda _e: self._snapshot_tb_session())
         # Maps interest-tree item ids -> (listing dict, team name, player
         # name) for the real-store-backed Interest tab. The listing dicts
         # live in league.trade_market; declines mutate them (the model).
@@ -21763,7 +22218,7 @@ class TradeBlockWindow(InGamePopup):
         ttk.Button(btn_frame, text="Suggest Trade Value", command=self.suggest_trade_value).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Simulate Trade Offers", command=self.simulate_trade_offers).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Generate Interest", command=self.generate_trade_interest).pack(side="left", padx=5)
-        ttk.Button(btn_frame, text="Close", command=self.destroy).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Close", command=self.close_view).pack(side="right", padx=5)
 
         # --- Checkbox state ---
         self.selected_items = set()
@@ -21777,11 +22232,101 @@ class TradeBlockWindow(InGamePopup):
         self.create_other_trade_blocks(others_tab)
         self.update_interest_display()
 
+        # Gating Phase 2: restore parked UI state (filters/tab/selection),
+        # revalidating checkbox ids against the live roster.
+        self._tb_restoring = False
+        self._restore_tb_session()
+
     def _tb_set_filter(self, var, value):
         """Set a trade-block pill filter and refresh instantly."""
         var.set(value)
         self._tb_paint_pills()
         self._populate_tree()
+        self._snapshot_tb_session()  # Gating P2: write-through
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B UI session ("trade_block_ui", kind
+    # "trade_block"). Filters, active tab, checkbox selection, and the
+    # other-teams browser selection write through on every interaction;
+    # on open they are restored with the selection revalidated against the
+    # live roster (§6: honest "no longer available" handling). The block
+    # itself is model state and is always read live.
+    # ------------------------------------------------------------------
+    _TB_SESSION_ID = "trade_block_ui"
+
+    def _tb_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self.parent, self._TB_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "trade_block")
+        return sess
+
+    def _snapshot_tb_session(self):
+        if getattr(self, "_tb_restoring", False):
+            return
+        try:
+            sess = self._tb_session()
+            if not sess:
+                return
+            sess["filters"] = {k: v.get() for k, v in
+                               (self.filter_vars or {}).items()}
+            try:
+                sess["tab"] = self._tb_notebook.index("current")
+            except Exception:
+                pass
+            sess["selected_items"] = sorted(
+                str(i) for i in (self.selected_items or set()))
+            sess["other_team"] = (self.team_var.get()
+                                  if hasattr(self, "team_var") else "")
+        except Exception:
+            pass
+
+    def _restore_tb_session(self):
+        try:
+            sess = self._tb_session()
+            if not sess:
+                return
+            self._tb_restoring = True
+            try:
+                for k, val in (sess.get("filters") or {}).items():
+                    if k in (self.filter_vars or {}):
+                        try:
+                            self.filter_vars[k].set(val)
+                        except Exception:
+                            pass
+                self._tb_paint_pills()
+                try:
+                    tab = sess.get("tab")
+                    if tab is not None:
+                        self._tb_notebook.select(int(tab))
+                except Exception:
+                    pass
+                # Revalidate checkbox ids against the live roster; stale
+                # ids (traded/released while parked) are dropped honestly.
+                try:
+                    idmap = {str(getattr(p, "id", "")): getattr(p, "id", None)
+                             for p in (getattr(self.parent.user_team,
+                                               "roster", None) or [])}
+                    self.selected_items = {
+                        idmap[s] for s in (sess.get("selected_items") or [])
+                        if s in idmap}
+                except Exception:
+                    pass
+                other = sess.get("other_team") or ""
+                if other and hasattr(self, "team_var"):
+                    try:
+                        if other in (self.team_combo.cget("values") or ()):
+                            self.team_var.set(other)
+                            self.on_team_selected()
+                    except Exception:
+                        pass
+            finally:
+                self._tb_restoring = False
+            self._populate_tree()
+            self._snapshot_tb_session()
+        except Exception:
+            pass
 
     def _tb_paint_pills(self):
         for var, btns in getattr(self, '_tb_pill_groups', []):
@@ -21896,6 +22441,7 @@ class TradeBlockWindow(InGamePopup):
                 elif player:
                     self.selected_items.add(player.id)
                 self._populate_tree()
+                self._snapshot_tb_session()  # Gating P2: write-through
 
     def add_selected_to_block(self):
         # Convert selected IDs to player objects
@@ -21937,7 +22483,8 @@ class TradeBlockWindow(InGamePopup):
         shop_window.title("Shop Players")
         shop_window.geometry("700x500")
         shop_window.configure(bg=self.parent.BG_COLOR)
-        shop_window.grab_set()  # Make window modal
+        # Gating Phase 2: no grab_set -- the card is non-modal per the
+        # Eastside grammar; dismissing it defers, nothing is decided.
         
         # Create scrollable text widget
         frame = ttk.Frame(shop_window, style='Panel.TFrame', padding=15)
@@ -22380,7 +22927,6 @@ class TradeBlockWindow(InGamePopup):
         nothing is fabricated. Fail-safe: any exception leaves the window
         functional and writes nothing.
         """
-        from tkinter import messagebox
         try:
             app = self.parent
             user_team = getattr(app, 'user_team', None)
@@ -22564,7 +23110,6 @@ class TradeBlockWindow(InGamePopup):
         open offer still needs an answer in the inbox). Never raises; the
         model is only written after the selected row resolves.
         """
-        from tkinter import messagebox
         try:
             selection = self.interest_tree.selection()
             if not selection:
@@ -22618,7 +23163,6 @@ class TradeBlockWindow(InGamePopup):
         on your side of the deal. Routes through the app's open_trade_window
         (main.py:15300); honest warning if anything is unresolvable.
         """
-        from tkinter import messagebox
         try:
             tree = getattr(self, 'interest_tree', None)
             selection = tree.selection() if tree is not None else []
@@ -22790,6 +23334,7 @@ class TradeBlockWindow(InGamePopup):
             set_tree_empty_state(
                 self.other_tree,
                 f"{label} has no players on the block")
+        self._snapshot_tb_session()  # Gating P2: write-through
 
     def refresh_other_blocks(self):
         """Refresh other teams' trade blocks."""
@@ -22811,7 +23356,6 @@ class TradeBlockWindow(InGamePopup):
         read by the scouting/targets surfaces). Never fabricates an AI
         response. Never raises; failures report honestly.
         """
-        from tkinter import messagebox
         try:
             selection = self.other_tree.selection()
             if not selection:

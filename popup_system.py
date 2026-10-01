@@ -22,6 +22,15 @@ messagebox / simpledialog
     ``wait_window``, so all 400+ call sites keep working unchanged. When no
     app is registered (launcher before wiring, headless tests) they fall back
     to the real tkinter dialogs.
+ask_card / prompt_card / notify_card (T2-Phase 1, gating pattern)
+    Non-modal counterparts of the blocking facades: same styled cards, but
+    no grab_set, no wait_window, no dimmed lock-in. The card returns a token
+    immediately; the answer arrives later via ``on_answer``. Dismissal
+    (Escape / X / click-out) defers by default -- the question parks in the
+    Tier-B session (``app.pending_sessions``) and ``represent_dialog()``
+    re-shows it. ``DIALOG_RESOLVERS`` + ``register_dialog_resolver`` give
+    save/load-safe named continuations. Additive: the blocking facades are
+    untouched.
 
 Usage
 -----
@@ -892,8 +901,15 @@ class _MessageBoxFacade:
         mgr = _resolve_manager(parent)
         if mgr is None:
             return _fallback(kind).showinfo(title, message)
-        return _dialog(mgr, kind, title or "", message or "",
-                       [("OK", True, "primary")])
+        # Gating T2-Phase 4: FYI notifications are fire-and-forget --
+        # a dismissible non-modal card, never a grab_set seizure.
+        # Pure information; the flow already stopped or succeeded on
+        # its own, so nothing needs to wait for the dismissal.
+        try:
+            notify_card(parent, title or "", message or "", kind=kind)
+        except Exception:
+            pass
+        return True
 
     def showinfo(self, title=None, message=None, parent=None, **kw):
         return self._show("info", title, message, parent, **kw)
@@ -991,8 +1007,23 @@ simpledialog = _SimpleDialogFacade()
 # immediately and the answer arrives later via on_answer. Dismissal (Escape /
 # X / click-out) is NEVER an accidental answer: default_on_dismiss="defer"
 # (the default for gating questions) parks the question — the parent flow
-# stays "awaiting answer" and the card can re-present from the session.
-# Any other default_on_dismiss value answers with that safe default.
+# stays "awaiting answer" and the card can re-present from the session via
+# represent_dialog(). Any other default_on_dismiss value answers with that
+# safe default. "nodefer" is reserved and rejected.
+#
+# Session entries (app.pending_sessions[session_id]["dialogs"][dialog_id]):
+#   ask:    {"dialog_id", "title", "message", "options": [labels],
+#            "option_values": [JSON-safe], "option_styles": [styles],
+#            "answer": None, "parked": bool, "resolver": name,
+#            "resolver_args": {...}, "default_on_dismiss": "defer" | None}
+#   prompt: {"dialog_id", "title", "message", "options": [], "answer": None,
+#            "draft": <live text>, "parked": bool, "as_int": bool,
+#            "resolver": name, "resolver_args": {...},
+#            "default_on_dismiss": "defer" | None}
+# Lambdas can't survive save/load, so same-process re-presents reuse the
+# live spec (original buttons + on_answer); post-load re-presents rebuild
+# from the serialized entry and route the answer through
+# DIALOG_RESOLVERS[resolver](session_id, dialog_id, value, **resolver_args).
 #
 # Additive: the blocking facades above are untouched; unmigrated call sites
 # keep working exactly as before.
@@ -1007,8 +1038,17 @@ import uuid as _uuid
 DIALOG_RESOLVERS = {}
 
 
-def register_dialog_resolver(name, fn):
-    """Register a named resolver for parked question cards."""
+def register_dialog_resolver(name, fn=None):
+    """Register a named resolver for parked question cards.
+
+    Two-arg form: register_dialog_resolver("trade_waiver", resolve_fn).
+    Also usable as a decorator: @register_dialog_resolver("trade_waiver").
+    """
+    if fn is None:
+        def _decorator(f):
+            DIALOG_RESOLVERS[name] = f
+            return f
+        return _decorator
     DIALOG_RESOLVERS[name] = fn
     return fn
 
@@ -1044,11 +1084,14 @@ def _coerce_app(parent, manager):
             return parent
         w = parent
         for _ in range(25):
+            # Check the widget itself first: the app root carries
+            # pending_sessions / show_screen and is a valid session owner
+            # (represent_dialog resolves the app from the manager root).
+            if hasattr(w, "pending_sessions") or hasattr(w, "show_screen"):
+                return w
             w = getattr(w, "master", None)
             if w is None:
                 break
-            if hasattr(w, "pending_sessions") or hasattr(w, "show_screen"):
-                return w
     except Exception:
         pass
     return None
@@ -1066,7 +1109,7 @@ def get_pending_session(app, session_id):
         return None
     try:
         sessions = getattr(app, "pending_sessions", None)
-        if sessions is None:
+        if not isinstance(sessions, dict):
             sessions = {}
             app.pending_sessions = sessions
         sess = sessions.get(session_id)
@@ -1089,6 +1132,88 @@ def _write_question_session(app, session_id, dialog_id, payload):
     except Exception:
         return None
     return sess
+
+
+# ---------------------------------------------------------------------------
+# Contract-negotiation sessions (gating Phase 1 -- Tier-B generalization).
+#
+# These generalize the old ``app.negotiation_sessions`` dict: negotiation
+# state now lives in ``app.pending_sessions`` keyed by session id, with
+# write-through on every meaningful interaction (the views write their
+# draft terms into the entry on each widget change), so navigating away
+# mid-talks can never lose the in-progress offer. The ``"player"`` value is
+# a live game object (runtime only); the save serializer whitelists
+# kind == "team_talk" sessions, so negotiation entries are dropped from
+# saves exactly as the old attribute dict was -- no save/load change.
+# ---------------------------------------------------------------------------
+
+CONTRACT_NEGOTIATION_KIND = "contract_negotiation"
+
+
+def _negotiation_player_key(player):
+    try:
+        return getattr(player, "id", None) or id(player)
+    except Exception:
+        return id(player)
+
+
+def negotiation_session_id(player):
+    """Session id for a player's contract negotiation."""
+    return "negotiation:%s" % (_negotiation_player_key(player),)
+
+
+def get_negotiation_session(app, player, defaults=None):
+    """Return the Tier-B session for this player's contract talks.
+
+    Creates and initializes it on first use (from ``defaults``); returns
+    the existing entry -- with its in-progress draft terms -- on resume.
+    Re-initializes when the entry belongs to a different player object
+    (e.g. a fresh league reusing an id), matching the old
+    ``negotiation_sessions`` semantics.
+    """
+    if app is None or player is None:
+        return None
+    try:
+        sid = negotiation_session_id(player)
+        sess = get_pending_session(app, sid)
+        if sess is None:
+            return None
+        if (sess.get("kind") != CONTRACT_NEGOTIATION_KIND
+                or sess.get("player") is not player):
+            # (Re)initialize in place so existing view references to the
+            # entry stay valid.
+            sess.clear()
+            sess.update({
+                "id": sid,
+                "kind": CONTRACT_NEGOTIATION_KIND,
+                "player": player,
+                "player_key": _negotiation_player_key(player),
+                "dialogs": {},
+            })
+            if defaults:
+                try:
+                    sess.update(dict(defaults))
+                except Exception:
+                    pass
+        if "dialogs" not in sess:
+            sess["dialogs"] = {}
+        return sess
+    except Exception:
+        return None
+
+
+def close_negotiation_session(app, player):
+    """Consume a finished/cancelled negotiation session."""
+    try:
+        sessions = getattr(app, "pending_sessions", None)
+        if sessions:
+            sessions.pop(negotiation_session_id(player), None)
+        try:
+            app.refresh_screen_navbar()
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _card_shell(manager, title, message, kind="question", width=470,
@@ -1120,13 +1245,18 @@ def _card_shell(manager, title, message, kind="question", width=470,
 
 
 def _card_buttons(host, buttons, on_pick):
-    """Button row. buttons = [(label, value, style)]."""
+    """Button row. buttons = [(label, value, style)].
+
+    One row when the buttons fit; if the row would overflow the card it
+    reflows into a vertical stack (growing the card) so no button clips.
+    """
     brow = tk.Frame(host, bg=_BG)
     brow.pack(fill="x", padx=18, pady=(6, 14))
     try:
         accent = _app_accent(host._popup_manager.root)
     except Exception:
         accent = "#14b8a6"
+    _made = []
     for label, value, style in buttons:
         bg = accent if style == "primary" else "#2a2e37"
         fg = "#ffffff" if style == "primary" else _TEXT
@@ -1137,6 +1267,25 @@ def _card_buttons(host, buttons, on_pick):
                       relief="flat", bd=0, cursor="hand2",
                       command=lambda v=value: on_pick(v))
         b.pack(side="right", padx=(8, 0))
+        _made.append(b)
+    try:
+        brow.update_idletasks()
+        if _made and brow.winfo_reqwidth() > brow.winfo_width():
+            for b in _made:
+                b.pack_forget()
+            for b in _made:
+                b.pack(side="top", fill="x", pady=(5, 0))
+            brow.update_idletasks()
+            # Grow the card so the stacked rows fit.
+            mgr = getattr(host, "_popup_manager", None)
+            entry = mgr._entry_for(host) if mgr is not None else None
+            if entry is not None:
+                entry["height"] = min(
+                    560, int(entry.get("height", 200))
+                    + 44 * (len(_made) - 1))
+                mgr._place_entry(entry)
+    except Exception:
+        pass
 
 
 def _track_card(manager, token_id, record):
@@ -1153,6 +1302,53 @@ def _untrack_card(manager, token_id):
         pass
 
 
+def _live_specs(manager):
+    """Per-manager full-fidelity specs for parked question cards.
+
+    Keyed (session_id, dialog_id) -> rebuild spec holding the ORIGINAL
+    buttons (labels, values, styles) and the live on_answer callback.
+    Lambdas can't survive save/load, so this is the same-process
+    re-present path; the serialized session entry + DIALOG_RESOLVERS is
+    the post-load fallback. Specs are popped on answer / concrete-dismiss /
+    re-present, and kept while parked.
+    """
+    specs = getattr(manager, "_parked_specs", None)
+    if specs is None:
+        specs = {}
+        manager._parked_specs = specs
+    return specs
+
+
+def _json_safe(value):
+    """Best-effort JSON-safe copy for the session entry (save/load path)."""
+    try:
+        import json
+        return json.loads(json.dumps(value))
+    except Exception:
+        return None
+
+
+def _mark_parked(app, session_id, dialog_id, parked):
+    """Record the parked flag on a session dialog entry (best effort)."""
+    try:
+        sess = get_pending_session(app, session_id)
+        if sess is not None and dialog_id in sess.get("dialogs", {}):
+            sess["dialogs"][dialog_id]["parked"] = bool(parked)
+    except Exception:
+        pass
+
+
+def _record_answer(app, session_id, dialog_id, answer):
+    """Write an answer through to the session dialog entry (best effort)."""
+    try:
+        sess = get_pending_session(app, session_id)
+        if sess is not None and dialog_id in sess.get("dialogs", {}):
+            sess["dialogs"][dialog_id]["answer"] = answer
+            sess["dialogs"][dialog_id]["parked"] = False
+    except Exception:
+        pass
+
+
 def ask_card(parent, title, message, buttons, on_answer=None, *,
              default_on_dismiss="defer", session_id=None, dialog_id=None,
              resolver=None, resolver_args=None, kind="question",
@@ -1165,12 +1361,27 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
     Dismiss (Escape / X / click-out):
       - "defer" (default): nothing is decided. The card closes; the parent
         flow stays "awaiting answer". The open question is written to the
-        session (when session_id/dialog_id are given) so it can re-present.
+        session (when session_id/dialog_id are given) with
+        answer=None, parked=True, so represent_dialog() can re-show it.
       - any other value: answers with that safe default.
+      - "nodefer" is reserved and rejected (ValueError).
+
+    Session entry schema (app.pending_sessions[session_id]["dialogs"]):
+        {"dialog_id", "title", "message", "options": [labels],
+         "option_values": [JSON-safe values], "option_styles": [styles],
+         "answer": None, "parked": False,
+         "resolver": <DIALOG_RESOLVERS name>, "resolver_args": {...},
+         "default_on_dismiss": "defer" | None}
 
     resolver/resolver_args: name + JSON-friendly args for save/load-safe
-    re-presentation (see DIALOG_RESOLVERS).
+    re-presentation (see DIALOG_RESOLVERS). Post-load, a re-presented card
+    answers through DIALOG_RESOLVERS[resolver](session_id, dialog_id, value,
+    **resolver_args); same-process re-presents reuse the live on_answer.
     """
+    if default_on_dismiss == "nodefer":
+        raise ValueError("default_on_dismiss='nodefer' is reserved and unused; "
+                         "use 'defer' or a concrete safe value")
+    buttons = list(buttons)
     mgr = _resolve_manager(parent)
     token_id = "q_" + _uuid.uuid4().hex[:8]
     token = {"token_id": token_id, "dialog_id": dialog_id or token_id,
@@ -1191,12 +1402,24 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
     if session_id:
         _write_question_session(app, session_id, did, {
             "dialog_id": did, "title": title, "message": message,
-            "options": labels, "answer": None,
+            "options": labels,
+            "option_values": [_json_safe(v) for _l, v, _s in buttons],
+            "option_styles": [s for _l, _v, s in buttons],
+            "answer": None, "parked": False,
             "resolver": resolver, "resolver_args": resolver_args or {},
             "default_on_dismiss": (default_on_dismiss
                                    if isinstance(default_on_dismiss, str)
                                    else None),
         })
+        # Full-fidelity same-process re-present spec (values + live
+        # callback; lambdas can't go through save/load).
+        _live_specs(mgr)[(session_id, did)] = {
+            "kind": "question", "title": title, "message": message,
+            "buttons": buttons, "on_answer": on_answer,
+            "default_on_dismiss": default_on_dismiss,
+            "resolver": resolver, "resolver_args": resolver_args or {},
+            "width": width, "height": height,
+        }
 
     state = {"done": False}
 
@@ -1208,6 +1431,12 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
                     sess["dialogs"][did]["answer"] = idx
             except Exception:
                 pass
+
+    def _drop_spec():
+        try:
+            _live_specs(mgr).pop((session_id, did), None)
+        except Exception:
+            pass
 
     host = _card_shell(mgr, title, message, kind=kind, width=width,
                        height=height)
@@ -1223,11 +1452,13 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
             return
         state["done"] = True
         _untrack_card(mgr, token_id)
+        _drop_spec()
         try:
             idx = [v for _l, v, _s in buttons].index(value)
         except ValueError:
             idx = None
         _finish_session_answer(idx)
+        _mark_parked(app, session_id, did, False)
         _close_widget()
         if callable(on_answer):
             try:
@@ -1243,7 +1474,11 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
         _untrack_card(mgr, token_id)
         _close_widget()
         if default_on_dismiss == "defer":
-            return  # parked; session holds the open question
+            # Parked, never an accidental answer.
+            _mark_parked(app, session_id, did, True)
+            return
+        _drop_spec()
+        _record_answer(app, session_id, did, default_on_dismiss)
         if callable(on_answer):
             try:
                 on_answer(default_on_dismiss)
@@ -1252,11 +1487,13 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
 
     def _park():
         # Navigation: close the widget only. Never answers, never applies
-        # the dismiss default. The session already holds the open question.
+        # the dismiss default. The session already holds the open question;
+        # the live spec is kept so represent_dialog() can re-show it.
         if state["done"]:
             return
         state["done"] = True
         _untrack_card(mgr, token_id)
+        _mark_parked(app, session_id, did, True)
         _close_widget()
 
     _card_buttons(host, buttons, _answer)
@@ -1270,7 +1507,8 @@ def ask_card(parent, title, message, buttons, on_answer=None, *,
     except Exception:
         pass
     _track_card(mgr, token_id, {"kind": "question", "park": _park,
-                               "dialog_id": did, "session_id": session_id})
+                               "dialog_id": did, "session_id": session_id,
+                               "token": token})
     token["close"] = _park
     return token
 
@@ -1308,8 +1546,61 @@ def notify_card(parent, title, message, kind="info", width=470, height=180):
         host.bind("<Escape>", lambda e: _close(), add="+")
     except Exception:
         pass
-    _track_card(mgr, token_id, {"kind": "notify", "park": _close})
+    _track_card(mgr, token_id, {"kind": "notify", "park": _close,
+                               "token": {"token_id": token_id,
+                                         "close": _close}})
     return {"token_id": token_id, "close": _close}
+
+
+def confirm_card(parent, title, message, on_yes, *, on_no=None,
+                 yes_label="Yes", no_label="No", session_id=None,
+                 dialog_id=None, resolver=None, resolver_args=None,
+                 kind="question"):
+    """Fire-and-forget confirm: a non-modal Yes/No question card.
+
+    T2-Phase 3 workhorse for the ~20 confirm-then-continue sites (deletes,
+    releases, resets, save-overwrites). Yes runs ``on_yes``; No runs
+    ``on_no`` when given. Dismiss (Escape / X / click-out) is the safe
+    default -- No -- never an accidental Yes.
+
+    No session is required: a confirm dismissed by save/load or navigation
+    simply never fires, which is the honest outcome (nothing was decided;
+    the user re-initiates). Named ``resolver`` + ``resolver_args`` may be
+    given for sites that DO hold state, following the ask_card grammar.
+    Headless (no card manager): falls back to the legacy blocking facade
+    so CLI/test flows keep their old answer semantics.
+    """
+    if not cards_available(parent):
+        try:
+            ans = messagebox.askyesno(title, message)
+        except Exception:
+            ans = False
+        try:
+            if ans:
+                on_yes()
+            elif on_no is not None:
+                on_no()
+        except Exception:
+            pass
+        return None
+
+    def _on_answer(value):
+        try:
+            if value:
+                on_yes()
+            elif on_no is not None:
+                on_no()
+        except Exception:
+            pass
+
+    return ask_card(parent, title, message,
+                    [(yes_label, True, "primary"),
+                     (no_label, False, "secondary")],
+                    on_answer=_on_answer,
+                    default_on_dismiss=False,
+                    session_id=session_id, dialog_id=dialog_id,
+                    resolver=resolver, resolver_args=resolver_args,
+                    kind=kind)
 
 
 def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
@@ -1318,16 +1609,35 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
                 width=440, height=200):
     """Non-modal text/integer prompt. Typed input writes through to the
     session on every keystroke (when session_id is given), so navigating
-    away never loses half-typed text."""
+    away never loses half-typed text.
+
+    Mirrors simpledialog.askstring/askinteger semantics: as_int=True parses
+    the entry as an integer on submit (invalid input shakes off with a red
+    highlight and does not submit). Dismiss (Escape / X / click-out) defers
+    by default -- the draft stays in the session, parked=True, and
+    represent_dialog() can re-show it with the typed text intact.
+    "nodefer" is reserved and rejected (ValueError).
+
+    Session entry schema: {"dialog_id", "title", "message": prompt,
+    "options": [], "answer": None, "draft": <current text>, "parked": bool,
+    "as_int": bool, "resolver": <name>, "resolver_args": {...},
+    "default_on_dismiss": "defer" | None}.
+    """
+    if default_on_dismiss == "nodefer":
+        raise ValueError("default_on_dismiss='nodefer' is reserved and unused; "
+                         "use 'defer' or a concrete safe value")
     mgr = _resolve_manager(parent)
     token_id = "p_" + _uuid.uuid4().hex[:8]
+    token = {"token_id": token_id, "dialog_id": dialog_id or token_id,
+             "answered": False}
     if mgr is None:
         if default_on_dismiss != "defer" and callable(on_answer):
             try:
                 on_answer(default_on_dismiss)
             except Exception:
                 pass
-        return {"token_id": token_id, "close": lambda: None}
+        token["close"] = lambda: None
+        return token
 
     did = dialog_id or token_id
     app = _coerce_app(parent, mgr)
@@ -1335,11 +1645,20 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
         _write_question_session(app, session_id, did, {
             "dialog_id": did, "title": title, "message": prompt,
             "options": [], "answer": None, "draft": initial,
+            "parked": False, "as_int": bool(as_int),
             "resolver": resolver, "resolver_args": resolver_args or {},
             "default_on_dismiss": (default_on_dismiss
                                    if isinstance(default_on_dismiss, str)
                                    else None),
         })
+        _live_specs(mgr)[(session_id, did)] = {
+            "kind": "prompt", "title": title, "prompt": prompt,
+            "initial": initial, "as_int": bool(as_int),
+            "on_answer": on_answer,
+            "default_on_dismiss": default_on_dismiss,
+            "resolver": resolver, "resolver_args": resolver_args or {},
+            "width": width, "height": height,
+        }
 
     host, _close = mgr.show_card(title, width=width, height=height,
                                  modal=False, dismiss_on_backdrop=True)
@@ -1379,6 +1698,12 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
         except Exception:
             pass
 
+    def _drop_spec():
+        try:
+            _live_specs(mgr).pop((session_id, did), None)
+        except Exception:
+            pass
+
     def _submit(event=None):
         if state["done"]:
             return
@@ -1394,13 +1719,8 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
                 return
         state["done"] = True
         _untrack_card(mgr, token_id)
-        if session_id:
-            try:
-                sess = get_pending_session(app, session_id)
-                if sess is not None and did in sess["dialogs"]:
-                    sess["dialogs"][did]["answer"] = val
-            except Exception:
-                pass
+        _drop_spec()
+        _record_answer(app, session_id, did, val)
         _close_widget()
         if callable(on_answer):
             try:
@@ -1415,7 +1735,11 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
         _untrack_card(mgr, token_id)
         _close_widget()
         if default_on_dismiss == "defer":
-            return  # draft stays in the session
+            # Draft stays in the session; parked, never an accidental answer.
+            _mark_parked(app, session_id, did, True)
+            return
+        _drop_spec()
+        _record_answer(app, session_id, did, default_on_dismiss)
         if callable(on_answer):
             try:
                 on_answer(default_on_dismiss)
@@ -1427,6 +1751,7 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
             return
         state["done"] = True
         _untrack_card(mgr, token_id)
+        _mark_parked(app, session_id, did, True)
         _close_widget()
 
     ent.bind("<Return>", _submit)
@@ -1456,8 +1781,10 @@ def prompt_card(parent, title, prompt, on_answer=None, *, initial="",
     except Exception:
         pass
     _track_card(mgr, token_id, {"kind": "prompt", "park": _park,
-                               "dialog_id": did, "session_id": session_id})
-    return {"token_id": token_id, "close": _park}
+                               "dialog_id": did, "session_id": session_id,
+                               "token": token})
+    token["close"] = _park
+    return token
 
 
 def park_question_cards(manager):
@@ -1486,3 +1813,372 @@ def park_question_cards_for(parent):
         return park_question_cards(_resolve_manager(parent))
     except Exception:
         return 0
+
+
+def _resolver_on_answer(app, session_id, dialog_id, resolver, resolver_args):
+    """Post-load on_answer: write the answer through, then hand the
+    continuation to the named DIALOG_RESOLVERS entry.
+
+    Resolver convention (defined per migrated flow in T2-Phase 2):
+        fn(session_id, dialog_id, value, **resolver_args)
+    """
+    def _cb(value):
+        _record_answer(app, session_id, dialog_id, value)
+        try:
+            fn = get_dialog_resolver(resolver)
+        except Exception:
+            fn = None
+        if callable(fn):
+            try:
+                fn(session_id, dialog_id, value, **(resolver_args or {}))
+            except Exception:
+                pass
+    return _cb
+
+
+def represent_dialog(session_id, dialog_id, parent=None):
+    """Re-show a parked question/prompt card (park-on-navigate recovery).
+
+    Called by a later phase when the user returns to a flow with an
+    unanswered question: the card re-presents non-modally, in place.
+
+    Two paths:
+      - Same process (the common case): the live spec kept by ask_card /
+        prompt_card rebuilds the card with the ORIGINAL buttons, values,
+        styles and on_answer callback. A parked prompt restores the
+        last-typed draft from the session.
+      - Post-load (live callback gone): the card rebuilds from the
+        serialized session entry (JSON-safe values; styles preserved) and
+        the answer routes through the named DIALOG_RESOLVERS entry.
+
+    If a card for this dialog is already open, its token is returned
+    instead of opening a duplicate. Returns the new (or existing) token,
+    or None when there is no manager, no session entry, or the question
+    was already answered.
+    """
+    try:
+        mgr = (_resolve_manager(parent) if parent is not None
+               else _default_manager)
+        if mgr is None:
+            return None
+        anchor = parent if parent is not None else getattr(mgr, "root", None)
+        app = _coerce_app(anchor, mgr)
+        sess = get_pending_session(app, session_id)
+        entry = (sess.get("dialogs", {}).get(dialog_id)
+                 if isinstance(sess, dict) else None)
+        if not isinstance(entry, dict):
+            return None
+        if entry.get("answer") is not None:
+            return None  # already answered; nothing to re-present
+
+        # Already open? Hand back the live token, never a duplicate card.
+        for record in _question_cards(mgr).values():
+            try:
+                if (record.get("dialog_id") == dialog_id
+                        and record.get("session_id") == session_id
+                        and record.get("token") is not None):
+                    return record["token"]
+            except Exception:
+                continue
+
+        owner = parent if parent is not None else (app if app is not None
+                                                  else mgr.root)
+        spec = _live_specs(mgr).pop((session_id, dialog_id), None)
+        if spec is not None:
+            if spec.get("kind") == "prompt":
+                draft = entry.get("draft", spec.get("initial", ""))
+                if draft is None:
+                    draft = ""
+                return prompt_card(
+                    owner, spec.get("title", ""), spec.get("prompt", ""),
+                    on_answer=spec.get("on_answer"),
+                    initial=str(draft), as_int=spec.get("as_int", False),
+                    default_on_dismiss=spec.get("default_on_dismiss",
+                                                "defer"),
+                    session_id=session_id, dialog_id=dialog_id,
+                    resolver=spec.get("resolver"),
+                    resolver_args=spec.get("resolver_args"),
+                    width=spec.get("width", 440),
+                    height=spec.get("height", 200))
+            return ask_card(
+                owner, spec.get("title", ""), spec.get("message", ""),
+                spec.get("buttons", []),
+                on_answer=spec.get("on_answer"),
+                default_on_dismiss=spec.get("default_on_dismiss", "defer"),
+                session_id=session_id, dialog_id=dialog_id,
+                resolver=spec.get("resolver"),
+                resolver_args=spec.get("resolver_args"),
+                width=spec.get("width", 470),
+                height=spec.get("height", 210))
+
+        # Post-load: rebuild from the serialized entry. Values that survived
+        # JSON round-trip are reused; anything else falls back to the label.
+        # The live callback is gone, so the answer goes to the resolver.
+        resolver = entry.get("resolver")
+        rargs = entry.get("resolver_args") or {}
+        on_answer = _resolver_on_answer(app, session_id, dialog_id,
+                                        resolver, rargs)
+        dismiss_default = entry.get("default_on_dismiss", "defer")
+        if "draft" in entry or "as_int" in entry:
+            draft = entry.get("draft")
+            return prompt_card(
+                owner, entry.get("title", ""), entry.get("message", ""),
+                on_answer=on_answer,
+                initial="" if draft is None else str(draft),
+                as_int=bool(entry.get("as_int", False)),
+                default_on_dismiss=(dismiss_default
+                                    if isinstance(dismiss_default, str)
+                                    else "defer"),
+                session_id=session_id, dialog_id=dialog_id,
+                resolver=resolver, resolver_args=rargs)
+        labels = entry.get("options") or []
+        values = entry.get("option_values") or []
+        styles = entry.get("option_styles") or []
+        buttons = []
+        for i, label in enumerate(labels):
+            val = values[i] if i < len(values) and values[i] is not None \
+                else label
+            style = styles[i] if i < len(styles) else "secondary"
+            buttons.append((label, val, style))
+        return ask_card(
+            owner, entry.get("title", ""), entry.get("message", ""),
+            buttons, on_answer=on_answer,
+            default_on_dismiss=(dismiss_default
+                                if isinstance(dismiss_default, str)
+                                else "defer"),
+            session_id=session_id, dialog_id=dialog_id,
+            resolver=resolver, resolver_args=rargs)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Pending-items registry (Gating T2-Phase 2).
+#
+# Unifies the ad-hoc day-advance gates. Each entry:
+#   {id, kind, title, detail, screen_id, focus, resolver, resolver_args}
+# Kinds:
+#   BLOCKS_ADVANCE -- the day cannot advance (fantasy draft, cap breach,
+#                     captaincy, coach meeting). ZERO Tier-2 dialog entries
+#                     may use this kind: dialogs never block the day, their
+#                     parent flows might.
+#   PAUSES_DAY     -- the day pauses and shifts to the item's screen (the
+#                     game-day bundle pattern; the draft-night phone call).
+#   RESUMABLE      -- listed, never blocking (half-built trade awaiting a
+#                     waiver answer, parked deposition). Surfaced via resume
+#                     chips; always one click away.
+#
+# get_continue_state() (main.py) is the registry's read path: it merges
+# BLOCKS_ADVANCE + PAUSES_DAY entries with the legacy hardcoded blockers.
+# Consumers (simulate_day, MP ready votes, refresh_next_day_button) are
+# unchanged.
+#
+# Registry entries for parked question cards are runtime-only. The durable
+# record is the session dialog entry (pending_sessions, JSON-safe); each
+# migrated site stashes its registry spec at
+# sess["dialogs"][did]["registry"] so rebuild_registry_from_sessions()
+# can re-register after a save/load. Session kinds that cannot resume
+# post-load (trade_propose, draft_call -- popup/view state doesn't survive)
+# are dropped by the save whitelist; scrub_abandoned_waiver_stamps() clears
+# their single-use stamps first so a dead proposal spends nothing.
+# ---------------------------------------------------------------------------
+
+#: Registry kinds. BLOCKS_ADVANCE takes no Tier-2 dialog entries (standing rule).
+BLOCKS_ADVANCE = "BLOCKS_ADVANCE"
+PAUSES_DAY = "PAUSES_DAY"
+RESUMABLE = "RESUMABLE"
+
+_REGISTRY_KINDS = (BLOCKS_ADVANCE, PAUSES_DAY, RESUMABLE)
+
+
+def cards_available(parent):
+    """True when a question card can actually render (not headless).
+
+    Migrated call sites use this to take the legacy blocking path in
+    headless/test environments, where ask_card would have no manager and
+    a defer-dismiss would never call back.
+    """
+    try:
+        return _resolve_manager(parent) is not None
+    except Exception:
+        return False
+
+
+def _pending_items_store(app):
+    try:
+        store = getattr(app, "pending_items", None)
+        if not isinstance(store, dict):
+            store = {}
+            app.pending_items = store
+        return store
+    except Exception:
+        return {}
+
+
+def register_pending_item(app, item_id, *, kind, title, detail,
+                         screen_id, focus=None, resolver=None,
+                         resolver_args=None):
+    """Register a pending item. Returns the entry dict (or None)."""
+    if kind not in _REGISTRY_KINDS:
+        raise ValueError(f"unknown pending-item kind: {kind!r}")
+    if kind == BLOCKS_ADVANCE and (resolver or "").startswith("dialog:"):
+        raise ValueError("Tier-2 dialogs may not BLOCKS_ADVANCE")
+    store = _pending_items_store(app)
+    try:
+        entry = {
+            "id": item_id, "kind": kind, "title": str(title),
+            "detail": str(detail), "screen_id": screen_id,
+            "focus": focus, "resolver": resolver,
+            "resolver_args": dict(resolver_args or {}),
+        }
+        store[item_id] = entry
+        return entry
+    except Exception:
+        return None
+
+
+def unregister_pending_item(app, item_id):
+    """Drop a pending item. Never raises."""
+    try:
+        store = _pending_items_store(app)
+        store.pop(item_id, None)
+    except Exception:
+        pass
+
+
+def get_pending_items(app, kinds=None):
+    """All pending items, optionally filtered to kinds (str or iterable)."""
+    try:
+        store = _pending_items_store(app)
+        items = list(store.values())
+    except Exception:
+        return []
+    if kinds is None:
+        return items
+    if isinstance(kinds, str):
+        kinds = (kinds,)
+    kinds = set(kinds)
+    return [it for it in items
+            if isinstance(it, dict) and it.get("kind") in kinds]
+
+
+def rebuild_registry_from_sessions(app):
+    """Re-register parked-question items after a save/load.
+
+    Scans pending_sessions for unanswered dialogs carrying a "registry"
+    spec (stashed by migrated sites) and re-registers them. Idempotent.
+    """
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for _sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            for _did, entry in list((sess.get("dialogs") or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("answer") is not None:
+                    continue
+                spec = entry.get("registry")
+                if not isinstance(spec, dict):
+                    continue
+                try:
+                    register_pending_item(
+                        app, spec.get("item_id") or f"{_sid}:{_did}",
+                        kind=spec.get("kind") or RESUMABLE,
+                        title=spec.get("title") or "Pending question",
+                        detail=spec.get("detail") or "",
+                        screen_id=spec.get("screen_id"),
+                        focus=spec.get("focus"),
+                        resolver=spec.get("resolver"),
+                        resolver_args=spec.get("resolver_args"))
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+
+def _iter_stamped_player_ids(app):
+    """Player ids with single-use waiver stamps held by droppable sessions."""
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for _sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            if sess.get("kind") not in ("trade_propose", "draft_call"):
+                continue
+            for pid in (sess.get("stamped") or []):
+                yield str(pid)
+            for asset in (sess.get("waiver_assets") or []):
+                # draft_call stores asset ids for engine-stamped will_adds
+                yield str(asset if not isinstance(asset, dict)
+                          else asset.get("id", ""))
+    except Exception:
+        return
+
+
+def scrub_abandoned_waiver_stamps(app):
+    """Clear single-use ntc_waiver_for stamps held by sessions that will not
+    survive save/load (trade_propose, draft_call).
+
+    A dead proposal spends nothing: if the offer was never sent, its waivers
+    must not linger into the next session and suppress future asks.
+    Returns the number of stamps cleared.
+    """
+    cleared = 0
+    try:
+        ids = {pid for pid in _iter_stamped_player_ids(app) if pid}
+        if not ids:
+            return 0
+        league = getattr(app, "league", None)
+        teams = list(getattr(league, "teams", None) or [])
+        ut = getattr(app, "user_team", None)
+        if ut is not None and ut not in teams:
+            teams.append(ut)
+        for team in teams:
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if str(getattr(p, "id", "")) not in ids:
+                        continue
+                    contract = getattr(p, "contract", None)
+                    if contract is not None and getattr(
+                            contract, "ntc_waiver_for", ""):
+                        contract.ntc_waiver_for = ""
+                        cleared += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return cleared
+
+
+def represent_screen_questions(app, screen_id, parent=None):
+    """Re-present unanswered question cards parked for a screen.
+
+    Called when the user returns to a screen: any unanswered dialog whose
+    registry spec names this screen re-shows non-modally ("the question is
+    waiting where you left it"). Returns the number of cards re-presented.
+    """
+    count = 0
+    try:
+        sessions = getattr(app, "pending_sessions", None) or {}
+        for sid, sess in list(sessions.items()):
+            if not isinstance(sess, dict):
+                continue
+            for did, entry in list((sess.get("dialogs") or {}).items()):
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("answer") is not None:
+                    continue
+                spec = entry.get("registry") or {}
+                if not isinstance(spec, dict):
+                    continue
+                if spec.get("screen_id") != screen_id:
+                    continue
+                try:
+                    if represent_dialog(sid, did, parent=parent) is not None:
+                        count += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return count

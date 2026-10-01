@@ -634,23 +634,6 @@ class ManagerHubView(ctk.CTkFrame):
 
 # ---------------------------------------------------------------------------
 
-class ManagerHubWindow(InGamePopup):
-    """Popup wrapper around ManagerHubView (backward compatibility)."""
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent)
-        self.title("Manager Hub")
-        self._view = ManagerHubView(self, app=parent, *args, **kwargs)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
 # Dialogs (embedded focus-card screens + thin popup wrappers)
 # ---------------------------------------------------------------------------
 class TeamTalkView(ctk.CTkFrame):
@@ -740,24 +723,6 @@ class TeamTalkView(ctk.CTkFrame):
             self.destroy()
 
 
-class TeamTalkDialog(InGamePopup):
-    """Popup wrapper around TeamTalkView (backward compatibility)."""
-    def __init__(self, parent, team, when: str, context: dict, on_done=None):
-        super().__init__(parent)
-        self._view = TeamTalkView(self, team, when, context, app=parent,
-                                 on_done=on_done)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class PressConferenceView(ctk.CTkFrame):
     """Press conference as an embedded full-screen focus card.
 
@@ -835,25 +800,6 @@ class PressConferenceView(ctk.CTkFrame):
             self.destroy()
 
 
-class PressConferenceDialog(InGamePopup):
-    """Popup wrapper around PressConferenceView (backward compatibility)."""
-    def __init__(self, parent, questions: List[dict],
-                 title: str = "Press Conference", on_done=None):
-        super().__init__(parent)
-        self._view = PressConferenceView(self, questions, title, app=parent,
-                                         on_done=on_done)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class OppositionReportView(ctk.CTkFrame):
     """Read-only pre-match scout report as an embedded focus card."""
 
@@ -907,20 +853,3 @@ class OppositionReportView(ctk.CTkFrame):
             fn()
         else:
             self.destroy()
-
-
-class OppositionReportDialog(InGamePopup):
-    """Popup wrapper around OppositionReportView (backward compatibility)."""
-    def __init__(self, parent, report: dict):
-        super().__init__(parent)
-        self._view = OppositionReportView(self, report, app=parent)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

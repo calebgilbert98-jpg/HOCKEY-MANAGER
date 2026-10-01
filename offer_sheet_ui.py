@@ -9,7 +9,7 @@ compensation picks. The July pass even notes "the user signs offer sheets
 via the UI, not here" -- but that UI was never built, so the user had no
 way to initiate one.
 
-OfferSheetWindow (InGamePopup, CTk): browse unsigned RFAs on rival NHL
+OfferSheetWindow (screen, CTk): browse unsigned RFAs on rival NHL
 clubs, set AAV + term, see live compensation (the real
 offer_sheet_compensation bands) with own-pick availability, a cap check,
 and a qualitative read of the player's interest -- then present the
@@ -23,7 +23,7 @@ from tkinter import ttk
 
 import customtkinter as ctk
 
-from popup_system import InGamePopup, messagebox
+from popup_system import messagebox
 
 
 def _money(n):
@@ -61,22 +61,47 @@ def compensation_pick_status(user_team, year, picks):
     return lines, missing
 
 
-class OfferSheetWindow(InGamePopup):
-    """Sign a rival club's unsigned RFA to an offer sheet."""
+class OfferSheetWindow(ctk.CTkFrame):
+    """Sign a rival club's unsigned RFA to an offer sheet.
 
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.app = parent
-        self.league = getattr(parent, "league", None)
+    Gating Phase 2: a Tier-1 screen (``show_screen("offer_sheet", ...)``).
+    The in-progress sheet -- target player + AAV/term -- lives in
+    ``app.pending_sessions["offer_sheet"]`` (Tier B, write-through), so the
+    screen rebuilds from the session on open and revalidates the target
+    (still an unsigned RFA on a rival club?) with an honest "no longer
+    available" note if the world moved. Cap/picks/window legality is
+    revalidated transactionally at the moment of presenting.
+    """
+
+    _SHEET_SESSION_ID = "offer_sheet"
+
+    # -- screen shims: Toplevel API the old popup code still calls -------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def __init__(self, parent, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        _app = app if app is not None else parent
+        self.app = _app
+        self._close_screen = None  # set by show_screen()
+        self.league = getattr(_app, "league", None)
         self.user_team = getattr(self.league, "user_team", None)
         if self.user_team is None:
-            self.user_team = getattr(parent, "user_team", None)
-
-        self.title("Offer Sheets — Poach a Rival RFA")
-        try:
-            self.geometry("1180x760")
-        except Exception:
-            pass
+            self.user_team = getattr(_app, "user_team", None)
 
         self._targets = []        # (player, original_team, market)
         self._selected = None     # (player, original_team, market)
@@ -84,6 +109,7 @@ class OfferSheetWindow(InGamePopup):
 
         self._build()
         self._refresh_targets()
+        self._restore_sheet_session()
 
     # ------------------------------------------------------------------
     # Layout
@@ -132,7 +158,7 @@ class OfferSheetWindow(InGamePopup):
              font=("Segoe UI", 11), text_color=ct["TEXT_DIM"]).pack(
             side="left", padx=8, pady=12)
         secondary_button(header, text="Close",
-                         command=self.destroy).pack(side="right", padx=16)
+                         command=self.close_view).pack(side="right", padx=16)
 
         main = ctk.CTkFrame(root, fg_color="transparent")
         main.pack(fill="both", expand=True, padx=14, pady=(0, 14))
@@ -230,6 +256,114 @@ class OfferSheetWindow(InGamePopup):
              font=("Segoe UI", 11, "bold"), text_color=ct["TEXT"],
              wraplength=340, justify="left").pack(
             anchor="w", padx=12, pady=(0, 10))
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B sheet session ("offer_sheet", kind
+    # "offer_sheet"). Target + terms write through on every interaction;
+    # on open the target is revalidated against live league state (§6).
+    # ------------------------------------------------------------------
+    def _sheet_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self.app, self._SHEET_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "offer_sheet")
+        return sess
+
+    def _snapshot_sheet_session(self):
+        try:
+            sess = self._sheet_session()
+            if not sess:
+                return
+            if self._selected is not None:
+                p, team, _market = self._selected
+                sess["player_id"] = str(getattr(p, "id", ""))
+                sess["player_name"] = str(getattr(
+                    p, "full_name", getattr(p, "name", "?")))
+                sess["team_name"] = str(getattr(team, "team_name", ""))
+                aav, years = self._current_terms()
+                sess["aav"] = aav
+                sess["years"] = years
+            else:
+                sess.pop("player_id", None)
+        except Exception:
+            pass
+
+    def _clear_sheet_session(self):
+        try:
+            sessions = getattr(self.app, "pending_sessions", None)
+            if isinstance(sessions, dict):
+                sessions.pop(self._SHEET_SESSION_ID, None)
+        except Exception:
+            pass
+
+    def _revalidate_target(self, player_id):
+        """Resolve a snapshotted target ID against live league state.
+
+        Returns (player, team, market) or None -- None means the world
+        moved (signed, traded, no longer RFA) and the parked sheet is
+        honestly dead.
+        """
+        try:
+            import rfa_system as _rfa
+        except Exception:
+            return None
+        sid = str(player_id)
+        for (p, team, market) in (self._targets or []):
+            try:
+                if str(getattr(p, "id", "")) != sid:
+                    continue
+                if not _rfa.is_rfa(p):
+                    return None
+                if bool(getattr(p, "arbitration_filed", False)):
+                    return None
+                if bool(getattr(p, "offer_sheet_pending", False)):
+                    return None
+                return (p, team, market)
+            except Exception:
+                continue
+        return None
+
+    def _restore_sheet_session(self):
+        """Rebuild the parked sheet from the Tier-B session."""
+        try:
+            sess = self._sheet_session()
+            pid = (sess or {}).get("player_id")
+            if not pid:
+                return
+            hit = self._revalidate_target(pid)
+            if hit is None:
+                # Honest revalidation (§6): the target moved on.
+                name = (sess or {}).get("player_name", "that player")
+                self._result_var.set(
+                    f"⚠️ {name} is no longer available -- pick another "
+                    f"target.")
+                self._clear_sheet_session()
+                return
+            p, team, _market = hit
+            self._selected = hit
+            try:
+                aav = float((sess or {}).get("aav") or 0) / 1_000_000
+                years = str(int((sess or {}).get("years") or 4))
+                if 1.0 <= aav <= 12.0:
+                    self._aav_var.set(aav)
+                if years in ("1", "2", "3", "4", "5"):
+                    self._years_var.set(years)
+            except Exception:
+                pass
+            pos = getattr(getattr(p, "primary_position", None), "name", "?")
+            try:
+                ovr = p.overall_rating()
+            except Exception:
+                ovr = "?"
+            self._detail_var.set(
+                f"{getattr(p, 'full_name', '?')} — {pos}, age "
+                f"{getattr(p, 'age', '?')}, {ovr} OVR\n"
+                f"Rights held by: {getattr(team, 'team_name', '?')}\n"
+                f"(restored your parked sheet)")
+            self._update_preview()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Data
@@ -332,6 +466,7 @@ class OfferSheetWindow(InGamePopup):
             pass
         self._result_var.set("")
         self._update_preview()
+        self._snapshot_sheet_session()  # Gating P2: write-through
 
     # ------------------------------------------------------------------
     # Live preview
@@ -415,6 +550,7 @@ class OfferSheetWindow(InGamePopup):
             self._interest_var.set(f"📣 {read}")
         except Exception:
             self._interest_var.set("")
+        self._snapshot_sheet_session()  # Gating P2: write-through
 
     # ------------------------------------------------------------------
     # Present the sheet
@@ -522,4 +658,5 @@ class OfferSheetWindow(InGamePopup):
         except Exception:
             pass
         self._selected = None
+        self._clear_sheet_session()  # Gating P2: the sheet is presented
         self._refresh_targets()

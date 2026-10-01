@@ -18,6 +18,32 @@ import threading
 from dataclasses import asdict
 
 
+# -- Gating T2-Phase 3: rename-file prompt resolver (module level so a
+# post-load answer always finds it) ------------------------------------
+def _rename_file_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['rename_file_answer']: apply the rename named in
+    resolver_args; empty/dismissed value or missing file is a no-op."""
+    try:
+        _fp = kwargs.get("filepath", "")
+        if not value or not str(value).strip() or not _fp:
+            return False
+        _nn = str(value).strip()
+        if not _nn.endswith('.hm'):
+            _nn += '.hm'
+        _np = os.path.join(os.path.dirname(_fp), _nn)
+        os.rename(_fp, _np)
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _sl_reg
+    _sl_reg("rename_file_answer", _rename_file_answer)
+except Exception:
+    pass
+
+
 def _safe_asdict(obj: Any) -> Dict[str, Any]:
     """asdict() for a dataclass, else its __dict__, else {}. Never raises."""
     try:
@@ -238,15 +264,31 @@ class GameSaveManager:
         Whitelisted to kind == "team_talk" and JSON-round-tripped: only
         plain data (str/float/bool/dict) survives, so a session can never
         smuggle a live widget or game object into the save.
+
+        Gating (staff negotiate chain): kind == "staff_negotiate_chain"
+        is also whitelisted -- it holds only staff IDs + result strings
+        (JSON-safe by construction), so a parked chain survives save/load
+        and resumes via its named resolver.
         """
         try:
             import json
             app = getattr(self, 'app', None)
+            # Gating T2-Phase 2: sessions that cannot resume post-load
+            # (trade_propose, draft_call) are dropped by the whitelist
+            # below -- scrub their single-use waiver stamps FIRST so a
+            # dead proposal spends nothing.
+            try:
+                from popup_system import scrub_abandoned_waiver_stamps
+                scrub_abandoned_waiver_stamps(app)
+            except Exception:
+                pass
+            _keep_kinds = ("team_talk", "staff_negotiate_chain")
             sessions = getattr(app, 'pending_sessions', None) or {}
             out = {}
             for sid, sess in sessions.items():
                 try:
-                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                    if (not isinstance(sess, dict)
+                            or sess.get('kind') not in _keep_kinds):
                         continue
                     probe = json.loads(json.dumps(sess))
                     out[sid] = probe
@@ -257,7 +299,14 @@ class GameSaveManager:
             return {}
 
     def _restore_team_talk_sessions(self, saved):
-        """Restore parked team-talk sessions onto the app (Tier-B)."""
+        """Restore parked team-talk sessions onto the app (Tier-B).
+
+        Also restores parked staff negotiate chains (kind ==
+        "staff_negotiate_chain"): no date-staleness applies (staff IDs
+        revalidate against the live roster on resume), then
+        rebuild_registry_from_sessions() re-registers their parked
+        resume question in the pending-items registry.
+        """
         app = getattr(self, 'app', None)
         if app is None or not isinstance(saved, dict):
             return
@@ -276,14 +325,25 @@ class GameSaveManager:
                 app.pending_sessions = sessions
             for sid, sess in saved.items():
                 try:
-                    if not isinstance(sess, dict) or sess.get('kind') != 'team_talk':
+                    if not isinstance(sess, dict):
                         continue
-                    tt = sess.get('team_talk') or {}
-                    if today and tt.get('date') and tt.get('date') != today:
-                        continue  # stale: its game is gone
+                    _kind = sess.get('kind')
+                    if _kind == 'team_talk':
+                        tt = sess.get('team_talk') or {}
+                        if today and tt.get('date') and tt.get('date') != today:
+                            continue  # stale: its game is gone
+                    elif _kind == 'staff_negotiate_chain':
+                        pass  # IDs revalidate on resume; no date staleness
+                    else:
+                        continue
                     sessions[sid] = sess
                 except Exception:
                     continue
+            try:
+                from popup_system import rebuild_registry_from_sessions
+                rebuild_registry_from_sessions(app)
+            except Exception:
+                pass
         except Exception:
             pass
     
@@ -2783,6 +2843,23 @@ class SaveLoadView(ctk.CTkFrame):
         else:
             self.destroy()
 
+    def refresh(self):
+        """Re-entrant refresh for screen-cache hits (gating Phase 1).
+
+        Mode is fixed per screen id ('save_game' <-> mode='save',
+        'load_game' <-> mode='load'), so the refresh only re-syncs the
+        save lists -- a parked view never shows stale saves. In-progress
+        input (typed save name, open confirm panels) is left alone.
+        """
+        try:
+            self._refresh_file_list()
+        except Exception:
+            pass
+        try:
+            self._refresh_quick_save_slots()
+        except Exception:
+            pass
+
     def _notify_done(self, result):
         """Fire the on_done callback (blocking-flow replacement)."""
         cb = getattr(self, 'on_done', None)
@@ -3719,23 +3796,42 @@ class SaveLoadView(ctk.CTkFrame):
         current_name = self.file_tree.set(item, 'filename')
         current_path = self.file_tree.set(item, 'filepath')
 
-        # Simple rename dialog
-        new_name = simpledialog.askstring("Rename File",
-                                           f"Enter new name for '{current_name}':",
-                                           initialvalue=current_name.replace('.hm', ''))
+        # Gating T2-Phase 3: non-modal prompt; dismiss = keep the name.
+        # The answer survives save/load via the resolver (filepath in
+        # resolver_args); the draft survives navigation in the session.
+        from popup_system import prompt_card, cards_available
 
-        if new_name and new_name.strip():
+        def _do_rename(new_name):
+            if not new_name or not str(new_name).strip():
+                return
+            new_name = str(new_name).strip()
             if not new_name.endswith('.hm'):
                 new_name += '.hm'
-
             new_path = os.path.join(os.path.dirname(current_path), new_name)
-
             try:
                 os.rename(current_path, new_path)
                 self._show_banner(f"File renamed to '{new_name}'", "ok")
                 self._refresh_file_list()
             except Exception as e:
                 self._show_banner(f"Failed to rename file:\n{str(e)}", "error")
+
+        if not cards_available(self):
+            # Headless: legacy blocking prompt, identical semantics.
+            new_name = simpledialog.askstring(
+                "Rename File",
+                f"Enter new name for '{current_name}':",
+                initialvalue=current_name.replace('.hm', ''))
+            _do_rename(new_name)
+            return
+
+        prompt_card(
+            self, "Rename File",
+            f"Enter new name for '{current_name}':",
+            on_answer=_do_rename,
+            initial=current_name.replace('.hm', ''),
+            session_id="rename_file", dialog_id="rename_file_card",
+            resolver="rename_file_answer",
+            resolver_args={"filepath": current_path})
 
     def _show_file_properties(self):
         """Show detailed properties of selected file"""

@@ -1361,42 +1361,50 @@ class PBPVisualSim(InGamePopup):
 
     def _on_tac_enforce(self):
         try:
-            from tkinter import messagebox as _mb
+            from popup_system import confirm_card as _cc
             import tactics as _tx
             import reputation_system as _rs
             my = self._my_team()
             if not self._tac_pending:
                 return
-            if not _mb.askyesno("Enforce Tactics",
-                                "Overrule your head coach and enforce these "
-                                "systems right now? He won't forget it."):
-                return
-            res = _rs.enforce_tactics(my, dict(self._tac_pending),
-                                      self._tac_ctx(), mid_game=True)
-            if res.get("applied"):
-                self._tac_pending.clear()
-            self._tac_response_text = res.get("text", "")
-            self._refresh_tactics_tab()
+
+            def _do_enforce(_my=my):
+                res = _rs.enforce_tactics(_my, dict(self._tac_pending),
+                                          self._tac_ctx(), mid_game=True)
+                if res.get("applied"):
+                    self._tac_pending.clear()
+                self._tac_response_text = res.get("text", "")
+                self._refresh_tactics_tab()
+
+            # Gating T2-Phase 3: non-modal confirm; dismiss = no overrule.
+            _cc(self, "Enforce Tactics",
+                "Overrule your head coach and enforce these "
+                "systems right now? He won't forget it.",
+                on_yes=_do_enforce)
         except Exception:
             pass
 
     def _on_tac_takeover(self):
         try:
-            from tkinter import messagebox as _mb
+            from popup_system import confirm_card as _cc
             import tactics as _tx
             import reputation_system as _rs
             my = self._my_team()
-            if not _mb.askyesno("Take Over Whiteboard",
-                                "Take permanent control of tactics from your "
-                                "head coach?"):
-                return
-            res = _rs.take_over_tactics(my, self._tac_ctx())
-            if res.get("changed"):
-                for cat, key in list(self._tac_pending.items()):
-                    _tx.set_team_system(my, cat, key, mid_game=True)
-                self._tac_pending.clear()
-            self._tac_response_text = res.get("text", "")
-            self._refresh_tactics_tab()
+
+            def _do_takeover(_my=my):
+                res = _rs.take_over_tactics(_my, self._tac_ctx())
+                if res.get("changed"):
+                    for cat, key in list(self._tac_pending.items()):
+                        _tx.set_team_system(_my, cat, key, mid_game=True)
+                    self._tac_pending.clear()
+                self._tac_response_text = res.get("text", "")
+                self._refresh_tactics_tab()
+
+            # Gating T2-Phase 3: non-modal confirm; dismiss = coach keeps it.
+            _cc(self, "Take Over Whiteboard",
+                "Take permanent control of tactics from your "
+                "head coach?",
+                on_yes=_do_takeover)
         except Exception:
             pass
 

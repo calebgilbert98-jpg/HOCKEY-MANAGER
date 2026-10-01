@@ -9,7 +9,7 @@ styled dark treeview with rating-tier and morale tags, CTk dialogs.
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from typing import List
 
 import customtkinter as ctk
@@ -22,6 +22,349 @@ from ctk_theme import (
     TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
     ROW_HOVER, ROW_SELECTED,
 )
+
+
+# ---------------------------------------------------------------------------
+# Gating: staff negotiate-chain persist/resume (Chris's design call).
+#
+# negotiate_selected_staff() used to run a closure-only chain: each step
+# opened a StaffContractView and the next step fired from on_done. Navigating
+# away mid-chain destroyed the view without on_done, silently killing the
+# rest of the chain -- no digest, remaining staff never negotiated.
+#
+# Now the chain is Tier-B persisted in app.pending_sessions
+# ("staff_negotiate_chain", JSON-safe: staff IDs + result strings only):
+#   - write-through on start and every advance (step_open tracks the
+#     currently-open negotiation step),
+#   - navigating away mid-step parks it: a RESUMABLE registry entry, an
+#     inbox notice (priority 3 -> "!" pill), and the standard navbar resume
+#     chip (via the session's dialogs["resume"] registry spec),
+#   - returning to the Staff screen re-presents the resume question card
+#     (dismiss = keep parked, never auto-answer),
+#   - the named DIALOG_RESOLVERS entry "staff_chain_resume" makes the
+#     continuation save/load-safe: IDs revalidate against the live roster,
+#     stale IDs are skipped with an honest digest note, never a crash.
+# ---------------------------------------------------------------------------
+_CHAIN_SESSION_ID = "staff_negotiate_chain"
+_CHAIN_RESUME_DIALOG = "resume"
+_CHAIN_RESOLVER = "staff_chain_resume"
+_CHAIN_ITEM_ID = _CHAIN_SESSION_ID + ":" + _CHAIN_RESUME_DIALOG
+_CHAIN_SCREEN_ID = "staff_management"
+_CHAIN_CONTRACT_SCREEN_ID = "staff_contract"
+
+# Process-wide app handle for the named resolver (resolvers don't receive
+# the app; the view sets this on every chain touchpoint). Falls back to
+# tkinter's default root when unset (fresh process, chip-click path).
+_CHAIN_APP = None
+
+
+def _set_chain_app(app):
+    global _CHAIN_APP
+    try:
+        if app is not None and hasattr(app, "pending_sessions"):
+            _CHAIN_APP = app
+    except Exception:
+        pass
+
+
+def _chain_app():
+    app = _CHAIN_APP
+    if app is not None:
+        return app
+    try:
+        import tkinter as _tk
+        _root = _tk._default_root
+        if _root is not None and hasattr(_root, "pending_sessions"):
+            return _root
+    except Exception:
+        pass
+    return None
+
+
+def _chain_session(app):
+    """Tier-B session dict for the negotiate chain (created on demand)."""
+    try:
+        from popup_system import get_pending_session
+        return get_pending_session(app, _CHAIN_SESSION_ID)
+    except Exception:
+        return None
+
+
+def _write_chain_session(app, remaining_ids, results, step_open,
+                         staff_names=None):
+    """Write-through: persist the chain's in-progress state.
+
+    remaining_ids: staff IDs still to negotiate (includes the open step).
+    step_open: staff ID of the currently-open negotiation screen, or None
+    between steps. An active step clears any stale resume dialog.
+    """
+    try:
+        sess = _chain_session(app)
+        if not isinstance(sess, dict):
+            return None
+        sess["kind"] = "staff_negotiate_chain"
+        sess["remaining_staff_ids"] = [str(i) for i in (remaining_ids or [])]
+        sess["completed_results"] = [str(r) for r in (results or [])]
+        sess["total"] = int(sess.get("total") or len(remaining_ids or []) or 0)
+        sess["step_open"] = (str(step_open) if step_open is not None
+                             else None)
+        if staff_names:
+            try:
+                names = dict(sess.get("staff_names") or {})
+                for _k, _v in dict(staff_names).items():
+                    names[str(_k)] = str(_v)
+                sess["staff_names"] = names
+            except Exception:
+                pass
+        if step_open is not None:
+            # Active step: no resume question while the chain is live.
+            try:
+                (sess.get("dialogs") or {}).pop(_CHAIN_RESUME_DIALOG, None)
+            except Exception:
+                pass
+        return sess
+    except Exception:
+        return None
+
+
+def _chain_staff_view(app):
+    """The StaffManagementView, opening the screen if needed."""
+    try:
+        view = (getattr(app, "open_windows", None) or {}).get(
+            _CHAIN_SCREEN_ID)
+        if view is not None:
+            return view
+    except Exception:
+        pass
+    try:
+        opener = getattr(app, "open_staff_management_window", None)
+        if callable(opener):
+            return opener()
+    except Exception:
+        pass
+    return None
+
+
+def _clear_chain_notice(app, sess):
+    """Delete the park-time inbox notice, if it still exists."""
+    try:
+        mid = (sess or {}).get("notice_message_id")
+        if not mid:
+            return
+        inbox = getattr(getattr(app, "user_team", None), "inbox", None)
+        deleter = getattr(inbox, "delete_message", None)
+        if callable(deleter):
+            deleter(mid)
+        try:
+            updater = getattr(app, "update_inbox_notification", None)
+            if callable(updater):
+                updater()
+        except Exception:
+            pass
+        try:
+            sess["notice_message_id"] = None
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _park_staff_negotiate_chain(app, sess):
+    """Park a mid-step chain: registry entry + inbox notice + resume card.
+
+    Called when the open negotiation screen is torn down without its
+    on_done firing (the user navigated away). Idempotent: re-parking an
+    already-parked chain refreshes counts, never duplicates the notice.
+    """
+    try:
+        from popup_system import register_pending_item
+        remaining = [str(i) for i in (sess.get("remaining_staff_ids") or [])]
+        results = list(sess.get("completed_results") or [])
+        total = int(sess.get("total") or len(remaining) or 0)
+        done = len(results)
+        names = sess.get("staff_names") or {}
+        first_names = [str(names.get(sid, sid)) for sid in remaining[:3]]
+        detail = (f"{len(remaining)} of {total} negotiations remaining"
+                  + (f" ({', '.join(first_names)}"
+                     + ("..." if len(remaining) > 3 else "") + ")"
+                     if first_names else ""))
+        title = "Staff negotiations parked"
+        message = (
+            f"Contract negotiations paused -- {detail}.\n\n"
+            "Resume where you left off, or discard the remaining "
+            "negotiations.")
+        # The resume question: standard ask_card schema so the navbar chip
+        # path, represent_screen_questions, and post-load represent_dialog
+        # all work unchanged. Dismiss = keep parked (defer).
+        try:
+            dialogs = sess.get("dialogs")
+            if not isinstance(dialogs, dict):
+                dialogs = {}
+                sess["dialogs"] = dialogs
+            dialogs[_CHAIN_RESUME_DIALOG] = {
+                "dialog_id": _CHAIN_RESUME_DIALOG,
+                "title": title,
+                "message": message,
+                "options": ["Resume", "Discard"],
+                "option_values": [True, False],
+                "option_styles": ["primary", "secondary"],
+                "answer": None,
+                "parked": True,
+                "resolver": _CHAIN_RESOLVER,
+                "resolver_args": {},
+                "default_on_dismiss": "defer",
+                "registry": {
+                    "item_id": _CHAIN_ITEM_ID,
+                    "kind": "RESUMABLE",
+                    "title": title,
+                    "detail": detail,
+                    "screen_id": _CHAIN_SCREEN_ID,
+                },
+            }
+        except Exception:
+            pass
+        try:
+            register_pending_item(
+                app, _CHAIN_ITEM_ID, kind="RESUMABLE", title=title,
+                detail=detail, screen_id=_CHAIN_SCREEN_ID,
+                resolver="dialog:" + _CHAIN_RESOLVER, resolver_args={})
+        except Exception:
+            pass
+        # User-visible notice at park time: inbox entry with the priority
+        # pill (priority 3 -> "!"). One notice per parked chain; the
+        # message id is kept so completion/discard can clear it.
+        try:
+            if not sess.get("notice_message_id"):
+                from game_classes import EmailMessage
+                from datetime import date
+                msg = EmailMessage(
+                    sender="System", sender_type="System",
+                    date_sent=date.today(), category="Contracts",
+                    priority=3, subject=title,
+                    content=(f"Contract negotiations paused -- {detail}.\n"
+                             "Resume any time from the Staff screen, or use "
+                             "the resume chip in the nav bar."))
+                app.send_email_to_user(msg)
+                sess["notice_message_id"] = msg.id
+        except Exception:
+            pass
+        try:
+            refresher = getattr(app, "refresh_screen_navbar", None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def park_staff_negotiate_chain_if_needed(app, screen_id):
+    """Screen-teardown hook (called from the app's _teardown_screen).
+
+    Parks the staff negotiate chain when its open negotiation screen is
+    torn down without on_done firing -- i.e. the user navigated away
+    mid-step. Between-step teardowns (chain advancing to the next screen)
+    have step_open cleared already and are ignored.
+    """
+    try:
+        if screen_id != _CHAIN_CONTRACT_SCREEN_ID:
+            return False
+        sess = _chain_session(app)
+        if not isinstance(sess, dict):
+            return False
+        if not sess.get("step_open"):
+            return False
+        try:
+            if getattr(app, "_staff_chain_advancing", False):
+                # Intra-chain handoff (old step -> next step): not a park.
+                return False
+        except Exception:
+            pass
+        # The open step never resolved: keep it in remaining and park.
+        sess["step_open"] = None
+        return bool(_park_staff_negotiate_chain(app, sess))
+    except Exception:
+        return False
+
+
+def _staff_chain_resume_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['staff_chain_resume']: answer the resume card.
+
+    value True  -> revalidate IDs and resume the chain where it parked.
+    value False -> explicit discard: clear everything (the "dismissed" case).
+    Card dismissal never reaches here (defer = keep parked).
+    Stale staff IDs are skipped with an honest digest note, never a crash.
+    """
+    try:
+        app = _chain_app()
+        if app is None:
+            return False
+        from popup_system import get_pending_session, unregister_pending_item
+        sess = get_pending_session(app, session_id)
+        if not isinstance(sess, dict):
+            return False
+        # Consume the question first: exactly-once continuation.
+        try:
+            (sess.get("dialogs") or {}).pop(dialog_id, None)
+        except Exception:
+            pass
+        try:
+            unregister_pending_item(app, _CHAIN_ITEM_ID)
+        except Exception:
+            pass
+        _clear_chain_notice(app, sess)
+        try:
+            refresher = getattr(app, "refresh_screen_navbar", None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
+        if not value:
+            # Explicit discard: drop the persisted chain entirely.
+            try:
+                sessions = getattr(app, "pending_sessions", None)
+                if isinstance(sessions, dict):
+                    sessions.pop(session_id, None)
+            except Exception:
+                pass
+            return True
+        remaining_ids = [str(i)
+                         for i in (sess.get("remaining_staff_ids") or [])]
+        results = list(sess.get("completed_results") or [])
+        names = sess.get("staff_names") or {}
+        staff_by_id = {}
+        try:
+            team = getattr(app, "user_team", None)
+            for s in (getattr(team, "staff", None) or []):
+                staff_by_id[str(getattr(s, "id", ""))] = s
+        except Exception:
+            pass
+        staff_objs = []
+        for sid in remaining_ids:
+            s = staff_by_id.get(sid)
+            if s is None:
+                _nm = str(names.get(sid) or sid)
+                results.append(f"{_nm}: no longer on staff -- skipped")
+            else:
+                staff_objs.append(s)
+        view = _chain_staff_view(app)
+        if view is None:
+            return False
+        if not staff_objs:
+            view._chain_complete(results)
+            return True
+        view._negotiate_chain(list(staff_objs), list(results))
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _chain_reg_resolver
+    _chain_reg_resolver(_CHAIN_RESOLVER, _staff_chain_resume_answer)
+except Exception:
+    pass
 
 
 class StaffManagementView(ctk.CTkFrame):
@@ -49,6 +392,8 @@ class StaffManagementView(ctk.CTkFrame):
         self.app = app if app is not None else parent
         self._close_screen = None  # set by show_screen() or the StaffManagementWindow wrapper
         self.configure(fg_color=BG)
+        # Gating: chain-resume resolver needs the app handle.
+        _set_chain_app(self.app)
 
         # Staff candidates hired through the Free Agency window land here briefly
         # during negotiation; the authoritative lists live on the team/league.
@@ -1053,36 +1398,136 @@ class StaffManagementView(ctk.CTkFrame):
     def negotiate_selected_staff(self):
         """Negotiate contracts with selected staff members.
 
-        Each negotiation is a sequential modal dialog; results reflect what
-        actually happened instead of assuming failure.
+        Gating Phase 2: the sequential modal dialogs are a chained series
+        of non-modal negotiation screens. Results still reflect what
+        actually happened; one inbox digest lands at the end.
         """
         if not self.selected_staff:
             messagebox.showwarning("No Selection", "Please select staff members to negotiate contracts.")
             return
 
         selected_staff_list = [s for s in self.get_current_team_staff() if s.id in self.selected_staff]
-        results = []
+        # Gating: persist the chain (Tier B) before the first step so a
+        # mid-chain navigation can park and resume instead of dying silent.
+        _set_chain_app(self.app)
+        _write_chain_session(
+            self.app, [s.id for s in selected_staff_list], [],
+            None,
+            staff_names={s.id: s.full_name for s in selected_staff_list})
+        self._negotiate_chain(list(selected_staff_list), [])
 
-        for staff in selected_staff_list:
-            if self.open_contract_negotiation(staff, is_hiring=False):
-                results.append(f"{staff.full_name}: agreement reached")
-            else:
-                results.append(f"{staff.full_name}: no agreement")
+    def _negotiate_chain(self, remaining, results):
+        """Open the next renegotiation screen; the digest lands when the
+        chain completes.
 
-        if results:
-            # One inbox digest instead of a popup (FM24/EHM style).
+        Gating: the chain is write-through persisted (Tier B). Each open
+        step records step_open; the app's screen-teardown hook parks the
+        chain when the step's screen goes away without on_done firing.
+        """
+        app = getattr(self, "app", None)
+        _set_chain_app(app)
+        _write_chain_session(
+            app, [s.id for s in remaining], list(results),
+            remaining[0].id if remaining else None,
+            staff_names={s.id: s.full_name for s in remaining})
+        if not remaining:
+            self._chain_complete(results)
+            return
+        staff = remaining[0]
+
+        def _one_done(accepted, _staff=staff):
+            # Guard: ignore late/duplicate callbacks. Only the currently
+            # open step may advance the chain.
             try:
-                from game_classes import EmailMessage
-                from datetime import date
-                self.app.send_email_to_user(EmailMessage(
-                    sender="System", sender_type="System",
-                    date_sent=date.today(), category="Contracts", priority=2,
-                    subject="Staff Negotiation Results",
-                    content="Contract negotiations complete:\n" + "\n".join(
-                        f"• {r}" for r in results)))
+                _sess = _chain_session(app)
+                if (not isinstance(_sess, dict)
+                        or str(_sess.get("step_open") or "")
+                        != str(_staff.id)):
+                    return
+            except Exception:
+                return
+            results.append(
+                f"{_staff.full_name}: "
+                f"{'agreement reached' if accepted else 'no agreement'}")
+            _write_chain_session(
+                app, [s.id for s in remaining[1:]], list(results), None)
+            self._negotiate_chain(remaining[1:], results)
+
+        # Intra-chain transition: the old step's screen is torn down by
+        # show_screen() below. Mark it on the app (NOT the persisted
+        # session) so the teardown hook does not mistake the handoff for
+        # navigating away and park the chain mid-advance.
+        try:
+            setattr(app, "_staff_chain_advancing", True)
+        except Exception:
+            pass
+        try:
+            self.open_contract_negotiation(staff, is_hiring=False,
+                                           on_done=_one_done)
+        finally:
+            try:
+                if getattr(app, "_staff_chain_advancing", False):
+                    app._staff_chain_advancing = False
             except Exception:
                 pass
 
+    def _chain_complete(self, results):
+        """Land the chain: exactly-once digest, then clear all parked state.
+
+        The session is consumed FIRST so re-entrant completions (resume
+        with zero live staff, double callbacks) can never double-fire the
+        digest. The park-time inbox notice and registry entry are cleared.
+        """
+        app = getattr(self, "app", None)
+        try:
+            sessions = getattr(app, "pending_sessions", None)
+            sess = (sessions.pop(_CHAIN_SESSION_ID, None)
+                    if isinstance(sessions, dict) else None)
+        except Exception:
+            sess = None
+        try:
+            from popup_system import unregister_pending_item
+            unregister_pending_item(app, _CHAIN_ITEM_ID)
+        except Exception:
+            pass
+        _clear_chain_notice(app, sess if isinstance(sess, dict) else None)
+        try:
+            refresher = getattr(app, "refresh_screen_navbar", None)
+            if callable(refresher):
+                refresher()
+        except Exception:
+            pass
+        if results:
+            # One inbox digest instead of a popup (FM24/EHM style).
+            # Exactly-once: the identical digest may already be in the
+            # inbox if _chain_complete re-enters (e.g. a late callback
+            # racing completion) -- skip rather than double-post.
+            content = ("Contract negotiations complete:\n" + "\n".join(
+                f"• {r}" for r in results))
+            already = False
+            try:
+                inbox = getattr(getattr(app, "user_team", None),
+                                "inbox", None)
+                for m in (getattr(inbox, "messages", None) or []):
+                    if (getattr(m, "subject", "")
+                            == "Staff Negotiation Results"
+                            and getattr(m, "content", "") == content):
+                        already = True
+                        break
+            except Exception:
+                already = False
+            if not already:
+                try:
+                    from game_classes import EmailMessage
+                    from datetime import date
+                    self.app.send_email_to_user(EmailMessage(
+                        sender="System", sender_type="System",
+                        date_sent=date.today(), category="Contracts",
+                        priority=2,
+                        subject="Staff Negotiation Results",
+                        content=content))
+                except Exception:
+                    pass
         self.update_current_staff_view()
 
     def reassign_selected_staff(self):
@@ -1115,24 +1560,25 @@ class StaffManagementView(ctk.CTkFrame):
         else:
             msg = f"Are you sure you want to release {len(selected_staff_list)} staff members?"
 
-        if not messagebox.askyesno("Confirm Release", msg):
-            return
+        def _do_release():
+            user_team = self._get_user_team()
+            if not user_team:
+                return
 
-        user_team = self._get_user_team()
-        if not user_team:
-            return
+            released_count = 0
+            for staff in selected_staff_list:
+                if staff in user_team.staff:
+                    user_team.staff.remove(staff)
+                    released_count += 1
 
-        released_count = 0
-        for staff in selected_staff_list:
-            if staff in user_team.staff:
-                user_team.staff.remove(staff)
-                released_count += 1
+            # Clear selection
+            self.selected_staff.clear()
 
-        # Clear selection
-        self.selected_staff.clear()
+            messagebox.showinfo("Staff Released", f"Successfully released {released_count} staff member(s).")
+            self.update_current_staff_view()
 
-        messagebox.showinfo("Staff Released", f"Successfully released {released_count} staff member(s).")
-        self.update_current_staff_view()
+        # Gating T2-Phase 3: non-modal confirm; dismiss = nobody released.
+        confirm_card(self, "Confirm Release", msg, on_yes=_do_release)
 
     # ------------------------------------------------------------------
     # Dialogs
@@ -1677,8 +2123,13 @@ class StaffManagementView(ctk.CTkFrame):
                          anchor="w").pack(anchor="w", padx=8, pady=2)
 
     def _negotiate_current_staff(self, staff: Staff, details_window):
-        """Negotiate with a current staffer from the details window (modal, honest result)."""
-        if self.open_contract_negotiation(staff, is_hiring=False):
+        """Negotiate with a current staffer from the details window.
+
+        Gating Phase 2: non-modal screen; the result arrives via on_done.
+        """
+        def _on_done(accepted):
+            if not accepted:
+                return
             # Result lands in the inbox (FM24/EHM style), not a popup.
             try:
                 from game_classes import EmailMessage
@@ -1691,8 +2142,14 @@ class StaffManagementView(ctk.CTkFrame):
                              f"({staff.role.value}).")))
             except Exception:
                 pass
-            details_window.destroy()
+            try:
+                details_window.destroy()
+            except Exception:
+                pass
             self.update_views()
+
+        self.open_contract_negotiation(staff, is_hiring=False,
+                                       on_done=_on_done)
 
     def format_staff_attributes(self, staff: Staff) -> str:
         """Format staff attributes for display."""
@@ -1733,171 +2190,45 @@ class StaffManagementView(ctk.CTkFrame):
 
         return attr_text
 
-    def open_contract_negotiation(self, staff: Staff, is_hiring: bool = False):
-        """Open a modal contract negotiation window.
+    def open_contract_negotiation(self, staff: Staff, is_hiring: bool = False,
+                                    on_done=None):
+        """Route staff contract negotiation to the StaffContractView screen.
 
-        Returns True when both sides reach an agreement, False otherwise
-        (rejected offer or cancelled). The caller owns all follow-up
-        messaging and view refreshes.
+        Gating Phase 2: the modal InGamePopup (grab_set + wait_window) is
+        gone. The negotiation is a non-modal screen shift; the outcome
+        arrives via on_done(accepted: bool) -- True on agreement, False on
+        cancel/dismiss. is_hiring=True runs the hire flow; is_hiring=False
+        renegotiates an existing staffer's terms (same mechanics as the
+        old dialog: demands + offer + staff.negotiate_contract roll).
+        Half-typed offers live in app.pending_sessions (Tier B,
+        write-through) so navigating away never loses them.
         """
-        ct = self._ct
-        nego_window = InGamePopup(self)
-        nego_window.title(f"Contract Negotiation - {staff.full_name}")
-        nego_window.configure(fg_color=ct['BG'])
-        nego_window.geometry("500x470")
-        nego_window.transient(self)
-
-        # Result flag read after the modal loop exits
-        nego_window._accepted = False
-
-        # Main frame
-        main_frame = ctk.CTkFrame(nego_window, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=18, pady=18)
-
-        # Staff info
-        self._heading(main_frame,
-                      text=f"Negotiating with {staff.full_name}",
-                      size=14).pack(anchor="w", pady=(0, 2))
-        ctk.CTkLabel(main_frame, text=staff.role.value,
-                     font=self._sfont(11), text_color=ct['TEAL']).pack(
-                         anchor="w", pady=(0, 14))
-
-        # Current demands
-        demands_inner = self._dialog_card(main_frame, "Current Demands")
-        self._info_label(demands_inner, f"Asking Salary: ${staff.salary:,}")
-        self._info_label(demands_inner, f"Contract Length: {staff.contract_years} years")
-
-        # Offer frame
-        offer_inner = self._dialog_card(main_frame, "Your Offer")
-        offer_grid = ctk.CTkFrame(offer_inner, fg_color="transparent")
-        offer_grid.pack(anchor="w")
-
-        ctk.CTkLabel(offer_grid, text="Salary:",
-                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
-                         row=0, column=0, padx=5, pady=5, sticky='w')
-        salary_entry = ctk.CTkEntry(
-            offer_grid, width=150, fg_color=ct['BG'],
-            border_color=ct['BORDER'], text_color=ct['TEXT'])
-        salary_entry.insert(0, str(staff.salary))
-        salary_entry.grid(row=0, column=1, padx=5, pady=5)
-
-        ctk.CTkLabel(offer_grid, text="Years:",
-                     font=self._sfont(10), text_color=ct['TEXT_DIM']).grid(
-                         row=1, column=0, padx=5, pady=5, sticky='w')
-        years_entry = ctk.CTkEntry(
-            offer_grid, width=150, fg_color=ct['BG'],
-            border_color=ct['BORDER'], text_color=ct['TEXT'])
-        years_entry.insert(0, str(staff.contract_years))
-        years_entry.grid(row=1, column=1, padx=5, pady=5)
-
-        # Result label
-        result_label = ctk.CTkLabel(main_frame, text="",
-                                    font=self._sfont(10),
-                                    text_color=ct['TEXT_DIM'],
-                                    wraplength=440, justify="left")
-        result_label.pack(fill="x", pady=(0, 12))
-
-        # Buttons
-        button_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        button_frame.pack(fill="x")
-
-        def make_offer():
+        from windows import StaffContractView
+        app = getattr(self, "app", None)
+        if app is None or not hasattr(app, "show_screen"):
+            # Headless/legacy fallback: keep the old honesty contract.
             try:
-                offered_salary = int(salary_entry.get())
-                offered_years = int(years_entry.get())
-            except ValueError:
-                messagebox.showerror("Invalid Input", "Please enter valid numbers for salary and years.")
-                return
-
-            if offered_salary <= 0 or not 1 <= offered_years <= 5:
-                messagebox.showerror("Invalid Input", "Salary must be positive and the term 1-5 years.")
-                return
-
-            if staff.negotiate_contract(offered_salary, offered_years):
-                result_label.configure(text="Offer Accepted!", text_color=ct['GREEN'])
-
-                if is_hiring:
-                    # Add to team with role validation
-                    user_team = self._get_user_team()
-                    if user_team:
-                        # Check for unique role violations before hiring
-                        if Staff.is_unique_role(staff.role):
-                            existing_with_role = [s for s in user_team.staff if s.role == staff.role]
-                            if existing_with_role:
-                                messagebox.showerror(
-                                    "Role Conflict",
-                                    f"Team already has a {staff.role.value}: {existing_with_role[0].full_name}.\n"
-                                    f"You must reassign or release the existing {staff.role.value} first.")
-                                return
-
-                        staff.salary = offered_salary
-                        staff.contract_years = offered_years
-                        user_team.staff.append(staff)
-                        try:
-                            import assistant_coaches as _ac
-                            _app = getattr(self, "app", None) or getattr(
-                                self, "master", None)
-                            _ac.on_assistant_hired(user_team, staff, app=_app)
-                        except Exception:
-                            pass
-                        # New head coach, new whiteboard: he installs HIS
-                        # systems (unless the GM owns tactics).
-                        try:
-                            _role = str(getattr(getattr(staff, "role", None),
-                                                "value", ""))
-                            if "Head Coach" in _role:
-                                import tactics as _tx
-                                _app = getattr(self, "app", None) or getattr(
-                                    self, "master", None)
-                                if _tx.get_tactics_control(user_team) == "coach":
-                                    installed = _tx.install_coach_systems(
-                                        user_team, staff, reason="hired")
-                                    if installed and _app is not None:
-                                        _cname = (f"{getattr(staff, 'first_name', '')} "
-                                                  f"{getattr(staff, 'last_name', '')}").strip()
-                                        _bits = ", ".join(
-                                            f"{c}: {k.replace('_', ' ')}"
-                                            for c, k in installed.items())
-                                        try:
-                                            _app.add_news(
-                                                f"{_cname} is installing his systems "
-                                                f"({len(installed)} changes: {_bits}). "
-                                                f"The room starts learning -- familiarity reset.")
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            pass
-                        if staff in self.available_staff:
-                            self.available_staff.remove(staff)
-                else:
-                    # Update existing contract
-                    staff.salary = offered_salary
-                    staff.contract_years = offered_years
-
-                nego_window._accepted = True
-                nego_window.destroy()
-            else:
-                result_label.configure(text="Offer Rejected. Try adjusting your offer.",
-                                       text_color=ct['RED'])
-
-        self._primary_button(button_frame, text="Make Offer", command=make_offer,
-                             width=130, height=36).pack(side="left", padx=5)
-        self._secondary_button(button_frame, text="Cancel",
-                               command=nego_window.destroy,
-                               width=110, height=36).pack(side="right", padx=5)
-
-        # Modal: block until the window closes, then report the outcome
-        nego_window.grab_set()
-        self.wait_window(nego_window)
-        return bool(getattr(nego_window, "_accepted", False))
+                from popup_system import messagebox
+                messagebox.showwarning(
+                    "Negotiation unavailable",
+                    "Staff contract negotiation needs the app screen host.")
+            except Exception:
+                pass
+            if callable(on_done):
+                try:
+                    on_done(False)
+                except Exception:
+                    pass
+            return None
+        title = (f"Contract Offer - {staff.full_name}" if is_hiring
+                 else f"Contract Negotiation - {staff.full_name}")
+        return app.show_screen("staff_contract", title, StaffContractView,
+                               staff, fresh=True, hire_source="free_agent",
+                               renegotiate=not is_hiring, on_done=on_done)
 
     def release_staff_action(self, staff: Staff, details_window=None):
         """Perform staff release action."""
-        result = messagebox.askyesno("Confirm Release",
-                                    f"Are you sure you want to release {staff.full_name}?\n"
-                                    f"This will end their contract immediately.")
-
-        if result:
+        def _do_release():
             user_team = self._get_user_team()
             if user_team and staff in user_team.staff:
                 user_team.staff.remove(staff)
@@ -1908,13 +2239,29 @@ class StaffManagementView(ctk.CTkFrame):
 
                 self.update_views()
 
+        # Gating T2-Phase 3: non-modal confirm; dismiss = nobody released.
+        confirm_card(self, "Confirm Release",
+                     f"Are you sure you want to release {staff.full_name}?\n"
+                     f"This will end their contract immediately.",
+                     on_yes=_do_release)
+
     def make_staff_offer_action(self, staff: Staff, details_window=None):
-        """Make offer to a hiring candidate (modal negotiation, honest result)."""
+        """Make offer to a hiring candidate.
+
+        Gating Phase 2: routes to the StaffContractView screen; the hire
+        result arrives via on_done.
+        """
         if details_window:
             details_window.destroy()
-        if self.open_contract_negotiation(staff, is_hiring=True):
-            messagebox.showinfo("Success", f"{staff.full_name} has been hired!")
-            self.update_views()
+
+        def _on_done(accepted):
+            if accepted:
+                messagebox.showinfo("Success",
+                                    f"{staff.full_name} has been hired!")
+                self.update_views()
+
+        self.open_contract_negotiation(staff, is_hiring=True,
+                                       on_done=_on_done)
 
     def categorize_staff(self, staff_list):
         """Categorize staff by their roles for filtering."""

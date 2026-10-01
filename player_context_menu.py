@@ -80,6 +80,113 @@ def _player_sort_key(p):
             getattr(p, "first_name", "") or "")
 
 
+class PhysioReportView(tk.Frame):
+    """Full-screen physio/fitness report for a player.
+
+    Gating Phase 2: was a ctk.CTkToplevel + grab_set() (the worst modal
+    offender). The report content is self-contained (injury status +
+    fitness words) -- the renderer is moved here verbatim, only the
+    container changed. Read-only: no session needed.
+    """
+
+    def __init__(self, parent, player=None, app=None):
+        # tk.Frame base keeps this view independent of the CTk theme
+        # import cost at module load; ctk is imported locally like the
+        # old popup did.
+        tk.Frame.__init__(self, parent, bg="#0b0e11")
+        self.player = player
+        self.app = app
+        self._close_screen = None  # set by show_screen()
+        self._build()
+
+    def close_view(self):
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+    def _build(self):
+        try:
+            import customtkinter as ctk
+            from ctk_theme import init_ctk_theme, BG
+            init_ctk_theme()
+            from ctk_theme import (heading, body, primary_button,
+                                   wire_focus_ring, top_column,
+                                   PANEL, GREEN, RED)
+            from ui_scale import scaled
+            player = self.player
+
+            scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+            scroll.pack(fill="both", expand=True)
+            # Job 3 polish: top-anchored, width-capped column -- no more
+            # thin centered strip floating on wide monitors.
+            outer = top_column(scroll)
+            heading(outer, "Physio Report", size=18).pack(
+                anchor="w", padx=18, pady=(16, 2))
+            body(outer, getattr(player, "full_name", "?"), dim=True,
+                 size=12).pack(anchor="w", padx=18, pady=(0, 12))
+            card = ctk.CTkFrame(outer, fg_color=PANEL, corner_radius=12)
+            card.pack(fill="x", padx=14, pady=(0, 14))
+
+            injured = bool(getattr(player, "is_injured", False))
+            body(card, "Status", dim=True, size=12).pack(
+                anchor="w", padx=16, pady=(14, 0))
+            ctk.CTkLabel(
+                card, text="INJURED" if injured else "Fit to play",
+                font=("Segoe UI", scaled(15), "bold"),
+                text_color=RED if injured else GREEN).pack(
+                    anchor="w", padx=16, pady=(2, 8))
+
+            def _word(v):
+                try:
+                    v = float(v)
+                except Exception:
+                    return "Unknown"
+                if v >= 40:
+                    return "Excellent"
+                if v >= 34:
+                    return "Good"
+                if v >= 27:
+                    return "Average"
+                if v >= 20:
+                    return "Below average"
+                return "Poor"
+
+            rows = [
+                ("Injury", str(getattr(player, "injury_type", "None") or "None")),
+                ("Est. games out", str(getattr(player, "games_remaining_injured", 0) or 0) if injured else "—"),
+                ("Last injury", str(getattr(player, "last_injury", "None") or "None")),
+                ("Career games missed", str(getattr(player, "career_games_missed", 0))),
+                ("Days missed (season)", str(getattr(player, "days_missed", 0))),
+                ("Durability", _word(getattr(player, "durability", 30))),
+                ("Injury proneness", _word(50 - (getattr(player, "injury_proneness", 10) or 0))),
+                ("Stamina", _word(getattr(player, "stamina", 30))),
+            ]
+            for label, value in rows:
+                r = ctk.CTkFrame(card, fg_color="transparent")
+                r.pack(fill="x", padx=16, pady=3)
+                body(r, label, dim=True, size=12).pack(side="left")
+                ctk.CTkLabel(r, text=value, font=("Segoe UI", scaled(12),
+                                                 "bold"),
+                             text_color="white").pack(side="right")
+            note = ""
+            if injured:
+                note = "Follow the medical team's timeline — rushing him back risks re-injury."
+            elif (getattr(player, "injury_proneness", 0) or 0) > 12:
+                note = "Injury-prone: consider managing his minutes in back-to-backs."
+            if note:
+                body(card, note, dim=True, size=12,
+                     wraplength=scaled(560)).pack(
+                    anchor="w", padx=16, pady=(10, 4))
+            _close_btn = primary_button(card, text="Close", width=120,
+                                        command=self.close_view)
+            _close_btn.pack(pady=(8, 14))
+            wire_focus_ring(_close_btn)
+        except Exception as e:
+            print(f"Physio report failed: {e}")
+
+
 class PlayerContextMenu:
     """Universal player context menu for consistent player interactions across all windows"""
     
@@ -473,170 +580,49 @@ class PlayerContextMenu:
         close_btn.pack(pady=10)
     
     def _physio_report(self, player):
-        """Show a physio/fitness report popup for the player."""
+        """Show a physio/fitness report for the player.
+
+        Gating Phase 2: was a modal ctk.CTkToplevel + grab_set(); now a
+        full-screen jump to PhysioReportView (screen id "physio_report").
+        Content is identical; the report is read-only.
+        """
         try:
-            import customtkinter as ctk
-            from ctk_theme import init_ctk_theme, BG
-            init_ctk_theme()
             app = self.parent
             # Unwrap: parent may be a window holding .parent -> app
             for _ in range(3):
                 if hasattr(app, "open_player_profile"):
                     break
                 app = getattr(app, "parent", app)
-            win = ctk.CTkToplevel(self.parent)
-            win.title(f"Physio Report — {player.full_name}")
-            win.geometry("430x510")
-            win.configure(fg_color=BG)
-            try:
-                win.transient(self.parent)
-                win.grab_set()
-            except Exception:
-                pass
-            from ctk_theme import (heading, body, PANEL, GREEN, RED)
-            heading(win, "Physio Report", size=16).pack(anchor="w", padx=18, pady=(16, 2))
-            body(win, player.full_name, dim=True).pack(anchor="w", padx=18, pady=(0, 12))
-            card = ctk.CTkFrame(win, fg_color=PANEL, corner_radius=12)
-            card.pack(fill="both", expand=True, padx=14, pady=(0, 14))
-
-            injured = bool(getattr(player, "is_injured", False))
-            body(card, "Status", dim=True, size=11).pack(anchor="w", padx=16, pady=(14, 0))
-            ctk.CTkLabel(
-                card, text="INJURED" if injured else "Fit to play",
-                font=("Segoe UI", 15, "bold"),
-                text_color=RED if injured else GREEN).pack(anchor="w", padx=16, pady=(2, 8))
-
-            def _word(v):
-                try:
-                    v = float(v)
-                except Exception:
-                    return "Unknown"
-                if v >= 40: return "Excellent"
-                if v >= 34: return "Good"
-                if v >= 27: return "Average"
-                if v >= 20: return "Below average"
-                return "Poor"
-
-            rows = [
-                ("Injury", str(getattr(player, "injury_type", "None") or "None")),
-                ("Est. games out", str(getattr(player, "games_remaining_injured", 0) or 0) if injured else "—"),
-                ("Last injury", str(getattr(player, "last_injury", "None") or "None")),
-                ("Career games missed", str(getattr(player, "career_games_missed", 0))),
-                ("Days missed (season)", str(getattr(player, "days_missed", 0))),
-                ("Durability", _word(getattr(player, "durability", 30))),
-                ("Injury proneness", _word(50 - (getattr(player, "injury_proneness", 10) or 0))),
-                ("Stamina", _word(getattr(player, "stamina", 30))),
-            ]
-            for label, value in rows:
-                r = ctk.CTkFrame(card, fg_color="transparent")
-                r.pack(fill="x", padx=16, pady=3)
-                body(r, label, dim=True, size=12).pack(side="left")
-                ctk.CTkLabel(r, text=value, font=("Segoe UI", 12, "bold"),
-                             text_color="white").pack(side="right")
-            note = ""
-            if injured:
-                note = "Follow the medical team's timeline — rushing him back risks re-injury."
-            elif (getattr(player, "injury_proneness", 0) or 0) > 12:
-                note = "Injury-prone: consider managing his minutes in back-to-backs."
-            if note:
-                body(card, note, dim=True, size=11).pack(anchor="w", padx=16, pady=(10, 4))
-            ctk.CTkButton(card, text="Close", width=120, fg_color="#00ceb8",
-                          hover_color="#00b3a0", text_color="#0b0e11",
-                          command=win.destroy).pack(pady=(8, 14))
+            show = getattr(app, "show_screen", None)
+            if not callable(show):
+                from popup_system import messagebox
+                messagebox.showwarning(
+                    "Physio Report",
+                    "The physio report needs the app screen host.")
+                return
+            show("physio_report", f"Physio Report — {player.full_name}",
+                 PhysioReportView, player, fresh=True)
         except Exception as e:
             print(f"Physio report failed: {e}")
 
     def _add_to_shortlist(self, player):
-        """Add player to shortlist with category selection"""
-        # Create shortlist dialog
-        shortlist_dialog = InGamePopup(self.parent)
-        shortlist_dialog.title("Add to Shortlist")
-        shortlist_dialog.geometry("400x300")
-        shortlist_dialog.configure(bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        shortlist_dialog.resizable(False, False)
-        
-        # Make modal
-        shortlist_dialog.transient(self.parent)
-        shortlist_dialog.grab_set()
-        
-        # Title
-        title_label = tk.Label(shortlist_dialog, 
-                              text=f"Add {player.full_name} to Shortlist",
-                              font=(getattr(self.parent, 'FONT_FAMILY', 'Segoe UI'), 14, 'bold'),
-                              fg=getattr(self.parent, 'HEADER_COLOR', 'white'),
-                              bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        title_label.pack(pady=10)
-        
-        # Category selection
-        category_frame = tk.LabelFrame(shortlist_dialog, text="Category", 
-                                      fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                                      bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        category_frame.pack(fill='x', padx=20, pady=10)
-        
-        from shortlist_system import ShortlistManager
-        category_var = tk.StringVar(value="Trade Targets")
-        
-        from tkinter import ttk
-        category_combo = ttk.Combobox(category_frame, textvariable=category_var,
-                                     values=ShortlistManager.CATEGORIES,
-                                     state="readonly")
-        category_combo.pack(fill='x', padx=10, pady=5)
-        
-        # Priority selection
-        priority_frame = tk.LabelFrame(shortlist_dialog, text="Priority",
-                                      fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                                      bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        priority_frame.pack(fill='x', padx=20, pady=5)
-        
-        priority_var = tk.StringVar(value="Medium Priority")
-        priority_combo = ttk.Combobox(priority_frame, textvariable=priority_var,
-                                     values=list(ShortlistManager.PRIORITY_LEVELS.values()),
-                                     state="readonly")
-        priority_combo.pack(fill='x', padx=10, pady=5)
-        
-        # Notes
-        notes_frame = tk.LabelFrame(shortlist_dialog, text="Notes",
-                                   fg=getattr(self.parent, 'TEXT_COLOR', 'white'),
-                                   bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        notes_frame.pack(fill='both', expand=True, padx=20, pady=5)
-        
-        notes_text = tk.Text(notes_frame, height=4, wrap="word",
-                            bg=getattr(self.parent, 'CONTENT_BG', '#2A2A2A'),
-                            fg=getattr(self.parent, 'TEXT_COLOR', 'white'))
-        notes_text.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        # Buttons
-        button_frame = tk.Frame(shortlist_dialog, bg=getattr(self.parent, 'BG_COLOR', '#1E1E1E'))
-        button_frame.pack(fill='x', padx=20, pady=10)
-        
-        def add_player():
-            category = category_var.get()
-            priority_text = priority_var.get()
-            priority = next((k for k, v in ShortlistManager.PRIORITY_LEVELS.items() 
-                           if v == priority_text), 2)
-            notes = notes_text.get("1.0", "end-1c")
-            
-            # Get shortlist manager
-            if hasattr(self.parent, 'shortlist_manager'):
-                shortlist_manager = self.parent.shortlist_manager
-            elif hasattr(self.parent, 'parent') and hasattr(self.parent.parent, 'shortlist_manager'):
-                shortlist_manager = self.parent.parent.shortlist_manager
-            else:
-                messagebox.showerror("Error", "Shortlist manager not available.")
-                shortlist_dialog.destroy()
-                return
-            
-            # Add to shortlist
-            if shortlist_manager.add_player(player.id, player.full_name, category, notes, priority):
-                messagebox.showinfo("Added to Shortlist", 
-                                   f"{player.full_name} added to {category}!")
-                shortlist_dialog.destroy()
-            else:
-                messagebox.showwarning("Already on Shortlist", 
-                                      f"{player.full_name} is already in {category}.")
-        
-        ttk.Button(button_frame, text="Add to Shortlist", command=add_player).pack(side="left")
-        ttk.Button(button_frame, text="Cancel", command=shortlist_dialog.destroy).pack(side="right")
+        """Add player to shortlist with category selection.
+
+        Gating Phase 2: was a modal InGamePopup + grab_set(); now routes
+        to the ShortlistAddView screen via
+        scouting_window_helpers.open_shortlist_dialog (same categories,
+        priorities, notes, and real ShortlistManager write).
+        """
+        try:
+            app = self.parent
+            for _ in range(3):
+                if hasattr(app, "show_screen"):
+                    break
+                app = getattr(app, "parent", app)
+            from scouting_window_helpers import open_shortlist_dialog
+            open_shortlist_dialog(self.parent, app, player)
+        except Exception as e:
+            print(f"Add to shortlist failed: {e}")
     
     def _compare_players(self, player):
         """Open enhanced player comparison tool"""

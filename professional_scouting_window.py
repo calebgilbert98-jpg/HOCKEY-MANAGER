@@ -8,7 +8,7 @@ Features: Player database, scout management, draft prospects, assignments, and r
 import tkinter as tk
 from tkinter import ttk
 import customtkinter as ctk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 from typing import (Dict, List, Any)
 import datetime
 import random
@@ -2328,15 +2328,17 @@ Grade {grade} - Worth monitoring progress."""
             messagebox.showerror("Scouting", f"Scouting helpers unavailable: {e}")
             return
 
-        result = messagebox.askyesno(
-            "Cancel Assignment",
-            f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
-            "The scout is freed up; any report filed so far is kept.")
-        if result:
+        def _do_cancel():
             ok, msg = cancel_scout_assignment(self.app, player)
             (messagebox.showinfo if ok else messagebox.showwarning)(
                 "Assignment Cancelled" if ok else "Scouting", msg)
             self._populate_assignments()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep scouting.
+        confirm_card(self, "Cancel Assignment",
+                     f"Stop scouting {getattr(player, 'full_name', 'this player')}?\n\n"
+                     "The scout is freed up; any report filed so far is kept.",
+                     on_yes=_do_cancel)
 
     def _populate_assignments(self):
         """Populate the assignments tree from the REAL scouting_assignments.

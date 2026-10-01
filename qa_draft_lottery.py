@@ -120,10 +120,11 @@ txt = dl.lottery_reveal_text(rows, YEAR)
 check("reveal text 17 lines", len(txt.splitlines()) == 17,
       str(len(txt.splitlines())))
 check("reaction for #1 mentions win",
-      "WINS" in dl.reaction_line(rows[0]))
+      "win" in dl.reaction_line(rows[0]).lower())  # title-case house grammar
 jump = next((r for r in rows if r["movement"] >= 4), None)
 if jump:
-    check("big-jump reaction", "LEAPS" in dl.reaction_line(jump))
+    check("big-jump reaction",
+          "leap" in dl.reaction_line(jump).lower())  # title-case house grammar
 else:
     check("big-jump reaction (no jump this seed)", True)
 

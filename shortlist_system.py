@@ -551,28 +551,6 @@ class ShortlistView(ctk.CTkFrame):
                                  on_done=self._back_to_shortlist)
 
 
-class ShortlistWindow(InGamePopup):
-    """Popup wrapper around ShortlistView (backward compatibility)."""
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.title("Player Shortlist")
-        app = (getattr(parent, 'app', None)
-               or getattr(parent, 'parent', None) or parent)
-        self._view = ShortlistView(self, app=app)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class AddPlayerView(ctk.CTkFrame):
     """Dialog for adding a player to shortlist (focus-card view)."""
 
@@ -764,29 +742,6 @@ class AddPlayerView(ctk.CTkFrame):
         return None
 
 
-class AddPlayerDialog(InGamePopup):
-    """Popup wrapper around AddPlayerView (backward compatibility)."""
-
-    def __init__(self, parent_window, shortlist_manager):
-        super().__init__(parent_window, modal=True)
-        self.title("Add Player to Shortlist")
-        app = (getattr(parent_window, 'app', None)
-               or getattr(parent_window, 'parent', None) or parent_window)
-        self._view = AddPlayerView(self, app=app,
-                                  shortlist_manager=shortlist_manager)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
-
-
 class EditNotesView(ctk.CTkFrame):
     """Dialog for editing shortlist entry notes (focus-card view)."""
 
@@ -893,29 +848,6 @@ class EditNotesView(ctk.CTkFrame):
                                           self.entry.category, new_notes)
         self._show_banner("Notes updated successfully!", "ok")
         self._finish()
-
-
-class EditNotesDialog(InGamePopup):
-    """Popup wrapper around EditNotesView (backward compatibility)."""
-
-    def __init__(self, parent_window, entry, shortlist_manager):
-        super().__init__(parent_window, modal=True)
-        self.title("Edit Notes")
-        app = (getattr(parent_window, 'app', None)
-               or getattr(parent_window, 'parent', None) or parent_window)
-        self._view = EditNotesView(self, app=app, entry=entry,
-                                   shortlist_manager=shortlist_manager)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)
 
 
 class ChangePriorityView(ctk.CTkFrame):
@@ -1026,26 +958,3 @@ class ChangePriorityView(ctk.CTkFrame):
                                              self.entry.category, priority)
         self._show_banner("Priority updated successfully!", "ok")
         self._finish()
-
-
-class ChangePriorityDialog(InGamePopup):
-    """Popup wrapper around ChangePriorityView (backward compatibility)."""
-
-    def __init__(self, parent_window, entry, shortlist_manager):
-        super().__init__(parent_window, modal=True)
-        self.title("Change Priority")
-        app = (getattr(parent_window, 'app', None)
-               or getattr(parent_window, 'parent', None) or parent_window)
-        self._view = ChangePriorityView(self, app=app, entry=entry,
-                                        shortlist_manager=shortlist_manager)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

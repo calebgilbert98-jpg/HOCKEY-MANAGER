@@ -4,7 +4,8 @@
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import (messagebox, InGamePopup)
+from popup_system import (messagebox, InGamePopup, ask_card, confirm_card,
+                          cards_available)
 import customtkinter as ctk
 from game_classes import (StaffRole, PlayerPosition, to_100_scale)
 import random
@@ -1904,16 +1905,30 @@ class RosterView(ctk.CTkFrame):
                             pass
                 except Exception:
                     pass
-                if messagebox.askyesno(
-                        "Unsigned prospect",
-                        f"{player.full_name} needs an entry-level contract "
-                        f"before he can join the {to_roster.upper()} "
-                        f"roster.\n\nOpen contract talks now?"):
+                # Gating T2-Phase 3: non-modal question; dismiss = no talks.
+                _set_elc_app(self.app)
+                _pid = str(getattr(player, "id", ""))
+
+                def _elc_on_answer(_ans, _p=player):
+                    if not _ans:
+                        return
                     try:
                         self.app.open_contract_negotiation_window(
-                            player, is_elc=True)
+                            _p, is_elc=True)
                     except Exception:
                         pass
+
+                ask_card(self, "Unsigned prospect",
+                         f"{player.full_name} needs an entry-level contract "
+                         f"before he can join the {to_roster.upper()} "
+                         f"roster.\n\nOpen contract talks now?",
+                         [("Open Talks", True, "primary"),
+                          ("Not Now", False, "secondary")],
+                         on_answer=_elc_on_answer,
+                         default_on_dismiss=False,
+                         session_id="elc_talks", dialog_id="elc_card",
+                         resolver="elc_talks_answer",
+                         resolver_args={"player_id": _pid})
                 return
             try:
                 player.playing_where = "NHL" if to_roster == 'nhl' \
@@ -4378,32 +4393,205 @@ def gm_trade_value_badges(ai_manager, team, app=None, level="NHL"):
     return _badge
 
 
-class TradeWindow(InGamePopup):
-    """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history."""
+# -- Gating T2-Phase 2: stale guards for popup-local sessions ----------
+# trade_propose / draft_call / deposition sessions are popup view state:
+# they never survive save/load (save whitelist drops non-team_talk
+# sessions; single-use waiver stamps are scrubbed pre-save). If a parked
+# card is ever answered after its parent window is gone, the honest move
+# is to do nothing -- the save path has already dropped the session.
+def _stale_popup_answer(session_id, dialog_id, value, **kwargs):
+    return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _gating_reg_resolver
+    _gating_reg_resolver("trade_waiver_answer", _stale_popup_answer)
+    _gating_reg_resolver("draft_call_answer", _stale_popup_answer)
+    _gating_reg_resolver("deposition_answer", _stale_popup_answer)
+except Exception:
+    pass
+
+
+# -- Gating T2-Phase 3: unsigned-prospect ELC question ------------------
+# "Open contract talks now?" Yes opens the ELC negotiation for the
+# prospect; No/dismiss does nothing (the promotion was already refused).
+# The player is carried by id so a post-load answer re-resolves him.
+_ELC_APP = None
+
+
+def _set_elc_app(app):
+    global _ELC_APP
+    _ELC_APP = app
+
+
+def _elc_app():
+    app = _ELC_APP
+    if app is not None:
+        return app
+    try:
+        import tkinter as _tk
+        _root = _tk._default_root
+        if _root is not None and hasattr(_root, "open_contract_negotiation_window"):
+            return _root
+    except Exception:
+        pass
+    return None
+
+
+def _find_player_by_id(app, pid):
+    try:
+        league = getattr(app, "league", None)
+        for team in getattr(league, "teams", None) or []:
+            for roster in (getattr(team, "roster", None),
+                           getattr(team, "prospects", None)):
+                for p in roster or []:
+                    if str(getattr(p, "id", "")) == str(pid):
+                        return p
+    except Exception:
+        pass
+    return None
+
+
+def _elc_talks_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['elc_talks_answer']: Yes opens ELC talks for the
+    prospect named in resolver_args; anything else is a no-op. Honest
+    when the player can't be re-resolved (stale id): does nothing."""
+    try:
+        if not value:
+            return False
+        app = _elc_app()
+        if app is None:
+            return False
+        player = _find_player_by_id(app, kwargs.get("player_id", ""))
+        if player is None:
+            return False
+        try:
+            app.open_contract_negotiation_window(player, is_elc=True)
+        except Exception:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+try:
+    _gating_reg_resolver("elc_talks_answer", _elc_talks_answer)
+except Exception:
+    pass
+
+
+# -- Gating T2-Phase 3: game-viewer "simulate and watch" questions ------
+# A transient view question (the schedule viewer stays on screen), so the
+# continuation keeps a live (view, game, commit) tuple in a module-level
+# holder. A post-load answer can't re-find the view: honest no-op.
+_WATCH_GAME_CTX = {}
+
+
+def _set_watch_game_ctx(view, game_data, commit):
+    _WATCH_GAME_CTX.clear()
+    _WATCH_GAME_CTX["view"] = view
+    _WATCH_GAME_CTX["game"] = game_data
+    _WATCH_GAME_CTX["commit"] = commit
+
+
+def _watch_game_on_answer(answer):
+    ctx = _WATCH_GAME_CTX.get("view")
+    game = _WATCH_GAME_CTX.get("game")
+    if not answer or ctx is None or game is None:
+        return
+    try:
+        ctx._launch_game_viewer(game, commit=_WATCH_GAME_CTX.get("commit", False))
+    except Exception:
+        pass
+
+
+def _watch_game_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['watch_game_answer']: Yes re-launches the viewer
+    for the game held in the module ctx; anything else is a no-op."""
+    try:
+        _watch_game_on_answer(value)
+        return bool(value)
+    except Exception:
+        return False
+
+
+try:
+    _gating_reg_resolver("watch_game_answer", _watch_game_answer)
+except Exception:
+    pass
+
+
+class TradeWindow(ctk.CTkFrame):
+    """Trade Center (CustomTkinter): live value meter, picks, AI counter-offers, history.
+
+    Gating Phase 2: a Tier-1 screen (``show_screen("trade", ...)``), not a
+    popup card. The in-progress deal lives in
+    ``app.pending_sessions["trade_deal"]`` (Tier B, write-through on every
+    mutation): the user can shift to the roster mid-negotiation and shift
+    back -- the screen rebuilds from the session and revalidates every
+    asset, with an honest "no longer available" note if the world moved.
+    Dismiss = defer: navigating away parks the deal (and any parked waiver
+    questions); it never abandons or sends anything.
+    """
 
     METER_W = 280
     METER_H = 22
 
-    def __init__(self, parent, preset=None):
+    # -- screen shims: Toplevel API the old popup code still calls -------
+    def title(self, _text=None):
+        return None
+
+    def geometry(self, _spec=None):
+        return ""
+
+    def close_view(self):
+        """Leave the screen (the navbar's ‹ Dashboard in screen mode)."""
+        fn = getattr(self, "_close_screen", None)
+        if callable(fn):
+            fn()
+        else:
+            try:
+                self.destroy()
+            except Exception:
+                pass
+
+    def destroy(self):
+        # Gating Phase 2: teardown parks, never abandons. The deal and any
+        # parked waiver questions live in Tier-B sessions; stamps are
+        # consumed on send or cleared on explicit cancel only.
+        try:
+            self._trade_propose_session = None
+        except Exception:
+            pass
+        try:
+            ctk.CTkFrame.destroy(self)
+        except Exception:
+            pass
+
+    def __init__(self, parent, preset=None, app=None):
         from ctk_theme import (
             init_ctk_theme, CTkOfferList, CTkPlayerList,
             primary_button, secondary_button, heading, body,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
         )
+        ctk.CTkFrame.__init__(self, parent)
+        _app = app if app is not None else getattr(parent, 'app', parent)
+        self.app = _app
+        # Historical: this whole class treats self.parent as the app root.
+        self.parent = _app
+        self._close_screen = None  # set by show_screen()
+        # Local alias: the body below was written against the app object.
+        parent = _app
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
                         CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN,
                         RED=RED, BLUE=BLUE)
         init_ctk_theme()
-        # A workbench, not a verdict: non-modal with click-out so the
-        # user can dismiss it freely and keep exploring. Sending an
-        # offer never resolves instantly -- the AI GM answers in a few
-        # days via the inbox.
-        super().__init__(parent, modal=False, dismiss_on_backdrop=True)
-        self.parent = parent
-        self.title("Trade Center")
-        self.geometry("1280x780")
+        # Screen mode: no popup chrome (title/geometry are no-op shims now;
+        # the navbar carries the title). The workbench stays non-modal by
+        # construction -- sending never resolves instantly; the AI GM
+        # answers in a few days via the inbox.
         self.configure(fg_color=BG)
         self.trade_offers = {'user': [], 'partner': []}
         self._asset_levels = {'user': {}, 'partner': {}}  # id(player) -> NHL/AHL/Prospects
@@ -4573,8 +4761,25 @@ class TradeWindow(InGamePopup):
         # History panel (hidden by default)
         self.history_frame = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=10)
 
-        self.update_views()
+        # Gating Phase 2: the in-progress deal is Tier-B state. A preset
+        # always opens a fresh workbench (drop the parked deal first, like
+        # the old destroy-and-rebuild); otherwise rebuild from the session
+        # with honest revalidation.
+        self._trade_propose_session = None
+        # Suppress write-through while the view builds: update_views ->
+        # update_trade_partner_roster snapshots, and it must not wipe the
+        # parked deal before _restore_deal_session runs.
+        self._restoring = True
+        try:
+            if preset:
+                self._reset_deal_session()
+            self.update_views()
+            self._restore_deal_session()
+        finally:
+            self._restoring = False
         self._apply_preset()
+        self._snapshot_deal_session()
+        self._reconcile_stamps()
         self._wire_player_menus()
 
     # ------------------------------------------------------------------
@@ -4617,6 +4822,24 @@ class TradeWindow(InGamePopup):
                         if str(k) == str(getattr(a, 'id', '')) and v}
             except Exception:
                 pass
+            # Gating Phase 2 (§6): version-stamp the negotiation terms --
+            # if the AI moved under a parked negotiation, surface it
+            # honestly on resume.
+            try:
+                _hash = self._neg_terms_hash()
+                _sess = self._deal_session()
+                _old = _sess.get("neg_terms_hash") if _sess else None
+                if _sess and _hash and _old and _old != _hash:
+                    from popup_system import notify_card
+                    notify_card(
+                        self, "Proposal updated",
+                        "Their side of the proposal changed while you were "
+                        "away -- the workbench now shows the latest terms.",
+                        kind="warning")
+                if _sess and _hash:
+                    _sess["neg_terms_hash"] = _hash
+            except Exception:
+                pass
             self._refresh_offer_lists()
             try:
                 self.propose_btn.configure(text="Send Counter-Offer")
@@ -4636,6 +4859,270 @@ class TradeWindow(InGamePopup):
                 lambda e, p: mgr.show_context_menu(e, p))
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B deal session ("trade_deal", kind "trade").
+    #
+    # The in-progress deal -- both sides' asset IDs, partner, retention %,
+    # pick protection -- is snapshotted on every mutation (write-through),
+    # so the screen can be rebuilt from the session on open. Revalidation
+    # resolves every snapshotted ID against live league state; anything the
+    # world moved is dropped with an honest "no longer available" note
+    # (the §6 mid-trade roster-mutation risk). Only plain data is stored,
+    # so the session survives save/load.
+    # ------------------------------------------------------------------
+    _DEAL_SESSION_ID = "trade_deal"
+    _PROPOSE_SESSION_ID = "trade_propose"
+
+    def _deal_session(self):
+        from popup_system import get_pending_session
+        sess = get_pending_session(self._trade_app(), self._DEAL_SESSION_ID)
+        if not isinstance(sess, dict):
+            return {}
+        sess.setdefault("kind", "trade")
+        return sess
+
+    def _asset_ref(self, asset):
+        try:
+            label = self.te.asset_label(asset)
+        except Exception:
+            label = str(getattr(asset, "full_name",
+                                getattr(asset, "name", "?")))
+        try:
+            kind = "pick" if self.te._is_pick(asset) else "player"
+        except Exception:
+            kind = "player"
+        return {"id": str(getattr(asset, "id", "")), "kind": kind,
+                "label": label}
+
+    def _snapshot_deal_session(self):
+        """Write-through: current in-progress deal -> Tier-B session."""
+        if getattr(self, "_restoring", False):
+            return
+        try:
+            sess = self._deal_session()
+            if not sess:
+                return
+            user_refs = [self._asset_ref(a)
+                         for a in (self.trade_offers.get("user") or [])]
+            partner_refs = [self._asset_ref(a)
+                            for a in (self.trade_offers.get("partner") or [])]
+            lvl_user, lvl_partner = {}, {}
+            for side, lvl_map in (("user", lvl_user), ("partner", lvl_partner)):
+                for a in (self.trade_offers.get(side) or []):
+                    lvl = (self._asset_levels.get(side) or {}).get(id(a),
+                                                                   "NHL")
+                    lvl_map[str(getattr(a, "id", ""))] = lvl
+            sess["partner"] = (self.partner_combo.get()
+                               if hasattr(self, "partner_combo") else "")
+            sess["user_assets"] = user_refs
+            sess["partner_assets"] = partner_refs
+            sess["asset_levels"] = {"user": lvl_user,
+                                    "partner": lvl_partner}
+            sess["retention"] = {str(k): float(v)
+                                 for k, v in (self._retention or {}).items()
+                                 if v}
+            sess["pick_protection"] = {
+                str(k): v for k, v in (self._pick_protection or {}).items()
+                if v}
+            sess["terms_version"] = int(sess.get("terms_version") or 0) + 1
+            sess["negotiation_id"] = self._negotiation_id
+            try:
+                import datetime as _dt
+                sess["updated_at"] = _dt.datetime.now().isoformat(
+                    timespec="seconds")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _clear_deal_session(self):
+        try:
+            sessions = getattr(self._trade_app(), "pending_sessions", None)
+            if isinstance(sessions, dict):
+                sessions.pop(self._DEAL_SESSION_ID, None)
+        except Exception:
+            pass
+
+    def _reset_deal_session(self):
+        """Fresh workbench: drop the parked deal and any parked propose
+        chain for a *different* deal (a dead proposal spends nothing --
+        its single-use waiver stamps are cleared, same as the old
+        destroy-and-rebuild on preset open)."""
+        try:
+            from popup_system import get_pending_session
+            app = self._trade_app()
+            ps = get_pending_session(app, self._PROPOSE_SESSION_ID)
+            if isinstance(ps, dict) and not ps.get("sent"):
+                self._clear_propose_stamps(ps)
+            self._drop_propose_session()
+            # Sweep orphaned id-keyed propose sessions from the popup era.
+            sessions = getattr(app, "pending_sessions", None)
+            if isinstance(sessions, dict):
+                for sid in [s for s in sessions
+                            if str(s).startswith("trade_propose:")]:
+                    sessions.pop(sid, None)
+        except Exception:
+            pass
+        self._clear_deal_session()
+
+    def _resolve_deal_asset(self, team, asset_id, kind):
+        """Revalidate: resolve a snapshotted asset ID against live state."""
+        if team is None or not asset_id:
+            return None
+        sid = str(asset_id)
+        if kind == "pick":
+            try:
+                for _yr, picks in (
+                        getattr(team, "draft_picks", None) or {}).items():
+                    for pk in (picks or []):
+                        if str(getattr(pk, "id", "")) == sid:
+                            try:
+                                if not pk.can_be_traded():
+                                    return None
+                            except Exception:
+                                pass
+                            return pk
+            except Exception:
+                return None
+            return None
+        for attr in ("roster", "ahl_roster", "prospects"):
+            try:
+                for p in (getattr(team, attr, None) or []):
+                    if str(getattr(p, "id", "")) == sid:
+                        return p
+            except Exception:
+                continue
+        return None
+
+    def _restore_deal_session(self):
+        """Rebuild the in-progress deal from the Tier-B session, dropping
+        (honestly) anything the world moved since it was parked."""
+        dropped = []
+        try:
+            sess = self._deal_session()
+            if (not sess or (not sess.get("user_assets")
+                             and not sess.get("partner_assets")
+                             and not sess.get("partner"))):
+                return dropped
+            pname = sess.get("partner") or ""
+            if pname and hasattr(self, "partner_combo"):
+                try:
+                    vals = list(self.partner_combo.cget("values") or [])
+                except Exception:
+                    vals = []
+                if pname in vals:
+                    self.partner_combo.set(pname)
+            # Refresh the partner roster first (it clears the partner side
+            # of the deal by design); the restore re-fills it below.
+            self.update_trade_partner_roster()
+            partner = self._partner_team()
+            user_team = getattr(self._trade_app(), "user_team", None)
+            lvl_maps = sess.get("asset_levels") or {}
+            ret_map = {str(k): v
+                       for k, v in (sess.get("retention") or {}).items()}
+            prot_map = {str(k): v
+                        for k, v in (sess.get("pick_protection") or {}).items()}
+            restored = {"user": [], "partner": []}
+            new_levels = {"user": {}, "partner": {}}
+            for side, refs in (("user", sess.get("user_assets") or []),
+                               ("partner", sess.get("partner_assets") or [])):
+                team = user_team if side == "user" else partner
+                for ref in (refs or []):
+                    obj = self._resolve_deal_asset(
+                        team, ref.get("id"), ref.get("kind"))
+                    if obj is None:
+                        dropped.append(ref.get("label")
+                                       or f"{ref.get('kind', 'asset')} "
+                                          f"{ref.get('id', '?')}")
+                        continue
+                    restored[side].append(obj)
+                    lvl = (lvl_maps.get(side) or {}).get(
+                        str(ref.get("id")), "NHL")
+                    new_levels[side][id(obj)] = lvl
+            self.trade_offers = restored
+            self._asset_levels = new_levels
+            keep = {str(getattr(a, "id", "")) for a in restored["user"]}
+            self._retention = {}
+            self._pick_protection = {}
+            for a in restored["user"]:
+                aid = getattr(a, "id", None)
+                if str(aid) in ret_map and ret_map[str(aid)]:
+                    try:
+                        self._retention[aid] = float(ret_map[str(aid)])
+                    except Exception:
+                        pass
+                if str(aid) in prot_map and prot_map[str(aid)]:
+                    self._pick_protection[aid] = prot_map[str(aid)]
+            self._refresh_offer_lists()
+            self._update_meter()
+            self._reconcile_stamps()
+            if dropped:
+                # Honest revalidation (§6): the world moved while parked.
+                from popup_system import notify_card
+                notify_card(
+                    self, "Deal updated",
+                    "No longer available and removed from the deal:\n" +
+                    "\n".join("• %s" % n for n in dropped[:8]),
+                    kind="warning")
+            self._snapshot_deal_session()
+        except Exception:
+            pass
+        return dropped
+
+    def _reconcile_stamps(self):
+        """A parked waiver stamp only lives while its player is still in
+        the deal -- scrub stamps for players who left (a dead proposal
+        spends nothing)."""
+        try:
+            from popup_system import get_pending_session
+            ps = get_pending_session(self._trade_app(),
+                                     self._PROPOSE_SESSION_ID)
+            if not isinstance(ps, dict) or ps.get("sent"):
+                return
+            in_deal = {str(getattr(a, "id", ""))
+                       for a in (self.trade_offers.get("user") or [])}
+            stamped = [str(i) for i in (ps.get("stamped") or [])]
+            gone = [i for i in stamped if i not in in_deal]
+            if not gone:
+                return
+            league = self._trade_league()
+            for _t in (getattr(league, "teams", None) or []):
+                for _pl in (getattr(_t, "roster", None) or []):
+                    try:
+                        if str(getattr(_pl, "id", "")) in gone:
+                            _c = getattr(_pl, "contract", None)
+                            if _c is not None:
+                                _c.ntc_waiver_for = ""
+                    except Exception:
+                        continue
+            ps["stamped"] = [i for i in stamped if i not in gone]
+        except Exception:
+            pass
+
+    def _neg_terms_hash(self):
+        """Version-stamp (§6): fingerprint the model-side negotiation's
+        current terms so an AI move under a paused negotiation is
+        detectable on resume."""
+        try:
+            import trade_negotiation as _tn
+            if not self._negotiation_id:
+                return None
+            neg = _tn.get_negotiation(self.parent, self._negotiation_id)
+            if neg is None:
+                return None
+            bits = [str(getattr(neg, "status", ""))]
+            for a in (getattr(neg, "user_assets", None) or []):
+                bits.append("u" + str(getattr(a, "id", "")))
+            for a in (getattr(neg, "partner_assets", None) or []):
+                bits.append("p" + str(getattr(a, "id", "")))
+            for k in sorted((getattr(neg, "retention", None) or {})):
+                bits.append("r%s=%s" % (k, neg.retention[k]))
+            for k in sorted((getattr(neg, "pick_protection", None) or {})):
+                bits.append("q%s=%s" % (k, neg.pick_protection[k]))
+            return "|".join(bits)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Views
@@ -4717,6 +5204,7 @@ class TradeWindow(InGamePopup):
             self._asset_levels['partner'] = {}
             self._refresh_offer_lists()
             self._update_meter()
+            self._snapshot_deal_session()  # Gating P2: write-through
         finally:
             self._set_busy(False)
 
@@ -4812,6 +5300,7 @@ class TradeWindow(InGamePopup):
             self._retention.pop(pid, None)
         self._refresh_offer_lists()
         self._update_meter()
+        self._snapshot_deal_session()  # Gating P2: write-through
 
     # ------------------------------------------------------------------
     # Trade meter
@@ -4908,6 +5397,7 @@ class TradeWindow(InGamePopup):
             self._asset_levels[side][id(player)] = lvl
             self._refresh_offer_lists()
             self._update_meter()
+            self._snapshot_deal_session()  # Gating P2: write-through
 
     def _remove_player_from_trade(self, side, player):
         """Right-click on a roster row: pull that player out of the deal."""
@@ -4944,6 +5434,7 @@ class TradeWindow(InGamePopup):
             self._pick_protection.pop(str(getattr(gone, 'id', '')), None)
         self._refresh_offer_lists()
         self._update_meter()
+        self._snapshot_deal_session()  # Gating P2: write-through
 
     def _team_picks(self, team):
         picks = []
@@ -5054,6 +5545,7 @@ class TradeWindow(InGamePopup):
                     self._pick_protection[pk.id] = prot
                 self._refresh_offer_lists()
                 self._update_meter()
+                self._snapshot_deal_session()  # Gating P2: write-through
                 dlg.destroy()
 
         primary_button(dlg, text="Add to Offer", command=add).pack(pady=12)
@@ -5100,14 +5592,39 @@ class TradeWindow(InGamePopup):
                     _wok = False
                 _bits.append(f"\u2022 {_vn} ({_tv['detail']}) -- "
                              f"{'likely to waive' if _wok else 'may refuse'}")
-            if not messagebox.askyesno(
-                    "Trade protection",
+            # Gating T2-Phase 2: the heads-up is a question card, not a
+            # blocking dialog. Dismiss = safe default (don't send).
+            from popup_system import ask_card, cards_available
+            if not cards_available(self):
+                if not messagebox.askyesno(
+                        "Trade protection",
+                        "Heads-up -- the other side has clause players:\n\n"
+                        + "\n".join(_bits)
+                        + "\n\nThey'll be asked to waive for a move to the "
+                        f"{self.parent.user_team.team_name}, and a refusal kills "
+                        "the deal. Send the offer anyway?"):
+                    return
+            else:
+                ask_card(
+                    self, "Trade protection",
                     "Heads-up -- the other side has clause players:\n\n"
                     + "\n".join(_bits)
                     + "\n\nThey'll be asked to waive for a move to the "
                     f"{self.parent.user_team.team_name}, and a refusal kills "
-                    "the deal. Send the offer anyway?"):
+                    "the deal. Send the offer anyway?",
+                    [("Send it anyway", True, "primary"),
+                     ("Not now", False, "secondary")],
+                    on_answer=lambda ans: (
+                        self._propose_trade_after_heads_up(
+                            partner, user_assets, partner_assets, _league)
+                        if ans else None),
+                    default_on_dismiss=False)
                 return
+        self._propose_trade_after_heads_up(
+            partner, user_assets, partner_assets, _league)
+
+    def _propose_trade_after_heads_up(self, partner, user_assets,
+                                      partner_assets, _league):
         # No-trade / no-movement clauses: the user's own clause players must
         # waive for this specific destination before the offer goes out.
         # Yes = ask him, No = pull him from the offer, Cancel = stop.
@@ -5158,53 +5675,72 @@ class TradeWindow(InGamePopup):
         # Waivers stamped in this pass belong to the proposal being built:
         # if the user cancels, they are cleared -- a dead proposal spends
         # nothing (the same rule the MP host applies to dead deals).
-        _stamped = []
-        for _v in self.te.trade_vetoes(
-                self.parent.user_team, partner,
-                [p for p in user_assets if not self.te._is_pick(p)], _league):
-            _p, _pname = _v["player"], getattr(
-                _v["player"], "full_name", str(_v["player"]))
-            _ans = messagebox.askyesnocancel(
-                "No-trade clause",
-                f"{_pname} has a {_v['detail']}.\n\nAsk him to waive it for "
-                f"a move to the {partner.team_name}?\n\n"
-                f"Yes = ask him  |  No = remove him from the offer  |  "
-                f"Cancel = stop")
-            if _ans is None:
-                for _sp in _stamped:
-                    try:
-                        _sp.contract.ntc_waiver_for = ""
-                    except Exception:
-                        pass
-                return
-            if _ans is False:
-                self.trade_offers['user'] = [
-                    a for a in self.trade_offers['user'] if a is not _p]
-                self._retention.pop(getattr(_p, 'id', None), None)
-                user_assets = list(self.trade_offers['user'])
-                self._refresh_offer_lists()
-                self._update_meter()
-                continue
-            _ok, _why = self.te.will_waive_ntc(
-                _p, self.parent.user_team, partner, _league)
-            if _ok:
-                try:
-                    _p.contract.ntc_waiver_for = partner.team_name
-                    _stamped.append(_p)
-                except Exception:
-                    pass
-                messagebox.showinfo("Waiver granted", _why)
-            else:
-                messagebox.showwarning(
-                    "Waiver refused",
-                    f"{_why}\n\nHe's staying put -- remove him from the "
-                    f"offer or cancel.")
-                return
+        # Gating T2-Phase 2: the waiver ask loop is a chain of question
+        # cards (one open at a time, ordered via the session). Dismiss =
+        # defer -- the unsent offer waits for the answer.
+        _vetoes = self.te.trade_vetoes(
+            self.parent.user_team, partner,
+            [p for p in user_assets if not self.te._is_pick(p)], _league)
+        if not _vetoes:
+            self._propose_trade_send(partner, user_assets, partner_assets)
+            return
+        from popup_system import get_pending_session
+        # Gating Phase 2: stable session id (the old id(self)-keyed id died
+        # with the popup; the chain must survive screen rebuilds).
+        _sess_id = self._PROPOSE_SESSION_ID
+        _sess = get_pending_session(self._trade_app(), _sess_id)
+        _sess["kind"] = "trade_propose"
+        _sess["partner"] = partner.team_name
+        _sess["queue"] = [
+            {"player_id": str(getattr(_v["player"], "id", "")),
+             "pname": getattr(_v["player"], "full_name",
+                             str(_v["player"])),
+             "detail": _v.get("detail", "clause")}
+            for _v in _vetoes]
+        _sess["stamped"] = []
+        _sess["sent"] = False
+        self._trade_propose_session = _sess_id
+        self._waiver_step()
+        return
+        self._propose_trade_send(partner, user_assets, partner_assets)
+
+    def _propose_trade_send(self, partner, user_assets, partner_assets):
+        """Send the offer after the waiver chain completes.
+
+        user_assets is rebuilt from the live offer: the waiver chain may
+        have pulled a player (and his retention row) out on a refused
+        waiver.
+
+        Gating Phase 2 (§6): consume-once -- a parked chain can only send a
+        single time -- and cap legality is revalidated transactionally at
+        the moment of send (the deal may have changed while parked).
+        """
+        # Consume-once: never double-send a parked chain.
+        from popup_system import get_pending_session
+        _ps = get_pending_session(self._trade_app(),
+                                  self._PROPOSE_SESSION_ID)
+        if isinstance(_ps, dict) and _ps.get("sent"):
+            return
         # Deal terms the user set on this screen (retention %, pick protection).
-        # Rebuilt here because the waiver loop above may have pulled a player
-        # (and his retention row) out of the offer on a refused waiver.
+        user_assets = list(self.trade_offers.get("user", []))
+        partner_assets = list(self.trade_offers.get("partner", []))
         retention = {k: v for k, v in self._retention.items() if v}
         pick_protection = dict(self._pick_protection)
+        if not user_assets or not partner_assets:
+            messagebox.showwarning(
+                "Incomplete",
+                "The deal is empty -- put assets on both sides first.")
+            return
+        # Transactional cap revalidation: the preflight ran before the
+        # waiver chain; re-check now, at the moment of send.
+        if not self.te._cap_ok_after(self.parent.user_team, user_assets,
+                                     partner_assets, retention=retention):
+            messagebox.showerror(
+                "Cap problem",
+                "This trade no longer clears the salary cap (the deal "
+                "changed while the waiver questions were parked). Shed "
+                "salary first.")
+            return
         if self._negotiation_id and self._preset.get("mode") == "counter":
             neg = tn.get_negotiation(self.parent, self._negotiation_id)
             if neg is not None and neg.is_open:
@@ -5216,7 +5752,8 @@ class TradeWindow(InGamePopup):
                     f"Your revised proposal is with {partner.team_name}.\n"
                     "They will answer in a few days -- the reply lands in "
                     "your inbox. You can close this window.")
-                self.destroy()
+                self._mark_propose_sent()
+                self._finish_proposal()
                 return
         tn.send_offer(self.parent, partner, user_assets, partner_assets,
                       retention=retention, pick_protection=pick_protection)
@@ -5225,7 +5762,260 @@ class TradeWindow(InGamePopup):
             f"Your offer is with {partner.team_name}'s front office.\n"
             "Expect an answer within a few days -- it will arrive in your "
             "inbox, so feel free to close this and keep working.")
-        self.destroy()
+        self._mark_propose_sent()
+        self._finish_proposal()
+
+    def _finish_proposal(self):
+        """The deal is sent: consume the parked chain, reset the workbench,
+        and leave the screen (the old popup closed on send)."""
+        try:
+            self._drop_propose_session()
+        except Exception:
+            pass
+        try:
+            self._clear_deal_session()
+        except Exception:
+            pass
+        try:
+            self.trade_offers = {'user': [], 'partner': []}
+            self._asset_levels = {'user': {}, 'partner': {}}
+            self._retention = {}
+            self._pick_protection = {}
+            self._refresh_offer_lists()
+            self._update_meter()
+        except Exception:
+            pass
+        self.close_view()
+
+    # -- Gating T2-Phase 2: waiver question chain ----------------------
+    def _trade_app(self):
+        _p = getattr(self, "parent", None)
+        return getattr(_p, "app", _p)
+
+    def _trade_current_screen_id(self):
+        try:
+            return (getattr(self._trade_app(), "_current_screen", None)
+                    or {}).get("id")
+        except Exception:
+            return None
+
+    def _trade_league(self):
+        _app = self._trade_app()
+        return (getattr(getattr(_app, "game_manager", None), "league", None)
+                or getattr(_app, "league", None))
+
+    def _trade_partner_team(self, partner_name):
+        """Revalidate: resolve the partner team object fresh from the league."""
+        try:
+            for _t in (getattr(self._trade_league(), "teams", None) or []):
+                if getattr(_t, "team_name", None) == partner_name:
+                    return _t
+        except Exception:
+            pass
+        return None
+
+    def _trade_offer_player(self, player_id):
+        for _a in (self.trade_offers.get("user", None) or []):
+            try:
+                if (not self.te._is_pick(_a)
+                        and str(getattr(_a, "id", "")) == str(player_id)):
+                    return _a
+            except Exception:
+                continue
+        return None
+
+    def _mark_propose_sent(self):
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self._trade_app(),
+                                        self._PROPOSE_SESSION_ID)
+            if isinstance(_sess, dict):
+                _sess["sent"] = True
+        except Exception:
+            pass
+
+    def _clear_propose_stamps(self, _sess):
+        """A dead proposal spends nothing: clear single-use waiver stamps."""
+        try:
+            _ids = {str(i) for i in (_sess.get("stamped") or [])}
+            for _t in (getattr(self._trade_league(), "teams", None) or []):
+                for _pl in (getattr(_t, "roster", None) or []):
+                    try:
+                        if str(getattr(_pl, "id", "")) in _ids:
+                            _c = getattr(_pl, "contract", None)
+                            if _c is not None:
+                                _c.ntc_waiver_for = ""
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            _sess["stamped"] = []
+        except Exception:
+            pass
+
+    def _drop_propose_session(self):
+        """Forget the propose session and its parked questions."""
+        try:
+            from popup_system import (get_pending_session,
+                                      unregister_pending_item)
+            # Gating Phase 2: stable session id (survives screen rebuilds).
+            _sess_id = self._PROPOSE_SESSION_ID
+            _app = self._trade_app()
+            _sess = get_pending_session(_app, _sess_id)
+            if isinstance(_sess, dict):
+                for _did in list((_sess.get("dialogs") or {}).keys()):
+                    unregister_pending_item(_app, f"q:{_sess_id}:{_did}")
+                try:
+                    del _app.pending_sessions[_sess_id]
+                except Exception:
+                    pass
+            self._trade_propose_session = None
+        except Exception:
+            pass
+
+    def _waiver_step(self):
+        """Ask the next waiver question in the queue, or send the offer."""
+        from popup_system import (ask_card, cards_available,
+                                  get_pending_session, register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        # Gating Phase 2: stable session id (survives screen rebuilds).
+        _sess = get_pending_session(self._trade_app(),
+                                    self._PROPOSE_SESSION_ID)
+        if not isinstance(_sess, dict):
+            return
+        _queue = _sess.get("queue") or []
+        if not _queue:
+            _partner = self._trade_partner_team(_sess.get("partner"))
+            if _partner is None:
+                messagebox.showwarning(
+                    "Trade stale",
+                    "The trade partner changed while the waiver questions "
+                    "were parked. The offer was not sent.")
+                self._clear_propose_stamps(_sess)
+                return
+            self._propose_trade_send(
+                _partner,
+                list(self.trade_offers.get("user", [])),
+                list(self.trade_offers.get("partner", [])))
+            return
+        _item = _queue[0]
+        _pid = _item.get("player_id")
+        _p = self._trade_offer_player(_pid)
+        if _p is None:
+            # Player left the offer while parked: skip honestly, continue.
+            _queue.pop(0)
+            self._waiver_step()
+            return
+        _pname = getattr(_p, "full_name", _item.get("pname", "?"))
+        _partner_name = _sess.get("partner", "?")
+        _did = f"waiver:{_pid}"
+        _msg = (f"{_pname} has a {_item.get('detail', 'clause')}.\n\n"
+                f"Ask him to waive it for a move to {_partner_name}?\n\n"
+                "Yes = ask him  |  No = remove him from the offer  |  "
+                "Cancel = stop")
+        _buttons = [("Yes \u2014 ask him", True, "primary"),
+                    ("No \u2014 remove from offer", False, "secondary"),
+                    ("Cancel", "cancel", "secondary")]
+
+        def _on_answer(ans, _pid=_pid, _did=_did, _sess_id=_sess_id):
+            try:
+                unregister_pending_item(self._trade_app(),
+                                        f"q:{_sess_id}:{_did}")
+            except Exception:
+                pass
+            self._waiver_answer(_sess_id, _pid, ans)
+
+        if not cards_available(self):
+            # Headless: legacy blocking path, identical branches.
+            _on_answer(messagebox.askyesnocancel("No-trade clause", _msg))
+            return
+        _app = self._trade_app()
+        _item_id = f"q:{_sess_id}:{_did}"
+        _title = f"Waiver: {_pname} \u2014 answer"
+        _detail = (f"{_pname} must waive his clause before the offer to "
+                   f"{_partner_name} can be sent.")
+        _screen_id = self._trade_current_screen_id()
+        register_pending_item(_app, _item_id, kind=RESUMABLE, title=_title,
+                              detail=_detail, screen_id=_screen_id)
+        ask_card(self, "No-trade clause", _msg, _buttons,
+                 on_answer=_on_answer, default_on_dismiss="defer",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="trade_waiver_answer",
+                 resolver_args={"player_id": _pid})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE, "title": _title,
+                "detail": _detail, "screen_id": _screen_id}
+        except Exception:
+            pass
+
+    def _waiver_answer(self, _sess_id, _pid, _ans):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self._trade_app(), _sess_id)
+        if not isinstance(_sess, dict):
+            return
+        _queue = _sess.get("queue") or []
+        if _queue and str(_queue[0].get("player_id")) == str(_pid):
+            _queue.pop(0)
+        else:
+            _queue[:] = [q for q in _queue
+                         if str(q.get("player_id")) != str(_pid)]
+        _p = self._trade_offer_player(_pid)
+        if _ans is None or _ans == "cancel":
+            # Cancel: clear every stamp -- a dead proposal spends nothing.
+            self._clear_propose_stamps(_sess)
+            return
+        if _ans is False:
+            # No: pull him (and his retention row) from the offer.
+            if _p is not None:
+                self.trade_offers["user"] = [
+                    a for a in self.trade_offers["user"] if a is not _p]
+                self._retention.pop(getattr(_p, "id", None), None)
+                try:
+                    self._refresh_offer_lists()
+                    self._update_meter()
+                except Exception:
+                    pass
+                self._snapshot_deal_session()  # Gating P2: write-through
+            self._waiver_step()
+            return
+        # Yes: roll the waiver.
+        if _p is None:
+            self._waiver_step()
+            return
+        _partner = self._trade_partner_team(_sess.get("partner"))
+        _user_team = getattr(self._trade_app(), "user_team", None)
+        if _partner is None or _user_team is None:
+            messagebox.showwarning(
+                "Trade stale",
+                "The trade changed while the question was parked. "
+                "The offer was not sent.")
+            self._clear_propose_stamps(_sess)
+            return
+        try:
+            _ok, _why = self.te.will_waive_ntc(
+                _p, _user_team, _partner, self._trade_league())
+        except Exception:
+            _ok, _why = False, "The waiver request failed."
+        if _ok:
+            try:
+                _p.contract.ntc_waiver_for = _partner.team_name
+                _st = _sess.get("stamped") or []
+                _st.append(str(_pid))
+                _sess["stamped"] = _st
+            except Exception:
+                pass
+            messagebox.showinfo("Waiver granted", _why)
+            self._waiver_step()
+        else:
+            messagebox.showwarning(
+                "Waiver refused",
+                f"{_why}\n\nHe's staying put -- remove him from the "
+                "offer or cancel.")
+            # Dead stop, exactly like the blocking version: the window
+            # stays open and earlier stamps stay live with the offer.
+            return
 
     # ------------------------------------------------------------------
     # History
@@ -5827,6 +6617,15 @@ class DraftView(ctk.CTkFrame):
         self._draft_rng = random.Random()
         self._sp_clock_id = None
         self._sp_clock_left = 0
+        # Gating T2-Phase 2: set while a draft-night call card is parked.
+        # The SP clock freezes (without a grab) until the call resolves.
+        self._ddt_call_parked = False
+        # Gating Phase 3 (A2/A3): the user's own pick-swap card, while
+        # open, also freezes the SP clock -- the clock must never fire
+        # under an in-progress draft decision. Tracked as the live dialog
+        # object; liveness is re-checked on every tick (self-healing if
+        # the card was destroyed without clearing it).
+        self._draft_trade_dlg = None
 
         ct = self._ct
 
@@ -7191,6 +7990,23 @@ class DraftView(ctk.CTkFrame):
                 text=f"Your next pick: #{nxt + 1} (Round {r})")
         else:
             self.next_pick_label.configure(text="No picks remaining")
+        # Gating Phase 3 (A2): the clock moved off the user's turn (a
+        # mid-draft trade moved their pick, or the clock auto-picked).
+        # Any armed two-step confirm is stale -- disarm it so a later
+        # click can't act on a dead decision.
+        if not is_user:
+            try:
+                self.selected_prospect = None
+            except Exception:
+                pass
+            try:
+                self._disarm_draft_button()
+            except Exception:
+                pass
+            try:
+                self.selected_label.configure(text="No prospect selected")
+            except Exception:
+                pass
 
     def _start_sp_draft_clock(self):
         """Single-player draft countdown for the local human's pick.
@@ -7220,6 +8036,62 @@ class DraftView(ctk.CTkFrame):
                 pass
         self._sp_clock_id = None
 
+    # Gating Phase 3 (A2/A4): the single predicate behind the SP clock
+    # freeze. The clock never advances under an in-progress draft
+    # decision -- a parked/open draft-night call card, the user's own
+    # pick-swap card, or a legacy modal grab. Extracted (not inlined) so
+    # the freeze is unit-testable headless.
+    def _draft_clock_frozen(self):
+        try:
+            if self.grab_current() is not None:
+                return True
+        except Exception:
+            pass
+        try:
+            if getattr(self, '_ddt_call_parked', False):
+                return True
+        except Exception:
+            pass
+        try:
+            _dlg = getattr(self, '_draft_trade_dlg', None)
+            if _dlg is not None:
+                try:
+                    if _dlg.winfo_exists():
+                        return True
+                except Exception:
+                    pass
+                # Card gone without clearing: self-heal, don't freeze forever.
+                self._draft_trade_dlg = None
+        except Exception:
+            pass
+        return False
+
+    # Gating Phase 3 (A1): re-read the on-clock slot live. Never trust a
+    # snapshot taken when the board was rendered -- a mid-draft trade may
+    # have moved the pick since.
+    def _live_on_clock(self):
+        try:
+            if 0 <= self.current_pick < len(self.draft_order):
+                _r, _t, _dp = self.draft_order[self.current_pick]
+                return (self.current_pick + 1, _r, _t, _dp)
+        except Exception:
+            pass
+        return (None, None, None, None)
+
+    def _slot_already_picked(self, idx):
+        """True when slot idx (0-based) already has a committed pick."""
+        try:
+            _sess = getattr(self, '_session', None)
+            if _sess is not None:
+                return bool(_sess.has_pick(int(idx) + 1))
+        except Exception:
+            pass
+        try:
+            return any(int(_ov) == int(idx) + 1
+                       for _tn, _ov, _pl in (self.picks_made or []))
+        except Exception:
+            return False
+
     def _sp_clock_tick(self):
         self._sp_clock_id = None
         if self.current_pick >= len(self.draft_order):
@@ -7227,13 +8099,12 @@ class DraftView(ctk.CTkFrame):
         _r, _team, _dp = self.draft_order[self.current_pick]
         if _team != self.app.user_team:
             return
-        try:
-            if self.grab_current() is not None:
-                # Modal open (trade offer/counter): defer, don't fire.
-                self._sp_clock_id = self.after(1000, self._sp_clock_tick)
-                return
-        except Exception:
-            pass
+        # Gating Phase 3 (A2): the clock freezes under any in-progress
+        # draft decision (parked call card, open pick-swap card, modal
+        # grab) -- never fires under a decision. See _draft_clock_frozen.
+        if self._draft_clock_frozen():
+            self._sp_clock_id = self.after(1000, self._sp_clock_tick)
+            return
         if self._sp_clock_left <= 0:
             try:
                 self._ticker(f"{_team.team_name} ran out the clock -- "
@@ -7303,6 +8174,21 @@ class DraftView(ctk.CTkFrame):
         if self.current_pick >= len(self.draft_order):
             self.end_draft()
             return
+        # Gating Phase 3 (A1/A3): a trade executed anywhere mid-draft
+        # (war-room call, pick-swap card, or the full Trade Center on
+        # another screen) moves pick objects, not this view's order list.
+        # Re-point the board at the LIVE owners before anything reads the
+        # clock, and mirror into the session journal -- the board shows
+        # the new owner, never a stale one.
+        try:
+            from draft_day_trades import _sync_view_order
+            _sync_view_order(self, self.app.league)
+        except Exception:
+            pass
+        try:
+            self._sync_session_owners()
+        except Exception:
+            pass
         round_num, team_on_clock, _dp = self.draft_order[self.current_pick]
         # DRAFT-DAY MARKET: round 1 runs like the trade deadline. Before the
         # clock starts, the phones ring -- an AI club below may trade up for
@@ -7347,6 +8233,11 @@ class DraftView(ctk.CTkFrame):
                         self.trade_pick_button.configure(state=state)
             except Exception:
                 pass
+            # Gating T2-Phase 2: the call card owns the clock now. The
+            # answer continuation re-runs process_draft_pick when the call
+            # resolves -- don't start the clock under a parked call.
+            if getattr(self, '_ddt_call_parked', False):
+                return
 
         # Your next pick info is handled inside _refresh_clock_ui.
 
@@ -7541,8 +8432,35 @@ class DraftView(ctk.CTkFrame):
         if not self.selected_prospect:
             messagebox.showwarning("No Prospect", "Select a prospect from the shortlist.")
             return
-        _r, team_on_clock, _dp = self.draft_order[self.current_pick]
+        _overall, _r, team_on_clock, _dp = self._live_on_clock()
+        if team_on_clock is None:
+            return
         if team_on_clock != self.app.user_team:
+            # Gating Phase 3 (A1): ownership drifted under the armed pick
+            # (a mid-draft trade moved it) or the clock already auto-picked.
+            # Refuse honestly -- never silently apply, never leave a stale
+            # armed button behind.
+            _owner = getattr(team_on_clock, 'team_name', '?')
+            _pname = getattr(self.selected_prospect, 'full_name', '?')
+            self.selected_prospect = None
+            self._disarm_draft_button()
+            try:
+                self.selected_label.configure(text="No prospect selected")
+            except Exception:
+                pass
+            try:
+                self._refresh_shortlist()
+            except Exception:
+                pass
+            from popup_system import notify_card
+            try:
+                notify_card(
+                    self, "No Longer Your Pick",
+                    f"Pick #{_overall} is no longer yours -- it now belongs "
+                    f"to {_owner}. Your selection ({_pname}) was cleared; "
+                    f"no pick was made.")
+            except Exception:
+                pass
             return
         p = self.selected_prospect
         if p not in self.app.league.draft_prospects:
@@ -7634,6 +8552,27 @@ class DraftView(ctk.CTkFrame):
         try:
             _sess = self._session
             if _sess is not None and _sess.has_pick(_ov):
+                return False
+        except Exception:
+            pass
+        # Gating Phase 3 (A1): pick-ownership drift. The `team` handed in
+        # must still own the live on-clock slot -- a mid-draft trade may
+        # have moved it since the caller read the board. Acting on a stale
+        # owner is refused, never silently applied to the wrong club.
+        try:
+            _live_team = self.draft_order[self.current_pick][1]
+            _same = (_live_team is team) or (
+                getattr(_live_team, 'team_name', None) is not None
+                and getattr(_live_team, 'team_name', None)
+                == getattr(team, 'team_name', None))
+            if not _same:
+                try:
+                    self._ticker(
+                        f"Pick #{_ov} refused: {_live_team.team_name} "
+                        f"now owns the slot (stale owner "
+                        f"{getattr(team, 'team_name', '?')}).")
+                except Exception:
+                    pass
                 return False
         except Exception:
             pass
@@ -7764,6 +8703,11 @@ class DraftView(ctk.CTkFrame):
         dlg.geometry("480x460")
         dlg.configure(fg_color=ct['BG'])
         dlg.transient(self)
+        # Gating Phase 3 (A2): while this card is open the SP clock
+        # freezes -- the clock must never auto-pick under the user's
+        # in-progress trade decision. _draft_clock_frozen re-checks the
+        # card's liveness every tick (self-healing on destroy).
+        self._draft_trade_dlg = dlg
         overall = self.current_pick + 1
         self._heading(dlg, text=f"Your pick: #{overall} (Round {_r})",
                 size=13).pack(pady=(14, 4))
@@ -7835,6 +8779,26 @@ class DraftView(ctk.CTkFrame):
             sel = lb.curselection()
             if not sel or not dlg._picks:
                 return
+            # Gating Phase 3 (A1): re-validate at propose time. The slot
+            # may have moved (or been picked) while the card was open --
+            # a swap for a stale slot is refused, never silently applied.
+            _ov2, _rr2, _live_team, _live_dp = self._live_on_clock()
+            if _live_dp is not user_pick or self._slot_already_picked(
+                    self.current_pick):
+                try:
+                    dlg.destroy()
+                except Exception:
+                    pass
+                self._draft_trade_dlg = None
+                from popup_system import notify_card as _nc2
+                try:
+                    _nc2(self, "Pick No Longer Available",
+                         "That pick is no longer on the clock -- the draft "
+                         "moved on while the trade window was open. No "
+                         "trade was made.")
+                except Exception:
+                    pass
+                return
             j, partner_pick, _r2 = dlg._picks[sel[0]]
             partner = next(t for t in self.app.league.teams
                            if t.team_name == combo.get())
@@ -7847,18 +8811,83 @@ class DraftView(ctk.CTkFrame):
             if resp.decision == 'counter':
                 extra = resp.want_added + resp.will_add
                 detail = "; ".join(self.te.asset_label(a) for a in extra)
-                if not messagebox.askyesno("Counter-offer",
-                                           f"{resp.message}\n\nAccept?"):
-                    return
-                _done = self._execute_pick_swap(
-                    j, user_pick, partner_pick,
-                    resp.want_added, resp.will_add)
+                # Gating T2-Phase 2: the counter is a question card, not a
+                # blocking dialog. Dismiss = safe default (decline).
+                from popup_system import (ask_card, cards_available,
+                                          get_pending_session,
+                                          register_pending_item,
+                                          unregister_pending_item, RESUMABLE)
+                _sess_id = f"pick_swap:{id(dlg)}"
+                _sess = get_pending_session(self.app, _sess_id)
+                _sess["kind"] = "pick_swap"
+                _did = "counter"
+                _item_id = f"q:{_sess_id}:{_did}"
+                _title = f"Pick-swap counter \u2014 answer"
+                _pdetail = (f"Counter on the pick swap (#{overall + 1}): "
+                            "accept or decline.")
+                _screen_id = None
+                try:
+                    _screen_id = (getattr(self.app, "_current_screen", None)
+                                  or {}).get("id")
+                except Exception:
+                    pass
+
+                def _counter_answer(ans, _sess_id=_sess_id,
+                                    _item_id=_item_id):
+                    try:
+                        unregister_pending_item(self.app, _item_id)
+                    except Exception:
+                        pass
+                    try:
+                        if (isinstance(
+                                getattr(self.app, "pending_sessions", None),
+                                dict)):
+                            self.app.pending_sessions.pop(_sess_id, None)
+                    except Exception:
+                        pass
+                    if not ans:
+                        return
+                    _done = self._execute_pick_swap(
+                        j, user_pick, partner_pick,
+                        resp.want_added, resp.will_add)
+                    if not _done:
+                        return  # legality preflight blocked it
+                    dlg.destroy()
+                    self._draft_trade_dlg = None
+                    messagebox.showinfo("Trade Complete",
+                                        "Pick swap completed.")
+                    self.process_draft_pick()
+
+                if not cards_available(self):
+                    # Headless: legacy blocking path, identical branches.
+                    _counter_answer(messagebox.askyesno(
+                        "Counter-offer", f"{resp.message}\n\nAccept?"))
+                else:
+                    register_pending_item(
+                        self.app, _item_id, kind=RESUMABLE, title=_title,
+                        detail=_pdetail, screen_id=_screen_id)
+                    ask_card(self, "Counter-offer",
+                             f"{resp.message}\n\nAccept the counter?",
+                             [("Accept", True, "primary"),
+                              ("Decline", False, "secondary")],
+                             on_answer=_counter_answer,
+                             default_on_dismiss=False,
+                             session_id=_sess_id, dialog_id=_did)
+                    try:
+                        _sess["dialogs"][_did]["registry"] = {
+                            "item_id": _item_id, "kind": RESUMABLE,
+                            "title": _title, "detail": _pdetail,
+                            "screen_id": _screen_id}
+                    except Exception:
+                        pass
+                return
             else:
                 _done = self._execute_pick_swap(
                     j, user_pick, partner_pick, [], [])
             if not _done:
                 return  # legality preflight blocked it; dialog stays open
             dlg.destroy()
+            self._draft_trade_dlg = None
             messagebox.showinfo("Trade Complete", "Pick swap completed.")
             self.process_draft_pick()
 
@@ -7950,6 +8979,18 @@ class DraftView(ctk.CTkFrame):
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
         user_team = self.app.user_team
+        # Gating Phase 3 (A1/A3): the on-clock slot is re-read live. If a
+        # mid-draft trade or a clock auto-pick moved/spent it while the
+        # swap was being built, the swap is refused honestly -- trading a
+        # spent pick would double-use the slot.
+        _ov3, _rr3, _lt3, _ldp3 = self._live_on_clock()
+        if _ldp3 is not user_pick or self._slot_already_picked(
+                self.current_pick):
+            messagebox.showerror(
+                "Pick No Longer Available",
+                "That pick is no longer on the clock -- the draft moved on "
+                "while the trade window was open. No trade was made.")
+            return False
         partner_team = self.draft_order[partner_idx][1]
         # Legality preflight: the counter path used to skip every gate.
         _ok, _why = self._validate_pick_swap(
@@ -8000,6 +9041,12 @@ class DraftView(ctk.CTkFrame):
         except Exception:
             pass
         self._ticker(f"TRADE: {summary}")
+        # Gating Phase 3 (A3): mirror the new owners into the session
+        # journal so a screen-shift re-entry sees the same board.
+        try:
+            self._sync_session_owners()
+        except Exception:
+            pass
         return True
 
     # ------------------------------------------------------------------
@@ -8519,22 +9566,32 @@ class ScheduleView(ctk.CTkFrame):
             is_past_game = False
 
         if is_past_game:
-            response = messagebox.askyesno(
-                "Game Not Played",
-                "This game hasn't been played yet.\n\n"
-                "Would you like to simulate and watch it?\n"
-                "(The result will be recorded in your season.)")
-            if not response:
-                return
-            self._launch_game_viewer(game_data, commit=True)
+            # Gating T2-Phase 3: non-modal; dismiss = don't simulate.
+            _set_watch_game_ctx(self, game_data, True)
+            ask_card(self, "Game Not Played",
+                     "This game hasn't been played yet.\n\n"
+                     "Would you like to simulate and watch it?\n"
+                     "(The result will be recorded in your season.)",
+                     [("Simulate & Watch", True, "primary"),
+                      ("Not Now", False, "secondary")],
+                     on_answer=_watch_game_on_answer,
+                     default_on_dismiss=False,
+                     session_id="watch_game", dialog_id="watch_card",
+                     resolver="watch_game_answer")
+            return
         else:
-            response = messagebox.askyesno(
-                "Future Game",
-                "This game is scheduled for today or the future.\n\n"
-                "Watch a preview simulation? It will not affect your season.")
-            if not response:
-                return
-            self._launch_game_viewer(game_data, commit=False)
+            # Gating T2-Phase 3: non-modal; dismiss = no preview.
+            _set_watch_game_ctx(self, game_data, False)
+            ask_card(self, "Future Game",
+                     "This game is scheduled for today or the future.\n\n"
+                     "Watch a preview simulation? It will not affect your season.",
+                     [("Watch Preview", True, "primary"),
+                      ("Not Now", False, "secondary")],
+                     on_answer=_watch_game_on_answer,
+                     default_on_dismiss=False,
+                     session_id="watch_game", dialog_id="watch_card",
+                     resolver="watch_game_answer")
+            return
 
     def simulate_selected_game(self):
         """Simulate the selected game without watching.
@@ -10872,8 +11929,9 @@ class ContractNegotiationView(ctk.CTkFrame):
 
     Offer builder on the left, team/player context on the right: cap space,
     the agent's ask, comparable contracts, and this negotiation's offer
-    history. Negotiation state lives in ``app.negotiation_sessions`` so the
-    user can jump to another screen mid-talks and resume from the navbar.
+    history. Negotiation state lives in ``app.pending_sessions`` (see
+    ``popup_system.get_negotiation_session``) so the user can jump to
+    another screen mid-talks and resume from the navbar.
     """
 
     def __init__(self, parent, player=None, is_extension=False, app=None,
@@ -10898,39 +11956,28 @@ class ContractNegotiationView(ctk.CTkFrame):
     # ---------- session ----------
 
     def _get_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is None:
-            sessions = {}
-            self.app.negotiation_sessions = sessions
-        player = self.player
-        key = getattr(player, "id", None) or id(player)
-        sess = sessions.get(key)
-        if sess is None or sess.get("player") is not player:
-            sess = {
-                "player": player,
-                "is_extension": self.is_extension,
-                "is_elc": self.is_elc,
-                "offers": [],          # (salary, years, result)
-                "asking_price": None,  # last known agent ask
-                "draft_salary": "",
-                "draft_years": 1,
-                "draft_clause": "none",
-                "draft_clause_size": 10,
-                "draft_signing_bonus": "",
-                "draft_perf_bonus": "",
-            }
-            sessions[key] = sess
-        self._sess_key = key
-        return sess
+        # Gating Phase 1: Tier-B session in app.pending_sessions (see
+        # popup_system.get_negotiation_session). Draft terms write through
+        # on every widget change, so the in-progress offer survives
+        # navigation, cache eviction, and re-presentation.
+        from popup_system import get_negotiation_session
+        sess = get_negotiation_session(self.app, self.player, defaults={
+            "is_extension": self.is_extension,
+            "is_elc": self.is_elc,
+            "offers": [],          # (salary, years, result)
+            "asking_price": None,  # last known agent ask
+            "draft_salary": "",
+            "draft_years": 1,
+            "draft_clause": "none",
+            "draft_clause_size": 10,
+            "draft_signing_bonus": "",
+            "draft_perf_bonus": "",
+        })
+        return sess if sess is not None else {}
 
     def _close_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is not None:
-            sessions.pop(self._sess_key, None)
-        try:
-            self.app.refresh_screen_navbar()
-        except Exception:
-            pass
+        from popup_system import close_negotiation_session
+        close_negotiation_session(self.app, self.player)
 
     # ---------- market data ----------
 
@@ -11883,43 +12930,125 @@ class WaiversView(ctk.CTkFrame):
             import trade_engine as _te
             _kind, _detail = _te.clause_of(player)
             if _kind == "NMC":
-                _ask = messagebox.askyesno(
-                    "No-movement clause",
-                    f"{player.full_name} has a {_detail}.\n\n"
-                    "He must approve being exposed on waivers. Ask him?")
-                if not _ask:
+                # Gating T2-Phase 2: NMC consent is a question card, not a
+                # blocking dialog. Dismiss = defer (safe default: not
+                # asked, the player stays on the roster).
+                from popup_system import (ask_card, cards_available,
+                                          get_pending_session,
+                                          register_pending_item,
+                                          unregister_pending_item, RESUMABLE)
+                _sess_id = f"waiver_nmc:{player.id}"
+                _sess = get_pending_session(self.app, _sess_id)
+                _sess["kind"] = "waiver_nmc"
+                _sess["player_id"] = str(player.id)
+                _did = f"consent:{player.id}"
+                _item_id = f"q:{_sess_id}:{_did}"
+                _title = f"NMC consent: {player.full_name} \u2014 answer"
+                _detail = (f"{player.full_name} must approve being exposed "
+                           "on waivers before placement.")
+                _screen_id = None
+                try:
+                    _screen_id = (getattr(self.app, "_current_screen", None)
+                                  or {}).get("id")
+                except Exception:
+                    pass
+                _nmc_msg = (f"{player.full_name} has a {_detail}.\n\n"
+                            "He must approve being exposed on waivers. "
+                            "Ask him?")
+
+                def _nmc_on_answer(ans, _pid=player.id,
+                                   _sess_id=_sess_id, _item_id=_item_id):
+                    try:
+                        unregister_pending_item(self.app, _item_id)
+                    except Exception:
+                        pass
+                    self._waiver_nmc_answer(_sess_id, _pid, ans)
+
+                if not cards_available(self):
+                    # Headless: legacy blocking path, identical branches.
+                    _nmc_on_answer(messagebox.askyesno(
+                        "No-movement clause", _nmc_msg))
                     return
-                _lg = getattr(getattr(self.app, 'game_manager', None),
-                              'league', None) or getattr(self.app, 'league', None)
-                _ok, _why = _te.will_waive_ntc(
-                    player, self.app.user_team, None, _lg, context="waivers")
-                if not _ok:
-                    messagebox.showwarning(
-                        "Waiver refused",
-                        f"{_why}\n\nHe's staying on the roster.")
-                    return
-                messagebox.showinfo("Waiver approved", _why)
-            confirm = qol_confirm(self, "Confirm Waiver",
-                                  f"Place {player.full_name} on waivers? "
-                                  "Other teams will have a chance to claim them.",
-                                  confirm_text="Place on Waivers")
-            if confirm:
-                # Add to waiver list
-                player.on_waivers = True
-                player.waiver_days = 2  # Players stay on waivers for 2 days
-                self.app.waiver_list.append(player)
+                register_pending_item(
+                    self.app, _item_id, kind=RESUMABLE, title=_title,
+                    detail=_detail, screen_id=_screen_id)
+                ask_card(self, "No-movement clause", _nmc_msg,
+                         [("Ask him", True, "primary"),
+                          ("Not now", False, "secondary")],
+                         on_answer=_nmc_on_answer,
+                         default_on_dismiss="defer",
+                         session_id=_sess_id, dialog_id=_did,
+                         resolver="deposition_answer",
+                         resolver_args={"player_id": str(player.id)})
+                try:
+                    _sess["dialogs"][_did]["registry"] = {
+                        "item_id": _item_id, "kind": RESUMABLE,
+                        "title": _title, "detail": _detail,
+                        "screen_id": _screen_id}
+                except Exception:
+                    pass
+                return
+            self._place_on_waivers_after_consent(player)
+
+    def _waiver_nmc_answer(self, _sess_id, _pid, _ans):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self.app, _sess_id)
+        _player = next((p for p in self.app.user_team.roster
+                        if str(p.id) == str(_pid)), None)
+        self._drop_waiver_nmc_session(_sess_id)
+        if _ans is not True:
+            # No or dismiss: safe default -- not asked, stays on roster.
+            return
+        if _player is None:
+            messagebox.showwarning(
+                "Player unavailable",
+                "The player is no longer on the roster. Waiver placement "
+                "stopped.")
+            return
+        import trade_engine as _te
+        _lg = getattr(getattr(self.app, 'game_manager', None),
+                      'league', None) or getattr(self.app, 'league', None)
+        _ok, _why = _te.will_waive_ntc(
+            _player, self.app.user_team, None, _lg, context="waivers")
+        if not _ok:
+            messagebox.showwarning(
+                "Waiver refused",
+                f"{_why}\n\nHe's staying on the roster.")
+            return
+        messagebox.showinfo("Waiver approved", _why)
+        self._place_on_waivers_after_consent(_player)
+
+    def _drop_waiver_nmc_session(self, _sess_id):
+        try:
+            _app = self.app
+            if (isinstance(getattr(_app, "pending_sessions", None), dict)
+                    and _sess_id in _app.pending_sessions):
+                del _app.pending_sessions[_sess_id]
+        except Exception:
+            pass
+
+    def _place_on_waivers_after_consent(self, player):
+        confirm = qol_confirm(self, "Confirm Waiver",
+                              f"Place {player.full_name} on waivers? "
+                              "Other teams will have a chance to claim them.",
+                              confirm_text="Place on Waivers")
+        if confirm:
+            # Add to waiver list
+            player.on_waivers = True
+            player.waiver_days = 2  # Players stay on waivers for 2 days
+            self.app.waiver_list.append(player)
                 
-                # Add to news log
-                self.app.add_news(f"{player.full_name} placed on waivers by {self.app.user_team.team_name}.")
+            # Add to news log
+            self.app.add_news(f"{player.full_name} placed on waivers by {self.app.user_team.team_name}.")
                 
-                # Update the views
-                self.populate_eligible_players()
-                self.populate_waiver_wire()
-                messagebox.showinfo("Player on Waivers",
-                                   f"{player.full_name} has been placed on waivers. "
-                                   "They will remain on waivers for 2 days, during which time other teams may claim them. "
-                                   f"Their cap hit is temporarily shed until waivers clear -- "
-                                   f"this can bring an over-cap roster back into compliance.")
+            # Update the views
+            self.populate_eligible_players()
+            self.populate_waiver_wire()
+            messagebox.showinfo("Player on Waivers",
+                               f"{player.full_name} has been placed on waivers. "
+                               "They will remain on waivers for 2 days, during which time other teams may claim them. "
+                               f"Their cap hit is temporarily shed until waivers clear -- "
+                               f"this can bring an over-cap roster back into compliance.")
     
     def claim_from_waivers(self, item=None):
         """Claim a player from the waiver wire."""
@@ -12404,7 +13533,7 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self.player = player
         self.market_value = market_value
         self.max_years = max_years
-        # Gating Phase 1: negotiation state lives in app.negotiation_sessions
+        # Gating Phase 1: negotiation state lives in app.pending_sessions
         # (same pattern as ContractNegotiationView) so the user can jump to
         # another screen mid-talks and resume from the navbar.
         self._session = self._get_session()
@@ -12547,24 +13676,20 @@ class ExtensionNegotiationView(ctk.CTkFrame):
     # ---------- session ----------
 
     def _get_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is None:
-            sessions = {}
-            self.app.negotiation_sessions = sessions
-        player = self.player
-        key = getattr(player, "id", None) or id(player)
-        sess = sessions.get(key)
-        if sess is None or sess.get("player") is not player:
-            sess = {
-                "player": player,
-                "is_extension": True,
-                "draft_salary": "",
-                "draft_years": 0,
-                "draft_ntc": False,
-                "draft_signing_bonus": "",
-            }
-            sessions[key] = sess
-        self._sess_key = key
+        # Gating Phase 1: terms live in the app.pending_sessions entry
+        # (popup_system.get_negotiation_session); the view rebuilds from
+        # the session on open via _restore_draft, and update_total writes
+        # every widget change back through immediately.
+        from popup_system import get_negotiation_session
+        sess = get_negotiation_session(self.app, self.player, defaults={
+            "is_extension": True,
+            "draft_salary": "",
+            "draft_years": 0,
+            "draft_ntc": False,
+            "draft_signing_bonus": "",
+        })
+        if sess is None:
+            sess = {}
         try:
             self.app.refresh_screen_navbar()
         except Exception:
@@ -12572,13 +13697,8 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         return sess
 
     def _close_session(self):
-        sessions = getattr(self.app, "negotiation_sessions", None)
-        if sessions is not None:
-            sessions.pop(getattr(self, "_sess_key", None), None)
-        try:
-            self.app.refresh_screen_navbar()
-        except Exception:
-            pass
+        from popup_system import close_negotiation_session
+        close_negotiation_session(self.app, self.player)
 
     def _restore_draft(self):
         """Seed the offer widgets from the session's in-progress draft.
@@ -12884,15 +14004,18 @@ class StaffContractView(ctk.CTkFrame):
     """
 
     def __init__(self, parent, staff=None, app=None, hire_source="free_agent",
-                 from_team=None):
+                 from_team=None, renegotiate=False, on_done=None):
         super().__init__(parent, fg_color="transparent")
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
+            wire_focus_ring, top_column,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
             ROW_HOVER, ROW_SELECTED,
         )
         init_ctk_theme()
+        self._wire_focus_ring = wire_focus_ring
+        self._top_column = top_column
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
                         CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
@@ -12906,8 +14029,122 @@ class StaffContractView(ctk.CTkFrame):
         self.staff = staff
         self.hire_source = hire_source or "free_agent"
         self.from_team = from_team
+        self.renegotiate = bool(renegotiate)
+        # Gating Phase 2: the old modal staff dialog returned a bool
+        # synchronously (grab_set + wait_window). The screen reports the
+        # outcome through on_done(accepted: bool) instead -- True on
+        # agreement, False on cancel/dismiss. Fires at most once.
+        self.on_done = on_done
+        self._done_fired = False
         self._close_screen = None  # set by show_screen()
         self._build()
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: Tier-B session (serializable, write-through).
+    # ------------------------------------------------------------------
+    def _session_id(self):
+        try:
+            sid = str(getattr(self.staff, "id", "") or "")
+        except Exception:
+            sid = ""
+        kind = "renegotiate" if self.renegotiate else "contract"
+        return "staff_%s:%s" % (kind, sid or "unknown")
+
+    def _session(self):
+        """Get-or-create the serializable in-progress session for this
+        negotiation. Survives navigation and save/load (staff referenced
+        by id only)."""
+        app = self.app
+        try:
+            store = getattr(app, "pending_sessions", None)
+        except Exception:
+            store = None
+        if not isinstance(store, dict):
+            try:
+                app.pending_sessions = store = {}
+            except Exception:
+                return {}
+        sid = self._session_id()
+        sess = store.get(sid)
+        if not isinstance(sess, dict):
+            try:
+                staff_id = str(getattr(self.staff, "id", "") or "")
+            except Exception:
+                staff_id = ""
+            sess = {"id": sid,
+                    "kind": ("staff_renegotiation" if self.renegotiate
+                             else "staff_contract"),
+                    "staff_id": staff_id,
+                    "salary_text": "", "years": 2, "assignment": "nhl",
+                    "resolved": None}
+            store[sid] = sess
+        return sess
+
+    def _write_session(self, **fields):
+        """Write-through: every meaningful interaction updates the session
+        immediately so cache eviction can never lose work."""
+        try:
+            sess = self._session()
+            if isinstance(sess, dict):
+                sess.update(fields)
+        except Exception:
+            pass
+
+    def _close_session(self, resolved):
+        """Consume the session on agreement (resolution is terminal)."""
+        try:
+            app = self.app
+            store = getattr(app, "pending_sessions", None)
+            sess = self._session()
+            if isinstance(sess, dict):
+                sess["resolved"] = resolved
+            if resolved and isinstance(store, dict):
+                store.pop(self._session_id(), None)
+        except Exception:
+            pass
+
+    def _fire_done(self, accepted):
+        """Report the negotiation outcome to the entry-point caller."""
+        if self._done_fired:
+            return
+        self._done_fired = True
+        try:
+            fn = self.on_done
+            if callable(fn):
+                fn(bool(accepted))
+        except Exception:
+            pass
+
+    def _resolve_staff_from_session(self):
+        """Revalidate a staffer referenced by session id (honest
+        'no longer available' state when the world moved)."""
+        try:
+            sess = self._session()
+            want = str(sess.get("staff_id") or "")
+            if not want:
+                return None
+            app = self.app
+            gm = getattr(app, "game_manager", None)
+            pools = []
+            team = getattr(gm, "user_team", None) if gm else None
+            if team is not None:
+                pools.append(getattr(team, "staff", None) or [])
+            league = getattr(gm, "league", None) if gm else None
+            if league is not None:
+                pools.append(getattr(league, "free_agent_staff", None) or [])
+                pools.append(getattr(league, "overseas_staff", None) or [])
+            if self.from_team is not None:
+                pools.append(getattr(self.from_team, "staff", None) or [])
+            for pool in pools:
+                for s in pool:
+                    try:
+                        if str(getattr(s, "id", "")) == want:
+                            return s
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
 
     def close_view(self):
         """Close this screen (dashboard in screen mode)."""
@@ -12927,15 +14164,54 @@ class StaffContractView(ctk.CTkFrame):
         except Exception:
             return None
 
+    def _set_offer_busy(self, busy):
+        """Honest loading state for the offer handoff (hire path).
+
+        While the acceptance roll and signing run, the action buttons
+        are visibly disabled (never dead-clickable); they recover on
+        decline or error. The busy state paints synchronously
+        (update_idletasks) before the synchronous work runs. Never
+        raises -- safe to call after the screen closed.
+        """
+        try:
+            offer_btn = getattr(self, "_offer_btn", None)
+            back_btn = getattr(self, "_back_btn", None)
+            if busy:
+                if offer_btn is not None:
+                    offer_btn.configure(state="disabled",
+                                        text="Making offer\u2026")
+                if back_btn is not None:
+                    back_btn.configure(state="disabled")
+                self.update_idletasks()
+            else:
+                if offer_btn is not None:
+                    offer_btn.configure(state="normal",
+                                        text="Make Offer")
+                if back_btn is not None:
+                    back_btn.configure(state="normal")
+        except Exception:
+            pass
+
     def _build(self):
+        # Gating Phase 2: the old StaffManagementView.open_contract_negotiation
+        # modal dialog is consolidated onto this screen. renegotiate=True
+        # renders its exact mechanics (demands + offer + accept/reject roll)
+        # for an existing staffer instead of the hire flow.
+        if self.renegotiate and self.staff is None:
+            self.staff = self._resolve_staff_from_session()
+        if self.renegotiate:
+            self._build_renegotiate()
+            return
         from game_classes import staff_market_ask
         ct = self._ct
         staff = self.staff
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
-        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
-                            width=560)
-        card.pack(pady=18)
+        # Job 3 polish: top-anchored, width-capped column -- no more thin
+        # centered strip floating on wide monitors.
+        col = self._top_column(scroll)
+        card = ctk.CTkFrame(col, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="x", pady=14)
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=20)
 
@@ -12956,7 +14232,7 @@ class StaffContractView(ctk.CTkFrame):
         self._body(body,
                    text=f"{_role} \u2022 {getattr(staff, 'nationality', '')} "
                         f"\u2022 Age {getattr(staff, 'age', '?')}",
-                   dim=True, size=11).pack(anchor="w", pady=(2, 6))
+                   dim=True, size=12).pack(anchor="w", pady=(2, 6))
 
         # Where he comes from (poach context).
         _src_line = ""
@@ -12993,48 +14269,88 @@ class StaffContractView(ctk.CTkFrame):
                    text=f"Club staff budget: ${_budget:,}  \u2022  "
                         f"Committed: ${_committed:,}  \u2022  "
                         f"Available: ${_remaining:,}",
-                   size=11, dim=True).pack(anchor="w", padx=12, pady=10)
+                   size=12, dim=True).pack(anchor="w", padx=12, pady=10)
         self._budget_remaining = _remaining
 
         offer_info = {'years': 2}
 
+        # Gating Phase 2: restore half-built offers from the session
+        # (write-through below keeps it current on every interaction).
+        _sess = self._session()
+        try:
+            _sess_years = int(_sess.get("years") or 2)
+        except Exception:
+            _sess_years = 2
+        if _sess_years not in (1, 2, 3, 4, 5):
+            _sess_years = 2
+        offer_info['years'] = _sess_years
+
         self._body(body, text="Contract length:", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         years_seg = ctk.CTkSegmentedButton(
             body, values=["1", "2", "3", "4", "5"],
             selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
             unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        years_seg.set("2")
+            command=lambda _v: _on_years())
+        years_seg.set(str(_sess_years))
         years_seg.pack(anchor="w", pady=(0, 10))
+
+        def _on_years():
+            try:
+                offer_info['years'] = int(years_seg.get())
+            except Exception:
+                pass
+            self._write_session(years=offer_info['years'])
+            _paint()
 
         # Free dollar entry -- tailored offers, not fixed steps.
         self._body(body, text="Salary offer ($ / year):", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         self._salary_entry = ctk.CTkEntry(
             body, width=220, fg_color=ct['BG'], border_color=ct['BORDER'])
-        self._salary_entry.insert(0, f"{ask:,}")
+        _sess_salary = str(_sess.get("salary_text") or "")
+        self._salary_entry.insert(0, _sess_salary if _sess_salary else f"{ask:,}")
         self._salary_entry.pack(anchor="w", pady=(0, 12))
-        self._salary_entry.bind('<KeyRelease>', lambda _e: _paint())
+
+        def _on_salary_key(_e=None):
+            try:
+                self._write_session(
+                    salary_text=self._salary_entry.get())
+            except Exception:
+                pass
+            _paint()
+
+        self._salary_entry.bind('<KeyRelease>', _on_salary_key)
 
         # Which club the hire joins -- NHL roster or AHL affiliate. Poached
         # AHL staffers default to the farm (lateral move); everyone else
         # defaults to the NHL club.
         self._body(body, text="Assign to:", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         _default_asg = "AHL" if (self.hire_source == "ahl_poach") else "NHL"
+        _sess_asg = str(_sess.get("assignment") or "").upper()
+        if _sess_asg not in ("NHL", "AHL"):
+            _sess_asg = _default_asg
         asg_seg = ctk.CTkSegmentedButton(
             body, values=["NHL", "AHL"],
             selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
             unselected_color=ct['CARD'], unselected_hover_color=ct['BORDER'],
-            command=lambda _v: _paint())
-        asg_seg.set(_default_asg)
+            command=lambda _v: _on_asg())
+        asg_seg.set(_sess_asg)
         asg_seg.pack(anchor="w", pady=(0, 12))
         self._asg_seg = asg_seg
 
+        def _on_asg():
+            try:
+                self._write_session(
+                    assignment=str(asg_seg.get()).lower())
+            except Exception:
+                pass
+            _paint()
+
         offer_label = self._body(body, text="", size=12)
         offer_label.pack(anchor="w", pady=(0, 2))
-        chance_label = self._body(body, text="", size=11)
+        chance_label = self._body(body, text="", size=12)
         chance_label.pack(anchor="w", pady=(0, 12))
 
         def _paint():
@@ -13068,13 +14384,189 @@ class StaffContractView(ctk.CTkFrame):
 
         btns = ctk.CTkFrame(body, fg_color="transparent")
         btns.pack(fill="x", pady=(4, 0))
-        self._secondary_button(btns, text="Back",
-                               command=self.close_view).pack(side="right",
-                                                            padx=(10, 0))
-        self._primary_button(btns, text="Make Offer",
-                             command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'],
-                                 self._asg_seg.get().lower())).pack(side="right")
+        # Job 3 polish: right-aligned cluster; creation order is the
+        # keyboard tab order (primary action first).
+        rc = ctk.CTkFrame(btns, fg_color="transparent")
+        rc.pack(side="right")
+        self._offer_btn = self._primary_button(
+            rc, text="Make Offer",
+            command=lambda: self._resolve_staff_offer(
+                staff, offer_info['years'],
+                self._asg_seg.get().lower()))
+        self._offer_btn.pack(side="left")
+        self._back_btn = self._secondary_button(
+            rc, text="Back", command=self._cancel_hire)
+        self._back_btn.pack(side="left", padx=(10, 0))
+        self._wire_focus_ring(self._offer_btn)
+        self._wire_focus_ring(self._back_btn)
+        self._wire_focus_ring(self._salary_entry)
+
+    # ------------------------------------------------------------------
+    # Gating Phase 2: renegotiation mode.
+    # ------------------------------------------------------------------
+    def _build_renegotiate(self):
+        """Renegotiate with an existing staffer (was: the modal
+        StaffManagementView.open_contract_negotiation dialog).
+
+        Same mechanics, non-modal: current demands + offer frame, Make
+        Offer rolls staff.negotiate_contract(). On agreement the new
+        terms land, the session is consumed and on_done(True) fires; on
+        rejection the result label updates and the offer stays editable.
+        """
+        import customtkinter as ctk
+        from popup_system import messagebox
+        ct = self._ct
+        staff = self.staff
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        # Job 3 polish: top-anchored, width-capped column (same as hire).
+        col = self._top_column(scroll)
+        card = ctk.CTkFrame(col, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="x", pady=14)
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=24, pady=20)
+
+        if staff is None:
+            self._body(body,
+                       text=("That staffer is no longer available -- "
+                             "he may have left the club."),
+                       dim=True).pack(anchor="w", pady=12)
+            self._secondary_button(body, text="Back",
+                                   command=self._cancel_renegotiate).pack(
+                                       anchor="w", pady=(8, 0))
+            return
+
+        self._heading(body, text=f"Negotiating with {staff.full_name}",
+                      size=14).pack(anchor="w", pady=(0, 2))
+        try:
+            _role = staff.role.value
+        except Exception:
+            _role = getattr(staff, "role", "")
+        ctk.CTkLabel(body, text=str(_role), font=("Segoe UI", 12),
+                     text_color=ct['TEAL']).pack(anchor="w", pady=(0, 14))
+
+        # Current demands card.
+        demands = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        demands.pack(fill="x", pady=(0, 12))
+        self._body(demands, text="Current Demands", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        self._body(demands,
+                   text=f"Asking Salary: ${int(getattr(staff, 'salary', 0) or 0):,}",
+                   dim=True, size=12).pack(anchor="w", padx=12, pady=2)
+        self._body(demands,
+                   text=f"Contract Length: {getattr(staff, 'contract_years', '?')} years",
+                   dim=True, size=12).pack(anchor="w", padx=12, pady=(2, 10))
+
+        # Offer frame.
+        offer = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
+        offer.pack(fill="x", pady=(0, 12))
+        self._body(offer, text="Your Offer", size=12).pack(
+            anchor="w", padx=12, pady=(10, 2))
+        grid = ctk.CTkFrame(offer, fg_color="transparent")
+        grid.pack(anchor="w", padx=12, pady=(2, 10))
+        ctk.CTkLabel(grid, text="Salary:", font=("Segoe UI", 12),
+                     text_color=ct['TEXT_DIM']).grid(
+                         row=0, column=0, padx=5, pady=5, sticky='w')
+        salary_entry = ctk.CTkEntry(
+            grid, width=150, fg_color=ct['BG'],
+            border_color=ct['BORDER'], text_color=ct['TEXT'])
+        ctk.CTkLabel(grid, text="Years:", font=("Segoe UI", 12),
+                     text_color=ct['TEXT_DIM']).grid(
+                         row=1, column=0, padx=5, pady=5, sticky='w')
+        years_entry = ctk.CTkEntry(
+            grid, width=150, fg_color=ct['BG'],
+            border_color=ct['BORDER'], text_color=ct['TEXT'])
+        salary_entry.grid(row=0, column=1, padx=5, pady=5)
+        years_entry.grid(row=1, column=1, padx=5, pady=5)
+
+        # Restore half-typed offers from the session (write-through below).
+        _sess = self._session()
+        _sal = str(_sess.get("salary_text") or "")
+        _yrs = str(_sess.get("years") or "")
+        salary_entry.insert(0, _sal if _sal else str(
+            getattr(staff, "salary", "") or ""))
+        years_entry.insert(0, _yrs if _yrs else str(
+            getattr(staff, "contract_years", "") or ""))
+
+        def _on_key(_e=None):
+            self._write_session(salary_text=salary_entry.get(),
+                                years=years_entry.get())
+
+        salary_entry.bind('<KeyRelease>', _on_key)
+        years_entry.bind('<KeyRelease>', _on_key)
+
+        result_label = ctk.CTkLabel(body, text="", font=("Segoe UI", 12),
+                                    text_color=ct['TEXT_DIM'],
+                                    wraplength=440, justify="left")
+        result_label.pack(fill="x", pady=(0, 12))
+
+        btns = ctk.CTkFrame(body, fg_color="transparent")
+        btns.pack(fill="x")
+
+        def make_offer():
+            try:
+                offered_salary = int(salary_entry.get())
+                offered_years = int(years_entry.get())
+            except ValueError:
+                messagebox.showerror(
+                    "Invalid Input",
+                    "Please enter valid numbers for salary and years.")
+                return
+            if offered_salary <= 0 or not 1 <= offered_years <= 5:
+                messagebox.showerror(
+                    "Invalid Input",
+                    "Salary must be positive and the term 1-5 years.")
+                return
+            self._write_session(salary_text=salary_entry.get(),
+                                years=years_entry.get())
+            # Honest loading state: same helper as the hire path (the
+            # buttons are stored on self under the same names).
+            self._set_offer_busy(True)
+            try:
+                accepted = staff.negotiate_contract(offered_salary,
+                                                    offered_years)
+            except Exception:
+                accepted = False
+            try:
+                if accepted:
+                    result_label.configure(text="Offer Accepted!",
+                                           text_color=ct['GREEN'])
+                    staff.salary = offered_salary
+                    staff.contract_years = offered_years
+                    self._close_session(True)
+                    self._fire_done(True)
+                    self.close_view()
+                else:
+                    result_label.configure(
+                        text="Offer Rejected. Try adjusting your offer.",
+                        text_color=ct['RED'])
+            finally:
+                self._set_offer_busy(False)
+
+        self._offer_btn = self._primary_button(
+            btns, text="Make Offer", command=make_offer,
+            width=130, height=36)
+        self._offer_btn.pack(side="left", padx=5)
+        self._back_btn = self._secondary_button(
+            btns, text="Cancel", command=self._cancel_renegotiate,
+            width=110, height=36)
+        self._back_btn.pack(side="right", padx=5)
+        self._wire_focus_ring(self._offer_btn)
+        self._wire_focus_ring(self._back_btn)
+        self._wire_focus_ring(salary_entry)
+        self._wire_focus_ring(years_entry)
+
+    def _cancel_renegotiate(self):
+        """Back out of a renegotiation (reports False, keeps session for
+        resume)."""
+        self._fire_done(False)
+        self.close_view()
+
+    def _cancel_hire(self):
+        """Back out of a hire negotiation (reports False, keeps session)."""
+        self._fire_done(False)
+        self.close_view()
 
     def _staff_offer_accept_chance(self, staff, offer_salary):
         """Rough acceptance chance for a staff offer (display only)."""
@@ -13127,6 +14619,25 @@ class StaffContractView(ctk.CTkFrame):
                 f"under a staff payroll budget -- trim the offer or move "
                 f"money by letting staff go.")
             return
+        # Gating Phase 2 (old-dialog parity): unique roles (GM, Head Coach)
+        # can't be double-hired. Blocks before the roll, same as before.
+        try:
+            from game_classes import Staff as _StaffCls
+            if _StaffCls.is_unique_role(getattr(staff, "role", None)):
+                _team = getattr(self.app.game_manager, "user_team", None)
+                _holders = [s for s in (getattr(_team, "staff", None) or [])
+                            if getattr(s, "role", None) == staff.role]
+                if _holders:
+                    _rv = getattr(staff.role, "value", str(staff.role))
+                    messagebox.showerror(
+                        "Role Conflict",
+                        f"Team already has a {_rv}: "
+                        f"{_holders[0].full_name}.\n"
+                        f"You must reassign or release the existing "
+                        f"{_rv} first.")
+                    return
+        except Exception:
+            pass
         # MP client: the host runs the acceptance roll against canonical
         # state -- a local roll would be snapshot noise.
         if _mp_route(self.app, "hire_staff",
@@ -13135,35 +14646,85 @@ class StaffContractView(ctk.CTkFrame):
                       "assignment": assignment},
                      on_sent=self.close_view):
             return
-        chance = self._staff_offer_accept_chance(staff, salary)
-        if random.random() < chance:
-            # Only leave the source pool/club AFTER a successful signing --
-            # if sign_free_agent_staff fails (e.g. a budget race), the
-            # staffer must not be lost from their old club/pool.
-            if self.app.game_manager.sign_free_agent_staff(
-                    staff, salary, years, assignment):
-                league = getattr(self.app, 'league', None)
-                if self.hire_source == "overseas" and league is not None:
-                    pool = getattr(league, "overseas_staff", None)
-                    if pool is not None and staff in pool:
-                        pool.remove(staff)
-                elif (self.hire_source == "ahl_poach"
-                      and self.from_team is not None
-                      and staff in self.from_team.staff):
-                    self.from_team.staff.remove(staff)
-                messagebox.showinfo("Offer Accepted",
-                                    f"{staff.full_name} has accepted your offer!")
-                try:
-                    self.app.update_all_views()
-                except Exception:
-                    pass
-                self.close_view()
+        # Honest loading state: the acceptance roll and the signing run
+        # synchronously here, so the busy state paints first
+        # (update_idletasks) -- the buttons are never dead-clickable,
+        # and they recover on decline or error.
+        self._set_offer_busy(True)
+        try:
+            chance = self._staff_offer_accept_chance(staff, salary)
+            if random.random() < chance:
+                # Only leave the source pool/club AFTER a successful signing --
+                # if sign_free_agent_staff fails (e.g. a budget race), the
+                # staffer must not be lost from their old club/pool.
+                if self.app.game_manager.sign_free_agent_staff(
+                        staff, salary, years, assignment):
+                    league = getattr(self.app, 'league', None)
+                    if self.hire_source == "overseas" and league is not None:
+                        pool = getattr(league, "overseas_staff", None)
+                        if pool is not None and staff in pool:
+                            pool.remove(staff)
+                    elif (self.hire_source == "ahl_poach"
+                          and self.from_team is not None
+                          and staff in self.from_team.staff):
+                        self.from_team.staff.remove(staff)
+                    messagebox.showinfo("Offer Accepted",
+                                        f"{staff.full_name} has accepted your offer!")
+                    # Gating Phase 2 (old-dialog parity): the assistant-coach
+                    # hire hook and the new-head-coach whiteboard install ran
+                    # in the dialog's hire path; they run here now.
+                    try:
+                        import assistant_coaches as _ac
+                        _team2 = getattr(self.app.game_manager, "user_team",
+                                        None)
+                        if _team2 is not None:
+                            _ac.on_assistant_hired(_team2, staff, app=self.app)
+                    except Exception:
+                        pass
+                    try:
+                        _role = str(getattr(getattr(staff, "role", None),
+                                            "value", ""))
+                        if "Head Coach" in _role:
+                            import tactics as _tx
+                            _team3 = getattr(self.app.game_manager, "user_team",
+                                            None)
+                            if (_team3 is not None
+                                    and _tx.get_tactics_control(_team3)
+                                    == "coach"):
+                                installed = _tx.install_coach_systems(
+                                    _team3, staff, reason="hired")
+                                if installed:
+                                    _cname = (f"{getattr(staff, 'first_name', '')} "
+                                              f"{getattr(staff, 'last_name', '')}"
+                                              ).strip()
+                                    _bits = ", ".join(
+                                        f"{c}: {k.replace('_', ' ')}"
+                                        for c, k in installed.items())
+                                    try:
+                                        self.app.add_news(
+                                            f"{_cname} is installing his systems "
+                                            f"({len(installed)} changes: {_bits}). "
+                                            f"The room starts learning -- "
+                                            f"familiarity reset.")
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                    try:
+                        self.app.update_all_views()
+                    except Exception:
+                        pass
+                    self._close_session(True)
+                    self._fire_done(True)
+                    self.close_view()
+                else:
+                    messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
             else:
-                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
-        else:
-            messagebox.showinfo("Offer Declined",
-                                f"{staff.full_name} has declined your offer. "
-                                f"Consider offering a better salary.")
+                messagebox.showinfo("Offer Declined",
+                                    f"{staff.full_name} has declined your offer. "
+                                    f"Consider offering a better salary.")
+        finally:
+            self._set_offer_busy(False)
 
 class CaptainChangeDialog(InGamePopup):
     """Pre-change judgment call: stripping the C has consequences.
@@ -13347,12 +14908,49 @@ class SetCaptainsView(ctk.CTkFrame):
             _cc is not None and old_c is not None
             and _cc.is_established_captain(old_c)
             and (new_c is None or new_c is not old_c))
-        dep_ctx = None
         if deposition:
-            _proceed, dep_ctx = self._run_deposition_flow(
-                team, old_c, new_c, _cc)
-            if not _proceed:
-                return  # backed down or cancelled: leave everything as is
+            # Gating T2-Phase 2: the deposition conversation is a chain of
+            # question cards, not blocking dialogs. Dismiss = safe default
+            # (back down / cancel): the letters are left exactly as is.
+            self._run_deposition_flow(
+                team, old_c, new_c, _cc,
+                lambda _proceed, _dep_ctx, _nc=new_c, _a1=alt1, _a2=alt2:
+                    self._save_captains_after_deposition(
+                        _proceed, _dep_ctx, _nc, _a1, _a2))
+            return
+        # MP client: letters land on the host's canonical roster.
+        _cap_params = {
+            "captain_id": (str(getattr(new_c, "id", ""))
+                           if new_c is not None else ""),
+            "alt_ids": [str(getattr(a, "id", ""))
+                        for a in (alt1, alt2) if a is not None]}
+
+        def _caps_sent():
+            messagebox.showinfo(
+                "Captains Sent",
+                "Your captaincy picks were sent to the host and apply "
+                "on the next sync.")
+            self.close_view()
+        if _mp_route(self.app, "set_captaincy", _cap_params,
+                     on_sent=_caps_sent):
+            return
+        self._apply_letters(team, new_c, alt1, alt2,
+                           skip_captain=False)
+        # A human just chose: never mistake these letters for auto-repair.
+        try:
+            self.app.user_team._captaincy_auto_assigned = False
+        except Exception:
+            pass
+        messagebox.showinfo("Captains Updated", "Team captaincy has been updated.")
+        self.app.update_all_views()
+        self.close_view()
+
+    def _save_captains_after_deposition(self, _proceed, dep_ctx, new_c,
+                                       alt1, alt2):
+        """Continuation after the deposition card chain resolves."""
+        if not _proceed:
+            return  # backed down or cancelled: leave everything as is
+        team = self.app.user_team
         # MP client: letters land on the host's canonical roster. The
         # deposition conversation happened here; its fallout applies on
         # the host via the deposition context.
@@ -13373,12 +14971,8 @@ class SetCaptainsView(ctk.CTkFrame):
         if _mp_route(self.app, "set_captaincy", _cap_params,
                      on_sent=_caps_sent):
             return
-        if deposition:
-            self._apply_letters(team, new_c, alt1, alt2,
-                               skip_captain=True)
-        else:
-            self._apply_letters(team, new_c, alt1, alt2,
-                               skip_captain=False)
+        self._apply_letters(team, new_c, alt1, alt2,
+                           skip_captain=True)
         # A human just chose: never mistake these letters for auto-repair.
         try:
             self.app.user_team._captaincy_auto_assigned = False
@@ -13414,7 +15008,264 @@ class SetCaptainsView(ctk.CTkFrame):
             except Exception:
                 pass
 
-    def _run_deposition_flow(self, team, old_c, new_c, _cc):
+    def _run_deposition_flow(self, team, old_c, new_c, _cc, on_done):
+        """The judgment call as a chain of question cards.
+
+        on_done(proceed, dep_ctx) fires when the chain resolves -- the
+        same (proceed, dep_ctx) contract as the old blocking version.
+        Dismiss = safe default (cancel / back down): the letters stay.
+        Headless fallback: the legacy blocking flow, talk-first stand-firm.
+        """
+        from popup_system import cards_available
+        if not cards_available(self):
+            _proceed, _dep_ctx = self._run_deposition_flow_sync(
+                team, old_c, new_c, _cc)
+            on_done(_proceed, _dep_ctx)
+            return
+        from popup_system import get_pending_session
+        _app = self.app
+        _old_id = str(getattr(old_c, "id", ""))
+        _sess_id = f"deposition:{_old_id}"
+        _sess = get_pending_session(_app, _sess_id)
+        _sess["kind"] = "deposition"
+        _sess["old_id"] = _old_id
+        _sess["new_id"] = (str(getattr(new_c, "id", ""))
+                           if new_c is not None else "")
+        try:
+            _info = _cc.assess_deposition(
+                old_c, new_c, team, getattr(_app, "league", None))
+        except Exception:
+            _info = {"acceptance": 0.5, "reasons": []}
+        _sess["acceptance"] = float(_info.get("acceptance", 0.5))
+        _sess["reasons"] = list(_info.get("reasons", []) or [])[:5]
+        _sess["old_name"] = getattr(old_c, "full_name", "the captain")
+        _sess["new_name"] = (getattr(new_c, "full_name", "no one")
+                             if new_c is not None else "no one")
+        self._present_deposition_card1(_sess_id, on_done)
+
+    def _deposition_screen_id(self):
+        try:
+            return (getattr(self.app, "_current_screen", None)
+                    or {}).get("id")
+        except Exception:
+            return None
+
+    def _drop_deposition_session(self, _sess_id):
+        try:
+            from popup_system import unregister_pending_item
+            _app = self.app
+            _sess = _app.pending_sessions.get(_sess_id)
+            if isinstance(_sess, dict):
+                for _did in list((_sess.get("dialogs") or {}).keys()):
+                    try:
+                        unregister_pending_item(
+                            _app, f"q:{_sess_id}:{_did}")
+                    except Exception:
+                        pass
+            _app.pending_sessions.pop(_sess_id, None)
+        except Exception:
+            pass
+
+    def _present_deposition_card1(self, _sess_id, on_done):
+        from popup_system import (ask_card, get_pending_session,
+                                  register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _did = "approach"
+        _item_id = f"q:{_sess_id}:{_did}"
+        _old_name = _sess.get("old_name", "the captain")
+        _new_name = _sess.get("new_name", "no one")
+        _reasons = _sess.get("reasons") or []
+        _msg = (f"Stripping the C from {_old_name} will have "
+                f"consequences.\n{_new_name} takes over -- unless "
+                f"{_old_name} is spoken to first and respects the call.")
+        if _reasons:
+            _msg += ("\n\nWhat you know:\n"
+                     + "\n".join(f"\u2022 {r}" for r in _reasons))
+        _title = "Changing the Captaincy"
+        _detail = (f"Decide how to handle stripping the C from "
+                   f"{_old_name}.")
+
+        def _on_pre(pre):
+            try:
+                unregister_pending_item(_app, _item_id)
+            except Exception:
+                pass
+            self._deposition_answer1(_sess_id, pre, on_done)
+
+        register_pending_item(
+            _app, _item_id, kind=RESUMABLE, title=_title,
+            detail=_detail, screen_id=self._deposition_screen_id())
+        ask_card(self, _title, _msg,
+                 [("Speak with him first", "speak", "primary"),
+                  ("Announce it cold", "cold", "secondary"),
+                  ("Cancel", "cancel", "secondary")],
+                 on_answer=_on_pre, default_on_dismiss="cancel",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="deposition_answer",
+                 resolver_args={"step": "approach"})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE,
+                "title": _title, "detail": _detail,
+                "screen_id": self._deposition_screen_id()}
+        except Exception:
+            pass
+
+    def _deposition_answer1(self, _sess_id, pre, on_done):
+        from popup_system import get_pending_session
+        _sess = get_pending_session(self.app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        if pre in ("cancel", None):
+            self._drop_deposition_session(_sess_id)
+            on_done(False, None)
+            return
+        _talked = (pre == "speak")
+        _acceptance = float(_sess.get("acceptance", 0.5))
+        _acceptance += 0.18 if _talked else -0.10
+        _acceptance = max(0.02, min(0.98, _acceptance))
+        _sess["talked"] = _talked
+        _sess["acceptance"] = _acceptance
+        try:
+            import captaincy_change as _cc
+            _tier = _cc.roll_tier(_acceptance)
+        except Exception:
+            _tier = "accept"
+        _sess["tier"] = _tier
+        if _tier in ("pushback", "extreme"):
+            self._present_deposition_card2(_sess_id, on_done)
+            return
+        self._deposition_finish(_sess_id, False, on_done)
+
+    def _present_deposition_card2(self, _sess_id, on_done):
+        from popup_system import (ask_card, get_pending_session,
+                                  register_pending_item,
+                                  unregister_pending_item, RESUMABLE)
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _did = "pushback"
+        _item_id = f"q:{_sess_id}:{_did}"
+        _old_name = _sess.get("old_name", "the captain")
+        _new_name = _sess.get("new_name", "no one")
+        _tier = _sess.get("tier", "pushback")
+        _quotes = {
+            "pushback": ("\u201cAfter everything I've given this team? "
+                         "You're making a mistake.\u201d"),
+            "extreme": "\u201cWe're done here.\u201d He walks out.",
+        }
+        _msg = (f"{_old_name} is not accepting the change to "
+                f"{_new_name}:\n\n{_quotes.get(_tier, '')}\n\n"
+                "You have to make the call.")
+        _title = "He Pushed Back"
+        _detail = f"{_old_name} pushed back on losing the C."
+
+        def _on_call(call):
+            try:
+                unregister_pending_item(_app, _item_id)
+            except Exception:
+                pass
+            self._deposition_answer2(_sess_id, call, on_done)
+
+        register_pending_item(
+            _app, _item_id, kind=RESUMABLE, title=_title,
+            detail=_detail, screen_id=self._deposition_screen_id())
+        ask_card(self, _title, _msg,
+                 [("Stand firm", "firm", "primary"),
+                  ("Name him alternate (A)", "alternate", "secondary"),
+                  ("Back down", "backdown", "secondary")],
+                 on_answer=_on_call, default_on_dismiss="backdown",
+                 session_id=_sess_id, dialog_id=_did,
+                 resolver="deposition_answer",
+                 resolver_args={"step": "pushback"})
+        try:
+            _sess["dialogs"][_did]["registry"] = {
+                "item_id": _item_id, "kind": RESUMABLE,
+                "title": _title, "detail": _detail,
+                "screen_id": self._deposition_screen_id()}
+        except Exception:
+            pass
+
+    def _deposition_answer2(self, _sess_id, call, on_done):
+        if call in ("backdown", None):
+            self._drop_deposition_session(_sess_id)
+            on_done(False, None)
+            return
+        self._deposition_finish(_sess_id, call == "alternate", on_done)
+
+    def _deposition_finish(self, _sess_id, compromise, on_done):
+        """Apply the deposition fallout, then fire the save continuation."""
+        from popup_system import get_pending_session
+        _app = self.app
+        _sess = get_pending_session(_app, _sess_id)
+        if not isinstance(_sess, dict):
+            on_done(False, None)
+            return
+        _team = _app.user_team
+        _roster = getattr(_team, "roster", None) or []
+
+        def _find(_pid):
+            if not _pid:
+                return None
+            return next((p for p in _roster
+                         if str(getattr(p, "id", "")) == str(_pid)), None)
+
+        _old_c = _find(_sess.get("old_id"))
+        _new_c = _find(_sess.get("new_id"))
+        self._drop_deposition_session(_sess_id)
+        if _old_c is None:
+            # The old captain left the roster while parked: stop honestly.
+            on_done(False, None)
+            return
+        try:
+            import captaincy_change as _cc
+        except Exception:
+            _cc = None
+        if _cc is None:
+            on_done(False, None)
+            return
+        try:
+            _date_str = _app.current_date.isoformat()
+        except Exception:
+            _date_str = ""
+        _talked = bool(_sess.get("talked", False))
+        _tier = _sess.get("tier", "accept")
+        # MP client: the fallout (morale, news, the letters) lands on the
+        # host's canonical state -- applying it to this snapshot would be
+        # wiped by the next sync.
+        if _mp_is_client(_app):
+            on_done(True, {
+                "old_captain_id": str(getattr(_old_c, "id", "")),
+                "tier": _tier, "talked": _talked,
+                "compromise": bool(compromise), "date_str": _date_str})
+            return
+        _report = _cc.apply_deposition(
+            _team, _old_c, _new_c, _tier, talked=_talked,
+            date_str=_date_str, compromise_alternate=bool(compromise))
+        for _line in (_report.get("news") or []):
+            try:
+                _app.add_news(_line)
+            except Exception:
+                pass
+        _detail = "\n".join(_report.get("lines", []))
+        if _detail:
+            try:
+                messagebox.showinfo("Captaincy Change", _detail)
+            except Exception:
+                pass
+        # Extreme fallout leaves a repair path in the Dressing Room
+        # ("Clear the air" row) -- nothing more to do here.
+        on_done(True, None)
+
+    def _run_deposition_flow_sync(self, team, old_c, new_c, _cc):
         """The judgment call. Returns (proceed, dep_ctx).
 
         The conversation (dialogs, pushback, the call) always happens

@@ -78,6 +78,18 @@ class EventDayHubView(ctk.CTkFrame):
         self.configure(fg_color=self.BG)
         self._close_screen = None  # set by show_screen() or wrapper
 
+        # Gating Phase 2: thin Tier-B session for this read-mostly hub
+        # (no in-progress user input; the live data stays model-side).
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self.app, self._session_id())
+            if _sess is not None:
+                _sess.update(kind="event_hub",
+                             screen_id=self._session_id(),
+                             title=self.EVENT_TITLE)
+        except Exception:
+            pass
+
         self._ticker_text = ""
         self._ticker_x = 0
 
@@ -85,6 +97,10 @@ class EventDayHubView(ctk.CTkFrame):
         self._build_columns()   # subclass fills left/center/right
         self._build_ticker()
         self._animate_ticker()
+
+    def _session_id(self):
+        """Screen id for this hub (matches the show_screen registration)."""
+        return "draft_central" if isinstance(self, DraftDayCentral) else "fa_frenzy"
 
     def close_view(self):
         """Close this screen (dashboard in screen mode, card in popup mode)."""
@@ -898,9 +914,33 @@ class FreeAgencyFrenzy(EventDayHubView):
 # ----------------------------------------------------------------------------
 # Auto-open prompt
 # ----------------------------------------------------------------------------
+_EVENT_DAY_APP = None
+
+
+def _set_event_day_app(app):
+    global _EVENT_DAY_APP
+    _EVENT_DAY_APP = app
+
+
+def _event_day_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['event_day_answer']: reserved for the event-day
+    prompt. The prompt is fire-and-forget (same-day, transient), so a
+    post-load answer is always a no-op -- the day has passed and the hub
+    stays reachable from the navbar."""
+    return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _ed_reg
+    _ed_reg("event_day_answer", _event_day_answer)
+except Exception:
+    pass
+
+
 def prompt_event_day(parent, game_manager, event):
     """Ask the user whether to open the event hub when the day arrives."""
-    from popup_system import messagebox
+    from popup_system import (messagebox, ask_card, confirm_card,
+                              cards_available)
     titles = {
         'draft': ("Draft Day is here!",
                   "The NHL Entry Draft begins today.\n\nOpen Draft Day Central for the live pick-by-pick experience?"),
@@ -910,18 +950,52 @@ def prompt_event_day(parent, game_manager, event):
                         "The free agent market opens today.\n\nOpen Free Agent Frenzy?"),
     }
     title, msg = titles.get(event, ("Event Day!", "A league event day has arrived."))
+
+    def _do_open():
+        _open_event_hub(parent, game_manager, event)
+
+    if confirm_card is not None and (cards_available is None
+                                     or cards_available()):
+        # Gating T2-Phase 3: non-modal; dismiss = stay on current screen.
+        _set_event_day_app(parent)
+        confirm_card(parent, title, msg, on_yes=_do_open)
+        return
+
     if not messagebox.askyesno(title, msg):
         return
+    _do_open()
+
+
+
+
+def _open_event_hub(app, game_manager, event):
+    """Open the event hub for the given event key. Honest no-op when the
+    app or hub can't be resolved."""
+    if app is None:
+        return False
     try:
         if event == 'draft':
-            DraftDayCentralWindow(parent, game_manager)
+            show = getattr(app, 'show_screen', None)
+            if callable(show):
+                show("draft_central", "Draft Day Central", DraftDayCentral,
+                     game_manager)
+                return True
+            return False
         elif event == 'deadline':
+            opener = getattr(app, 'open_trade_deadline_center', None)
+            if callable(opener):
+                opener()
+                return True
             from trade_deadline_center import TradeDeadlineCenter
-            TradeDeadlineCenter(parent)
+            app.show_screen("trade_deadline", "Trade Deadline Center",
+                            TradeDeadlineCenter)
+            return True
         elif event == 'free_agency':
-            FreeAgencyFrenzyWindow(parent, game_manager)
+            FreeAgencyFrenzyWindow(app, game_manager)
+            return True
     except Exception:
         pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -944,21 +1018,6 @@ class EventDayHub(InGamePopup):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
 
-class DraftDayCentralWindow(EventDayHub):
-    """Popup wrapper for Draft Day Central."""
-    def __init__(self, parent, game_manager):
-        InGamePopup.__init__(self, parent)
-        self.title("Draft Day Central")
-        try:
-            self.state('zoomed')
-        except Exception:
-            self.geometry("1600x950")
-        self._view = DraftDayCentral(self, game_manager, app=parent)
-        self._view.pack(fill="both", expand=True)
-        self._view._close_screen = self.destroy
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-
-
 class FreeAgencyFrenzyWindow(EventDayHub):
     """Popup wrapper for Free Agency Frenzy."""
     def __init__(self, parent, game_manager):
@@ -974,6 +1033,7 @@ class FreeAgencyFrenzyWindow(EventDayHub):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
 
-# Keep original names working as popup wrappers for existing callers
-DraftDayCentralPopup = DraftDayCentralWindow
+# Keep the original name working as a popup wrapper for existing callers
+# (Gating Phase 2: DraftDayCentralWindow/DraftDayCentralPopup were deleted --
+# the hub is screen-only now).
 FreeAgencyFrenzyPopup = FreeAgencyFrenzyWindow

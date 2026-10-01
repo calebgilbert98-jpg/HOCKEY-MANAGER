@@ -6,7 +6,7 @@ Modern, polished interface with enhanced functionality and visual design
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 import customtkinter as ctk
 from datetime import datetime
 from player_development_system import PlayerDevelopmentEngine, initialize_player_potential
@@ -1053,8 +1053,19 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
                   f"Intensity: {intensity_label}\n\n"
                   f"This training program will be active for the next 30 days.\n"
                   f"A first session runs immediately.")
-        if not messagebox.askyesno("Confirm Training Assignment", message):
-            return
+        # Gating T2-Phase 3: non-modal confirm; dismiss = no program.
+        confirm_card(self, "Confirm Training Assignment", message,
+                     on_yes=lambda: self._assign_training_confirmed(
+                         player, player_name, focus, practice_type,
+                         intensity, intensity_label, engine))
+        return
+
+    def _assign_training_confirmed(self, player, player_name, focus,
+                                   practice_type, intensity,
+                                   intensity_label, engine):
+        """Record the training program after the user confirmed."""
+        from enhanced_practice_system import ACTIVE_TRAINING_PROGRAMS
+        from datetime import date
 
         # Record the program (shared registry; survives window close).
         # Assignment is stamped with the GAME date and mirrored into the
@@ -1420,13 +1431,14 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
     
     def _add_to_shortlist(self, player):
         """Add player to shortlist"""
-        result = messagebox.askyesno("Add to Shortlist", 
-                                   f"Add {player.full_name} to your shortlist?\n\n"
-                                   f"This will help you track their progress and "
-                                   f"receive notifications about their development.")
-        if result:
-            messagebox.showinfo("Added to Shortlist", 
-                              f"{player.full_name} has been added to your shortlist.")
+        # Gating T2-Phase 3: non-modal confirm; dismiss = not added.
+        confirm_card(self, "Add to Shortlist",
+                     f"Add {player.full_name} to your shortlist?\n\n"
+                     f"This will help you track their progress and "
+                     f"receive notifications about their development.",
+                     on_yes=lambda: messagebox.showinfo(
+                         "Added to Shortlist",
+                         f"{player.full_name} has been added to your shortlist."))
     
     def _compare_players(self, player):
         """Compare players functionality"""

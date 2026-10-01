@@ -3,8 +3,8 @@
 # Immersive, story-driven dashboard with visual hierarchy and team personality
 
 import tkinter as tk
-from popup_system import InGamePopup
 from tkinter import ttk
+import customtkinter as ctk
 from datetime import date
 from typing import (Dict, List)
 import random
@@ -968,38 +968,25 @@ class AtmosphericDashboard:
             print("Inbox window not available")
             
     def _show_team_stats_popup(self):
-        """Show a simple team stats popup window"""
-        import tkinter as tk
-        from tkinter import ttk
-        
-        popup = InGamePopup(self)
-        popup.title("Team Statistics")
-        popup.configure(background=self.parent.BG_COLOR)
-        popup.geometry("400x300")
-        
-        # Center the popup
-        popup.transient(self)
-        popup.grab_set()
-        
-        # Create content
-        title_label = ttk.Label(popup, text="Team Statistics", style='Title.TLabel')
-        title_label.pack(pady=10)
-        
-        # Team record
+        """Show a simple team stats snapshot as a Tier-1 screen.
+
+        Gating Phase 2: was a modal popup; the content
+        is now a screen, non-modal, with a thin Tier-B session.
+        """
         user_team = self.parent.user_team
-        record_text = f"Record: {user_team.wins}-{user_team.losses}-{user_team.ties}"
-        record_label = ttk.Label(popup, text=record_text, style='Heading.TLabel')
-        record_label.pack(pady=5)
-        
-        # Points
-        points = user_team.wins * 2 + user_team.ties
-        points_text = f"Points: {points}"
-        points_label = ttk.Label(popup, text=points_text, style='TLabel')
-        points_label.pack(pady=5)
-        
-        # Close button
-        close_btn = ttk.Button(popup, text="Close", command=popup.destroy)
-        close_btn.pack(pady=20)
+        wins = getattr(user_team, 'wins', 0)
+        losses = getattr(user_team, 'losses', 0)
+        ties = getattr(user_team, 'ties', 0)
+        stats = {
+            "team_name": getattr(user_team, 'team_name', ''),
+            "wins": wins,
+            "losses": losses,
+            "ties": ties,
+            "points": wins * 2 + ties,
+        }
+        show = getattr(self.parent, 'show_screen', None)
+        if callable(show):
+            show("team_stats", "Team Statistics", TeamStatsView, stats)
     
     # Animation and effects
     def _pulse_continue_button(self, button):
@@ -1255,124 +1242,46 @@ class AtmosphericDashboard:
             return None
 
     def _show_game_preview(self, game_data):
-        """Show detailed game preview window"""
-        preview_window = InGamePopup(self.parent)
-        preview_window.title(f"Game Preview: vs. {game_data['opponent']}")
-        preview_window.configure(bg=self.theme.colors.background)
-        preview_window.geometry("500x600")
-        preview_window.transient(self.parent)
-        preview_window.grab_set()
-        
-        # Center the window
-        preview_window.geometry("+%d+%d" % (
-            self.parent.winfo_rootx() + 50,
-            self.parent.winfo_rooty() + 50
-        ))
-        
-        # Header
-        header_frame = tk.Frame(preview_window, bg=self.theme.colors.primary, height=60)
-        header_frame.pack(fill='x')
-        header_frame.pack_propagate(False)
-        
-        title_label = tk.Label(header_frame, 
-                             text=f"🏒 {self.parent.user_team.team_name} vs. {game_data['opponent']}",
-                             font=self.theme.fonts['heading'],
-                             fg=self.theme.colors.text_light,
-                             bg=self.theme.colors.primary)
-        title_label.pack(expand=True)
-        
-        # Main content
-        content_frame = tk.Frame(preview_window, bg=self.theme.colors.background)
-        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
-        
-        # Game details
-        details_frame = tk.Frame(content_frame, bg=self.theme.colors.secondary, relief='flat', bd=1)
-        details_frame.pack(fill='x', pady=(0, 15))
-        
-        tk.Label(details_frame, text="📅 Game Details",
-                font=self.theme.fonts['subheading'],
-                fg=self.theme.colors.primary,
-                bg=self.theme.colors.secondary).pack(anchor='w', padx=12, pady=(12, 8))
-        
-        details_text = f"Date: {game_data['date_formatted']}\nVenue: {'Home' if game_data['is_home'] else 'Away'} Game\nType: Regular Season"
-        tk.Label(details_frame, text=details_text,
-                font=self.theme.fonts['body'],
-                fg=self.theme.colors.text_light,
-                bg=self.theme.colors.secondary,
-                justify='left').pack(anchor='w', padx=12, pady=(0, 12))
-        
-        # Team comparison
-        comparison_frame = tk.Frame(content_frame, bg=self.theme.colors.secondary, relief='flat', bd=1)
-        comparison_frame.pack(fill='x', pady=(0, 15))
-        
-        tk.Label(comparison_frame, text="⚔️ Team Comparison",
-                font=self.theme.fonts['subheading'],
-                fg=self.theme.colors.primary,
-                bg=self.theme.colors.secondary).pack(anchor='w', padx=12, pady=(12, 8))
-        
-        # Stats comparison grid
-        stats_grid = tk.Frame(comparison_frame, bg=self.theme.colors.secondary)
-        stats_grid.pack(fill='x', padx=12, pady=(0, 12))
-        
-        # Headers
-        tk.Label(stats_grid, text="", width=15, font=self.theme.fonts['caption'],
-                bg=self.theme.colors.secondary).grid(row=0, column=0)
-        tk.Label(stats_grid, text="Your Team", width=12, font=self.theme.fonts['caption'],
-                fg=self.theme.colors.primary, bg=self.theme.colors.secondary).grid(row=0, column=1)
-        tk.Label(stats_grid, text="Opponent", width=12, font=self.theme.fonts['caption'],
-                fg=self.theme.colors.primary, bg=self.theme.colors.secondary).grid(row=0, column=2)
-        
-        # Stats rows
-        stats_data = [
-            ("Record", game_data['your_record'], game_data['opponent_record']),
-            ("Goals For", str(getattr(self.parent.user_team, 'goals_for', 0)), 
-             str(getattr(game_data.get('opponent_team'), 'goals_for', 0)) if game_data.get('opponent_team') else "0"),
-            ("Goals Against", str(getattr(self.parent.user_team, 'goals_against', 0)),
-             str(getattr(game_data.get('opponent_team'), 'goals_against', 0)) if game_data.get('opponent_team') else "0")
-        ]
-        
-        for i, (stat_name, your_stat, opp_stat) in enumerate(stats_data, 1):
-            tk.Label(stats_grid, text=stat_name, font=self.theme.fonts['body'],
-                    fg=self.theme.colors.text_light, bg=self.theme.colors.secondary).grid(row=i, column=0, sticky='w')
-            tk.Label(stats_grid, text=your_stat, font=self.theme.fonts['body'],
-                    fg=self.theme.colors.text_light, bg=self.theme.colors.secondary).grid(row=i, column=1)
-            tk.Label(stats_grid, text=opp_stat, font=self.theme.fonts['body'],
-                    fg=self.theme.colors.text_light, bg=self.theme.colors.secondary).grid(row=i, column=2)
-        
-        # Key players section
-        players_frame = tk.Frame(content_frame, bg=self.theme.colors.secondary, relief='flat', bd=1)
-        players_frame.pack(fill='x', pady=(0, 15))
-        
-        tk.Label(players_frame, text="⭐ Key Players to Watch",
-                font=self.theme.fonts['subheading'],
-                fg=self.theme.colors.primary,
-                bg=self.theme.colors.secondary).pack(anchor='w', padx=12, pady=(12, 8))
-        
-        # Get top 3 players from user team
-        if hasattr(self.parent.user_team, 'roster') and self.parent.user_team.roster:
-            top_players = sorted(self.parent.user_team.roster, 
-                               key=lambda p: getattr(p, 'goals', 0) + getattr(p, 'assists', 0), 
-                               reverse=True)[:3]
-            
-            for player in top_players:
-                points = getattr(player, 'goals', 0) + getattr(player, 'assists', 0)
-                player_text = f"• {getattr(player, 'full_name', 'Unknown')} - {points} points"
-                tk.Label(players_frame, text=player_text,
-                        font=self.theme.fonts['body'],
-                        fg=self.theme.colors.text_light,
-                        bg=self.theme.colors.secondary).pack(anchor='w', padx=24, pady=1)
-        
-        # Close button
-        close_btn = tk.Button(content_frame, text="Close Preview",
-                            font=self.theme.fonts['body'],
-                            bg=self.theme.colors.primary,
-                            fg=self.theme.colors.text_light,
-                            relief='flat', bd=0,
-                            padx=20, pady=8,
-                            cursor='hand2',
-                            command=preview_window.destroy)
-        close_btn.pack(pady=(10, 0))
-        self._add_button_hover_effects(close_btn)
+        """Show detailed game preview as a Tier-1 screen.
+
+        Gating Phase 2: was a modal popup. The content is
+        unchanged; the data is snapshotted (JSON-safe) into the screen args
+        and the theme object is passed through for styling.
+        """
+        opp_team = game_data.get('opponent_team')
+        top_players = []
+        try:
+            roster = getattr(self.parent.user_team, 'roster', None) or []
+            top = sorted(
+                roster,
+                key=lambda p: getattr(p, 'goals', 0) + getattr(p, 'assists', 0),
+                reverse=True)[:3]
+            for player in top:
+                pts = getattr(player, 'goals', 0) + getattr(player, 'assists', 0)
+                top_players.append({
+                    "name": getattr(player, 'full_name', 'Unknown'),
+                    "points": pts,
+                })
+        except Exception:
+            pass
+        preview_data = {
+            'team_name': getattr(self.parent.user_team, 'team_name', ''),
+            'opponent': game_data['opponent'],
+            'date_formatted': game_data['date_formatted'],
+            'home_away': 'Home' if game_data['is_home'] else 'Away',
+            'your_record': game_data['your_record'],
+            'opponent_record': game_data['opponent_record'],
+            'your_gf': str(getattr(self.parent.user_team, 'goals_for', 0)),
+            'your_ga': str(getattr(self.parent.user_team, 'goals_against', 0)),
+            'opp_gf': str(getattr(opp_team, 'goals_for', 0)) if opp_team else "0",
+            'opp_ga': str(getattr(opp_team, 'goals_against', 0)) if opp_team else "0",
+            'top_players': top_players,
+        }
+        show = getattr(self.parent, 'show_screen', None)
+        if callable(show):
+            show("game_preview",
+                 f"Game Preview: vs. {game_data['opponent']}",
+                 GamePreviewView, preview_data, self.theme)
 
     def _get_next_game_info(self) -> str:
         """Get next game information"""
@@ -2463,3 +2372,177 @@ class AtmosphericDashboard:
             "Wins": {'player': 'Frederik Andersen', 'team': 'Carolina Hurricanes', 'value': 16},
             "Save %": {'player': 'Linus Ullmark', 'team': 'Boston Bruins', 'value': '.938'}
         }
+
+
+# ---------------------------------------------------------------------------
+# Gating Phase 2: screen views for the two migrated modal popups.
+# ---------------------------------------------------------------------------
+
+class TeamStatsView(ctk.CTkFrame):
+    """Team record/points snapshot as a Tier-1 screen (was a modal popup)."""
+
+    def __init__(self, parent, stats=None, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen()
+        stats = stats or {}
+
+        # Thin Tier-B session (read-only snapshot view).
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self.app, "team_stats")
+            if _sess is not None:
+                _sess.update(kind="team_stats", screen_id="team_stats",
+                             title="Team Statistics",
+                             team_name=stats.get("team_name", ""))
+        except Exception:
+            pass
+
+        bg = getattr(self.app, 'BG_COLOR', '#0e0e11')
+        self.configure(fg_color=bg)
+
+        tk.Label(self, text="Team Statistics",
+                 font=('Segoe UI', 16, 'bold'),
+                 fg='#F2F5FA', bg=bg).pack(pady=(30, 10))
+
+        record_text = (f"Record: {stats.get('wins', 0)}-"
+                       f"{stats.get('losses', 0)}-{stats.get('ties', 0)}")
+        tk.Label(self, text=record_text,
+                 font=('Segoe UI', 13, 'bold'),
+                 fg='#F2F5FA', bg=bg).pack(pady=5)
+
+        tk.Label(self, text=f"Points: {stats.get('points', 0)}",
+                 font=('Segoe UI', 11),
+                 fg='#9aa0aa', bg=bg).pack(pady=5)
+
+        tk.Button(self, text="Close", command=self.close_view,
+                  font=('Segoe UI', 10), bg='#00ceb8', fg='white',
+                  relief='flat', padx=30, pady=8,
+                  activebackground='#00a894').pack(pady=30)
+
+    def close_view(self):
+        """Close this screen (returns via _close_screen)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()
+
+
+class GamePreviewView(ctk.CTkFrame):
+    """Detailed game preview as a Tier-1 screen (was a modal popup).
+
+    Same sections as the old popup: game details, team comparison grid,
+    key players to watch. Data arrives as a JSON-safe snapshot
+    (preview_data); styling comes from the dashboard's theme object.
+    """
+
+    def __init__(self, parent, preview_data=None, theme=None, app=None):
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self._close_screen = None  # set by show_screen()
+        data = preview_data or {}
+        self.theme = theme
+
+        # Thin Tier-B session (read-only snapshot view).
+        try:
+            from popup_system import get_pending_session
+            _sess = get_pending_session(self.app, "game_preview")
+            if _sess is not None:
+                _sess.update(kind="game_preview", screen_id="game_preview",
+                             title=f"Game Preview: vs. {data.get('opponent', '')}",
+                             opponent=data.get('opponent', ''),
+                             date=data.get('date_formatted', ''))
+        except Exception:
+            pass
+
+        colors = theme.colors if theme is not None else None
+        fonts = theme.fonts if theme is not None else None
+        bg = getattr(colors, 'background', '#0e0e11') if colors else '#0e0e11'
+        secondary = getattr(colors, 'secondary', '#16161a') if colors else '#16161a'
+        primary = getattr(colors, 'primary', '#00ceb8') if colors else '#00ceb8'
+        text_light = getattr(colors, 'text_light', '#a1a1aa') if colors else '#a1a1aa'
+        heading = fonts['heading'] if fonts else ('Segoe UI', 16, 'bold')
+        subheading = fonts['subheading'] if fonts else ('Segoe UI', 12, 'bold')
+        body = fonts['body'] if fonts else ('Segoe UI', 10)
+        caption = fonts['caption'] if fonts else ('Segoe UI', 9)
+
+        self.configure(fg_color=bg)
+
+        # Header
+        header_frame = tk.Frame(self, bg=primary, height=60)
+        header_frame.pack(fill='x')
+        header_frame.pack_propagate(False)
+        tk.Label(header_frame,
+                 text=f"🏒 {data.get('team_name', '')} vs. {data.get('opponent', '')}",
+                 font=heading, fg=text_light, bg=primary).pack(expand=True)
+
+        # Main content
+        content_frame = tk.Frame(self, bg=bg)
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # Game details
+        details_frame = tk.Frame(content_frame, bg=secondary, relief='flat', bd=1)
+        details_frame.pack(fill='x', pady=(0, 15))
+        tk.Label(details_frame, text="📅 Game Details",
+                 font=subheading, fg=primary, bg=secondary).pack(
+                     anchor='w', padx=12, pady=(12, 8))
+        details_text = (f"Date: {data.get('date_formatted', '')}\n"
+                        f"Venue: {data.get('home_away', '')} Game\n"
+                        f"Type: Regular Season")
+        tk.Label(details_frame, text=details_text,
+                 font=body, fg=text_light, bg=secondary,
+                 justify='left').pack(anchor='w', padx=12, pady=(0, 12))
+
+        # Team comparison
+        comparison_frame = tk.Frame(content_frame, bg=secondary, relief='flat', bd=1)
+        comparison_frame.pack(fill='x', pady=(0, 15))
+        tk.Label(comparison_frame, text="⚔️ Team Comparison",
+                 font=subheading, fg=primary, bg=secondary).pack(
+                     anchor='w', padx=12, pady=(12, 8))
+        stats_grid = tk.Frame(comparison_frame, bg=secondary)
+        stats_grid.pack(fill='x', padx=12, pady=(0, 12))
+        tk.Label(stats_grid, text="", width=15, font=caption,
+                 bg=secondary).grid(row=0, column=0)
+        tk.Label(stats_grid, text="Your Team", width=12, font=caption,
+                 fg=primary, bg=secondary).grid(row=0, column=1)
+        tk.Label(stats_grid, text="Opponent", width=12, font=caption,
+                 fg=primary, bg=secondary).grid(row=0, column=2)
+        stats_data = [
+            ("Record", data.get('your_record', ''), data.get('opponent_record', '')),
+            ("Goals For", data.get('your_gf', '0'), data.get('opp_gf', '0')),
+            ("Goals Against", data.get('your_ga', '0'), data.get('opp_ga', '0')),
+        ]
+        for i, (stat_name, your_stat, opp_stat) in enumerate(stats_data, 1):
+            tk.Label(stats_grid, text=stat_name, font=body,
+                     fg=text_light, bg=secondary).grid(row=i, column=0, sticky='w')
+            tk.Label(stats_grid, text=your_stat, font=body,
+                     fg=text_light, bg=secondary).grid(row=i, column=1)
+            tk.Label(stats_grid, text=opp_stat, font=body,
+                     fg=text_light, bg=secondary).grid(row=i, column=2)
+
+        # Key players section
+        players_frame = tk.Frame(content_frame, bg=secondary, relief='flat', bd=1)
+        players_frame.pack(fill='x', pady=(0, 15))
+        tk.Label(players_frame, text="⭐ Key Players to Watch",
+                 font=subheading, fg=primary, bg=secondary).pack(
+                     anchor='w', padx=12, pady=(12, 8))
+        for player in data.get('top_players', []):
+            player_text = f"• {player.get('name', 'Unknown')} - {player.get('points', 0)} points"
+            tk.Label(players_frame, text=player_text,
+                     font=body, fg=text_light, bg=secondary).pack(
+                         anchor='w', padx=24, pady=1)
+
+        # Close button
+        tk.Button(content_frame, text="Close Preview",
+                  font=body, bg=primary, fg=text_light,
+                  relief='flat', bd=0, padx=20, pady=8, cursor='hand2',
+                  command=self.close_view).pack(pady=(10, 0))
+
+    def close_view(self):
+        """Close this screen (returns via _close_screen)."""
+        fn = getattr(self, '_close_screen', None)
+        if callable(fn):
+            fn()
+        else:
+            self.destroy()

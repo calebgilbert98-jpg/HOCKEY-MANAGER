@@ -3,13 +3,54 @@
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
 import tkinter as tk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card, ask_card
 from tkinter import ttk
 import json
 import os
 import customtkinter as ctk
 
 from modern_ui import AppColors, AppFonts, AppCard, AppButton
+
+
+# Gating T2-Phase 3: the unsaved-changes card answers through this named
+# resolver on post-load re-present. The view is kept module-side while
+# the card is open (same pattern as staff_management_window._chain_app).
+_SETTINGS_DIRTY_VIEW = None
+
+
+def _set_settings_dirty_view(view):
+    global _SETTINGS_DIRTY_VIEW
+    _SETTINGS_DIRTY_VIEW = view
+
+
+def _settings_dirty_answer(session_id, dialog_id, value, **kwargs):
+    """DIALOG_RESOLVERS['settings_dirty_answer']: 'save' saves (and may
+    auto-close), 'nosave' closes without saving, anything else stays.
+    Never raises; a missing view is an honest no-op."""
+    try:
+        view = _SETTINGS_DIRTY_VIEW
+        if view is None:
+            return False
+        if value == "save":
+            try:
+                view._save_settings()
+            except Exception:
+                pass
+        elif value == "nosave":
+            try:
+                view.close_view()
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+try:
+    from popup_system import register_dialog_resolver as _sreg
+    _sreg("settings_dirty_answer", _settings_dirty_answer)
+except Exception:
+    pass
 
 
 def default_settings():
@@ -770,18 +811,19 @@ class SettingsView(ctk.CTkFrame):
 
     def _reset_to_defaults(self):
         """Reset all settings to factory defaults"""
-        result = messagebox.askyesno(
-            "Reset Settings",
-            "Are you sure you want to reset all settings to defaults?\n\n"
-            "This cannot be undone.",
-            parent=self)
-        if result:
+        def _do_reset():
             # Factory defaults, not last-saved: this is what "Reset to
             # Defaults" promises. default_settings() is the single
             # source of truth used by get_settings() for fresh installs.
             self.settings = default_settings()
             self._load_current_values()
             self._mark_changed()
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = keep settings.
+        confirm_card(self, "Reset Settings",
+                     "Are you sure you want to reset all settings to defaults?\n\n"
+                     "This cannot be undone.",
+                     on_yes=_do_reset)
 
     def _apply_settings(self):
         """Apply settings without saving to file"""
@@ -829,42 +871,30 @@ class SettingsView(ctk.CTkFrame):
 
     def _cancel(self):
         """Cancel changes and close window"""
-        if self._dirty:  # Check if there are unsaved changes
-            result = messagebox.askyesnocancel(
-                "Unsaved Changes",
-                "You have unsaved changes. Do you want to save before "
-                "closing?",
-                parent=self)
-            if result is True:  # Save
-                self._save_settings()
-                return
-            elif result is None:  # Cancel
-                return
+        if not self._dirty:  # No unsaved changes: just close.
+            self.close_view()
+            return
 
-        self.close_view()
+        def _on_answer(value):
+            if value == "save":
+                self._save_settings()
+            elif value == "nosave":
+                self.close_view()
+            # "cancel" or dismiss: stay, keep editing.
+
+        # Gating T2-Phase 3: non-modal 3-way card; dismiss = stay.
+        _set_settings_dirty_view(self)
+        ask_card(self, "Unsaved Changes",
+                 "You have unsaved changes. Do you want to save before "
+                 "closing?",
+                 [("Save", "save", "primary"),
+                  ("Don't Save", "nosave", "secondary"),
+                  ("Cancel", "cancel", "secondary")],
+                 on_answer=_on_answer,
+                 default_on_dismiss="defer",
+                 session_id="settings_dirty", dialog_id="dirty_card",
+                 resolver="settings_dirty_answer")
 
     def get_game_results_settings(self):
         """Get current game results settings for external use"""
         return self.settings.get('game_results', {})
-
-
-class SettingsWindow(InGamePopup):
-    """Popup wrapper around SettingsView (backward compatibility)."""
-
-    def __init__(self, parent):
-        super().__init__(parent, modal=True)
-        self.title("Settings - Hockey Manager")
-        app = (getattr(parent, 'app', None)
-               or getattr(parent, 'parent', None) or parent)
-        self._view = SettingsView(self, app=app)
-        self._view._close_screen = self.destroy
-        self._view.pack(fill="both", expand=True)
-
-    def __getattr__(self, name):
-        view = self.__dict__.get("_view")
-        if view is not None:
-            try:
-                return getattr(view, name)
-            except AttributeError:
-                pass
-        return InGamePopup.__getattr__(self, name)

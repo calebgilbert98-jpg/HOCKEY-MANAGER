@@ -7,7 +7,7 @@ player pools, draft visualization, and comprehensive draft management.
 
 import tkinter as tk
 from tkinter import ttk
-from popup_system import messagebox, InGamePopup
+from popup_system import messagebox, InGamePopup, confirm_card
 import random
 from typing import List, Dict, Optional
 from dataclasses import dataclass
@@ -1051,6 +1051,45 @@ def audit_fantasy_draft(manager, league) -> list:
     return issues
 
 
+# ---------------------------------------------------------------------------
+# Gating Phase 2: standalone-browser navigation helpers.
+#
+# The player browser / draft order browser are Tier-1 screens now. Opening
+# one replaces (destroys) this draft view; the draft manager is league-owned
+# so re-entering the screen re-attaches to the live session (BUG-2 fix).
+# ---------------------------------------------------------------------------
+def _browser_return_nav(app, game_manager):
+    """Where a standalone browser returns to when closed.
+
+    Back to the draft screen while the draft is pending; the dashboard
+    once the draft has completed (avoids the 'not available' info popup).
+    """
+    try:
+        if getattr(game_manager, 'pending_fantasy_draft', False):
+            app.open_fantasy_draft_window()
+        else:
+            app.show_dashboard()
+    except Exception:
+        pass
+
+
+def _browser_pick(app, game_manager, player):
+    """Pick continuation for the browser screen's on_select callback.
+
+    Runs on the freshly re-opened draft view (the old view was replaced
+    by the browser screen), then the browser's close_view fires and its
+    _close_screen no-ops (we are already on the draft screen).
+    """
+    try:
+        _browser_return_nav(app, game_manager)
+        cur = getattr(app, '_current_screen', None) or {}
+        view = cur.get('view')
+        if view is not None and hasattr(view, 'draft_specific_player'):
+            view.draft_specific_player(player)
+    except Exception:
+        pass
+
+
 class FantasyDraftView(tk.Frame):
     """Modern interactive fantasy draft as an embedded full-screen view.
 
@@ -1128,6 +1167,21 @@ class FantasyDraftView(tk.Frame):
         if hasattr(self, 'players_tree'):
             debug_print("DEBUG: Starting initial player population...")
             self.after(100, self.initial_player_load)  # Slight delay to ensure UI is ready
+
+        # Gating Phase 2: resume a dropped auto-draft chain. Opening a
+        # Tier-1 screen (player browser / draft order) replaces this view,
+        # killing the after() chain; the in-flight flag lives on the
+        # league-owned draft manager so the rebuilt view picks it back up.
+        try:
+            _dm = self.draft_manager
+            if getattr(_dm, 'auto_draft_in_flight', False) and not _dm.is_draft_complete():
+                _cur = _dm.get_current_pick()
+                if _cur is not None and _cur.team != self.user_team:
+                    self.after(800, self.continue_auto_draft)
+                else:
+                    _dm.auto_draft_in_flight = False
+        except Exception:
+            pass
 
     def _warn_reentry_issues(self):
         """Surface re-entry audit issues once (main-interface path)."""
@@ -1988,29 +2042,36 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.setup_integrated_draft_order(order_tab)
         
     def open_player_browser(self):
-        """Open the standalone player browser"""
-        from player_browser import PlayerBrowserWindow
-        
+        """Open the standalone player browser (Gating Phase 2: Tier-1 screen).
+
+        The old blocking wait_window flow is replaced by the view's
+        on_select callback; the pick continuation returns to the draft
+        screen (the draft manager is league-owned, so re-entry is safe).
+        """
+        from player_browser import PlayerBrowserView
+
         available_players = self.draft_manager.get_available_players()
         if not available_players:
             messagebox.showinfo("No Players", "No players available for drafting.")
             return
-            
-        browser = PlayerBrowserWindow(self, available_players, "Fantasy Draft - Available Players")
-        
-        # Wait for user to make selection
-        self.wait_window(browser)
-        
-        # Check if player was drafted
-        selected_player = browser.get_selected_player()
-        if selected_player:
-            self.draft_specific_player(selected_player)
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen(
+            'player_browser', 'Fantasy Draft - Available Players',
+            PlayerBrowserView, available_players,
+            'Fantasy Draft - Available Players',
+            on_select=lambda p: _browser_pick(app, gm, p))
+        # Closing without picking returns to the draft (was: popup teardown).
+        view._close_screen = lambda: _browser_return_nav(app, gm)
             
     def open_draft_order_browser(self):
-        """Open the standalone draft order browser"""
-        from player_browser import SimpleDraftOrderWindow
-        
-        SimpleDraftOrderWindow(self, self.draft_manager)
+        """Open the standalone draft order browser (Gating Phase 2: screen)."""
+        from player_browser import SimpleDraftOrderView
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen('draft_order', 'Draft Order',
+                               SimpleDraftOrderView, self.draft_manager)
+        view._close_screen = lambda: _browser_return_nav(app, gm)
         
     def open_quick_draft(self):
         """Open quick draft interface"""
@@ -2029,15 +2090,17 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             messagebox.showinfo("Not Your Turn", f"It's {current_pick.team.team_name}'s turn to pick.")
             return
             
-        # Open browser for user's pick
-        from player_browser import PlayerBrowserWindow
-        
-        browser = PlayerBrowserWindow(self, available_players, f"Your Pick #{current_pick.overall_pick}")
-        self.wait_window(browser)
-        
-        selected_player = browser.get_selected_player()
-        if selected_player:
-            self.draft_specific_player(selected_player)
+        # Open browser for user's pick (Gating Phase 2: Tier-1 screen,
+        # pick delivered via the view's on_select callback).
+        from player_browser import PlayerBrowserView
+
+        app, gm = self.app, self.game_manager
+        view = app.show_screen(
+            'player_browser', f"Your Pick #{current_pick.overall_pick}",
+            PlayerBrowserView, available_players,
+            f"Your Pick #{current_pick.overall_pick}",
+            on_select=lambda p: _browser_pick(app, gm, p))
+        view._close_screen = lambda: _browser_return_nav(app, gm)
             
     def draft_specific_player(self, player):
         """Draft a specific player from browser"""
@@ -2507,9 +2570,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             f"Confirm this draft selection?"
         )
         
-        result = messagebox.askyesno("🏒 Draft Player", confirm_text)
-        
-        if result:
+        def _do_draft():
             debug_print(f"DEBUG: User confirmed draft of {player.full_name}")
             # Make the draft pick
             success = self.draft_manager.make_pick(player)
@@ -2589,8 +2650,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             else:
                 debug_print(f"DEBUG: Draft pick failed for {player.full_name}")
                 messagebox.showerror("Draft Error", "Unable to complete the draft pick. Please try again.")
-        else:
-            debug_print(f"DEBUG: User cancelled draft of {player.full_name}")
+
+        # Gating T2-Phase 3: non-modal confirm; dismiss = no pick made.
+        confirm_card(self, "Draft Player", confirm_text,
+                     on_yes=_do_draft)
     
     def setup_integrated_draft_order(self, parent):
         """Setup integrated draft order browser directly in the tab"""
@@ -4026,20 +4089,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         current_pick = self.draft_manager.get_current_pick()
         remaining_picks = len(self.draft_manager.draft_picks) - self.draft_manager.current_pick
         
-        response = messagebox.askyesno(
-            "Simulate Rest of Draft", 
-            f"This will simulate all remaining {remaining_picks} picks in the draft.\n\n"
-            f"Current pick: #{current_pick.overall_pick if current_pick else 'N/A'}\n"
-            f"Remaining picks: {remaining_picks}\n\n"
-            f"Are you sure you want to continue?"
-        )
-        
-        if not response:
-            return
-            
+        # Gating T2-Phase 3: non-modal confirm; dismiss = do not simulate.
+        confirm_card(self, "Simulate Rest of Draft",
+                     f"This will simulate all remaining {remaining_picks} picks in the draft.\n\n"
+                     f"Current pick: #{current_pick.overall_pick if current_pick else 'N/A'}\n"
+                     f"Remaining picks: {remaining_picks}\n\n"
+                     f"Are you sure you want to continue?",
+                     on_yes=self._sim_rest_of_draft_confirmed)
+
+    def _sim_rest_of_draft_confirmed(self):
+        """Run the rest-of-draft sim after the user confirmed."""
+        current_pick = self.draft_manager.get_current_pick()
+        remaining_picks = (len(self.draft_manager.draft_picks)
+                           - self.draft_manager.current_pick)
         picks_simmed = 0
         total_picks = remaining_picks
-        
+    
         # Show progress dialog for long simulation
         progress_window = InGamePopup(self)
         progress_window.title("Simulating Draft...")
@@ -4047,46 +4112,46 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         progress_window.configure(background=self.app.BG_COLOR)
         progress_window.transient(self)
         progress_window.grab_set()
-        
+    
         progress_label = ttk.Label(progress_window, text="Simulating draft picks...", 
                                  style='Title.TLabel')
         progress_label.pack(pady=20)
-        
+    
         progress_var = tk.StringVar()
         progress_detail = ttk.Label(progress_window, textvariable=progress_var, 
                                   style='Info.TLabel')
         progress_detail.pack(pady=10)
-        
+    
         progress_window.update()
-        
+    
         while not self.draft_manager.is_draft_complete():
             current_pick = self.draft_manager.get_current_pick()
-            
+        
             if not current_pick:
                 break
-                
+            
             # Update progress
             picks_simmed += 1
             percentage = int((picks_simmed / total_picks) * 100) if total_picks > 0 else 0
             progress_var.set(f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} ({percentage}%)")
             progress_window.update()
-            
+        
             # AI selection logic with team needs
             available_players = self.draft_manager.get_available_players()
             if not available_players:
                 break
-                
+            
             team_needs = self.analyze_team_needs(current_pick.team)
             suitable_players = self.filter_by_team_needs(available_players, team_needs)
-            
+        
             if not suitable_players:
                 suitable_players = available_players[:20]  # Fallback to best available
-                
+            
             # Weight selection towards top players with some randomness
             top_candidates = suitable_players[:10]
             weights = [10, 8, 6, 5, 4, 3, 2, 2, 1, 1][:len(top_candidates)]
             ai_pick = random.choices(top_candidates, weights=weights, k=1)[0]
-            
+        
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Roster assignment (23-man NHL cap) on the manager.
@@ -4095,32 +4160,32 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
-                
+            
             # Small delay to show progress (optional)
             if picks_simmed % 10 == 0:
                 progress_window.after(10)  # Brief pause every 10 picks
-                
+            
         # Close progress window
         progress_window.destroy()
-        
+    
         # CRITICAL: Update display after simulation with forced refresh
         debug_print(f"DEBUG: Final update after simulating {picks_simmed} picks in sim_rest_of_draft")
         self.update_display()
-        
+    
         # FORCE immediate draft board refresh and make it visible
         if hasattr(self, 'recent_picks_tree'):
             debug_print("DEBUG: FORCE final draft board refresh in sim_rest_of_draft")
             self.ensure_draft_board_visible()  # Make sure draft board tab is active
             self.update_recent_picks()
-            
+        
         # FORCE team roster refresh  
         if hasattr(self, 'team_roster_tree'):
             self.update_all_team_rosters()
-            
+        
         # Force UI refresh
         self.update_idletasks()
         self.update()
-        
+    
         # Show completion message
         if self.draft_manager.is_draft_complete():
             messagebox.showinfo(
@@ -4137,7 +4202,7 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                 f"Simulated {picks_simmed} picks.\n"
                 f"Draft may still be in progress - check current pick status."
             )
-    
+
     def analyze_team_needs(self, team):
         """Analyze what positions a team needs most"""
         # Count current picks by position
@@ -4229,38 +4294,56 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             
             # Continue with AI picks if enabled
             if self.auto_draft_enabled.get() or current_pick.team != self.user_team:
+                self.draft_manager.auto_draft_in_flight = True
                 self.after(1000, self.continue_auto_draft)
         else:
             messagebox.showerror("Draft Error", "Unable to complete the draft pick.")
             
     def continue_auto_draft(self):
-        """Continue with automated draft picks"""
-        if self.draft_manager.is_draft_complete():
+        """Continue with automated draft picks.
+
+        Gating Phase 2: in-flight state lives on the league-owned draft
+        manager (not the view). A screen-shift away (e.g. the player
+        browser) replaces this view and kills the after() chain; the
+        rebuilt view resumes it from the flag -- no silent stall.
+        """
+        dm = self.draft_manager
+        if dm.is_draft_complete():
+            dm.auto_draft_in_flight = False
             self.complete_draft()
             return
             
-        current_pick = self.draft_manager.get_current_pick()
+        current_pick = dm.get_current_pick()
         if current_pick and current_pick.team != self.user_team:
             # AI makes pick
-            available_players = self.draft_manager.get_available_players()
+            available_players = dm.get_available_players()
             if available_players:
                 # AI picks best available player with some randomness
                 top_players = available_players[:10]  # Top 10 available
                 ai_pick = random.choice(top_players[:3])  # Pick from top 3
                 
-                success = self.draft_manager.make_pick(ai_pick)
+                success = dm.make_pick(ai_pick)
                 if success:
                     # Roster assignment (23-man NHL cap) on the manager.
-                    self.draft_manager.assign_drafted_player(
+                    dm.assign_drafted_player(
                         current_pick.team, ai_pick)
 
                     self.update_display()
                     
                     # Continue if still not user's turn
-                    next_pick = self.draft_manager.get_current_pick()
+                    next_pick = dm.get_current_pick()
                     if next_pick and next_pick.team != self.user_team:
                         delay = 500 if self.draft_speed.get() == "Fast" else 1500 if self.draft_speed.get() == "Slow" else 1000
+                        dm.auto_draft_in_flight = True
                         self.after(delay, self.continue_auto_draft)
+                    else:
+                        dm.auto_draft_in_flight = False
+                else:
+                    dm.auto_draft_in_flight = False
+            else:
+                dm.auto_draft_in_flight = False
+        else:
+            dm.auto_draft_in_flight = False
                         
     def complete_draft(self):
         """Handle draft completion"""
@@ -4514,45 +4597,45 @@ NHL League Office""",
         
     def begin_draft(self):
         """Start the fantasy draft"""
-        # Confirm start
-        result = messagebox.askyesno(
-            "Begin Fantasy Draft",
-            f"Are you sure you want to begin the fantasy draft?\n\n"
-            f"This will:\n"
-            f"• Clear all current team rosters\n"
-            f"• Redistribute {len(self.draft_manager.all_players)} players\n"
-            f"• Start the {self.draft_manager.config.rounds}-round draft\n\n"
-            f"This action cannot be undone!"
-        )
-        
-        if result:
-            # Hide begin draft button
-            if hasattr(self, 'begin_draft_button'):
-                self.begin_draft_button.destroy()
-            
-            # Initialize the first pick
-            self.draft_manager.current_pick = 0
-            
-            # Update display to show first pick
-            self.update_display()
-            
-            # Add delayed updates to ensure tabs are ready
-            self.after(200, self.update_recent_picks)
-            self.after(300, self.update_all_team_rosters)
-            self.after(400, self.update_main_player_spotlight)
-            
-            # Also ensure team rosters tab shows initial state
-            debug_print("DEBUG: Scheduling initial team roster display update")
-            self.after(500, lambda: self.update_team_roster() if hasattr(self, 'update_team_roster') else None)
-            
-            # Show success message
-            first_pick = self.draft_manager.get_current_pick()
-            if first_pick:
-                messagebox.showinfo(
-                    "Fantasy Draft Started!",
-                    f"The fantasy draft has begun!\n\n"
-                    f"First pick: {first_pick.team.team_name} (Pick #{first_pick.overall_pick})"
-                )
+        # Gating T2-Phase 3: non-modal confirm; dismiss = draft not started.
+        confirm_card(self, "Begin Fantasy Draft",
+                     f"Are you sure you want to begin the fantasy draft?\n\n"
+                     f"This will:\n"
+                     f"• Clear all current team rosters\n"
+                     f"• Redistribute {len(self.draft_manager.all_players)} players\n"
+                     f"• Start the {self.draft_manager.config.rounds}-round draft\n\n"
+                     f"This action cannot be undone!",
+                     on_yes=self._begin_draft_confirmed)
+
+    def _begin_draft_confirmed(self):
+        """Begin the draft after the user confirmed (clears rosters)."""
+        # Hide begin draft button
+        if hasattr(self, 'begin_draft_button'):
+            self.begin_draft_button.destroy()
+
+        # Initialize the first pick
+        self.draft_manager.current_pick = 0
+
+        # Update display to show first pick
+        self.update_display()
+
+        # Add delayed updates to ensure tabs are ready
+        self.after(200, self.update_recent_picks)
+        self.after(300, self.update_all_team_rosters)
+        self.after(400, self.update_main_player_spotlight)
+
+        # Also ensure team rosters tab shows initial state
+        debug_print("DEBUG: Scheduling initial team roster display update")
+        self.after(500, lambda: self.update_team_roster() if hasattr(self, 'update_team_roster') else None)
+
+        # Show success message
+        first_pick = self.draft_manager.get_current_pick()
+        if first_pick:
+            messagebox.showinfo(
+                "Fantasy Draft Started!",
+                f"The fantasy draft has begun!\n\n"
+                f"First pick: {first_pick.team.team_name} (Pick #{first_pick.overall_pick})"
+            )
                 
     def clear_filters(self):
         """Clear all player filters"""

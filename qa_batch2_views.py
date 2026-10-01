@@ -117,10 +117,11 @@ def main():
     cv = ChangePriorityView(app2.root, app=app2, entry=entry,
                             shortlist_manager=app2.shortlist_manager)
     ok("ChangePriorityView constructs", cv.entry is entry)
-    # wrapper still exists with old signature
-    from shortlist_system import ShortlistWindow, AddPlayerDialog, EditNotesDialog, ChangePriorityDialog
-    ok("shortlist wrappers importable", all(x is not None for x in
-        (ShortlistWindow, AddPlayerDialog, EditNotesDialog, ChangePriorityDialog)))
+    # wrappers pruned (gating T2-Phase 3, spec 8.8): views are the API now
+    ok("shortlist wrappers pruned",
+       not any(hasattr(__import__("shortlist_system"), n)
+               for n in ("ShortlistWindow", "AddPlayerDialog",
+                         "EditNotesDialog", "ChangePriorityDialog")))
 
     # --- scouting profile views ------------------------------------------
     from scouting_profile_dialog import (ScoutingProfileView, ProfileEditorView)
@@ -165,17 +166,17 @@ def main():
        and app3.saved_called >= 1 and not sv2.winfo_exists())
 
     # --- settings views ----------------------------------------------------
-    from settings_window import SettingsView, SettingsWindow
+    from settings_window import SettingsView
     st = SettingsView(app.root, app=app)
     ok("SettingsView constructs", isinstance(st, ctk.CTkFrame))
     st.close_view()
     ok("SettingsView close_view fallback destroys", not st.winfo_exists())
-    ok("settings wrappers importable", SettingsWindow is not None)
+    ok("settings wrapper pruned",
+       not hasattr(__import__("settings_window"), "SettingsWindow"))
 
     # --- season_flow views -------------------------------------------------
     from season_flow_ui import (AutomationSettingsView, MilestoneNotificationView,
-                                SettingsWindow as SFSettingsWindow,
-                                MilestoneNotificationWindow, SeasonPhase)
+                                SeasonPhase)
 
     class FakeSettings:
         simulate_away_games = True
@@ -213,8 +214,9 @@ def main():
     ok("MilestoneNotificationView constructs", mv.milestone.name == "Trade Deadline")
     mv.close_view()
     ok("MilestoneNotificationView close_view fallback destroys", not mv.winfo_exists())
-    ok("season_flow wrappers importable",
-       SFSettingsWindow is not None and MilestoneNotificationWindow is not None)
+    ok("season_flow wrappers pruned",
+       not any(hasattr(__import__("season_flow_ui"), n)
+               for n in ("SettingsWindow", "MilestoneNotificationWindow")))
 
     print(f"\n{ PASS } passed, { FAIL } failed")
     return 1 if FAIL else 0
