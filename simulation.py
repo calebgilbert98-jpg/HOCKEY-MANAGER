@@ -9302,6 +9302,12 @@ class GameSim:
         momentum risk reading shifts it +-15s. Conversion is untouched --
         this is risk, not a boost.
         """
+        # Workstream B (2026-09-30): no phantom after-the-horn pulls. The
+        # end-of-final-tick check used to fire with the clock at/below zero
+        # -- a pull with no time left inflates the pull count and can do
+        # nothing. A pull needs live time on the clock.
+        if getattr(self, "clock", 0) <= 0:
+            return False
         if getattr(self, "period", 1) != 3:
             return False
         if team.team_name in getattr(self, "goalie_pulled", set()):
@@ -9470,12 +9476,48 @@ class GameSim:
         return highlights
 
     def _maybe_pull_goalies(self):
-        """Once-per-tick: trailing teams pull on the fly with OZ possession."""
+        """Once-per-tick: trailing teams pull on the fly.
+
+        Pull timing by coach personality (workstream B, 2026-09-30): the
+        aggressive coach gambles on neutral-zone possession, the balanced
+        coach needs the offensive zone, the conservative coach waits for
+        CLEAN OZ possession (control, not a loose puck). WHEN the window
+        opens still comes from goalie_pull.pull_windows -- this is only
+        which opportunities each personality takes. Conversion untouched.
+        """
         for team in (self.home_team, self.away_team):
-            if (self._pull_eligible(team)
-                    and self.possession_team == team
-                    and self._team_in_oz(team)):
-                self._pull_goalie(team)
+            if not self._pull_eligible(team):
+                continue
+            if self.possession_team != team:
+                continue
+            _style = "balanced"
+            try:
+                from goalie_pull import (pull_style as _pstyle,
+                                         coach_for as _cfor)
+                _s = _pstyle(_cfor(self, team))
+                _style = (_s.get("style", "balanced")
+                          if isinstance(_s, dict) else str(_s))
+            except Exception:
+                pass
+            if self._team_in_oz(team):
+                if _style == "conservative":
+                    try:
+                        if (self.possession_type
+                                != PossessionType.CLEAN_POSSESSION):
+                            continue
+                    except Exception:
+                        pass
+            else:
+                # Neutral-zone possession on the fly: only the aggressive
+                # coach takes the gamble (defensive-zone: nobody does).
+                try:
+                    _nx = (self.puck_pos[0]
+                           if getattr(self, "puck_pos", None) else 100.0)
+                except Exception:
+                    _nx = 100.0
+                if not (75 <= _nx <= 125 and _style == "aggressive"):
+                    continue
+            self._pull_goalie(team)
 
     def _maybe_pull_goalie_for_draw(self, fx):
         """A trailing coach keeps the goalie out for an offensive-zone draw.

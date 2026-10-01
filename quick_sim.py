@@ -987,6 +987,10 @@ class AdvancedGameSim:
         if self.pk_team == team_name:
             return False  # never shorthanded
         remaining = 3600 - self.time
+        # Workstream B (2026-09-30): no phantom after-the-horn pulls -- a
+        # pull needs live time on the clock.
+        if remaining <= 0:
+            return False
         try:
             from goalie_pull import pull_windows as _gpw
             d1, d2, _style = _gpw(self, team)
