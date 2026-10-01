@@ -601,7 +601,23 @@ def ai_roster_compliance(team, league=None, rng=None):
                 except Exception:
                     return (0, 0)
             cands.sort(key=_key)
-            pick = cands[0]
+            pick = None
+            for c in cands:
+                # Never paper down below a dressable 18+2 -- a demotion
+                # that breaks the dressed minimum is skipped (the summon
+                # step below covers genuine shortfalls with fill-ins).
+                # Clubs that already can't dress skip the guard: paper
+                # moves can't make a short lineup shorter.
+                try:
+                    if (can_dress_lineup(team)
+                            and would_break_dress_minimum(team, [c])):
+                        continue
+                except Exception:
+                    pass
+                pick = c
+                break
+            if pick is None:
+                break  # every demotable player is needed to dress
             try:
                 roster.remove(pick)
                 ahl.append(pick)

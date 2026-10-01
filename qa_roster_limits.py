@@ -214,6 +214,20 @@ done = rl.ai_roster_compliance(t11)
 check("AI papered down to 23", rl.active_roster_count(t11) == 23, str(done))
 check("AI demotions used the AHL", len(t11.ahl_roster) == 3)
 
+# paper-down never breaks the dressed minimum: 24 active, exactly 18+2
+# dressable (4 injured) -> may only demote the injured
+t11b = mkteam()
+for _ in range(18):
+    t11b.roster.append(mkplayer("C"))
+for _ in range(2):
+    t11b.roster.append(mkplayer("G"))
+for _ in range(4):
+    t11b.roster.append(mkplayer("C", injured=True))
+done = rl.ai_roster_compliance(t11b)
+check("paper-down keeps 18+2 dressable", rl.can_dress_lineup(t11b), str(done))
+check("paper-down only moved the injured",
+      all(p.is_injured for p in t11b.ahl_roster))
+
 t12 = mkteam()  # AI can't dress -> summons
 done = rl.ai_roster_compliance(t12)
 check("AI summoned fillers", done["summoned"] > 0 and rl.can_dress_lineup(t12))
