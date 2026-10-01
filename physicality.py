@@ -1254,7 +1254,12 @@ def stevens_impact_bump(sim: Any, hitter: Any, impact: int) -> int:
         if not isinstance(marks, dict):
             return impact
         m = int(marks.get(getattr(hitter, "id", None), 0) or 0)
-        if m >= 2 and int(impact or 1) < 3 \
+        # D16 (fixed 2026-09-30): tier 3 is invalid downstream --
+        # hit_effects(3) falls through to injury_mult 1.0 (vs 2.2 for
+        # BIG) and the big-injury band is lost, so the grudge "reward"
+        # made the hit SOFTER in every downstream term. Cap the bump at
+        # tier 2 (BIG): only tier 1 (NORMAL) may step up.
+        if m >= 2 and int(impact or 1) < 2 \
                 and random.random() < min(0.24, 0.08 * m):
             return int(impact) + 1
         return impact

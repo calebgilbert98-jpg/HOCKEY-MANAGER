@@ -1366,6 +1366,17 @@ class RosterView(ctk.CTkFrame):
             morale_raw = int(getattr(player, 'morale', 7) or 7)
             morale = f"{morale_raw * 10} {morale_label(morale_raw)}"
             injury_status = getattr(player, 'injury_status', 'Healthy')
+            # D14 (2026-09-30): the legacy string is no longer written by
+            # any injury path (the old hit path is gone; the recovery loop
+            # only ever writes "Healthy"). Read the real injury state so
+            # a stale string on an old save can't tag a healthy player
+            # 'injured' forever. Suspended override below still applies.
+            try:
+                import condition_ui as _cui
+                _real = _cui.injury_status(player)
+                injury_status = _real if _real else 'Healthy'
+            except Exception:
+                pass
             # TRACK C #3a: suspended players are silently unavailable in the
             # lineup builder -- surface the badge in the status column.
             try:
