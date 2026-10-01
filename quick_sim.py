@@ -1738,6 +1738,28 @@ class AdvancedGameSim:
         """Once per shift: trailing teams pull for the extra attacker."""
         for team in (self.home_team, self.away_team):
             if self._pull_eligible(team, team.team_name):
+                # RC3 parity (2026-10-01): GameSim pulls only with
+                # possession in the OZ (NZ for the aggressive coach, DZ
+                # never). AdvGS has no possession/zone state, so the
+                # fast-fidelity approximation is a per-shift opportunity
+                # roll: 0.5 (has the puck -- AdvGS's own puck model) x 0.5
+                # (in the OZ while pressing) = 0.25; the aggressive coach
+                # also takes NZ gambles (0.5 x 0.75 = 0.375). The style
+                # gate is the shared goalie_pull.pull_style decision. A
+                # failed roll tries again next shift -- the pull waits for
+                # its opportunity instead of firing at the window's edge.
+                _pstyle = "balanced"
+                try:
+                    from goalie_pull import (pull_style as _pstyle_f,
+                                             coach_for as _cfor_f)
+                    _ps = _pstyle_f(_cfor_f(self, team))
+                    _pstyle = (_ps.get("style", "balanced")
+                               if isinstance(_ps, dict) else str(_ps))
+                except Exception:
+                    pass
+                _zone_p = 0.75 if _pstyle == "aggressive" else 0.5
+                if random.random() >= 0.5 * _zone_p:
+                    continue
                 _tn = team.team_name
                 self._pull_goalie(_tn)
                 # Structured drama (workstream B, 2026-09-30, additive):
@@ -3606,8 +3628,9 @@ class AdvancedGameSim:
         # fatigue is the live shift-fatigue curve. sys/dz/pressure/
         # tactics are neutral -- AdvGS has no deployment-layer state
         # (documented fidelity gap, not a formula difference). A blocked
-        # shot never reaches the goal roll; the miss arm rolls after a
-        # failed goal roll below, so fate never changes P(goal|attempt).
+        # shot never reaches the goal roll. The miss arm (D11/RC1) rolls
+        # BEFORE the goal roll below -- fate changes P(goal|attempt),
+        # the same decision GameSim makes.
         _fate_missed = False
         _blocked_now = False
         _defender = None
@@ -3646,18 +3669,54 @@ class AdvancedGameSim:
         # +x for home, mirrored for away). The old flat 0.85-per-shot
         # made every empty-net shot nearly automatic; real (and GameSim)
         # empty-netters come from zone position, not shot volume.
-        _en_x = shooter.x
-        if puck_team_name == self.home_team.team_name:
-            _en_deep = _en_x > 125
+        #
+        # RC4 parity (2026-10-01): the shooter's shift coordinates are
+        # static for the whole shift and don't reflect the turnover
+        # reality of an EN chance -- GameSim's EN fires on a turnover,
+        # usually in the pressing team's OZ (the shooting team's DZ).
+        # Roll the zone from the turnover distribution instead of reading
+        # stale coordinates: DZ 0.70 / NZ 0.25 / OZ-deep 0.05. Small
+        # impact, but the direction matches GameSim (most EN chances are
+        # long-range).
+        _en_zone_roll = random.random()
+        if _en_zone_roll < 0.70:
+            _en_prob = 0.03
+        elif _en_zone_roll < 0.95:
+            _en_prob = 0.10
         else:
-            _en_deep = _en_x < 75
-        _en_neutral = 75 <= _en_x <= 125
-        _en_prob = 0.30 if _en_deep else (0.10 if _en_neutral else 0.03)
+            _en_prob = 0.30
         _empty_net = (not shot_blocked
                       and opp_team_name in self.goalie_pulled
                       and random.random() < _en_prob)
+        # D11 miss arm, RC1 parity (2026-10-01): the ONE shared miss
+        # decision (mesh_system.shot_miss_prob), rolled BEFORE the goal
+        # roll -- a miss is off-net and can never be a goal, the same
+        # decision GameSim makes (simulation.py:5058, miss -> return
+        # before _resolve_shot_on_goal). Grade-aware via _last_chance_grade
+        # (set in _apply_chance_grade above); distance is AdvGS's
+        # coordinate proxy for GameSim's location-based distance. Blocked
+        # shots never reach here; empty-net shots skip the miss roll (the
+        # EN auto-goal is its own decision, same as GameSim's
+        # turnover-gated EN which never rolls a miss).
+        _fate_missed = False
+        if not shot_blocked and not _empty_net:
+            try:
+                from mesh_system import shot_miss_prob as _smp0
+                _miss_grade0 = str(getattr(self, "_last_chance_grade", "B")
+                                   or "B")
+                _fate_missed = (random.random()
+                                < _smp0(shooter, _miss_grade0, _qs_dist))
+            except Exception:
+                _fate_missed = False
         if shot_blocked:
             shot_result = 'BLOCKED'
+        elif _fate_missed:
+            # Off-net: no goal roll, no save. The attempt still counts as
+            # a shot and records its grade below (xG backbone).
+            shot_result = 'MISS'
+            self.events.append({'time': self.time, 'period': self.period,
+                                'team': puck_team_name, 'player': shooter,
+                                'event': 'Shot'})
         elif _empty_net or random.random() < shot_chance:
             shot_result = 'GOAL'
             self.score[puck_team_name] += 1
@@ -3750,25 +3809,11 @@ class AdvancedGameSim:
                 self.pk_team = None
                 self.pp_end_time = None
         elif goalie:
-            # Shared grade-aware miss, D11: the ONE shared miss decision
-            # (mesh_system.shot_miss_prob) -- clean looks rarely miss,
-            # perimeter prayers often do, with the coordinate-derived
-            # distance folded in (AdvGS's documented proxy for GameSim's
-            # location-based distance). A miss is off-net (not a save);
-            # otherwise the goalie stops it. Rolls AFTER the failed goal
-            # roll: fate never changes P(goal|attempt).
-            _missed = False
-            try:
-                from mesh_system import shot_miss_prob as _smp
-                _miss_grade = str(getattr(self, "_last_chance_grade", "B") or "B")
-                _missed = random.random() < _smp(shooter, _miss_grade, _qs_dist)
-            except Exception:
-                _missed = False
-            if _missed:
-                shot_result = 'MISS'
-            else:
-                shot_result = 'SAVE'
-            if goalie and not _missed:
+            # On-net but stopped. The miss was decided upfront (D11/RC1);
+            # a shot reaching here passed the shared miss gate, so it is
+            # always a SAVE -- the old post-hoc miss re-roll is gone.
+            shot_result = 'SAVE'
+            if goalie:
                 self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
             # Add shot/save event
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})

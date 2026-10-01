@@ -6815,6 +6815,12 @@ class GameSim:
         if dp is not None and reason != "penalty":
             self._delayed_penalty = None
             self._book_penalty(dp["player"], dp["team"], *dp["infraction"])
+            # RC2 parity fix (2026-10-01): booking the penalty changes
+            # manpower, so the extra attacker returns -- the same as a
+            # penalty whistle above. Without this, the goalie stays out
+            # through the ensuing 5v4 and the shorthanded side scores
+            # phantom empty-netters (all of GameSim's EN goals measured).
+            self._return_all_goalies()
         # Icing no-line-change: the restriction ends when the ensuing
         # faceoff is taken (cleared at the end of _resolve_faceoff for
         # reason == "icing"). This is a safety net for any other whistle.
