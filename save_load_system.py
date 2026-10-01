@@ -129,6 +129,34 @@ class GameSaveManager:
     def create_save_data(self) -> Dict[str, Any]:
         """Create a complete save data structure"""
         try:
+            # News funnel: ~20 call sites append directly to the GUI's
+            # news_log, bypassing add_news()'s mirror into the save-carried
+            # news_stories. Merge any missing entries here so every save
+            # path (quick/menu/auto/harness) keeps the full feed.
+            try:
+                _gm = self.game_manager
+                _app = getattr(_gm, 'app', None)
+                _log = getattr(_app, 'news_log', None)
+                if isinstance(_log, list):
+                    _stories = getattr(_gm, 'news_stories', None)
+                    if _stories is None:
+                        _gm.news_stories = _stories = []
+                    _seen = set()
+                    for _s in _stories:
+                        if isinstance(_s, dict):
+                            _seen.add((str(_s.get('date')), _s.get('story')))
+                    for _e in _log:
+                        if not isinstance(_e, dict):
+                            continue
+                        _d = _e.get('date')
+                        _key = ((_d.isoformat() if hasattr(_d, 'isoformat')
+                                 else str(_d)), _e.get('story'))
+                        if _key not in _seen:
+                            _seen.add(_key)
+                            _stories.append({'date': _key[0],
+                                             'story': _e.get('story')})
+            except Exception:
+                pass
             save_data = {
                 'version': SAVE_VERSION_100_SCALE,
                 'timestamp': datetime.now().isoformat(),
