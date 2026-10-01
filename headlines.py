@@ -64,6 +64,8 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "milestone_hit": _milestone_headline,
         "lottery_results": _lottery_headline,
         "international_results": _intl_headline,
+        "line_chemistry": _line_chemistry_headline,
+        "scenario_moment": _scenario_moment_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -641,6 +643,68 @@ def _intl_headline(game_date, title="", year=0, summary="", **kw):
         category="League",
         priority=2,
         is_important=True,
+    )
+
+
+_SITUATION_LABELS = {"ev": "even strength", "pp": "the power play",
+                     "pk": "the penalty kill"}
+
+
+def _scenario_moment_headline(game_date, off="", defense="", story="",
+                              event="", **kw):
+    """Standout scenario-composite battle (scenario_narrative).
+
+    Narrative only: the story text is pre-written hockey language from the
+    scenario spec. Edges, amplifiers, and decisiveness numbers never leave
+    the engine -- this builder only ever sees the story string.
+    """
+    from game_classes import EmailMessage
+    story = str(story or "").strip()
+    if not story:
+        return None
+    event = str(event or "a key moment").strip()
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🎬 {event}: {off} vs {defense}",
+        content=(
+            f"{story}\n\n"
+            f"One decisive sequence in {off} vs {defense} -- the kind of "
+            f"moment that has the building buzzing."
+        ),
+        category="League",
+        priority=2,
+    )
+
+
+def _line_chemistry_headline(game_date, hook="", text="", situation="ev",
+                             **kw):
+    """Line-chemistry notebook item (UI surface for line_chemistry).
+
+    The engine payload carries a raw "efficiency" number -- it is
+    deliberately dropped here and never reaches the EmailMessage, so the
+    story stays narrative-only (analytics stay a puzzle, never a cheat
+    sheet). Only the hockey-language story text is rendered.
+    """
+    from game_classes import EmailMessage
+    kw.pop("efficiency", None)  # numeric leak: never rendered, ever
+    hook = str(hook or "clicking").strip() or "clicking"
+    story = str(text or "").strip()
+    if not story:
+        return None
+    sit = _SITUATION_LABELS.get(str(situation or "ev").lower(),
+                                "even strength")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"📓 CHEMISTRY WATCH: a {hook} unit at {sit}",
+        content=(
+            f"{story}\n\n"
+            f"One {sit} unit is turning heads around the league -- the "
+            f"kind of thing coaches notice long before the scoresheet does."
+        ),
+        category="League",
+        priority=2,
     )
 
 

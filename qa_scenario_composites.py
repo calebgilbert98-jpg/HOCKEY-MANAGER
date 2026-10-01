@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """qa_scenario_composites.py — 17/17 per the Scenario Combos design doc §7.
 
 - Weight integrity: all 18 scenarios, both sides sum to 1.0; every member

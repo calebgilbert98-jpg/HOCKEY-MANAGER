@@ -775,6 +775,52 @@ class StaffManagementView(ctk.CTkFrame):
             text_color=ct['TEXT_DIM'], anchor="w", justify="left")
         self.stats_label.pack(anchor="w", padx=14, pady=(0, 10))
 
+        # Morale explainer card: the dedicated surface for the living
+        # morale system (staff_morale). Narrative only -- what morale is,
+        # what moves it, what it does. No numeric leaks beyond the 1-100
+        # scale the Morale column on the Current Staff tab already shows.
+        morale_card = self._card(frame)
+        morale_card.pack(fill="x", padx=12, pady=(0, 10))
+        ctk.CTkLabel(morale_card, text="How Morale Works",
+                     font=self._sfont(13, 'bold'),
+                     text_color=ct['TEXT'], anchor="w").pack(
+                         anchor="w", padx=14, pady=(10, 4))
+        self._morale_explainer = ctk.CTkLabel(
+            morale_card,
+            text=(
+                "Every coach and staff member carries morale on a 1\u2013100 "
+                "scale \u2014 the Morale column on the Current Staff tab shows "
+                "where each person stands. It isn't fixed: month to month, "
+                "morale drifts toward where it wants to be, shaped by results, "
+                "job security, contract situation, ambition fit, and "
+                "controversy around the club.\n\n"
+                "Morale is more than a mood ring. A coach in good spirits gets "
+                "a little more out of his players \u2014 sharper practices, "
+                "better-prepared units. One running on fumes gets a little "
+                "less. The effect is deliberately small: talent and tactics "
+                "still decide games.\n\n"
+                "Big swings surface in your daily news. When a coach is "
+                "'running on fumes' or 'has his spark back', it's worth a "
+                "conversation before the room notices."
+            ),
+            font=self._sfont(10), text_color=ct['TEXT_DIM'],
+            anchor="w", justify="left", wraplength=800)
+        self._morale_explainer.pack(anchor="w", padx=14, pady=(0, 10))
+
+        def _fit_morale_wrap(_ev=None, _lbl=self._morale_explainer,
+                             _card=morale_card):
+            # Keep the explainer readable at any window width: re-wrap to
+            # the card's live width (same responsive pattern as the footer
+            # hint in main.py).
+            try:
+                _w = _card.winfo_width() - 28
+                if _w > 200:
+                    _lbl.configure(wraplength=_w)
+            except Exception:
+                pass
+
+        morale_card.bind("<Configure>", _fit_morale_wrap)
+
     # ------------------------------------------------------------------
     # Data / filtering / sorting
     # ------------------------------------------------------------------

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scenario-level composite combinations — the shared battle layer.
 
 Pipeline: attributes -> composites (attribute_composites.py) ->

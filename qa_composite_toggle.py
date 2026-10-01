@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """QA: Composite Ratings visibility toggle (new-save advanced setting).
 
 Muck's test: the toggle must "fit right in the ecosystem both ways."
