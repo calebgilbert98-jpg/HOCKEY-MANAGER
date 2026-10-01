@@ -182,6 +182,17 @@ def main():
     league, hname = make_league()
     print(f"running {N_GAMES} games/engine ...", flush=True)
     run_quicksim(league)
+    # Test hygiene (2026-09-30, C2): heal QS-phase injuries before the GS
+    # phase. [6] is a WIRING check (do EV one-timers reach the scenario
+    # battle?) -- a ringer lost to a QS injury confounds it with roster
+    # depletion. The wiring signal should not depend on who got hurt.
+    for _t in league.teams:
+        for _p in getattr(_t, "roster", []) or []:
+            try:
+                _p.is_injured = False
+                _p.games_remaining_injured = 0
+            except Exception:
+                pass
     run_gamesim(league)
 
     # [1] scheme bite

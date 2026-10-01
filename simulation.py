@@ -5021,10 +5021,13 @@ class GameSim:
             # Spotlight talent gate (2026-09-30, workstream C, Muck):
             # who EARNS the one-timer volume -- elite trigger +
             # awareness + finishing ~1.0, average ~0.4, below ~0.15.
+            # Archetype factor (C2): the one-timer is a sniper's
+            # signature -- role players get their looks elsewhere.
             try:
                 from scenario_composites import (
-                    onetimer_talent_gate as _otg2)
-                _otw *= _otg2(shooter)
+                    onetimer_talent_gate as _otg2,
+                    onetimer_archetype_factor as _oaf2)
+                _otw *= _otg2(shooter) * _oaf2(shooter)
             except Exception:
                 pass
             if _otw > 0:
