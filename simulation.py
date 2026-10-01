@@ -4981,6 +4981,15 @@ class GameSim:
             except Exception:
                 _otv = 10.0
             _otw = max(0.0, min(0.20, (_otv - 60.0) / 200.0))
+            # Spotlight talent gate (2026-09-30, workstream C, Muck):
+            # who EARNS the one-timer volume -- elite trigger +
+            # awareness + finishing ~1.0, average ~0.4, below ~0.15.
+            try:
+                from scenario_composites import (
+                    onetimer_talent_gate as _otg2)
+                _otw *= _otg2(shooter)
+            except Exception:
+                pass
             if _otw > 0:
                 type_weights[ShotType.ONE_TIMER] = (
                     type_weights.get(ShotType.ONE_TIMER, 0.0) + _otw)
@@ -5859,13 +5868,22 @@ class GameSim:
         # Superstar tune 2026-09-28 (shared decisions, one decision two
         # fidelities): D point-shot conversion discount + sniper archetype
         # finishing tilt -- the same multipliers quick-sim applies.
+        # STACKING (2026-09-30, workstream C, Muck): the opportunity
+        # amplifiers on one chance (finishing tilt, schemed relief,
+        # chemistry) combine sub-multiplicatively below -- collected
+        # here, applied once. The D point-shot discount is a suppressor
+        # and keeps full multiplicative power (honest brake).
+        _gs_boosters = []
         try:
             from mesh_system import (defense_point_shot_discount as _dpsd,
                                      archetype_finish_tilt as _aft)
-            _tilt = _dpsd(shooter) * _aft(shooter)
-            if _tilt != 1.0:
-                goal_prob = (1.0 - adjusted_save_prob) * _tilt
+            _dpsd_f = _dpsd(shooter)
+            _aft_f = _aft(shooter)
+            if _dpsd_f != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _dpsd_f
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+            if _aft_f != 1.0:
+                _gs_boosters.append(_aft_f)
         except Exception:
             pass
 
@@ -5897,8 +5915,7 @@ class GameSim:
                                  sim=self, off_team=attacking_team,
                                  def_team=defending_team)
             if _schemed_f2 != 1.0:
-                goal_prob = (1.0 - adjusted_save_prob) * _schemed_f2
-                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+                _gs_boosters.append(_schemed_f2)
         except Exception:
             pass
 
@@ -5914,8 +5931,7 @@ class GameSim:
             _lc_eff2 = _lcef2(_a_unit, situation=_sit_lc2, sim=self,
                               team=attacking_team)
             if _lc_eff2 != 1.0:
-                goal_prob = (1.0 - adjusted_save_prob) * _lc_eff2
-                adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+                _gs_boosters.append(_lc_eff2)
             # detect_situation returns the ATTACKING team's view: the
             # defending PK unit's denial applies when the attack is on
             # the PP ("pp"), not when the attack is shorthanded.
@@ -5923,6 +5939,29 @@ class GameSim:
                 _deny2 = _lkdf2(_d_unit, sim=self, team=defending_team)
                 if _deny2 != 1.0:
                     goal_prob = (1.0 - adjusted_save_prob) * _deny2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # STACKING (2026-09-30, workstream C, Muck): the collected
+        # opportunity amplifiers combine sub-multiplicatively
+        # (strongest boost keeps full value, further boosts keep 30%
+        # of their excess). Denials collected here pass through at
+        # full multiplicative power -- honest brakes, never muted.
+        try:
+            from scenario_composites import (
+                combine_stacked_amplifiers as _csa2)
+        except Exception:
+            _csa2 = None
+        try:
+            _free2 = 1.0
+            for _b in _gs_boosters:
+                _free2 *= _b
+            if _gs_boosters and _free2 > 0.0:
+                _combined2 = _csa2(*_gs_boosters) if _csa2 else _free2
+                if _combined2 != _free2:
+                    goal_prob = ((1.0 - adjusted_save_prob)
+                                 * (_combined2 / _free2))
                     adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
         except Exception:
             pass
@@ -6028,6 +6067,18 @@ class GameSim:
                                _dside, _scn, sim=self,
                                off_team=attacking_team,
                                def_team=defending_team)
+                # Point-shot feeder gate (2026-09-30, workstream C2,
+                # Muck): the play design feeds the look, the SHOOTER's
+                # own shooting tools + hockey IQ decide what it becomes.
+                # Smooth 0.85..1.0 -- mediocre shooters don't mint goals
+                # off play design alone.
+                if _is_onetimer:
+                    try:
+                        from scenario_composites import (
+                            point_shot_talent_gate as _pstg2)
+                        _fgp *= _pstg2(shooter)
+                    except Exception:
+                        pass
             else:
                 _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter,
                                "finishing", sim=self, team=attacking_team)

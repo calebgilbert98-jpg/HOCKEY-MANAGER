@@ -1232,6 +1232,21 @@ def pp_look_shares(unit: List[Any], coach: Any = None,
             # Only the heater half of leverage tilts looks; slumps don't
             # lose their PP spot (that would change who dresses).
             tilt = 1.0 + max(0.0, lv - 1.0) * 0.5
+            # Point-shot deployment (2026-09-30, workstream C2, Muck): the
+            # PP's point looks concentrate on the D who can actually shoot
+            # -- own slapshot + one_timer + hockey IQ, smooth 0.85..1.15.
+            # Mean-1.0 normalization below keeps it a pure redistribution
+            # (tuning-crew-safe: no PP power-level change).
+            try:
+                _pos = str(getattr(getattr(p, "primary_position", None),
+                                   "name", "")).upper()
+                if "DEFEN" in _pos:
+                    _tool = (float(getattr(p, "slapshot", 70)) * 0.45
+                             + float(getattr(p, "one_timer", 70)) * 0.30
+                             + float(getattr(p, "hockey_iq", 70)) * 0.25)
+                    tilt *= 0.85 + 0.30 * max(0.0, min(1.0, (_tool - 60.0) / 30.0))
+            except Exception:
+                pass
             raw[_pid(p)] = _clamp(tilt, _LOOK_MIN, _LOOK_MAX)
         mean = sum(raw.values()) / len(raw)
         if mean <= 0:
