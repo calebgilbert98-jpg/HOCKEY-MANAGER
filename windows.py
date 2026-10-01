@@ -2995,8 +2995,8 @@ class FreeAgencyView(ctk.CTkFrame):
         for item in self.fa_player_tree.get_children():
             self.fa_player_tree.delete(item)
         # Drop stale item->player mappings (item ids are recycled by Tk).
-        self.parent.tree_maps.get('fa_players', {}).clear()
-        self.parent.tree_maps.get(self.fa_player_tree, {}).clear()
+        self.app.tree_maps.get('fa_players', {}).clear()
+        self.app.tree_maps.get(self.fa_player_tree, {}).clear()
 
         name_filter = self.player_name_search.get().lower()
         position_filter = self.player_position_filter.get()

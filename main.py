@@ -16511,7 +16511,23 @@ class HockeyManagerGUI(tk.Tk):
         chips_fn = getattr(self, "_navbar_session_chips", None)
         if callable(chips_fn):
             chips_fn(navbar, screen_id)
-        view = view_cls(holder, app=self, *args, **kwargs)
+        try:
+            view = view_cls(holder, app=self, *args, **kwargs)
+        except Exception:
+            # A view that fails mid-construction must not strand the user on
+            # a half-built screen (orphaned holder + navbar, dashboard
+            # hidden, no current screen). Tear the orphans down, restore the
+            # dashboard, then re-raise so the traceback still surfaces.
+            for _w in (holder, navbar):
+                try:
+                    _w.destroy()
+                except Exception:
+                    pass
+            try:
+                self._dashboard_frame.grid(**self._dashboard_grid)
+            except Exception:
+                pass
+            raise
         # Gating Phase 1: tag views built with a screen's static kwargs so
         # teardown knows they are safe to park (a quit-flow save carrying
         # a per-invocation on_done is never parked).
