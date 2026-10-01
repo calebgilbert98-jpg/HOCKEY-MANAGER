@@ -2622,7 +2622,20 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                 moved_names.append(str(nm))
         if moved_names:
             press_event = {"players_involved": moved_names, "trade": True}
+            # Trade-stamp idempotency (analytics audit): the per-player
+            # _trade_stamp guard above doesn't cover this per-side block, so
+            # a repeat invocation re-fired the press cascade (morale moves).
+            press_stamp = (date_str,
+                           getattr(user_team, "team_name", ""),
+                           getattr(partner_team, "team_name", ""),
+                           tuple(sorted(moved_names)))
             for side in (user_team, partner_team):
+                try:
+                    if getattr(side, "_press_trade_stamp", None) == press_stamp:
+                        continue  # press already answered for this trade
+                    side._press_trade_stamp = press_stamp
+                except Exception:
+                    pass
                 # Human-run clubs (local or MP) do their own press; AI clubs
                 # get the automated response.
                 _hum = False
