@@ -6285,12 +6285,36 @@ class GameSim:
         if att_roll > def_roll:
             # Attacker gets rebound - quick shot attempt
 
-            # Rebound conversion (~22%, in line with NHL second-chance rates)
-            if random.random() < 0.22:
+            # D12 (2026-09-30): the net-front finish stage is the shared
+            # decision now -- mesh_system.netfront_finish_chance()
+            # replaces the flat 0.22 (the function's own calibrated base
+            # ~22% is untouched; this is wiring, not recalibration).
+            # Forward vs goalie here; forward vs defense already ran in
+            # the scramble above (att_roll vs def_roll) -- the two stages
+            # combine to forward vs (defense + goalie). Rebounds are grade
+            # A by the shared hard gate; the grade is recorded for the
+            # xG backbone, and the computed probability (not a hardcoded
+            # 0.22) is the goalie's xG on both branches.
+            try:
+                from mesh_system import netfront_finish_chance as _nffc
+                _gs = 60.0
+                try:
+                    _ov = getattr(goalie, "overall_rating", None)
+                    if callable(_ov):
+                        _gs = float(_ov())
+                    elif _ov is not None:
+                        _gs = float(_ov)
+                except Exception:
+                    pass
+                _nf_p = float(_nffc(best_attacker, goalie, _gs))
+            except Exception:
+                _nf_p = 0.22
+            if random.random() < _nf_p:
                 self.game_stats[best_attacker.id]['rebounds_scored'] += 1
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
                                         'high', 8.0, ShotType.REBOUND)
-                self._record_goaltender_stats(goalie, 'goal', SaveType.PAD_SAVE, 0.22, 'high')
+                self._record_chance_grade(best_attacker, "A", True)
+                self._record_goaltender_stats(goalie, 'goal', SaveType.PAD_SAVE, _nf_p, 'high')
                 # Part B: rebound goals earn assists too -- the setup man is
                 # selected by the shared decision (no pass branch ran here).
                 _reb_assists = self._award_assists(best_attacker, attacking_team)
@@ -6299,7 +6323,8 @@ class GameSim:
             else:
                 self._update_shot_stats(best_attacker, attacking_team, defending_team,
                                         'high', 8.0, ShotType.REBOUND)
-                self._record_goaltender_stats(goalie, 'save', SaveType.PAD_SAVE, 0.22, 'high')
+                self._record_chance_grade(best_attacker, "A", False)
+                self._record_goaltender_stats(goalie, 'save', SaveType.PAD_SAVE, _nf_p, 'high')
                 self._log_event(f"Rebound chance by {best_attacker.full_name}, saved by {goalie.full_name}!", "SAVE")
                 # Possession model: the rebound save breaks up like any save.
                 try:

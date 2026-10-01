@@ -2096,6 +2096,17 @@ class AdvancedGameSim:
                     "quick_release": shot_type == "one-timer",
                     "screened_goalie": bool(screened_now),
                     "won_spot": False,
+                    # D12 (2026-09-30): this engine generates no discrete
+                    # rebound event -- rebounds are folded into the graded
+                    # shot stream. The shared rebound decision lives in two
+                    # places: roll_chance_grade hard-gates any rebound
+                    # situation to grade A (set "rebound": True here if a
+                    # discrete rebound event is ever generated), and
+                    # mesh_system.netfront_finish_chance() is the net-front
+                    # finish probability GameSim._resolve_rebound_chance
+                    # calls directly. Wiring it here would invent a rebound
+                    # event -- new sim behavior, not wiring -- so this
+                    # stays False.
                     "rebound": False,
                     "tip": shot_type in ("tip", "deflection"),
                 },
