@@ -270,16 +270,25 @@ class SalaryCapSystem:
     # -- cap-relative demands -----------------------------------------------
 
     def demand_for(self, base_cap_pct: float, ovr: int, position: str,
-                   age: int, season: int) -> int:
-        """
-        Convert a base demand (as cap %) to dollars against the CURRENT cap,
+                   age: int, season: int, scarcity: float = 1.0) -> int:
+        """Convert a base demand (as cap %) to dollars against the CURRENT cap,
         applying any market-setter premium. This is the single choke point
         for "what does this player ask for" -- all negotiation paths should
         flow through here so demands track the cap.
+
+        scarcity: UFA/RFA market scarcity multiplier from
+        fa_market_scarcity() (default 1.0 = no scarcity effect). Thin
+        market + many suitors inflates the ask; a flooded pool softens it.
+        Same multiplier for user and AI -- one market.
         """
         premium = self.market_premium(ovr, position, age, season)
+        try:
+            _s = float(scarcity or 1.0)
+        except Exception:
+            _s = 1.0
+        _s = max(SCARCITY_MIN, min(SCARCITY_MAX, _s))
         return int(cap_pct_to_dollars(base_cap_pct, self.current_cap)
-                   * premium)
+                   * premium * _s)
 
     # -- persistence ---------------------------------------------------------
 
@@ -1052,3 +1061,140 @@ def cap_breakdown(team, season_year=None) -> Dict:
         "floor_space": total - int(SALARY_CAP_FLOOR),
         "under_floor": total < int(SALARY_CAP_FLOOR),
     }
+
+
+# ---------------------------------------------------------------------------
+# UFA/RFA market scarcity pricing (2026-10-01, Chris's ask)
+# ---------------------------------------------------------------------------
+# Supply and demand on top of the fixed valuation bands: when the
+# free-agent market is thin at a position and many clubs are chasing the
+# same gap, asks rise; when the pool is flooded, asks soften. Additive --
+# a multiplier into demand_for (default 1.0 = no behavior change), so the
+# contract engine itself is untouched. User and AI share it: both ask
+# paths (main.py negotiation, ai_team_management._player_ask) funnel
+# through demand_for with the same scarcity input.
+#
+# Tuning (flagged for Chris):
+SCARCITY_SLOPE = 0.10        # +10% ask per unit of demand/supply imbalance
+SCARCITY_MAX = 1.35          # never more than a 35% scarcity premium
+SCARCITY_MIN = 0.90          # never more than a 10% flooded-market discount
+SCARCITY_QUALITY_OVR = 78.0  # native scale: only NHL-caliber FAs count as supply
+SCARCITY_BID_MIN_SPACE = 2_000_000  # a club needs $2M+ space to be a bidder
+
+# team_needs() codes -> position_group() buckets
+_SCARCITY_NEED_TO_GROUP = {
+    "C": "Forward", "LW": "Forward", "RW": "Forward",
+    "LD": "Defense", "RD": "Defense",
+    "G": "Goalie",
+}
+
+
+def fa_market_scarcity(league, position):
+    """Supply/demand read on the free-agent market for one position.
+
+    Returns a dict: multiplier (ask scaling), supply (NHL-caliber FAs in
+    the group), demand (clubs with a top-2 need there and $2M+ space),
+    and a qualitative signal key for the UI ("thin_market" /
+    "high_demand" / "balanced" / "buyers_market"). Pure function of the
+    league state -- same answer for user and AI. Never raises.
+    """
+    out = {"multiplier": 1.0, "supply": 0, "demand": 0,
+           "signal": "balanced", "group": ""}
+    try:
+        group = position_group(position)
+    except Exception:
+        return out
+    out["group"] = group
+    try:
+        pool = list(getattr(league, "free_agents", None) or [])
+    except Exception:
+        return out
+    # --- supply: signable, NHL-caliber FAs in this group -------------------
+    supply = 0
+    for p in pool:
+        try:
+            if position_group(getattr(
+                    getattr(p, "primary_position", ""), "value",
+                    str(getattr(p, "primary_position", "")))) != group:
+                continue
+            if float(p.overall_rating()) < SCARCITY_QUALITY_OVR:
+                continue
+            try:
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    continue  # draft-eligible: not a signable FA
+            except Exception:
+                pass
+            supply += 1
+        except Exception:
+            continue
+    # --- demand: clubs with a top-2 need here and room to bid --------------
+    demand = 0
+    try:
+        from trade_engine import team_needs as _needs
+    except Exception:
+        _needs = None
+    if _needs is not None:
+        for team in (getattr(league, "teams", None) or []):
+            try:
+                needs = _needs(team) or []
+                top2 = [_SCARCITY_NEED_TO_GROUP.get(str(n).upper(), "")
+                        for n in needs[:2]]
+                if group not in top2:
+                    continue
+                try:
+                    space = int(cap_space(team))
+                except Exception:
+                    space = 0
+                if space >= SCARCITY_BID_MIN_SPACE:
+                    demand += 1
+            except Exception:
+                continue
+    out["supply"] = supply
+    out["demand"] = demand
+    ratio = float(demand) / max(float(supply), 1.0)
+    mult = 1.0 + SCARCITY_SLOPE * (ratio - 1.0)
+    mult = max(SCARCITY_MIN, min(SCARCITY_MAX, mult))
+    out["multiplier"] = round(mult, 3)
+    # --- qualitative signal (UI copy lives in scarcity_signal_text) ---------
+    if supply <= 2 and demand >= 3:
+        out["signal"] = "thin_market"
+    elif mult >= 1.15:
+        out["signal"] = "high_demand"
+    elif mult <= 0.95:
+        out["signal"] = "buyers_market"
+    else:
+        out["signal"] = "balanced"
+    return out
+
+
+def scarcity_signal_text(signal, position=None):
+    """Qualitative market-demand copy. No numbers -- the analytics stay a
+    puzzle; the number should feel earned, never bare."""
+    _pos = ""
+    try:
+        _p = str(position or "").upper()
+        _pos = {"C": " at center", "LW": " on the wing",
+                "RW": " on the wing", "LD": " on defense",
+                "RD": " on defense", "D": " on defense",
+                "G": " in goal"}.get(_p, "")
+    except Exception:
+        pass
+    return {
+        "thin_market": f"Thin market{_pos} -- few quality options available.",
+        "high_demand": f"High demand{_pos} -- several clubs are chasing "
+                       f"the same gap.",
+        "buyers_market": f"Buyer's market{_pos} -- plenty of options, "
+                         f"less competition.",
+        "balanced": f"Steady market{_pos}.",
+    }.get(signal, f"Steady market{_pos}.")
+
+
+def scarcity_signal_short(signal) -> str:
+    """One-line market-demand label for dense table columns."""
+    return {
+        "thin_market": "Thin market",
+        "high_demand": "High demand",
+        "buyers_market": "Buyer's market",
+        "balanced": "Steady",
+    }.get(signal, "Steady")

@@ -577,10 +577,28 @@ def _ai_qualify_decision(team, player, qo_amount: int) -> bool:
     return qo_amount <= _spending_budget(team, core=core)
 
 
-def _ai_rfa_deal(player, qo_amount: int, rng) -> Tuple[int, int]:
+def _scarcity_mult(league, player) -> float:
+    """UFA/RFA scarcity multiplier for one player (1.0 when unknown).
+
+    One market for user and AI: re-sign asks and offer sheets ride the
+    same supply/demand read the negotiation paths use."""
+    try:
+        from salary_cap_system import fa_market_scarcity as _fms
+        pos = getattr(getattr(player, "primary_position", ""),
+                      "value", "") or ""
+        return float(_fms(league, pos).get("multiplier", 1.0))
+    except Exception:
+        return 1.0
+
+
+def _ai_rfa_deal(player, qo_amount: int, rng, league=None) -> Tuple[int, int]:
     """AI club re-signs its qualified RFA: most sign near the QO or a
-    short market deal; bridge deals for the young and good."""
-    market = _market_value(player)
+    short market deal; bridge deals for the young and good.
+
+    Market-based outcomes carry the scarcity read (same market the user
+    negotiates in); the bare QO outcome is a fixed CBA floor and is not
+    scarcity-adjusted."""
+    market = int(_market_value(player) * _scarcity_mult(league, player))
     age = _age(player)
     try:
         ovr = float(player.overall_rating())
@@ -678,7 +696,7 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             # than the club wrecking its cap structure.
             still_unsigned.append((team, player, qo))
             continue
-        aav, years = _ai_rfa_deal(player, qo, r)
+        aav, years = _ai_rfa_deal(player, qo, r, league=league)
         _sign_player(team, player, min(aav, int(budget)), years)
 
     # --- 4. AI clubs: UFAs — re-sign the core, release the rest -------------
@@ -692,7 +710,8 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
                 ovr = 70.0
             tenure = _service_years(player)
             if ovr >= 82 or (ovr >= 78 and tenure >= 5):
-                market = _market_value(player)
+                market = int(_market_value(player)
+                             * _scarcity_mult(league, player))
                 budget = _spending_budget(team, core=True)
                 if market <= budget:
                     _sign_player(team, player, market,
@@ -730,7 +749,10 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             if _is_user_team(offering_team):
                 continue  # the user signs offer sheets via the UI, not here
             market = _market_value(player)
-            aav = int(market * (1.05 + r.random() * 0.25))
+            # Scarcity rides along: poaching a scarce position costs the
+            # same premium the open market would demand.
+            aav = int(market * (1.05 + r.random() * 0.25)
+                      * _scarcity_mult(league, player))
             score = ai_offer_sheet_target_score(offering_team, player, aav)
             if score <= 0:
                 continue
@@ -801,7 +823,7 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
                                     core=_is_core_keep(player))
         if budget < LEAGUE_MIN_SALARY:
             continue  # still doesn't fit the plan: the holdout continues
-        aav, years = _ai_rfa_deal(player, qo, r)
+        aav, years = _ai_rfa_deal(player, qo, r, league=league)
         _sign_player(original_team, player, min(aav, int(budget)), years)
         summary["qualified"] += 0  # counted at qualify time
 
@@ -1864,7 +1886,8 @@ def resolve_user_rfa(app, league, team, player, rng=None) -> Dict[str, Any]:
             if offering_team is team or _is_user_team(offering_team):
                 continue
             market = _market_value(player)
-            aav = int(market * (1.05 + r.random() * 0.25))
+            aav = int(market * (1.05 + r.random() * 0.25)
+                      * _scarcity_mult(league, player))
             score = ai_offer_sheet_target_score(offering_team, player, aav)
             if score <= 0:
                 continue

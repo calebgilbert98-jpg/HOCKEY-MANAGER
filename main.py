@@ -19488,14 +19488,37 @@ class HockeyManagerGUI(tk.Tk):
         from salary_cap_system import base_ask_dollars as _bad2
         _base_pct = _bad2(_ovr100, getattr(person, "age", 27),
                           _on_elc, _pos_name) / _live_cap
+        # UFA/RFA scarcity: the same market read the AI clubs get -- thin
+        # market + many suitors inflates this ask, a flooded pool softens
+        # it. Stored on the session so the UI can explain the number.
+        _scarc3 = 1.0
+        _scarc_sig3 = "balanced"
+        try:
+            from salary_cap_system import fa_market_scarcity as _fms3
+            _sc = _fms3(getattr(self, 'league', None), _pos_name)
+            _scarc3 = float(_sc.get("multiplier", 1.0))
+            _scarc_sig3 = str(_sc.get("signal", "balanced"))
+        except Exception:
+            pass
         if _cap_sys is not None:
             _season = getattr(getattr(self, 'league', None), 'season_year', 0)
             asking_price = _cap_sys.demand_for(
                 _base_pct, _ovr100, _pos_name,
-                getattr(person, "age", 27), _season)
+                getattr(person, "age", 27), _season, scarcity=_scarc3)
         else:
             asking_price = int(_base_pct * _live_cap)
         asking_price = max(asking_price, 750_000)
+        # Stash the market read on the negotiation session so the talks UI
+        # can explain the number (qualitative signal only, never the
+        # multiplier).
+        try:
+            from popup_system import get_negotiation_session as _gns
+            _nsess = _gns(self, person, defaults={})
+            if _nsess is not None:
+                _nsess["scarcity_signal"] = _scarc_sig3
+                _nsess["scarcity_pos"] = _pos_name
+        except Exception:
+            pass
 
         # A player who badly wants protection and isn't getting it charges
         # for the missing clause.
@@ -19679,9 +19702,23 @@ class HockeyManagerGUI(tk.Tk):
                 _ct = ""
             _still = (f" Your {_ct} offer is still on the table."
                       if _ct else "")
+            # Market-demand signal (qualitative) alongside the ask.
+            _msig4 = ""
+            try:
+                from popup_system import get_negotiation_session as _gns4
+                from salary_cap_system import \
+                    scarcity_signal_text as _sst4
+                _ns4 = _gns4(self, person, defaults={})
+                _ss4 = str((_ns4 or {}).get("scarcity_signal", "balanced"))
+                if _ss4 and _ss4 != "balanced":
+                    _msig4 = (" Market: "
+                              + _sst4(_ss4, (_ns4 or {}).get("scarcity_pos")))
+            except Exception:
+                _msig4 = ""
             messagebox.showinfo("Counter Offer",
                                 f"{name} has rejected your offer, but is willing "
-                                f"to sign for ${asking_price:,} per year.{_still}")
+                                f"to sign for ${asking_price:,} per year."
+                                f"{_still}{_msig4}")
         else:
             messagebox.showerror("Contract Rejected",
                                  f"{name} has rejected your contract offer.")
@@ -19728,12 +19765,26 @@ class HockeyManagerGUI(tk.Tk):
         else:  # counter -- interactive
             _still = (f" Your {_clause_txt} offer is still on the table."
                       if _clause_txt else "")
+            # Market-demand signal: WHY the ask is what it is (qualitative).
+            _msig = ""
+            _ss3, _spos3 = "balanced", None
+            try:
+                from popup_system import get_negotiation_session as _gns3
+                from salary_cap_system import \
+                    scarcity_signal_text as _sst3
+                _ns3 = _gns3(self, person, defaults={})
+                _ss3 = str((_ns3 or {}).get("scarcity_signal", "balanced"))
+                _spos3 = (_ns3 or {}).get("scarcity_pos")
+                if _ss3 and _ss3 != "balanced":
+                    _msig = "\n\nMarket: " + _sst3(_ss3, _spos3)
+            except Exception:
+                _msig = ""
             msg = EmailMessage(
                 subject=f"Counter-offer: {name}",
                 content=(f"{name}'s camp has rejected your offer of "
                          f"${salary:,} per year, but they are willing to "
                          f"sign for ${asking_price:,} per year over "
-                         f"{years} year(s).{_still}\n\n"
+                         f"{years} year(s).{_still}{_msig}\n\n"
                          f"Respond below -- the offer waits for you."),
                 requires_response=True,
                 action_type="contract_counter",
@@ -19742,7 +19793,9 @@ class HockeyManagerGUI(tk.Tk):
                              "years": int(years),
                              "is_extension": bool(extension),
                              "clause_kind": clause_kind or "none",
-                             "clause_list_size": int(clause_list_size or 10)},
+                             "clause_list_size": int(clause_list_size or 10),
+                             "scarcity_signal": _ss3,
+                             "scarcity_pos": _spos3},
                 **base)
         self.send_email_to_user(msg)
 

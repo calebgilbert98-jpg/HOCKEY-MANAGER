@@ -2669,6 +2669,7 @@ class FreeAgencyView(ctk.CTkFrame):
             'ovr': ('Tier', 95),
             'pot': ('Pot', 50),
             'salary': ('Salary', 100),
+            'market': ('Market', 130),
             'years': ('Years', 60),
             'nationality': ('Country', 80),
             'shoots': ('Shoots', 60),
@@ -2904,6 +2905,24 @@ class FreeAgencyView(ctk.CTkFrame):
         for pos, count in sorted(pos_counts.items()):
             self._body(parent_frame, text=f"  {pos}: {count}",
                        dim=True, size=11).pack(anchor="w", padx=12)
+        # Market-demand read: WHY the numbers are what they are. Qualitative
+        # only -- no multipliers (the analytics stay a puzzle).
+        self._body(parent_frame, text="Market demand:", size=10).pack(
+            anchor="w", padx=12, pady=(8, 2))
+        try:
+            from salary_cap_system import (
+                fa_market_scarcity as _fms_m, scarcity_signal_text as _sst_m)
+            _league_m = getattr(getattr(self.app, "game_manager", None),
+                                "league", None)
+            for _mpos, _mlabel in (("C", "Forwards"), ("LD", "Defense"),
+                                   ("G", "Goalies")):
+                _scm = _fms_m(_league_m, _mpos)
+                _txt = _sst_m(_scm.get("signal", "balanced"), _mpos)
+                self._body(parent_frame,
+                           text=f"  {_mlabel}: {_txt}",
+                           dim=True, size=11).pack(anchor="w", padx=12)
+        except Exception:
+            pass
         # bottom padding
         ctk.CTkFrame(parent_frame, fg_color="transparent", height=8).pack()
 
@@ -3142,6 +3161,28 @@ class FreeAgencyView(ctk.CTkFrame):
         elif sort_by == 'Potential':
             filtered_players.sort(key=lambda p: p.potential_grade or '')
 
+        # Market-demand signals, computed once per group (qualitative only).
+        _sig_cache = {}
+        try:
+            from salary_cap_system import (
+                fa_market_scarcity as _fms_p, scarcity_signal_short as _sss_p,
+                position_group as _pg_p)
+            _lg_p = getattr(getattr(self.app, "game_manager", None),
+                            "league", None) or getattr(self.app, "league", None)
+            for _gpos in ("C", "LD", "G"):
+                _sc = _fms_p(_lg_p, _gpos)
+                _sig_cache[str(_sc.get("group", ""))] = _sss_p(
+                    _sc.get("signal", "balanced"))
+        except Exception:
+            _sig_cache = {}
+
+        def _market_signal(pos_value):
+            try:
+                _grp = str(_pg_p(pos_value))
+            except Exception:
+                return ""
+            return _sig_cache.get(_grp, "")
+
         for player in filtered_players:
             salary = getattr(player, "salary", getattr(player.contract, "salary", 750000))
             contract_years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
@@ -3154,6 +3195,7 @@ class FreeAgencyView(ctk.CTkFrame):
                 _tier_label(player),
                 player.potential_grade,
                 f"${salary:,}",
+                _market_signal(player.primary_position.value),
                 f"{contract_years}y",
                 getattr(player, 'nationality', 'Unknown'),
                 getattr(player, 'shoots', 'R'),
@@ -12626,6 +12668,16 @@ class ContractNegotiationView(ctk.CTkFrame):
         else:
             mv = self._estimate_market_value(p)
             lines.append(f"Estimated market value: ${mv:,}/yr")
+        # Market-demand signal: WHY the ask is what it is. Qualitative
+        # only -- no multipliers, the analytics stay a puzzle.
+        try:
+            _sig = self._session.get("scarcity_signal", "balanced")
+            if _sig and _sig != "balanced":
+                from salary_cap_system import scarcity_signal_text as _sst
+                lines.append("Market: " + _sst(
+                    _sig, self._session.get("scarcity_pos")))
+        except Exception:
+            pass
         lines.append("")
         # Comparables
         lines.append("Comparable contracts:")

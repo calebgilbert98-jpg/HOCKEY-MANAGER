@@ -5813,6 +5813,19 @@ def evaluate_contract_decision(player: Any, aav: float, expected_aav: float,
             effects.append(f"fan_backlash={backlash} on player")
             _nudge_gm_rep(team, -5, "albatross_contract")
             effects.append("gm_rep-5 (albatross)")
+        # Market-demand context: WHY the number got there. Qualitative only.
+        try:
+            from salary_cap_system import (
+                fa_market_scarcity as _fms_r, scarcity_signal_text as _sst_r)
+            _rp = getattr(getattr(player, "primary_position", ""),
+                          "value", "") or ""
+            _rs = _fms_r(league, _rp) if league is not None else {}
+            if str(_rs.get("signal", "balanced")) in (
+                    "thin_market", "high_demand"):
+                texts.append("Around the league, the price made sense -- "
+                             + _sst_r(_rs.get("signal"), _rp))
+        except Exception:
+            pass
         try:
             record_team_event(team, "contract", " ".join(texts),
                               morale_delta=-1 if verdict == "overpay" else -2,

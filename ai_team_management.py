@@ -644,10 +644,18 @@ class AITeamManager:
         # so it scales, with any market-setter premium on top.
         from salary_cap_system import base_ask_dollars as _bad
         _base_pct = _bad(_ovr100, _age, _on_elc, _pos_name) / _cap
+        # UFA/RFA scarcity: thin market + many suitors inflates the ask
+        # for AI clubs exactly as for the user -- one market.
+        _scarc = 1.0
+        try:
+            from salary_cap_system import fa_market_scarcity as _fms
+            _scarc = float(_fms(_lg, _pos_name).get("multiplier", 1.0))
+        except Exception:
+            _scarc = 1.0
         try:
             if _cap_sys is not None:
                 _ask = _cap_sys.demand_for(_base_pct, _ovr100, _pos_name,
-                                           _age, _season)
+                                           _age, _season, scarcity=_scarc)
             else:
                 _ask = int(_base_pct * _cap)
         except Exception:
@@ -2160,14 +2168,20 @@ class AITeamManager:
             base_salary *= 1.05
 
         # Convert to cap % so demands scale with the cap, then apply any
-        # market-setter premium through the single choke point.
+        # market-setter premium through the single choke point. Scarcity
+        # rides along: one market for AI estimates and user talks alike.
         base_cap_pct = base_salary / cap
         pos_name = pos.value if hasattr(pos, "value") else str(pos)
         if cap_sys:
             league = getattr(self, "_league_ref", None)
             season = getattr(league, "season_year", 0) if league else 0
+            try:
+                from salary_cap_system import fa_market_scarcity as _fms2
+                _scarc2 = float(_fms2(league, pos_name).get("multiplier", 1.0))
+            except Exception:
+                _scarc2 = 1.0
             salary = cap_sys.demand_for(base_cap_pct, ovr100, pos_name,
-                                        age, season)
+                                        age, season, scarcity=_scarc2)
         else:
             salary = int(base_salary)
 

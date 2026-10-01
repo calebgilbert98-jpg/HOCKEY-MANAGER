@@ -256,6 +256,14 @@ class OfferSheetWindow(ctk.CTkFrame):
              wraplength=340, justify="left").pack(
             anchor="w", padx=12, pady=(0, 8))
 
+        # Market-demand read for the target's position: WHY his number is
+        # what it is. Qualitative only -- no multipliers.
+        self._market_var = tk.StringVar(value="")
+        body(right, text="", textvariable=self._market_var,
+             font=("Segoe UI", 11), text_color=ct["TEXT_DIM"],
+             wraplength=340, justify="left").pack(
+            anchor="w", padx=12, pady=(0, 8))
+
         self._submit_btn = primary_button(
             right, text="Present Offer Sheet",
             command=self._present_offer_sheet)
@@ -554,6 +562,20 @@ class OfferSheetWindow(ctk.CTkFrame):
             self._interest_var.set(f"📣 {read}")
         except Exception:
             self._interest_var.set("")
+        # Market-demand signal for his position (qualitative only).
+        try:
+            from salary_cap_system import (
+                fa_market_scarcity as _fms_o, scarcity_signal_text as _sst_o)
+            _ppos = getattr(getattr(p, "primary_position", ""),
+                            "value", "") or ""
+            _sco = _fms_o(self.league, _ppos)
+            if str(_sco.get("signal", "balanced")) != "balanced":
+                self._market_var.set(
+                    "📊 Market: " + _sst_o(_sco.get("signal"), _ppos))
+            else:
+                self._market_var.set("")
+        except Exception:
+            self._market_var.set("")
         self._snapshot_sheet_session()  # Gating P2: write-through
 
     # ------------------------------------------------------------------
