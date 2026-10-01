@@ -1152,6 +1152,11 @@ def fa_market_scarcity(league, position):
                 continue
     out["supply"] = supply
     out["demand"] = demand
+    if supply == 0 and demand == 0:
+        # No market at all (degenerate league / empty pool): no adjustment.
+        out["multiplier"] = 1.0
+        out["signal"] = "balanced"
+        return out
     ratio = float(demand) / max(float(supply), 1.0)
     mult = 1.0 + SCARCITY_SLOPE * (ratio - 1.0)
     mult = max(SCARCITY_MIN, min(SCARCITY_MAX, mult))
