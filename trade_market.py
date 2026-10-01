@@ -1574,8 +1574,13 @@ def contract_worth(player):
             ovr = player.overall_rating()
         except Exception:
             ovr = 75
-        # Granular (Muck 2026-10-01): worth judged against the 1-point
-        # overall's market band, not the tier label. Tiers are overviews.
+        try:
+            # Tier-based (Muck 2026-10-01): worth judged against the tier's
+            # market band, not the 1-point overall.
+            from attribute_composites import tier_proxy_overall as _tpo_cw
+            ovr = _tpo_cw(ovr)
+        except Exception:
+            pass
         try:
             age = int(getattr(player, "age", 27) or 27)
         except Exception:
