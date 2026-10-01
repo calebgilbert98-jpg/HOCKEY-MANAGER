@@ -2540,10 +2540,14 @@ class AdvancedGameSim:
         # EARNS the one-timer volume -- elite trigger + awareness +
         # finishing ~1.0, average ~0.4, below-average ~0.15. The looks
         # concentrate on the shooters, never a participation trophy.
+        # Archetype factor (C2): the one-timer is a sniper's signature --
+        # role players get their looks elsewhere.
         # (PP one-timer rate is the tuning crew's lane -- untouched.)
         try:
-            from scenario_composites import onetimer_talent_gate as _otg
-            _ot_prob *= _otg(shooter)
+            from scenario_composites import (
+                onetimer_talent_gate as _otg,
+                onetimer_archetype_factor as _oaf)
+            _ot_prob *= _otg(shooter) * _oaf(shooter)
         except Exception:
             pass
         if self.pp_team and random.random() < 0.3:  # More one-timers on PP

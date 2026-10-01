@@ -792,6 +792,63 @@ def onetimer_talent_gate(shooter):
     return max(0.0, min(1.0, (_t - 55.0) / 35.0))
 
 
+# One-timer archetype factor (2026-09-30, workstream C2, Muck): the talent
+# gate above measures the TOOL; this measures the ROLE. The EV one-timer is
+# a sniper's signature -- snipers and playmakers live in the one-timer
+# spot, power forwards flash it, two-way/grinder/enforcer types get their
+# offense other ways. Without this, the attribute-only gate passes
+# high-awareness role players (two-way forwards dominate the population)
+# and enforcers wire 20+ one-timers a sample. PP one-timer rate is the
+# tuning crew's lane -- untouched. D keep 1.0 (their EV one-timer resolves
+# through the d_to_d_onetimer scenario, not this gate).
+_ONETIMER_ARCHETYPE_FACTOR = {
+    "Sniper": 1.0,
+    "Playmaker": 0.9,
+    "Power Forward": 0.85,
+    "Two-Way Forward": 0.6,
+    "Grinder": 0.4,
+    "Enforcer": 0.3,
+}
+
+
+def onetimer_archetype_factor(shooter):
+    """0.3..1.0: role-based share of EV one-timer volume. Sniper 1.0;
+    unlisted/unknown forward archetypes 0.75; D 1.0. Never raises volume,
+    only concentrates it on the shooters.
+
+    Elite tool overrides role: a 90+ one-timer wires it like a sniper
+    wherever it lives -- a generational two-way with a 95 trigger is a
+    one-timer threat, not a role player (the archetype classifier labels
+    flat-elite players "Two-Way Forward" on their defensive half). Smooth
+    ramp 80->90, no cliff."""
+    try:
+        _pos = str(getattr(getattr(shooter, "primary_position", None),
+                           "name", "")).upper()
+        if "DEFEN" in _pos:
+            return 1.0
+        try:
+            from player_archetypes import get_archetype as _ga
+            _arch = _ga(shooter)
+        except Exception:
+            _arch = None
+        if _arch in _ONETIMER_ARCHETYPE_FACTOR:
+            _base = _ONETIMER_ARCHETYPE_FACTOR[_arch]
+        else:
+            _base = 0.75
+        try:
+            _ot = float(getattr(shooter, "one_timer", 70))
+        except Exception:
+            _ot = 70.0
+        if _ot >= 90.0:
+            return 1.0
+        if _ot > 80.0:
+            _ramp = (_ot - 80.0) / 10.0
+            return _base + (1.0 - _base) * _ramp
+        return _base
+    except Exception:
+        return 0.75
+
+
 # ---------------------------------------------------------------------------
 # LiveHeat — the shared bounded in-game heat accumulator (§5.2, option a).
 # Both engines update the same object semantics: fights +6, majors +4,
