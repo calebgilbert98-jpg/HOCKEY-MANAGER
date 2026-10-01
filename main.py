@@ -15107,7 +15107,16 @@ class HockeyManagerGUI(tk.Tk):
             w = (getattr(self, 'open_windows', None) or {}).get('playoffs')
             if w is not None and w.winfo_exists():
                 bracket = getattr(w, 'playoff_bracket', None)
-                if bracket is not None and getattr(bracket, 'stanley_cup_champion', None):
+                _lb = getattr(getattr(self, 'league', None),
+                              'playoff_bracket', None)
+                # BUG-REVIEW-002: the playoffs view is never torn down, so a
+                # DECIDED bracket from a previous season can linger on it.
+                # Only trust the view's bracket when it IS the league's live
+                # bracket (identity is the invariant _generate_bracket
+                # establishes); otherwise a stale view silently skips the
+                # entire postseason.
+                if (bracket is not None and bracket is _lb
+                        and getattr(bracket, 'stanley_cup_champion', None)):
                     return True
             lb = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
             if lb is not None and getattr(lb, 'stanley_cup_champion', None):
@@ -16031,7 +16040,13 @@ class HockeyManagerGUI(tk.Tk):
             pw = (getattr(self, 'open_windows', None) or {}).get('playoffs')
             bracket = None
             if pw is not None and hasattr(pw, 'winfo_exists') and pw.winfo_exists():
-                bracket = getattr(pw, 'playoff_bracket', None)
+                _wb = getattr(pw, 'playoff_bracket', None)
+                _lb = getattr(getattr(self, 'league', None),
+                              'playoff_bracket', None)
+                # BUG-REVIEW-002: ignore a stale decided bracket lingering
+                # on the never-torn-down playoffs view; the league's bracket
+                # is the live one (same identity invariant as above).
+                bracket = _wb if (_wb is not None and _wb is _lb) else _lb
             if bracket is None:
                 bracket = getattr(getattr(self, 'league', None), 'playoff_bracket', None)
             if bracket is not None:
