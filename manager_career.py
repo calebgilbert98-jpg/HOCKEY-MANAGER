@@ -362,20 +362,33 @@ class BoardSystem:
             self._apply_delta(delta, "", channel="big_event")
         return delta
 
+    def _sack_threshold(self) -> int:
+        """D2 (2026-09-30): the board's sack line follows the club's
+        expectation -- a win-now board loses patience while confidence is
+        still positive; a rebuild board only acts at rock bottom."""
+        exp = self.expectation or "playoffs"
+        try:
+            return int(EXPECTATIONS.get(exp, {}).get(
+                "min_confidence_for_sack", 0))
+        except (TypeError, ValueError):
+            return 0
+
     def _check_sack(self):
         # Respect the user's "GM can be sacked" setting. If disabled,
-        # confidence floors at 1 (job safe, but budgets/morale still suffer).
+        # confidence floors just above the sack line (job safe, but
+        # budgets/morale still suffer).
+        threshold = self._sack_threshold()
         if not self.can_be_sacked:
-            if self.confidence <= 0:
-                self.confidence = 1
+            if self.confidence <= threshold:
+                self.confidence = threshold + 1
             return
         # First-year honeymoon: owners don't rotate GMs after one bumpy
         # season — unless it's a genuine disaster (scandal, catastrophic skid).
         if self.season_number == 1 and not self._disaster:
-            if self.confidence <= 0:
-                self.confidence = 1
+            if self.confidence <= threshold:
+                self.confidence = threshold + 1
             return
-        if self.confidence <= 0 and not self.sacked:
+        if self.confidence <= threshold and not self.sacked:
             self.sacked = True
 
     # -- reviews ----------------------------------------------------------
