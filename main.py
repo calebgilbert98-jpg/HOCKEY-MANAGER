@@ -10608,6 +10608,26 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+        # Practice fatigue recovery (P1): practice sessions accrue fatigue
+        # on the shared player histories, but recover_fatigue had no live
+        # callers -- fatigue was permanent, so the grind gate never
+        # reopened. Recover daily at the engine's own tuned rate (2/day)
+        # so rest days actually rest. Only histories with fatigue > 0 are
+        # visited, so this stays cheap league-wide.
+        try:
+            import enhanced_practice_system as _eps
+            _ph = getattr(_eps, "_SHARED_PLAYER_HISTORIES", None) or {}
+            if _ph:
+                _peng = _eps.PracticeEngine()
+                for _pid, _hist in list(_ph.items()):
+                    try:
+                        if getattr(_hist, "current_fatigue", 0) > 0:
+                            _peng.recover_fatigue(_pid, days=1)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
         # Event-day hubs: prompt once per year when a tentpole day arrives.
         # (Entry draft is handled daily inside _check_for_event_day; it must
         # NOT be Monday-gated since June 23-25 often contains no Monday.)
