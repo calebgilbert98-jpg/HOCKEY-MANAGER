@@ -2130,9 +2130,21 @@ class PBPVisualSim(InGamePopup):
         else keeps their shape, holds the weak side, and stays goal-side.
         A separation pass guarantees teammates never pile up. Runs every
         tick; sim skate snapshots only feed puck position + carrier.
+
+        Target commitment: the tactical code below computes a *desired*
+        target each tick, but dots commit to a destination and don't
+        chase every recomputation. Without this, sim snapshots (which
+        disagree with formation by ~32ft on average) cause constant
+        direction reversals that read as "brain dead" skating.
         """
         if self._faceoff_ceremony:
             return  # faceoff owns every dot's targets until the puck drops
+        # Snapshot committed targets before the tactical code overwrites
+        # (tx, ty) with new desired positions.
+        for _d in self.dots.values():
+            if "_ctx" not in _d:
+                _d["_ctx"], _d["_cty"] = _d["tx"], _d["ty"]
+                _d["_ctx_t"] = self.playhead
         px, py = self.puck["x"], self.puck["y"]
         pp = self._pp_team()
         strong_y, weak_y = (24.0, 61.0) if py < 42.5 else (61.0, 24.0)
@@ -2394,6 +2406,61 @@ class PBPVisualSim(InGamePopup):
                         (onx + 48 * adir, 53.0)
             d["tx"] = min(max(tx + jx, 5), 195)
             d["ty"] = min(max(ty + jy, 5), 80)
+
+        # ---- target commitment: don't chase teleporting targets ----
+        # The tactical code above writes *desired* positions into (tx, ty),
+        # but sim snapshots disagree with formation by ~32ft on average. If
+        # dots chased every recomputation they'd reverse direction
+        # constantly (1,078 reversals in 3,200 ticks measured). Instead each
+        # dot commits to a destination and only re-targets when it arrives,
+        # the update is small, or a timeout fires. Runs BEFORE separation
+        # so the separation pass can still nudge the committed targets
+        # apart. The carrier, goalies, line-changers, and penalty-box dots
+        # bypass commitment (they need tight tracking or immediate
+        # repositioning).
+        for d in self.dots.values():
+            if d["role"] == "G":
+                d["_ctx"], d["_cty"] = d["tx"], d["ty"]
+                d["_ctx_t"] = self.playhead
+                continue
+            if d["id"] == self.carrier_id:
+                d["_ctx"], d["_cty"] = d["tx"], d["ty"]
+                d["_ctx_t"] = self.playhead
+                continue
+            if d["id"] in self.penalty_box:
+                d["_ctx"], d["_cty"] = d["tx"], d["ty"]
+                d["_ctx_t"] = self.playhead
+                continue
+            side = "home" if d["is_home"] else "away"
+            ch = self._line_change.get(side)
+            if ch is not None and d["role"] in ch["roles"]:
+                d["_ctx"], d["_cty"] = d["tx"], d["ty"]
+                d["_ctx_t"] = self.playhead
+                continue
+            if d.get("nudge"):
+                # hit/battle lunge owns this dot; don't touch its target
+                d["_ctx"], d["_cty"] = d["tx"], d["ty"]
+                d["_ctx_t"] = self.playhead
+                continue
+            desired_x, desired_y = d["tx"], d["ty"]
+            committed_x, committed_y = d["_ctx"], d["_cty"]
+            dist_to_committed = math.hypot(d["x"] - committed_x,
+                                           d["y"] - committed_y)
+            shift = math.hypot(desired_x - committed_x,
+                               desired_y - committed_y)
+            if dist_to_committed < 4.0:
+                commit = True  # arrived: pick a new destination
+            elif shift < 6.0:
+                commit = True  # small refinement: no reversal risk
+            elif self.playhead - d["_ctx_t"] > 2.0:
+                commit = True  # timeout: don't get stuck on stale target
+            else:
+                commit = False  # big jump while en route: stay committed
+            if commit:
+                d["_ctx"], d["_cty"] = desired_x, desired_y
+                d["_ctx_t"] = self.playhead
+            else:
+                d["tx"], d["ty"] = committed_x, committed_y
 
         # ---- separation: teammates never share a phone booth ----
         for home in (True, False):

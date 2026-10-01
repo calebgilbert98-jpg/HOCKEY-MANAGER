@@ -46,15 +46,18 @@ Design notes (from the SI playbook):
 * Full-state sync, not deltas. The save blob is a few MB; on a LAN
   that is milliseconds. Deltas are a Phase-2 optimisation and a
   Phase-1 bug farm.
-* Pickle is used because the game's own save format is pickle and
-  this is a trusted-LAN feature (same trust model as the save
-  files). Do NOT expose the host port to the open internet.
+* Pickle is used because the game's own save format is pickle, but frames
+  are decoded with a restricted unpickler that only allows plain data
+  types (dict/list/str/int/float/bool/bytes/None) -- a malicious peer
+  cannot execute code via the wire protocol. Do NOT expose the host port
+  to the open internet regardless.
 * ACTION messages carry *intent* ("sign free agent X to 2yr deal"),
   never mutated state. The host is the only writer of truth.
 """
 
 from __future__ import annotations
 
+import io
 import pickle
 import struct
 import time
@@ -191,6 +194,37 @@ class ProtocolError(Exception):
     """Raised when a byte stream violates the wire protocol."""
 
 
+class _SafeUnpickler(pickle.Unpickler):
+    """Unpickler restricted to plain protocol data types.
+
+    ``pickle.loads`` on network bytes is remote code execution: a malicious
+    peer can run arbitrary Python while the payload decodes. The protocol
+    only ever carries plain data (dicts, lists, strings, numbers, bytes,
+    booleans, None), so every class lookup outside that allowlist is
+    rejected. The wire format is unchanged -- safe peers interoperate.
+    """
+
+    _SAFE = frozenset({
+        ("builtins", "dict"), ("builtins", "list"), ("builtins", "tuple"),
+        ("builtins", "set"), ("builtins", "frozenset"),
+        ("builtins", "str"), ("builtins", "int"), ("builtins", "float"),
+        ("builtins", "bool"), ("builtins", "bytes"), ("builtins", "bytearray"),
+        ("builtins", "complex"),
+    })
+
+    def find_class(self, module: str, name: str):
+        if (module, name) in self._SAFE:
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(
+            f"blocked unpickle of {module}.{name}: "
+            f"not a protocol data type")
+
+
+def _safe_loads(blob: bytes) -> Any:
+    """Decode a protocol frame without allowing code execution."""
+    return _SafeUnpickler(io.BytesIO(blob)).load()
+
+
 def encode_message(msg_type: str, seq: int, payload: Optional[Dict[str, Any]] = None) -> bytes:
     """Serialize one message to length-prefixed bytes ready for send()."""
     if msg_type not in ALL_TYPES:
@@ -232,7 +266,7 @@ class MessageReader:
             blob = bytes(self._buf[HEADER_SIZE:HEADER_SIZE + length])
             del self._buf[:HEADER_SIZE + length]
             try:
-                msg = pickle.loads(blob)
+                msg = _safe_loads(blob)
             except Exception as exc:  # corrupt frame -> drop connection
                 raise ProtocolError(f"unpicklable frame: {exc}") from exc
             if not isinstance(msg, dict) or "type" not in msg:
