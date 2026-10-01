@@ -82,8 +82,9 @@ HEAT_BEATS = (0.5, 0.75, 0.9)
 # (Hall<->Larsson, Jones<->Johansen): young-controllable for
 # young-controllable at a clear positional need. trade_engine.py is NEVER
 # touched -- this is a market-layer overlay only.
-HEADLINER_OVR = 85
-HEADLINER_YOUNG_OVR = 83
+# Headliner young-age cutoff (the tier cutoffs live in trade_engine.tier_label,
+# coherent with the talent-tiers branch: Generational/Elite always, Very good
+# when young).
 HEADLINER_YOUNG_AGE = 26
 HEADLINER_MIN_ASSETS = 3
 HEADLINER_EXCEPTION_AGE = 27
@@ -693,8 +694,9 @@ def _find_bidders(app, league, listing, today, ramp):
                 stance = tsl.stance(app, tname)
             except Exception:
                 stance = "neutral"
-            if stance not in ("buyer", "bubble"):
-                continue
+            # D43 (Wave B): no early stance gate -- sellers and neutrals
+            # participate too. Participation is decided after need-fit is
+            # computed below (stance shapes WHAT they bid on).
             # Baseline cooldown: hot GMs sit out initiating, but may bid.
             # (Cooldown gates *initiating*; bidding stays open.)
             # The PERSON: ambitions shape destinations. A cup-chaser won't
@@ -713,7 +715,9 @@ def _find_bidders(app, league, listing, today, ramp):
                 pass
             # Need-fit: positional need or best-player-available override.
             # Need-fit: team_needs() returns all groups weakest-first; the
-            # three weakest are genuine needs (plus a star BPA override).
+            # three weakest are genuine needs (plus a star BPA override --
+            # tier-based for talent-tiers coherence: Very good and above,
+            # i.e. the old ovr >= 84).
             try:
                 if tname not in needs_cache:
                     needs_cache[tname] = te.team_needs(team)[:3]
@@ -777,11 +781,41 @@ def _find_bidders(app, league, listing, today, ramp):
                 pass
             if not need_fit:
                 continue
-            # Rivalry is a minuscule factor, never a veto (never-blocked rule,
+            # D43 (Wave B): sellers and neutrals participate -- stance
+            # shapes WHAT they bid on, not WHETHER they bid.
+            # - buyer/bubble: need-fit or marquee (decided above).
+            # - seller: hockey trades only -- a top-2-need fit for a
+            #   timeline piece (age <= 28). No star-chasing, no rentals;
+            #   a seller doesn't bid on another seller's veteran.
+            # - neutral (or unknown): opportunistic -- the single biggest
+            #   hole (#1 need) and only at a value/perception discount
+            #   (buy-low fliers, not retail).
+            if stance == "seller":
+                try:
+                    _sage = int(getattr(player, "age", 99) or 99)
+                except Exception:
+                    _sage = 99
+                _top2 = needs[:2]
+                _pos_hit = (pos in _top2) or \
+                    (pos == "D" and any(n in ("LD", "RD") for n in _top2))
+                if not (_pos_hit and _sage <= 28):
+                    continue
+            elif stance not in ("buyer", "bubble"):
+                try:
+                    _top1 = (needs or [None])[0]
+                    _pos_hit = (pos == _top1) or \
+                        (pos == "D" and _top1 in ("LD", "RD"))
+                    _pf, _pn = perception_discount(app, league, player)
+                    _wr, _wn = contract_worth(player)
+                    if not (_pos_hit and (_pf < 0.90 or _wr < 0.80)):
+                        continue
+                except Exception:
+                    continue
+            # Rivalry is circumstantial, never a veto (never-blocked rule,
             # Muck 2026-09-29): even the most stubborn GMs deal, because
-            # winning is the objective. The tiny friction lives in build_bid
-            # as a ~2% max rivalry tax — an offer they can't refuse still
-            # gets done.
+            # winning is the objective. The friction lives in build_bid's
+            # shared gate (open / taxed / closed) -- an offer they can't
+            # refuse still gets done.
             # Clause: piece must be movable to this bidder (or waivable).
             # One conversation per destination: granted waivers are recorded
             # on the listing (no double-rolls, no single-string collisions
@@ -1624,10 +1658,14 @@ def _attach_cap_dump_sweetener(app, league, seller, player, listing, ask):
         return ask
 
 
-def build_bid(app, league, bidder, player, seller, ask_points):
+def build_bid(app, league, bidder, player, seller, ask_points, n_bidders=1):
     """Build one opening offer sized to ask x eagerness. Returns a list of
     live asset objects (owned by bidder) or []. Never raises. Read-only
-    until the caller executes."""
+    until the caller executes.
+
+    n_bidders: how many clubs are in on this listing (1 = uncontested).
+    Feeds the D44 overpay-to-close premium.
+    """
     try:
         import trade_engine as te
         import trade_storylines as tsl
@@ -1657,19 +1695,45 @@ def build_bid(app, league, bidder, player, seller, ask_points):
             _wf = 1.0
         target = ask_points * eagerness * (1.0 + 0.30 * _desp) * \
             max(0.5, min(1.2, _pf)) * _wf
-        # Rivalry tax (never-blocked rule, Muck 2026-09-29): a bitter rival
-        # pays a minuscule premium — max +2% at max rivalry intensity,
-        # scaling up from the old 50 threshold with no cliff. Winning is
-        # the objective, so this never blocks a deal; an overwhelming
-        # offer clears it without noticing.
+        # D44 (Wave B): deliberate overpay-to-close. Competition bids the
+        # price up (+5% per rival bidder, capped at +15%); a desperate
+        # buyer in a contested race adds a closer's premium (+5%) instead
+        # of losing the piece over pennies.
+        try:
+            _nb = max(1, int(n_bidders or 1))
+        except Exception:
+            _nb = 1
+        if _nb > 1:
+            target *= 1.0 + 0.05 * min(3, _nb - 1)
+            try:
+                if float(_desp) > 0.6:
+                    target *= 1.05
+            except Exception:
+                pass
+        # Rivalry gate (Wave B D40, Muck's never-blocked doctrine 2026-09-29):
+        # the SAME circumstantial gate as the direct-negotiation path --
+        # open / taxed / closed -- so both paths agree about what rivalry
+        # means. An overwhelming offer still clears a tax; only the crown
+        # jewel (or a contender's core piece) is closed between bitter
+        # rivals, and a closed gate means no bid at all.
         try:
             _sname = getattr(seller, "team_name", "")
             _bname = getattr(bidder, "team_name", "")
             _ri = float(tsl._rivalry_intensity(app, _bname, _sname) or 0)
         except Exception:
             _ri = 0.0
-        if _ri >= 50:
-            target *= 1.0 + 0.02 * min(1.0, max(0.0, (_ri - 50.0) / 50.0))
+        try:
+            _gate_sit = {"rivalry_intensity01": max(0.0, min(1.0, _ri / 100.0)),
+                         "stance": str(tsl.stance(app, _sname) or "")}
+            _g_ident = te.partner_gm_identity(seller)
+            _g_tiers = te.asset_franchise_tiers(seller, [player], _g_ident)
+            _g_verdict, _g_tax, _g_why = te.rivalry_trade_gate(
+                _gate_sit, seller, [player], _g_ident, _g_tiers)
+        except Exception:
+            _g_verdict, _g_tax = "open", 1.0
+        if _g_verdict == "closed":
+            return []
+        target *= _g_tax
         # Candidate assets: own tradeable picks (round 1-4), prospects,
         # then roster depth. Never the untouchable core (top-3 by value).
         cands = []
@@ -1697,9 +1761,27 @@ def build_bid(app, league, bidder, player, seller, ask_points):
                     continue
             vals.sort(key=lambda t: t[0], reverse=True)
             core_ids = {p.id for _v, p in vals[:3]}
+            # D31 (Wave B): the untouchable core is a franchise tier, not a
+            # top-3 cutoff -- an UNTOUCHABLE-tier piece (franchise_score 80+,
+            # GM-relative) is never offered, however the value list sorts.
+            # Tier reads via te.tier_label()/franchise_score(), never raw
+            # overall (talent-tiers coherence).
+            try:
+                _bid_ident = te.partner_gm_identity(bidder)
+                _bid_tiers = te.asset_franchise_tiers(
+                    bidder, [p for _v, p in vals], _bid_ident)
+            except Exception:
+                _bid_tiers = {}
             for _v, p in vals:
                 try:
                     if getattr(p, "id", None) in core_ids:
+                        continue
+                    try:
+                        _bl = _bid_tiers.get(getattr(p, "id", None),
+                                            ("GETTABLE", 0.0))[0]
+                    except Exception:
+                        _bl = "GETTABLE"
+                    if _bl == "UNTOUCHABLE":
                         continue
                     if te.trade_vetoes(bidder, seller, [p]):
                         continue
@@ -1713,13 +1795,32 @@ def build_bid(app, league, bidder, player, seller, ask_points):
             pass
         # Cheapest-first fill until target reached (picks before prospects
         # before roster players -- GMs spend futures first).
+        # D44 (Wave B) bundling: within each asset class, pieces that fill
+        # the SELLER's needs sort first -- packages are shaped to what the
+        # seller actually wants, not just cheapest-first.
         def _av(c):
             try:
                 return te.asset_value(c[1])
             except Exception:
                 return 0
+        try:
+            _sneeds = te.team_needs(seller)[:2]
+        except Exception:
+            _sneeds = []
+        def _need_rank(c):
+            try:
+                if c[0] == "pick":
+                    return 1
+                _pc = _pos_code(c[1])
+                if _pc in _sneeds:
+                    return 0
+                if _pc == "D" and any(n in ("LD", "RD") for n in _sneeds):
+                    return 0
+            except Exception:
+                pass
+            return 1
         order = {"pick": 0, "prospect": 1, "depth": 2}
-        cands.sort(key=lambda c: (order.get(c[0], 9), _av(c)))
+        cands.sort(key=lambda c: (order.get(c[0], 9), _need_rank(c), _av(c)))
         chosen, total = [], 0
         for _kind, asset in cands:
             if len(chosen) >= MAX_BID_ASSETS:
@@ -1841,7 +1942,8 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                                            player, seller, ask,
                                            esc_mult=params.get("esc_mult", 1.0))
                 if assets is None:
-                    assets = build_bid(app, league, bidder, player, seller, ask)
+                    assets = build_bid(app, league, bidder, player, seller,
+                                       ask, n_bidders=len(bidders))
                 if not assets:
                     continue
                 # User sale: no engine evaluation here -- the best bid goes

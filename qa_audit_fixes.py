@@ -73,21 +73,23 @@ check(f"bargain ({_ovr}ovr) worth more than fairly-paid", v_barg > v_fair)
 check("values are sane magnitudes", v_fair > 500 and v_over > 100)
 
 # ------------------------------------------------------------ F2: waiver-aware trade cap
-print("== F2: waiver shed in trade validation ==")
+print("== F2: waiver wire in trade validation (D45: no shed) ==")
 w = mkplayer(5_000_000); w.on_waivers = True; w.waiver_days = 2
 n = mkplayer(5_000_000)
-check("waived player counts $0 outgoing", te._effective_outgoing_hit(w) == 0)
+check("waived player counts FULL $5M outgoing (no wire shed)",
+      te._effective_outgoing_hit(w) == 5_000_000)
 check("active player counts full hit", te._effective_outgoing_hit(n) == 5_000_000)
 u, p = mkteam("U2"), mkteam("P2")
 u.roster.append(w)
 inbound = mkplayer(1_000_000, name="Inbound One")
 p.roster.append(mkplayer(5_000_000))
 p.roster.append(inbound)
-# over-cap team shedding a waived player: validation must not double-count
-u.salary_cap = 5_000_000  # tiny cap; waived 5M already sheds to $0 baseline
+# $5M cap; the waived $5M counts in full, so the club sits exactly at the
+# cap -- trading him for a $1M player is a genuine $4M shed, legal.
+u.salary_cap = 5_000_000
 tr = te.execute_trade(u, p, [w], [inbound], date_str="2026-11-01")
 moved = tr.summary.startswith("BLOCKED:")
-check("waived-player trade executes (no phantom cap block)", not moved)
+check("waived-player trade executes (genuine shed, no cap block)", not moved)
 got = inbound if not moved else None
 check("acquiring club receives cleared waiver flags",
       moved or (got.on_waivers is False and got.waiver_days == 0))

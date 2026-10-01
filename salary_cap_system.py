@@ -27,6 +27,11 @@ from typing import (Dict, List, Optional)
 # ---------------------------------------------------------------------------
 
 DEFAULT_CAP = 104_000_000          # 2026-27 NHL cap (modern day)
+#: Salary floor (2026-27): $78.0M against the $104M cap -- the real NHL's
+#: ~$26M cap-to-floor gap, rounded. Clubs must sit at or above it; the
+#: day-advance gate (_floor_compliance_blocker) and AI auto-compliance
+#: enforce it. D46 (Wave B).
+SALARY_CAP_FLOOR = 78_000_000
 MIN_CAP = 70_000_000              # Floor sanity bound
 MAX_CAP = 200_000_000             # Ceiling sanity bound
 MIN_GROWTH = 0.02                 # 2% minimum annual growth
@@ -768,15 +773,17 @@ def _on_waiver_wire(p) -> bool:
 def _active_roster_hit(p) -> int:
     """Cap hit of a player on the NHL active roster: full salary.
 
-    Waiver shed: a player on the wire temporarily doesn't count. This
-    is the escape valve that lets an over-cap club get compliant via
-    waivers (or a shedding trade) and start games. (Real NHL keeps
-    counting until assignment; the game sheds on placement by design.)
-    When waivers clear, the claim or the burial rule resolves the hit.
+    Wave B D45: the waiver wire no longer sheds cap space. A player on the
+    wire counts his FULL hit until his waiver clears (real NHL). The old
+    $0-while-on-wire rule was a loophole -- waive the $8M problem Monday,
+    trade Tuesday at phantom space, reclaim him off the wire Thursday.
+    Relief now comes only from the real outcomes: a claim (off the books
+    entirely) or clearance + AHL assignment (burial rule). Waivers remain
+    a logical compliance tool -- the day-advance blocker counts an
+    in-flight wire at its expected post-clearing charge (compliance_charge)
+    so corrective action isn't a soft-lock.
     """
     try:
-        if _on_waiver_wire(p):
-            return 0
         contract = getattr(p, "contract", None)
         if contract is not None:
             hit = int(getattr(contract, "salary", 0) or 0)
@@ -787,16 +794,77 @@ def _active_roster_hit(p) -> int:
     return 0
 
 
+def _expected_wire_charge(p) -> int:
+    """Cap charge a wire player will carry once his waiver clears (D45).
+
+    Clearance auto-assigns to the AHL (main.py waiver processing), so the
+    burial rule applies: two-way deals drop to $0, one-way deals keep hit
+    minus the burial exemption. The day-advance compliance blocker counts
+    this expected charge -- an in-flight corrective waive doesn't
+    hard-block the day. Trade validation and cap_space always use the
+    real current charge (full hit on the wire).
+    """
+    try:
+        contract = getattr(p, "contract", None)
+        if contract is None:
+            return 0
+        if bool(getattr(contract, "two_way", False)):
+            return 0
+        hit = int(getattr(contract, "salary", 0) or 0)
+        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        try:
+            _bury = burial_exemption()
+        except Exception:
+            _bury = BURY_EXEMPTION
+        return max(0, hit - _bury)
+    except Exception:
+        return 0
+
+
+def compliance_charge(team) -> int:
+    """Cap charge for the day-advance compliance check (D45).
+
+    Identical to total_cap_charge except players on the waiver wire count
+    at their expected post-clearing charge (burial rule) instead of their
+    full current hit: a pending corrective waive is corrective action in
+    flight, not a reason to hard-block the day. Everything else -- trade
+    validation, cap_space, the cap UI -- uses the real charge.
+    """
+    try:
+        total = 0
+        for p in (getattr(team, "roster", None) or []):
+            try:
+                total += (_expected_wire_charge(p) if _on_waiver_wire(p)
+                          else _active_roster_hit(p))
+            except Exception:
+                continue
+        for p in (getattr(team, "ahl_roster", None) or []):
+            try:
+                total += minor_league_cap_charge(p)
+            except Exception:
+                continue
+        return max(0, total) + int(dead_cap_charge(team) or 0)
+    except Exception:
+        return 0
+
+
+def floor_space(team) -> int:
+    """Cap payroll above the salary floor (negative when under it). D46."""
+    try:
+        return int(total_cap_charge(team) or 0) - int(SALARY_CAP_FLOOR)
+    except Exception:
+        return 0
+
+
 def minor_league_cap_charge(p) -> int:
     """Cap hit of a player under NHL contract assigned to the minors.
 
     True NHL rule: two-way deals count $0 (minor-league salary is cap
     exempt); one-way deals count salary minus the burial exemption.
-    A player on the waiver wire is fully shed until waivers clear.
+    D45: the waiver-wire shed is gone everywhere -- a player on the wire
+    counts his full hit until his waiver clears (see _active_roster_hit).
     """
     try:
-        if _on_waiver_wire(p):
-            return 0
         contract = getattr(p, "contract", None)
         if contract is None:
             return 0
@@ -931,17 +999,12 @@ def is_over_cap(team, season_year=None) -> bool:
 def waiver_shed_charge(team) -> int:
     """Cap dollars temporarily shed by players on the waiver wire.
 
-    A waived player doesn't count until waivers clear -- the escape
-    valve that lets an over-cap club get compliant and start games.
+    RETIRED by Wave B D45: the wire no longer sheds cap space (real NHL --
+    a player on the wire counts his full hit until his waiver clears).
+    Kept as a zero-returning shim because the cap UI and windows.py
+    reference it; the compliance blocker now uses compliance_charge().
     """
-    try:
-        return sum(
-            max(0, int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
-                - int(getattr(p, "retained_amount", 0) or 0))
-            for p in (getattr(team, "roster", None) or [])
-            if _on_waiver_wire(p))
-    except Exception:
-        return 0
+    return 0
 
 
 def cap_breakdown(team, season_year=None) -> Dict:
@@ -955,7 +1018,8 @@ def cap_breakdown(team, season_year=None) -> Dict:
     except Exception:
         buried = 0
     # Cap dollars temporarily shed by players sitting on the waiver wire.
-    # Informational only -- already excluded from the roster charge above.
+    # Informational only -- retired by D45 (always 0; the wire counts its
+    # full hit now). Key kept so cap UI screens don't KeyError.
     waivers_shed = waiver_shed_charge(team)
     buyouts = in_game_buyout_charge(team, season_year)
     s_buyout = seeded_buyout_charge(team)
@@ -982,4 +1046,9 @@ def cap_breakdown(team, season_year=None) -> Dict:
         "total": total,
         "space": cap - total,
         "over_cap": (cap - total) < 0,
+        # D46: salary-floor keys. under_floor mirrors over_cap so the
+        # day-advance floor gate reads one dict.
+        "floor": int(SALARY_CAP_FLOOR),
+        "floor_space": total - int(SALARY_CAP_FLOOR),
+        "under_floor": total < int(SALARY_CAP_FLOOR),
     }

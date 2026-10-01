@@ -285,7 +285,10 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
                         _place_on_wire(league, app, wire, team, p,
                                        "cap compliance"))
                     done += 1
-                    space += _save  # the wire shed; re-check pressure
+                    # D45: no wire shed -- this is the expected burial
+                    # savings once the 2-day wire clears and the AHL
+                    # assignment lands. Re-check pressure against it.
+                    space += _save
                     if space >= CAP_PRESSURE_BELOW:
                         break
 
