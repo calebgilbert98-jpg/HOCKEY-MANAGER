@@ -283,20 +283,17 @@ def apply_6v5_mix(shot_chance, turnover_chance, cycle_chance,
     """Apply the 6v5 attack model to an OZ event mix (GameSim fidelity).
 
     Volume edge rides the shot gate (pre-clamp -- call BEFORE the
-    engine's texture clamp so it still binds); the sustenance shift
-    kills turnover mass into cycle/maintain AFTER (order-independent).
-    Returns (shot_chance, turnover_chance, cycle_chance). Never raises.
+    engine's texture clamp so it still binds). The 6v5 is urgency, not
+    patience: it shoots on sight, it does not cycle. Turnover mass is
+    LEFT as turnovers -- the live turnovers are what feed the leading
+    team's honest empty-net threat. Returns
+    (shot_chance, turnover_chance, cycle_chance). Never raises.
     """
     try:
         if not SIX_ON_FIVE_MODEL_ENABLED:
             return shot_chance, turnover_chance, cycle_chance
         _vol = six_on_five_volume(attacking_unit, defending_unit)
         shot_chance = shot_chance * _vol
-        _keep, _cyc = oz_sustenance_shift(attacking_unit, defending_unit)
-        _freed = turnover_chance * (1.0 - _keep)
-        turnover_chance = turnover_chance * _keep
-        cycle_chance = cycle_chance + _freed * _cyc
-        # the rest of the freed mass flows to maintain downstream
         return shot_chance, turnover_chance, cycle_chance
     except Exception:
         return shot_chance, turnover_chance, cycle_chance
@@ -328,3 +325,52 @@ def grade_tilt_ctx(attacking_unit, defending_unit):
                                                   defending_unit)}
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# 3v3 open-ice tilt (workstream B(e), 2026-09-30): 3-on-3 overtime is wide
+# open -- skating and chance creation decide it. Personnel-scaled grade
+# tilt for the 3v3 unit, generation side only. The live lever for (e):
+# volume + better looks, never a synthetic "decide it in OT" roll.
+# ---------------------------------------------------------------------------
+
+OT_TILT_BASE = 1.15
+OT_TILT_MIN = 0.90
+OT_TILT_MAX = 1.40
+OT_TILT_EDGE_SCALE = 0.008
+
+
+def ot_open_ice_tilt(attacking_unit, defending_unit):
+    """Grade-A tilt for 3v3 overtime. Open ice rewards wheels and IQ:
+    the attack's skating/chance-creation vs the defense's ability to
+    stay with them. Bounded [0.90, 1.40]. Never raises."""
+    try:
+        if not SIX_ON_FIVE_MODEL_ENABLED:
+            return 1.0
+        _att = []
+        _def = []
+        for p in _skaters(attacking_unit):
+            try:
+                _att.append(float(getattr(p, "skating", 75.0) or 75.0) * 0.45
+                            + float(getattr(p, "offensive_awareness",
+                                            70.0) or 70.0) * 0.30
+                            + float(getattr(p, "shooting", 70.0)
+                                    or 70.0) * 0.25)
+            except Exception:
+                _att.append(72.0)
+        for p in _skaters(defending_unit):
+            try:
+                _def.append(float(getattr(p, "skating", 75.0) or 75.0) * 0.40
+                            + float(getattr(p, "defensive_awareness",
+                                            70.0) or 70.0) * 0.35
+                            + float(getattr(p, "defensive_positioning",
+                                            70.0) or 70.0) * 0.25)
+            except Exception:
+                _def.append(72.0)
+        if not _att or not _def:
+            return OT_TILT_BASE
+        _edge = (sum(_att) / len(_att)) - (sum(_def) / len(_def))
+        _t = OT_TILT_BASE + _edge * OT_TILT_EDGE_SCALE
+        return max(OT_TILT_MIN, min(OT_TILT_MAX, _t))
+    except Exception:
+        return OT_TILT_BASE

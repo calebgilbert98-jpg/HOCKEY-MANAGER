@@ -2966,7 +2966,8 @@ class GameSim:
         # Attempt breakout
         return self._attempt_breakout(attacking_team, defending_team)
 
-    def _determine_zone_entry_type(self, puck_carrier, defenders, fatigue_factor):
+    def _determine_zone_entry_type(self, puck_carrier, defenders,
+                                     fatigue_factor):
         """Determine how the player will attempt to enter the zone."""
         skill_factor = (puck_carrier.skating + puck_carrier.puck_handling + puck_carrier.hockey_iq) / 3
         skill_factor *= fatigue_factor
@@ -5262,6 +5263,22 @@ class GameSim:
                                      ).get("six_on_five_tilt", 1.0)
             except Exception:
                 pass
+            # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+            # Generation side only: 3v3 OT's open ice tilts grade-A earning
+            # by the on-ice units' skating/chance-creation. The live lever
+            # for (e), alongside the volume bump in
+            # _apply_situation_modifiers.
+            _tilt3v3 = 1.0
+            try:
+                if getattr(self, "_ot_sudden_death", False) and not getattr(
+                        self, "is_playoff", False):
+                    from six_on_five import ot_open_ice_tilt as _ot33
+                    _opp3v3 = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt3v3 = _ot33(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp3v3))
+            except Exception:
+                pass
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,
@@ -5282,6 +5299,7 @@ class GameSim:
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
                     "six_on_five_tilt": _tilt65,
+                    "ot_3v3_tilt": _tilt3v3,
                 })
         except Exception:
             pass
@@ -6975,7 +6993,10 @@ class GameSim:
         elif situation == SpecialSituation.FOUR_ON_FOUR:
             modifier = 1.15  # Slight increase for 4v4 (more open ice)
         elif situation == SpecialSituation.THREE_ON_THREE:
-            modifier = 1.25  # Significant increase for 3v3 (very open)
+            # Workstream B(e), 2026-09-30: 3v3 OT is very open -- widen
+            # the live chance engine (volume + the ot_3v3_tilt on grade).
+            # Never a synthetic "decide it in OT" roll.
+            modifier = 2.00
         
         return base_chance * modifier
 

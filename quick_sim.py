@@ -1528,11 +1528,12 @@ class AdvancedGameSim:
         # trap teams shoot less. Dynamic per team, per game. SHOT_LIFT
         # raises the league to real NHL volume (~29.5 SOG/team/game).
         #
-        # 3v3 overtime (divergence #3): the open ice is worth 1.25x shot
-        # volume -- the same decision GameSim's THREE_ON_THREE branch
-        # makes in _apply_situation_modifiers.
+        # 3v3 overtime (divergence #3, workstream B(e)): the open ice is
+        # worth 2.00x shot volume -- the same decision GameSim's
+        # THREE_ON_THREE branch makes in _apply_situation_modifiers.
+        # The live lever for (e), with the ot_3v3_tilt on grade below.
         if getattr(self, "_ot_3v3", False):
-            shot_prob *= 1.25
+            shot_prob *= 2.00
         # 6-on-5 (divergence #13, workstream B, 2026-09-30): the pulled-goalie
         # extra attacker. The flat 2.2x is replaced by the shared
         # generation-side 6v5 model (six_on_five.six_on_five_volume): the
@@ -2202,6 +2203,21 @@ class AdvancedGameSim:
                                       ).get("six_on_five_tilt", 1.0)
             except Exception:
                 pass
+            # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+            # Generation side only: 3v3 OT's open ice tilts grade-A earning
+            # by the on-ice units' skating/chance-creation. The live lever
+            # for (e), alongside the 1.60x volume above.
+            _tilt3v3 = 1.0
+            try:
+                if getattr(self, "_ot_3v3", False):
+                    from six_on_five import ot_open_ice_tilt as _ot33q
+                    _a_onice3 = self.on_ice.get(puck_team_name, {}) or {}
+                    _a_unit3 = [p for p in (_a_onice3.get("Forwards", [])
+                                            + _a_onice3.get("Defense", []))
+                                if p is not None]
+                    _tilt3v3 = _ot33q(_a_unit3, _d_unit)
+            except Exception:
+                pass
             # -- roll ---------------------------------------------------
             _grade = _rcg(
                 _loc, _contest01, shooter,
@@ -2222,6 +2238,7 @@ class AdvancedGameSim:
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
                     "six_on_five_tilt": _tilt65,
+                    "ot_3v3_tilt": _tilt3v3,
                 })
             shot_chance = shot_chance * _cgfm(_grade)
             # Schemed-against factor (scenario battle): applied to the
