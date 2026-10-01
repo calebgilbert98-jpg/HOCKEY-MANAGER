@@ -652,7 +652,6 @@ class PlayerProfile(InGamePopup):
                     ("faceoff", "Faceoffs"),
                     ("puck_retrieval", "Puck Retrieval"),
                     ("discipline", "Discipline"),
-                    ("goalie_save", "Goaltending"),
                 ]
                 if _is_g:
                     _comp_labels = [("goalie_save", "Goaltending"),

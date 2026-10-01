@@ -120,5 +120,32 @@ check("composite computation identical (no toggle input)",
 check("engine module has no visibility dependency",
       "show_composite_ratings" not in open("attribute_composites.py").read())
 
+print("== goalie/skater composite gating (bug 2) ==")
+root2 = tk.Tk()
+root2.geometry("1600x900")
+root2.startup_settings = {"show_composite_ratings": True}
+skater = g.Player("Skater", "Test", 25, PlayerPosition.CENTER, 75)
+w_sk = PlayerProfile(root2, skater)
+root2.update()
+texts_sk = _texts(w_sk)
+w_sk.destroy()
+check("skater card: no 'Goaltending' composite bar",
+      not any(t.strip() == "Goaltending" for t in texts_sk),
+      str([t for t in texts_sk if "Goaltend" in t])[:200])
+check("skater card: skater composites still render",
+      any("Chance Creation" in t for t in texts_sk)
+      and any("Faceoffs" in t for t in texts_sk))
+goalie = g.Player("Goalie", "Test", 25, PlayerPosition.GOALIE, 75)
+w_gk = PlayerProfile(root2, goalie)
+root2.update()
+texts_gk = _texts(w_gk)
+w_gk.destroy()
+check("goalie card: 'Goaltending' composite bar renders",
+      any(t.strip() == "Goaltending" for t in texts_gk))
+check("goalie card: no skater-only 'Finishing' bar",
+      not any(t.strip() == "Finishing" for t in texts_gk),
+      str([t for t in texts_gk if "Finish" in t])[:200])
+root2.destroy()
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)
