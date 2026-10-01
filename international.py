@@ -112,8 +112,14 @@ def _is_dman(p: Any) -> bool:
 
 
 def _pname(p: Any) -> str:
+    # full_name is a property on Player (game_classes.py); some callers pass
+    # duck-typed objects where it may be a method. Handle both.
+    # Fixed 2026-10-01 (playthrough BUG-REVIEW-001): p.full_name() raised
+    # TypeError on the property, so every Olympic roster name rendered
+    # "Unknown".
     try:
-        return p.full_name()
+        _fn = p.full_name
+        return _fn() if callable(_fn) else str(_fn)
     except Exception:
         return getattr(p, "name", "Unknown")
 

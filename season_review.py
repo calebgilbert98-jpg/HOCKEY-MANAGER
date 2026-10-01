@@ -280,7 +280,7 @@ def _standout_lines(team):
         d = _expected_diff(p)
         if d is not None and d < -5:
             continue  # deep below pace: that's the tough-go list, not this one
-        name = _ff_tag(p, team, getattr(p, "name", "Unknown"))
+        name = _ff_tag(p, team, getattr(p, "full_name", "Unknown"))
         line = f"{name}: {_skater_line(p)}"
         if d is not None and d >= 8:
             line += f" ({d:+.0f} vs career pace -- career year)"
@@ -290,7 +290,7 @@ def _standout_lines(team):
     for p in sorted(goalies,
                     key=lambda p: float(getattr(p, "save_percentage", 0) or 0),
                     reverse=True)[:1]:
-        name = _ff_tag(p, team, getattr(p, "name", "Unknown"))
+        name = _ff_tag(p, team, getattr(p, "full_name", "Unknown"))
         out.append(f"{name}: {_num(getattr(p, 'wins', 0))}W, "
                    f"{getattr(p, 'save_percentage', 0)} SV%, "
                    f"{getattr(p, 'goals_against_avg', 0)} GAA")
@@ -305,7 +305,7 @@ def _standout_lines(team):
     cands.sort(key=lambda x: x[0])
     for d, p in cands[:3]:
         if d < -5:
-            name = getattr(p, "name", "Unknown")
+            name = getattr(p, "full_name", "Unknown")
             tough.append(f"{name}: {_skater_line(p)} ({d:+.0f} vs career pace)")
     return out, tough
 
@@ -322,7 +322,7 @@ def _rookie_lines(app, team, year):
                 or r.get("player") in (getattr(team, "roster", None) or [])][:3]
         for r in mine:
             p = r["player"]
-            name = getattr(p, "name", "Unknown")
+            name = getattr(p, "full_name", "Unknown")
             if r.get("goalie"):
                 lines.append(f"{name}: {r.get('wins', 0)}W, {r.get('sv_pct', 0)} SV% "
                              f"(Calder race)")
@@ -395,7 +395,7 @@ def _prospect_lines(team):
                 return 0
         for p in sorted(prospects, key=_pot, reverse=True)[:12]:
             try:
-                name = getattr(p, "name", "Unknown")
+                name = getattr(p, "full_name", "Unknown")
                 age = getattr(p, "age", "?")
                 s = pds.get_player_development_summary(p)
                 cur = s.get("current_overall", "?")
@@ -447,11 +447,11 @@ def _discipline_lines(app, team, year):
                 continue
             if etype == "suspension":
                 susp_by_player.setdefault(
-                    getattr(p, "name", "Unknown"), []).append(e)
+                    getattr(p, "full_name", "Unknown"), []).append(e)
             elif "missed" in etype or "dops" in etype or "review" in etype:
                 desc = str(e.get("description", "") or "").strip()
                 if desc:
-                    missed.append((getattr(p, "name", "Unknown"), desc))
+                    missed.append((getattr(p, "full_name", "Unknown"), desc))
     for name, evs in sorted(susp_by_player.items(),
                             key=lambda kv: len(kv[1]), reverse=True):
         n = len(evs)
@@ -549,7 +549,7 @@ def _stars_lines(app, team, year):
             ranked.append((w, p))
     ranked.sort(key=lambda x: x[0], reverse=True)
     for w, p in ranked[:3]:
-        name = getattr(p, "name", "Unknown")
+        name = getattr(p, "full_name", "Unknown")
         try:
             gs = getattr(p, "game_stars", None) or {}
             brk = (f"{_num(gs.get('first'))}x1st "
@@ -634,16 +634,16 @@ def _leadership_lines(team):
                 if str(getattr(p, "captaincy", "") or "").upper() == "A"]
         if caps:
             p = caps[0]
-            name = getattr(p, "name", "Unknown")
+            name = getattr(p, "full_name", "Unknown")
             yrs = _num(getattr(p, "captain_tenure_years", 0))
             line = (f"Captain: {name} "
                     f"({yrs} year{'s' if yrs != 1 else ''} wearing the C)")
             if alts:
-                anames = ", ".join(getattr(a, "name", "?") for a in alts[:2])
+                anames = ", ".join(getattr(a, "full_name", "?") for a in alts[:2])
                 line += f"; alternates: {anames}"
             lines.append(line)
         elif alts:
-            anames = ", ".join(getattr(a, "name", "?") for a in alts[:2])
+            anames = ", ".join(getattr(a, "full_name", "?") for a in alts[:2])
             lines.append(f"No captain named; alternates: {anames}.")
     except Exception:
         pass
