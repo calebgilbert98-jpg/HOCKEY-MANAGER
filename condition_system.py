@@ -410,3 +410,43 @@ def condition_tier(player):
     if c >= 50:
         return "WORN"
     return "GASSED"
+
+
+# ---------------------------------------------------------------------------
+# Wave A (2026-10-01, Muck D17/D18/D23/D24): deployment-facing condition reads
+# ---------------------------------------------------------------------------
+
+#: D23 -- per-tick bench recovery: energy points restored per second of game
+#: time for benched skaters, scaled by fatigue_recovery_mult. A hard ES
+#: shift costs ~25 energy (0.55/s x ~45s); a normal 2-3 minute bench sit
+#: (~150s) at 0.22/s restores ~33 -- rotation players stay sustainable
+#: across three periods, double-shifters and heavy-PK men still gas.
+#: The old _update_fatigue docstring promised bench recovery; only
+#: intermissions delivered. Never raises.
+BENCH_RECOVERY_PER_S = 0.22
+
+
+def condition_deployment_mult(player):
+    """D17 -- persistent-condition factor on deployment quantity.
+
+    A physical fact, not a vibe: applied OUTSIDE the vibe clamp in
+    _player_deployment_score. Gassed (<50): 0.85; worn (<70): 0.94;
+    fresh (>=90): 1.03; good: 1.00. Playing hurt (D24 tag) costs another
+    x0.90 -- the wear shows in his minutes, exactly as Muck ordered.
+    Never raises.
+    """
+    try:
+        c = get_condition(player)
+        if c < GASSED_CONDITION:
+            m = 0.85
+        elif c < WORN_CONDITION:
+            m = 0.94
+        elif c >= 90.0:
+            m = 1.03
+        else:
+            m = 1.00
+        if getattr(player, "playing_hurt", False):
+            m *= 0.90
+        return m
+    except Exception:
+        return 1.0

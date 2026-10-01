@@ -431,11 +431,15 @@ def flatten_lineup(lineup):
     return lineup
 
 
-def resolve_game_lineup(team):
+def resolve_game_lineup(team, context=None):
     """The one shared lineup-resolution decision (one decision, two
     fidelities). Previously a closure inside AdvancedGameSim.__init__;
     GameSim resolves the same way, so both engines dress from the same
     decision instead of two copies.
+
+    ``context`` (optional dict): {"playoffs": bool} -- lets the D24
+    play-hurt pass know when the coach may demand a star play hurt for
+    cause. Absent == regular-season game.
 
     Precedence:
       1. suspension scrub (mutates the stored team.lineup in place);
@@ -475,7 +479,7 @@ def resolve_game_lineup(team):
             lineup, _ = _lcha2(team, lineup)
         except Exception:
             pass
-        return lineup
+        return apply_play_hurt_management(team, lineup, context)
     # Defensive: fill missing keys with best_lines
     keys = ['Forwards', 'Defense', 'Goalies']
     missing = [k for k in keys if k not in lineup]
@@ -494,8 +498,240 @@ def resolve_game_lineup(team):
             lineup, _ = _lcha(team, lineup)
         except Exception:
             pass
-    return lineup
+    # D24 (Wave A): nobody is forced back gassed at full condition.
+    return apply_play_hurt_management(team, lineup, context)
 
+
+# ---------------------------------------------------------------------------
+# D24 -- play-hurt / load management (Wave A, 2026-10-01, Muck)
+# ---------------------------------------------------------------------------
+# Nobody is forced into the lineup gassed or half-recovered at full role.
+# This pass runs inside resolve_game_lineup (the one shared decision), so
+# both engines dress from it. For each dressed skater who is gassed
+# (condition < 50), worn-and-recently-returned, or inside the re-injury
+# window:
+#   * a healthy scratch is available AND it is not the playoffs and not an
+#     injury crisis -> load management: he sits, the best healthy
+#     replacement draws in (dynamics-logged);
+#   * otherwise (playoffs, crisis, no depth) -> he dresses PLAYING HURT:
+#     tagged, deployment sheds his minutes (D17), re-injury risk rises.
+#     A playoff demand is the coach's call for cause -- logged with
+#     morale/fallout weight.
+# Playing hurt is never at maximum condition: the wear shows in his
+# minutes (deployment), and the tag clears every game (per-game state).
+# Goalies are excluded -- the starter rotation owns their load.
+
+def _play_hurt_risk(player):
+    """'high' / 'medium' / None for the D24 pass. Never raises."""
+    try:
+        from condition_system import get_condition as _gc
+        cond = _gc(player)
+    except Exception:
+        cond = 100.0
+    try:
+        gsr = getattr(player, "games_since_return", 999)
+        gsr = int(gsr) if gsr is not None else 999
+    except Exception:
+        gsr = 999
+    try:
+        from injury_data import REINJURY_WINDOW_GAMES as _rw
+    except Exception:
+        _rw = 10
+    if cond < 50.0 or gsr < 5:
+        return "high"
+    if cond < 65.0 or gsr < _rw:
+        return "medium"
+    return None
+
+
+def apply_play_hurt_management(team, lineup, context=None):
+    """D24 lineup pass. Never raises; returns the lineup (possibly with
+    scratches swapped)."""
+    try:
+        import condition_system as _cs
+    except Exception:
+        return lineup
+    try:
+        ctx = context or {}
+        playoffs = bool(ctx.get("playoffs"))
+        if not isinstance(lineup, dict):
+            return lineup
+        roster = getattr(team, "roster", None) or []
+        # Per-game tag: clear stale flags first.
+        for _p in roster:
+            try:
+                if getattr(_p, "playing_hurt", False):
+                    _p.playing_hurt = False
+            except Exception:
+                continue
+
+        def _dressed_ids():
+            ids = set()
+            for _ln in (lineup.get("Forwards") or []):
+                for _p in (_ln or []):
+                    if _p is not None:
+                        try:
+                            ids.add(_p.id)
+                        except Exception:
+                            pass
+            for _pr in (lineup.get("Defense") or []):
+                for _p in (_pr or []):
+                    if _p is not None:
+                        try:
+                            ids.add(_p.id)
+                        except Exception:
+                            pass
+            return ids
+
+        def _is_dman(_p):
+            try:
+                return _p.primary_position.name in (
+                    "LEFT_DEFENSE", "RIGHT_DEFENSE", "DEFENSE")
+            except Exception:
+                return False
+
+        def _healthy_scratch(side):
+            """Best healthy, fresh scratch on this side (F/D)."""
+            dressed = _dressed_ids()
+            cands = []
+            for _p in roster:
+                try:
+                    if _p.id in dressed:
+                        continue
+                    if getattr(_p, "is_injured", False):
+                        continue
+                    if getattr(_p, "suspension_games_remaining", 0) or 0:
+                        continue
+                    if _p.primary_position.name == "GOALIE":
+                        continue
+                    if _is_dman(_p) != (side == "D"):
+                        continue
+                    if _cs.get_condition(_p) < 65.0:
+                        continue
+                    cands.append(_p)
+                except Exception:
+                    continue
+            if not cands:
+                return None
+            cands.sort(key=lambda _p: _cs.get_condition(_p),
+                       reverse=True)
+            return cands[0]
+
+        def _swap_in(line_key, slot_idx, pos_idx, new_p):
+            """Swap a skater in the nested lineup, then re-flatten."""
+            try:
+                unit = lineup.get(line_key)
+                if not unit or slot_idx >= len(unit):
+                    return False
+                slot = unit[slot_idx]
+                if not isinstance(slot, list) or pos_idx >= len(slot):
+                    return False
+                slot[pos_idx] = new_p
+                flatten_lineup(lineup)  # refresh F1_LW.. keys
+                return True
+            except Exception:
+                return False
+
+        def _log(text, morale_delta=0, tone="neutral"):
+            try:
+                from reputation_system import record_team_event as _rte
+                _rte(team, "coach_demand", text,
+                     morale_delta=morale_delta, tone=tone)
+            except Exception:
+                pass
+
+        tname = getattr(team, "team_name", "?")
+        # Forwards.
+        for _li, _line in enumerate(lineup.get("Forwards") or []):
+            if not isinstance(_line, list):
+                continue
+            for _pi, _p in enumerate(list(_line)):
+                if _p is None:
+                    continue
+                try:
+                    risk = _play_hurt_risk(_p)
+                except Exception:
+                    risk = None
+                if risk is None:
+                    continue
+                _pname = getattr(_p, "full_name", "A skater")
+                if risk == "high" and not playoffs:
+                    _rep = _healthy_scratch("F")
+                    if _rep is not None:
+                        if _swap_in("Forwards", _li, _pi, _rep):
+                            _rname = getattr(_rep, "full_name", "?")
+                            _log(f"Load management: {_pname} sits "
+                                 f"(gassed/recovering) -- {_rname} draws "
+                                 f"in for {tname}.",
+                                 morale_delta=0, tone="neutral")
+                            try:
+                                _p.happiness = max(
+                                    1, (getattr(_p, "happiness", 70)
+                                        or 70) - 3)
+                            except Exception:
+                                pass
+                            continue
+                # Plays hurt: tag it; deployment sheds his minutes (D17),
+                # re-injury risk rises (injury_data).
+                try:
+                    _p.playing_hurt = True
+                except Exception:
+                    pass
+                if playoffs and risk == "high":
+                    _log(f"Coach's call: {_pname} plays hurt for "
+                         f"{tname} in the playoffs -- the room notices.",
+                         morale_delta=2, tone="up")
+                    try:
+                        _p.happiness = max(
+                            1, (getattr(_p, "happiness", 70) or 70) - 4)
+                    except Exception:
+                        pass
+        # Defense pairs.
+        for _pi2, _pair in enumerate(lineup.get("Defense") or []):
+            if not isinstance(_pair, list):
+                continue
+            for _pj, _p in enumerate(list(_pair)):
+                if _p is None:
+                    continue
+                try:
+                    risk = _play_hurt_risk(_p)
+                except Exception:
+                    risk = None
+                if risk is None:
+                    continue
+                _pname = getattr(_p, "full_name", "A skater")
+                if risk == "high" and not playoffs:
+                    _rep = _healthy_scratch("D")
+                    if _rep is not None:
+                        if _swap_in("Defense", _pi2, _pj, _rep):
+                            _rname = getattr(_rep, "full_name", "?")
+                            _log(f"Load management: {_pname} sits "
+                                 f"(gassed/recovering) -- {_rname} draws "
+                                 f"in for {tname}.",
+                                 morale_delta=0, tone="neutral")
+                            try:
+                                _p.happiness = max(
+                                    1, (getattr(_p, "happiness", 70)
+                                        or 70) - 3)
+                            except Exception:
+                                pass
+                            continue
+                try:
+                    _p.playing_hurt = True
+                except Exception:
+                    pass
+                if playoffs and risk == "high":
+                    _log(f"Coach's call: {_pname} plays hurt for "
+                         f"{tname} in the playoffs -- the room notices.",
+                         morale_delta=2, tone="up")
+                    try:
+                        _p.happiness = max(
+                            1, (getattr(_p, "happiness", 70) or 70) - 4)
+                    except Exception:
+                        pass
+        return lineup
+    except Exception:
+        return lineup
 
 # ---------------------------------------------------------------------------
 # D11 (2026-09-30, per Muck: CONSOLIDATE): AdvGS speed-optimized
@@ -1204,63 +1440,90 @@ class AdvancedGameSim:
         return (sum(self.stats[team_name].get(p.id, {}).get('fatigue', 0)
                     for p in members) / len(members))
 
-    def _toi_cap_s(self, team_name):
-        """Soft-cap seconds for this team/game state (scoring calibration,
-        2026-09-30). 30 min normally, 35 min when the bench is short
-        (injury-depleted). Applies in OT too -- 3v3 rides the same two
-        forwards, and an uncapped OT produced 52-min games.
-        Mirrors deployment_policy's SOFT_CAP_S / SOFT_CAP_SHORT_S, which
-        GameSim already enforces; AdvancedGameSim never did, letting
-        double-shifted stars skate 37-47 min and producing 100-goal seasons.
+    def _governor_state(self, team_name):
+        """Wave A gradient-governor window for this team/game (seconds).
+
+        Replaces the old binary 30-min skip (scoring calibration,
+        2026-09-30 -- kept double-shifted stars at 37-47 min and 100-goal
+        seasons out). The gradient bites from 24:00 to 30:00 and the
+        backstop (38:00) still zeroes pathological cases, so the same
+        protection holds without a learnable cliff. Short-bench games
+        (<15 dressed skaters) shift the whole window up 4 minutes.
+        Applies in OT too -- 3v3 rides the same two forwards, and an
+        uncapped OT produced 52-min games; the backstop still binds.
         """
         try:
             from deployment_policy import (
-                SOFT_CAP_S as _cap, SOFT_CAP_SHORT_S as _cap_short,
+                GOV_GRADIENT_START_S as _s,
+                GOV_GRADIENT_FULL_S as _f,
+                GOV_HARD_BACKSTOP_S as _b,
+                GOV_SHORT_BENCH_SHIFT_S as _sh,
                 _dressed_skater_count as _count,
             )
             try:
                 _n = _count(self.lineups[team_name])
             except Exception:
                 _n = 18
-            return _cap_short if _n < 15 else _cap
+            _shift = _sh if _n < 15 else 0
+            return _s + _shift, _f + _shift, _b + _shift
         except Exception:
-            return 30 * 60
+            return 24 * 60, 30 * 60, 38 * 60
 
-    def _line_toi_capped(self, team_name, line, cap_s):
-        """True if any skater on this unit is at/over the TOI soft cap."""
-        if cap_s is None:
-            return False
+    def _line_governor_factor(self, team_name, line, state):
+        """Wave A: gradient share-factor for this unit's binding skater
+        (1.0 fresh -> 0.25 at full gradient bite -> 0.0 at the backstop).
+        Mirrors deployment_policy.soft_cap_adjust_shares' TOI gradient
+        (AdvGS tracks per-shift TOI; the live condition/injury-risk terms
+        are GameSim per-tick readings with no AdvGS equivalent -- same
+        decision, speed-optimized approximation)."""
         try:
+            from deployment_policy import _smoothstep as _ss
+            start_s, full_s, backstop_s = state
             _st = self.stats.get(team_name, {})
+            worst = 0.0
             for p in line or []:
-                if p and _st.get(getattr(p, "id", None), {}).get("toi", 0) >= cap_s:
-                    return True
+                if not p:
+                    continue
+                try:
+                    _t = _st.get(getattr(p, "id", None), {}).get("toi", 0)
+                    worst = max(worst, float(_t or 0))
+                except Exception:
+                    continue
+            if worst >= backstop_s:
+                return 0.0
+            if worst <= start_s:
+                return 1.0
+            bite = _ss((worst - start_s) / max(1.0, full_s - start_s))
+            return max(0.05, 1.0 - 0.75 * bite)
         except Exception:
-            pass
-        return False
+            return 1.0
 
     def _select_lines_idx(self, team_name):
         """Least-fatigued unit. Returns (fw, df, goalie, fw_idx, df_idx).
 
-        Respects the TOI soft cap: units containing a skater at/over the
-        cap are skipped (he sits out). If every unit is capped, falls back
-        to least-fatigued so a shift is always dressed.
+        Wave A: the gradient governor deprioritizes (not hard-skips) units
+        whose binding skater is deep in the gradient -- a unit at full
+        bite skates as if ~2 shifts more tired (the same +6 scale as the
+        matchup veto below). Only the pathological backstop zeroes a
+        unit, and then the least-fatigued fallback still dresses a shift.
         """
         lineup = self.lineups[team_name]
         fw_lines = lineup['Forwards']
         df_pairs = lineup['Defense']
         goalies = lineup['Goalies']
-        _cap = self._toi_cap_s(team_name)
+        _gov = self._governor_state(team_name)
 
         def _pick(lines):
             _best, _best_f = None, float("inf")
             _fb, _fb_f = None, float("inf")
             for i, _line in enumerate(lines):
                 _f = self._line_fatigue(team_name, _line)
+                _g = self._line_governor_factor(team_name, _line, _gov)
+                _score = _f + (1.0 - _g) * 8.0
                 if _f < _fb_f:
                     _fb_f, _fb = _f, i
-                if not self._line_toi_capped(team_name, _line, _cap) and _f < _best_f:
-                    _best_f, _best = _f, i
+                if _g > 0.0 and _score < _best_f:
+                    _best_f, _best = _score, i
             return _best if _best is not None else _fb
 
         fw_idx = _pick(fw_lines)
@@ -1299,12 +1562,12 @@ class AdvancedGameSim:
         fw_lines = lineup['Forwards']
         df_pairs = lineup['Defense']
         use_f, use_d, directed = fresh_f, fresh_d, False
-        _cap = self._toi_cap_s(team_name)
+        _gov = self._governor_state(team_name)
         if 0 <= want_f < len(fw_lines):
             if want_f == fresh_f:
                 if act_f:
                     directed = True  # rotation already had the matchup unit
-            elif (not self._line_toi_capped(team_name, fw_lines[want_f], _cap)
+            elif (self._line_governor_factor(team_name, fw_lines[want_f], _gov) > 0.0
                     and self._line_fatigue(team_name, fw_lines[want_f])
                     <= self._line_fatigue(team_name, fw_lines[fresh_f]) + 6):
                 use_f, directed = want_f, True
@@ -1312,7 +1575,7 @@ class AdvancedGameSim:
             if want_d == fresh_d:
                 if act_d:
                     directed = True
-            elif (not self._line_toi_capped(team_name, df_pairs[want_d], _cap)
+            elif (self._line_governor_factor(team_name, df_pairs[want_d], _gov) > 0.0
                     and self._line_fatigue(team_name, df_pairs[want_d])
                     <= self._line_fatigue(team_name, df_pairs[fresh_d]) + 6):
                 use_d, directed = want_d, True
@@ -1504,15 +1767,17 @@ class AdvancedGameSim:
             if getattr(self, "_ot_3v3", False):
                 fw = [p for p in fw if p][:2]
                 df = [p for p in df if p][:1]
-            # TOI soft cap (player level): a skater at/over the cap sits out
-            # this shift, even on a "stuck" line that bypassed selection.
-            # Prevents double-shifted stars from skating 37-47 min.
-            # Never empties a unit: if all are capped, the least-toied
-            # dresses (cap binds him next shift).
+            # Wave A gradient governor (player level): only the pathological
+            # backstop (38:00, 42:00 short-bench) hard-sits a skater on a
+            # "stuck" line that bypassed selection. The gradient already
+            # deprioritized his unit at line selection, so this is the
+            # last-resort brake -- never the cliff. Never empties a unit:
+            # if all are at the backstop, the least-toied dresses.
             try:
-                _pcap = self._toi_cap_s(team_name)
-                if _pcap is not None:
+                _gov = self._governor_state(team_name)
+                if _gov is not None:
                     _st = self.stats.get(team_name, {})
+                    _backstop = _gov[2]
 
                     def _toi_of(_p):
                         try:
@@ -1524,7 +1789,7 @@ class AdvancedGameSim:
                         _live = [p for p in (_unit or []) if p]
                         if not _live:
                             return _unit
-                        _ok = [p for p in _live if _toi_of(p) < _pcap]
+                        _ok = [p for p in _live if _toi_of(p) < _backstop]
                         if _ok:
                             return _ok
                         _live.sort(key=_toi_of)

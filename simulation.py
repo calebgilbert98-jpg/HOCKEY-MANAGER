@@ -705,9 +705,13 @@ class GameSim:
         # simulation.py and quick_sim.py.
         try:
             from quick_sim import resolve_game_lineup
+            # D24 (Wave A): the shared lineup decision gets playoff context
+            # so the play-hurt pass knows when the coach may demand a star
+            # play hurt for cause (logged, with morale fallout).
+            _ph_ctx = {"playoffs": bool(is_playoff)}
             self.lineups = {
-                home_team.team_name: resolve_game_lineup(home_team),
-                away_team.team_name: resolve_game_lineup(away_team),
+                home_team.team_name: resolve_game_lineup(home_team, _ph_ctx),
+                away_team.team_name: resolve_game_lineup(away_team, _ph_ctx),
             }
         except Exception:
             self.lineups = {}
@@ -3273,6 +3277,41 @@ class GameSim:
             if player.id in self.game_stats:
                 self.game_stats[player.id]['time_on_ice'] = \
                     self.game_stats[player.id].get('time_on_ice', 0) + time_elapsed
+        # D23 (Wave A, 2026-10-01, Muck): per-tick bench recovery. The old
+        # docstring promised "benched skaters recover" but only
+        # intermissions delivered -- by the 3rd period the whole league
+        # was gassed. Benched skaters now genuinely recover during the
+        # game: BENCH_RECOVERY_PER_S x fatigue_recovery_mult (stamina
+        # matters) per second, capped at 100, kept in sync on the
+        # canonical game_energy pool. Rotation players stay sustainable;
+        # double-shifters still gas.
+        try:
+            from condition_system import (
+                BENCH_RECOVERY_PER_S as _w3_brs,
+                fatigue_recovery_mult as _w3_brec,
+                get_game_energy as _w3_bge,
+            )
+        except Exception:
+            _w3_brs = None
+        if _w3_brs is not None:
+            try:
+                for _bp in (self.home_team.roster + self.away_team.roster):
+                    try:
+                        if _bp.id in on_ice_ids:
+                            continue
+                        if _bp.primary_position == PlayerPosition.GOALIE:
+                            continue  # goalies have their own pool
+                        _cur = self.player_fatigue.get(
+                            _bp.id, _w3_bge(_bp))
+                        _ne = min(100.0, _cur
+                                  + _w3_brs * _w3_brec(_bp) * time_elapsed)
+                        self.player_fatigue[_bp.id] = _ne
+                        if _w3_sync is not None:
+                            _w3_sync(_bp, _ne)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
     def _apply_intermission_recovery(self):
         """W3: intermission breather -- stamina-scaled energy recovery.
@@ -6053,11 +6092,14 @@ class GameSim:
         
         # Apply shot skill bonus to save probability
         adjusted_save_prob = save_probability * (1.0 - (shot_skill_bonus / 200))  # Slight reduction for good passes
-        # F3: morale (1-10, initialized 4-7) affects finishing. Subtle: +/-3%.
+        # F3: morale affects finishing. Subtle: +/-3%.
+        # D27 (Wave A, 2026-10-01): the old gate (1-10, initialized 4-7)
+        # never fired -- morale is 1-100 (default 70). Retiered to the real
+        # scale, neutral at 70: +3% at 100, -3% at 40. Same intent, live.
         try:
-            morale = getattr(shooter, 'morale', 5)
-            if 1 <= morale <= 10:
-                morale_edge = (morale - 5) * 0.006
+            morale = getattr(shooter, 'morale', 70)
+            if 1 <= morale <= 100:
+                morale_edge = ((morale - 70) / 30.0) * 0.03
                 adjusted_save_prob *= (1.0 - morale_edge)
         except Exception:
             pass
@@ -9523,39 +9565,47 @@ class GameSim:
                 special_unit = f"PK{(self.clock // 45) % 2 + 1}"
         if special_unit:
             unit = self._game_lineup(team).get(special_unit) or {}
-            # Soft-cap governor (icetime-ecosystem): a skater at/over the
-            # ~30-min cap sits out special teams too. His ES line is already
-            # bound by soft_cap_adjust_shares; without this, PP/PK shifts
-            # (dressed here, not by the shift engine) skate him 2-5 min past
-            # the cap in high-penalty games. Short-bench games govern at the
-            # 35-min second-tier cap; must-win playoff games and OT marathons
-            # ride.
+            # Wave A gradient governor (icetime-ecosystem): the old ~30-min
+            # hard sit-out on special teams is gone with the cliff. Now:
+            # only the pathological backstop (38:00, 42:00 short-bench)
+            # hard-skips, and gassed skaters dress LAST (stable partition --
+            # the coach's unit order is kept, fresh legs just get the nod
+            # first). Must-win playoff games and OT marathons still ride.
             try:
                 from deployment_policy import (
                     _raw_toi as _st_raw_toi,
                     _game_state_from_sim as _st_gs,
                     soft_cap_exceptions as _st_exc,
-                    SOFT_CAP_S as _ST_CAP,
-                    SOFT_CAP_SHORT_S as _ST_CAP_SHORT,
+                    GOV_HARD_BACKSTOP_S as _ST_BACKSTOP,
+                    GOV_SHORT_BENCH_SHIFT_S as _ST_SHIFT,
                 )
+                from condition_system import is_gassed as _st_gassed
                 _st_exc_d = _st_exc(_st_gs(self, team))
                 if _st_exc_d.get("must_win_playoff") or _st_exc_d.get("ot_marathon"):
                     _st_governed = False
                 else:
                     _st_governed = True
-                    if _st_exc_d.get("bench_depleted"):
-                        _ST_CAP = _ST_CAP_SHORT
+                    _st_backstop = _ST_BACKSTOP + (
+                        _ST_SHIFT if _st_exc_d.get("bench_depleted") else 0)
             except Exception:
                 _st_governed = False
-            for p in (unit.get('Forwards') or []) + (unit.get('Defense') or []):
+            _st_cands = [p for p in (unit.get('Forwards') or [])
+                         + (unit.get('Defense') or []) if p]
+            if _st_governed:
+                try:
+                    _st_cands = ([p for p in _st_cands if not _st_gassed(p)]
+                                 + [p for p in _st_cands if _st_gassed(p)])
+                except Exception:
+                    pass
+            for p in _st_cands:
                 # Clamp to exact manpower: never dress more skaters than the
                 # penalty situation allows (5v4 -> 4, 5v3 -> 3).
                 if len(on_ice) >= num_skaters:
                     break
-                if p and p.id not in penalized_ids and p.id not in on_ice_ids:
+                if p.id not in penalized_ids and p.id not in on_ice_ids:
                     if _st_governed:
                         try:
-                            if _st_raw_toi(self, p.id) >= _ST_CAP:
+                            if _st_raw_toi(self, p.id) >= _st_backstop:
                                 continue
                         except Exception:
                             pass

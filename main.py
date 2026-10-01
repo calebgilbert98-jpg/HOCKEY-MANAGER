@@ -13656,15 +13656,21 @@ class HockeyManagerGUI(tk.Tk):
         top_goalies = [p for p in sorted_roster if p.primary_position.name == 'GOALIE'][:1]
         
         # Elite forwards boost offensive production
+        # D28 (Wave A, 2026-10-01, Muck): retiered to the true 1-100
+        # talent bands. The old thresholds (52/50/47/44) handed nearly
+        # every rostered forward the max effect -- a flat +0.4 for all 32
+        # teams, the opposite of a hierarchy. Now aligned with the talent
+        # tiers: Generational 92+ -> 0.25, Elite 88+ -> 0.18,
+        # Very good 84+ -> 0.10, Good 80+ -> 0.05.
         for forward in top_forwards:
             rating = forward.overall_rating()
-            if rating >= 52:  # Generational talent
+            if rating >= 92:  # Generational
                 effects['offensive_boost'] += 0.25
-            elif rating >= 50:  # Superstar
+            elif rating >= 88:  # Elite
                 effects['offensive_boost'] += 0.18
-            elif rating >= 47:  # Elite
+            elif rating >= 84:  # Very good
                 effects['offensive_boost'] += 0.10
-            elif rating >= 44:  # Very good
+            elif rating >= 80:  # Good
                 effects['offensive_boost'] += 0.05
         
         # Elite defensemen reduce opponent scoring
