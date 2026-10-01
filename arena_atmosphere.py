@@ -44,7 +44,10 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
                   milestone_home: bool = False,
                   ceremony: bool = False,
                   outdoor: bool = False,
-                  rivalry_heat: float = 0.0) -> Dict[str, Any]:
+                  rivalry_heat: float = 0.0,
+                  fan_sentiment: Optional[float] = None,
+                  fan_fav_names: Optional[List[str]] = None,
+                  hated_returnee_names: Optional[List[str]] = None) -> Dict[str, Any]:
     """Compute the crowd state at puck drop.
 
     energy: 0-100 loudness/engagement.
@@ -55,6 +58,16 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
     rivalry_heat: 0-100 bad blood between the clubs (reputation system).
     Grudge games are louder before puck drop -- this is the atmosphere
     half of the rivalry loop (the engine half reads heat for hits/fights).
+
+    fan_sentiment: 0-100 persistent fanbase mood (fan_sentiment module).
+    A happy fanbase is louder and more behind its team; a disgruntled one
+    makes the building nervous. None = skip (legacy callers unaffected).
+
+    fan_fav_names: home-team fan favourites dressing tonight -- the
+    building buzzes for its heroes.
+
+    hated_returnee_names: away players the home fans haven't forgiven
+    (simmering fan hate, reputation system) -- a hostile buzz.
     """
     drivers: List[str] = []
     energy = 38.0
@@ -141,6 +154,55 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
     elif skid == 3:
         mood -= 8.0
 
+    # --- home win streak: the building believes (D34 mirror of the skid) -----
+    streak = _home_streak(home_team)
+    if streak >= 4:
+        energy += 8.0
+        mood += 10.0
+        drivers.append("Winners of %d straight" % streak)
+    elif streak == 3:
+        energy += 4.0
+        mood += 5.0
+
+    # --- persistent fan sentiment: the slow stock beneath the night (D34) ----
+    # A fanbase that loves its team is louder and more forgiving; one that
+    # has turned makes the building nervous. 60 = content baseline.
+    if fan_sentiment is not None:
+        try:
+            _fs = float(fan_sentiment)
+            mood += (_fs - 60.0) * 0.45
+            energy += (_fs - 60.0) * 0.25
+            if _fs >= 80.0:
+                drivers.append("The faithful are buzzing")
+            elif _fs <= 35.0:
+                drivers.append("A restless, edgy building")
+        except Exception:
+            pass
+
+    # --- fan favourites: the building buzzes for its heroes (D34) ------------
+    try:
+        _favs = [str(n) for n in (fan_fav_names or []) if n][:3]
+    except Exception:
+        _favs = []
+    if _favs:
+        energy += 4.0 + 2.0 * min(3, len(_favs))
+        mood += 4.0
+        drivers.append("Buzzing for %s" % _favs[0] +
+                       (" (+%d more)" % (len(_favs) - 1) if len(_favs) > 1 else ""))
+
+    # --- simmering hate: still not forgiven in this barn (D39) ----------------
+    # Smaller than the first homecoming (reputation_system): the story has
+    # cooled but the booing still lifts the building's edge.
+    try:
+        _hated = [str(n) for n in (hated_returnee_names or []) if n][:3]
+    except Exception:
+        _hated = []
+    if _hated:
+        energy += 6.0
+        mood += 3.0
+        drivers.append("Still not forgiven: %s" % _hated[0] +
+                       (" (+%d more)" % (len(_hated) - 1) if len(_hated) > 1 else ""))
+
     energy = max(8.0, min(97.0, energy))
     mood = max(-90.0, min(95.0, mood))
     return {
@@ -157,12 +219,16 @@ def pregame_crowd(home_team: Any, away_team: Any, ledger: Any = None,
 
 def live_crowd_update(state: Dict[str, Any], scorer_is_home: bool,
                       home_score: int, away_score: int,
-                      period: int = 1) -> None:
+                      period: int = 1,
+                      scorer_is_fan_favourite: bool = False) -> None:
     """Mutate a pregame_crowd dict in place after a goal.
 
     Real-life shape: home goals erupt the building (bigger when they cut into
     a deficit -- the comeback lift), away goals quiet it and make it nervous,
     especially when the visitors take a late lead.
+
+    scorer_is_fan_favourite: a goal from a fan favourite gets the extra
+    roar -- the building's hero scores.
     """
     try:
         energy = float(state.get("energy", 50.0))
@@ -175,6 +241,10 @@ def live_crowd_update(state: Dict[str, Any], scorer_is_home: bool,
         deficit_before = (away_score - home_score) + 1
         energy += 7.0
         mood += 10.0
+        if scorer_is_fan_favourite:
+            # the building's hero scores: the extra roar
+            energy += 4.0
+            mood += 5.0
         if was_down and deficit_before >= 2:
             # cutting into a multi-goal deficit: the building erupts
             energy += 5.0
@@ -268,6 +338,24 @@ def _home_skid(home_team: Any) -> int:
             else:
                 break
         return skid
+    except Exception:
+        return 0
+
+
+def _home_streak(home_team: Any) -> int:
+    """Consecutive wins heading into tonight, 0 when unknown (D34)."""
+    try:
+        results = getattr(home_team, "recent_results", None)
+        if not results:
+            return 0
+        streak = 0
+        for r in results:
+            r = str(r).upper()
+            if r.startswith("W") or "WIN" in r:
+                streak += 1
+            else:
+                break
+        return streak
     except Exception:
         return 0
 

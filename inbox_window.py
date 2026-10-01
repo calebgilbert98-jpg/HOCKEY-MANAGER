@@ -663,7 +663,7 @@ class InboxView(ctk.CTkFrame):
                 "rfa_qualifying", "offer_sheet_match",
                 "offer_sheet_trade_alt",
                 "arbitration_walkaway", "buyout_window",
-                "staff_renewal"):
+                "staff_renewal", "media_fine_response"):
             self._show_interactive_action(message)
         else:
             self._hide_interactive_action()
@@ -875,6 +875,8 @@ class InboxView(ctk.CTkFrame):
             self._render_buyout_window(message)
         elif message.action_type == "staff_renewal":
             self._render_staff_renewal(message)
+        elif message.action_type == "media_fine_response":
+            self._render_media_fine_response(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -1431,6 +1433,64 @@ class InboxView(ctk.CTkFrame):
             self.app.apply_staff_renewal_decision(message, staff_id, years)
         except Exception as e:
             print(f"staff renewal decide failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- League fine response (Wave C D36) ----------
+    def _render_media_fine_response(self, message):
+        """A league fine landed on a human-managed club: the GM answers
+        for it -- Appeal (25% the league halves it) or Accept and move on.
+        Performative only: no cap teeth, per Muck's call."""
+        data = message.action_data or {}
+        self._iwrap("LEAGUE FINE", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        try:
+            my_team = getattr(getattr(self.app, "user_team", None),
+                              "team_name", "")
+        except Exception:
+            my_team = ""
+        name = data.get("fine_name", "")
+        team = data.get("fine_team", "")
+        amount = data.get("fine_amount", 0) or 0
+        reason = data.get("fine_reason", "")
+        self._iwrap(f"{name} ({team})", size=12, bold=True, padx=10)
+        self._iwrap(f"${int(amount):,} -- {reason}", size=11, padx=10,
+                    pady=(0, 4))
+        if message.action_done or data.get("responded"):
+            self._iwrap(data.get("outcome", "This fine has been answered."),
+                        size=11, padx=10, pady=(4, 0))
+            return
+        if team != my_team:
+            self._iwrap("Not your club's fine -- nothing for you to answer "
+                        "for.", size=11, dim=True, padx=10)
+            return
+        self._action_section("YOUR RESPONSE")
+        self._iwrap("The league office awaits your answer. An appeal works "
+                    "about one time in four -- and the head office remembers "
+                    "who complains.", size=10, dim=True, padx=10, pady=(0, 4))
+        btn_row = ctk.CTkFrame(self.interactive_frame,
+                               fg_color="transparent")
+        btn_row.pack(anchor='w', padx=10, pady=6)
+        self._secondary_button(
+            btn_row, text="Appeal the fine",
+            command=lambda m=message:
+                self._on_fine_response(m, "appeal"),
+        ).pack(side='left', padx=(0, 8))
+        self._primary_button(
+            btn_row, text="Accept and move on",
+            command=lambda m=message:
+                self._on_fine_response(m, "accept"),
+        ).pack(side='left')
+
+    def _on_fine_response(self, message, choice):
+        import media_engine
+        try:
+            outcome = media_engine.resolve_fine_appeal(
+                self.app, message.action_data or {}, choice)
+            message.action_data["outcome"] = outcome
+            message.action_done = True
+        except Exception as e:
+            print(f"fine response failed: {e}")
         self._refresh_inbox()
         self._display_message_preview(message)
 

@@ -2111,12 +2111,45 @@ def _pregame_atmosphere(home_team, away_team, is_playoff=False, series_game=1,
                           .get("heat", 0.0) or 0.0)
         except Exception:
             _heat = 0.0
+        # Wave C (D34/D39): persistent fan sentiment, tonight's fan
+        # favourites, and simmering (faced, still-alive) fan hate for the
+        # returnees dressing on the visiting side.
+        _fs = None
+        _favs: list = []
+        _hated: list = []
+        try:
+            from fan_sentiment import get_fan_sentiment
+            _fs = get_fan_sentiment(home_team,
+                                    getattr(league, "current_date", None))
+        except Exception:
+            _fs = None
+        try:
+            from reputation_system import is_fan_favourite, simmering_hate
+            for _p in (getattr(home_team, "roster", None) or []):
+                try:
+                    if is_fan_favourite(home_team, _p):
+                        _favs.append(
+                            f"{getattr(_p, 'first_name', '')} "
+                            f"{getattr(_p, 'last_name', '')}".strip())
+                except Exception:
+                    continue
+            for _h in simmering_hate(
+                    getattr(league, "rivalries", None) or [],
+                    home_team, away_team):
+                try:
+                    _hated.append(_h.get("player_name", ""))
+                except Exception:
+                    continue
+        except Exception:
+            pass
         return pregame_crowd(
             home_team, away_team, ledger=active_ledger(),
             is_playoff=is_playoff, series_game=series_game,
             elimination_game=elimination_game,
             milestone_home=milestone_home, ceremony=ceremony,
-            outdoor=outdoor, rivalry_heat=_heat)
+            outdoor=outdoor, rivalry_heat=_heat,
+            fan_sentiment=_fs, fan_fav_names=_favs,
+            hated_returnee_names=_hated)
     except Exception:
         return {"energy": 50.0, "mood": 30.0, "drivers": [],
                 "big_game": False}
@@ -17248,7 +17281,7 @@ class HockeyManagerGUI(tk.Tk):
         noteworthy = []
         for p in (getattr(team, "roster", []) or []):
             try:
-                noteworthy.extend(manager_career.update_player_happiness(p, team_games))
+                noteworthy.extend(manager_career.update_player_happiness(p, team_games, team=team))
             except Exception:
                 continue
         # Farm confidence: AHL production -> morale / attitude / call-up
@@ -17265,6 +17298,14 @@ class HockeyManagerGUI(tk.Tk):
                         self.send_email_to_user(_note)
                     except Exception:
                         continue
+        except Exception:
+            pass
+        # Fan sentiment (Wave C D34): slow weekly drift toward the
+        # results baseline keeps the persistent fanbase mood honest
+        # between the discrete presser/win nudges.
+        try:
+            from fan_sentiment import tick_fan_sentiment
+            tick_fan_sentiment(team, current_date=self.current_date)
         except Exception:
             pass
         # Training effects: morale + injury risk
@@ -17743,6 +17784,10 @@ class HockeyManagerGUI(tk.Tk):
         team = self.user_team
         total_morale = sum(a.get("morale_effect", 0) for a in answers)
         total_board = sum(a.get("board_effect", 0) for a in answers)
+        # D22 (Wave C): press answers already carried fan_effect in the
+        # question banks -- now they actually move the needle. Defending
+        # your players endears you; throwing them under the bus doesn't.
+        total_fan = sum(a.get("fan_effect", 0) for a in answers)
         if total_morale:
             for p in (getattr(team, "roster", []) or []):
                 m = getattr(p, "morale", 70) or 70
@@ -17750,7 +17795,19 @@ class HockeyManagerGUI(tk.Tk):
         if total_board:
             self.career.board.apply_press_board_effect(
                 total_board, self.current_date.isoformat())
+        if total_fan:
+            try:
+                from fan_sentiment import nudge_fan_sentiment
+                nudge_fan_sentiment(
+                    team, total_fan * 2.5,
+                    reason=f"presser ({kind}): {total_fan:+d}",
+                    current_date=self.current_date)
+            except Exception:
+                pass
         summary = f"{kind}: " + "; ".join(a.get("label", "") for a in answers)
+        if total_fan:
+            summary += (f" [fans {'loved' if total_fan > 0 else 'hated'} "
+                        f"it: {total_fan:+d}]")
         self.career.press_history.append(
             {"date": self.current_date.isoformat(), "type": kind, "summary": summary})
 

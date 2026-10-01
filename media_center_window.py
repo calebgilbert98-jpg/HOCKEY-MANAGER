@@ -145,9 +145,10 @@ class MediaCenterView(ctk.CTkFrame):
         self._create_status_panel(left_panel)
         self._create_journalist_panel(left_panel)
 
-        # Right: events, storylines
+        # Right: events, storylines, fines ledger
         self._create_events_panel(right_panel)
         self._create_storylines_panel(right_panel)
+        self._create_fines_panel(right_panel)
 
     def _create_header(self, parent):
         """Header card with title and quick status."""
@@ -308,6 +309,63 @@ class MediaCenterView(ctk.CTkFrame):
 
         self.storylines_empty = self._body(card, "", size=11, dim=True)
         self.storylines_empty.pack(anchor='w', padx=14, pady=(0, 10))
+
+    # ------------------------------------------------------------------
+    # Fines ledger (Wave C D36): the screen the media_fines ledger
+    # always deserved. Read-only league-wide record, newest first, with
+    # a season total. Your own fines can be appealed/accepted from the
+    # inbox headline -- performative, no cap teeth, per Muck's call.
+    # ------------------------------------------------------------------
+    def _create_fines_panel(self, parent):
+        """Fines ledger card with a dark styled treeview + total."""
+        card = self._card(parent)
+        card.pack(fill='x', pady=(0, 10))
+        self._heading(card, "Fines Ledger", size=14).pack(
+            anchor='w', padx=14, pady=(12, 4))
+
+        columns = {'date': ('Date', 90), 'name': ('Fined', 170),
+                   'team': ('Team', 150), 'amount': ('Amount', 80),
+                   'reason': ('Reason', 220)}
+        self.fines_tree = self._make_tree(card, columns, height_rows=5)
+
+        self.fines_empty = self._body(card, "", size=11, dim=True)
+        self.fines_empty.pack(anchor='w', padx=14, pady=(0, 4))
+        self.fines_total = self._body(card, "", size=11, bold=True)
+        self.fines_total.pack(anchor='w', padx=14, pady=(0, 10))
+
+    def _populate_fines(self):
+        """Populate the fines ledger tree, newest first."""
+        for item in self.fines_tree.get_children():
+            self.fines_tree.delete(item)
+        try:
+            league = getattr(self.app.game_manager, "league", None)
+            fines = list(getattr(league, "media_fines", None) or [])
+        except Exception:
+            fines = []
+        fines.sort(key=lambda f: str(f.get("date", "")), reverse=True)
+        total = 0
+        for f in fines[:60]:
+            try:
+                amount = int(f.get("amount", 0) or 0)
+            except Exception:
+                amount = 0
+            total += amount
+            self.fines_tree.insert('', tk.END, values=[
+                str(f.get("date", ""))[:10],
+                str(f.get("name", "")),
+                str(f.get("team", "")),
+                f"${amount:,}",
+                str(f.get("reason", ""))[:48],
+            ])
+        if not fines:
+            self.fines_empty.configure(
+                text="No fines handed down this season. The league office "
+                     "is watching, though.")
+            self.fines_total.configure(text="")
+        else:
+            self.fines_empty.configure(text="")
+            self.fines_total.configure(
+                text=f"Season total: ${total:,} across {len(fines)} fine(s)")
 
     # ------------------------------------------------------------------
     # Backend event-shape adapter
@@ -536,6 +594,7 @@ TIP: {"Higher engagement = more storylines but more interactions" if status['eng
         # Update all panels
         self._populate_events()
         self._populate_storylines()
+        self._populate_fines()
         self._update_status_text()
 
     # ------------------------------------------------------------------

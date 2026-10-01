@@ -655,7 +655,179 @@ def happiness_label(happiness: int) -> str:
     return "Very unhappy"
 
 
-def update_player_happiness(player, team_games_played: int) -> List[str]:
+# ---------------------------------------------------------------------------
+# Wave C (D37): the market matters. A star is not equally happy in a
+# hockey-mad fishbowl and a desert -- and a homesick kid far from home
+# isn't equally happy anywhere. Market fit feeds happiness weekly, on top
+# of ice time / personality / promises (which were the whole story before).
+# ---------------------------------------------------------------------------
+
+_TEAM_CITIES = {
+    "Boston Bruins": "Boston", "Buffalo Sabres": "Buffalo",
+    "Detroit Red Wings": "Detroit", "Florida Panthers": "Sunrise",
+    "Montréal Canadiens": "Montréal", "Ottawa Senators": "Ottawa",
+    "Tampa Bay Lightning": "Tampa", "Toronto Maple Leafs": "Toronto",
+    "Carolina Hurricanes": "Raleigh", "Columbus Blue Jackets": "Columbus",
+    "New Jersey Devils": "Newark", "New York Islanders": "New York",
+    "New York Rangers": "New York", "Philadelphia Flyers": "Philadelphia",
+    "Pittsburgh Penguins": "Pittsburgh", "Washington Capitals": "Washington",
+    "Chicago Blackhawks": "Chicago", "Colorado Avalanche": "Denver",
+    "Dallas Stars": "Dallas", "Minnesota Wild": "Saint Paul",
+    "Nashville Predators": "Nashville", "St. Louis Blues": "St. Louis",
+    "Utah Hockey Club": "Salt Lake City", "Winnipeg Jets": "Winnipeg",
+    "Anaheim Ducks": "Anaheim", "Calgary Flames": "Calgary",
+    "Edmonton Oilers": "Edmonton", "Los Angeles Kings": "Los Angeles",
+    "San Jose Sharks": "San Jose", "Seattle Kraken": "Seattle",
+    "Vancouver Canucks": "Vancouver", "Vegas Golden Knights": "Las Vegas",
+}
+
+_NA_COUNTRIES = {"canada", "united states", "usa", "u.s.a.", "mexico"}
+_EUROPE_COUNTRIES = {
+    "russia", "sweden", "finland", "czech republic", "czechia", "slovakia",
+    "germany", "switzerland", "latvia", "denmark", "norway", "belarus",
+    "ukraine", "kazakhstan", "austria", "slovenia", "france", "italy",
+    "united kingdom", "england", "netherlands", "poland", "hungary",
+}
+
+
+def _market_city(team_name: str) -> str:
+    try:
+        name = str(team_name or "")
+        if name in _TEAM_CITIES:
+            return _TEAM_CITIES[name]
+        parts = name.rsplit(" ", 1)
+        return parts[0] if len(parts) == 2 else name
+    except Exception:
+        return ""
+
+
+def _birth_city(birthplace: str) -> str:
+    try:
+        return str(birthplace or "").split(",")[0].strip()
+    except Exception:
+        return ""
+
+
+def _continent(country: str) -> str:
+    try:
+        c = str(country or "").strip().lower()
+        if c in _NA_COUNTRIES:
+            return "NA"
+        if c in _EUROPE_COUNTRIES:
+            return "EU"
+        return "other" if c else "NA"
+    except Exception:
+        return "NA"
+
+
+def market_happiness_delta(player, team) -> Tuple[int, str]:
+    """Weekly happiness delta from market fit (D37). Returns (delta, reason).
+
+    Homesickness (birthplace vs team city/country/continent), cushioned by
+    clique membership, tenure, winning, and loyal/patient markets; fishbowl
+    pressure (high intensity + adversarial) on struggling players; a stage
+    boost for thriving stars. Bounded [-6, +5]. Never raises.
+    """
+    try:
+        if team is None or player is None:
+            return (0, "")
+        team_name = getattr(team, "team_name", "") or ""
+        city = _market_city(team_name)
+        home_city = _birth_city(getattr(player, "birthplace", "") or "")
+        nationality = getattr(player, "nationality", "") or ""
+        morale = getattr(player, "morale", 70) or 70
+        gp = getattr(player, "games_played", 0) or 0
+
+        delta = 0
+        reasons = []
+
+        # --- homesickness: distance from home ------------------------------
+        if home_city and home_city.lower() == city.lower():
+            delta += 2
+            reasons.append("playing at home")
+        else:
+            home_cont = _continent(nationality)
+            team_cont = "NA"  # all 32 clubs are North American
+            if home_cont == "NA":
+                home_base = 0
+            elif home_cont == "EU":
+                home_base = -3
+            else:
+                home_base = -2
+            if home_base < 0:
+                delta += home_base
+                reasons.append("far from home")
+
+        # --- cushions -------------------------------------------------------
+        homesick = delta < 0
+        if homesick:
+            try:
+                from dressing_room import clique_of
+                if clique_of(team, player) is not None:
+                    delta += 2
+                    reasons.append("his clique looks after him")
+            except Exception:
+                pass
+        if gp >= 150:
+            delta += 2
+            if homesick:
+                reasons.append("settled in now")
+        elif gp >= 60:
+            delta += 1
+        try:
+            wins = float(getattr(team, "wins", 0) or 0)
+            losses = float(getattr(team, "losses", 0) or 0)
+            otl = float(getattr(team, "ot_losses", 0) or 0)
+            games = wins + losses + otl
+            if games > 5:
+                wpct = (wins + 0.5 * otl) / games
+                if wpct > 0.550:
+                    delta += 1
+                elif wpct < 0.450:
+                    delta -= 1
+                    if homesick:
+                        reasons.append("losing far from home stings")
+        except Exception:
+            pass
+
+        # --- the market's character -----------------------------------------
+        intensity = adversarial = loyalty = patience = None
+        try:
+            from media_engine import MARKET_PROFILES
+            prof = MARKET_PROFILES.get(team_name)
+            if prof:
+                intensity, adversarial, loyalty, patience = prof
+        except Exception:
+            pass
+        personality = get_player_personality(player)
+        if intensity is not None and intensity >= 80 \
+                and (adversarial or 0) >= 60:
+            # fishbowl: Toronto, Montréal, Philly, New York...
+            if morale < 45:
+                delta -= 2
+                reasons.append("the fishbowl is eating him alive")
+                if personality == "Volatile":
+                    delta -= 1
+                    reasons.append("clashing with the media")
+            elif morale >= 75:
+                delta += 1
+                reasons.append("loves the big stage")
+            elif personality == "Laid-back":
+                delta += 1  # shrugs the papers off
+        if homesick and loyalty is not None and loyalty >= 68 \
+                and (patience or 0) >= 68:
+            delta += 1
+            reasons.append("the fans embraced him")
+
+        delta = max(-6, min(5, int(round(delta))))
+        reason = "; ".join(reasons[:2])
+        return (delta, reason)
+    except Exception:
+        return (0, "")
+
+
+def update_player_happiness(player, team_games_played: int,
+                            team=None) -> List[str]:
     """Weekly happiness update. Returns noteworthy event strings."""
     events = []
     gp = getattr(player, "games_played", 0) or 0
@@ -695,6 +867,17 @@ def update_player_happiness(player, team_games_played: int) -> List[str]:
             promise = ""
             happiness = min(100, happiness + 10)
             events.append(f"{player.first_name} {player.last_name} is pleased you kept your playing-time promise.")
+
+    # Market fit (Wave C D37): the market a player lives in moves
+    # happiness -- homesickness, fishbowl pressure, the big stage.
+    if team is not None:
+        _mdelta, _mreason = market_happiness_delta(player, team)
+        if _mdelta:
+            happiness = max(0, min(100, happiness + _mdelta))
+            if abs(_mdelta) >= 3 and _mreason:
+                events.append(
+                    f"{player.first_name} {player.last_name}: market fit "
+                    f"({'+' if _mdelta > 0 else ''}{_mdelta}) -- {_mreason}.")
 
     # Transfer request trigger
     if happiness < 25 and concern > 70 and not getattr(player, "transfer_requested", False):
