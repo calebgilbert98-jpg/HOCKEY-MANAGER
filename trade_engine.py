@@ -2143,12 +2143,16 @@ def _stinginess_delta(partner_team, partner_assets, ident, tiers,
     return max(-0.15, min(0.25, delta))
 
 
-# D46b (exploit mitigation): demand added per $1M of payroll a sub-floor
-# club absorbs BEYOND its floor shortfall. The floor need justifies
-# taking salary up to the shortfall for free; beyond that the club is
-# providing a cap service and charges for it -- otherwise the floor is
-# a free, unlimited salary-dump ground. Tuning knob (flagged for Chris).
-_DUMP_FEE_PER_M46B = 0.02
+# D46b (exploit mitigation, retuned 2026-10-01 per Chris: realistic like
+# real life): cap-service TOLL per $1M of payroll a sub-floor club absorbs
+# BEYOND its floor shortfall, priced in draft-pick value. Real NHL
+# behavior: clubs weaponize cap space -- they eat another team's dead
+# money only for futures, never for free. Calibration: ~$1M of dead money
+# costs roughly a mid-round pick (3rd ~= 250 pts, 4th ~= 125); ~$5M costs
+# a 1st-rounder (1000 pts) -- the going rate for real cap dumps (e.g. a
+# $6.25M x 1yr dump cost a 1st). The toll is demanded in picks via the
+# counter builder below, not as flat greed. Tuning knob (flagged for Chris).
+_DUMP_TOLL_PER_M46B = 200
 
 
 def ai_consider_trade(partner_team, user_assets, partner_assets,
@@ -2233,12 +2237,15 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # D46b (exploit mitigation): a club already UNDER the floor is a
     # forced buyer of salary -- but its need is bounded by the
     # shortfall. Net payroll absorbed BEYOND the shortfall is a cap
-    # service the user pays for via a higher demand threshold;
-    # salary that merely fills the shortfall stays free (genuine
+    # service: in real life the taking club charges futures for it.
+    # Salary that merely fills the shortfall stays free (genuine
     # mutual benefit -- it saves the club from the enforcer).
-    # Computed up front so it stacks into greed alongside the other
-    # demand adjustments below. Never raises.
-    _dump_fee46b = 0.0
+    # Computed up front: the toll stacks into greed (ratio units) so a
+    # free dump can't auto-accept, and the counter builder below prices
+    # it in draft picks. Never raises.
+    _excess46b = 0
+    _dump_toll46b = 0.0      # ratio units, stacks into greed
+    _dump_toll_pts46b = 0    # value points, priced in picks by the counter
     try:
         from salary_cap_system import SALARY_CAP_FLOOR as _FLOOR46b
         from salary_cap_system import total_cap_charge as _tcc46b
@@ -2251,10 +2258,15 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                           if not _is_pick(a))
             _excess46b = max(0, (_in46b - _out46b) - _short46b)
             if _excess46b > 0:
-                _dump_fee46b = (_DUMP_FEE_PER_M46B
-                                * (_excess46b / 1_000_000))
+                _dump_toll_pts46b = int(_DUMP_TOLL_PER_M46B
+                                       * (_excess46b / 1_000_000))
+                _pv46b = int(getattr(ev, "partner_value", 0) or 0)
+                if _pv46b > 0:
+                    _dump_toll46b = _dump_toll_pts46b / _pv46b
     except Exception:
-        _dump_fee46b = 0.0
+        _excess46b = 0
+        _dump_toll46b = 0.0
+        _dump_toll_pts46b = 0
 
     # R3(c): system-grounded rationale for every AI answer below. The
     # decisions are untouched -- only the message text gains specific,
@@ -2355,10 +2367,11 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         except Exception:
             sit_mult = 1.0
     greed *= sit_mult
-    # D46b: the sub-floor dump fee stacks flat onto the demand
-    # threshold (after the multiplicative taxes) -- absorbing salary
-    # beyond the floor shortfall costs the user extra value.
-    greed += _dump_fee46b
+    # D46b: the dump toll stacks onto the demand threshold (after the
+    # multiplicative taxes) -- absorbing salary beyond the floor
+    # shortfall costs the user real value, priced like the futures a
+    # real club would charge for the cap service.
+    greed += _dump_toll46b
 
     if effective >= greed:
         return AIResponse('accept', "You've got a deal." + _why_tail())
@@ -2391,6 +2404,67 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     # D42: counters demand the FULL shortfall. The old 0.7 factor let a
     # 74-cents-on-the-dollar offer through whenever the user owned one
     # mid-sized asset -- the AI negotiated against itself.
+    # D46b (retune): the cap-service toll is priced in FUTURES. When the
+    # demand includes a dump toll and the user holds tradable picks, the
+    # counter asks for picks first -- the real-life price of eating dead
+    # money -- smallest picks covering the toll, then the smallest asset
+    # for any remaining hockey-value shortfall. With no picks to offer,
+    # the standard single-asset counter below still applies (the toll
+    # stays in the demand threshold, so the dump never clears for free).
+    if _dump_toll_pts46b > 0 and user_picks:
+        _toll_picks46b = []
+        _toll_got46b = 0
+        try:
+            _by_val46b = sorted(user_picks, key=asset_value)
+            # Prefer the single smallest pick that covers the toll (a
+            # real GM pays one good pick, not a fistful of late-rounders);
+            # combine top-down only when no single pick covers it.
+            _single46b = next(
+                (_p for _p in _by_val46b
+                 if int(asset_value(_p) or 0) >= _dump_toll_pts46b),
+                None)
+            if _single46b is not None:
+                _toll_picks46b = [_single46b]
+                _toll_got46b = int(asset_value(_single46b) or 0)
+            else:
+                for _pk in sorted(user_picks, key=asset_value,
+                                  reverse=True):
+                    if _toll_got46b >= _dump_toll_pts46b:
+                        break
+                    _toll_picks46b.append(_pk)
+                    _toll_got46b += int(asset_value(_pk) or 0)
+        except Exception:
+            _toll_picks46b, _toll_got46b = [], 0
+        if _toll_picks46b and _toll_got46b >= _dump_toll_pts46b:
+            _want46b = list(_toll_picks46b)
+            _rest46b = shortfall - _toll_got46b
+            _topup_ok46b = True
+            if _rest46b > 0:
+                _topup_ok46b = False
+                for c in candidates:
+                    if c in _toll_picks46b:
+                        continue
+                    try:
+                        if asset_value(c) >= _rest46b:
+                            _want46b.append(c)
+                            _topup_ok46b = True
+                            break
+                    except Exception:
+                        continue
+            if _topup_ok46b:
+                _plabels46b = ", ".join(asset_label(_p)
+                                       for _p in _toll_picks46b)
+                _exm46b = _excess46b / 1_000_000
+                return AIResponse(
+                    'counter',
+                    f"We're doing you a favor eating ${_exm46b:.1f}M past "
+                    f"what we need for the floor -- that kind of cap space "
+                    f"costs futures. Add {_plabels46b} and we have a deal."
+                    + _why_tail(),
+                    want_added=_want46b)
+        # else: the user's picks can't cover the toll -- fall through to
+        # the standard counter; the demand threshold still blocks a free
+        # dump.
     for c in candidates:
         if asset_value(c) >= shortfall * 1.0:
             return AIResponse(
