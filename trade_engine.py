@@ -2143,6 +2143,14 @@ def _stinginess_delta(partner_team, partner_assets, ident, tiers,
     return max(-0.15, min(0.25, delta))
 
 
+# D46b (exploit mitigation): demand added per $1M of payroll a sub-floor
+# club absorbs BEYOND its floor shortfall. The floor need justifies
+# taking salary up to the shortfall for free; beyond that the club is
+# providing a cap service and charges for it -- otherwise the floor is
+# a free, unlimited salary-dump ground. Tuning knob (flagged for Chris).
+_DUMP_FEE_PER_M46B = 0.02
+
+
 def ai_consider_trade(partner_team, user_assets, partner_assets,
                       user_team=None, patience=1.0, situational=None,
                       retention=None) -> AIResponse:
@@ -2221,6 +2229,32 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                 f"office won't allow it.")
     except Exception:
         pass
+
+    # D46b (exploit mitigation): a club already UNDER the floor is a
+    # forced buyer of salary -- but its need is bounded by the
+    # shortfall. Net payroll absorbed BEYOND the shortfall is a cap
+    # service the user pays for via a higher demand threshold;
+    # salary that merely fills the shortfall stays free (genuine
+    # mutual benefit -- it saves the club from the enforcer).
+    # Computed up front so it stacks into greed alongside the other
+    # demand adjustments below. Never raises.
+    _dump_fee46b = 0.0
+    try:
+        from salary_cap_system import SALARY_CAP_FLOOR as _FLOOR46b
+        from salary_cap_system import total_cap_charge as _tcc46b
+        _pre46b = int(_tcc46b(partner_team) or 0)
+        if _pre46b < int(_FLOOR46b):
+            _short46b = int(_FLOOR46b) - _pre46b
+            _in46b = sum(_player_cap_hit(a) for a in user_assets
+                         if not _is_pick(a))
+            _out46b = sum(_effective_outgoing_hit(a) for a in partner_assets
+                          if not _is_pick(a))
+            _excess46b = max(0, (_in46b - _out46b) - _short46b)
+            if _excess46b > 0:
+                _dump_fee46b = (_DUMP_FEE_PER_M46B
+                                * (_excess46b / 1_000_000))
+    except Exception:
+        _dump_fee46b = 0.0
 
     # R3(c): system-grounded rationale for every AI answer below. The
     # decisions are untouched -- only the message text gains specific,
@@ -2313,6 +2347,10 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         except Exception:
             sit_mult = 1.0
     greed *= sit_mult
+    # D46b: the sub-floor dump fee stacks flat onto the demand
+    # threshold (after the multiplicative taxes) -- absorbing salary
+    # beyond the floor shortfall costs the user extra value.
+    greed += _dump_fee46b
 
     if effective >= greed:
         return AIResponse('accept', "You've got a deal." + _why_tail())

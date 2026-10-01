@@ -1567,15 +1567,40 @@ class AITeamManager:
             except Exception:
                 pass
             cands.append(p)
-        # Fewest signings that cover the shortfall: biggest asks first,
-        # needs-matching positions preferred over warm bodies.
-        def _sort_key(p):
+        # Best-fit cover (anti-overshoot): the old biggest-ask-first order
+        # systematically overshot the floor -- e.g. $77.49M -> $82.42M on
+        # ONE signing to close a $0.51M gap -- because the largest ask
+        # always won. Prefer the smallest ask that covers the shortfall
+        # in a single signing (needs-matching positions first). Only
+        # when no affordable candidate covers it alone does the loop
+        # fall back to fewest-signings (biggest asks first).
+        def _need_hit(p):
             try:
-                _need_hit = (getattr(p, "primary_position", None) in needs)
+                return getattr(p, "primary_position", None) in needs
             except Exception:
-                _need_hit = False
-            return (0 if _need_hit else 1, -_ask(p))
-        cands.sort(key=_sort_key)
+                return False
+        try:
+            _single_ids = set()
+            _singles = []
+            for _p in cands:
+                try:
+                    if _ask(_p) >= shortfall:
+                        _singles.append(_p)
+                        _single_ids.add(id(_p))
+                except Exception:
+                    continue
+            if _singles:
+                _singles.sort(key=lambda p: (0 if _need_hit(p) else 1,
+                                             _ask(p)))
+                _rest = [p for p in cands if id(p) not in _single_ids]
+                _rest.sort(key=lambda p: (0 if _need_hit(p) else 1,
+                                          -_ask(p)))
+                cands = _singles + _rest
+            else:
+                cands.sort(key=lambda p: (0 if _need_hit(p) else 1,
+                                          -_ask(p)))
+        except Exception:
+            pass
 
         made = 0
         for p in cands:
