@@ -1019,8 +1019,14 @@ def build_cup_recap(champ: Any, bracket: Any, league: Any) -> str:
         g, a, gp = _playoff_pts(smythe)
         _sep = _cep_cr(smythe)
         _sep_bit = f", the man they call \"{_sep}\"," if _sep else ""
-        smythe_bit = (f" Conn Smythe winner {smythe_name}{_sep_bit} ({g}G-{a}A in "
-                      f"{gp} playoff games) was voted playoff MVP.")
+        # Playthrough 2026-10-01 (Sim A S5): the stashed winner once rendered
+        # "0G-0A in 0 playoff games" -- a winner with no playoff ledger at
+        # recap time (stale/duplicate object or wipe ordering; root cause
+        # still open). The playoff MVP must never print an impossible stat
+        # line, so fall back to the name-only form the elif below uses.
+        _stat_bit = (f" ({g}G-{a}A in {gp} playoff games)" if gp > 0 else "")
+        smythe_bit = (f" Conn Smythe winner {smythe_name}{_sep_bit}{_stat_bit}"
+                      f" was voted playoff MVP.")
     elif smythe_name:
         smythe_bit = f" Conn Smythe winner {smythe_name} was voted playoff MVP."
 
