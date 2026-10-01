@@ -741,6 +741,15 @@ class GameSim:
         # Empty-net state: team NAMES currently skating 6 with the goalie
         # pulled (Team objects are unhashable). Reset every game in run().
         self.goalie_pulled = set()
+        # Structured drama (workstream B, 2026-09-30, additive): measurement
+        # reads sim.drama_events -- broadcast keeps its text log unchanged.
+        self._strategic_pulled = set()  # strategic (non-delayed) pulls live
+        self._pull_clock = {}           # team name -> clock remaining at pull
+        try:
+            from drama_events import init_drama_events as _ide
+            _ide(self)
+        except Exception:
+            self.drama_events = []
         # Rule 84.2: an OT penalty expiry leaves 4v4 until the next whistle.
         self._ot_4v4_until_whistle = False
         # Rule 26: a signaled-but-unwhistled penalty (delayed call).
@@ -2233,6 +2242,14 @@ class GameSim:
         """Runs the entire game simulation from period 1 through OT/shootout if necessary."""
         self._ppos_ensure()
         self.goalie_pulled = set()  # no carryover between games
+        # Structured drama (workstream B): fresh live-pull tracking per game.
+        try:
+            self._strategic_pulled = set()
+            self._pull_clock = {}
+            from drama_events import init_drama_events as _ide2
+            _ide2(self)
+        except Exception:
+            pass
         self._game_elapsed = 0.0  # shift clocks run on cumulative game time
         self._team_poss_time = {}  # team_name -> seconds of possession
         self._shift = {}
@@ -2301,12 +2318,36 @@ class GameSim:
                 except Exception:
                     pass
 
+        _ot_pre_score = (self.home_score, self.away_score)
         if self.home_score == self.away_score:
             self._handle_overtime()
+        # Structured drama (workstream B, 2026-09-30, additive): how OT
+        # ended -- 3v3 in the regular season, sudden-death in the playoffs.
+        try:
+            if (self.home_score, self.away_score) != _ot_pre_score:
+                from drama_events import record_ot_result as _rot
+                _ot_decided = ("ot_sudden_death" if self.is_playoff else "3v3")
+                if self.home_score > self.away_score:
+                    _ot_w, _ot_l = self.home_team.team_name, self.away_team.team_name
+                else:
+                    _ot_w, _ot_l = self.away_team.team_name, self.home_team.team_name
+                _rot(self, _ot_decided, winner_name=_ot_w, loser_name=_ot_l)
+        except Exception:
+            pass
 
         # Shootout only in regular season; playoffs use continuous sudden-death OT
         if self.home_score == self.away_score and not self.is_playoff:
             self._handle_shootout()
+            # Structured drama (workstream B, 2026-09-30, additive).
+            try:
+                from drama_events import record_ot_result as _rot2
+                if self.home_score > self.away_score:
+                    _so_w, _so_l = self.home_team.team_name, self.away_team.team_name
+                else:
+                    _so_w, _so_l = self.away_team.team_name, self.home_team.team_name
+                _rot2(self, "shootout", winner_name=_so_w, loser_name=_so_l)
+            except Exception:
+                pass
         
         self._check_for_notable_performances()
 
@@ -7764,6 +7805,28 @@ class GameSim:
         goalie's GAA per NHL rule (but no shot recorded against him), and
         both goalies return (the trailing coach may re-pull after).
         """
+        # Structured drama (workstream B, 2026-09-30, additive): late-equalizer
+        # detect. Runs BEFORE _return_all_goalies below and BEFORE the score
+        # increment at the bottom -- the pulled state and pre-goal scores are
+        # the honest inputs. Excludes empty-netters (opposite outcome) and
+        # delayed-penalty extra attackers (routine, not the gamble).
+        try:
+            if (self.period == 3 and not empty_net
+                    and scoring_team.team_name in getattr(self, "goalie_pulled", set())
+                    and scoring_team.team_name in getattr(self, "_strategic_pulled", set())
+                    and getattr(self, "_delayed_penalty", None) is None):
+                _hs, _as = self.home_score, self.away_score
+                if scoring_team is self.home_team:
+                    _hs += 1
+                else:
+                    _as += 1
+                if _hs == _as:
+                    from drama_events import record_late_equalizer as _rle
+                    _rle(self, scoring_team.team_name, scorer,
+                         pull_clock_remaining=getattr(self, "_pull_clock", {}).get(
+                             scoring_team.team_name))
+        except Exception:
+            pass
         # Rule 26: a goal during a delayed call washes out a minor. A double
         # minor is reduced to a single minor; majors are still fully assessed
         # (booked after the goal faceoff -- the goal is the whistle).
@@ -9258,6 +9321,28 @@ class GameSim:
             return
         self.goalie_pulled.add(team.team_name)
         self._select_starting_lines()
+        # Structured drama (workstream B, 2026-09-30, additive): record the
+        # pull for measurement. Delayed-penalty extra attackers are recorded
+        # distinctly -- they are routine, not the coach's late-game gamble.
+        try:
+            from drama_events import record_goalie_pull as _rgp
+            _style = "balanced"
+            try:
+                from goalie_pull import pull_windows as _gpw
+                _, _, _style = _gpw(self, team)
+                if isinstance(_style, dict):
+                    _style = _style.get("style", "balanced")
+            except Exception:
+                pass
+            _tn = team.team_name
+            _diff = ((self.away_score - self.home_score) if team is self.home_team
+                     else (self.home_score - self.away_score))
+            _rgp(self, _tn, coach_style=_style, deficit=_diff, delayed=delayed)
+            if not delayed:
+                self._strategic_pulled.add(_tn)
+                self._pull_clock[_tn] = round(float(self.clock), 1)
+        except Exception:
+            pass
         try:
             self._emit_skate(force=True)
         except Exception:
@@ -9282,6 +9367,12 @@ class GameSim:
         if team.team_name not in self.goalie_pulled:
             return
         self.goalie_pulled.discard(team.team_name)
+        # Structured drama (workstream B): clear the live-pull tracking.
+        try:
+            self._strategic_pulled.discard(team.team_name)
+            self._pull_clock.pop(team.team_name, None)
+        except Exception:
+            pass
         self._select_starting_lines()
         self._emit_pbp("goalie_back", team=team.team_name,
                        home_score=self.home_score, away_score=self.away_score)
@@ -9424,6 +9515,13 @@ class GameSim:
         self._handle_goal(team_with_puck, scorer, [],
                           shot_type=ShotType.WRIST_SHOT,
                           location=ShotLocation.CREASE, empty_net=True)
+        # Structured drama (workstream B, 2026-09-30, additive): the leading
+        # team's honest empty-net conversion -- the price of the gamble.
+        try:
+            from drama_events import record_empty_net_goal as _reng
+            _reng(self, team_with_puck.team_name, scorer)
+        except Exception:
+            pass
         _en_elapsed = max(0.0, self._period_length - self.clock)
         self.event_log.append({
             'timestamp': _en_elapsed,

@@ -619,6 +619,15 @@ class AdvancedGameSim:
         # net empty. Checked once per shift in period 3; goalies return on
         # any goal and at period ends.
         self.goalie_pulled = set()
+        # Structured drama (workstream B, 2026-09-30, additive): measurement
+        # reads sim.drama_events -- broadcast keeps its text log unchanged.
+        # QS has no delayed-penalty pulls (all pulls are strategic).
+        self._pull_clock = {}  # team name -> time remaining at the pull
+        try:
+            from drama_events import init_drama_events as _ide
+            _ide(self)
+        except Exception:
+            self.drama_events = []
         # EHM shift-fatigue: continuous seconds the current on-ice unit has
         # been out. Most shifts rotate; stuck units accumulate and degrade.
         self._shift_age = {home_team.team_name: 0.0, away_team.team_name: 0.0}
@@ -1002,7 +1011,28 @@ class AdvancedGameSim:
         """Once per shift: trailing teams pull for the extra attacker."""
         for team in (self.home_team, self.away_team):
             if self._pull_eligible(team, team.team_name):
-                self._pull_goalie(team.team_name)
+                _tn = team.team_name
+                self._pull_goalie(_tn)
+                # Structured drama (workstream B, 2026-09-30, additive):
+                # record the strategic pull for measurement.
+                try:
+                    from drama_events import record_goalie_pull as _rgp
+                    _style = "balanced"
+                    try:
+                        from goalie_pull import pull_windows as _gpw2
+                        _, _, _style = _gpw2(self, team)
+                        if isinstance(_style, dict):
+                            _style = _style.get("style", "balanced")
+                    except Exception:
+                        pass
+                    _oth = (self.away_team.team_name if team is self.home_team
+                            else self.home_team.team_name)
+                    _rem = 3600 - self.time
+                    self._pull_clock[_tn] = round(max(0.0, _rem), 1)
+                    _rgp(self, _tn, coach_style=_style,
+                         deficit=self.score[_oth] - self.score[_tn])
+                except Exception:
+                    pass
 
     def _pull_goalie(self, team_name):
         if team_name in self.goalie_pulled:
@@ -1015,6 +1045,11 @@ class AdvancedGameSim:
 
     def _return_goalie(self, team_name):
         self.goalie_pulled.discard(team_name)
+        # Structured drama (workstream B): clear the live-pull tracking.
+        try:
+            self._pull_clock.pop(team_name, None)
+        except Exception:
+            pass
 
     def _return_all_goalies(self):
         self.goalie_pulled.clear()
@@ -1632,6 +1667,18 @@ class AdvancedGameSim:
                 self.score[self.home_team.team_name] = ot_home_start + 1
             if away_ot_goals > 1:
                 self.score[self.away_team.team_name] = ot_away_start + 1
+            # Structured drama (workstream B, 2026-09-30, additive): OT was
+            # decided live in 3v3 sudden death (regular season here).
+            try:
+                from drama_events import record_ot_result as _rot_q
+                if (self.score[self.home_team.team_name] > ot_home_start
+                        or self.score[self.away_team.team_name] > ot_away_start):
+                    if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
+                        _rot_q(self, "3v3", self.home_team.team_name, self.away_team.team_name)
+                    else:
+                        _rot_q(self, "3v3", self.away_team.team_name, self.home_team.team_name)
+            except Exception:
+                pass
         # If still tied after OT, do shootout
 
         # Defensive: get home/away goalies safely
@@ -1728,6 +1775,12 @@ class AdvancedGameSim:
             
             scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
             notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
+            # Structured drama (workstream B, 2026-09-30, additive).
+            try:
+                from drama_events import record_ot_result as _rot_q2
+                _rot_q2(self, "shootout", winner.team_name, loser.team_name)
+            except Exception:
+                pass
             self._record_mesh_performances()
             # Shootout => the game went past regulation.
             self._record_parity_result(winner, scores, went_ot=True)
@@ -2624,6 +2677,26 @@ class AdvancedGameSim:
         elif _empty_net or random.random() < shot_chance:
             shot_result = 'GOAL'
             self.score[puck_team_name] += 1
+            # Structured drama (workstream B, 2026-09-30, additive):
+            # detect the empty-net conversion and the late equalizer while
+            # the pulled state is still live (before _return_all_goalies).
+            try:
+                from drama_events import (record_late_equalizer as _rle_q,
+                                          record_empty_net_goal as _reng_q)
+                _pulled_live_q = set(getattr(self, "goalie_pulled", set()) or set())
+                if _empty_net:
+                    _reng_q(self, puck_team_name, shooter)
+                elif (self.period == 3 and puck_team_name in _pulled_live_q):
+                    _pre_q = self.score[puck_team_name] - 1
+                    _opp_q = (self.away_team.team_name if puck_team_name
+                              == self.home_team.team_name
+                              else self.home_team.team_name)
+                    if _pre_q == self.score[_opp_q] - 1:
+                        _rle_q(self, puck_team_name, shooter,
+                               pull_clock_remaining=getattr(
+                                   self, "_pull_clock", {}).get(puck_team_name))
+            except Exception:
+                pass
             # The net is never empty across a goal: both goalies return.
             self._return_all_goalies()
             # Crowd: the building swings on every goal (live mood/energy).
