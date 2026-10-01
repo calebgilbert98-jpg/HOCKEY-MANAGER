@@ -2492,6 +2492,33 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                              board_a=board)
     except Exception:
         pass
+    # D4: trading away a star is a board headline (star_leaves fuel).
+    # One headline per trade, even in a multi-star blockbuster.
+    try:
+        from game_classes import DraftPick as _DP4
+        from reputation_system import note_star_departure as _nsd4
+        for _a4 in list(user_assets or []):
+            if isinstance(_a4, _DP4):
+                continue
+            if _nsd4(board, _a4):
+                break
+    except Exception:
+        pass
+    # D4: acquiring a star is a board headline too (star_signing fuel).
+    # Mirror of the give side: the headline belongs on the receiving side's
+    # board -- `board` is the user_team-side board on user deals, None on
+    # AI-AI trades (the note no-ops there, same as the give side).
+    # One headline per trade, even in a multi-star blockbuster.
+    try:
+        from game_classes import DraftPick as _DP4
+        from reputation_system import note_star_signing as _nss4
+        for _a4 in list(partner_assets or []):
+            if isinstance(_a4, _DP4):
+                continue
+            if _nss4(board, _a4):
+                break
+    except Exception:
+        pass
     # Authoritative post-trade integration point: EVERY completed trade
     # path (user deals, AI deadline deals) flows through here.
     #  - Fresh start: rescued players get their morale payoff.
@@ -2622,7 +2649,20 @@ def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
                 moved_names.append(str(nm))
         if moved_names:
             press_event = {"players_involved": moved_names, "trade": True}
+            # Trade-stamp idempotency (analytics audit): the per-player
+            # _trade_stamp guard above doesn't cover this per-side block, so
+            # a repeat invocation re-fired the press cascade (morale moves).
+            press_stamp = (date_str,
+                           getattr(user_team, "team_name", ""),
+                           getattr(partner_team, "team_name", ""),
+                           tuple(sorted(moved_names)))
             for side in (user_team, partner_team):
+                try:
+                    if getattr(side, "_press_trade_stamp", None) == press_stamp:
+                        continue  # press already answered for this trade
+                    side._press_trade_stamp = press_stamp
+                except Exception:
+                    pass
                 # Human-run clubs (local or MP) do their own press; AI clubs
                 # get the automated response.
                 _hum = False

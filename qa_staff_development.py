@@ -7,6 +7,7 @@ Run: python3 qa_staff_development.py
 import os
 import random
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,6 +34,9 @@ def mkstaff(age=30, rep=60, assignment="nhl", icon_level=""):
     s.assignment = assignment
     s.icon_level = icon_level
     s.experience = 5
+    # Pin a mid-length deal so the D5 expiry tick doesn't sweep the fixture
+    # staff into the free-agent pool mid-test (random 1-5 default).
+    s.contract_years = 4
     for a in _STAFF_DEVELOP_ATTRS:
         setattr(s, a, 60)
     return s
@@ -227,6 +231,68 @@ check("retirement is recorded",
 check("retirement news names the coach",
       any("Old Timer" in n for n in league.staff_retirement_news))
 check("young coach still employed after rollover", young_nhl in t.staff)
+
+# --- 13. D5: contract expiry tick ---------------------------------------------
+import staff_poaching as _sp
+t5 = Team("Five", "Testville", "Atlantic", "Eastern", "NHL", "GM", None)
+hc5 = mkstaff(age=50, rep=60); hc5.first_name, hc5.last_name = "Ex", "Coach"
+hc5.role = StaffRole.HEAD_COACH; hc5.contract_years = 1
+ast5 = mkstaff(age=40, rep=55); ast5.first_name, ast5.last_name = "Next", "Man"
+ast5.role = StaffRole.ASSISTANT_COACH; ast5.contract_years = 3
+ast5b = mkstaff(age=42, rep=45); ast5b.first_name, ast5b.last_name = "Bench", "Two"
+ast5b.role = StaffRole.ASSISTANT_COACH; ast5b.contract_years = 3
+sct5 = mkstaff(age=45, rep=50); sct5.first_name, sct5.last_name = "Gone", "Scout"
+sct5.role = StaffRole.AMATEUR_SCOUT; sct5.contract_years = 1
+t5.staff = [hc5, ast5, ast5b, sct5]
+lg5 = League("NHL"); lg5.teams = [t5]; lg5.free_agent_staff = []
+news5 = gc.tick_staff_contracts(lg5)
+check("expiry releases HC and scout to the pool",
+      hc5 in lg5.free_agent_staff and sct5 in lg5.free_agent_staff)
+check("assistant's deal ticks down", ast5b.contract_years == 2,
+      f"years={ast5b.contract_years}")
+check("HC vacancy auto-promotes in-house successor",
+      ast5.role == StaffRole.HEAD_COACH and ast5.contract_years == 3,
+      f"role={ast5.role}, years={ast5.contract_years}")
+check("expiry news is produced", len(news5) >= 3, f"news={news5}")
+check("status helper: expiring",
+      gc.staff_contract_status(SimpleNamespace(contract_years=1)) == "Expiring"
+      and gc.staff_contract_status(sct5) == "Expiring")  # 0 yr == expired
+check("status helper: short/long",
+      gc.staff_contract_status(ast5) == "Long-term"
+      and gc.staff_contract_status(SimpleNamespace(contract_years=2)) == "Short-term"
+      and gc.staff_contract_status(SimpleNamespace(contract_years=1)) == "Expiring")
+from datetime import date as _date
+exp = mkstaff(); exp.role = StaffRole.ASSISTANT_COACH; exp.assignment = "nhl"
+exp.contract_years = 1
+emp = SimpleNamespace(team_name="Five")
+ok, _ = gc.can_approach_staff(exp, employer_team=emp,
+                              user_team=SimpleNamespace(),
+                              current_date=_date(2026, 7, 1))
+check("expiring NHL staff approachable in offseason", ok)
+ok2, _ = gc.can_approach_staff(exp, employer_team=emp,
+                               user_team=SimpleNamespace(),
+                               current_date=_date(2026, 11, 1))
+check("expiring NHL staff NOT approachable in-season", not ok2)
+lt5 = mkstaff(); lt5.role = StaffRole.ASSISTANT_COACH; lt5.assignment = "nhl"
+lt5.contract_years = 4
+ok3, _ = gc.can_approach_staff(lt5, employer_team=emp,
+                               user_team=SimpleNamespace(),
+                               current_date=_date(2026, 7, 1))
+check("long-term NHL staff still unavailable", not ok3)
+# Poach pass: bounded, climb-ambition star assistant gets an HC offer.
+pa = mkstaff(age=38, rep=70); pa.first_name, pa.last_name = "Star", "Aide"
+pa.role = StaffRole.ASSISTANT_COACH; pa.contract_years = 1; pa.ambition = "climb"
+pa.assignment = "nhl"
+rv = Team("Rival", "R", "A", "E", "NHL", "GM", None); rv.staff = [pa]
+rv.reputation = 60; rv.is_user_controlled = False
+pk = Team("Poach", "P", "A", "E", "NHL", "GM", None); pk.staff = []
+pk.reputation = 70; pk.is_user_controlled = False
+lg6 = SimpleNamespace(teams=[rv, pk])
+random.seed(1)
+pn = _sp.offseason_staff_poach(lg6, user_team=None)
+check("poach pass bounded (<=4)", len(pn) <= 4)
+check("poach news mentions the move",
+      any("Star Aide" in m for m in pn), f"news={pn}")
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

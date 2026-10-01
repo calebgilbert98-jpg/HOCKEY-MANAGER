@@ -75,10 +75,58 @@ class ShortlistManager:
         3: "Low Priority"
     }
     
-    def __init__(self):
+    # Legacy global store (pre-per-save). Still readable: a save that never
+    # had its own shortlist imports from here ONCE, then never again. The
+    # global file is never deleted -- old saves keep working.
+    GLOBAL_SAVE_FILE = "saves/shortlist.json"
+
+    def __init__(self, save_key=None):
+        """save_key: stable per-save id (trade_market.league_shortlist_key).
+        None keeps the legacy global file -- old callers keep working."""
         self.entries: List[ShortlistEntry] = []
-        self.save_file = "saves/shortlist.json"
+        self.save_key = save_key
+        if save_key:
+            import re as _re
+            _safe = _re.sub(r"[^A-Za-z0-9_-]", "_", str(save_key))[:48] or "save"
+            self.save_file = os.path.join("saves", "shortlists",
+                                          f"{_safe}.json")
+        else:
+            self.save_file = self.GLOBAL_SAVE_FILE
+        _fresh = not os.path.exists(self.save_file)
         self.load_shortlist()
+        if _fresh and save_key:
+            # First touch of this save: import the legacy global shortlist
+            # once (copied, never deleted) so nothing is lost in the move
+            # to per-save storage.
+            try:
+                self._import_global_once()
+            except Exception:
+                pass
+
+    def _import_global_once(self):
+        """Copy entries from the legacy global file into this per-save
+        store. Never raises; never touches the global file."""
+        try:
+            if not os.path.exists(self.GLOBAL_SAVE_FILE):
+                return
+            with open(self.GLOBAL_SAVE_FILE, 'r') as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return
+            seen = {(e.player_id, e.category) for e in self.entries}
+            for raw in data:
+                try:
+                    e = ShortlistEntry.from_dict(raw)
+                except Exception:
+                    continue
+                if (e.player_id, e.category) in seen:
+                    continue
+                self.entries.append(e)
+                seen.add((e.player_id, e.category))
+            if data:
+                self.save_shortlist()
+        except Exception:
+            pass
     
     def add_player(self, player_id: str, player_name: str, category: str, 
                    notes: str = "", priority: int = 2) -> bool:

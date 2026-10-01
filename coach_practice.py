@@ -181,29 +181,98 @@ def _staff_name(staff: Any) -> str:
 # ---------------------------------------------------------------------------
 # Who runs the drill
 # ---------------------------------------------------------------------------
+
+# D8: assignment splits behind the bench. "nhl" = full NHL bench quality;
+# "ahl" = AHL-assignment coaches run the session (~80% teaching quality);
+# "overseas" = the player's junior/college/Euro program (~70%). This is
+# the same split the staff system already uses for assignment.
+_ASSIGNMENT_QUALITY = {"nhl": 1.0, "ahl": 0.80, "overseas": 0.70}
+
+
+def _assignment_of(staff: Any) -> str:
+    try:
+        return str(getattr(staff, "assignment", "nhl") or "nhl").lower()
+    except Exception:
+        return "nhl"
+
+
+def assignment_quality(assignment: str) -> float:
+    """Teaching-quality factor for a session assignment (D8)."""
+    try:
+        return _ASSIGNMENT_QUALITY.get(str(assignment or "nhl").lower(), 1.0)
+    except Exception:
+        return 1.0
+
+
+def _match_assignment(cands: List[Any], assignment: str) -> List[Any]:
+    """Prefer staff whose assignment matches the session's.
+
+    For "nhl" sessions the existing rule holds: AHL coaches are never
+    picked as the NHL bench boss (strict, no fallback). For non-NHL
+    sessions, fall back to anyone when nobody matches (defensive: never
+    leave a session coachless).
+    """
+    try:
+        asg = str(assignment or "nhl").lower()
+        matched = [c for c in cands if _assignment_of(c) == asg]
+        if matched or asg == "nhl":
+            return matched
+        return list(cands)
+    except Exception:
+        return list(cands)
+
+
 def session_coach(team: Any, player: Any,
-                  practice_type: str) -> Tuple[Optional[Any], str]:
+                  practice_type: str,
+                  assignment: str = "nhl") -> Tuple[Optional[Any], str]:
     """Pick the coach running this drill.
 
     Goalies go to the goalie coach; skaters go to the assistant whose
     specialty best matches the drill; the head coach covers when nobody
     better is on staff. Returns (coach, role_label).
+
+    D8: `assignment` reweights who's behind the bench -- an AHL session
+    is run by AHL-assignment coaches, an overseas one by whoever the
+    junior/college/Euro program provides (club staff only as fallback).
+    Defaults to "nhl" so every existing caller prices unchanged.
     """
     ptype = str(practice_type or "").lower()
     group = _position_group(player)
+    asg = str(assignment or "nhl").lower()
     if group == "goalie":
-        gc = goalie_coach_of(team)
+        cands = [stf for stf in _staff_list(team)
+                 if "Goalie Coach" in _role_of(stf)]
+        if asg == "nhl":
+            # Old goalie_coach_of() semantics: prefer the NHL goalie
+            # coach, fall back to any goalie coach.
+            gc = next((c for c in cands if _assignment_of(c) == "nhl"),
+                      cands[0] if cands else None)
+        else:
+            cands = _match_assignment(cands, asg)
+            gc = cands[0] if cands else None
         if gc is not None:
             return gc, "Goalie coach"
     specs = DRILL_SPECIALTY.get(ptype, ("technical_coaching",))
     best, best_score = None, -1.0
-    for ac in assistants_of(team):
+    for ac in _match_assignment(
+            [stf for stf in _staff_list(team)
+             if ("Assistant Coach" in _role_of(stf)
+                 or "Associate Coach" in _role_of(stf))], asg):
         score = sum(_num(ac, a) for a in specs[:2]) / 2.0
         if score > best_score:
             best, best_score = ac, score
     if best is not None and best_score >= 55:
         return best, "Assistant"
-    hc = head_coach_of(team)
+    hc_cands = [stf for stf in _staff_list(team)
+                if "Head Coach" in _role_of(stf)]
+    if asg == "nhl":
+        # Old head_coach_of() semantics: prefer the NHL bench boss, fall
+        # back to any head coach rather than leave the session uncovered.
+        hc = next((c for c in hc_cands if _assignment_of(c) == "nhl"),
+                  hc_cands[0] if hc_cands else None)
+    else:
+        hc_cands = _match_assignment(hc_cands, asg)
+        hc = hc_cands[0] if hc_cands else None
     if hc is not None:
         return hc, "Head coach"
     # Nobody behind the bench at all: fall back to whoever exists.
@@ -531,18 +600,30 @@ def system_practice_fit(team: Any,
 # The full breakdown: one entry point for the practice engine
 # ---------------------------------------------------------------------------
 def practice_breakdown(team: Any, player: Any,
-                       practice_type: str) -> Dict[str, Any]:
+                       practice_type: str,
+                       assignment: str = "nhl") -> Dict[str, Any]:
     """Everything the engine needs, with human-readable reasons.
 
     Keys: coach, coach_role, coach_rating, coach_drivers, affinity,
     affinity_why, attitude, attitude_label, attitude_drivers, fit,
     fit_label, morale_cost, system, system_label, trains_system,
-    fatigue_mult, total_mult, loves.
+    fatigue_mult, total_mult, loves, assignment, assignment_mult.
+
+    D8: `assignment` ("nhl" | "ahl" | "overseas") reweights who's
+    behind the bench (see session_coach) and applies the documented
+    teaching-quality penalty for non-NHL assignments. Defaults to
+    "nhl" so every existing caller prices unchanged.
     """
     ptype = str(practice_type or "").lower()
-    coach, role = session_coach(team, player, ptype) if team is not None \
-        else (None, "")
+    asg = str(assignment or "nhl").lower()
+    asg_mult = assignment_quality(asg)
+    coach, role = session_coach(team, player, ptype, assignment=asg) \
+        if team is not None else (None, "")
     rating, coach_drivers = coach_drill_rating(coach, player, ptype)
+    # D8: non-NHL assignments teach at reduced quality -- the same split
+    # the staff system uses for assignment. Applied to the rating before
+    # the multiplier conversion so the penalty is visible at every band.
+    rating = rating * asg_mult
     # 0-100 rating -> multiplier. 65 (a solid average coach) is 1.0, so a
     # league-average setup reproduces the old flat-trainer tuning; the
     # spread (0.76..1.18) is where staff quality actually matters now.
@@ -581,6 +662,8 @@ def practice_breakdown(team: Any, player: Any,
         "fatigue_mult": round(fatigue_mult, 3),
         "total_mult": round(total, 3),
         "loves": archetype_loves(player),
+        "assignment": asg,
+        "assignment_mult": round(asg_mult, 3),
     }
 
 
@@ -609,6 +692,17 @@ def describe_session(breakdown: Dict[str, Any]) -> List[str]:
         sl = breakdown.get("system_label", "")
         if sl:
             lines.append(sl)
+        # D8: say the quiet part -- non-NHL assignments develop slower.
+        try:
+            _am = float(breakdown.get("assignment_mult", 1.0) or 1.0)
+            _aa = str(breakdown.get("assignment", "nhl") or "nhl")
+            if _am < 1.0:
+                _an = "AHL program" if _aa == "ahl" else "junior/college/Euro program"
+                lines.append(
+                    f"{_an} teaching quality x{_am:.2f} -- "
+                    f"development runs slower away from the NHL bench.")
+        except Exception:
+            pass
     except Exception:
         pass
     return lines

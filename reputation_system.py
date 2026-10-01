@@ -24,8 +24,57 @@ from datetime import date
 from typing import List, Dict, Optional, Any, Tuple
 
 # ---------------------------------------------------------------------------
-# Tuning
+# D10: in-game date / games-elapsed providers.
+#
+# Every timestamp this module writes must be stamped in GAME time, not
+# wall-clock time -- a June date on a mid-season event corrupts every
+# "days since" decay that reads it back. The app registers its
+# providers once at startup (main.py __init__); before that (and in
+# headless QA), everything falls back to wall-clock / zero.
 # ---------------------------------------------------------------------------
+
+_now_provider = None      # () -> datetime.date (the game's current date)
+_games_provider = None    # () -> int (games elapsed this season)
+
+
+def register_date_provider(fn) -> None:
+    """Register the app's in-game date provider. Never raises."""
+    global _now_provider
+    try:
+        _now_provider = fn
+    except Exception:
+        pass
+
+
+def register_games_provider(fn) -> None:
+    """Register the app's games-elapsed provider. Never raises."""
+    global _games_provider
+    try:
+        _games_provider = fn
+    except Exception:
+        pass
+
+
+def _now():
+    """Current in-game date (falls back to wall-clock when unregistered)."""
+    try:
+        if _now_provider is not None:
+            d = _now_provider()
+            if hasattr(d, "isoformat"):
+                return d
+    except Exception:
+        pass
+    return date.today()
+
+
+def _games_elapsed() -> int:
+    """Games elapsed this season (falls back to 0 when unregistered)."""
+    try:
+        if _games_provider is not None:
+            return max(0, int(_games_provider()))
+    except Exception:
+        pass
+    return 0
 
 VETERAN_AGE = 32            # age at which leadership weighs heaviest
 REPUTATION_MAX = 100
@@ -294,7 +343,7 @@ def update_player_reputation(
     if target > player.reputation:
         player.reputation = target
         player.reputation_history.append({
-            "date": date.today().isoformat(),
+            "date": _now().isoformat(),
             "reputation": player.reputation,
             "reason": "season_update",
         })
@@ -321,7 +370,7 @@ def update_staff_reputation(staff: Any, team_win_pct: float = 0.5,
         if target != current:
             staff.career_reputation = target
             staff.reputation_history.append({
-                "date": date.today().isoformat(),
+                "date": _now().isoformat(),
                 "reputation": staff.career_reputation,
                 "reason": "season_update",
             })
@@ -507,7 +556,7 @@ def award_championship(entity: Any, season_year: int = None) -> int:
             return entity.career_reputation
         entity.reputation = min(REPUTATION_MAX, (entity.reputation or 0) + 8)
         entity.reputation_history.append({
-            "date": date.today().isoformat(),
+            "date": _now().isoformat(),
             "reputation": entity.reputation,
             "reason": "stanley_cup",
         })
@@ -1185,11 +1234,21 @@ def room_implications(status: Dict[str, Any], entity: Any,
                 add("personnel", "Captaincy under review: strip the C?", 1)
         else:
             add("personnel", "Ownership pressure: win or else", 1)
+            if kind == "coach":
+                # D9: the monthly tick only evaluates head coaches, so
+                # without this the _room_trade_risk_mult stamp in
+                # _apply_room_fallout was unreachable -- the headlines
+                # trade-request consumer was wired to a dead producer.
+                add("trade", "Fracturing room: trade-request risk x1.5",
+                    1.5)
     else:  # Lost
         add("chemistry", "Lost room: chemistry collapse", -15)
         if kind == "coach":
             add("personnel", f"Recommend termination: {name} should be fired", 1)
             add("media", "Firing watch: every loss is the lead story", 20)
+            # D9: same as above -- a lost room means players want out.
+            add("trade", "Lost room: players want out -- trade-request "
+                         "risk x2", 2.0)
         elif kind == "gm":
             add("personnel", f"Ownership review: {name}'s job in danger", 1)
         else:
@@ -1769,7 +1828,7 @@ def record_team_event(team: Any, event_type: str, text: str,
     Genuinely distinct events always append.
     """
     log = _team_log(team)
-    today = date.today().isoformat()
+    today = _now().isoformat()
     for ev in log:
         if (ev.get("date") == today and ev.get("text") == text
                 and ev.get("tone") == tone):
@@ -1786,7 +1845,7 @@ def _same_day_event(team: Any, event_type: str,
     """The team's dynamics entry for this event type recorded today, if any.
     Pass text to match one exact rendering; omit it to match any entry of
     the type (used for once-per-day guards on repeatable GM actions)."""
-    today = date.today().isoformat()
+    today = _now().isoformat()
     for ev in reversed(_team_log(team)):
         if ev.get("date") == today and ev.get("type") == event_type \
                 and (text is None or ev.get("text") == text):
@@ -2867,7 +2926,7 @@ def add_rivalry(rivalries: list, a: Any, b: Any, kind: str, intensity: int,
             return r
     rec = {"a": ka, "b": kb, "a_name": _ename(a), "b_name": _ename(b),
            "kind": kind, "intensity": max(0, min(100, intensity)),
-           "origin": origin, "story": story, "date": date.today().isoformat(),
+           "origin": origin, "story": story, "date": _now().isoformat(),
            "grudge": max(0, min(100, grudge)),
            "career_cost": max(0, min(100, career_cost))}
     rivalries.append(rec)
@@ -4478,8 +4537,8 @@ def feed_grudge(rivalries: list, team_a: Any, team_b: Any,
 
 def _incident_games_ago(inc: Dict[str, Any]) -> float:
     try:
-        d = date.fromisoformat(inc.get("date", date.today().isoformat()))
-        days = (date.today() - d).days
+        d = date.fromisoformat(inc.get("date", _now().isoformat()))
+        days = (_now() - d).days
         return max(0.0, days / 3.0)  # roughly a game every 3 days
     except Exception:
         return 0.0
@@ -4487,8 +4546,8 @@ def _incident_games_ago(inc: Dict[str, Any]) -> float:
 
 def _rivalry_age_years(r: Dict[str, Any]) -> float:
     try:
-        d = date.fromisoformat(r.get("date", date.today().isoformat()))
-        return max(0.0, (date.today() - d).days / 365.0)
+        d = date.fromisoformat(r.get("date", _now().isoformat()))
+        return max(0.0, (_now() - d).days / 365.0)
     except Exception:
         return 0.0
 
@@ -5496,7 +5555,7 @@ def _nudge_gm_rep(team: Any, delta: int, reason: str) -> None:
         ensure_reputation_fields(gm)
         cur = int(getattr(gm, "career_reputation", 0) or 0)
         gm.career_reputation = max(0, min(100, cur + delta))
-        gm.reputation_history.append({"date": date.today().isoformat(),
+        gm.reputation_history.append({"date": _now().isoformat(),
                                      "reputation": gm.career_reputation,
                                      "reason": reason})
     except Exception:
@@ -5825,7 +5884,7 @@ def _bump_gm_respect(league: Any, team_a: Any, team_b: Any, delta: int) -> int:
                  "intensity": max(0, min(100, GM_RESPECT_NEUTRAL + int(delta))),
                  "origin": "dealings",
                  "story": "Professional regard between two GMs.",
-                 "date": date.today().isoformat(), "grudge": 0, "career_cost": 0}
+                 "date": _now().isoformat(), "grudge": 0, "career_cost": 0}
             store.append(r)
             return int(r["intensity"])
         r["intensity"] = max(0, min(100, int(r.get("intensity", GM_RESPECT_NEUTRAL)) + int(delta)))
@@ -5929,6 +5988,63 @@ def gm_staff_accept_delta(team: Any) -> float:
     except Exception:
         pass
     return 0.0
+
+
+# ---------------------------------------------------------------------------
+# D4 (2026-09-30): headline-event fuel for the board's record_big_event
+# kinds (manager_career.BoardSystem). Production callers for 'star_signing',
+# 'star_leaves' and 'scandal' -- the three kinds that previously had zero
+# production fuel. Small predicates so each call site is a one-liner;
+# every helper is defensive and never raises.
+# ---------------------------------------------------------------------------
+
+#: overall_rating() (native 1-100) at/above which a player counts as a
+#: "star" for headline purposes. Same line as gm_fa_accept_delta's star
+#: convention.
+STAR_OVR = 85
+
+
+def is_star_player(player: Any) -> bool:
+    """True when the player is a headline-grade star. Never raises."""
+    try:
+        return float(player.overall_rating()) >= STAR_OVR
+    except Exception:
+        return False
+
+
+def note_star_signing(board: Any, player: Any) -> bool:
+    """Board headline: a star just signed. Returns True when it fired."""
+    try:
+        if board is not None and is_star_player(player):
+            board.record_big_event("star_signing")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def note_star_departure(board: Any, player: Any) -> bool:
+    """Board headline: a star just left (trade / buyout / release).
+    Returns True when it fired."""
+    try:
+        if board is not None and is_star_player(player):
+            board.record_big_event("star_leaves")
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def note_scandal(board: Any) -> bool:
+    """Board headline: a genuine scandal (DoPS suspension of your player,
+    your club in a line brawl, ...). Returns True when it fired."""
+    try:
+        if board is not None:
+            board.record_big_event("scandal")
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,

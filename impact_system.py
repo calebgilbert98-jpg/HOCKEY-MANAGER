@@ -326,6 +326,20 @@ def classify_hit_impact(hitter: Any, target: Any, ctx: ImpactContext) -> int:
         pb += 0.08 * harder
         pt -= 0.03 * harder
 
+    # D1 design build: "stay disciplined" trims the big-hit edge a touch
+    # (bounded, efficacy-scaled). Other instructions don't move the hit
+    # distribution -- their channels are volume/location/penalties.
+    if (ctx.coach_instruction or "") == "stay_disciplined":
+        try:
+            from mesh_system import (coach_instruction_effects as _cie_sd,
+                                     coach_instruction_efficacy as _ceff_sd)
+            _d = (_cie_sd("stay_disciplined").get("hit_big_add", 0.0)
+                  * _ceff_sd(ctx.coach))
+            pb += _d
+            pt -= _d * 0.375
+        except Exception:
+            pass
+
     # Hotheads finish everything.
     heat = _personality_heat(hitter, ctx.team, ctx.coach)
     if heat > 4:

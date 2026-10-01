@@ -5510,7 +5510,7 @@ class PBPVisualSim(InGamePopup):
 # ----------------------------------------------------------------------------
 def open_pbp_window(parent, home_team, away_team, on_complete=None,
                     rivalries=None, is_playoff=False, series_game=0,
-                    user_team=None, outdoor=None):
+                    user_team=None, outdoor=None, coach_instruction=None):
     """Open the visual play-by-play simulator for a game.
 
     parent: tk widget (usually the main app root)
@@ -5522,10 +5522,30 @@ def open_pbp_window(parent, home_team, away_team, on_complete=None,
     outdoor: optional outdoor-game info dict (Winter Classic/Stadium
         Series) -- drives the pre-game card, feed lines, and the crowd
         energy bump in the sim.
+    coach_instruction: D1 -- the user's explicit coach instruction from
+        the game-day bundle (e.g. "play_harder"), applied to the user's
+        team via the standard set_coach_instruction channel. The AI fill
+        (simulation._ai_coach_instructions) never overwrites it.
     Returns the PBPVisualSim window. Does not block.
     """
     sim = GameSim(home_team, away_team, is_playoff=is_playoff,
                   rivalries=rivalries, series_game=series_game)
+    if coach_instruction:
+        # Explicit user call: provenance "explicit", so the AI fill
+        # (which ran at sim construction, and re-runs at intermissions)
+        # keeps its hands off.
+        try:
+            _uname = getattr(user_team, "team_name", None)
+            if _uname:
+                if coach_instruction == "none":
+                    # "Let the game come to us": clear any AI fill and
+                    # hold the explicit provenance.
+                    sim.set_coach_instruction(_uname, None)
+                    sim._coach_instruction_source[_uname] = "explicit"
+                else:
+                    sim.set_coach_instruction(_uname, coach_instruction)
+        except Exception:
+            pass
     if outdoor is not None:
         # The loudest night of the regular season: pin the building near-max
         # through the existing two-sided crowd channel.

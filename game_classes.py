@@ -1564,6 +1564,11 @@ def can_approach_staff(staff, employer_team=None, user_team=None,
             return (False,
                     f"Under contract with {club}'s AHL club \u2014 "
                     "minor-league staff can only be approached in the offseason.")
+        # D5: staff in the final year of their deal can be approached in
+        # the offseason (any assignment) -- the expiring-contract lane.
+        # Everyone else under NHL contract stays unavailable.
+        if is_staff_expiring(staff) and is_offseason(current_date):
+            return True, ""
         return (False,
                 f"Under contract with {club}'s NHL staff \u2014 not available.")
     except Exception:
@@ -1721,7 +1726,10 @@ def develop_staff_member(staff, employed: bool = True,
 def age_staff_one_year(staff, employed: bool = True,
                        assignment: str = "nhl") -> bool:
     """Age one staffer a year: +1 age, +1 experience if employed, attribute
-    development. Returns True if the staffer retires this rollover."""
+    development. Returns True if the staffer retires this rollover.
+    Contract years are NOT touched here -- the contract tick lives in
+    tick_staff_contracts (D5), called once per offseason from
+    League.end_of_season."""
     try:
         staff.age = int(getattr(staff, "age", 40) or 40) + 1
         if employed:
@@ -1743,6 +1751,256 @@ def age_staff_one_year(staff, employed: bool = True,
     except Exception:
         pass
     return False
+
+
+# ---------------------------------------------------------------------------
+# Staff contract lifecycle (D5): contracts actually expire.
+# ---------------------------------------------------------------------------
+
+def staff_contract_status(staff) -> str:
+    """Contract bucket for a staffer: 'Expiring' (<=1 yr left),
+    'Short-term' (2 yrs), or 'Long-term' (3+). One definition shared by
+    the tick below and any UI surface that shows contract status."""
+    try:
+        yrs = int(getattr(staff, "contract_years", 0) or 0)
+    except (TypeError, ValueError):
+        yrs = 0
+    if yrs <= 1:
+        return "Expiring"
+    if yrs == 2:
+        return "Short-term"
+    return "Long-term"
+
+
+def is_staff_expiring(staff) -> bool:
+    """True when a staffer is in the final year of his deal (approachable
+    in the offseason under the extended approach rules)."""
+    try:
+        return int(getattr(staff, "contract_years", 0) or 0) <= 1
+    except (TypeError, ValueError):
+        return False
+
+
+def ai_renew_staff_decision(staff, team) -> bool:
+    """AI GM renewal call (D5 follow-up): re-sign the staff the club
+    values, let the rest walk to the free-agent pool. Simple, readable:
+    a head coach with a credible track record (career_reputation >= 60)
+    keeps the bench; everyone else needs real career standing
+    (career_reputation >= 70). A struggling bench boss walks and the
+    club promotes from within via promote_head_coach_successor.
+    ``team`` is reserved for future club-situation factors."""
+    try:
+        rep = int(getattr(staff, "career_reputation", 0) or 0)
+    except (TypeError, ValueError):
+        rep = 0
+    try:
+        role_v = getattr(getattr(staff, "role", None), "value", "") or ""
+    except Exception:
+        role_v = ""
+    if role_v == "Head Coach":
+        return rep >= 60
+    return rep >= 70
+
+
+def promote_head_coach_successor(team):
+    """Promote the best in-house assistant/associate coach to head coach
+    on a fresh 3-year deal, so a club is never left permanently
+    coachless. Returns (promoted_or_None, news_line_or_None)."""
+    try:
+        staff_list = getattr(team, "staff", None) or []
+        in_house = [c for c in staff_list
+                    if getattr(getattr(c, "role", None), "value", "") in (
+                        "Assistant Coach", "Associate Coach")]
+        promoted = (max(in_house,
+                        key=lambda c: getattr(c, "reputation", 0))
+                    if in_house else None)
+        if promoted is None:
+            return None, None
+        promoted.role = StaffRole.HEAD_COACH
+        promoted.assignment = "nhl"
+        promoted.contract_years = 3
+        nm = (f"{getattr(promoted, 'first_name', '')} "
+              f"{getattr(promoted, 'last_name', '')}").strip() or "A coach"
+        tname = getattr(team, "team_name", "?") or "?"
+        return promoted, f"{tname} promoted {nm} to head coach."
+    except Exception:
+        return None, None
+
+
+def _purge_renewal_offer(league, staff):
+    """Drop any pending user renewal offer for this staffer (e.g. an
+    assistant just promoted to head coach got a fresh deal already)."""
+    try:
+        box = getattr(league, "staff_renewal_offers", None)
+        if not box:
+            return
+        for o in list(box):
+            try:
+                if (o or {}).get("staff") is staff:
+                    box.remove(o)
+            except ValueError:
+                pass
+    except Exception:
+        pass
+
+
+def _staff_full_name(staff):
+    try:
+        nm = (f"{getattr(staff, 'first_name', '')} "
+              f"{getattr(staff, 'last_name', '')}").strip()
+        return nm or "A staffer"
+    except Exception:
+        return "A staffer"
+
+
+def _release_expired_staff(league, pool, team, tname, staff,
+                           promoted_ids=None, walk_note="contract expired"):
+    """Shared release path: remove the staffer from the club, append to
+    the free-agent pool, and run the head-coach promote fallback when a
+    bench boss walks. Returns news lines; never raises."""
+    news = []
+    try:
+        staff_list = getattr(team, "staff", None) or []
+        try:
+            staff_list.remove(staff)
+        except ValueError:
+            pass
+        if staff not in pool:
+            pool.append(staff)
+        role_v = getattr(getattr(staff, "role", None), "value", "staff")
+        nm = _staff_full_name(staff)
+        if role_v == "Head Coach":
+            promoted, pline = promote_head_coach_successor(team)
+            if promoted is not None:
+                if promoted_ids is not None:
+                    promoted_ids.add(id(promoted))
+                # A promoted assistant's pending renewal offer (if any)
+                # is moot -- he just signed a fresh 3-year HC deal.
+                _purge_renewal_offer(league, promoted)
+                if pline:
+                    news.append(pline)
+            news.append(f"{nm} left {tname} -- head-coach {walk_note}.")
+        else:
+            news.append(f"{nm} ({role_v}) left {tname} -- {walk_note}.")
+    except Exception:
+        pass
+    return news
+
+
+def _is_user_team(league, team) -> bool:
+    """True when this team is the human player's club."""
+    try:
+        if team is getattr(league, "user_team", None):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(getattr(team, "is_user_team", False))
+    except Exception:
+        return False
+
+
+def _stash_renewal_offer(league, team, staff):
+    """Hold one expired user-team staffer for the renewal decision: he
+    stays employed (contract_years == 0) until the user re-signs or he
+    walks. The interactive inbox message (staff_renewals) carries the
+    offer; undecided staff walk to the pool at the season's first game
+    day (see resolve_pending_renewals)."""
+    try:
+        box = getattr(league, "staff_renewal_offers", None)
+        if not isinstance(box, list):
+            box = []
+            league.staff_renewal_offers = box
+        for o in box:
+            try:
+                if (o or {}).get("staff") is staff:
+                    return
+            except Exception:
+                continue
+        box.append({"team": team, "staff": staff})
+    except Exception:
+        pass
+
+
+def tick_staff_contracts(league) -> list:
+    """Yearly staff-contract tick. Decrements every employed staffer's
+    contract_years; expired contracts release the staffer into the
+    free-agent pool.
+
+    D5 follow-up -- expiry -> offer -> pool pipeline. When a deal
+    expires (BEFORE the release step):
+      * the user's staff are HELD employed and stashed on
+        league.staff_renewal_offers; the interactive inbox message
+        (staff_renewals.queue_user_renewal_message, queued by
+        _start_offseason right after end_of_season) carries the
+        re-sign / let-walk decision. Decline/ignore releases them to
+        the pool, exactly like an AI walk;
+      * AI clubs auto-decide via ai_renew_staff_decision: valued staff
+        are re-signed on a fresh deal (head coach 3 years, others
+        2 years), the rest walk to the pool.
+    An expired head coach is replaced by promoting the best in-house
+    assistant/associate coach (fresh contract), so the tick never
+    leaves a club permanently coachless -- including when the user
+    lets his head coach walk. Returns news lines; never raises."""
+    news = []
+    try:
+        pool = getattr(league, "free_agent_staff", None)
+        if pool is None:
+            pool = []
+            league.free_agent_staff = pool
+        # Backstop: offers left undecided from a previous cycle (e.g. a
+        # headless rollover that never queued the inbox message) resolve
+        # as walks -- nobody lingers on an expired deal forever.
+        _stale = list(getattr(league, "staff_renewal_offers", None) or [])
+        if _stale:
+            league.staff_renewal_offers = []
+            for _o in _stale:
+                _t = (_o or {}).get("team")
+                _s = (_o or {}).get("staff")
+                if _t is None or _s is None:
+                    continue
+                _tn = getattr(_t, "team_name", "?") or "?"
+                news.extend(_release_expired_staff(
+                    league, pool, _t, _tn, _s, None,
+                    walk_note="contract expired, no renewal agreed"))
+        teams = list(getattr(league, "teams", None) or [])
+        for team in teams:
+            staff_list = getattr(team, "staff", None)
+            if not staff_list:
+                continue
+            tname = getattr(team, "team_name", "?") or "?"
+            user_club = _is_user_team(league, team)
+            promoted_ids = set()
+            for s in list(staff_list):
+                if id(s) in promoted_ids:
+                    continue  # just got a fresh deal via promotion
+                try:
+                    yrs = int(getattr(s, "contract_years", 0) or 0)
+                except (TypeError, ValueError):
+                    yrs = 0
+                if yrs <= 0:
+                    continue  # unsigned / legacy record: leave alone
+                yrs -= 1
+                s.contract_years = yrs
+                if yrs > 0:
+                    continue
+                role_v = getattr(getattr(s, "role", None), "value", "staff")
+                nm = _staff_full_name(s)
+                if user_club:
+                    # Renewal offer first: hold employed, decide via inbox.
+                    _stash_renewal_offer(league, team, s)
+                    continue
+                if ai_renew_staff_decision(s, team):
+                    _fresh = 3 if role_v == "Head Coach" else 2
+                    s.contract_years = _fresh
+                    news.append(f"{tname} re-signed {nm} ({role_v}) "
+                                f"to a {_fresh}-year deal.")
+                    continue
+                news.extend(_release_expired_staff(
+                    league, pool, team, tname, s, promoted_ids))
+    except Exception:
+        pass
+    return news
 
 
 # ---------------------------------------------------------------------------
@@ -6892,6 +7150,18 @@ class League:
             _age_staff_list(getattr(self, "free_agent_staff", []), False)
             _age_staff_list(getattr(self, "overseas_staff", []), True,
                             lambda s: "overseas")
+            # D5: staff contracts tick down; expired deals release the
+            # staffer into the free-agent pool (HC expiry auto-promotes
+            # an in-house successor). News is flushed to the inbox by
+            # _start_offseason.
+            try:
+                _cn = tick_staff_contracts(self)
+                if _cn:
+                    self.staff_contract_news = (
+                        list(getattr(self, "staff_contract_news", None)
+                             or []) + [str(_m) for _m in _cn])
+            except Exception:
+                pass
             for _s in _retirees:
                 try:
                     for _t in self.teams:

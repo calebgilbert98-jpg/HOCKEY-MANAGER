@@ -605,6 +605,38 @@ def _complete(app, neg: TradeNegotiation, user_objs, partner_objs) -> bool:
     _lg = getattr(getattr(app, 'game_manager', None), 'league', None) or \
         getattr(app, 'league', None)
     _board = getattr(getattr(app, 'career', None), 'board', None)
+    # D15: clause consent recovery. A no-trade/no-movement veto no longer
+    # kills the deal silently at the engine preflight: any player who was
+    # never asked gets his ONE consent conversation now. Waive and the deal
+    # proceeds; refuse and the deal dies with a clear outcome -- never a
+    # mystery BLOCKED.
+    try:
+        import trade_market as _tm
+        _ok, _notes, _refused = _tm.resolve_clause_consent(
+            app, _lg, user_team, partner, user_objs)
+        if _ok:
+            _ok2, _notes2, _refused2 = _tm.resolve_clause_consent(
+                app, _lg, partner, user_team, partner_objs)
+            _ok, _notes, _refused = _ok2, _notes + _notes2, _refused2
+        if _notes:
+            try:
+                neg.history.append(
+                    {"date": date_str[:10], "by": "system",
+                     "summary": "Clause consent: " + "; ".join(_notes)})
+            except Exception:
+                pass
+        if not _ok:
+            _deliver(app,
+                     subject=f"Trade with {neg.partner_team_name} fell through",
+                     content=(f"{_refused}.\n\nThe deal is dead; no assets "
+                              f"moved. Re-open talks without him if you "
+                              f"still want it."),
+                     sender="League Office")
+            _clear_waivers(app, neg)
+            neg.status = "expired"
+            return False
+    except Exception:
+        pass
     trade = te.execute_trade(user_team, partner, user_objs, partner_objs,
                              date_str, league=_lg, board=_board,
                              retention=retention)

@@ -827,6 +827,125 @@ class AdvancedGameSim:
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
 
+    # -- D1: coach-instruction channel (uniform with GameSim) ------------
+    # AdvancedGameSim never classifies hits, so an instruction is
+    # currently INERT on the quick path -- the channel exists so the
+    # game-day bundle can set one uniformly and any future consumer
+    # reads the same _coach_instructions shape. Never raises.
+    def set_coach_instruction(self, team_name, instruction):
+        """Set a coach instruction for a team (e.g. "play_harder").
+        Pass None to clear. Explicit sets (game-day bundle) are tracked
+        so the AI refresh never overwrites a human call -- same provenance
+        rule as GameSim."""
+        try:
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
+            if instruction:
+                self._coach_instructions[team_name] = instruction
+                self._coach_instruction_source[team_name] = "explicit"
+            else:
+                self._coach_instructions.pop(team_name, None)
+                self._coach_instruction_source.pop(team_name, None)
+        except Exception:
+            pass
+
+    def get_coach_instruction(self, team):
+        try:
+            return self._coach_instructions.get(
+                getattr(team, "team_name", None))
+        except Exception:
+            return None
+
+    # -- D1 design build: live instruction refresh (fast fidelity) --------
+    # The SAME shared decision as the watched path
+    # (mesh_system.ai_coach_instruction_for) with this engine's fast
+    # state: score dict, period, cumulative time, head coaches, rivalry
+    # heat. No feed announcements on the quick path. Explicit user
+    # instructions are never overwritten. Never raises.
+    def _refresh_coach_instructions(self, flags_by_team=None):
+        try:
+            from mesh_system import ai_coach_instruction_for as _aii
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
+            _fb = flags_by_team or {}
+            _per = int(getattr(self, "period", 1) or 1)
+            try:
+                _t = max(0.0, 1200.0 * _per - float(getattr(self, "time", 0)
+                                                    or 0))
+            except Exception:
+                _t = 1200.0
+            for _team, _coach in (
+                    (self.home_team, getattr(self, "_home_coach", None)),
+                    (self.away_team, getattr(self, "_away_coach", None))):
+                try:
+                    _tn = getattr(_team, "team_name", "") or ""
+                    if not _tn:
+                        continue
+                    if (self._coach_instruction_source.get(_tn)
+                            == "explicit"):
+                        continue
+                    _other = (self.away_team if _team is self.home_team
+                              else self.home_team)
+                    _diff = (int(self.score.get(_tn, 0))
+                             - int(self.score.get(
+                                 getattr(_other, "team_name", ""), 0)))
+                    _pp = getattr(self, "pp_team", None)
+                    _pk = getattr(self, "pk_team", None)
+                    _heat = 0.0
+                    try:
+                        import reputation_system as _rsq
+                        _lg = getattr(self, "league", None)
+                        _rivs = (getattr(_lg, "rivalries", None)
+                                 if _lg else None)
+                        if _rivs:
+                            _rh = _rsq.get_rivalry_heat(_rivs, _team, _other)
+                            _heat = float((_rh or {}).get("heat", 0) or 0)
+                    except Exception:
+                        pass
+                    _want = _aii(_diff, _per, _t, _coach,
+                                 flags=_fb.get(_tn), rivalry_heat=_heat,
+                                 on_pp=_pp == _tn, on_pk=_pk == _tn)
+                    _have = self._coach_instructions.get(_tn)
+                    if _want == _have:
+                        continue
+                    if _want:
+                        self._coach_instructions[_tn] = _want
+                        self._coach_instruction_source[_tn] = "ai"
+                    else:
+                        self._coach_instructions.pop(_tn, None)
+                        self._coach_instruction_source.pop(_tn, None)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _instruction_effect(self, team_name, channel, default=1.0):
+        """D1: this team's instruction effect channel (fast path).
+
+        Multipliers are efficacy-scaled on the delta (bounded). Never
+        raises.
+        """
+        try:
+            from mesh_system import (coach_instruction_effects as _cie,
+                                     coach_instruction_efficacy as _ceff)
+            _instrs = getattr(self, "_coach_instructions", {}) or {}
+            _fx = _cie(_instrs.get(team_name, ""))
+            _v = float(_fx.get(channel, default))
+            if _v == default:
+                return default
+            _coach = (getattr(self, "_home_coach", None)
+                      if team_name == getattr(self.home_team, "team_name",
+                                             "")
+                      else getattr(self, "_away_coach", None))
+            _eff = _ceff(_coach)
+            return 1.0 + (_v - 1.0) * _eff
+        except Exception:
+            return default
+
     # -- Crowd (arena_atmosphere) -------------------------------------------
     def _init_crowd(self, atmosphere):
         """Seed crowd state from a pregame_crowd() dict (or a quiet default)."""
@@ -1246,6 +1365,12 @@ class AdvancedGameSim:
         if self.time >= 1200 * self.period:
             old_period = self.period
             self.period += 1
+            # D1 design build: benches re-evaluate between periods (same
+            # shared decision as the watched path's intermission look).
+            try:
+                self._refresh_coach_instructions()
+            except Exception:
+                pass
             # The net is never empty across a horn.
             self._return_all_goalies()
             if old_period == 2 and self.period == 3:
@@ -1572,7 +1697,8 @@ class AdvancedGameSim:
         _puck_team = (self.home_team if puck_team_name == self.home_team.team_name
                       else self.away_team)
         event_type = self._determine_event_type(shooter, shooters, fatigue_factor,
-                                                team=_puck_team)
+                                                team=_puck_team,
+                                                opp_team_name=opp_team_name)
         
         if event_type == "SHOT":
             self._resolve_shot_event(shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters)
@@ -1649,7 +1775,8 @@ class AdvancedGameSim:
         position_skill = (off_the_puck + anticipation + hockey_iq) / 3
         return 1.0 + (position_skill - 10) * 0.03
     
-    def _determine_event_type(self, player, shooters, fatigue_factor, team=None):
+    def _determine_event_type(self, player, shooters, fatigue_factor, team=None,
+                                opp_team_name=None):
         """Determine what type of event occurs based on player attributes"""
         creativity = getattr(player, 'creativity', 10)
         decision_making = getattr(player, 'decision_making', 10)
@@ -1801,6 +1928,25 @@ class AdvancedGameSim:
                 if _unit_qs:
                     _tm_qs = self.home_team if _pp_tn == self.home_team.team_name else self.away_team
                     shot_prob *= _pzs_qs(_unit_qs, sim=self, team=_tm_qs)
+        except Exception:
+            pass
+
+        # D1 design build: coach instructions move the volume gate -- the
+        # fast fidelity of the watched path's rush nudges (same shared
+        # effects). Own instruction scales own shot volume; the
+        # opponent's defensive instruction suppresses it; crash_net adds
+        # net-front presence (screens up -- the deflection else-branch
+        # rides along).
+        try:
+            _tn = getattr(team, "team_name", "") if team is not None else ""
+            if _tn:
+                shot_prob *= self._instruction_effect(
+                    _tn, "shot_volume_mult", 1.0)
+                screen_prob *= self._instruction_effect(
+                    _tn, "netfront_event_mult", 1.0)
+            if opp_team_name:
+                shot_prob *= self._instruction_effect(
+                    opp_team_name, "opp_shot_volume_mult", 1.0)
         except Exception:
             pass
 
@@ -2411,6 +2557,17 @@ class AdvancedGameSim:
                     "quick_release": shot_type == "one-timer",
                     "screened_goalie": bool(screened_now),
                     "won_spot": False,
+                    # D12 (2026-09-30): quick_sim DOES generate a discrete
+                    # rebound event now -- _resolve_rebound_event, fired off
+                    # real saves in _resolve_shot_event. It is the fast
+                    # approximation of GameSim._resolve_rebound_chance:
+                    # the same rebound-control trigger ladder, the same
+                    # anticipation+offensive_awareness finisher pick, and
+                    # the SHARED mesh_system.netfront_finish_chance
+                    # decision (never a different formula). The graded
+                    # stream itself never emits rebound situations, so
+                    # this stays False; roll_chance_grade hard-gates any
+                    # rebound situation to grade A regardless.
                     "rebound": False,
                     "tip": shot_type in ("tip", "deflection"),
                 },
@@ -3013,6 +3170,13 @@ class AdvancedGameSim:
                                    self, "_pull_clock", {}).get(puck_team_name))
             except Exception:
                 pass
+            # D1 design build: goals move benches (conceding coach
+            # re-evaluates -- same shared decision as the watched path).
+            try:
+                self._refresh_coach_instructions(
+                    flags_by_team={opp_team_name: {"goal_against"}})
+            except Exception:
+                pass
             # The net is never empty across a goal: both goalies return.
             self._return_all_goalies()
             # Crowd: the building swings on every goal (live mood/energy).
@@ -3089,6 +3253,13 @@ class AdvancedGameSim:
                 self.stats[opp_team_name][goalie.id]['saves'] = self.stats[opp_team_name][goalie.id].get('saves', 0) + 1
             # Add shot/save event
             self.events.append({'time': self.time, 'period': self.period, 'team': puck_team_name, 'player': shooter, 'event': 'Shot'})
+            # D12 discrete rebound event (2026-09-30, Muck: quick sim must
+            # behave the SAME as the watched sim): a real save (not a miss)
+            # can kick out a rebound -- the fast approximation of
+            # GameSim._resolve_rebound_chance, wired below.
+            if shot_result == 'SAVE':
+                self._resolve_rebound_event(goalie, puck_team_name,
+                                            opp_team_name, shot_type, shooters)
         else:
             shot_result = 'MISS'
             # Add missed shot event
@@ -3138,7 +3309,208 @@ class AdvancedGameSim:
                     'faceoff_pos': (50, 25)
                 }
             })
-    
+
+    def _resolve_rebound_event(self, goalie, puck_team_name, opp_team_name,
+                               shot_type, shooters):
+        """Discrete rebound event (D12 quick-sim wiring, 2026-09-30, Muck).
+
+        Fast approximation of GameSim._resolve_rebound_chance -- the SAME
+        trigger ladder, the SAME finisher pick and net-front battle, and
+        the SHARED mesh_system.netfront_finish_chance decision (never a
+        different formula). Rebounds are grade A by the shared hard gate.
+        Returns True when a rebound chance resolved (goal or save).
+        """
+        # --- finisher pool: on-ice attackers, goalie excluded -----------
+        _attackers = [p for p in (shooters or [])
+                      if p is not None
+                      and getattr(getattr(p, "primary_position", None),
+                                  "name", "") != "GOALIE"]
+        if not _attackers:
+            return False
+
+        # --- trigger: GameSim's rebound-control ladder, fast form -------
+        # GameSim._determine_rebound_control computes control_probability
+        # and fires the rebound chance on WEAK_REBOUND/DANGEROUS_REBOUND
+        # (P = 1 - control_probability). Rungs resolve as plain indices
+        # here (the enum lives in simulation.py); the ladder math is
+        # identical: absorbed < cp*0.45, controlled < cp*0.75,
+        # deflected_away < cp, weak < cp + (1-cp)*0.7, else dangerous.
+        _rc = float(getattr(goalie, "rebound_control", 69.0) or 69.0) \
+            if goalie is not None else 69.0
+        _base = min(0.97, max(0.50, 0.80 + (_rc - 69.0) * 0.008))
+        # PROXY (documented): quick_sim does not model save types, so the
+        # GameSim save-type modifier (0.4-1.3 across glove/chest/stick/
+        # pad/blocker/desperation/diving) is replaced by its expected
+        # value over GameSim's own save-type distribution (base: glove
+        # .2/chest .15/stick .1/pad .3/blocker .2/desperation .04/diving
+        # .01 -> 1.3*.2+1.2*.15+0.7*.1+0.8*.3+0.6*.2+0.4*.04+0.5*.01
+        # = 0.89). The shot-type modifier mirrors GameSim's table
+        # exactly (slap 0.7, one-timer 0.6, tip 0.5, deflection 0.4).
+        _shot_mod = {"slap shot": 0.7, "one-timer": 0.6,
+                     "tip": 0.5, "deflection": 0.4}.get(shot_type, 1.0)
+        _cp = min(_base * 0.89 * _shot_mod, 0.97)
+        _r = random.random()
+        _rung = (0 if _r < _cp * 0.45 else
+                 1 if _r < _cp * 0.75 else
+                 2 if _r < _cp else
+                 3 if _r < _cp + (1.0 - _cp) * 0.7 else 4)
+        # Goalie personality: the same rebound_shift GameSim applies --
+        # athletic scramblers kick out more second chances, technicians
+        # swallow pucks. Shifts the outcome one rung up/down the ladder.
+        try:
+            import goalie_personality as _gp_rb
+            _shift = (float(_gp_rb.rebound_shift(goalie))
+                      if goalie is not None else 0.0)
+            if _shift > 0 and random.random() < _shift:
+                _rung = min(4, _rung + 1)
+            elif _shift < 0 and random.random() < -_shift:
+                _rung = max(0, _rung - 1)
+        except Exception:
+            pass
+        if _rung < 3:
+            return False  # controlled: no rebound, play continues
+
+        # --- the goalie kicked this puck out: he created the rebound ----
+        # (mirrors GameSim: debited before the scramble, on both
+        # branches; never raises on goalie-less synthetic setups)
+        if goalie is not None:
+            _gst = self.stats[opp_team_name].setdefault(goalie.id, {})
+            _gst['rebounds_created'] = _gst.get('rebounds_created', 0) + 1
+
+        # --- finisher pick + net-front battle (GameSim's formula) -------
+        # Same weights GameSim uses (no proxy needed: shooters IS the
+        # on-ice attacking group): anticipation + offensive_awareness.
+        # Then the same scramble: attacker roll vs best defender roll --
+        # the forward-vs-defense half of forward vs (defense + goalie).
+        _finisher = random.choices(
+            _attackers,
+            weights=[max(1.0,
+                         float(getattr(p, "anticipation", 10) or 10)
+                         + float(getattr(p, "offensive_awareness", 10) or 10))
+                     for p in _attackers],
+            k=1)[0]
+        try:
+            _d_onice = ((self.on_ice.get(opp_team_name, {}) or {})
+                        .get("Defense", []))
+            _defenders = [d for d in _d_onice if d is not None]
+        except Exception:
+            _defenders = []
+        _best_def = (max(_defenders,
+                         key=lambda p: (float(getattr(p, "anticipation", 10)
+                                              or 10)
+                                        + float(getattr(p, "defensive_awareness",
+                                                        10) or 10)))
+                     if _defenders else None)
+        _att_roll = (float(getattr(_finisher, "anticipation", 10) or 10)
+                     + float(getattr(_finisher, "offensive_awareness", 10)
+                             or 10) + random.randint(1, 10))
+        _def_roll = ((float(getattr(_best_def, "anticipation", 10) or 10)
+                      + float(getattr(_best_def, "defensive_awareness", 10)
+                              or 10) + random.randint(1, 10))
+                     if _best_def is not None else 0)
+        if not (_att_roll > _def_roll):
+            return False  # defender clears it: play continues, nothing
+                          # invented (quick_sim has no possession model
+                          # on this path)
+
+        # --- the shared decision: forward vs goalie --------------------
+        # goalie_skill is computed exactly as in GameSim's D12 hunk
+        # (overall_rating, 60.0 fallback); netfront_finish_chance never
+        # raises and returns within [0.05, 0.55].
+        try:
+            from mesh_system import netfront_finish_chance as _nffc
+            _gs = 60.0
+            try:
+                _ov = getattr(goalie, "overall_rating", None)
+                if callable(_ov):
+                    _gs = float(_ov())
+                elif _ov is not None:
+                    _gs = float(_ov)
+            except Exception:
+                pass
+            _nf_p = float(_nffc(_finisher, goalie, _gs))
+        except Exception:
+            _nf_p = 0.22
+        _reb_goal = random.random() < _nf_p
+
+        # --- the rebound is its own shot: grade A by the hard gate -----
+        _fst = self.stats[puck_team_name].setdefault(_finisher.id, {})
+        _fst['shots'] = _fst.get('shots', 0) + 1
+        _fst['grade_a_shots'] = _fst.get('grade_a_shots', 0) + 1
+        self.events.append({'time': self.time, 'period': self.period,
+                            'team': puck_team_name, 'player': _finisher,
+                            'event': 'Shot'})
+
+        if _reb_goal:
+            # Rebound goal -- credited exactly as the quick_sim goal path.
+            _fst['goals'] = _fst.get('goals', 0) + 1
+            _fst['grade_a_goals'] = _fst.get('grade_a_goals', 0) + 1
+            _fst['rebounds_scored'] = _fst.get('rebounds_scored', 0) + 1
+            self.score[puck_team_name] += 1
+            # The net is never empty across a goal: both goalies return.
+            self._return_all_goalies()
+            # Crowd: the building swings on every goal.
+            self._crowd_on_goal(puck_team_name)
+            # Goalie personality: charge the goal to the beaten goalie --
+            # bounce-back clock starts, tilt check for shelled battlers.
+            if goalie is not None:
+                try:
+                    import goalie_personality as _gp2r
+                    _st2 = self.goalie_personality_state.get(goalie.id)
+                    if _st2 is None:
+                        _st2 = _gp2r.new_game_state()
+                        self.goalie_personality_state[goalie.id] = _st2
+                    _gp2r.record_goal_allowed(_st2)
+                    _gp2r.check_tilt(goalie, _st2)
+                except Exception:
+                    pass
+            # Assists: the finisher is the scorer of the rebound goal.
+            assist_ids, assist_players = self._credit_assists(_finisher,
+                                                              puck_team_name)
+            self.events.append({'time': self.time, 'period': self.period,
+                                'team': puck_team_name, 'player': _finisher,
+                                'event': 'Goal', 'assists': assist_players})
+            if self.pp_team == puck_team_name:
+                _strength = 'PP'
+            elif self.pk_team == puck_team_name:
+                _strength = 'SH'
+            else:
+                _strength = 'EV'
+            _in_period = max(0.0, self.time - 1200 * (self.period - 1))
+            self.event_log.append({
+                'timestamp': self.time,
+                'duration': 1.0,
+                'type': 'GOAL_ADVANCED',
+                'details': {
+                    'scorer_id': _finisher.id,
+                    'assist_ids': assist_ids,
+                    'goaltender_id': goalie.id if goalie else None,
+                    'goal_type': 'rebound',
+                    'period': self.period,
+                    'strength': _strength,
+                    'time_str': f"{int(_in_period // 60)}:{int(_in_period % 60):02d}",
+                }
+            })
+            # PP ends when the PP team scores (NHL rule)
+            if self.pp_team == puck_team_name:
+                self.pp_team = None
+                self.pk_team = None
+                self.pp_end_time = None
+            self.event_log.append({
+                'timestamp': self.time + 1.0,
+                'duration': 2.0,
+                'type': 'STOPPAGE',
+                'details': {'reason': 'Goal Scored', 'faceoff_pos': (50, 25)}
+            })
+        else:
+            # Rebound saved -- the goalie stops the second chance too
+            # (GameSim credits this save on its rebound path); play
+            # continues, no invented second-order events.
+            if goalie is not None:
+                _gst2 = self.stats[opp_team_name].setdefault(goalie.id, {})
+                _gst2['saves'] = _gst2.get('saves', 0) + 1
+        return True
+
     def _calculate_goalie_save_skill(self, goalie, shot_type, danger_level=None, distance=None, situation=None):
         """Enhanced goalie skill calculation with coordinate-based danger awareness.
 
@@ -3471,6 +3843,12 @@ class AdvancedGameSim:
 
             if random.random() < goal_chance:
                 self.score[puck_team_name] += 1
+                # D1: tip goals move benches too (same shared decision).
+                try:
+                    self._refresh_coach_instructions(
+                        flags_by_team={opp_team_name: {"goal_against"}})
+                except Exception:
+                    pass
                 self.stats[puck_team_name][deflector.id]['goals'] = self.stats[puck_team_name][deflector.id].get('goals', 0) + 1
                 # Net-front goals are a tracked category (QA: netfront_goals)
                 try:
@@ -3516,6 +3894,25 @@ class AdvancedGameSim:
             _disc = _mm.get("home_discipline" if _mh else "away_discipline", 1.0)
             penalty_chance *= max(0.5, min(1.5, 2.0 - _disc))
             penalty_chance = min(0.06, max(0.005, penalty_chance))
+        except Exception:
+            pass
+        # D1 design build: the offending team's instruction moves the
+        # penalty rate -- the fast fidelity of the watched path's
+        # instruction_penalty_mult on hit results (same shared function,
+        # coach-mediated, player from the draw itself). Bounded.
+        try:
+            from mesh_system import instruction_penalty_mult as _ipm_qs
+            _tn = getattr(self, "home_team", None)
+            _coach_qs = (getattr(self, "_home_coach", None)
+                         if _tn is not None and puck_team_name
+                         == getattr(_tn, "team_name", "")
+                         else getattr(self, "_away_coach", None))
+            _instrs_qs = getattr(self, "_coach_instructions", {}) or {}
+            _pm = _ipm_qs(_instrs_qs.get(puck_team_name, ""),
+                          player=penalized, coach=_coach_qs)
+            if _pm != 1.0:
+                penalty_chance *= _pm
+                penalty_chance = min(0.06, max(0.005, penalty_chance))
         except Exception:
             pass
         # --- attribute composites (additive, bounded) ---

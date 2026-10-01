@@ -93,18 +93,27 @@ def condition_text(player):
 def injury_status(player):
     """Injury status string, or None when the player is healthy/unknown.
 
+    D14 (fixed 2026-09-30): the single source of truth is the real injury
+    system (is_injured / injury_type / games_remaining_injured, counted
+    down by the recovery loop in main._process_injury_recovery). The
+    legacy injury_status string was written by the old hit-injury path
+    and never cleared -- reading it back here made phantom injuries
+    report forever (practice exclusion, roster tags, profile pills). The
+    legacy writer is gone, so this reads only the real state.
+
     Never raises.
     """
     try:
-        s = getattr(player, "injury_status", None)
-        if s is None:
-            return None
-        s = str(s).strip()
-        if not s or s.lower() in ("healthy", "none", "ok", "fit"):
-            return None
-        return s
+        if getattr(player, "is_injured", False):
+            t = getattr(player, "injury_type", None)
+            if t is not None:
+                t = str(t).strip()
+                if t and t.lower() not in ("none", "healthy", "ok", "fit"):
+                    return t
+            return "Injured"
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _clamp(v):

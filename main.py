@@ -154,6 +154,38 @@ class GameManager:
         # Game calendar date. The GUI syncs its own current_date here on
         # startup; default keeps headless/engine paths working.
         self.current_date = START_DATE
+        # D10: reputation_system stamps everything in GAME time. Register
+        # the providers once here; the module falls back to wall-clock
+        # when headless/unregistered.
+        try:
+            import reputation_system as _rs10
+
+            def _gm_date():
+                try:
+                    return self.current_date
+                except Exception:
+                    from datetime import date as _d
+                    return _d.today()
+
+            def _gm_games_elapsed():
+                try:
+                    today = self.current_date
+                    played = 0
+                    for _e in (getattr(self.league, "schedule", None) or []):
+                        try:
+                            if _e and _e[0] <= today:
+                                played += 1
+                        except Exception:
+                            pass
+                    # 32 clubs, 2 per game: per-team average = played / 16.
+                    return played // 16
+                except Exception:
+                    return 0
+
+            _rs10.register_date_provider(_gm_date)
+            _rs10.register_games_provider(_gm_games_elapsed)
+        except Exception:
+            pass
         
         # Initialize records system lazily to avoid blocking startup
         self._record_manager = None
@@ -7060,6 +7092,26 @@ class HockeyManagerGUI(tk.Tk):
                     except Exception:
                         pass
 
+            # D5 follow-up: undecided staff renewal offers lapse at the
+            # first game day of the season (preseason or regular) -- the
+            # staffer walks to the free-agent pool. Once per season.
+            try:
+                _rsy = getattr(getattr(self, 'league', None),
+                               'season_year', None)
+                if (_rsy is not None
+                        and getattr(self, '_renewals_resolved_year', None)
+                        != _rsy):
+                    self._renewals_resolved_year = _rsy
+                    import staff_renewals as _srr
+                    for _rl in (_srr.resolve_pending_renewals(
+                            self.league) or []):
+                        try:
+                            self.add_news("🧑‍💼 " + str(_rl))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
@@ -10749,12 +10801,15 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-    def _weekly_coaching_mults(self, team, player, attrs, _cache):
+    def _weekly_coaching_mults(self, team, player, attrs, _cache,
+                               assignment="nhl"):
         """Per-attribute coaching multipliers for the weekly all-team
         development tick. Same practice_breakdown math as practice
         sessions (drill knowledge, archetype affinity, attitude, fit,
         system) -- one mechanic for all 32 clubs, user and AI alike.
-        Additive: returns 1.0 for anything it can't price. Never raises.
+        D8: `assignment` ("nhl" | "ahl" | "overseas") splits the quality
+        behind the bench by roster. Additive: returns 1.0 for anything it
+        can't price. Never raises.
         """
         try:
             import coach_practice as _cp
@@ -10765,14 +10820,16 @@ class HockeyManagerGUI(tk.Tk):
             drill = _cp.attribute_drill(attr)
             if drill is None or not hasattr(player, attr):
                 continue
-            # Keyed by team too: the same player object must never borrow
-            # another club's staff pricing.
-            key = (id(team), id(player), drill)
+            # Keyed by team AND assignment too: the same player object must
+            # never borrow another club's staff pricing or another
+            # roster's bench quality.
+            key = (id(team), id(player), drill, assignment)
             mult = _cache.get(key)
             if mult is None:
                 try:
                     mult = float(_cp.practice_breakdown(
-                        team, player, drill).get("total_mult", 1.0))
+                        team, player, drill,
+                        assignment=assignment).get("total_mult", 1.0))
                 except Exception:
                     mult = 1.0
                 _cache[key] = mult
@@ -10842,9 +10899,15 @@ class HockeyManagerGUI(tk.Tk):
                                 # Coaching parity: this club's staff shapes the
                                 # weekly tick exactly the way they shape a
                                 # practice session (same model, all 32 teams).
+                                # D8: bench quality splits by roster -- AHL
+                                # skaters learn from the AHL bench, prospects
+                                # from their junior/college/Euro program.
+                                _asg8 = ("nhl" if roster_type == "roster"
+                                         else ("ahl" if roster_type == "ahl"
+                                               else "overseas"))
                                 coach_mults = self._weekly_coaching_mults(
                                     team, player, developable_attrs,
-                                    _coach_cache)
+                                    _coach_cache, assignment=_asg8)
                                 
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
@@ -11283,9 +11346,12 @@ class HockeyManagerGUI(tk.Tk):
             _bundle_res = getattr(self, '_game_day_resolution', None)
             _bundle_active = (_bundle_res is not None
                               and _bundle_res.get("date") == self.current_date)
+            _bundle_instruction = None  # D1: only the bundle carries one
             if _bundle_active:
                 use_game_viewer = bool(_bundle_res.get("watch"))
                 _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
+                # D1: the user's explicit coach instruction from the bundle.
+                _bundle_instruction = _bundle_res.get("instruction")
                 self._game_day_resolution = None  # consume once
             elif getattr(self, '_bulk_simming', False):
                 use_game_viewer = False
@@ -11316,7 +11382,8 @@ class HockeyManagerGUI(tk.Tk):
                 # Modern visual play-by-play (rink + live player bubbles).
                 # Modal: returns the standard 6-tuple once watched to the end.
                 result = self._simulate_game_with_pbp_visual(
-                    home_team, away_team, outdoor=_outdoor_info)
+                    home_team, away_team, outdoor=_outdoor_info,
+                    coach_instruction=_bundle_instruction)
                 winner, loser, scores, events, notable_events, sim_engine = result
                 # GameSim already updated player season stats itself; the
                 # event-based stat pass below must be skipped to avoid
@@ -11425,6 +11492,17 @@ class HockeyManagerGUI(tk.Tk):
                     league=getattr(self, "league", None))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                # D1: the user's explicit coach instruction from the
+                # game-day bundle -- uniform channel, inert on the quick
+                # path (no hit classifier), but accepted for parity.
+                # "none" is the explicit no-instruction call: nothing to set.
+                if (_bundle_instruction and _bundle_instruction != "none"
+                        and self.user_team is not None):
+                    try:
+                        sim_engine.set_coach_instruction(
+                            self.user_team.team_name, _bundle_instruction)
+                    except Exception:
+                        pass
                 # Pregame ceremony (if one is queued): electric building via
                 # the atmosphere flag above, plus the room's one-game bump.
                 try:
@@ -13978,7 +14056,7 @@ class HockeyManagerGUI(tk.Tk):
         return winner, loser, scores, events, notable_events, sim_engine
 
     def _simulate_game_with_pbp_visual(self, home_team, away_team,
-                                       outdoor=None):
+                                       outdoor=None, coach_instruction=None):
         """Run the modern visual play-by-play window modally for a user game.
 
         Opens the live PBP viewer (rink + player bubbles driven by real sim
@@ -13986,6 +14064,9 @@ class HockeyManagerGUI(tk.Tk):
         the final whistle and the window is closed. Returns the standard
         6-tuple (winner, loser, scores, events, notable_events, sim_engine)
         so the result processes exactly like any other sim.
+
+        D1: coach_instruction is the user's explicit game-day call,
+        forwarded to open_pbp_window (applied via the standard channel).
         """
         from pbp_visual_sim import open_pbp_window
 
@@ -14058,7 +14139,8 @@ class HockeyManagerGUI(tk.Tk):
                               rivalries=getattr(getattr(self, "league", None),
                                                 "rivalries", []),
                               user_team=getattr(self, "user_team", None),
-                              outdoor=outdoor)
+                              outdoor=outdoor,
+                              coach_instruction=coach_instruction)
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
@@ -15336,8 +15418,33 @@ class HockeyManagerGUI(tk.Tk):
         # Must precede league.end_of_season(), which wipes the standings the
         # draft order is built from.
         self._guarantee_offseason_tentpoles()
+        # D5: offseason staff carousel -- AI clubs approach expiring
+        # staff (the "stud assistant in his final year who wants a
+        # head-coach job" case). Runs BEFORE end_of_season() so the
+        # tick below only decrements the staff who stayed.
+        try:
+            import staff_poaching as _sp
+            _pn5 = _sp.offseason_staff_poach(self.league, self.user_team)
+            if _pn5:
+                self.league.staff_contract_news = (
+                    list(getattr(self.league, "staff_contract_news", None)
+                         or []) + [str(_m) for _m in _pn5])
+        except Exception:
+            pass
         # Age players and reset stats
         self.league.end_of_season()
+
+        # D5 follow-up: the contract tick above held the user's expired
+        # staff for renewal instead of releasing them. Their offer
+        # arrives as one interactive inbox message (never a popout).
+        # Decline/ignore walks them to the free-agent pool.
+        try:
+            import staff_renewals as _srq
+            _uq = getattr(self, "user_team", None)
+            if _uq is not None:
+                _srq.queue_user_renewal_message(self.league, _uq, self)
+        except Exception:
+            pass
 
         # Draft rights lifecycle: end_of_season() (game_classes) collected
         # re-entry / UFA / retirement / warning messages on league.rights_news.
@@ -15378,6 +15485,19 @@ class HockeyManagerGUI(tk.Tk):
                     pass
             if _rn:
                 self.league.rivalry_review_news = []
+        except Exception:
+            pass
+        # D5: staff contract expiries + offseason poach moves.
+        try:
+            _sn = list(getattr(self.league, "staff_contract_news", None)
+                       or [])
+            for _msg in _sn:
+                try:
+                    self.add_news("🧑‍💼 " + str(_msg))
+                except Exception:
+                    pass
+            if _sn:
+                self.league.staff_contract_news = []
         except Exception:
             pass
         # Snapshot staff breakthrough headlines for the year-end recap
@@ -17333,6 +17453,44 @@ class HockeyManagerGUI(tk.Tk):
                 "talk_context": talk_ctx,
                 "talk_chosen": None,
                 "talk_boost": 1.0,
+                # D1: coach's instruction. The engine understands
+                # D1 design build: the coach's instruction for tonight. Six
+                # real benches' vocabulary + none. "none" = the user
+                # explicitly wants no instruction (distinct from None =
+                # unchosen, where the AI fill may still act). The user's
+                # call always wins over the AI fill
+                # (simulation._ai_coach_instructions).
+                "instruction_options": [
+                    {"id": "play_harder",
+                     "label": "🔥 Demand more: play harder",
+                     "text": "The bench wants a heavier, more physical "
+                             "sixty minutes -- forecheck through the whistle."
+                     },
+                    {"id": "tighten_up",
+                     "label": "🛡️ Lock it down: tighten up",
+                     "text": "Take away the middle of the ice -- nothing "
+                             "through the slot, make them beat us wide."},
+                    {"id": "crash_net",
+                     "label": "🥅 Crash the net",
+                     "text": "Pucks and bodies to the blue paint -- screens, "
+                             "tips, second chances."},
+                    {"id": "protect_lead",
+                     "label": "🐢 Protect the lead",
+                     "text": "Sit on it smart -- structure first, manage "
+                             "the clock, no heroics."},
+                    {"id": "chase_game",
+                     "label": "⚡ Chase the game",
+                     "text": "We need goals -- activate the defense, push "
+                             "the pace, live with the exposure."},
+                    {"id": "stay_disciplined",
+                     "label": "🧊 Stay disciplined",
+                     "text": "Skates clean -- no retaliation, no lazy "
+                             "hooks. Stay out of the box."},
+                    {"id": "none",
+                     "label": "🌙 No special instruction",
+                     "text": "Let the game come to us."},
+                ],
+                "instruction_chosen": None,
             })
 
     def _maybe_open_game_day_bundle(self, todays_games) -> bool:
@@ -17388,17 +17546,36 @@ class HockeyManagerGUI(tk.Tk):
             print(f"Bundle team talk error (non-fatal): {e}")
             return ""
 
+    def _answer_bundle_instruction(self, message, opt_id) -> None:
+        """Inbox callback: the coach's instruction for tonight (D1).
+
+        Stored on the bundle; applied to the sim at game construction
+        (watch: open_pbp_window; quick: AdvancedGameSim). Explicit user
+        choice -- the AI fill never overwrites it.
+        """
+        try:
+            data = message.action_data or {}
+            valid = {o.get("id") for o in (data.get("instruction_options")
+                                           or [])}
+            data["instruction_chosen"] = (opt_id if opt_id in valid
+                                          else None)
+        except Exception as e:
+            print(f"Bundle instruction error (non-fatal): {e}")
+
     def _resolve_game_day(self, watch: bool):
         """Inbox callback: Watch Live / Quick Sim picked. Close the inbox
         and run the day with the bundle's collected choices."""
         try:
             msg = self._find_game_day_bundle(self.current_date)
             talk_boost = 1.0
+            instruction = None
             if msg is not None:
                 talk_boost = float((msg.action_data or {}).get("talk_boost", 1.0) or 1.0)
+                instruction = (msg.action_data or {}).get("instruction_chosen")
                 msg.action_done = True
             self._game_day_resolution = {
                 "watch": bool(watch), "talk_boost": talk_boost,
+                "instruction": instruction,
                 "date": self.current_date,
             }
             try:
@@ -19103,6 +19280,14 @@ class HockeyManagerGUI(tk.Tk):
                     date_str=str(getattr(self, "current_date", "")))
             except Exception:
                 pass
+            # D4: signing a star is a board headline (star_signing fuel).
+            try:
+                import reputation_system as _rs4
+                _rs4.note_star_signing(
+                    getattr(getattr(self, "career", None), "board", None),
+                    person)
+            except Exception:
+                pass
         self.news_log.append({'date': self.current_date, 'story': f"The {self.user_team.team_name} have signed {person.full_name} to a {years}-year contract."})
 
         # Generate media event for signing (if media system enabled)
@@ -19324,6 +19509,14 @@ class HockeyManagerGUI(tk.Tk):
                         self.league, team, person,
                         season_year=season_year)
                     ok = True
+                    # D4: buying out a star is a board headline.
+                    try:
+                        import reputation_system as _rs4b
+                        _rs4b.note_star_departure(
+                            getattr(getattr(self, "career", None),
+                                    "board", None), person)
+                    except Exception:
+                        pass
                     try:
                         self.add_news(
                             f"✂️ You bought out "
@@ -19344,6 +19537,40 @@ class HockeyManagerGUI(tk.Tk):
         cards = data.get("cards", []) or []
         if len(decided) >= len(cards):
             message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
+
+    def apply_staff_renewal_decision(self, message, staff_id, years):
+        """Inbox action: re-sign an expired staffer (years=1/2/3) or let
+        him walk to the free-agent pool (years=None).
+
+        The D5 tick held him employed pending this decision, so the club
+        is never caught short mid-decision; a walked head coach triggers
+        the in-house promote fallback, exactly like the automatic path.
+        """
+        import staff_renewals as _sr
+        data = message.action_data or {}
+        try:
+            ok, lines = _sr.apply_renewal_decision(
+                self.league, staff_id, years)
+        except Exception:
+            ok, lines = False, []
+        decided = data.get("decided", {}) or {}
+        decided[str(staff_id)] = years
+        data["decided"] = decided
+        message.action_data = data
+        offers = data.get("offers", []) or []
+        if len(decided) >= len(offers):
+            message.action_done = True
+        for _ln in lines or []:
+            try:
+                _emo = "✍️ " if years else "🚶 "
+                self.add_news(_emo + str(_ln))
+            except Exception:
+                pass
         try:
             self.update_all_views()
         except Exception:
