@@ -474,12 +474,22 @@ class RosterView(ctk.CTkFrame):
         self._heading(top, text=f"{self.app.user_team.team_name.upper()} ROSTER",
                       size=18).pack(side="left")
 
-        # Quick roster stats on the right
-        nhl_count = len(self.app.user_team.roster)
+        # Quick roster stats on the right (R1: the /23 figure is the NHL
+        # active count -- emergency fill-ins are exempt, shown separately)
+        try:
+            import roster_limits as _rl
+            nhl_count = _rl.active_roster_count(self.app.user_team)
+            _fillers = sum(1 for p in self.app.user_team.roster
+                           if _rl.is_emergency_filler(p))
+        except Exception:
+            nhl_count = len(self.app.user_team.roster)
+            _fillers = 0
         ahl_count = len(self.app.user_team.ahl_roster)
         prospects_count = len(self.app.user_team.prospects)
         _, _, cap_space, _ = self._cap_numbers()
-        stats_text = (f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | "
+        stats_text = (f"NHL: {nhl_count}/23" +
+                      (f" (+{_fillers} emergency)" if _fillers else "") +
+                      f" | AHL: {ahl_count}/20 | "
                       f"Prospects: {prospects_count} | Cap Space: ${cap_space:,}")
         self.stats_label = self._body(top, text=stats_text, size=11)
         self.stats_label.pack(side="right")
@@ -1101,6 +1111,10 @@ class RosterView(ctk.CTkFrame):
         if roster_type == 'nhl':
             self._secondary_button(actions, text="Send to AHL",
                                    command=lambda: self.bulk_move_players('nhl', 'ahl')).pack(side="left", padx=3)
+            # R1 (roster limits): summon league-exception fill-ins when the
+            # club can't dress 18+2 -- available even over the cap.
+            self._secondary_button(actions, text="Summon Fill-Ins",
+                                   command=self._summon_fill_ins).pack(side="left", padx=3)
             self._primary_button(actions, text="Edit Lines",
                                  command=self.open_lines_editor).pack(side="left", padx=3)
         elif roster_type == 'ahl':
@@ -1145,6 +1159,10 @@ class RosterView(ctk.CTkFrame):
         tree.tag_configure('suspended', background='#3a2320')
         tree.tag_configure('elite', foreground=ct['GOLD'])
         tree.tag_configure('star', foreground=ct['TEAL'])
+        # R1 (roster limits): emergency fill-ins get a background-only tag
+        # (foreground tags don't compose reliably -- see the suspended note
+        # above). The status column carries the text badge.
+        tree.tag_configure('emergency', background='#232a3a')
 
         # Scrollbars
         v_scrollbar = ttk.Scrollbar(table_frame, orient="vertical",
@@ -1409,6 +1427,12 @@ class RosterView(ctk.CTkFrame):
                 _susp_n = 0
             if _susp_n > 0:
                 injury_status = f"SUSPENDED ({_susp_n})"
+            # R1 (roster limits): emergency fill-ins are badged in the
+            # status column (same pattern as SUSPENDED) -- clearly marked,
+            # qualitative, no numbers.
+            _is_filler = bool(getattr(player, 'emergency_filler', False))
+            if _is_filler:
+                injury_status = "EMERGENCY FILL-IN"
 
             # Basic values for all roster types (tier label, never numeric --
             # Muck's directive 2026-10-01; `overall` stays numeric for the
@@ -1451,10 +1475,12 @@ class RosterView(ctk.CTkFrame):
             tags = []
             if is_selected:
                 tags.append('selected')
-            if injury_status != 'Healthy':
+            if injury_status != 'Healthy' and not _is_filler:
                 tags.append('injured')
             if _susp_n > 0:
                 tags.append('suspended')
+            if _is_filler:
+                tags.append('emergency')
             if overall >= 94:
                 tags.append('elite')
             elif overall >= 88:
@@ -1764,7 +1790,17 @@ class RosterView(ctk.CTkFrame):
             total_salary = sum(getattr(p, 'salary', getattr(p.contract, 'salary', 750000)) for p in players)
             avg_age = sum(p.age for p in players) / len(players) if players else 0
 
-            summary = f"Players: {len(players)}/23 | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f}"
+            # R1: the /23 figure matches the day gate (fillers exempt).
+            try:
+                import roster_limits as _rl
+                _active = _rl.active_roster_count(self.app.user_team)
+                _fillers = sum(1 for p in players
+                               if _rl.is_emergency_filler(p))
+                _cnt = (f"{_active}/23" +
+                        (f" (+{_fillers} emergency)" if _fillers else ""))
+            except Exception:
+                _cnt = f"{len(players)}/23"
+            summary = f"Players: {_cnt} | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f}"
             self.nhl_summary_label.configure(text=summary)
 
         elif roster_type == 'ahl':
@@ -2107,6 +2143,46 @@ class RosterView(ctk.CTkFrame):
         else:
             messagebox.showinfo("Trade Block", f"{player.full_name} is already on the trade block.")
 
+    def _summon_fill_ins(self):
+        """R1 (roster limits): summon emergency fill-ins for the user club.
+
+        Fills exactly the dressed-lineup shortfall (18 skaters + 2 goalies)
+        with league-minimum replacement-level players -- available even
+        over the cap (the league exception). No-op with an explanation when
+        the club can already dress a lineup.
+        """
+        try:
+            import roster_limits as _rl
+            team = self.app.user_team
+            sk, go = _rl.lineup_shortfall(team)
+            if sk <= 0 and go <= 0:
+                messagebox.showinfo(
+                    "No fill-ins needed",
+                    "You can already dress a legal lineup "
+                    "(18 skaters + 2 goalies) -- no emergency fill-ins "
+                    "needed.")
+                return
+            summoned = _rl.summon_emergency_fillers(team)
+            if summoned:
+                need = []
+                if sk:
+                    need.append(f"{sk} skater{'s' if sk != 1 else ''}")
+                if go:
+                    need.append(f"{go} goalie{'s' if go != 1 else ''}")
+                messagebox.showinfo(
+                    "Emergency fill-ins summoned",
+                    f"The league office assigned {len(summoned)} emergency "
+                    f"fill-in(s) ({', '.join(need)}) so you can ice a legal "
+                    f"lineup.\n\nThey're replacement-level players on "
+                    f"league-minimum deals -- marked EMERGENCY on your "
+                    f"roster, exempt from the 23-man limit, and they return "
+                    f"to the pool automatically when you no longer need "
+                    f"them. They can't be traded or signed to standard "
+                    f"deals.")
+            self.update_views()
+        except Exception:
+            pass
+
     def open_lines_editor(self):
         """Open the live lines editor."""
         try:
@@ -2228,14 +2304,25 @@ class RosterView(ctk.CTkFrame):
             if rt in built:
                 self.update_roster_tab(rt)
 
-        # Update header stats
-        nhl_count = len(self.app.user_team.roster)
+        # Update header stats (R1: /23 is the NHL active count -- emergency
+        # fill-ins exempt, shown separately)
+        try:
+            import roster_limits as _rl
+            nhl_count = _rl.active_roster_count(self.app.user_team)
+            _fillers = sum(1 for p in self.app.user_team.roster
+                           if _rl.is_emergency_filler(p))
+        except Exception:
+            nhl_count = len(self.app.user_team.roster)
+            _fillers = 0
         ahl_count = len(self.app.user_team.ahl_roster)
         prospects_count = len(self.app.user_team.prospects)
 
         # Header cap figures (buyout dead cap included, matching the Salary Cap tab)
         _, _, cap_space, _ = self._cap_numbers()
-        stats_text = f"NHL: {nhl_count}/23 | AHL: {ahl_count}/20 | Prospects: {prospects_count} | Cap Space: ${cap_space:,}"
+        stats_text = (f"NHL: {nhl_count}/23" +
+                      (f" (+{_fillers} emergency)" if _fillers else "") +
+                      f" | AHL: {ahl_count}/20 | Prospects: {prospects_count} | "
+                      f"Cap Space: ${cap_space:,}")
         self.stats_label.configure(text=stats_text)
 
         # Update tab labels with counts (CTkTabview.rename keeps tab content)
