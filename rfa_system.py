@@ -2303,7 +2303,10 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
         budget = _spending_budget(team, incoming=True)
         best = None
         for p in sorted(pool, key=_market_value):
-            ask = min(_market_value(p), 1_500_000)
+            # Scarcity rides along: filling a hole at a thin position
+            # costs what the market demands (capped at cheap-depth money).
+            ask = min(int(_market_value(p) * _scarcity_mult(league, p)),
+                      1_500_000)
             if ask <= budget and budget >= LEAGUE_MIN_SALARY:
                 best = (p, ask)
                 break
