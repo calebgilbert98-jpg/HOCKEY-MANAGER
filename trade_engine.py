@@ -2504,6 +2504,21 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                 break
     except Exception:
         pass
+    # D4: acquiring a star is a board headline too (star_signing fuel).
+    # Mirror of the give side: the headline belongs on the receiving side's
+    # board -- `board` is the user_team-side board on user deals, None on
+    # AI-AI trades (the note no-ops there, same as the give side).
+    # One headline per trade, even in a multi-star blockbuster.
+    try:
+        from game_classes import DraftPick as _DP4
+        from reputation_system import note_star_signing as _nss4
+        for _a4 in list(partner_assets or []):
+            if isinstance(_a4, _DP4):
+                continue
+            if _nss4(board, _a4):
+                break
+    except Exception:
+        pass
     # Authoritative post-trade integration point: EVERY completed trade
     # path (user deals, AI deadline deals) flows through here.
     #  - Fresh start: rescued players get their morale payoff.
