@@ -1841,30 +1841,92 @@ def chance_grade_clamp(grade: str):
 def finishing_ceiling_fraction(finishing: float) -> float:
     """Map a 1-100 finishing rating to [0, 1] of the grade envelope.
 
-    Convex (exponent 1.3, anchored at 45): stars (90+) keep ~85-100% of
-    the envelope, a 75-finishing shooter keeps about half, a
-    60-finishing shooter about a fifth. finishing >= 95 -> 1.0, so the
-    league maximum is unchanged. Never raises.
+    Convex (exponent 1.1, anchored at 45): stars (90+) keep ~85-100% of
+    the envelope, a 75-finishing shooter keeps about 57%, a
+    60-finishing shooter about 27%. finishing >= 95 -> 1.0, so the
+    league maximum is unchanged. Softened 2026-10-01 (was 1.3): the
+    60-80 band was too compressed -- Muck wants windows for breakouts,
+    not a structural cap. Never raises.
     """
     try:
         _f = max(1.0, min(100.0, float(finishing)))
         _x = max(0.0, min(1.0, (_f - 45.0) / 50.0))
-        return _x ** 1.3
+        return _x ** 1.1
     except Exception:
         return 1.0
 
 
-def personal_grade_ceiling(player, grade, shot_tool=None):
+def ceiling_scenario_mult(player, linemates=None) -> float:
+    """Scenario lift for the personal finishing ceiling (2026-10-01, Muck).
+
+    The base ceiling is pure talent (finishing). But hockey has windows:
+    a heater, elite linemates, great chemistry, schemed-against relief.
+    Each factor >= 1.0; product capped at 1.8. Stars (95+) are already at
+    the envelope max, so the lift only creates windows for the middle --
+    separation by probability, not caps. Never raises.
+    """
+    try:
+        _mult = 1.0
+        # 1. Heat: a heater finishes better. 0.5 neutral -> 1.0;
+        #    1.0 (red-hot) -> 1.25. Cold doesn't penalize here (it already
+        #    hurts via the matchup tilt).
+        try:
+            _h = _player_heat(player)
+            if _h > 0.5:
+                _mult *= 1.0 + 0.50 * (_h - 0.5)
+        except Exception:
+            pass
+        # 2-4. Linemate effects (need the on-ice unit).
+        if linemates:
+            try:
+                _mates = [m for m in linemates if m is not None and m is not player]
+                if _mates:
+                    # 2. Elite linemate: a 90+ finisher on your line means
+                    #    better setups, more time/space. 90 -> 1.10,
+                    #    95 -> 1.15, 100 -> 1.20.
+                    _best = max((finishing_rating(m) for m in _mates),
+                                default=0.0)
+                    if _best >= 90.0:
+                        _mult *= 1.0 + 0.20 * min(1.0, (_best - 90.0) / 10.0 + 0.5)
+                    # 3. Line chemistry: great chemistry lifts everyone.
+                    try:
+                        from line_chemistry import line_chemistry_score as _lcs
+                        _chem = float(_lcs([player] + _mates))
+                        if _chem >= 70.0:
+                            _mult *= 1.0 + 0.12 * min(1.0, (_chem - 70.0) / 30.0)
+                    except Exception:
+                        pass
+                    # 4. Schemed-against relief: a star linemate drawing the
+                    #    shutdown coverage leaves easier looks for you.
+                    try:
+                        from line_chemistry import chemistry_relief_share as _crs
+                        _stars = [m for m in _mates if finishing_rating(m) >= 90.0]
+                        if _stars:
+                            _relief = max(_crs(player, _s, [player] + _mates)
+                                         for _s in _stars)
+                            _mult *= 1.0 + 0.15 * max(0.0, min(1.0, _relief))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        return min(1.8, _mult)
+    except Exception:
+        return 1.0
+
+
+def personal_grade_ceiling(player, grade, shot_tool=None, scenario_mult=1.0):
     """(lo, hi): the shooter's personal conversion ceiling for a graded
     chance. lo is the league floor for the grade; hi is the league
-    ceiling scaled by finishing_ceiling_fraction(finishing_rating).
-    League max unchanged (95+ finishing -> the full envelope).
-    Never raises.
+    ceiling scaled by finishing_ceiling_fraction(finishing_rating),
+    lifted by scenario_mult (heat, linemates, chemistry, scheme relief)
+    up to the envelope max. League max unchanged (95+ finishing -> the
+    full envelope). Never raises.
     """
     try:
         _lo, _hi = chance_grade_clamp(grade)
         _frac = finishing_ceiling_fraction(
             finishing_rating(player, shot_tool))
+        _frac = min(1.0, _frac * max(1.0, float(scenario_mult or 1.0)))
         return (_lo, _lo + (_hi - _lo) * _frac)
     except Exception:
         return chance_grade_clamp(grade)

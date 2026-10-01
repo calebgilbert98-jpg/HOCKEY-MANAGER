@@ -3005,11 +3005,22 @@ class AdvancedGameSim:
             # Personal finishing ceiling (2026-10-01, Muck): the
             # shooter's finishing scales his grade ceiling WITHIN the
             # protected league envelope -- the same shared decision
-            # GameSim applies. League max unchanged; the flat grade-A
+            # GameSim applies. Scenario lift (heat, linemates, chemistry,
+            # scheme relief) creates windows for breakouts; stars stay at
+            # the envelope max. League max unchanged; the flat grade-A
             # 0.18 for everyone is retired.
             try:
                 from mesh_system import personal_grade_ceiling as _pgc
-                _lo, _hi = _pgc(shooter, _grade, shot_tool=shot_tool)
+                from mesh_system import ceiling_scenario_mult as _csm
+                _mates = None
+                try:
+                    _oi = self.on_ice.get(puck_team_name, {})
+                    _mates = _oi.get('Forwards', None)
+                except Exception:
+                    pass
+                _sm = _csm(shooter, linemates=_mates)
+                _lo, _hi = _pgc(shooter, _grade, shot_tool=shot_tool,
+                                scenario_mult=_sm)
             except Exception:
                 pass
             shot_chance = max(_lo, min(_hi, shot_chance))

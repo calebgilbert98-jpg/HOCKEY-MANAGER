@@ -259,5 +259,45 @@ check("protected CLAMP untouched",
       mesh.CHANCE_GRADE_CLAMP == {"A": (0.10, 0.18), "B": (0.04, 0.12),
                                   "C": (0.015, 0.09)})
 
+# 10. Scenario lift (2026-10-01, Muck): windows for breakouts, not caps
+print("\n10. Scenario lift (windows, not caps):")
+_hot = Fake(**{a: 70 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_hot.mesh_form = 1.0  # red-hot heater
+_base_hi = mesh.personal_grade_ceiling(_hot, "A")[1]
+_lift_hi = mesh.personal_grade_ceiling(_hot, "A", scenario_mult=1.5)[1]
+check("scenario lift raises the ceiling", _lift_hi > _base_hi,
+      f"{_base_hi:.3f} -> {_lift_hi:.3f}")
+check("scenario lift never exceeds envelope", _lift_hi <= 0.18,
+      f"{_lift_hi:.3f}")
+_star = Fake(**{a: 97 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_star_hi = mesh.personal_grade_ceiling(_star, "A", scenario_mult=1.8)[1]
+check("stars stay at envelope max (lift doesn't exceed)",
+      _star_hi == mesh.chance_grade_clamp("A")[1],
+      f"{_star_hi:.3f}")
+# Heat-based scenario mult
+_hm = mesh.ceiling_scenario_mult(_hot)
+check("heater lifts scenario mult above 1.0", _hm > 1.0, f"{_hm:.3f}")
+_cold = Fake(**{a: 70 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_cold.mesh_form = -1.0  # ice cold
+_cm = mesh.ceiling_scenario_mult(_cold)
+check("cold doesn't penalize (stays 1.0)", _cm == 1.0, f"{_cm:.3f}")
+check("scenario mult capped at 1.8",
+      mesh.ceiling_scenario_mult(_hot, linemates=[_star, _star]) <= 1.8)
+
 print(f"\n{'='*40}\nPASS: {PASS}  FAIL: {FAIL}")
 sys.exit(1 if FAIL else 0)

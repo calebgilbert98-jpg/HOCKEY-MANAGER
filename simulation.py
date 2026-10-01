@@ -5581,16 +5581,27 @@ class GameSim:
         # finishing scales his conversion ceiling WITHIN the protected
         # league envelope -- the same shared decision quick-sim applies
         # in _apply_chance_grade (mesh_system.personal_grade_ceiling).
-        # Applied to the final goal probability, after all amplifiers.
+        # Scenario lift (heat, linemates, chemistry, scheme relief) creates
+        # windows for breakouts; stars stay at the envelope max. Applied
+        # to the final goal probability, after all amplifiers.
         # League max unchanged; no caps, no dampers -- pure talent.
         try:
             from mesh_system import personal_grade_ceiling as _pgc3
+            from mesh_system import ceiling_scenario_mult as _csm3
             _sbase3 = {
                 ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
                 ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
                 ShotType.BACKHAND: getattr(shooter, "backhand", 10),
             }.get(shot_type, getattr(shooter, "wristshot", 10))
-            _glo3, _ghi3 = _pgc3(shooter, grade, shot_tool=_sbase3)
+            _mates3 = None
+            try:
+                _mates3 = [p for p in self._get_on_ice(attacking_team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+            except Exception:
+                pass
+            _sm3 = _csm3(shooter, linemates=_mates3)
+            _glo3, _ghi3 = _pgc3(shooter, grade, shot_tool=_sbase3,
+                                 scenario_mult=_sm3)
             _gp3 = 1.0 - adjusted_save_prob
             if _gp3 > _ghi3:
                 adjusted_save_prob = 1.0 - _ghi3
