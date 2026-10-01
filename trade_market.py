@@ -1609,19 +1609,30 @@ def build_bid(app, league, bidder, player, seller, ask_points):
             _wf = 1.0
         target = ask_points * eagerness * (1.0 + 0.30 * _desp) * \
             max(0.5, min(1.2, _pf)) * _wf
-        # Rivalry tax (never-blocked rule, Muck 2026-09-29): a bitter rival
-        # pays a minuscule premium — max +2% at max rivalry intensity,
-        # scaling up from the old 50 threshold with no cliff. Winning is
-        # the objective, so this never blocks a deal; an overwhelming
-        # offer clears it without noticing.
+        # Rivalry gate (Wave B D40, Muck's never-blocked doctrine 2026-09-29):
+        # the SAME circumstantial gate as the direct-negotiation path --
+        # open / taxed / closed -- so both paths agree about what rivalry
+        # means. An overwhelming offer still clears a tax; only the crown
+        # jewel (or a contender's core piece) is closed between bitter
+        # rivals, and a closed gate means no bid at all.
         try:
             _sname = getattr(seller, "team_name", "")
             _bname = getattr(bidder, "team_name", "")
             _ri = float(tsl._rivalry_intensity(app, _bname, _sname) or 0)
         except Exception:
             _ri = 0.0
-        if _ri >= 50:
-            target *= 1.0 + 0.02 * min(1.0, max(0.0, (_ri - 50.0) / 50.0))
+        try:
+            _gate_sit = {"rivalry_intensity01": max(0.0, min(1.0, _ri / 100.0)),
+                         "stance": str(tsl.stance(app, _sname) or "")}
+            _g_ident = te.partner_gm_identity(seller)
+            _g_tiers = te.asset_franchise_tiers(seller, [player], _g_ident)
+            _g_verdict, _g_tax, _g_why = te.rivalry_trade_gate(
+                _gate_sit, seller, [player], _g_ident, _g_tiers)
+        except Exception:
+            _g_verdict, _g_tax = "open", 1.0
+        if _g_verdict == "closed":
+            return []
+        target *= _g_tax
         # Candidate assets: own tradeable picks (round 1-4), prospects,
         # then roster depth. Never the untouchable core (top-3 by value).
         cands = []
@@ -1649,9 +1660,27 @@ def build_bid(app, league, bidder, player, seller, ask_points):
                     continue
             vals.sort(key=lambda t: t[0], reverse=True)
             core_ids = {p.id for _v, p in vals[:3]}
+            # D31 (Wave B): the untouchable core is a franchise tier, not a
+            # top-3 cutoff -- an UNTOUCHABLE-tier piece (franchise_score 80+,
+            # GM-relative) is never offered, however the value list sorts.
+            # Tier reads via te.tier_label()/franchise_score(), never raw
+            # overall (talent-tiers coherence).
+            try:
+                _bid_ident = te.partner_gm_identity(bidder)
+                _bid_tiers = te.asset_franchise_tiers(
+                    bidder, [p for _v, p in vals], _bid_ident)
+            except Exception:
+                _bid_tiers = {}
             for _v, p in vals:
                 try:
                     if getattr(p, "id", None) in core_ids:
+                        continue
+                    try:
+                        _bl = _bid_tiers.get(getattr(p, "id", None),
+                                            ("GETTABLE", 0.0))[0]
+                    except Exception:
+                        _bl = "GETTABLE"
+                    if _bl == "UNTOUCHABLE":
                         continue
                     if te.trade_vetoes(bidder, seller, [p]):
                         continue

@@ -151,6 +151,10 @@ def situational_context(app, team, partner=None):
     Returns {'greed_mult': float, 'notes': [str]}. Multiply the AI's greed
     threshold by greed_mult: < 1 = more eager to deal, > 1 = drives a
     harder bargain.
+
+    Also carries 'rivalry_intensity01' (0..1, Wave B D40 gate) and 'stance'
+    ('buyer'/'seller'/'bubble'/'neutral', Wave B D40/D42) -- "" / 0.0 when
+    the caller has no app context.
     """
     ctx = {'greed_mult': 1.0, 'notes': []}
     try:
@@ -163,6 +167,12 @@ def situational_context(app, team, partner=None):
 
         # Standings stance: contenders buy, cellar teams sell
         st = stance(app, name)
+        # Wave B (D40/D42): the stance itself, for the rivalry gate and the
+        # stinginess pass. Additive key -- "" when unknown.
+        try:
+            ctx['stance'] = str(st or "")
+        except Exception:
+            ctx['stance'] = ""
         if st == 'buyer':
             mult *= _BUYER_MULT
             notes.append('buying for a Cup run')
@@ -182,16 +192,24 @@ def situational_context(app, team, partner=None):
             mult *= _WINNING_STREAK_MULT
             notes.append(f'{sk}-game win streak -- no need to tinker')
 
-        # Rivalries: minuscule premium only -- mirrors build_bid's
-        # never-blocked tax EXACTLY (B41, Muck 2026-09-29): max +2% at
-        # intensity 100, scaling from the 50 threshold with no cliff.
-        # Same cap, same threshold, same curve as the market path.
+        # Rivalries: priced by the Wave B circumstantial gate
+        # (trade_engine.rivalry_trade_gate -- open / taxed / closed), not
+        # here. The note stays so the talking points can name the bad
+        # blood; the gate owns the number, on both the direct and market
+        # paths. (B41's old +2% mirror retired with the gate.)
         if partner is not None:
             pname = getattr(partner, 'team_name', '')
             inten = _rivalry_intensity(app, name, pname)
+            # Wave B (D40): the raw intensity, 0..1, for the circumstantial
+            # rivalry gate in trade_engine (open / taxed / closed). Additive
+            # key -- 0.0 when the caller has no app context (gate stays
+            # open, never blocks blind).
+            try:
+                ctx['rivalry_intensity01'] = max(
+                    0.0, min(1.0, float(inten) / 100.0))
+            except Exception:
+                ctx['rivalry_intensity01'] = 0.0
             if inten >= 50:
-                bump = 1.0 + 0.02 * min(1.0, max(0.0, (float(inten) - 50.0) / 50.0))
-                mult *= bump
                 notes.append('bitter rivals -- premium demanded')
 
         # GM stature: the league judges YOU. Personal gm_gm heat was

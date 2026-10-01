@@ -1719,6 +1719,316 @@ class AIResponse:
     will_add: list = field(default_factory=list)
 
 
+# ---------------------------------------------------------------------------
+# GM trade mentality (Wave B: D31 untouchables + D40 rivalry gate + D42
+# stinginess). One negotiation-psychology system, not three patches.
+#
+# Cross-stream coherence (talent-tiers branch, Muck's "AI sees tiers too"
+# order): the value reads in this section use tier_label() -- which prefers
+# attribute_composites.talent_tier_for_player() once that branch merges and
+# mirrors its TALENT_TIERS table until then -- or the attribute-driven
+# franchise_score(). Never raw overall_rating().
+# ---------------------------------------------------------------------------
+
+def tier_label(player) -> str:
+    """Talent-tier label for a player ("Generational"/"Elite"/"Very good"/
+    "Good"/"Decent").
+
+    Cross-stream shim for the talent-tiers branch: prefers
+    attribute_composites.talent_tier_for_player() when available; until that
+    branch merges, mirrors its TALENT_TIERS thresholds exactly
+    (Generational 92+, Elite 88-91, Very good 84-87, Good 80-83, Decent <80).
+    Never raises.
+    """
+    try:
+        from attribute_composites import talent_tier_for_player as _ttfp
+        return _ttfp(player)
+    except Exception:
+        pass
+    try:
+        ovr = int(player.overall_rating())
+    except Exception:
+        return "Decent"
+    if ovr >= 92:
+        return "Generational"
+    if ovr >= 88:
+        return "Elite"
+    if ovr >= 84:
+        return "Very good"
+    if ovr >= 80:
+        return "Good"
+    return "Decent"
+
+
+def tier_index_of(player) -> int:
+    """Ordinal of the player's talent tier (0 = Generational .. 4 = Decent).
+
+    Prefers attribute_composites.tier_index() once the talent-tiers branch
+    merges; mirrors its ordering until then. Never raises.
+    """
+    try:
+        from attribute_composites import tier_index as _ti
+        from attribute_composites import talent_tier_for_player as _ttfp
+        return int(_ti(_ttfp(player)))
+    except Exception:
+        pass
+    return {"Generational": 0, "Elite": 1, "Very good": 2,
+            "Good": 3}.get(tier_label(player), 4)
+
+
+#: franchise_score at/above this: the franchise tier -- untouchable
+#: (ai_extension_planning._TRADE_TIERS: UNTOUCHABLE 80+).
+UNTOUCHABLE_FRANCHISE_SCORE = 80.0
+
+
+def _gm_staff_of(team):
+    """The Staff entity holding the GM chair (role-name check). Never raises."""
+    try:
+        for s in getattr(team, "staff", None) or []:
+            if getattr(getattr(s, "role", None), "name", "") == "GENERAL_MANAGER":
+                return s
+    except Exception:
+        pass
+    return None
+
+
+def partner_gm_identity(partner_team):
+    """GMIdentity for the evaluating club's GM (staff-derived; None if the
+    chair is empty). Never raises."""
+    try:
+        from ai_gm_identity import gm_identity_from_staff
+        staff = _gm_staff_of(partner_team)
+        if staff is None:
+            return None
+        return gm_identity_from_staff(
+            getattr(partner_team, "team_name", "") or "", staff)
+    except Exception:
+        return None
+
+
+def asset_franchise_tiers(partner_team, partner_assets, ident=None):
+    """Map asset id -> (tier label, franchise_score) for the evaluating
+    club's pieces.
+
+    franchise_score() is the attribute/personality-driven read (star power,
+    potential, pedigree, homegrown status, the GM's own loyalty/patience) --
+    the right currency for untouchability, which is a GM-relative judgement,
+    not a league-wide number. Labels: UNTOUCHABLE / CORE / VALUED /
+    GETTABLE. Never raises.
+    """
+    out = {}
+    try:
+        import ai_extension_planning as aep
+        for a in partner_assets or []:
+            try:
+                if _is_pick(a):
+                    continue
+                label, _color, score = aep.trade_value_tier(a, ident)
+                out[getattr(a, "id", None)] = (label, float(score))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _untouchable_names(partner_team, partner_assets, tiers):
+    """Full names of UNTOUCHABLE-tier pieces among the requested assets."""
+    names = []
+    try:
+        by_id = {getattr(a, "id", None): a for a in partner_assets or []}
+        for aid, (label, _score) in (tiers or {}).items():
+            if label == "UNTOUCHABLE" and aid in by_id:
+                names.append(getattr(
+                    by_id[aid], "full_name",
+                    getattr(by_id[aid], "name", "that player")))
+    except Exception:
+        pass
+    return names
+
+
+def rivalry_trade_gate(situational, partner_team, partner_assets,
+                       ident=None, tiers=None):
+    """Circumstantial rivalry gate: ("open" | "taxed" | "closed", tax_mult,
+    reason). D40.
+
+    Rivalry is circumstantial, never a blanket veto (never-blocked doctrine,
+    Muck 2026-09-29): the same gate serves the direct-negotiation path here
+    and the market path in trade_market.build_bid. Reads the intensity the
+    caller already computed into situational['rivalry_intensity01'] (0 when
+    the caller has no app context -- gate stays open, never blocks blind).
+
+    - intensity < 0.60: open.
+    - 0.60-0.84: taxed -- the tax scales with the GM's loyalty (a loyal GM
+      guards his room; a mercenary barely notices the rivalry).
+    - 0.85+ (bitter): the crown jewel is closed -- an UNTOUCHABLE-tier piece
+      (the McDavid-to-Calgary rule) never moves between bitter rivals.
+      Other pieces are heavily taxed. A rebuilding seller may still move
+      veteran (VALUED/GETTABLE, age 30+) pieces: taxed, never closed. A
+      contender never strengthens a rival: CORE-or-better pieces asked from
+      a buyer/bubble club are closed at bitter intensity. Role players can
+      always move between rivals.
+    """
+    try:
+        inten = 0.0
+        if isinstance(situational, dict):
+            inten = float(situational.get("rivalry_intensity01", 0.0) or 0.0)
+        inten = max(0.0, min(1.0, inten))
+        if inten < 0.60:
+            return "open", 1.0, ""
+        try:
+            loyalty = float(getattr(ident, "loyalty", 0.5) or 0.5)
+        except Exception:
+            loyalty = 0.5
+        loyalty = max(0.0, min(1.0, loyalty))
+        if inten < 0.85:
+            tax = 1.0 + 0.05 * loyalty * ((inten - 0.60) / 0.25)
+            return ("taxed", tax,
+                    "Rivalry tax: bad blood between the clubs.")
+        # Bitter rivals (0.85+).
+        if tiers is None:
+            tiers = asset_franchise_tiers(partner_team, partner_assets, ident)
+        try:
+            stance = ""
+            if isinstance(situational, dict):
+                stance = str(situational.get("stance", "") or "")
+        except Exception:
+            stance = ""
+        # Highest franchise tier among the requested pieces.
+        _rank = {"UNTOUCHABLE": 3, "CORE": 2, "VALUED": 1, "GETTABLE": 0}
+        worst = "GETTABLE"
+        try:
+            for _aid, (_label, _score) in (tiers or {}).items():
+                if _rank.get(_label, 0) > _rank.get(worst, 0):
+                    worst = _label
+        except Exception:
+            pass
+        # The crown jewel never moves between bitter rivals.
+        if worst == "UNTOUCHABLE":
+            return ("closed", 1.0,
+                    "Not between our clubs -- he's the face of the "
+                    "franchise.")
+        # A contender never strengthens a bitter rival with a core piece.
+        if worst == "CORE" and stance in ("buyer", "bubble"):
+            return ("closed", 1.0,
+                    "We're not sending a core piece to a rival chasing "
+                    "the same Cup.")
+        # A rebuilding seller may move veterans: taxed, never closed.
+        tax = 1.0 + 0.08 * loyalty
+        if stance == "seller":
+            try:
+                _vets = [a for a in partner_assets or []
+                         if not _is_pick(a)
+                         and int(getattr(a, "age", 0) or 0) >= 30]
+                if _vets:
+                    return ("taxed", tax,
+                            "Rivalry tax: even a seller charges a rival "
+                            "extra for a veteran.")
+            except Exception:
+                pass
+        return ("taxed", tax, "Rivalry tax: bad blood between the clubs.")
+    except Exception:
+        return "open", 1.0, ""
+
+
+def _coach_piece_fit01(coach, player) -> float:
+    """How the head coach values this player for his system, 0..1.
+
+    Uses reputation_system.coach_archetype_valuation when available;
+    falls back to neutral 0.5. Never raises.
+    """
+    try:
+        import reputation_system as rs
+        v = rs.coach_archetype_valuation(coach, player)
+        return max(0.0, min(1.0, float(v)))
+    except Exception:
+        return 0.5
+
+
+def _stinginess_delta(partner_team, partner_assets, ident, tiers,
+                      situational=None):
+    """D42 stinginess adjustments to the greed threshold, as an additive
+    delta (positive = drives a harder bargain). One read per piece:
+
+    - CORE-tier pieces cost extra (+0.06): the GM guards his core.
+    - The coach's system valuation: a piece the coach loves (+0.04 at
+      fit >= 0.75) costs more; one he doesn't rate (-0.03 at fit <= 0.35)
+      comes cheaper.
+    - Player morale/situation: an unhappy player (morale < 40 or a trade
+      request on file) is easier to pry (-0.05); a happy core piece (+0.02
+      at morale > 75) costs more.
+    - GM personality: loyal GMs (+0.03 at loyalty >= 0.7) guard their guys;
+      aggressive deal-makers (-0.02 at aggression >= 0.7) move pieces.
+    - Situation: a seller is motivated to move veterans 30+ (-0.04).
+
+    Never raises.
+    """
+    delta = 0.0
+    try:
+        stance = ""
+        if isinstance(situational, dict):
+            stance = str(situational.get("stance", "") or "")
+    except Exception:
+        stance = ""
+    try:
+        from coach_practice import head_coach_of
+        coach = head_coach_of(partner_team)
+    except Exception:
+        coach = None
+    try:
+        loyalty = float(getattr(ident, "loyalty", 0.5) or 0.5)
+        aggression = float(getattr(ident, "aggression", 0.5) or 0.5)
+    except Exception:
+        loyalty, aggression = 0.5, 0.5
+    if loyalty >= 0.7:
+        delta += 0.03
+    if aggression >= 0.7:
+        delta -= 0.02
+    try:
+        for a in partner_assets or []:
+            if _is_pick(a):
+                continue
+            try:
+                label = (tiers or {}).get(getattr(a, "id", None),
+                                         ("GETTABLE", 0.0))[0]
+            except Exception:
+                label = "GETTABLE"
+            if label == "CORE":
+                delta += 0.06
+            # The coach's read on this specific player.
+            try:
+                fit = _coach_piece_fit01(coach, a)
+            except Exception:
+                fit = 0.5
+            if fit >= 0.75:
+                delta += 0.04
+            elif fit <= 0.35:
+                delta -= 0.03
+            # The player's own situation.
+            try:
+                morale = int(getattr(a, "morale", 60) or 60)
+            except Exception:
+                morale = 60
+            try:
+                requested = bool(getattr(a, "transfer_requested", False))
+            except Exception:
+                requested = False
+            if morale < 40 or requested:
+                delta -= 0.05
+            elif morale > 75:
+                delta += 0.02
+            # A seller is motivated to move veterans.
+            try:
+                age = int(getattr(a, "age", 0) or 0)
+            except Exception:
+                age = 0
+            if stance == "seller" and age >= 30:
+                delta -= 0.04
+    except Exception:
+        pass
+    return max(-0.15, min(0.25, delta))
+
+
 def ai_consider_trade(partner_team, user_assets, partner_assets,
                       user_team=None, patience=1.0, situational=None,
                       retention=None) -> AIResponse:
@@ -1794,6 +2104,34 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
             except Exception:
                 pass
 
+    # --- GM trade mentality (Wave B: D31 + D40 + D42, one system) ---
+    # Who this GM is, and how he values the pieces you're asking for.
+    # franchise_score() is the attribute/personality read -- the right
+    # currency for untouchability (a GM-relative judgement, never a raw
+    # overall). All of this is additive: no situational dict, no identity
+    # on file, and the negotiation below behaves exactly as before.
+    _ident = partner_gm_identity(partner_team)
+    _tiers = asset_franchise_tiers(partner_team, partner_assets, _ident)
+
+    # D31 -- untouchables can't be had. An UNTOUCHABLE-tier piece
+    # (franchise_score 80+, the face of the franchise to THIS GM) is a
+    # flat, plain-spoken no -- not a price, not a counter.
+    _untouch = _untouchable_names(partner_team, partner_assets, _tiers)
+    if _untouch:
+        _nm = _untouch[0]
+        return AIResponse(
+            'reject',
+            f"{_nm} isn't available at any price -- he's the face of "
+            f"this franchise.")
+
+    # D40 -- the circumstantial rivalry gate (open / taxed / closed).
+    # Never a blanket veto: role players move between rivals; the crown
+    # jewel and a contender's core piece don't (at bitter intensity).
+    _gate, _gate_tax, _gate_why = rivalry_trade_gate(
+        situational, partner_team, partner_assets, _ident, _tiers)
+    if _gate == "closed":
+        return AIResponse('reject', _gate_why + _why_tail())
+
     # (ratio already scout-blended above)
     needs = team_needs(partner_team)
     # AI likes getting help at weak positions
@@ -1808,10 +2146,19 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
             pass
     effective = ratio + need_bonus
 
-    # Personality: some GMs drive a harder bargain. Low patience
-    # (after several counter rounds) pushes the demand higher and can
-    # turn a would-be counter into a flat rejection.
-    greed = (0.95 + random.uniform(-0.03, 0.10)) / max(patience, 0.35)
+    # D42 -- the stinginess pass. The threshold is anchored at fair value
+    # (1.0), not 0.95: the AI no longer sells at a 5% discount by default.
+    # _stinginess_delta() then moves it piece by piece -- the coach's
+    # system valuation, player morale/situation, GM personality
+    # (loyalty/aggression), and team situation (sellers move veterans).
+    # Low patience (late counter rounds) still pushes the demand higher
+    # and can turn a would-be counter into a flat rejection.
+    greed = (1.0 + random.uniform(-0.02, 0.06)
+             + _stinginess_delta(partner_team, partner_assets, _ident,
+                                 _tiers, situational)) / max(patience, 0.35)
+    # The rivalry gate's tax multiplies the threshold (D40): bad blood
+    # costs extra, but never blocks -- an overwhelming offer still clears.
+    greed *= _gate_tax
     # Situational nudge (standings stance, streaks, rivalries, deadline
     # urgency). Additive only; absent without a context dict.
     sit_mult = 1.0
@@ -1850,8 +2197,11 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
                           "We've been around on this too long. I'm moving on.")
     candidates = sorted(user_roster + user_picks, key=asset_value)
     shortfall = ev.partner_value * greed - ev.user_value
+    # D42: counters demand the FULL shortfall. The old 0.7 factor let a
+    # 74-cents-on-the-dollar offer through whenever the user owned one
+    # mid-sized asset -- the AI negotiated against itself.
     for c in candidates:
-        if asset_value(c) >= shortfall * 0.7:
+        if asset_value(c) >= shortfall * 1.0:
             return AIResponse(
                 'counter',
                 f"Not quite. Throw in {asset_label(c)} and we have a deal."
@@ -1863,7 +2213,17 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
         partner_roster = [p for p in getattr(partner_team, 'roster', [])
                           if p not in partner_assets]
         sweeteners = sorted(partner_roster, key=asset_value)
+        # D31: the AI never volunteers its untouchables as sweeteners.
+        _sweet_tiers = asset_franchise_tiers(partner_team, sweeteners[:6],
+                                             _ident)
         for s in sweeteners[:3]:
+            try:
+                _sl = _sweet_tiers.get(getattr(s, "id", None),
+                                      ("GETTABLE", 0.0))[0]
+            except Exception:
+                _sl = "GETTABLE"
+            if _sl == "UNTOUCHABLE":
+                continue
             if asset_value(s) < ev.diff * -0.5 + 200:
                 # The AI GM knows his own room: a player whose clause vetoes
                 # a move to your team is only offered if he'd waive -- and
