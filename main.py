@@ -6411,6 +6411,20 @@ class HockeyManagerGUI(tk.Tk):
         if bd["dead_cap"]:
             detail += f" + dead cap ${bd['dead_cap']/1e6:.2f}M"
         detail += "). Shed salary via trade, waivers, or demotion before advancing."
+        # 2026-10-01 (Sim A S5 debug): expired contracts still count until the
+        # GM acts, so a "phantom" overage is often unsigned players, not real
+        # payroll. Point the GM at the actual fix instead of just shedding.
+        try:
+            _unsigned_n = sum(
+                1 for _p in (getattr(team, "roster", None) or [])
+                if getattr(getattr(_p, "contract", None),
+                           "years_remaining", 1) == 0)
+        except Exception:
+            _unsigned_n = 0
+        if _unsigned_n:
+            detail += (f" {_unsigned_n} unsigned player(s) (expired contracts) "
+                       f"still count against the cap -- re-sign them or move "
+                       f"them on first.")
         return {
             'id': 'salary_cap',
             'title': 'Roster exceeds salary cap',
