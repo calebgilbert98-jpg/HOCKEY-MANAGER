@@ -2313,14 +2313,22 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
 
     # (ratio already scout-blended above)
     needs = team_needs(partner_team)
-    # AI likes getting help at weak positions
+    # AI likes getting help at weak positions -- but the bonus
+    # diminishes per additional need filled (P3 exploit mitigation):
+    # stacking full +0.04 bonuses let sub-0.95 value deals clear when
+    # the greed noise rolled low (1/6 accept at 0.906 vs 0/6 control).
+    # First need fill +0.04, each further fill +0.02 -- fit still
+    # counts, it just can't stack into a discount. Tuning change --
+    # flagged for Chris.
     need_bonus = 0.0
+    _need_fills = 0
     for a in user_assets:
         if _is_pick(a):
             continue
         try:
             if a.primary_position.value in needs[:2]:
-                need_bonus += 0.04
+                _need_fills += 1
+                need_bonus += 0.04 if _need_fills == 1 else 0.02
         except Exception:
             pass
     effective = ratio + need_bonus
