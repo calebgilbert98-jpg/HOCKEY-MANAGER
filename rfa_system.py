@@ -458,16 +458,15 @@ def _market_value(player) -> int:
     return int(max(750_000, (ovr - 60) * 250_000))
 
 
-def _sign_player(team, player, aav: int, years: int) -> None:
+def _sign_player(team, player, aav: int, years: int) -> bool:
     # R1 (roster limits): Dec-1 ineligible RFAs can't sign anywhere, and
-    # emergency fill-ins can't take standard deals. Refuse, don't corrupt.
+    # emergency fill-ins can't take standard deals. Refuse (False), don't
+    # corrupt -- fail-safe: every caller ignores the return value.
     try:
         import roster_limits as _rl
         _ok, _why = _rl.can_sign_player(player)
         if not _ok:
-            raise ValueError(_why)
-    except ValueError:
-        raise
+            return False
     except Exception:
         pass
     c = getattr(player, "contract", None)
@@ -483,6 +482,7 @@ def _sign_player(team, player, aav: int, years: int) -> None:
             setattr(player, attr, False)
         except Exception:
             pass
+    return True
 
 
 def _register_market_signing(league, player, aav: int) -> None:
@@ -651,6 +651,18 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             user_team = team
         else:
             ai_teams.append(team)
+
+    # --- 0. New league year: last season's Dec-1 ineligibility is spent.
+    # A qualified-but-unsigned RFA who sat out past Dec 1 re-enters the
+    # QO flow below like any other unsigned RFA (true NHL: the club still
+    # holds his rights). Without this he would be unsignable forever.
+    for team in list(getattr(league, "teams", []) or []):
+        for player in list(getattr(team, "roster", []) or []):
+            try:
+                if getattr(player, "season_ineligible", False):
+                    player.season_ineligible = False
+            except Exception:
+                continue
 
     # --- 1. Classify every expired contract --------------------------------
     for team in list(getattr(league, "teams", []) or []):
@@ -861,6 +873,21 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             except Exception:
                 continue
         _rl.july_release_unsigned_ufas(league, app)
+    except Exception:
+        pass
+
+    # --- 6e. Roster-compliance sweep (R1): the same guarantee for the
+    # 23-man max and the dressed minimum. Runs AFTER the July releases so
+    # the sweep's fillers survive: no AI club leaves July unable to dress
+    # 18+2 -- short clubs get emergency fill-ins via the same backstop
+    # the daily AI tick uses.
+    try:
+        import roster_limits as _rl2
+        for team in ai_teams:
+            try:
+                _rl2.ai_roster_compliance(team, league, r)
+            except Exception:
+                continue
     except Exception:
         pass
 
@@ -2333,19 +2360,32 @@ def _ai_backfill_roster(team, league, r, target: int = 21) -> None:
             roster.append(p)
     pool = getattr(league, "free_agents", []) or []
     guard = 0
+    # The scarcity read depends only on (league, position group): cache it
+    # per position for this backfill so a deep scan doesn't recompute the
+    # whole market per player (perf cliff on big FA pools).
+    _scarc_cache: Dict[str, float] = {}
     while len(roster) < target and pool and guard < 40:
         guard += 1
         # R1: never take a 51st contract.
         if _rl is not None and not _rl.ai_can_sign_spc(team):
             break
         budget = _spending_budget(team, incoming=True)
+        if budget < LEAGUE_MIN_SALARY:
+            break  # nothing in the pool is affordable -- skip the scan
         best = None
         for p in sorted(pool, key=_market_value):
             # Scarcity rides along: filling a hole at a thin position
             # costs what the market demands (capped at cheap-depth money).
-            ask = min(int(_market_value(p) * _scarcity_mult(league, p)),
+            try:
+                _g = str(getattr(getattr(p, "primary_position", ""),
+                                 "value", "") or "")
+            except Exception:
+                _g = ""
+            if _g not in _scarc_cache:
+                _scarc_cache[_g] = _scarcity_mult(league, p)
+            ask = min(int(_market_value(p) * _scarc_cache[_g]),
                       1_500_000)
-            if ask <= budget and budget >= LEAGUE_MIN_SALARY:
+            if ask <= budget:
                 best = (p, ask)
                 break
         if best is None:
