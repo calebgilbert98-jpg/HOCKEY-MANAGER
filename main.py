@@ -7092,6 +7092,26 @@ class HockeyManagerGUI(tk.Tk):
                     except Exception:
                         pass
 
+            # D5 follow-up: undecided staff renewal offers lapse at the
+            # first game day of the season (preseason or regular) -- the
+            # staffer walks to the free-agent pool. Once per season.
+            try:
+                _rsy = getattr(getattr(self, 'league', None),
+                               'season_year', None)
+                if (_rsy is not None
+                        and getattr(self, '_renewals_resolved_year', None)
+                        != _rsy):
+                    self._renewals_resolved_year = _rsy
+                    import staff_renewals as _srr
+                    for _rl in (_srr.resolve_pending_renewals(
+                            self.league) or []):
+                        try:
+                            self.add_news("🧑‍💼 " + str(_rl))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
             self._set_continue_feedback(True, "Simulating games...")
             # Process games if any exist
             if todays_games:
@@ -15414,6 +15434,18 @@ class HockeyManagerGUI(tk.Tk):
         # Age players and reset stats
         self.league.end_of_season()
 
+        # D5 follow-up: the contract tick above held the user's expired
+        # staff for renewal instead of releasing them. Their offer
+        # arrives as one interactive inbox message (never a popout).
+        # Decline/ignore walks them to the free-agent pool.
+        try:
+            import staff_renewals as _srq
+            _uq = getattr(self, "user_team", None)
+            if _uq is not None:
+                _srq.queue_user_renewal_message(self.league, _uq, self)
+        except Exception:
+            pass
+
         # Draft rights lifecycle: end_of_season() (game_classes) collected
         # re-entry / UFA / retirement / warning messages on league.rights_news.
         # Flush them to the inbox here (the monthly Jan-Jun beat hook would
@@ -19505,6 +19537,40 @@ class HockeyManagerGUI(tk.Tk):
         cards = data.get("cards", []) or []
         if len(decided) >= len(cards):
             message.action_done = True
+        try:
+            self.update_all_views()
+        except Exception:
+            pass
+        return ok
+
+    def apply_staff_renewal_decision(self, message, staff_id, years):
+        """Inbox action: re-sign an expired staffer (years=1/2/3) or let
+        him walk to the free-agent pool (years=None).
+
+        The D5 tick held him employed pending this decision, so the club
+        is never caught short mid-decision; a walked head coach triggers
+        the in-house promote fallback, exactly like the automatic path.
+        """
+        import staff_renewals as _sr
+        data = message.action_data or {}
+        try:
+            ok, lines = _sr.apply_renewal_decision(
+                self.league, staff_id, years)
+        except Exception:
+            ok, lines = False, []
+        decided = data.get("decided", {}) or {}
+        decided[str(staff_id)] = years
+        data["decided"] = decided
+        message.action_data = data
+        offers = data.get("offers", []) or []
+        if len(decided) >= len(offers):
+            message.action_done = True
+        for _ln in lines or []:
+            try:
+                _emo = "✍️ " if years else "🚶 "
+                self.add_news(_emo + str(_ln))
+            except Exception:
+                pass
         try:
             self.update_all_views()
         except Exception:
