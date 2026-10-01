@@ -1334,7 +1334,12 @@ class AtmosphericDashboard:
             for player in self.parent.user_team.roster:
                 if hasattr(player, 'is_injured') and player.is_injured:
                     injured_players.append(player)
-                elif hasattr(player, 'injury_status') and player.injury_status == 'day-to-day':
+                elif (getattr(player, 'is_injured', False)
+                        # D14 (2026-09-30): the legacy 'day-to-day' string
+                        # has no writer left; classify from the real injury
+                        # state (one game remaining ~= day-to-day).
+                        and int(getattr(player, 'games_remaining_injured',
+                                        99) or 99) <= 1):
                     day_to_day_players.append(player)
             
             injured_count = len(injured_players)
