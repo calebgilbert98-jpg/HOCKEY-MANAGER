@@ -5264,10 +5264,11 @@ class GameSim:
         expected_goal = self._calculate_expected_goal_value(location, shot_type, quality, distance, grade=grade)
 
         # Shooter talent (divergence #2): the shooter's attributes move
-        # finishing -- the ONE shared shooter_skill_composite with the same
-        # 0.30/0.25/0.20/0.15/0.10 weights quick-sim uses. Mean-preserving
-        # around the measured league average (65.3, n=2220, 2026-09-28):
-        # an average shooter is 1.0x; the piecewise slope (flat middle,
+        # finishing -- the ONE shared finishing_rating (diverse 13-member
+        # harmonic blend, 2026-10-01 per Muck), with the same shot-type
+        # base quick-sim uses. Mean-preserving around the measured league
+        # average (65.4, re-measured 2026-10-01 on the new blend): an
+        # average shooter is 1.0x; the piecewise slope (flat middle,
         # convex top) is the shared talent decision -- see mesh_system.
         # Elite (~70) finishes a touch above, depth (~62) a touch below --
         # additive on top of the volume edge snipers already get from
@@ -5472,6 +5473,132 @@ class GameSim:
         except Exception:
             pass
 
+        # --- attribute composites (additive, bounded) ---
+        # Finishing vs goalie-save: the shooter's finishing toolkit against
+        # the goalie's broad save toolkit. Scoring-sensitive rails
+        # [0.97, 1.03] on both sides (the goalie side is inverted: a better
+        # save composite lowers goal probability). Applied on goal_prob like
+        # the tilt/contest blocks above; existing weights never retuned.
+        #
+        # Breakaway supersession (2026-09-30, §6 rule 2): on a breakaway,
+        # the scenario battle REPLACES these single-composite hooks — the
+        # breakaway scenario (skating/finishing/chance_creation vs
+        # goalie_save) already contains finishing and goalie_save. Never
+        # stack; one scenario per event.
+        # Winger spotlight (2026-09-30, (c) Muck): the net-front scramble
+        # and one-timer scenario battles get the same §6 rule-2 treatment
+        # on their shots — the sniper one-timer and the power-forward
+        # net-front are composite battles (every factor wired), not
+        # pasted-on bonuses. EV only: PP conversion is the tuning crew's
+        # lane; their calibration must not move under them.
+        try:
+            from attribute_composites import apply_amplifier as _ac_fin
+            _is_break = False
+            try:
+                _is_break = (shot_type == ShotType.BREAKAWAY)
+            except Exception:
+                pass
+            _ev_shot = True
+            try:
+                _ev_shot = not self._is_on_power_play(shooter)
+            except Exception:
+                pass
+            _is_netfront = (_ev_shot and not empty_net and shot_type in (
+                ShotType.TIP_IN, ShotType.DEFLECTION, ShotType.REBOUND))
+            _is_onetimer = (_ev_shot and not empty_net
+                            and shot_type == ShotType.ONE_TIMER)
+            if _is_break:
+                from scenario_composites import apply_scenario as _asc_br
+                _fgp, _br_info = _asc_br(
+                    1.0 - adjusted_save_prob, [shooter], [goalie],
+                    "breakaway", sim=self, off_team=attacking_team,
+                    def_team=defending_team, detail=True)
+                # Narrative only: standout breakaway battles earn media/pbp
+                # ink (scenario_narrative). Sim math unchanged.
+                try:
+                    from scenario_narrative import note_scenario_moment as _nsn2
+                    _nsn2(self, "breakaway", attacking_team, defending_team,
+                          _br_info)
+                except Exception:
+                    pass
+            elif _is_netfront or _is_onetimer:
+                from scenario_composites import apply_scenario as _asc_sp
+                _scn = ("netfront_scramble"
+                        if _is_netfront else "d_to_d_onetimer")
+                _dside = [goalie] if goalie is not None else []
+                if _is_netfront:
+                    # Net-front is forward vs (defense + goalie) combined
+                    # (Muck 2026-09-28): the nearest defender battles too.
+                    try:
+                        self._ppos_ensure()
+                        _shp = self._ppos_get(shooter)
+                        _nd = min(
+                            (d for d in
+                             self._on_ice_skaters(defending_team)
+                             if d is not None),
+                            key=lambda d: self._ppos_dist(
+                                _shp, self._ppos_get(d)),
+                            default=None)
+                        if _nd is not None:
+                            _dside.append(_nd)
+                    except Exception:
+                        pass
+                _fgp, _sp_info = _asc_sp(
+                    1.0 - adjusted_save_prob, [shooter], _dside, _scn,
+                    sim=self, off_team=attacking_team,
+                    def_team=defending_team, detail=True)
+                # Point-shot feeder gate (2026-09-30, workstream C2,
+                # Muck): the play design feeds the look, the SHOOTER's
+                # own shooting tools + hockey IQ decide what it becomes.
+                # Smooth 0.85..1.0 -- mediocre shooters don't mint goals
+                # off play design alone.
+                if _is_onetimer:
+                    try:
+                        from scenario_composites import (
+                            point_shot_talent_gate as _pstg2)
+                        _fgp *= _pstg2(shooter)
+                    except Exception:
+                        pass
+                # Narrative only: standout net-front / one-timer battles earn
+                # media/pbp ink (scenario_narrative). Sim math unchanged.
+                try:
+                    from scenario_narrative import note_scenario_moment as _nsn3
+                    _nsn3(self, _scn, attacking_team, defending_team,
+                          _sp_info)
+                except Exception:
+                    pass
+            else:
+                _fgp = _ac_fin(1.0 - adjusted_save_prob, shooter,
+                               "finishing", sim=self, team=attacking_team)
+                if not empty_net:
+                    _fgp = _ac_fin(_fgp, goalie, "goalie_save", sim=self,
+                                   team=defending_team, invert=True)
+            adjusted_save_prob = 1.0 - min(0.98, max(0.0, _fgp))
+        except Exception:
+            pass
+
+        # Personal finishing ceiling (2026-10-01, Muck): the shooter's
+        # finishing scales his conversion ceiling WITHIN the protected
+        # league envelope -- the same shared decision quick-sim applies
+        # in _apply_chance_grade (mesh_system.personal_grade_ceiling).
+        # Applied to the final goal probability, after all amplifiers.
+        # League max unchanged; no caps, no dampers -- pure talent.
+        try:
+            from mesh_system import personal_grade_ceiling as _pgc3
+            _sbase3 = {
+                ShotType.ONE_TIMER: getattr(shooter, "one_timer", 10),
+                ShotType.SLAP_SHOT: getattr(shooter, "slapshot", 10),
+                ShotType.BACKHAND: getattr(shooter, "backhand", 10),
+            }.get(shot_type, getattr(shooter, "wristshot", 10))
+            _glo3, _ghi3 = _pgc3(shooter, grade, shot_tool=_sbase3)
+            _gp3 = 1.0 - adjusted_save_prob
+            if _gp3 > _ghi3:
+                adjusted_save_prob = 1.0 - _ghi3
+            elif _gp3 < _glo3:
+                adjusted_save_prob = 1.0 - _glo3
+        except Exception:
+            pass
+
         # -- Impact scaling (additive): apply the classified tier on top
         # of the existing math, exactly like the scoring-level preference
         # above. Big shots beat goalies cleaner; tired ones are easier.
@@ -5615,10 +5742,10 @@ class GameSim:
     def _calculate_shooter_skill(self, shooter, shot_type, quality, distance):
         """Calculate the shooter's skill for this specific shot.
 
-        Revived (divergence #2): delegates to the ONE shared
-        shooter_skill_composite -- the same 0.30/0.25/0.20/0.15/0.10
-        weights both engines use. Kept as a method so any external
-        callers keep working.
+        Delegates to the ONE shared finishing_rating (2026-10-01, per
+        Muck: CONSOLIDATE) -- the diverse 13-member harmonic blend both
+        engines use. Kept as a method so any external callers keep
+        working.
         """
         from mesh_system import shooter_skill_composite as _ssc3
         _sbase = {

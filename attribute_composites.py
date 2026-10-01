@@ -5,7 +5,9 @@
 Modeled on the net-front battle combination in mesh_system.py (forward vs
 defense+goalie, grade-A/B/C grader): one documented composite per game event,
 each a weighted sum of member attributes with weights summing to 1.0 and a
-rationale comment.
+rationale comment. The "finishing" composite is the exception: it aggregates
+harmonically via mesh_system.finishing_rating (the ONE shared finishing
+decision, per Muck 2026-10-01) -- raw_composite delegates there.
 
 FORM/HEAT/STREAK STATEMENT (for the B1 talent-hierarchy composition check):
     NO composite input reads player form (mesh_form), heater state
@@ -65,22 +67,43 @@ _COMPOSITES = {
         "rails": (0.97, 1.03),  # scoring-adjacent (chance volume): tight
     },
     "finishing": {
-        # Finishing: the shooting family converts, offensive positioning
-        # gets the shooter to the right spot with a clean look, composure
-        # keeps the hands under pressure, power beats the keeper clean,
-        # pressure_player steadies the clutch release, one-timer/backhand
-        # are extra release tools (different looks, harder reads).
+        # Finishing (2026-10-01 rebuild, per Muck): the diverse scoring
+        # toolkit -- NOT just a shot. The release itself (_shot_tool: the
+        # per-attempt wristshot/slapshot/one_timer/backhand, defaulting to
+        # the shooter's best tool for the stable rating) leads, because
+        # the release is what beats goalies; shooting_accuracy places it
+        # (corners, not crests); composure keeps the hands under pressure
+        # and pressure_player steadies the clutch release; hockey_iq reads
+        # the goalie and picks the spot while anticipation reacts to the
+        # developing chance; offensive_positioning puts him in the right
+        # spot and off_the_puck finds the seam / loses coverage;
+        # deflections is the tipping hand-eye; balance shoots in stride
+        # through contact and strength wins the net-front spot to shoot
+        # from; determination wins the second effort around the crease and
+        # aggressiveness attacks the net instead of the perimeter.
+        # Aggregated HARMONICALLY by mesh_system.finishing_rating (the
+        # synergy gate) -- raw_composite delegates there, so this table
+        # documents the members while the rating itself is the ONE shared
+        # finishing decision (see mesh_system.FINISHING_MEMBERS; a QA
+        # cross-check asserts the two tables stay in sync).
         "members": [
-            ("shooting", 0.20),
-            ("shooting_accuracy", 0.20),
-            ("offensive_positioning", 0.20),
-            ("composure", 0.15),
-            ("shooting_power", 0.10),
+            ("_shot_tool", 0.22),
+            ("shooting_accuracy", 0.16),
+            ("composure", 0.10),
+            ("hockey_iq", 0.08),
+            ("offensive_positioning", 0.08),
+            ("off_the_puck", 0.08),
+            ("anticipation", 0.06),
             ("pressure_player", 0.05),
-            ("one_timer", 0.05),
-            ("backhand", 0.05),
+            ("deflections", 0.05),
+            ("balance", 0.04),
+            ("strength", 0.04),
+            ("determination", 0.02),
+            ("aggressiveness", 0.02),
         ],
-        "rails": (0.97, 1.03),  # scoring-sensitive: tight
+        "rails": (0.94, 1.06),  # scoring-sensitive; widened 2026-10-01
+                                # (Muck: finishing must matter more)
+        "aggregation": "harmonic",  # resolved by mesh_system.finishing_rating
     },
     "defensive_play": {
         # Takeaways / blocks: defensive awareness reads the play,
@@ -245,9 +268,18 @@ def _attr(player, name):
 
 
 def raw_composite(player, key):
-    """Weighted-sum rating for one composite, 1-100. No circumstance."""
+    """Weighted-sum rating for one composite, 1-100. No circumstance.
+
+    The "finishing" composite aggregates harmonically and delegates to
+    mesh_system.finishing_rating -- the ONE shared finishing decision --
+    so the composite rating and the conversion path can never disagree
+    (2026-10-01, per Muck). All other composites are arithmetic.
+    """
     if key not in _COMPOSITES:
         raise KeyError(f"unknown composite: {key}")
+    if _COMPOSITES[key].get("aggregation") == "harmonic":
+        from mesh_system import finishing_rating as _fr
+        return _fr(player)
     return sum(_attr(player, attr) * w
                for attr, w in _COMPOSITES[key]["members"])
 

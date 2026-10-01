@@ -2717,12 +2717,19 @@ class AdvancedGameSim:
 
     def _apply_chance_grade(self, shot_chance, shooter, goalie, shot_type,
                             puck_team_name, opp_team_name, contest_mult,
-                            screened_now, shooters):
+                            screened_now, shooters, shot_tool=None):
         """Chance grading (2026-09-28, per Muck): grade the scoring chance
         A/B/C at creation time via the shared mesh_system roll, then apply
         the grade finish multiplier and grade-specific clamp. Replaces the
         old flat [0.04, 0.16] clamp -- grade B keeps that band, grade A
         reaches NHL high-danger (~20%+), grade C is suppressed.
+
+        (2026-10-01, per Muck): the clamp is PERSONAL -- the shooter's
+        finishing scales his ceiling WITHIN the protected league envelope
+        (mesh_system.personal_grade_ceiling, the same shared decision
+        GameSim applies). The flat 0.18 grade-A ceiling for everyone is
+        retired. shot_tool is the per-attempt shot-type value selected in
+        _resolve_shot_event.
 
         The grade is stashed on self._last_chance_grade for the analytics
         recording below (per-player grade_a/b/c_shots + _goals). Never
@@ -2995,6 +3002,16 @@ class AdvancedGameSim:
                 except Exception:
                     pass
             _lo, _hi = _cgc(_grade)
+            # Personal finishing ceiling (2026-10-01, Muck): the
+            # shooter's finishing scales his grade ceiling WITHIN the
+            # protected league envelope -- the same shared decision
+            # GameSim applies. League max unchanged; the flat grade-A
+            # 0.18 for everyone is retired.
+            try:
+                from mesh_system import personal_grade_ceiling as _pgc
+                _lo, _hi = _pgc(shooter, _grade, shot_tool=shot_tool)
+            except Exception:
+                pass
             shot_chance = max(_lo, min(_hi, shot_chance))
         except Exception:
             shot_chance = max(0.04, min(0.16, shot_chance))
@@ -3054,10 +3071,11 @@ class AdvancedGameSim:
             shooting_base = slapshot_val
             shot_type = "slap shot"
             
-        # Shooter skill: the ONE shared composite (divergence #2) -- same
-        # 0.30/0.25/0.20/0.15/0.10 weighting GameSim now uses. The
+        # Shooter skill: the ONE shared finishing decision (2026-10-01,
+        # per Muck: CONSOLIDATE) -- mesh_system.finishing_rating, the
+        # diverse 13-member harmonic blend both engines read. The
         # shot-type/position selection above is this engine's own texture;
-        # the weighting is the shared decision.
+        # the blend is the shared decision.
         # Fatigue is a VOLUME channel (unified decision, divergence #7):
         # tired legs shoot less often; they don't finish worse per shot.
         # Conversion-side fatigue lives in the impact tier below.
@@ -3401,7 +3419,8 @@ class AdvancedGameSim:
             shot_chance *= 1.6
         shot_chance = self._apply_chance_grade(
             shot_chance, shooter, goalie, shot_type, puck_team_name,
-            opp_team_name, _contest, _screened_now, shooters)
+            opp_team_name, _contest, _screened_now, shooters,
+            shot_tool=shooting_base)
 
         # 6-on-5 volume lives on the event-type gate above (divergence #13:
         # 2.2x, same as GameSim) -- not here on conversion.
