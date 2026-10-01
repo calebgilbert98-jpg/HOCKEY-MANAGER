@@ -706,6 +706,12 @@ def _d_pair_quality(defending_onice, sim=None, team=None, pair=0):
     """
     try:
         _cache = getattr(sim, "_scheme_rung_cache", None) if sim else None
+        if _cache is None and sim is not None:
+            _cache = {}
+            try:
+                sim._scheme_rung_cache = _cache
+            except Exception:
+                pass
         _team_obj = _resolve_team_obj(sim, team)
         _key = (getattr(_team_obj, "team_name", None) or str(team), pair)
         if isinstance(_cache, dict) and _key in _cache:
