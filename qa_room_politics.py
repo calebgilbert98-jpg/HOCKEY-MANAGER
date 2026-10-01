@@ -187,10 +187,17 @@ def test_crisis_detection(t):
     team = make_team(coach=demanding_coach())
     cap = team.roster[0]
     cap.captaincy = "C"
-    cap.leadership = 30  # influence < 55
+    cap.leadership = 30  # weak captain
+    # D32: influence_of now delegates to hierarchy_score (canonical).
+    # Give the mocks realistic reputation/tenure so the intended
+    # weak-C vs strong-A dynamic holds on the canonical scale.
+    cap.reputation = 20
+    cap.team_tenure = "This season"
     alt = team.roster[1]
     alt.captaincy = "A"
-    alt.leadership = 95  # influence >= 70
+    alt.leadership = 95  # the room's real voice
+    alt.reputation = 65
+    alt.team_tenure = "4+ years"
     for p in team.roster:
         p.morale = 35  # room sour
     league = make_league(team, losing_streak=4)

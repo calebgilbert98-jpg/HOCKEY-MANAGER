@@ -806,7 +806,15 @@ def hierarchy_score(player: Any) -> float:
 
 
 def team_hierarchy(roster: List[Any]) -> Dict[str, List[Any]]:
-    """FM-style dressing-room hierarchy. Top ~4 by influence lead the room."""
+    """FM-style dressing-room hierarchy. Top ~4 by influence lead the room.
+
+    D32 (Wave D consolidation): this is the ONE canonical roster hierarchy.
+    dressing_room.influence_of() delegates to hierarchy_score(), so the two
+    systems cannot disagree on who leads. The "Team Leaders" tier is never
+    left empty on a non-empty roster -- on a young roster where nobody
+    clears the 55 bar, the top influencer still leads (otherwise the
+    one-diva dampening in team_chemistry() silently disengages).
+    """
     scored = sorted(((hierarchy_score(p), p) for p in roster),
                     key=lambda t: t[0], reverse=True)
     tiers: Dict[str, List[Any]] = {t: [] for t in HIERARCHY_TIERS}
@@ -819,6 +827,20 @@ def team_hierarchy(roster: List[Any]) -> Dict[str, List[Any]]:
             tiers["Squad Players"].append(p)
         else:
             tiers["Fringe"].append(p)
+    # D32: never leave Team Leaders empty -- a roster always has someone
+    # the room looks to, even if nobody clears the veteran bar. Without
+    # this, team_chemistry()'s one-diva dampening divides by (1 + 0) and
+    # a single malcontent can tank a young room unchecked.
+    if not tiers["Team Leaders"] and scored:
+        # Promote the top influencer (and a second if they're close --
+        # leadership by committee is real on young teams).
+        tiers["Team Leaders"].append(scored[0][1])
+        if len(scored) > 1 and scored[1][0] >= scored[0][0] - 8:
+            tiers["Team Leaders"].append(scored[1][1])
+        # Remove the promoted from wherever they landed.
+        for t in ("Core Group", "Squad Players", "Fringe"):
+            tiers[t] = [p for p in tiers[t]
+                        if p not in tiers["Team Leaders"]]
     return tiers
 
 

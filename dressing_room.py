@@ -162,26 +162,18 @@ def tenure_years(player: Any) -> int:
 
 
 def influence_of(player: Any) -> int:
-    """A player's pull in the room (1-100). Letters carry weight."""
-    base = 35
-    letter = str(getattr(player, "captaincy", "") or "").upper()
-    if letter == "C":
-        base = 70
-    elif letter == "A":
-        base = 60
+    """A player's pull in the room (1-100). Letters carry weight.
+
+    D32 (Wave D consolidation): delegates to reputation_system.hierarchy_score
+    -- ONE canonical influence formula, so the room and the hierarchy can
+    never disagree on who leads. The 5-99 clamp preserves the historical
+    range callers expect.
+    """
     try:
-        base += float(getattr(player, "leadership", 50) or 50) * 0.22
+        from reputation_system import hierarchy_score as _hs
+        return _clamp(int(round(_hs(player))), 5, 99)
     except Exception:
-        pass
-    ty = tenure_years(player)
-    base += {4: 8, 3: 5, 2: 2}.get(ty, 0)
-    # League stature: a bona fide vet carries weight from day one, so a
-    # new arrival with a real resume doesn't enter as "Fringe".
-    try:
-        base += league_stature_of(player)
-    except Exception:
-        pass
-    return _clamp(base, 5, 99)
+        return 50
 
 
 def _tier(player: Any, influence: int) -> str:
