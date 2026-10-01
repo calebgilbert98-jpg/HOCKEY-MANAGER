@@ -11087,15 +11087,19 @@ class GameSim:
         rate in real hockey; 5v3 is close to automatic pressure. Shorthanded
         shots go the other way.
         """
-        situation = self._get_current_situation()
-        if situation == SpecialSituation.POWER_PLAY \
-                and self._is_team_on_power_play(attacking_team):
+        # BUGFIX 2026-09-30 (workstream A): the old code gated on the raw
+        # home-centric situation enum (== POWER_PLAY) AND the
+        # perspective-aware helper. SpecialSituation is home-centric, so the
+        # AWAY team's power play read PENALTY_KILL and never got the 2.2x
+        # (measured: 61/117 PP shots returned 1.0, all away PPs). Gate on
+        # the perspective-aware helpers alone -- they are the canonical
+        # "is this team on the PP/PK" used by every other PP branch.
+        if self._is_team_on_power_play(attacking_team):
             opp_pens = (self.home_penalties if defending_team is self.home_team
                         else self.away_penalties)
             n_opp = sum(1 for p in opp_pens if p.get('minutes', 2) >= 2)
             return 3.0 if n_opp >= 2 else 2.2
-        if situation == SpecialSituation.PENALTY_KILL \
-                and self._is_team_on_penalty_kill(attacking_team):
+        if self._is_team_on_penalty_kill(attacking_team):
             return 0.7
         return 1.0
 
