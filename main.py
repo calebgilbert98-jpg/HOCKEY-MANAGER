@@ -2827,6 +2827,21 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return SALARY_CAP
 
+    def _set_current_date(self, d):
+        """Set the game date on BOTH the GUI and the game manager.
+
+        Added 2026-10-01 (playthrough BUG-SAVE-001): the offseason jumps
+        assigned self.current_date directly on the GUI, leaving
+        game_manager.current_date stale; save_load_system serializes the
+        manager's date, so post-offseason saves reloaded 13 days in the
+        past. Every direct date assignment must go through here.
+        """
+        self.current_date = d
+        try:
+            self.game_manager.current_date = d
+        except Exception:
+            pass
+
     def _rebuild_news_log_from_stories(self):
         """Rebuild the GUI news feed from the canonical news_stories list.
 
@@ -15470,7 +15485,7 @@ class HockeyManagerGUI(tk.Tk):
             # 1. Lottery -- fully automatic, no user input needed.
             lotto_done = set(getattr(league, 'lottery_held_years', None) or [])
             if draft_year not in lotto_done:
-                self.current_date = date(draft_year, 5, 8)
+                self._set_current_date(date(draft_year, 5, 8))
                 try:
                     self._hold_draft_lottery(draft_year)
                 except Exception:
@@ -15489,7 +15504,7 @@ class HockeyManagerGUI(tk.Tk):
             conducted = set(
                 getattr(league, 'draft_conducted_years', None) or [])
             if draft_year not in draft_done and draft_year not in conducted:
-                self.current_date = date(draft_year, 6, 24)
+                self._set_current_date(date(draft_year, 6, 24))
                 try:
                     self._hold_entry_draft(draft_year)
                 except Exception:
@@ -15603,7 +15618,7 @@ class HockeyManagerGUI(tk.Tk):
         # AI) could ever execute a buyout. Runs before the draft (June
         # 23-25), matching the real calendar order.
         try:
-            self.current_date = date(self.league.season_year + 1, 6, 15)
+            self._set_current_date(date(self.league.season_year + 1, 6, 15))
         except Exception:
             pass
         try:
@@ -15851,7 +15866,7 @@ class HockeyManagerGUI(tk.Tk):
             pass
         
         # Update the current date to offseason
-        self.current_date = date(self.league.season_year, 7, 1)  # Jump to July 1st (Free Agency)
+        self._set_current_date(date(self.league.season_year, 7, 1))  # Jump to July 1st (Free Agency)
         
         messagebox.showinfo("Offseason", 
                            f"Welcome to the {self.league.season_year}-{self.league.season_year + 1} offseason!\n\n"
