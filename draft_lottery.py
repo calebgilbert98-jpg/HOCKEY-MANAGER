@@ -180,18 +180,22 @@ def lottery_reveal_text(rows: List[Dict[str, Any]], year: int) -> str:
 
 
 def reaction_line(row: Dict[str, Any]) -> str:
-    """One televised reaction line for a revealed pick."""
+    """One televised reaction line for a revealed pick.
+
+    House grammar: no emoji, no double-dash. Movement is carried by the
+    +/- number (never color alone) on the results board.
+    """
     mv, team, pick = row["movement"], row["team"], row["pick"]
     if pick == 1:
-        return f"🎰 {team} WINS the lottery -- #1 overall!"
+        return f"{team} wins the lottery \u2014 #1 overall!"
     if pick == 2:
-        return f"{team} takes #2 -- the consolation prize nobody hates."
+        return f"{team} takes #2 \u2014 the consolation prize nobody hates."
     if mv >= 5:
-        return f"{team} LEAPS {mv} spots to #{pick} -- the room erupts!"
+        return f"{team} leaps {mv} spots to #{pick} \u2014 the room erupts!"
     if mv >= 2:
         return f"{team} jumps to #{pick} (+{mv})."
     if mv <= -3:
-        return f"{team} slides to #{pick} ({mv}) -- groans in the war room."
+        return f"{team} slides to #{pick} ({mv}) \u2014 groans in the war room."
     if mv < 0:
         return f"{team} falls to #{pick}."
     return f"{team} holds at #{pick}."
@@ -262,60 +266,70 @@ class LotteryRevealView(ctk.CTkFrame):
         self._session_id = "draft_lottery"
         self._write_session(complete=False)
 
-        BG, PANEL, GOLD, WHITE, MUTED = (
-            "#0e0e11", "#16161a", "#ffd75e", "#F2F5FA", "#9aa0aa")
+        # Job 3 polish: full house-grammar restyle on the shared card
+        # components (ctk_theme). No emoji headings, no double-dash,
+        # body text at the 12px floor through ui_scale.
+        # (customtkinter is imported at module level.)
+        from ctk_theme import (init_ctk_theme, heading, body, primary_button,
+                               secondary_button, wire_focus_ring,
+                               PANEL, BORDER, GOLD)
+        from ui_scale import scaled
+        init_ctk_theme()
+        self.configure(fg_color="transparent")
 
-        root = tk.Frame(self, bg=BG)
-        root.pack(fill="both", expand=True)
+        # Controls pinned to the bottom of the screen. Packed BEFORE the
+        # scroll frame so the packer docks them first and the scroll gets
+        # only the remaining cavity -- never drawn underneath the bar.
+        # Creation order = keyboard tab order.
+        ctrls = ctk.CTkFrame(self, fg_color="transparent")
+        ctrls.pack(fill="x", side="bottom", padx=24, pady=(8, 14))
+        self._skip_btn = secondary_button(
+            ctrls, text="Skip to results", command=self._skip)
+        self._skip_btn.pack(side="left")
+        rc = ctk.CTkFrame(ctrls, fg_color="transparent")
+        rc.pack(side="right")
+        self._close_btn = secondary_button(
+            rc, text="Close", command=self._close)
+        self._close_btn.pack(side="left")
+        self._draft_btn = primary_button(
+            rc, text="Open Draft Central", command=self._open_draft,
+            state="disabled")
+        self._draft_btn.pack(side="left", padx=(10, 0))
+        for _b in (self._skip_btn, self._close_btn, self._draft_btn):
+            wire_focus_ring(_b)
 
-        tk.Label(root, text=f"🎰 NHL DRAFT LOTTERY -- {year}", bg=BG, fg=GOLD,
-                 font=("Helvetica", 18, "bold")).pack(pady=(14, 2))
-        tk.Label(root, text="the televised reveal -- picks 16 to 1", bg=BG,
-                 fg=MUTED, font=("Helvetica", 10, "italic")).pack(pady=(0, 10))
+        scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        hdr = ctk.CTkFrame(scroll, fg_color="transparent")
+        hdr.pack(fill="x", padx=24, pady=(18, 4))
+        heading(hdr, "NHL Draft Lottery", size=22).pack(anchor="w")
+        body(hdr, f"{year} \u00b7 The televised reveal \u00b7 picks 16 to 1",
+             dim=True, size=12).pack(anchor="w", pady=(2, 0))
 
         # Stage: the current pick.
-        stage = tk.Frame(root, bg=PANEL, highlightthickness=1,
-                         highlightbackground="#2a2a30")
-        stage.pack(fill="x", padx=18, pady=6)
-        self._pick_var = tk.StringVar(value="...")
-        self._team_var = tk.StringVar(value="The balls are in the machine...")
+        stage = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=12,
+                             border_width=1, border_color=BORDER)
+        stage.pack(fill="x", padx=24, pady=8)
+        self._pick_var = tk.StringVar(value="\u2026")
+        self._team_var = tk.StringVar(
+            value="The balls are in the machine\u2026")
         self._detail_var = tk.StringVar(value="")
-        tk.Label(stage, textvariable=self._pick_var, bg=PANEL, fg=GOLD,
-                 font=("Helvetica", 34, "bold")).pack(pady=(10, 0))
-        tk.Label(stage, textvariable=self._team_var, bg=PANEL, fg=WHITE,
-                 font=("Helvetica", 15, "bold"), wraplength=480,
-                 justify="center").pack(pady=2)
-        tk.Label(stage, textvariable=self._detail_var, bg=PANEL, fg=MUTED,
-                 font=("Helvetica", 10), wraplength=480,
-                 justify="center").pack(pady=(0, 10))
+        heading(stage, "", size=32, text_color=GOLD,
+                textvariable=self._pick_var).pack(pady=(14, 0))
+        heading(stage, "", size=16, textvariable=self._team_var,
+                wraplength=scaled(560)).pack(pady=2)
+        body(stage, "", size=12, dim=True, textvariable=self._detail_var,
+             wraplength=scaled(560), justify="center").pack(pady=(0, 14))
 
         # Results board (fills as revealed).
-        tk.Label(root, text="RESULTS", bg=BG, fg=MUTED,
-                 font=("Helvetica", 9, "bold")).pack(pady=(8, 2))
-        board_frame = tk.Frame(root, bg=BG)
-        board_frame.pack(fill="both", expand=True, padx=18)
-        self._board = tk.Text(board_frame, bg=BG, fg=WHITE, height=10,
-                              font=("Helvetica", 10), relief="flat",
-                              highlightthickness=0, state="disabled",
-                              wrap="word")
-        self._board.pack(fill="both", expand=True)
-
-        # Controls.
-        ctrls = tk.Frame(root, bg=BG)
-        ctrls.pack(fill="x", padx=18, pady=10)
-        skip = tk.Button(ctrls, text="SKIP TO RESULTS",
-                         command=self._skip, bg="#2a2a30", fg=WHITE,
-                         relief="flat", padx=12, pady=6)
-        skip.pack(side="left")
-        self._draft_btn = tk.Button(ctrls, text="OPEN DRAFT CENTRAL",
-                                    bg="#0e5c46", fg=WHITE, relief="flat",
-                                    padx=12, pady=6, state="disabled",
-                                    command=self._open_draft)
-        self._draft_btn.pack(side="right")
-        close = tk.Button(ctrls, text="CLOSE", bg="#2a2a30", fg=WHITE,
-                          relief="flat", padx=12, pady=6,
-                          command=self._close)
-        close.pack(side="right", padx=(0, 8))
+        body(scroll, "Results", dim=True, size=12).pack(
+            anchor="w", padx=24, pady=(10, 4))
+        results_card = ctk.CTkFrame(scroll, fg_color=PANEL, corner_radius=12)
+        results_card.pack(fill="x", padx=24, pady=(0, 8))
+        self._results_inner = ctk.CTkFrame(results_card,
+                                           fg_color="transparent")
+        self._results_inner.pack(fill="x", padx=8, pady=8)
 
         self._next()
 
@@ -361,7 +375,7 @@ class LotteryRevealView(ctk.CTkFrame):
         arrow = f"  +{mv} ▲" if mv > 0 else (f"  {mv} ▼" if mv < 0 else "")
         odds = (f"{row['odds_pct']:.1f}% odds" if row["odds_pct"] > 0
                 else "outside the lottery")
-        self._pick_var.set(f"PICK #{row['pick']}")
+        self._pick_var.set(f"Pick {row['pick']}")
         self._team_var.set(row["team"])
         self._detail_var.set(f"{odds}{arrow}\n{reaction_line(row)}")
         self._board_append(row)
@@ -370,15 +384,27 @@ class LotteryRevealView(ctk.CTkFrame):
         self._after(pause, self._next)
 
     def _board_append(self, row):
+        # One house-grammar row per revealed pick: gold pick number, team,
+        # and a signed movement figure -- never color alone.
+        from ctk_theme import heading, body, GOLD, GREEN, RED, TEXT_DIM
         mv = row["movement"]
-        arrow = f" (+{mv})" if mv > 0 else (f" ({mv})" if mv < 0 else "")
+        if mv > 0:
+            mv_txt, mv_color = f"+{mv}", GREEN
+        elif mv < 0:
+            mv_txt, mv_color = f"{mv}", RED
+        else:
+            mv_txt, mv_color = "\u2014", TEXT_DIM
         try:
-            self._board.configure(state="normal")
-            self._board.insert("1.0",
-                               f"#{row['pick']}: {row['team']}{arrow}\n")
-            self._board.configure(state="disabled")
+            r = ctk.CTkFrame(self._results_inner, fg_color="transparent")
         except Exception:
-            pass
+            return
+        r.pack(fill="x", pady=2)
+        heading(r, f"#{row['pick']}", size=12,
+                text_color=GOLD).pack(side="left", padx=(8, 10))
+        label = row["team"]
+        body(r, label, size=12).pack(side="left")
+        body(r, mv_txt, size=12, text_color=mv_color).pack(
+            side="right", padx=8)
 
     def _skip(self):
         for t in self._timers:
@@ -394,7 +420,7 @@ class LotteryRevealView(ctk.CTkFrame):
         self._finale()
 
     def _finale(self):
-        self._pick_var.set("LOTTERY COMPLETE")
+        self._pick_var.set("Lottery complete")
         top = next((r for r in self._revealed if r["pick"] == 1), None)
         self._team_var.set(
             f"{top['team']} selects #1 overall" if top else "")
@@ -413,13 +439,40 @@ class LotteryRevealView(ctk.CTkFrame):
         # The reveal is finished: no in-progress state remains.
         self._clear_session()
 
+    def _set_busy(self, busy, busy_text="Opening\u2026"):
+        """Honest loading state for the Draft Central handoff.
+
+        While Draft Central builds, the buttons are visibly disabled
+        (never dead-clickable); on error they recover so the user can
+        retry or close. Never raises.
+        """
+        try:
+            if busy:
+                self._skip_btn.configure(state="disabled")
+                self._close_btn.configure(state="disabled")
+                self._draft_btn.configure(state="disabled",
+                                          text=busy_text)
+                # Paint the busy state synchronously before the
+                # (synchronous) handoff runs.
+                self.update_idletasks()
+            else:
+                self._skip_btn.configure(state="normal")
+                self._close_btn.configure(state="normal")
+                self._draft_btn.configure(state="normal",
+                                          text="Open Draft Central")
+        except Exception:
+            pass
+
     def _open_draft(self):
+        self._set_busy(True)
         try:
             fn = getattr(self.app, "open_draft_day_central", None)
             if fn:
                 fn()
         except Exception:
-            pass
+            # Error case recovers: buttons come back, user can retry.
+            self._set_busy(False)
+            return
         self._close()
 
     def _close(self):

@@ -14008,11 +14008,14 @@ class StaffContractView(ctk.CTkFrame):
         super().__init__(parent, fg_color="transparent")
         from ctk_theme import (
             init_ctk_theme, primary_button, secondary_button, heading, body,
+            wire_focus_ring, top_column,
             TEAL, TEAL_HOVER, BG, PANEL, CARD, BORDER,
             TEXT, TEXT_DIM, TEXT_FAINT, GOLD, GREEN, RED, BLUE,
             ROW_HOVER, ROW_SELECTED,
         )
         init_ctk_theme()
+        self._wire_focus_ring = wire_focus_ring
+        self._top_column = top_column
         self._ct = dict(TEAL=TEAL, TEAL_HOVER=TEAL_HOVER, BG=BG, PANEL=PANEL,
                         CARD=CARD, BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
                         TEXT_FAINT=TEXT_FAINT, GOLD=GOLD, GREEN=GREEN, RED=RED,
@@ -14161,6 +14164,34 @@ class StaffContractView(ctk.CTkFrame):
         except Exception:
             return None
 
+    def _set_offer_busy(self, busy):
+        """Honest loading state for the offer handoff (hire path).
+
+        While the acceptance roll and signing run, the action buttons
+        are visibly disabled (never dead-clickable); they recover on
+        decline or error. The busy state paints synchronously
+        (update_idletasks) before the synchronous work runs. Never
+        raises -- safe to call after the screen closed.
+        """
+        try:
+            offer_btn = getattr(self, "_offer_btn", None)
+            back_btn = getattr(self, "_back_btn", None)
+            if busy:
+                if offer_btn is not None:
+                    offer_btn.configure(state="disabled",
+                                        text="Making offer\u2026")
+                if back_btn is not None:
+                    back_btn.configure(state="disabled")
+                self.update_idletasks()
+            else:
+                if offer_btn is not None:
+                    offer_btn.configure(state="normal",
+                                        text="Make Offer")
+                if back_btn is not None:
+                    back_btn.configure(state="normal")
+        except Exception:
+            pass
+
     def _build(self):
         # Gating Phase 2: the old StaffManagementView.open_contract_negotiation
         # modal dialog is consolidated onto this screen. renegotiate=True
@@ -14176,9 +14207,11 @@ class StaffContractView(ctk.CTkFrame):
         staff = self.staff
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
-        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
-                            width=560)
-        card.pack(pady=18)
+        # Job 3 polish: top-anchored, width-capped column -- no more thin
+        # centered strip floating on wide monitors.
+        col = self._top_column(scroll)
+        card = ctk.CTkFrame(col, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="x", pady=14)
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=20)
 
@@ -14199,7 +14232,7 @@ class StaffContractView(ctk.CTkFrame):
         self._body(body,
                    text=f"{_role} \u2022 {getattr(staff, 'nationality', '')} "
                         f"\u2022 Age {getattr(staff, 'age', '?')}",
-                   dim=True, size=11).pack(anchor="w", pady=(2, 6))
+                   dim=True, size=12).pack(anchor="w", pady=(2, 6))
 
         # Where he comes from (poach context).
         _src_line = ""
@@ -14236,7 +14269,7 @@ class StaffContractView(ctk.CTkFrame):
                    text=f"Club staff budget: ${_budget:,}  \u2022  "
                         f"Committed: ${_committed:,}  \u2022  "
                         f"Available: ${_remaining:,}",
-                   size=11, dim=True).pack(anchor="w", padx=12, pady=10)
+                   size=12, dim=True).pack(anchor="w", padx=12, pady=10)
         self._budget_remaining = _remaining
 
         offer_info = {'years': 2}
@@ -14253,7 +14286,7 @@ class StaffContractView(ctk.CTkFrame):
         offer_info['years'] = _sess_years
 
         self._body(body, text="Contract length:", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         years_seg = ctk.CTkSegmentedButton(
             body, values=["1", "2", "3", "4", "5"],
             selected_color=ct['TEAL'], selected_hover_color=ct['TEAL_HOVER'],
@@ -14272,7 +14305,7 @@ class StaffContractView(ctk.CTkFrame):
 
         # Free dollar entry -- tailored offers, not fixed steps.
         self._body(body, text="Salary offer ($ / year):", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         self._salary_entry = ctk.CTkEntry(
             body, width=220, fg_color=ct['BG'], border_color=ct['BORDER'])
         _sess_salary = str(_sess.get("salary_text") or "")
@@ -14293,7 +14326,7 @@ class StaffContractView(ctk.CTkFrame):
         # AHL staffers default to the farm (lateral move); everyone else
         # defaults to the NHL club.
         self._body(body, text="Assign to:", dim=True,
-                   size=11).pack(anchor="w", pady=(0, 4))
+                   size=12).pack(anchor="w", pady=(0, 4))
         _default_asg = "AHL" if (self.hire_source == "ahl_poach") else "NHL"
         _sess_asg = str(_sess.get("assignment") or "").upper()
         if _sess_asg not in ("NHL", "AHL"):
@@ -14317,7 +14350,7 @@ class StaffContractView(ctk.CTkFrame):
 
         offer_label = self._body(body, text="", size=12)
         offer_label.pack(anchor="w", pady=(0, 2))
-        chance_label = self._body(body, text="", size=11)
+        chance_label = self._body(body, text="", size=12)
         chance_label.pack(anchor="w", pady=(0, 12))
 
         def _paint():
@@ -14351,13 +14384,22 @@ class StaffContractView(ctk.CTkFrame):
 
         btns = ctk.CTkFrame(body, fg_color="transparent")
         btns.pack(fill="x", pady=(4, 0))
-        self._secondary_button(btns, text="Back",
-                               command=self._cancel_hire).pack(side="right",
-                                                              padx=(10, 0))
-        self._primary_button(btns, text="Make Offer",
-                             command=lambda: self._resolve_staff_offer(
-                                 staff, offer_info['years'],
-                                 self._asg_seg.get().lower())).pack(side="right")
+        # Job 3 polish: right-aligned cluster; creation order is the
+        # keyboard tab order (primary action first).
+        rc = ctk.CTkFrame(btns, fg_color="transparent")
+        rc.pack(side="right")
+        self._offer_btn = self._primary_button(
+            rc, text="Make Offer",
+            command=lambda: self._resolve_staff_offer(
+                staff, offer_info['years'],
+                self._asg_seg.get().lower()))
+        self._offer_btn.pack(side="left")
+        self._back_btn = self._secondary_button(
+            rc, text="Back", command=self._cancel_hire)
+        self._back_btn.pack(side="left", padx=(10, 0))
+        self._wire_focus_ring(self._offer_btn)
+        self._wire_focus_ring(self._back_btn)
+        self._wire_focus_ring(self._salary_entry)
 
     # ------------------------------------------------------------------
     # Gating Phase 2: renegotiation mode.
@@ -14378,9 +14420,10 @@ class StaffContractView(ctk.CTkFrame):
 
         scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
-        card = ctk.CTkFrame(scroll, fg_color=ct['PANEL'], corner_radius=12,
-                            width=560)
-        card.pack(pady=18)
+        # Job 3 polish: top-anchored, width-capped column (same as hire).
+        col = self._top_column(scroll)
+        card = ctk.CTkFrame(col, fg_color=ct['PANEL'], corner_radius=12)
+        card.pack(fill="x", pady=14)
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=24, pady=20)
 
@@ -14400,7 +14443,7 @@ class StaffContractView(ctk.CTkFrame):
             _role = staff.role.value
         except Exception:
             _role = getattr(staff, "role", "")
-        ctk.CTkLabel(body, text=str(_role), font=("Segoe UI", 11),
+        ctk.CTkLabel(body, text=str(_role), font=("Segoe UI", 12),
                      text_color=ct['TEAL']).pack(anchor="w", pady=(0, 14))
 
         # Current demands card.
@@ -14410,10 +14453,10 @@ class StaffContractView(ctk.CTkFrame):
             anchor="w", padx=12, pady=(10, 2))
         self._body(demands,
                    text=f"Asking Salary: ${int(getattr(staff, 'salary', 0) or 0):,}",
-                   dim=True, size=11).pack(anchor="w", padx=12, pady=2)
+                   dim=True, size=12).pack(anchor="w", padx=12, pady=2)
         self._body(demands,
                    text=f"Contract Length: {getattr(staff, 'contract_years', '?')} years",
-                   dim=True, size=11).pack(anchor="w", padx=12, pady=(2, 10))
+                   dim=True, size=12).pack(anchor="w", padx=12, pady=(2, 10))
 
         # Offer frame.
         offer = ctk.CTkFrame(body, fg_color=ct['CARD'], corner_radius=8)
@@ -14422,13 +14465,13 @@ class StaffContractView(ctk.CTkFrame):
             anchor="w", padx=12, pady=(10, 2))
         grid = ctk.CTkFrame(offer, fg_color="transparent")
         grid.pack(anchor="w", padx=12, pady=(2, 10))
-        ctk.CTkLabel(grid, text="Salary:", font=("Segoe UI", 10),
+        ctk.CTkLabel(grid, text="Salary:", font=("Segoe UI", 12),
                      text_color=ct['TEXT_DIM']).grid(
                          row=0, column=0, padx=5, pady=5, sticky='w')
         salary_entry = ctk.CTkEntry(
             grid, width=150, fg_color=ct['BG'],
             border_color=ct['BORDER'], text_color=ct['TEXT'])
-        ctk.CTkLabel(grid, text="Years:", font=("Segoe UI", 10),
+        ctk.CTkLabel(grid, text="Years:", font=("Segoe UI", 12),
                      text_color=ct['TEXT_DIM']).grid(
                          row=1, column=0, padx=5, pady=5, sticky='w')
         years_entry = ctk.CTkEntry(
@@ -14453,7 +14496,7 @@ class StaffContractView(ctk.CTkFrame):
         salary_entry.bind('<KeyRelease>', _on_key)
         years_entry.bind('<KeyRelease>', _on_key)
 
-        result_label = ctk.CTkLabel(body, text="", font=("Segoe UI", 10),
+        result_label = ctk.CTkLabel(body, text="", font=("Segoe UI", 12),
                                     text_color=ct['TEXT_DIM'],
                                     wraplength=440, justify="left")
         result_label.pack(fill="x", pady=(0, 12))
@@ -14477,25 +14520,42 @@ class StaffContractView(ctk.CTkFrame):
                 return
             self._write_session(salary_text=salary_entry.get(),
                                 years=years_entry.get())
-            if staff.negotiate_contract(offered_salary, offered_years):
-                result_label.configure(text="Offer Accepted!",
-                                       text_color=ct['GREEN'])
-                staff.salary = offered_salary
-                staff.contract_years = offered_years
-                self._close_session(True)
-                self._fire_done(True)
-                self.close_view()
-            else:
-                result_label.configure(
-                    text="Offer Rejected. Try adjusting your offer.",
-                    text_color=ct['RED'])
+            # Honest loading state: same helper as the hire path (the
+            # buttons are stored on self under the same names).
+            self._set_offer_busy(True)
+            try:
+                accepted = staff.negotiate_contract(offered_salary,
+                                                    offered_years)
+            except Exception:
+                accepted = False
+            try:
+                if accepted:
+                    result_label.configure(text="Offer Accepted!",
+                                           text_color=ct['GREEN'])
+                    staff.salary = offered_salary
+                    staff.contract_years = offered_years
+                    self._close_session(True)
+                    self._fire_done(True)
+                    self.close_view()
+                else:
+                    result_label.configure(
+                        text="Offer Rejected. Try adjusting your offer.",
+                        text_color=ct['RED'])
+            finally:
+                self._set_offer_busy(False)
 
-        self._primary_button(btns, text="Make Offer", command=make_offer,
-                             width=130, height=36).pack(side="left", padx=5)
-        self._secondary_button(btns, text="Cancel",
-                               command=self._cancel_renegotiate,
-                               width=110, height=36).pack(side="right",
-                                                         padx=5)
+        self._offer_btn = self._primary_button(
+            btns, text="Make Offer", command=make_offer,
+            width=130, height=36)
+        self._offer_btn.pack(side="left", padx=5)
+        self._back_btn = self._secondary_button(
+            btns, text="Cancel", command=self._cancel_renegotiate,
+            width=110, height=36)
+        self._back_btn.pack(side="right", padx=5)
+        self._wire_focus_ring(self._offer_btn)
+        self._wire_focus_ring(self._back_btn)
+        self._wire_focus_ring(salary_entry)
+        self._wire_focus_ring(years_entry)
 
     def _cancel_renegotiate(self):
         """Back out of a renegotiation (reports False, keeps session for
@@ -14586,77 +14646,85 @@ class StaffContractView(ctk.CTkFrame):
                       "assignment": assignment},
                      on_sent=self.close_view):
             return
-        chance = self._staff_offer_accept_chance(staff, salary)
-        if random.random() < chance:
-            # Only leave the source pool/club AFTER a successful signing --
-            # if sign_free_agent_staff fails (e.g. a budget race), the
-            # staffer must not be lost from their old club/pool.
-            if self.app.game_manager.sign_free_agent_staff(
-                    staff, salary, years, assignment):
-                league = getattr(self.app, 'league', None)
-                if self.hire_source == "overseas" and league is not None:
-                    pool = getattr(league, "overseas_staff", None)
-                    if pool is not None and staff in pool:
-                        pool.remove(staff)
-                elif (self.hire_source == "ahl_poach"
-                      and self.from_team is not None
-                      and staff in self.from_team.staff):
-                    self.from_team.staff.remove(staff)
-                messagebox.showinfo("Offer Accepted",
-                                    f"{staff.full_name} has accepted your offer!")
-                # Gating Phase 2 (old-dialog parity): the assistant-coach
-                # hire hook and the new-head-coach whiteboard install ran
-                # in the dialog's hire path; they run here now.
-                try:
-                    import assistant_coaches as _ac
-                    _team2 = getattr(self.app.game_manager, "user_team",
-                                    None)
-                    if _team2 is not None:
-                        _ac.on_assistant_hired(_team2, staff, app=self.app)
-                except Exception:
-                    pass
-                try:
-                    _role = str(getattr(getattr(staff, "role", None),
-                                        "value", ""))
-                    if "Head Coach" in _role:
-                        import tactics as _tx
-                        _team3 = getattr(self.app.game_manager, "user_team",
+        # Honest loading state: the acceptance roll and the signing run
+        # synchronously here, so the busy state paints first
+        # (update_idletasks) -- the buttons are never dead-clickable,
+        # and they recover on decline or error.
+        self._set_offer_busy(True)
+        try:
+            chance = self._staff_offer_accept_chance(staff, salary)
+            if random.random() < chance:
+                # Only leave the source pool/club AFTER a successful signing --
+                # if sign_free_agent_staff fails (e.g. a budget race), the
+                # staffer must not be lost from their old club/pool.
+                if self.app.game_manager.sign_free_agent_staff(
+                        staff, salary, years, assignment):
+                    league = getattr(self.app, 'league', None)
+                    if self.hire_source == "overseas" and league is not None:
+                        pool = getattr(league, "overseas_staff", None)
+                        if pool is not None and staff in pool:
+                            pool.remove(staff)
+                    elif (self.hire_source == "ahl_poach"
+                          and self.from_team is not None
+                          and staff in self.from_team.staff):
+                        self.from_team.staff.remove(staff)
+                    messagebox.showinfo("Offer Accepted",
+                                        f"{staff.full_name} has accepted your offer!")
+                    # Gating Phase 2 (old-dialog parity): the assistant-coach
+                    # hire hook and the new-head-coach whiteboard install ran
+                    # in the dialog's hire path; they run here now.
+                    try:
+                        import assistant_coaches as _ac
+                        _team2 = getattr(self.app.game_manager, "user_team",
                                         None)
-                        if (_team3 is not None
-                                and _tx.get_tactics_control(_team3)
-                                == "coach"):
-                            installed = _tx.install_coach_systems(
-                                _team3, staff, reason="hired")
-                            if installed:
-                                _cname = (f"{getattr(staff, 'first_name', '')} "
-                                          f"{getattr(staff, 'last_name', '')}"
-                                          ).strip()
-                                _bits = ", ".join(
-                                    f"{c}: {k.replace('_', ' ')}"
-                                    for c, k in installed.items())
-                                try:
-                                    self.app.add_news(
-                                        f"{_cname} is installing his systems "
-                                        f"({len(installed)} changes: {_bits}). "
-                                        f"The room starts learning -- "
-                                        f"familiarity reset.")
-                                except Exception:
-                                    pass
-                except Exception:
-                    pass
-                try:
-                    self.app.update_all_views()
-                except Exception:
-                    pass
-                self._close_session(True)
-                self._fire_done(True)
-                self.close_view()
+                        if _team2 is not None:
+                            _ac.on_assistant_hired(_team2, staff, app=self.app)
+                    except Exception:
+                        pass
+                    try:
+                        _role = str(getattr(getattr(staff, "role", None),
+                                            "value", ""))
+                        if "Head Coach" in _role:
+                            import tactics as _tx
+                            _team3 = getattr(self.app.game_manager, "user_team",
+                                            None)
+                            if (_team3 is not None
+                                    and _tx.get_tactics_control(_team3)
+                                    == "coach"):
+                                installed = _tx.install_coach_systems(
+                                    _team3, staff, reason="hired")
+                                if installed:
+                                    _cname = (f"{getattr(staff, 'first_name', '')} "
+                                              f"{getattr(staff, 'last_name', '')}"
+                                              ).strip()
+                                    _bits = ", ".join(
+                                        f"{c}: {k.replace('_', ' ')}"
+                                        for c, k in installed.items())
+                                    try:
+                                        self.app.add_news(
+                                            f"{_cname} is installing his systems "
+                                            f"({len(installed)} changes: {_bits}). "
+                                            f"The room starts learning -- "
+                                            f"familiarity reset.")
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                    try:
+                        self.app.update_all_views()
+                    except Exception:
+                        pass
+                    self._close_session(True)
+                    self._fire_done(True)
+                    self.close_view()
+                else:
+                    messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
             else:
-                messagebox.showerror("Error", "Failed to sign staff member. Check your budget.")
-        else:
-            messagebox.showinfo("Offer Declined",
-                                f"{staff.full_name} has declined your offer. "
-                                f"Consider offering a better salary.")
+                messagebox.showinfo("Offer Declined",
+                                    f"{staff.full_name} has declined your offer. "
+                                    f"Consider offering a better salary.")
+        finally:
+            self._set_offer_busy(False)
 
 class CaptainChangeDialog(InGamePopup):
     """Pre-change judgment call: stripping the C has consequences.

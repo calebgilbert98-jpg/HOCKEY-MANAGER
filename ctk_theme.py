@@ -350,3 +350,115 @@ class CTkOfferList(ctk.CTkScrollableFrame):
 
     def get_selected_index(self):
         return self._selected_idx
+
+
+# ---------------------------------------------------------------------------
+# Job-3 polish helpers (gating slice 4): visible keyboard focus + a
+# top-anchored, width-capped content column for small-card screens.
+# Additive only -- no existing behavior changes.
+# ---------------------------------------------------------------------------
+
+def wire_focus_ring(widget, ring_color=None):
+    """Visible keyboard-focus indicator (a11y: visible focus states).
+
+    While the widget holds keyboard focus its border switches to the
+    accent ring color; the resting border returns on focus-out. The
+    border is drawn inside the widget's bounds (2px reserved at wire
+    time), so no layout shift occurs. Works on CTkButton / CTkEntry.
+    Never raises.
+    """
+    try:
+        ring = ring_color or GOLD
+        try:
+            bw = int(widget.cget("border_width") or 0)
+        except Exception:
+            return
+        if bw >= 1:
+            # Entries etc: keep the existing border, just recolor on focus.
+            try:
+                rest = widget.cget("border_color")
+            except Exception:
+                rest = BORDER
+        else:
+            # Buttons: reserve an invisible border in the widget's own
+            # fill color, recolored to the ring on focus.
+            try:
+                rest = widget.cget("fg_color")
+            except Exception:
+                rest = BG
+            try:
+                widget.configure(border_width=2, border_color=rest)
+            except Exception:
+                pass
+
+        def _in(_e=None):
+            try:
+                widget.configure(border_color=ring)
+            except Exception:
+                pass
+
+        def _out(_e=None):
+            try:
+                widget.configure(border_color=rest)
+            except Exception:
+                pass
+
+        try:
+            widget.bind("<FocusIn>", _in, add="+")
+            widget.bind("<FocusOut>", _out, add="+")
+            # Marker for automated checks (the binding lives on the
+            # widget's inner focus target, which varies by widget type).
+            widget._focus_ring_wired = True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def top_column(scroll, max_width=680):
+    """Top-anchored, width-capped content column inside a scroll frame.
+
+    Small-card screens (physio report, staff contract) rendered as a
+    thin centered strip on wide monitors. This helper pins the column
+    to the top and caps its width (ui_scale-aware, so Large/XL tiers
+    get proportionally roomier columns); side padding adapts on window
+    resize via a debounced <Configure> handler (cheap reflow only).
+    Returns the inner frame to pack content into. Never raises.
+    """
+    from ui_scale import scaled
+    outer = ctk.CTkFrame(scroll, fg_color="transparent")
+    outer.pack(fill="x", anchor="n")
+    inner = ctk.CTkFrame(outer, fg_color="transparent")
+    inner.pack(fill="x")
+    state = {"after": None}
+
+    def _apply():
+        state["after"] = None
+        try:
+            w = scroll.winfo_width()
+            cap = scaled(max_width)
+            pad = max(16, (w - cap) // 2)
+            outer.pack_configure(padx=pad, pady=14)
+        except Exception:
+            pass
+
+    def _on_cfg(_e=None):
+        try:
+            if state["after"]:
+                scroll.after_cancel(state["after"])
+        except Exception:
+            pass
+        try:
+            state["after"] = scroll.after(120, _apply)
+        except Exception:
+            pass
+
+    try:
+        scroll.bind("<Configure>", _on_cfg, add="+")
+    except Exception:
+        pass
+    try:
+        scroll.after(80, _apply)
+    except Exception:
+        pass
+    return inner

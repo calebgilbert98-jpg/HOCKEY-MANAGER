@@ -111,26 +111,30 @@ class PhysioReportView(tk.Frame):
             import customtkinter as ctk
             from ctk_theme import init_ctk_theme, BG
             init_ctk_theme()
-            from ctk_theme import (heading, body, PANEL, GREEN, RED)
+            from ctk_theme import (heading, body, primary_button,
+                                   wire_focus_ring, top_column,
+                                   PANEL, GREEN, RED)
+            from ui_scale import scaled
             player = self.player
 
             scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
             scroll.pack(fill="both", expand=True)
-            outer = ctk.CTkFrame(scroll, fg_color="transparent", width=460)
-            outer.pack(pady=14)
-            heading(outer, "Physio Report", size=16).pack(
+            # Job 3 polish: top-anchored, width-capped column -- no more
+            # thin centered strip floating on wide monitors.
+            outer = top_column(scroll)
+            heading(outer, "Physio Report", size=18).pack(
                 anchor="w", padx=18, pady=(16, 2))
-            body(outer, getattr(player, "full_name", "?"), dim=True).pack(
-                anchor="w", padx=18, pady=(0, 12))
+            body(outer, getattr(player, "full_name", "?"), dim=True,
+                 size=12).pack(anchor="w", padx=18, pady=(0, 12))
             card = ctk.CTkFrame(outer, fg_color=PANEL, corner_radius=12)
-            card.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+            card.pack(fill="x", padx=14, pady=(0, 14))
 
             injured = bool(getattr(player, "is_injured", False))
-            body(card, "Status", dim=True, size=11).pack(
+            body(card, "Status", dim=True, size=12).pack(
                 anchor="w", padx=16, pady=(14, 0))
             ctk.CTkLabel(
                 card, text="INJURED" if injured else "Fit to play",
-                font=("Segoe UI", 15, "bold"),
+                font=("Segoe UI", scaled(15), "bold"),
                 text_color=RED if injured else GREEN).pack(
                     anchor="w", padx=16, pady=(2, 8))
 
@@ -163,7 +167,8 @@ class PhysioReportView(tk.Frame):
                 r = ctk.CTkFrame(card, fg_color="transparent")
                 r.pack(fill="x", padx=16, pady=3)
                 body(r, label, dim=True, size=12).pack(side="left")
-                ctk.CTkLabel(r, text=value, font=("Segoe UI", 12, "bold"),
+                ctk.CTkLabel(r, text=value, font=("Segoe UI", scaled(12),
+                                                 "bold"),
                              text_color="white").pack(side="right")
             note = ""
             if injured:
@@ -171,11 +176,13 @@ class PhysioReportView(tk.Frame):
             elif (getattr(player, "injury_proneness", 0) or 0) > 12:
                 note = "Injury-prone: consider managing his minutes in back-to-backs."
             if note:
-                body(card, note, dim=True, size=11).pack(
+                body(card, note, dim=True, size=12,
+                     wraplength=scaled(560)).pack(
                     anchor="w", padx=16, pady=(10, 4))
-            ctk.CTkButton(card, text="Close", width=120, fg_color="#00ceb8",
-                          hover_color="#00b3a0", text_color="#0b0e11",
-                          command=self.close_view).pack(pady=(8, 14))
+            _close_btn = primary_button(card, text="Close", width=120,
+                                        command=self.close_view)
+            _close_btn.pack(pady=(8, 14))
+            wire_focus_ring(_close_btn)
         except Exception as e:
             print(f"Physio report failed: {e}")
 
