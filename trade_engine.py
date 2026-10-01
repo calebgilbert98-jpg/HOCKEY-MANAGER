@@ -366,11 +366,14 @@ def _opportunity_factor(player, to_team):
     try:
         group = _position_group(player)
         age = int(getattr(player, "age", 28) or 28)
-        # Tier-based (Muck 2026-10-01): "at his level" means his tier, as the
-        # receiving GM perceives him (fogged) vs their own players (true).
+        # Tier-based (Muck 2026-10-01): "at his level" means his tier.
+        # The perceiver here is the PLAYER himself -- this feeds his private
+        # no-trade list -- so it is his TRUE tier. He knows his own level;
+        # the destination's fogged scouting grade of him is not his business.
         from attribute_composites import ai_perceived_tier as _apt
+        from attribute_composites import talent_tier_for_player as _ttp
         from attribute_composites import tier_index as _ti
-        mine = _ti(_apt(player, to_team))
+        mine = _ti(_ttp(player))
         mates = [p for p in (getattr(to_team, "roster", None) or [])
                  if _position_group(p) == group]
     except Exception:
