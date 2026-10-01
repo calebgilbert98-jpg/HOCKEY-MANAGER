@@ -619,6 +619,15 @@ class AdvancedGameSim:
         # net empty. Checked once per shift in period 3; goalies return on
         # any goal and at period ends.
         self.goalie_pulled = set()
+        # Structured drama (workstream B, 2026-09-30, additive): measurement
+        # reads sim.drama_events -- broadcast keeps its text log unchanged.
+        # QS has no delayed-penalty pulls (all pulls are strategic).
+        self._pull_clock = {}  # team name -> time remaining at the pull
+        try:
+            from drama_events import init_drama_events as _ide
+            _ide(self)
+        except Exception:
+            self.drama_events = []
         # EHM shift-fatigue: continuous seconds the current on-ice unit has
         # been out. Most shifts rotate; stuck units accumulate and degrade.
         self._shift_age = {home_team.team_name: 0.0, away_team.team_name: 0.0}
@@ -978,6 +987,10 @@ class AdvancedGameSim:
         if self.pk_team == team_name:
             return False  # never shorthanded
         remaining = 3600 - self.time
+        # Workstream B (2026-09-30): no phantom after-the-horn pulls -- a
+        # pull needs live time on the clock.
+        if remaining <= 0:
+            return False
         try:
             from goalie_pull import pull_windows as _gpw
             d1, d2, _style = _gpw(self, team)
@@ -1002,7 +1015,28 @@ class AdvancedGameSim:
         """Once per shift: trailing teams pull for the extra attacker."""
         for team in (self.home_team, self.away_team):
             if self._pull_eligible(team, team.team_name):
-                self._pull_goalie(team.team_name)
+                _tn = team.team_name
+                self._pull_goalie(_tn)
+                # Structured drama (workstream B, 2026-09-30, additive):
+                # record the strategic pull for measurement.
+                try:
+                    from drama_events import record_goalie_pull as _rgp
+                    _style = "balanced"
+                    try:
+                        from goalie_pull import pull_windows as _gpw2
+                        _, _, _style = _gpw2(self, team)
+                        if isinstance(_style, dict):
+                            _style = _style.get("style", "balanced")
+                    except Exception:
+                        pass
+                    _oth = (self.away_team.team_name if team is self.home_team
+                            else self.home_team.team_name)
+                    _rem = 3600 - self.time
+                    self._pull_clock[_tn] = round(max(0.0, _rem), 1)
+                    _rgp(self, _tn, coach_style=_style,
+                         deficit=self.score[_oth] - self.score[_tn])
+                except Exception:
+                    pass
 
     def _pull_goalie(self, team_name):
         if team_name in self.goalie_pulled:
@@ -1015,6 +1049,11 @@ class AdvancedGameSim:
 
     def _return_goalie(self, team_name):
         self.goalie_pulled.discard(team_name)
+        # Structured drama (workstream B): clear the live-pull tracking.
+        try:
+            self._pull_clock.pop(team_name, None)
+        except Exception:
+            pass
 
     def _return_all_goalies(self):
         self.goalie_pulled.clear()
@@ -1252,6 +1291,31 @@ class AdvancedGameSim:
 
     def _simulate_event(self):
         puck_team_name = self.home_team.team_name if random.random() < 0.5 else self.away_team.team_name
+        # 6-on-5 (workstream B, 2026-09-30): the pulled-goalie unit camps in
+        # the zone -- the shared OZ-sustenance fidelity for this engine
+        # weights puck-event retention toward the pulling team (personnel-
+        # scaled, ~0.56-0.78), replacing the 50/50 coin flip. The power-play
+        # override below still takes precedence when both apply.
+        try:
+            _gp65 = set(getattr(self, "goalie_pulled", set()) or set())
+            if _gp65 and puck_team_name not in _gp65:
+                from six_on_five import oz_possession_retention as _ret65
+                _pteam = (self.home_team if puck_team_name == self.home_team.team_name
+                          else self.away_team)
+                _pull_tn = next(iter(_gp65))
+                _pull_team = (self.home_team if _pull_tn == self.home_team.team_name
+                              else self.away_team)
+                if _pull_team is not _pteam:
+                    _po = self.on_ice.get(_pull_tn, {}) or {}
+                    _pu65 = [p for p in (_po.get("Forwards", [])
+                                         + _po.get("Defense", [])) if p]
+                    _do = self.on_ice.get(puck_team_name, {}) or {}
+                    _du65 = [p for p in (_do.get("Forwards", [])
+                                         + _do.get("Defense", [])) if p]
+                    if random.random() < _ret65(_pu65, _du65):
+                        puck_team_name = _pull_tn
+        except Exception:
+            pass
         opp_team_name = self.away_team.team_name if puck_team_name == self.home_team.team_name else self.home_team.team_name
         if self.pp_team:
             puck_team_name = self.pp_team
@@ -1464,18 +1528,35 @@ class AdvancedGameSim:
         # trap teams shoot less. Dynamic per team, per game. SHOT_LIFT
         # raises the league to real NHL volume (~29.5 SOG/team/game).
         #
-        # 3v3 overtime (divergence #3): the open ice is worth 1.25x shot
-        # volume -- the same decision GameSim's THREE_ON_THREE branch
-        # makes in _apply_situation_modifiers.
+        # 3v3 overtime (divergence #3, workstream B(e)): the open ice is
+        # worth 2.00x shot volume -- the same decision GameSim's
+        # THREE_ON_THREE branch makes in _apply_situation_modifiers.
+        # The live lever for (e), with the ot_3v3_tilt on grade below.
         if getattr(self, "_ot_3v3", False):
-            shot_prob *= 1.25
-        # 6-on-5 (divergence #13): the pulled-goalie extra attacker --
-        # 2.2x shot volume, the same decision GameSim makes on its volume
-        # gate. (No conversion boost on either side.)
+            shot_prob *= 2.00
+        # 6-on-5 (divergence #13, workstream B, 2026-09-30): the pulled-goalie
+        # extra attacker. The flat 2.2x is replaced by the shared
+        # generation-side 6v5 model (six_on_five.six_on_five_volume): the
+        # six-man unit's personnel-scaled volume edge (net-front/shooting/
+        # IQ vs the defense's box-out, ~1.30-1.90). Same decision GameSim
+        # makes on its volume gate -- one decision, two fidelities.
+        # (No conversion boost on either side.)
         try:
             if (team is not None and getattr(team, "team_name", "")
                     in getattr(self, "goalie_pulled", set())):
-                shot_prob *= 2.2
+                from six_on_five import six_on_five_volume as _v65
+                _tn65 = team.team_name
+                _a_on65 = self.on_ice.get(_tn65, {}) or {}
+                _a_u65 = [p for p in (_a_on65.get("Forwards", [])
+                                      + _a_on65.get("Defense", []))
+                          if p is not None]
+                _opp65 = (self.away_team if team is self.home_team
+                          else self.home_team)
+                _d_on65 = self.on_ice.get(_opp65.team_name, {}) or {}
+                _d_u65 = [p for p in (_d_on65.get("Forwards", [])
+                                      + _d_on65.get("Defense", []))
+                          if p is not None]
+                shot_prob *= _v65(_a_u65, _d_u65)
         except Exception:
             pass
         # sh_threat (divergence #15): unified on the VOLUME channel. An
@@ -1632,6 +1713,18 @@ class AdvancedGameSim:
                 self.score[self.home_team.team_name] = ot_home_start + 1
             if away_ot_goals > 1:
                 self.score[self.away_team.team_name] = ot_away_start + 1
+            # Structured drama (workstream B, 2026-09-30, additive): OT was
+            # decided live in 3v3 sudden death (regular season here).
+            try:
+                from drama_events import record_ot_result as _rot_q
+                if (self.score[self.home_team.team_name] > ot_home_start
+                        or self.score[self.away_team.team_name] > ot_away_start):
+                    if self.score[self.home_team.team_name] > self.score[self.away_team.team_name]:
+                        _rot_q(self, "3v3", self.home_team.team_name, self.away_team.team_name)
+                    else:
+                        _rot_q(self, "3v3", self.away_team.team_name, self.home_team.team_name)
+            except Exception:
+                pass
         # If still tied after OT, do shootout
 
         # Defensive: get home/away goalies safely
@@ -1728,6 +1821,12 @@ class AdvancedGameSim:
             
             scores = (self.score[self.home_team.team_name], self.score[self.away_team.team_name])
             notable_events = [e for e in self.events if e['event'] == 'Goal' or e['event'] == 'Shootout Goal']
+            # Structured drama (workstream B, 2026-09-30, additive).
+            try:
+                from drama_events import record_ot_result as _rot_q2
+                _rot_q2(self, "shootout", winner.team_name, loser.team_name)
+            except Exception:
+                pass
             self._record_mesh_performances()
             # Shootout => the game went past regulation.
             self._record_parity_result(winner, scores, went_ot=True)
@@ -2088,6 +2187,37 @@ class AdvancedGameSim:
                                    def_team=opp_team_name)
             except Exception:
                 _schemed_f = 1.0
+            # -- 6v5 scramble tilt (workstream B, 2026-09-30) -------------
+            # Generation side only: the six-man unit's net-front chaos
+            # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+            # earns grade A. Finishing constants/clamps untouched.
+            _tilt65 = 1.0
+            try:
+                if puck_team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import grade_tilt_ctx as _gtc65q
+                    _a_onice = self.on_ice.get(puck_team_name, {}) or {}
+                    _a_unit = [p for p in (_a_onice.get("Forwards", [])
+                                           + _a_onice.get("Defense", []))
+                               if p is not None]
+                    _tilt65 = _gtc65q(_a_unit, _d_unit
+                                      ).get("six_on_five_tilt", 1.0)
+            except Exception:
+                pass
+            # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+            # Generation side only: 3v3 OT's open ice tilts grade-A earning
+            # by the on-ice units' skating/chance-creation. The live lever
+            # for (e), alongside the 1.60x volume above.
+            _tilt3v3 = 1.0
+            try:
+                if getattr(self, "_ot_3v3", False):
+                    from six_on_five import ot_open_ice_tilt as _ot33q
+                    _a_onice3 = self.on_ice.get(puck_team_name, {}) or {}
+                    _a_unit3 = [p for p in (_a_onice3.get("Forwards", [])
+                                            + _a_onice3.get("Defense", []))
+                                if p is not None]
+                    _tilt3v3 = _ot33q(_a_unit3, _d_unit)
+            except Exception:
+                pass
             # -- roll ---------------------------------------------------
             _grade = _rcg(
                 _loc, _contest01, shooter,
@@ -2107,6 +2237,8 @@ class AdvancedGameSim:
                     "is_playoff": bool(getattr(self, "is_playoff", False)),
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
+                    "six_on_five_tilt": _tilt65,
+                    "ot_3v3_tilt": _tilt3v3,
                 })
             shot_chance = shot_chance * _cgfm(_grade)
             # Schemed-against factor (scenario battle): applied to the
@@ -2624,6 +2756,26 @@ class AdvancedGameSim:
         elif _empty_net or random.random() < shot_chance:
             shot_result = 'GOAL'
             self.score[puck_team_name] += 1
+            # Structured drama (workstream B, 2026-09-30, additive):
+            # detect the empty-net conversion and the late equalizer while
+            # the pulled state is still live (before _return_all_goalies).
+            try:
+                from drama_events import (record_late_equalizer as _rle_q,
+                                          record_empty_net_goal as _reng_q)
+                _pulled_live_q = set(getattr(self, "goalie_pulled", set()) or set())
+                if _empty_net:
+                    _reng_q(self, puck_team_name, shooter)
+                elif (self.period == 3 and puck_team_name in _pulled_live_q):
+                    _pre_q = self.score[puck_team_name] - 1
+                    _opp_q = (self.away_team.team_name if puck_team_name
+                              == self.home_team.team_name
+                              else self.home_team.team_name)
+                    if _pre_q == self.score[_opp_q] - 1:
+                        _rle_q(self, puck_team_name, shooter,
+                               pull_clock_remaining=getattr(
+                                   self, "_pull_clock", {}).get(puck_team_name))
+            except Exception:
+                pass
             # The net is never empty across a goal: both goalies return.
             self._return_all_goalies()
             # Crowd: the building swings on every goal (live mood/energy).
