@@ -4699,6 +4699,29 @@ class GameSim:
         except Exception:
             pass
 
+        # D1 design build: instruction rush nudges. chase_game opens it up
+        # (+attack, but exposure the other way); protect_lead / tighten_up
+        # add structure to the defending roll; play_harder forechecks.
+        # Small additive points on ~150-200 rolls -- bounded, never caps.
+        try:
+            from mesh_system import (coach_instruction_effects as _cie2,
+                                     coach_instruction_efficacy as _ceff2)
+            _instrs = getattr(self, "_coach_instructions", {}) or {}
+            _ai = _instrs.get(getattr(attacking_team, "team_name", ""), "")
+            _di = _instrs.get(getattr(defending_team, "team_name", ""), "")
+            _aeff = _ceff2(getattr(self, "_home_coach", None)
+                           if attacking_team is self.home_team
+                           else getattr(self, "_away_coach", None))
+            _deff = _ceff2(getattr(self, "_home_coach", None)
+                           if defending_team is self.home_team
+                           else getattr(self, "_away_coach", None))
+            _afx, _dfx = _cie2(_ai), _cie2(_di)
+            attacker_roll += (_afx.get("rush_attack_nudge", 0.0) * _aeff
+                              + _dfx.get("exposure_attack_nudge", 0.0) * _deff)
+            defender_roll += _dfx.get("rush_defense_nudge", 0.0) * _deff
+        except Exception:
+            pass
+
         if attacker_roll > defender_roll:
             self._resolve_scoring_chance(attacker, attacking_team, defending_team)
             return "Scoring Chance", attacking_team 
@@ -4744,7 +4767,9 @@ class GameSim:
             return
 
         # Determine shot location based on player position and situation
-        shot_location = self._determine_shot_location(shooter, attacking_team)
+        # (D1: defending team's instruction can deny the middle).
+        shot_location = self._determine_shot_location(
+            shooter, attacking_team, defending_team=defending_team)
 
         # Positional honesty: the shooter has the puck at his spot when he
         # lets it go -- he skated there as the chance developed.
@@ -4822,7 +4847,8 @@ class GameSim:
         # Shot is on goal - resolve against goalie
         self._resolve_shot_on_goal(shooter, attacking_team, defending_team, shot_type, shot_location, shot_quality, distance, grade=chance_grade)
 
-    def _determine_shot_location(self, shooter, attacking_team):
+    def _determine_shot_location(self, shooter, attacking_team,
+                                   defending_team=None):
         """Determine where the shot is taken from based on player position and game flow."""
         # Base mix mirrors NHL shot-location data: ~22% point, ~30% slot,
         # ~24% circles, ~20% wings/perimeter, ~4% crease.
@@ -4836,6 +4862,47 @@ class GameSim:
             ShotLocation.RIGHT_WING: 0.10,
             ShotLocation.CREASE: 0.04
         }
+
+        # D1 design build: coach instructions shape the opportunity MIX
+        # (where shots come from), never the grade ceilings. crash_net
+        # sends bodies and pucks to the blue paint; a defending tighten_up
+        # / protect_lead denies the middle and pushes looks wide.
+        try:
+            from mesh_system import (coach_instruction_effects as _cie,
+                                     coach_instruction_efficacy as _ceff)
+            _ainstr = (getattr(self, "_coach_instructions", {}) or {}).get(
+                getattr(attacking_team, "team_name", ""), "")
+            _aeff = _ceff(getattr(self, "_home_coach", None)
+                          if attacking_team is self.home_team
+                          else getattr(self, "_away_coach", None))
+            _afx = _cie(_ainstr)
+            if _afx.get("crease_mult"):
+                _m = 1.0 + (_afx["crease_mult"] - 1.0) * _aeff
+                location_weights[ShotLocation.CREASE] *= _m
+            if _afx.get("lowslot_mult"):
+                _m = 1.0 + (_afx["lowslot_mult"] - 1.0) * _aeff
+                location_weights[ShotLocation.LOW_SLOT] *= _m
+            if defending_team is not None:
+                _dinstr = (getattr(self, "_coach_instructions", {})
+                           or {}).get(getattr(defending_team, "team_name",
+                                             ""), "")
+                _deff = _ceff(getattr(self, "_home_coach", None)
+                              if defending_team is self.home_team
+                              else getattr(self, "_away_coach", None))
+                _dfx = _cie(_dinstr)
+                if _dfx.get("slot_deny_attack"):
+                    _m = 1.0 + (_dfx["slot_deny_attack"] - 1.0) * _deff
+                    location_weights[ShotLocation.HIGH_SLOT] *= _m
+                    location_weights[ShotLocation.LOW_SLOT] *= _m
+                    location_weights[ShotLocation.LEFT_CIRCLE] *= _m
+                    location_weights[ShotLocation.RIGHT_CIRCLE] *= _m
+                if _dfx.get("perimeter_shift"):
+                    _m = 1.0 + (_dfx["perimeter_shift"] - 1.0) * _deff
+                    location_weights[ShotLocation.POINT] *= _m
+                    location_weights[ShotLocation.LEFT_WING] *= _m
+                    location_weights[ShotLocation.RIGHT_WING] *= _m
+        except Exception:
+            pass
         
         # Adjust weights based on player position
         if shooter.primary_position in DEFENSEMEN_POSITIONS:
@@ -7264,44 +7331,73 @@ class GameSim:
             return None
 
     # -- D1: AI coach instructions (additive) ------------------------------
-    def _ai_instruction_for(self, team, coach):
+    def _ai_instruction_for(self, team, coach, flags=None):
         """The instruction an AI coach would set for himself right now.
 
-        Mirrors the derived fallback in impact_system._coach_play_harder
-        (a demanding coach trailing late demands more): the only delta
-        is derived 0.7 -> explicit 1.0 intensity. Returns "play_harder"
-        or None. Never touches finishing or grades -- the instruction
-        channel only nudges the hit-impact distribution.
+        THE shared decision lives in mesh_system.ai_coach_instruction_for
+        (one decision, two fidelities) -- this is the GameSim fidelity,
+        translating live sim state into its inputs. Returns an instruction
+        id or None. Never touches finishing or grades -- the instruction
+        channel only moves opportunity mix, volume and behavior.
         """
         try:
+            from mesh_system import ai_coach_instruction_for as _aii
             diff = self.home_score - self.away_score
             if team is not self.home_team:
                 diff = -diff
             period = int(getattr(self, "period", 1) or 1)
-            if coach is None:
-                return None
-            discipline = float(getattr(coach, "discipline", 10) or 10)
-            motivating = float(getattr(coach, "motivating", 10) or 10)
-            if discipline >= 14 and motivating >= 13:
-                if period >= 3 and diff < 0:
-                    return "play_harder"
+            clock = float(getattr(self, "clock", 1200) or 1200)
+            # Special-teams state from manpower penalties.
+            on_pp = on_pk = False
+            try:
+                _mine = len(self._manpower_penalties(team))
+                _theirs = len(self._manpower_penalties(
+                    self.away_team if team is self.home_team
+                    else self.home_team))
+                on_pp = _theirs > _mine
+                on_pk = _mine > _theirs
+            except Exception:
+                pass
+            heat = 0.0
+            try:
+                import reputation_system as _rs2
+                _rh = _rs2.get_rivalry_heat(
+                    self.rivalries or [], team,
+                    self.away_team if team is self.home_team
+                    else self.home_team)
+                heat = float((_rh or {}).get("heat", 0) or 0)
+            except Exception:
+                pass
+            return _aii(diff, period, clock, coach, flags=flags,
+                        rivalry_heat=heat, on_pp=on_pp, on_pk=on_pk)
         except Exception:
-            pass
-        return None
+            return None
 
-    def _ai_coach_instructions(self):
+    # Per-instruction feed lines (D1 design build): the broadcast says what
+    # the bench is actually asking for.
+    _COACH_INSTRUCTION_LINES = {
+        "play_harder": "the coach is demanding more -- play harder.",
+        "tighten_up": "the coach wants the middle locked down -- tighten up.",
+        "crash_net": "the message is pucks and bodies to the net -- crash it.",
+        "protect_lead": "the bench is sitting on this one -- protect the lead.",
+        "chase_game": "the coach has opened it up -- chase the game.",
+        "stay_disciplined": "the word is discipline -- stay out of the box.",
+    }
+
+    def _ai_coach_instructions(self, flags_by_team=None):
         """D1: AI coaches set their own instructions.
 
         Fills in an instruction for teams that don't have one; a team
         with an explicit instruction (the user's game-day call, or an
         AI call from an earlier stoppage) keeps it -- explicit always
-        wins. Called pregame and at each intermission (beside
-        _ai_tactics_intermission); changes are announced on the
-        broadcast feed.
+        wins. Called pregame, at each intermission, and after live game
+        events (goals, star injuries, fights) via _refresh_coach_instructions;
+        changes are announced on the broadcast feed.
         """
         try:
             if not hasattr(self, "_coach_instruction_source"):
                 self._coach_instruction_source = {}
+            _fb = flags_by_team or {}
             pairs = ((self.home_team, getattr(self, "_home_coach", None)),
                      (self.away_team, getattr(self, "_away_coach", None)))
             for team, coach in pairs:
@@ -7312,15 +7408,16 @@ class GameSim:
                     continue
                 if self._coach_instruction_source.get(tname) == "explicit":
                     continue  # the human call wins, always
-                want = self._ai_instruction_for(team, coach)
+                want = self._ai_instruction_for(team, coach,
+                                               flags=_fb.get(tname))
                 have = self._coach_instructions.get(tname)
                 if want == have:
                     continue
                 if want:
                     self._coach_instructions[tname] = want
                     self._coach_instruction_source[tname] = "ai"
-                    line = (f"{tname}: the coach is demanding more -- "
-                            f"{want.replace('_', ' ')}.")
+                    line = (f"{tname}: "
+                            f"{self._COACH_INSTRUCTION_LINES.get(want, want)}")
                 else:
                     self._coach_instructions.pop(tname, None)
                     self._coach_instruction_source.pop(tname, None)
@@ -7332,6 +7429,16 @@ class GameSim:
                                    instruction=want or "none", text=line)
                 except Exception:
                     pass
+        except Exception:
+            pass
+
+    def _refresh_coach_instructions(self, flags_by_team=None):
+        """D1 design build: re-evaluate AI instructions after a live game
+        event. flags_by_team maps team_name -> set of event flags
+        ({"goal_against"}, {"star_injured"}, {"fight"}). Explicit user
+        instructions are never overwritten. Never raises."""
+        try:
+            self._ai_coach_instructions(flags_by_team=flags_by_team)
         except Exception:
             pass
 
@@ -7693,6 +7800,20 @@ class GameSim:
                 pass
             _add_live_heat(self, _heat_add)
             self._maybe_brawl("fight")
+            # D1 design build: a fight moves both benches -- disciplinarians
+            # preach discipline, demanding coaches ride the energy.
+            try:
+                _ht = getattr(self.home_team, "team_name", "") or ""
+                _at = getattr(self.away_team, "team_name", "") or ""
+                _fflags = {}
+                if _ht:
+                    _fflags[_ht] = {"fight"}
+                if _at:
+                    _fflags[_at] = {"fight"}
+                if _fflags:
+                    self._refresh_coach_instructions(flags_by_team=_fflags)
+            except Exception:
+                pass
 
     def _book_misconduct(self, player, team):
         """10-minute misconduct: the player sits, no manpower change."""
@@ -7999,6 +8120,21 @@ class GameSim:
             self.home_score += 1
         else:
             self.away_score += 1
+
+        # D1 design build: goals move benches. The conceding coach
+        # re-evaluates (demanding -> play_harder, structured -> tighten_up);
+        # the scoring coach gets a look too (protect a new lead late).
+        try:
+            _concede_name = (self.away_team.team_name
+                             if scoring_team is self.home_team
+                             else self.home_team.team_name)
+            _score_name = getattr(scoring_team, "team_name", "") or ""
+            _gflags = {_concede_name: {"goal_against"}}
+            if _score_name and _score_name != _concede_name:
+                _gflags[_score_name] = set()
+            self._refresh_coach_instructions(flags_by_team=_gflags)
+        except Exception:
+            pass
 
         # Crowd: the building swings on every goal (live mood/energy feeds
         # the impact-tier ctx and the tension channel from here on).
@@ -10181,6 +10317,29 @@ class GameSim:
                 for r, p in results
             ]
 
+        # D1 design build: the hitting team's instruction moves the
+        # penalty-draw weight -- stay_disciplined keeps it clean (helps
+        # composed hitters most), play_harder's edge costs more.
+        # Bounded via the shared instruction_penalty_mult; the table's
+        # base weights are untouched.
+        try:
+            from mesh_system import instruction_penalty_mult as _ipm
+            _hteam = self._get_player_team(hitting_player)
+            _htname = getattr(_hteam, "team_name", "") or ""
+            _hinstr = (getattr(self, "_coach_instructions", {}) or {}
+                       ).get(_htname, "")
+            _hcoach = (getattr(self, "_home_coach", None)
+                       if _hteam is self.home_team
+                       else getattr(self, "_away_coach", None))
+            _pm = _ipm(_hinstr, player=hitting_player, coach=_hcoach)
+            if _pm != 1.0:
+                results = [
+                    (r, p * _pm if r == HitResult.PENALTY_DRAWN else p)
+                    for r, p in results
+                ]
+        except Exception:
+            pass
+
         # Select result based on probabilities
         # -- Impact scaling (additive): applied AFTER the hit-type and
         # trait logic above, so all existing tuning is preserved.
@@ -10449,6 +10608,17 @@ class GameSim:
                       + (f" ({injury_type})" if injury_type else "")
                       + f" with a {hit_type.value} hit")
             _rgi(self.rivalries, hitting_team, target_team, kind, detail)
+            # D1 design build: a star going down moves the victim's bench
+            # (the room responds -- play_harder). Non-star injuries don't
+            # move the needle.
+            if kind == "star_injured":
+                try:
+                    _vt = getattr(target_team, "team_name", "") or ""
+                    if _vt:
+                        self._refresh_coach_instructions(
+                            flags_by_team={_vt: {"star_injured"}})
+                except Exception:
+                    pass
         except Exception:
             pass
         # Rivalry lifecycle: a major injury becomes personal bad blood

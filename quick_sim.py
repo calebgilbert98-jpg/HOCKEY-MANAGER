@@ -650,14 +650,20 @@ class AdvancedGameSim:
     # reads the same _coach_instructions shape. Never raises.
     def set_coach_instruction(self, team_name, instruction):
         """Set a coach instruction for a team (e.g. "play_harder").
-        Pass None to clear."""
+        Pass None to clear. Explicit sets (game-day bundle) are tracked
+        so the AI refresh never overwrites a human call -- same provenance
+        rule as GameSim."""
         try:
             if not hasattr(self, "_coach_instructions"):
                 self._coach_instructions = {}
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
             if instruction:
                 self._coach_instructions[team_name] = instruction
+                self._coach_instruction_source[team_name] = "explicit"
             else:
                 self._coach_instructions.pop(team_name, None)
+                self._coach_instruction_source.pop(team_name, None)
         except Exception:
             pass
 
@@ -667,6 +673,94 @@ class AdvancedGameSim:
                 getattr(team, "team_name", None))
         except Exception:
             return None
+
+    # -- D1 design build: live instruction refresh (fast fidelity) --------
+    # The SAME shared decision as the watched path
+    # (mesh_system.ai_coach_instruction_for) with this engine's fast
+    # state: score dict, period, cumulative time, head coaches, rivalry
+    # heat. No feed announcements on the quick path. Explicit user
+    # instructions are never overwritten. Never raises.
+    def _refresh_coach_instructions(self, flags_by_team=None):
+        try:
+            from mesh_system import ai_coach_instruction_for as _aii
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
+            _fb = flags_by_team or {}
+            _per = int(getattr(self, "period", 1) or 1)
+            try:
+                _t = max(0.0, 1200.0 * _per - float(getattr(self, "time", 0)
+                                                    or 0))
+            except Exception:
+                _t = 1200.0
+            for _team, _coach in (
+                    (self.home_team, getattr(self, "_home_coach", None)),
+                    (self.away_team, getattr(self, "_away_coach", None))):
+                try:
+                    _tn = getattr(_team, "team_name", "") or ""
+                    if not _tn:
+                        continue
+                    if (self._coach_instruction_source.get(_tn)
+                            == "explicit"):
+                        continue
+                    _other = (self.away_team if _team is self.home_team
+                              else self.home_team)
+                    _diff = (int(self.score.get(_tn, 0))
+                             - int(self.score.get(
+                                 getattr(_other, "team_name", ""), 0)))
+                    _pp = getattr(self, "pp_team", None)
+                    _pk = getattr(self, "pk_team", None)
+                    _heat = 0.0
+                    try:
+                        import reputation_system as _rsq
+                        _lg = getattr(self, "league", None)
+                        _rivs = (getattr(_lg, "rivalries", None)
+                                 if _lg else None)
+                        if _rivs:
+                            _rh = _rsq.get_rivalry_heat(_rivs, _team, _other)
+                            _heat = float((_rh or {}).get("heat", 0) or 0)
+                    except Exception:
+                        pass
+                    _want = _aii(_diff, _per, _t, _coach,
+                                 flags=_fb.get(_tn), rivalry_heat=_heat,
+                                 on_pp=_pp == _tn, on_pk=_pk == _tn)
+                    _have = self._coach_instructions.get(_tn)
+                    if _want == _have:
+                        continue
+                    if _want:
+                        self._coach_instructions[_tn] = _want
+                        self._coach_instruction_source[_tn] = "ai"
+                    else:
+                        self._coach_instructions.pop(_tn, None)
+                        self._coach_instruction_source.pop(_tn, None)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    def _instruction_effect(self, team_name, channel, default=1.0):
+        """D1: this team's instruction effect channel (fast path).
+
+        Multipliers are efficacy-scaled on the delta (bounded). Never
+        raises.
+        """
+        try:
+            from mesh_system import (coach_instruction_effects as _cie,
+                                     coach_instruction_efficacy as _ceff)
+            _instrs = getattr(self, "_coach_instructions", {}) or {}
+            _fx = _cie(_instrs.get(team_name, ""))
+            _v = float(_fx.get(channel, default))
+            if _v == default:
+                return default
+            _coach = (getattr(self, "_home_coach", None)
+                      if team_name == getattr(self.home_team, "team_name",
+                                             "")
+                      else getattr(self, "_away_coach", None))
+            _eff = _ceff(_coach)
+            return 1.0 + (_v - 1.0) * _eff
+        except Exception:
+            return default
 
     # -- Crowd (arena_atmosphere) -------------------------------------------
     def _init_crowd(self, atmosphere):
@@ -1057,6 +1151,12 @@ class AdvancedGameSim:
         if self.time >= 1200 * self.period:
             old_period = self.period
             self.period += 1
+            # D1 design build: benches re-evaluate between periods (same
+            # shared decision as the watched path's intermission look).
+            try:
+                self._refresh_coach_instructions()
+            except Exception:
+                pass
             # The net is never empty across a horn.
             self._return_all_goalies()
             if old_period == 2 and self.period == 3:
@@ -1358,7 +1458,8 @@ class AdvancedGameSim:
         _puck_team = (self.home_team if puck_team_name == self.home_team.team_name
                       else self.away_team)
         event_type = self._determine_event_type(shooter, shooters, fatigue_factor,
-                                                team=_puck_team)
+                                                team=_puck_team,
+                                                opp_team_name=opp_team_name)
         
         if event_type == "SHOT":
             self._resolve_shot_event(shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters)
@@ -1435,7 +1536,8 @@ class AdvancedGameSim:
         position_skill = (off_the_puck + anticipation + hockey_iq) / 3
         return 1.0 + (position_skill - 10) * 0.03
     
-    def _determine_event_type(self, player, shooters, fatigue_factor, team=None):
+    def _determine_event_type(self, player, shooters, fatigue_factor, team=None,
+                                opp_team_name=None):
         """Determine what type of event occurs based on player attributes"""
         creativity = getattr(player, 'creativity', 10)
         decision_making = getattr(player, 'decision_making', 10)
@@ -1570,6 +1672,25 @@ class AdvancedGameSim:
                 if _unit_qs:
                     _tm_qs = self.home_team if _pp_tn == self.home_team.team_name else self.away_team
                     shot_prob *= _pzs_qs(_unit_qs, sim=self, team=_tm_qs)
+        except Exception:
+            pass
+
+        # D1 design build: coach instructions move the volume gate -- the
+        # fast fidelity of the watched path's rush nudges (same shared
+        # effects). Own instruction scales own shot volume; the
+        # opponent's defensive instruction suppresses it; crash_net adds
+        # net-front presence (screens up -- the deflection else-branch
+        # rides along).
+        try:
+            _tn = getattr(team, "team_name", "") if team is not None else ""
+            if _tn:
+                shot_prob *= self._instruction_effect(
+                    _tn, "shot_volume_mult", 1.0)
+                screen_prob *= self._instruction_effect(
+                    _tn, "netfront_event_mult", 1.0)
+            if opp_team_name:
+                shot_prob *= self._instruction_effect(
+                    opp_team_name, "opp_shot_volume_mult", 1.0)
         except Exception:
             pass
 
@@ -2660,6 +2781,13 @@ class AdvancedGameSim:
         elif _empty_net or random.random() < shot_chance:
             shot_result = 'GOAL'
             self.score[puck_team_name] += 1
+            # D1 design build: goals move benches (conceding coach
+            # re-evaluates -- same shared decision as the watched path).
+            try:
+                self._refresh_coach_instructions(
+                    flags_by_team={opp_team_name: {"goal_against"}})
+            except Exception:
+                pass
             # The net is never empty across a goal: both goalies return.
             self._return_all_goalies()
             # Crowd: the building swings on every goal (live mood/energy).
@@ -3164,6 +3292,12 @@ class AdvancedGameSim:
 
             if random.random() < goal_chance:
                 self.score[puck_team_name] += 1
+                # D1: tip goals move benches too (same shared decision).
+                try:
+                    self._refresh_coach_instructions(
+                        flags_by_team={opp_team_name: {"goal_against"}})
+                except Exception:
+                    pass
                 self.stats[puck_team_name][deflector.id]['goals'] = self.stats[puck_team_name][deflector.id].get('goals', 0) + 1
                 # Net-front goals are a tracked category (QA: netfront_goals)
                 try:
@@ -3209,6 +3343,25 @@ class AdvancedGameSim:
             _disc = _mm.get("home_discipline" if _mh else "away_discipline", 1.0)
             penalty_chance *= max(0.5, min(1.5, 2.0 - _disc))
             penalty_chance = min(0.06, max(0.005, penalty_chance))
+        except Exception:
+            pass
+        # D1 design build: the offending team's instruction moves the
+        # penalty rate -- the fast fidelity of the watched path's
+        # instruction_penalty_mult on hit results (same shared function,
+        # coach-mediated, player from the draw itself). Bounded.
+        try:
+            from mesh_system import instruction_penalty_mult as _ipm_qs
+            _tn = getattr(self, "home_team", None)
+            _coach_qs = (getattr(self, "_home_coach", None)
+                         if _tn is not None and puck_team_name
+                         == getattr(_tn, "team_name", "")
+                         else getattr(self, "_away_coach", None))
+            _instrs_qs = getattr(self, "_coach_instructions", {}) or {}
+            _pm = _ipm_qs(_instrs_qs.get(puck_team_name, ""),
+                          player=penalized, coach=_coach_qs)
+            if _pm != 1.0:
+                penalty_chance *= _pm
+                penalty_chance = min(0.06, max(0.005, penalty_chance))
         except Exception:
             pass
         # --- attribute composites (additive, bounded) ---

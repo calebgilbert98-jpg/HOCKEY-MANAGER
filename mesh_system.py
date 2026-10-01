@@ -1519,3 +1519,231 @@ def rebound_chance(goalie) -> float:
         return max(0.05, min(0.50, 0.45 - _rc * 0.004))
     except Exception:
         return 0.25
+
+
+# ---------------------------------------------------------------------------
+# Coach instructions (D1 design build, 2026-09-30, per Muck).
+# "Coach instructions must be realistic and dynamic to team situations and
+# game events" -- with real multi-channel effects, on BOTH engines.
+#
+# One decision, two fidelities: the instruction SET (which instruction a
+# coach wants, from live game state + his personality) and the EFFECTS
+# (bounded channel multipliers) live here. GameSim calls directly;
+# AdvancedGameSim calls the same functions with its fast state -- same
+# inputs, same logic, never a different formula.
+#
+# Every effect channel is opportunity-mix / volume / behavior. Nothing here
+# touches finishing constants or grade ceilings (protected levers).
+# ---------------------------------------------------------------------------
+
+#: Realistic coach-instruction vocabulary. What a real bench asks for.
+COACH_INSTRUCTIONS = (
+    "play_harder",      # demand more: heavier, more physical
+    "tighten_up",       # defensive structure: deny the middle
+    "crash_net",        # net-front emphasis: bodies and pucks to the blue paint
+    "protect_lead",     # sit on it: suppress, don't chase
+    "chase_game",       # open it up: volume now, exposure be damned
+    "stay_disciplined", # no retaliation, no stupid penalties
+)
+
+#: Per-instruction effect channels. All values are small, bounded, additive
+#: levers applied on top of the existing systems -- never pasted-on caps.
+#:
+#: - hit_big_add: added to big-hit probability in the impact tier
+#:   (the existing play_harder +0.08 channel; stay_disciplined -0.02).
+#: - penalty_mult: multiplies the penalty-draw weight (hit-result table on
+#:   the watched path, _check_for_penalty on the quick path).
+#: - rush_attack_nudge / rush_defense_nudge: points added to the 1v1 rush
+#:   roll on the watched path (chance generation is a roll comparison).
+#: - exposure_attack_nudge: when the DEFENDING team is chase_game, added to
+#:   the attacker's rush roll (open hockey cuts both ways).
+#: - slot_deny_attack / perimeter_shift: multiply the attacker's shot
+#:   location weights when the defending team denies the middle -- slot
+#:   denial as opportunity mix, never grade ceilings.
+#: - crease_mult / lowslot_mult: attacking crash_net location weights.
+#: - netfront_event_mult: quick-sim screen/deflection event probability
+#:   (net-front presence on the fast path).
+#: - shot_volume_mult / opp_shot_volume_mult: quick-sim SHOT event
+#:   probability, own team and opponent suppression.
+COACH_INSTRUCTION_EFFECTS = {
+    "play_harder":      {"hit_big_add": 0.08, "penalty_mult": 1.10,
+                         "rush_attack_nudge": 2.0, "shot_volume_mult": 1.02},
+    "tighten_up":       {"rush_defense_nudge": 3.0, "penalty_mult": 0.95,
+                         "slot_deny_attack": 0.85, "perimeter_shift": 1.12,
+                         "shot_volume_mult": 0.98,
+                         "opp_shot_volume_mult": 0.95},
+    "crash_net":        {"crease_mult": 1.6, "lowslot_mult": 1.25,
+                         "netfront_event_mult": 1.5,
+                         "shot_volume_mult": 1.02},
+    "protect_lead":     {"rush_defense_nudge": 4.0, "rush_attack_nudge": -3.0,
+                         "slot_deny_attack": 0.90,
+                         "shot_volume_mult": 0.96,
+                         "opp_shot_volume_mult": 0.94},
+    "chase_game":       {"rush_attack_nudge": 5.0, "shot_volume_mult": 1.08,
+                         "exposure_attack_nudge": 3.0,
+                         "opp_shot_volume_mult": 1.05},
+    "stay_disciplined": {"penalty_mult": 0.85, "hit_big_add": -0.02},
+}
+
+
+def coach_instruction_effects(instruction):
+    """Bounded effect dict for an instruction. Defensive copy; {} when none.
+
+    Never raises.
+    """
+    try:
+        _fx = COACH_INSTRUCTION_EFFECTS.get(instruction or "", None)
+        return dict(_fx) if _fx else {}
+    except Exception:
+        return {}
+
+
+def _coach_attr(coach, name, default=10.0):
+    try:
+        _v = getattr(coach, name, default)
+        return float(_v) if _v is not None else float(default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def coach_style_tag(coach):
+    """A coach's style from his attributes. Priority: demanding >
+    disciplinarian > structured > players_coach. Never raises."""
+    try:
+        if coach is None:
+            return ""
+        _disc = _coach_attr(coach, "discipline", 10)
+        _mot = _coach_attr(coach, "motivating", 10)
+        if _disc >= 14 and _mot >= 13:
+            return "demanding"
+        if _coach_attr(coach, "level_of_discipline", 10) >= 14:
+            return "disciplinarian"
+        if _coach_attr(coach, "defensive_coaching", 10) >= 14:
+            return "structured"
+        if _mot >= 14 and _disc < 12:
+            return "players_coach"
+    except Exception:
+        pass
+    return ""
+
+
+def coach_instruction_efficacy(coach):
+    """Buy-in scaler: motivating coaches get more out of the room.
+    0.6..1.1, 1.0 at motivating 20. Never raises."""
+    try:
+        _m = _coach_attr(coach, "motivating", 10)
+        return max(0.6, min(1.1, 0.8 + (_m - 10) * 0.02))
+    except Exception:
+        return 0.8
+
+
+def instruction_penalty_mult(instruction, player=None, coach=None):
+    """Penalty-draw multiplier for a team's instruction, mediated by the
+    player's own discipline/composure and the coach's buy-in.
+
+    stay_disciplined helps composed players most (they actually listen);
+    play_harder's extra edge costs hotheads more. Bounded, additive.
+    Never raises.
+    """
+    try:
+        _fx = COACH_INSTRUCTION_EFFECTS.get(instruction or "", {})
+        _base = float(_fx.get("penalty_mult", 1.0))
+        if _base == 1.0:
+            return 1.0
+        _eff = coach_instruction_efficacy(coach)
+        _disc = 10.0
+        try:
+            if player is not None:
+                _disc = (float(getattr(player, "discipline", 10) or 10)
+                         + float(getattr(player, "composure", 10) or 10)) / 2.0
+        except Exception:
+            pass
+        # 0.7 (undisciplined) .. 1.3 (composed) mediation on the delta.
+        _med = max(0.7, min(1.3, 0.7 + _disc / 33.0))
+        if _base < 1.0:
+            _med = max(0.7, min(1.3, 0.7 + _disc / 33.0))
+        else:
+            _med = max(0.7, min(1.3, 1.3 - _disc / 33.0))
+        return 1.0 + (_base - 1.0) * _eff * _med
+    except Exception:
+        return 1.0
+
+
+def ai_coach_instruction_for(score_diff, period, time_remaining, coach,
+                             flags=frozenset(), rivalry_heat=0.0,
+                             on_pp=False, on_pk=False):
+    """The instruction an AI coach wants RIGHT NOW. THE shared decision --
+    both engines call this with the same inputs.
+
+    score_diff: from the coach's team's perspective (+ = leading).
+    period: 1..4+. time_remaining: seconds left in the period.
+    coach: staff object (or None) -- style from attributes.
+    flags: set of {"goal_against", "star_injured", "fight",
+        "big_hit_on_star"} -- live game events since the last look.
+    rivalry_heat: 0-100. on_pp / on_pk: special-teams state.
+    Returns an instruction id or None (even keel). Never raises.
+    """
+    try:
+        _flags = set(flags or ())
+        _style = coach_style_tag(coach)
+        _sd = int(score_diff or 0)
+        _per = int(period or 1)
+        _t = max(0.0, float(time_remaining if time_remaining is not None
+                            else 1200))
+        # -- special teams: the situation is the instruction -------------
+        if on_pk:
+            return "stay_disciplined"
+        if on_pp:
+            return "crash_net"
+        # -- live events: the coach reacts to what just happened ---------
+        if "star_injured" in _flags:
+            return "play_harder"
+        if "fight" in _flags:
+            if _style in ("disciplinarian", "structured"):
+                return "stay_disciplined"
+            if _style == "demanding":
+                return "play_harder"
+            return None
+        if "big_hit_on_star" in _flags:
+            if _style == "disciplinarian":
+                return "stay_disciplined"
+            if _style == "demanding":
+                return "play_harder"
+            return None
+        if "goal_against" in _flags:
+            if _style == "demanding":
+                return "play_harder"
+            if _style in ("structured", "disciplinarian"):
+                return "tighten_up"
+            if _style == "players_coach":
+                return "play_harder"  # a players' coach answers with energy
+            return None
+        # -- score + clock ------------------------------------------------
+        _late = (_per == 3 and _t <= 300) or _per > 3
+        if _late:
+            if _sd <= -3:
+                return "play_harder"
+            if _sd <= -1:
+                return "chase_game"
+            if _sd >= 3:
+                return "stay_disciplined"
+            if _sd >= 1:
+                return "protect_lead"
+            # tied late: win it or lock it down -- style decides.
+            if _style == "demanding":
+                return "play_harder"
+            if _style in ("structured", "disciplinarian"):
+                return "tighten_up"
+            return None
+        if _per >= 2 and _sd <= -2 and _style == "demanding":
+            return "play_harder"
+        # -- pregame: bad blood is the only ask ---------------------------
+        if _per == 1 and _sd == 0 and not _flags:
+            try:
+                if float(rivalry_heat or 0) >= 70:
+                    return "play_harder"
+            except Exception:
+                pass
+        return None
+    except Exception:
+        return None

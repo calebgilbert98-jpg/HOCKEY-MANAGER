@@ -17422,7 +17422,8 @@ class HockeyManagerGUI(tk.Tk):
                 "talk_chosen": None,
                 "talk_boost": 1.0,
                 # D1: coach's instruction. The engine understands
-                # "play_harder" (heavier, more physical); "none" = the user
+                # D1 design build: the coach's instruction for tonight. Six
+                # real benches' vocabulary + none. "none" = the user
                 # explicitly wants no instruction (distinct from None =
                 # unchosen, where the AI fill may still act). The user's
                 # call always wins over the AI fill
@@ -17431,9 +17432,30 @@ class HockeyManagerGUI(tk.Tk):
                     {"id": "play_harder",
                      "label": "🔥 Demand more: play harder",
                      "text": "The bench wants a heavier, more physical "
-                             "sixty minutes."},
+                             "sixty minutes -- forecheck through the whistle."
+                     },
+                    {"id": "tighten_up",
+                     "label": "🛡️ Lock it down: tighten up",
+                     "text": "Take away the middle of the ice -- nothing "
+                             "through the slot, make them beat us wide."},
+                    {"id": "crash_net",
+                     "label": "🥅 Crash the net",
+                     "text": "Pucks and bodies to the blue paint -- screens, "
+                             "tips, second chances."},
+                    {"id": "protect_lead",
+                     "label": "🐢 Protect the lead",
+                     "text": "Sit on it smart -- structure first, manage "
+                             "the clock, no heroics."},
+                    {"id": "chase_game",
+                     "label": "⚡ Chase the game",
+                     "text": "We need goals -- activate the defense, push "
+                             "the pace, live with the exposure."},
+                    {"id": "stay_disciplined",
+                     "label": "🧊 Stay disciplined",
+                     "text": "Skates clean -- no retaliation, no lazy "
+                             "hooks. Stay out of the box."},
                     {"id": "none",
-                     "label": "🧊 No special instruction",
+                     "label": "🌙 No special instruction",
                      "text": "Let the game come to us."},
                 ],
                 "instruction_chosen": None,
