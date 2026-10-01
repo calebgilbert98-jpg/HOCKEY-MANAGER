@@ -1717,6 +1717,20 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
             listing["status"] = "expired"
             listing["note"] = "piece unavailable"
             return True
+        # D15: re-verify seller identity. A mid-listing ownership change
+        # (the piece moved in another deal) kills the listing -- otherwise
+        # it keeps running on a player the recorded seller can't deliver,
+        # with misattributed bookkeeping.
+        try:
+            _live_seller = getattr(seller, "team_name", "") or ""
+        except Exception:
+            _live_seller = ""
+        if _live_seller != (listing.get("seller") or ""):
+            listing["status"] = "expired"
+            listing["note"] = (f"seller changed mid-listing "
+                               f"({listing.get('seller', '?')} no longer owns "
+                               f"the piece)")
+            return True
         sname = listing.get("seller", "")
         user_name = getattr(getattr(app, "user_team", None), "team_name", "")
         user_sale = (sname == user_name)
@@ -1738,6 +1752,12 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
         bidders = _find_bidders(app, league, listing, today, ramp)
         if not bidders:
             listing["note"] = "no bidders this round"
+            # Bookkeeping still advances: a bidder-less day is a round that
+            # happened, not a round that stalled -- the last_round_day guard
+            # must hold on deadline-day GUI ticks, and the round counter must
+            # reflect reality.
+            listing["rounds"] = int(listing.get("rounds", 0) or 0) + 1
+            listing["last_round_day"] = _iso(today)
             return False
         # War rumor once the field is real -- marquee listings only.
         # Ordinary players resolve quietly: no bidding-war narrative.
@@ -1834,9 +1854,11 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                     _stash_counter(listing, bname, resp, today)
                 else:
                     _clear_waiver(player)
+                    _clear_waivers(assets)
                 # Clear the waiver unless this bid is still alive.
                 if decision != "accept":
                     _clear_waiver(player)
+                    _clear_waivers(assets)
             except Exception:
                 continue
         if user_sale:
@@ -1919,6 +1941,66 @@ def _clear_waiver(player):
             player.contract.ntc_waiver_for = ""
     except Exception:
         pass
+
+
+def _clear_waivers(assets):
+    """Clear single-use clause waivers on a batch of assets -- the bidder's
+    offered pieces as well as the listing piece (D15: a dead AI bid's stamp
+    on a bidder asset is stale consent that could green-light a later
+    unrelated trade to that destination). Never raises."""
+    try:
+        for a in (assets or []):
+            _clear_waiver(a)
+    except Exception:
+        pass
+
+
+def resolve_clause_consent(app, league, from_team, to_team, assets):
+    """One consent conversation per clause-blocked asset (D15).
+
+    For each asset whose no-trade/no-movement clause vetoes the move
+    from_team -> to_team, the player is asked ONCE via will_waive_ntc and a
+    granted waiver is stamped for this destination. A refusal stops the
+    deal with a clear outcome -- never a silent preflight death.
+
+    Returns (ok, notes, refused): ok False when a player refused (his stamp
+    was not set; previously granted stamps are left alone). Never raises.
+    """
+    notes = []
+    try:
+        import trade_engine as te
+        to_name = getattr(to_team, "team_name", "") or ""
+        try:
+            vetoes = te.trade_vetoes(from_team, to_team, assets or [], league)
+        except Exception:
+            vetoes = []
+        for v in vetoes or []:
+            try:
+                p = v.get("player")
+                detail = v.get("detail", "no-trade clause")
+                pname = getattr(p, "full_name", "?")
+                try:
+                    if str(getattr(p.contract, "ntc_waiver_for", "")
+                           or "") == to_name:
+                        continue  # already waived for this destination
+                except Exception:
+                    pass
+                ok, why = te.will_waive_ntc(p, from_team, to_team,
+                                            league=league)
+                if ok:
+                    try:
+                        p.contract.ntc_waiver_for = to_name
+                    except Exception:
+                        pass
+                    notes.append(f"{pname} waived his {detail} ({why})")
+                else:
+                    return False, notes, (
+                        f"{pname} refused to waive his {detail} ({why})")
+            except Exception:
+                continue
+        return True, notes, ""
+    except Exception:
+        return True, notes, ""
 
 
 def _stash_counter(listing, bidder_name, resp, today=None):
@@ -2338,9 +2420,11 @@ def _deliver_user_offer(app, league, market, listing, bidder, assets, today):
         if player is None:
             return False
         bname = getattr(bidder, "team_name", "?")
+        _neg = None
         try:
             import trade_negotiation as tneg
-            tneg.incoming_offer(app, bidder, list(assets), player_wanted=player)
+            _neg = tneg.incoming_offer(app, bidder, list(assets),
+                                       player_wanted=player)
         except Exception as e:
             print(f"user offer deliver failed (non-fatal): {e}")
         try:
@@ -2367,6 +2451,26 @@ def _deliver_user_offer(app, league, market, listing, bidder, assets, today):
                     f"offer sent to you by {bname} -- needs "
                     f"{_player_label(player)}'s consent "
                     f"({_vetoes[0].get('clause', 'clause')})")
+                # D15: the consent state is READ, not just written. Surface
+                # it on the negotiation so the user sees the red tape up
+                # front; the consent conversation itself happens at
+                # completion (trade_negotiation._complete) with a real
+                # waive/refuse outcome.
+                try:
+                    if _neg is not None:
+                        _clause_txt = _vetoes[0].get("clause", "no-trade clause")
+                        _neg.history.append(
+                            {"date": _iso(today), "by": "system",
+                             "summary": (
+                                 f"{_player_label(player)} must consent: his "
+                                 f"{_clause_txt} bites this destination -- "
+                                 f"he'll be asked before the deal completes")})
+                        _neg.last_message = (
+                            f"{_neg.last_message} Heads-up: "
+                            f"{_player_label(player)}'s {_clause_txt} means "
+                            f"he'll need to waive before this can go through.")
+                except Exception:
+                    pass
         except Exception:
             pass
         _news(app, f"RUMOR: {bname} has made an offer for "
@@ -2616,21 +2720,43 @@ _SHORTLIST_CATEGORY = "Trade Targets"
 _SUGGEST_PREFIX = "SUGGESTED by "
 
 
-def _shortlist_mgr():
-    """The canonical shortlist store. None if unavailable. Never raises."""
+def league_shortlist_key(league):
+    """Stable per-save shortlist id (D15). Persisted on the league object,
+    so it pickles with the save -- every save gets its own shortlist file.
+    Old-save safe: generated on first use. Never raises."""
     try:
-        from shortlist_system import ShortlistManager
-        return ShortlistManager()
+        key = getattr(league, "shortlist_key", None)
+        if not key:
+            import uuid
+            key = uuid.uuid4().hex[:16]
+            try:
+                league.shortlist_key = key
+            except Exception:
+                pass
+        return str(key) if key else None
     except Exception:
         return None
 
 
-def get_unified_targets():
-    """Every entry on the ONE unified surface, as dicts
-    {player_id, player_name, notes, priority, date_added}. Never raises."""
+def _shortlist_mgr(league=None):
+    """The canonical shortlist store. Per-save when a league is given
+    (D15: no more cross-save contamination through the global file);
+    legacy global otherwise. None if unavailable. Never raises."""
+    try:
+        from shortlist_system import ShortlistManager
+        key = league_shortlist_key(league) if league is not None else None
+        return ShortlistManager(save_key=key)
+    except Exception:
+        return None
+
+
+def get_unified_targets(league=None):
+    """Every entry on the unified surface, as dicts
+    {player_id, player_name, notes, priority, date_added}. Per-save when a
+    league is given. Never raises."""
     out = []
     try:
-        mgr = _shortlist_mgr()
+        mgr = _shortlist_mgr(league)
         if mgr is None:
             return []
         for e in (mgr.get_entries_by_category(_SHORTLIST_CATEGORY) or []):
@@ -2649,13 +2775,13 @@ def get_unified_targets():
     return out
 
 
-def _add_raw_target(pid_str, name, notes, priority=2):
+def _add_raw_target(pid_str, name, notes, priority=2, league=None):
     """Low-level add with exact notes. Returns True on a new add. Never raises."""
     try:
-        mgr = _shortlist_mgr()
+        mgr = _shortlist_mgr(league)
         if mgr is None or pid_str in (None, ""):
             return False
-        _enforce_target_cap()
+        _enforce_target_cap(league)
         return bool(mgr.add_player(str(pid_str), str(name or "?"),
                                    _SHORTLIST_CATEGORY,
                                    notes=(notes or "")[:200],
@@ -2664,11 +2790,11 @@ def _add_raw_target(pid_str, name, notes, priority=2):
         return False
 
 
-def _enforce_target_cap():
+def _enforce_target_cap(league=None):
     """Keep the unified surface at SHORTLIST_MAX: oldest user-added entries
     rotate out first, then oldest suggestions. Never raises."""
     try:
-        mgr = _shortlist_mgr()
+        mgr = _shortlist_mgr(league)
         if mgr is None:
             return
         entries = mgr.get_entries_by_category(_SHORTLIST_CATEGORY) or []
@@ -2688,7 +2814,7 @@ def _enforce_target_cap():
         pass
 
 
-def add_target(player, source="user", note="", priority=2):
+def add_target(player, source="user", note="", priority=2, league=None):
     """Add a target to the unified surface. source: "user" or a scout's
     name (stored as a SUGGESTED-by note with the scout's confidence band).
     Returns True on a new add. Never raises."""
@@ -2703,15 +2829,15 @@ def add_target(player, source="user", note="", priority=2):
             notes = (note or "").strip()
         else:
             notes = f"{_SUGGEST_PREFIX}{source}: {(note or '').strip()}".strip()
-        return _add_raw_target(pid, name, notes, priority)
+        return _add_raw_target(pid, name, notes, priority, league=league)
     except Exception:
         return False
 
 
-def remove_target(player_id):
+def remove_target(player_id, league=None):
     """Remove from the unified surface. Never raises."""
     try:
-        mgr = _shortlist_mgr()
+        mgr = _shortlist_mgr(league)
         if mgr is None:
             return False
         return bool(mgr.remove_player(str(player_id), _SHORTLIST_CATEGORY))
@@ -2763,7 +2889,7 @@ def migrate_shortlist_once(app, league, user_team, market):
                     if note.upper().startswith("SUGGESTED:"):
                         note = note[len("SUGGESTED:"):].strip()
                     notes = f"{_SUGGEST_PREFIX}{added_by}: {note}".strip()
-                if _add_raw_target(pid, name, notes):
+                if _add_raw_target(pid, name, notes, league=league):
                     moved += 1
             except Exception:
                 continue
@@ -2779,11 +2905,11 @@ def migrate_shortlist_once(app, league, user_team, market):
 
 # --- Legacy shims: same names/shapes as before, now backed by the unified
 # --- surface so older callers keep working.
-def get_shortlist(user_team):
+def get_shortlist(user_team, league=None):
     """[{player_id, added_by, date, note}]. Backed by the unified surface.
     Never raises."""
     out = []
-    for t in get_unified_targets():
+    for t in get_unified_targets(league):
         try:
             pid = t.get("player_id")
             try:
@@ -2808,21 +2934,24 @@ def get_shortlist(user_team):
     return out
 
 
-def add_to_shortlist(user_team, player, added_by="user", note="", today=None):
+def add_to_shortlist(user_team, player, added_by="user", note="", today=None,
+                     league=None):
     """Add a player to the shortlist. Returns True if added. Never raises."""
     try:
         if added_by == "user":
-            return add_target(player, source="user", note=note or "")
+            return add_target(player, source="user", note=note or "",
+                              league=league)
         return _add_raw_target(getattr(player, "id", ""),
                                getattr(player, "full_name", "?"),
-                               f"[{added_by}] {(note or '').strip()}".strip())
+                               f"[{added_by}] {(note or '').strip()}".strip(),
+                               league=league)
     except Exception:
         return False
 
 
-def remove_from_shortlist(user_team, player_id):
+def remove_from_shortlist(user_team, player_id, league=None):
     """Never raises."""
-    return remove_target(player_id)
+    return remove_target(player_id, league=league)
 
 
 def refresh_scout_suggestions(app, league):
@@ -2886,7 +3015,8 @@ def refresh_scout_suggestions(app, league):
                         pass
                     note = f"({conf} confidence): {reason}".strip() if conf \
                         else reason
-                    if add_target(p, source=sname, note=note[:140]):
+                    if add_target(p, source=sname, note=note[:140],
+                                 league=league):
                         added += 1
                 except Exception:
                     continue
@@ -2901,7 +3031,7 @@ def check_shortlist_nudges(app, league, market=None, today=None):
     try:
         market = market or get_market(league)
         today = today or _today(app)
-        targets = get_unified_targets()
+        targets = get_unified_targets(league)
         if not targets:
             return
         nudged = market.get("shortlist_nudges", {})
@@ -2974,24 +3104,33 @@ def process_market(app, league, today=None):
                 migrate_shortlist_once(app, league, user_team, market)
         except Exception:
             pass
+        # D15: post-deadline the market goes dormant. The league freeze
+        # (trade_engine._trade_freeze_active) means no deal can legally
+        # complete, so stranded listings expire with a clear note instead
+        # of lingering open forever.
+        if _deadline_passed(app, league, today):
+            _expire_post_deadline_listings(app, league, market, today)
+            return
         # The user's manual block becomes listings AI GMs bid on.
         _sync_user_block(app, league, market, today, params)
         _auto_list(app, league, market, today, ramp, params=params, heat=heat)
-        # One bidding round per listing per day (deadline day uses ticks).
-        if not _is_deadline_day(app, league, today):
-            for listing in list(_active_listings(market)):
-                try:
-                    last = _parse(listing.get("last_round_day", ""))
-                    if last is not None and last >= today:
-                        continue
-                    close = _parse(listing.get("bidding_close", ""))
-                    if close is not None and today > close:
-                        _close_expired(app, league, market, listing, today)
-                        continue
-                    _evaluate_round(app, league, market, listing, today, ramp,
-                                    params=params, heat=heat)
-                except Exception:
+        # One bidding round per listing per day. On deadline day the GUI
+        # clock drives rounds per tick; the last_round_day guard below keeps
+        # this pass from double-processing those. Headless/sim days with no
+        # ticks still get their round here -- deadline day must not stall.
+        for listing in list(_active_listings(market)):
+            try:
+                last = _parse(listing.get("last_round_day", ""))
+                if last is not None and last >= today:
                     continue
+                close = _parse(listing.get("bidding_close", ""))
+                if close is not None and today > close:
+                    _close_expired(app, league, market, listing, today)
+                    continue
+                _evaluate_round(app, league, market, listing, today, ramp,
+                                params=params, heat=heat)
+            except Exception:
+                continue
         _resolve_trade_requests(app, league, market, today, ramp)
         refresh_trade_blocks(app, league)
         check_shortlist_nudges(app, league, market, today)
@@ -3016,6 +3155,48 @@ def _is_deadline_day(app, league, today):
         return ddl == today
     except Exception:
         return False
+
+
+def _deadline_passed(app, league, today):
+    """True once the trade deadline for the current season has passed.
+    Never raises."""
+    try:
+        import trade_deadline_manager as tdm
+        gm = getattr(app, "game_manager", None)
+        if gm is not None:
+            try:
+                mgr = tdm.get_deadline_manager(gm)
+                if bool(getattr(mgr, "deadline_passed", False)):
+                    return True
+            except Exception:
+                pass
+        ddl = tdm.trade_deadline_date(league)
+        if ddl is None:
+            return False
+        if not isinstance(ddl, date):
+            ddl = _parse(ddl)
+        return bool(ddl is not None and today > ddl)
+    except Exception:
+        return False
+
+
+def _expire_post_deadline_listings(app, league, market, today):
+    """Kill listings the deadline stranded: no deal can complete now, so
+    every open listing expires with a clear note (and its single-use
+    waivers are spent, never leaked). Never raises."""
+    try:
+        idx = _player_index(league)
+        for listing in list(_active_listings(market)):
+            try:
+                listing["status"] = "expired"
+                listing["note"] = "trade deadline passed"
+                player, _s = idx.get(listing.get("player_id"), (None, None))
+                if player is not None:
+                    _clear_waiver(player)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
 
 def process_deadline_tick(app, league, mgr=None):

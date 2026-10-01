@@ -200,7 +200,19 @@ def assignments_of(app):
 
 
 def shortlist_manager_of(app):
-    """The real ShortlistManager (app's, or a fresh persisted one)."""
+    """The real ShortlistManager (app's, or a fresh persisted one).
+
+    Per-save when a league is present (D15): each save gets its own
+    shortlist file instead of sharing the global one."""
+    try:
+        league = league_of(app)
+        if league is not None:
+            from shortlist_system import ShortlistManager
+            import trade_market as _tm
+            return ShortlistManager(
+                save_key=_tm.league_shortlist_key(league))
+    except Exception:
+        pass
     try:
         mgr = getattr(app, "shortlist_manager", None)
         if mgr is not None:

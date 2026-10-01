@@ -117,13 +117,21 @@ def salary_total(team):
 
 
 def clear_shortlist_store():
-    """The unified shortlist persists to saves/shortlist.json -- reset it
-    between tests so they can't pollute each other."""
+    """The unified shortlist persists to saves/shortlist.json (legacy
+    global) and saves/shortlists/<save-key>.json (per-save, D15.5) --
+    reset both between tests so they can't pollute each other."""
     import os
+    import shutil
     p = os.path.join("saves", "shortlist.json")
     try:
         if os.path.exists(p):
             os.remove(p)
+    except Exception:
+        pass
+    d = os.path.join("saves", "shortlists")
+    try:
+        if os.path.isdir(d):
+            shutil.rmtree(d)
     except Exception:
         pass
 
@@ -414,19 +422,20 @@ def t_unified_shortlist():
     moved = tm.migrate_shortlist_once(app, league, team, market)
     check("legacy entries migrated", moved == 2, f"moved={moved}")
     check("legacy store retired", team.scout_shortlist == [])
-    uni = tm.get_unified_targets()
+    uni = tm.get_unified_targets(league)
     check("unified surface holds both entries", len(uni) == 2,
           str([(t["player_name"], t["notes"][:40]) for t in uni]))
     check("no duplicate player ids", len({t["player_id"] for t in uni}) == 2)
     moved2 = tm.migrate_shortlist_once(app, league, team, market)
     check("migration never re-runs", moved2 == 0)
     check("re-adding migrated player rejected",
-          tm.add_target(p1) is False)
+          tm.add_target(p1, league=league) is False)
     # Scout suggestion lands on the same surface with attribution.
     p3 = team.roster[2]
     check("scout add works", tm.add_target(p3, source="New Scout",
-                                           note="(High confidence): wheels") is True)
-    uni2 = tm.get_unified_targets()
+                                           note="(High confidence): wheels",
+                                           league=league) is True)
+    uni2 = tm.get_unified_targets(league)
     kinds = {tm._target_source(t["notes"])[0] for t in uni2}
     check("user + scout entries coexist on one surface",
           kinds == {"user", "scout"}, str(kinds))
@@ -683,7 +692,7 @@ def t_scout_suggestions_flow():
           all(e.get("added_by") for e in sug))
     # Unified surface: suggestions carry the scout's confidence band in
     # the notes, never the truth flag.
-    uni = tm.get_unified_targets()
+    uni = tm.get_unified_targets(league)
     sug_notes = [t["notes"] for t in uni
                  if t["notes"].startswith("SUGGESTED by ")]
     check("suggestion notes carry scout name + confidence band",

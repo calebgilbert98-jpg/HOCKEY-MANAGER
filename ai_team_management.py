@@ -1278,6 +1278,15 @@ class AITeamManager:
         # them would drain the pool in a week. First valid handshake wins.
         for d in decisions:
             try:
+                # D6: the trade decisions used to be created and silently
+                # dropped here. Both now execute through the real market
+                # machinery (bounded: one listing / one approach each).
+                if d.decision_type == "trade_offer_veteran":
+                    self._execute_veteran_trade_offer(team, d, league)
+                    continue
+                if d.decision_type == "trade_seek_player":
+                    self._execute_acquisition_offer(team, d, league)
+                    continue
                 p = d.target_player
                 if p is None:
                     continue
@@ -1318,6 +1327,211 @@ class AITeamManager:
                     ahl.append(p)
             except Exception:
                 continue
+
+    def _execute_veteran_trade_offer(self, team: Team, decision: AIDecision,
+                                     league) -> None:
+        """Shop a veteran through the real trade market (D6).
+
+        Creates a market listing via trade_market.list_piece -- bidding
+        rounds, bidder matching, and execution then run through the
+        existing path. Bounded by the market's own guards: one listing per
+        player, relist cooldown, per-team and league caps, deal cooldown.
+        Never raises.
+        """
+        try:
+            import trade_market as tm
+            veteran = getattr(decision, "target_player", None)
+            if veteran is None or league is None:
+                return
+            vid = getattr(veteran, "id", None)
+            try:
+                if all(getattr(p, "id", None) != vid
+                       for p in (getattr(team, "roster", None) or [])):
+                    return  # no longer ours to shop
+            except Exception:
+                return
+            today = getattr(decision, "timestamp", None)
+            tm.list_piece(None, league, team, veteran,
+                          source="ai_decision", today=today)
+        except Exception:
+            pass
+
+    def _execute_acquisition_offer(self, team: Team, decision: AIDecision,
+                                   league) -> None:
+        """Seek a player fitting a need (D6)."""
+        try:
+            import trade_market as tm
+            import trade_engine as te
+            if league is None:
+                return
+            details = getattr(decision, "offer_details", None) or {}
+            need_pos = details.get("position_needed") or ""
+            need_pos = str(getattr(need_pos, "value", need_pos)).upper()
+            try:
+                max_salary = float(details.get("max_salary") or 0)
+            except Exception:
+                max_salary = 0
+            if not need_pos or max_salary <= 0:
+                return
+            tname = getattr(team, "team_name", "") or ""
+            market = tm.get_market(league)
+            today = getattr(decision, "timestamp", None) or date.today()
+            try:
+                _cd = market.get("deal_cooldown", {}) or {}
+
+                def _cool(nm):
+                    try:
+                        until = _cd.get(nm, "")
+                        return bool(until) and str(until) >= today.isoformat()
+                    except Exception:
+                        return False
+
+                if _cool(tname):
+                    return  # deal cooldown gates initiating
+            except Exception:
+                pass
+
+            def _pos_of(p):
+                return str(getattr(
+                    getattr(p, "primary_position", ""), "value",
+                    getattr(p, "primary_position", ""))).upper()
+
+            def _in_group(code):
+                if need_pos == "D":
+                    return code in ("LD", "RD", "D")
+                return code == need_pos
+
+            # Weakest roster spot at the needed position: the target of
+            # the upgrade. No mates at the position -> nothing to seek.
+            try:
+                mates = [p for p in (getattr(team, "roster", None) or [])
+                         if _in_group(_pos_of(p))]
+                if not mates:
+                    return
+                weakest = min(mates,
+                              key=lambda p: p.overall_rating()
+                              if hasattr(p, "overall_rating") else 0)
+                weak_ovr = float(weakest.overall_rating())
+            except Exception:
+                return
+            # Candidate pool: other AI clubs' trade blocks. Players already
+            # on open market listings are handled by the market's own bidder
+            # matching -- no double approach.
+            try:
+                idx = tm._player_index(league)
+                listed_ids = {li.get("player_id")
+                              for li in tm._active_listings(market)}
+                blocks = tm.get_trade_blocks(league) or {}
+            except Exception:
+                return
+            best, best_owner, best_ovr = None, None, weak_ovr + 1.0
+            for oname, pids in blocks.items():
+                if not oname or oname == tname:
+                    continue
+                try:
+                    owner = next(
+                        (t for t in (getattr(league, "teams", None) or [])
+                         if getattr(t, "team_name", "") == oname), None)
+                    if owner is None or is_human_managed(owner):
+                        continue  # never poach the human club this way
+                    if _cool(oname):
+                        continue
+                except Exception:
+                    continue
+                for pid in (pids or []):
+                    try:
+                        if pid in listed_ids:
+                            continue
+                        cand, cand_owner = idx.get(pid, (None, None))
+                        if cand is None or cand_owner is None:
+                            continue
+                        if getattr(cand_owner, "team_name", "") != oname:
+                            continue  # stale block: not theirs to move
+                        if not _in_group(_pos_of(cand)):
+                            continue
+                        try:
+                            sal = float(getattr(getattr(
+                                cand, "contract", None), "salary", 0) or 0)
+                        except Exception:
+                            sal = 0
+                        if sal > max_salary:
+                            continue
+                        ovr = float(cand.overall_rating())
+                        if ovr > best_ovr:
+                            best, best_owner, best_ovr = cand, owner, ovr
+                    except Exception:
+                        continue
+            if best is None or best_owner is None:
+                return
+            # Size the offer through the market's own bid builder, then let
+            # the target GM answer through the real evaluation (greed, needs,
+            # situational context -- the existing AI logic, untouched).
+            try:
+                ask = float(te.player_trade_value(best))
+            except Exception:
+                return
+            assets = tm.build_bid(None, league, team, best, best_owner, ask)
+            if not assets:
+                return
+            try:
+                sit = None
+                try:
+                    import trade_storylines as tsl
+                    sit = tsl.situational_context(None, team, best_owner)
+                except Exception:
+                    sit = None
+                try:
+                    resp = te.ai_consider_trade(
+                        team, [best], list(assets), user_team=best_owner,
+                        patience=1.0, situational=sit)
+                except TypeError:
+                    resp = te.ai_consider_trade(
+                        team, [best], list(assets), user_team=best_owner,
+                        patience=1.0)
+            except Exception:
+                return
+            if getattr(resp, "decision", "reject") != "accept":
+                # Deal died: spend no waivers.
+                try:
+                    tm._clear_waiver(best)
+                    tm._clear_waivers(assets)
+                except Exception:
+                    pass
+                return
+            # Consent before the gate: each clause gets its one conversation;
+            # a refusal is a clean no-deal, never a silent preflight death.
+            try:
+                ok, _n, _r = tm.resolve_clause_consent(
+                    None, league, best_owner, team, [best])
+                if ok:
+                    ok, _n2, _r2 = tm.resolve_clause_consent(
+                        None, league, team, best_owner, list(assets))
+                if not ok:
+                    try:
+                        tm._clear_waiver(best)
+                        tm._clear_waivers(assets)
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+            try:
+                trade = te.execute_trade(
+                    best_owner, team, [best], list(assets),
+                    date_str=today.isoformat(), league=league)
+            except Exception:
+                trade = None
+            if trade is None or \
+                    getattr(trade, "summary", "").startswith("BLOCKED:"):
+                # Gate refused (cap/freeze/clause): nothing moved, spend no
+                # waivers.
+                try:
+                    tm._clear_waiver(best)
+                    tm._clear_waivers(assets)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _build_extension_plan(self, team: Team, identity, strategy,
                               current_date: date):
