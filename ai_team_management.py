@@ -442,12 +442,20 @@ class AITeamManager:
         update_job_security(sec, identity, team, champ, season_year)
 
         if sec.gm_fired:
-            # The owner carried out the threat: the old GM is gone, an
-            # interim runs the club, and the seat resets to a honeymoon.
-            # (The Staff member stays on the roster; the AI just stops
-            # listening to him.)
-            identity = gm_identity_from_staff(team.team_name, None)
+            # The owner carried out the threat: the old GM is gone and a
+            # REAL replacement is hired from the free-agent GM pool (D20) --
+            # no more placeholder identity with the old Staff silently
+            # staying on the roster. New GM, new ledger (D48): the
+            # predecessor's respect/heat does not transfer.
+            new_gm = self._hire_replacement_gm(team)
+            identity = gm_identity_from_staff(team.team_name, new_gm)
             self.gm_identities[team.team_name] = identity
+            try:
+                import reputation_system as _rs
+                _rs.reset_gm_ledger_on_hire(
+                    getattr(self, "_league_ref", None), team.team_name)
+            except Exception:
+                pass
             sec.gm_fired = False
             sec.owner_warning = False
             sec.confidence = 55.0
@@ -467,6 +475,91 @@ class AITeamManager:
             # strategy around who he is now.
             self.team_strategies[team.team_name] = self._generate_team_strategy(
                 team, identity, sec)
+
+    def _hire_replacement_gm(self, team: Team):
+        """Hire a real GM from the free-agent pool after a firing (D20).
+
+        The outgoing GM Staff member returns to the pool; the incoming hire
+        comes off it, takes the chair (team.gm_name syncs), and the identity
+        is built from his actual attributes. Returns the new Staff, or
+        None when the pool is empty (caller falls back to the interim
+        identity). Never raises.
+        """
+        try:
+            league = getattr(self, "_league_ref", None)
+            pool = list(getattr(league, "free_agent_staff", None) or [])
+            cands = [s for s in pool
+                     if getattr(s, "role", None) == StaffRole.GENERAL_MANAGER]
+            # The outgoing GM goes back on the market.
+            old_gm = None
+            try:
+                for s in list(getattr(team, "staff", None) or []):
+                    if getattr(s, "role", None) == StaffRole.GENERAL_MANAGER:
+                        old_gm = s
+                        break
+                if old_gm is None:
+                    _nm = getattr(team, "gm_name", "") or ""
+                    for s in list(getattr(team, "staff", None) or []):
+                        _sn = (f"{getattr(s, 'first_name', '')} "
+                               f"{getattr(s, 'last_name', '')}").strip()
+                        if _sn and _sn == _nm:
+                            old_gm = s
+                            break
+            except Exception:
+                old_gm = None
+            if old_gm is not None:
+                try:
+                    team.staff.remove(old_gm)
+                except Exception:
+                    pass
+                try:
+                    old_gm.assignment = ""
+                    old_gm.current_club = ""
+                    old_gm.years_with_team = 0
+                    if old_gm not in pool and league is not None:
+                        league.free_agent_staff.append(old_gm)
+                except Exception:
+                    pass
+            if not cands or league is None:
+                return None
+            # Hire the best available: reputation-led, with variety among
+            # the top three so the same retread isn't hired everywhere.
+            try:
+                cands.sort(key=lambda s: int(
+                    getattr(s, "reputation", 50) or 50), reverse=True)
+            except Exception:
+                pass
+            try:
+                import random as _r
+                new_gm = _r.choice(cands[:3])
+            except Exception:
+                new_gm = cands[0]
+            try:
+                league.free_agent_staff.remove(new_gm)
+            except Exception:
+                pass
+            try:
+                new_gm.assignment = "nhl"
+                new_gm.current_club = ""
+                new_gm.years_with_team = 0
+                team.staff.append(new_gm)
+                team.gm_name = (f"{getattr(new_gm, 'first_name', '')} "
+                                f"{getattr(new_gm, 'last_name', '')}").strip()
+            except Exception:
+                pass
+            # League news: the hiring is visible.
+            try:
+                _pend = getattr(self, "_pending_news", None)
+                if not isinstance(_pend, list):
+                    _pend = self._pending_news = []
+                _pend.append(
+                    f"The {team.team_name} have hired {team.gm_name} as "
+                    f"general manager.")
+            except Exception:
+                pass
+            return new_gm
+        except Exception:
+            return None
     
     def _player_ask(self, player: Player, overall: Optional[float] = None,
                     league=None) -> int:

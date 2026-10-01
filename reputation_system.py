@@ -5893,6 +5893,303 @@ def _bump_gm_respect(league: Any, team_a: Any, team_b: Any, delta: int) -> int:
         return GM_RESPECT_NEUTRAL
 
 
+# ---------------------------------------------------------------------------
+# Wave B D48: respect decay -- professional regard as a memory fading toward
+# a stature-derived baseline. One tunable table, below. Stature itself never
+# decays (the resume is the resume); what fades is the pairwise warmth.
+#
+# Muck's rule, kept: NO respect-sting on fleeces -- there is no objective
+# league-wide fairness judge. A fleece's teeth stay in the existing
+# channels (the counterparty's personal pairwise grudge, fans/room, the
+# owners' board). Respect only nudges the trade pass via gm_trade_greed_mult;
+# it never overrides untouchables or the never-blocked doctrine.
+# ---------------------------------------------------------------------------
+GM_RESPECT_TUNABLES = {
+    # baseline = 50 + (stature - 50) * pull, clamped to [lo, hi]: a
+    # high-stature GM is given the benefit of the doubt, a low-stature one
+    # starts from skepticism.
+    "baseline_stature_pull": 0.40,
+    "baseline_lo": 30.0,
+    "baseline_hi": 70.0,
+    # Asymmetric drift, applied at the trade deadline and at season end:
+    # goodwill fades faster than grudges are forgiven.
+    "k_goodwill": 0.25,   # intensity above baseline
+    "k_forgive": 0.10,    # intensity below baseline
+    # New-GM reset (D20 wiring): a fresh face gets a wary prior, not the
+    # predecessor's ledger (the record key never carried the GM's name).
+    "wary_prior": 42,
+    # Recency-weighted deal ledger: repeated dealings with the same GM in
+    # a short window have diminishing returns.
+    "diminish_per_deal": 0.35,
+    "diminish_window_days": 90,
+    "diminish_floor": 0.25,
+}
+
+
+def _gm_team_key(team_name: str):
+    """Record key fragment for a GM entity: ("gm", team_name). Stored as a
+    tuple in memory, as a list after a JSON round-trip -- match both."""
+    return ("gm", team_name)
+
+
+def _record_involves_gm(r: dict, team_name: str) -> bool:
+    try:
+        want = ["gm", team_name]
+        for side in ("a", "b"):
+            v = r.get(side)
+            if v is None:
+                continue
+            if list(v) == want:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def respect_tier_label(value: float) -> str:
+    """Legibility tier for a respect value: cold / wary / cordial / warm."""
+    try:
+        v = float(value)
+    except Exception:
+        v = GM_RESPECT_NEUTRAL
+    if v < 35:
+        return "cold"
+    if v < 50:
+        return "wary"
+    if v < 65:
+        return "cordial"
+    return "warm"
+
+
+def respect_baseline_for(team: Any) -> float:
+    """The stature-derived baseline this GM's pairwise respects drift
+    toward. Never raises."""
+    try:
+        t = GM_RESPECT_TUNABLES
+        stature = float(gm_stature(team))
+        base = 50.0 + (stature - 50.0) * float(t["baseline_stature_pull"])
+        return max(float(t["baseline_lo"]), min(float(t["baseline_hi"]), base))
+    except Exception:
+        return float(GM_RESPECT_NEUTRAL)
+
+
+def _deal_log(r: dict) -> list:
+    try:
+        log = r.get("deal_log")
+        if not isinstance(log, list):
+            log = []
+            r["deal_log"] = log
+        return log
+    except Exception:
+        return []
+
+
+def _recent_deal_count(r: dict, days: int) -> int:
+    """Deal-log entries within the last `days` days (recency weighting)."""
+    try:
+        now = _now().date() if hasattr(_now(), "date") else _now()
+        n = 0
+        for e in _deal_log(r):
+            try:
+                d = str((e or {}).get("date", ""))[:10]
+                y, m, dd = int(d[0:4]), int(d[5:7]), int(d[8:10])
+                from datetime import date as _d
+                if (now - _d(y, m, dd)).days <= days:
+                    n += 1
+            except Exception:
+                continue
+        return n
+    except Exception:
+        return 0
+
+
+def record_gm_dealing(league: Any, team_a: Any, team_b: Any,
+                      delta: int, outcome: str = "deal") -> int:
+    """Record one dealing between two GMs: append to the recency-weighted
+    deal ledger, apply diminishing returns per GM, and bump respect.
+
+    Returns the new respect value. When the bump crosses a legibility tier
+    (cold/wary/cordial/warm) and the user's club is one side, an inbox note
+    goes out -- the relationship change is visible, not silent. Never
+    raises.
+    """
+    try:
+        t = GM_RESPECT_TUNABLES
+        store = _respect_store(league)
+        pa, pb = gm_persona(team_a), gm_persona(team_b)
+        r = rivalry_between(store, pa, pb, kind="gm_respect")
+        old = int(r.get("intensity", GM_RESPECT_NEUTRAL)) if r else \
+            GM_RESPECT_NEUTRAL
+        recent = _recent_deal_count(r, int(t["diminish_window_days"])) if r \
+            else 0
+        scale = max(float(t["diminish_floor"]),
+                    1.0 / (1.0 + float(t["diminish_per_deal"]) * recent))
+        bump = int(round(int(delta) * scale))
+        new = _bump_gm_respect(league, team_a, team_b, bump)
+        # The ledger lives on the (possibly just-created) record.
+        try:
+            r2 = rivalry_between(store, pa, pb, kind="gm_respect")
+            if r2 is not None:
+                _deal_log(r2).append({"date": _now().isoformat(),
+                                      "delta": bump, "outcome": outcome})
+        except Exception:
+            pass
+        # Legibility: tier change involving the user -> inbox note.
+        try:
+            if respect_tier_label(old) != respect_tier_label(new):
+                _notify_respect_tier_change(league, team_a, team_b,
+                                            old, new)
+        except Exception:
+            pass
+        return new
+    except Exception:
+        try:
+            return _bump_gm_respect(league, team_a, team_b, delta)
+        except Exception:
+            return GM_RESPECT_NEUTRAL
+
+
+def _notify_respect_tier_change(league: Any, team_a: Any, team_b: Any,
+                               old: int, new: int) -> None:
+    """Inbox note when a respect tier changes and the user is one side."""
+    try:
+        from game_classes import EmailMessage, is_human_managed
+        from datetime import date as _date
+        teams = _league_teams(league)
+        user_team = next((x for x in teams if is_human_managed(x)), None)
+        if user_team is None:
+            return
+        uname = getattr(user_team, "team_name", "")
+        aname = getattr(team_a, "team_name", "") or str(team_a)
+        bname = getattr(team_b, "team_name", "") or str(team_b)
+        if uname not in (aname, bname):
+            return
+        other = bname if uname == aname else aname
+        try:
+            ogm = getattr(team_b if uname == aname else team_a,
+                          "gm_name", "their GM")
+        except Exception:
+            ogm = "their GM"
+        old_t, new_t = respect_tier_label(old), respect_tier_label(new)
+        direction = "warming" if new > old else "cooling"
+        msg = EmailMessage(
+            sender="League Office",
+            sender_type="League",
+            subject=f"Relationship with {other}: {old_t} -> {new_t}",
+            content=(f"Your professional relationship with {ogm} "
+                     f"({other}) is {direction}.\n\n"
+                     f"Respect moved from {old} to {new} "
+                     f"({old_t} -> {new_t}). Fair dealing builds it; "
+                     f"hardball erodes it. It fades toward his stature "
+                     f"over time -- nothing here is permanent."),
+            date_sent=_date.today(),
+            is_important=False,
+            category="League",
+            priority=2,
+        )
+        user_team.inbox.add_message(msg)
+    except Exception:
+        pass
+
+
+def respect_trend(league: Any, team_a: Any, team_b: Any) -> str:
+    """warming / cooling / steady from the 90-day deal ledger. Never raises."""
+    try:
+        t = GM_RESPECT_TUNABLES
+        store = _respect_store(league)
+        r = rivalry_between(store, gm_persona(team_a), gm_persona(team_b),
+                            kind="gm_respect")
+        if r is None:
+            return "steady"
+        now = _now().date() if hasattr(_now(), "date") else _now()
+        total = 0
+        for e in _deal_log(r):
+            try:
+                d = str((e or {}).get("date", ""))[:10]
+                y, m, dd = int(d[0:4]), int(d[5:7]), int(d[8:10])
+                from datetime import date as _d
+                if (now - _d(y, m, dd)).days <= int(t["diminish_window_days"]):
+                    total += int((e or {}).get("delta", 0))
+            except Exception:
+                continue
+        if total >= 4:
+            return "warming"
+        if total <= -4:
+            return "cooling"
+        return "steady"
+    except Exception:
+        return "steady"
+
+
+def decay_gm_respect(league: Any, team: Any = None) -> int:
+    """Drift pairwise respects toward their stature-derived baselines.
+
+    Asymmetric: goodwill (above baseline) decays at k_goodwill, grudges
+    (below baseline) are forgiven at k_forgive. Called at the trade
+    deadline and at season end. `team` limits the drift to that club's
+    pairs; None drifts the whole league. Returns the number of records
+    moved. Never raises.
+    """
+    try:
+        t = GM_RESPECT_TUNABLES
+        store = _respect_store(league)
+        teams = {getattr(x, "team_name", ""): x for x in _league_teams(league)}
+        baselines = {}
+        try:
+            for nm, tm in teams.items():
+                baselines[nm] = respect_baseline_for(tm)
+        except Exception:
+            pass
+        moved = 0
+        for r in store:
+            try:
+                if str(r.get("kind", "")) != "gm_respect":
+                    continue
+                a = list(r.get("a") or [])
+                b = list(r.get("b") or [])
+                if len(a) != 2 or len(b) != 2 or a[0] != "gm" or b[0] != "gm":
+                    continue
+                if team is not None:
+                    tn = getattr(team, "team_name", "")
+                    if a[1] != tn and b[1] != tn:
+                        continue
+                base = (baselines.get(a[1], 50.0) +
+                        baselines.get(b[1], 50.0)) / 2.0
+                cur = float(r.get("intensity", GM_RESPECT_NEUTRAL))
+                k = float(t["k_goodwill"]) if cur > base else float(
+                    t["k_forgive"])
+                r["intensity"] = max(
+                    0, min(100, int(round(cur + k * (base - cur)))))
+                moved += 1
+            except Exception:
+                continue
+        return moved
+    except Exception:
+        return 0
+
+
+def reset_gm_ledger_on_hire(league: Any, team_name: str) -> None:
+    """New GM, new ledger (D20 wiring). Respect pairs reset to the wary
+    prior (~40-45 -- the record key never carried the GM's name, so the
+    predecessor's warmth does NOT transfer); personal heat resets to 0;
+    deal logs are cleared. Never raises."""
+    try:
+        t = GM_RESPECT_TUNABLES
+        store = _respect_store(league)
+        for r in store:
+            try:
+                kind = str(r.get("kind", ""))
+                if kind == "gm_respect" and _record_involves_gm(r, team_name):
+                    r["intensity"] = int(t["wary_prior"])
+                    r["deal_log"] = []
+                elif kind == "gm_gm" and _record_involves_gm(r, team_name):
+                    r["intensity"] = 0
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def gm_trade_greed_mult(league: Any, user_team: Any,
                         partner_team: Any) -> Tuple[float, List[str]]:
     """Greed multiplier for an AI GM facing YOUR offer. Never raises.

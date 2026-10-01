@@ -4422,6 +4422,15 @@ def _perceiver_ctx(app, ai_manager, holder_team):
         ctx["respect01"] = _rs.gm_gm_respect(
             league, user_team, holder_team) / 100.0
         ctx["heat01"] = _rs.gm_gm_heat(league, user_team, holder_team) / 100.0
+        # Wave B D48 legibility: the respect trend (warming/cooling/steady)
+        # from the 90-day deal ledger, for the relationship panel.
+        try:
+            ctx["respect_trend"] = _rs.respect_trend(
+                league, user_team, holder_team)
+            ctx["respect_tier"] = _rs.respect_tier_label(
+                _rs.gm_gm_respect(league, user_team, holder_team))
+        except Exception:
+            pass
     except Exception:
         pass
     try:  # franchise rivalry: bad blood between the TEAMS, not just the GMs

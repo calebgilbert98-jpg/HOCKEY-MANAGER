@@ -6843,6 +6843,14 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         print("⏰ Trade deadline passed (3:00 PM ET). Trading locked.")
+        # Wave B D48: deadline respect decay -- the deadline frenzy's warmth
+        # and grudges fade toward each GM's stature-derived baseline
+        # (asymmetric: goodwill k=0.25, forgiveness k=0.10).
+        try:
+            import reputation_system as _rs
+            _rs.decay_gm_respect(getattr(self, "league", None))
+        except Exception:
+            pass
 
     def simulate_day(self):
         """Completely reworked daily simulation that properly handles all scenarios"""
@@ -14678,6 +14686,14 @@ class HockeyManagerGUI(tk.Tk):
         # Bank regular-season reputations before anything else touches stats.
         # (Has its own once-per-season guard; safe under the re-entry guard above.)
         self._update_player_reputations()
+        # Wave B D48: season-end respect decay -- a season's dealings fade
+        # toward each GM's stature-derived baseline (goodwill k=0.25,
+        # forgiveness k=0.10). Fires once per season, under the guard above.
+        try:
+            import reputation_system as _rs
+            _rs.decay_gm_respect(getattr(self, "league", None))
+        except Exception:
+            pass
         # Show season summary first (skip the modal dialog when bulk simming)
         if not getattr(self, '_bulk_simming', False):
             self._show_season_summary()
