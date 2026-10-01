@@ -662,7 +662,8 @@ class InboxView(ctk.CTkFrame):
                 "trade_offer", "trade_counter", "contract_counter",
                 "rfa_qualifying", "offer_sheet_match",
                 "offer_sheet_trade_alt",
-                "arbitration_walkaway", "buyout_window"):
+                "arbitration_walkaway", "buyout_window",
+                "staff_renewal"):
             self._show_interactive_action(message)
         else:
             self._hide_interactive_action()
@@ -872,6 +873,8 @@ class InboxView(ctk.CTkFrame):
             self._render_arbitration_walkaway(message)
         elif message.action_type == "buyout_window":
             self._render_buyout_window(message)
+        elif message.action_type == "staff_renewal":
+            self._render_staff_renewal(message)
 
     def _hide_interactive_action(self):
         """Restore the plain text content view."""
@@ -1359,6 +1362,75 @@ class InboxView(ctk.CTkFrame):
             self.app.apply_buyout_decision(message, player_id, buyout)
         except Exception as e:
             print(f"buyout decide failed: {e}")
+        self._refresh_inbox()
+        self._display_message_preview(message)
+
+    # ---------- Staff renewals (D5 follow-up) ----------
+    def _render_staff_renewal(self, message):
+        """Per-staffer Re-sign (1/2/3 yr) / Let walk buttons
+        (staff_renewal)."""
+        data = message.action_data or {}
+        self._iwrap("STAFF CONTRACT RENEWALS", size=15, bold=True,
+                    padx=10, pady=(10, 2))
+        if message.action_done:
+            self._iwrap("All renewal decisions are in.", size=11, dim=True,
+                        padx=10)
+            return
+        offers = data.get("offers", []) or []
+        decided = data.get("decided", {}) or {}
+        remaining = [o for o in offers
+                     if str(o.get("staff_id")) not in decided]
+        if not remaining:
+            message.action_done = True
+            self._iwrap("All renewal decisions are in.", size=11, dim=True,
+                        padx=10)
+            return
+        for o in remaining:
+            sid = str(o.get("staff_id"))
+            name = o.get("name", "Unknown")
+            role = o.get("role", "staffer")
+            self._action_section(f"{name.upper()} — {role.upper()}")
+            self._iwrap(
+                f"Age {o.get('age')} • career standing "
+                f"{o.get('reputation')}/100 • "
+                f"{o.get('years_with_team', 0)} yrs with the club • "
+                f"${o.get('salary', 0):,}/yr",
+                size=11, padx=10, pady=(2, 2))
+            self._iwrap(
+                "His deal expired. Re-sign him now on a fresh deal "
+                "(same role, same salary) or let him walk to the "
+                "free-agent pool.",
+                size=11, padx=10, pady=(0, 4))
+            btn_row = ctk.CTkFrame(self.interactive_frame,
+                                   fg_color="transparent")
+            btn_row.pack(fill="x", padx=10, pady=(0, 4))
+            for yrs in (1, 3):
+                self._secondary_button(
+                    btn_row,
+                    text=f"Re-sign × {yrs} yr",
+                    command=lambda m=message, s=sid, y=yrs:
+                        self._on_staff_renewal_decide(m, s, y),
+                ).pack(fill="x", pady=(0, 6))
+            self._primary_button(
+                btn_row,
+                text=f"Re-sign × 2 yrs (recommended)",
+                command=lambda m=message, s=sid:
+                    self._on_staff_renewal_decide(m, s, 2),
+            ).pack(fill="x", pady=(0, 6))
+            self._secondary_button(
+                btn_row, text="Let him walk",
+                command=lambda m=message, s=sid:
+                    self._on_staff_renewal_decide(m, s, None),
+            ).pack(fill="x")
+        self._iwrap("Undecided staff walk to the pool when the new "
+                    "season starts.",
+                    size=10, dim=True, padx=10, pady=(6, 0))
+
+    def _on_staff_renewal_decide(self, message, staff_id, years):
+        try:
+            self.app.apply_staff_renewal_decision(message, staff_id, years)
+        except Exception as e:
+            print(f"staff renewal decide failed: {e}")
         self._refresh_inbox()
         self._display_message_preview(message)
 
