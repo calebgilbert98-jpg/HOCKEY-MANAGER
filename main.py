@@ -15336,6 +15336,19 @@ class HockeyManagerGUI(tk.Tk):
         # Must precede league.end_of_season(), which wipes the standings the
         # draft order is built from.
         self._guarantee_offseason_tentpoles()
+        # D5: offseason staff carousel -- AI clubs approach expiring
+        # staff (the "stud assistant in his final year who wants a
+        # head-coach job" case). Runs BEFORE end_of_season() so the
+        # tick below only decrements the staff who stayed.
+        try:
+            import staff_poaching as _sp
+            _pn5 = _sp.offseason_staff_poach(self.league, self.user_team)
+            if _pn5:
+                self.league.staff_contract_news = (
+                    list(getattr(self.league, "staff_contract_news", None)
+                         or []) + [str(_m) for _m in _pn5])
+        except Exception:
+            pass
         # Age players and reset stats
         self.league.end_of_season()
 
@@ -15378,6 +15391,19 @@ class HockeyManagerGUI(tk.Tk):
                     pass
             if _rn:
                 self.league.rivalry_review_news = []
+        except Exception:
+            pass
+        # D5: staff contract expiries + offseason poach moves.
+        try:
+            _sn = list(getattr(self.league, "staff_contract_news", None)
+                       or [])
+            for _msg in _sn:
+                try:
+                    self.add_news("🧑‍💼 " + str(_msg))
+                except Exception:
+                    pass
+            if _sn:
+                self.league.staff_contract_news = []
         except Exception:
             pass
         # Snapshot staff breakthrough headlines for the year-end recap
