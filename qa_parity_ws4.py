@@ -35,8 +35,8 @@ import random
 import inspect
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-assert "wt-parity-ws4" in os.path.abspath(__file__), \
-    "must run from the wt-parity-ws4 worktree"
+assert "wt-parity" in os.path.abspath(__file__), \
+    "must run from a wt-parity worktree"
 
 import scenario_composites as sc
 from game_classes import League, PlayerPosition
