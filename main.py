@@ -10781,12 +10781,15 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
-    def _weekly_coaching_mults(self, team, player, attrs, _cache):
+    def _weekly_coaching_mults(self, team, player, attrs, _cache,
+                               assignment="nhl"):
         """Per-attribute coaching multipliers for the weekly all-team
         development tick. Same practice_breakdown math as practice
         sessions (drill knowledge, archetype affinity, attitude, fit,
         system) -- one mechanic for all 32 clubs, user and AI alike.
-        Additive: returns 1.0 for anything it can't price. Never raises.
+        D8: `assignment` ("nhl" | "ahl" | "overseas") splits the quality
+        behind the bench by roster. Additive: returns 1.0 for anything it
+        can't price. Never raises.
         """
         try:
             import coach_practice as _cp
@@ -10797,14 +10800,16 @@ class HockeyManagerGUI(tk.Tk):
             drill = _cp.attribute_drill(attr)
             if drill is None or not hasattr(player, attr):
                 continue
-            # Keyed by team too: the same player object must never borrow
-            # another club's staff pricing.
-            key = (id(team), id(player), drill)
+            # Keyed by team AND assignment too: the same player object must
+            # never borrow another club's staff pricing or another
+            # roster's bench quality.
+            key = (id(team), id(player), drill, assignment)
             mult = _cache.get(key)
             if mult is None:
                 try:
                     mult = float(_cp.practice_breakdown(
-                        team, player, drill).get("total_mult", 1.0))
+                        team, player, drill,
+                        assignment=assignment).get("total_mult", 1.0))
                 except Exception:
                     mult = 1.0
                 _cache[key] = mult
@@ -10874,9 +10879,15 @@ class HockeyManagerGUI(tk.Tk):
                                 # Coaching parity: this club's staff shapes the
                                 # weekly tick exactly the way they shape a
                                 # practice session (same model, all 32 teams).
+                                # D8: bench quality splits by roster -- AHL
+                                # skaters learn from the AHL bench, prospects
+                                # from their junior/college/Euro program.
+                                _asg8 = ("nhl" if roster_type == "roster"
+                                         else ("ahl" if roster_type == "ahl"
+                                               else "overseas"))
                                 coach_mults = self._weekly_coaching_mults(
                                     team, player, developable_attrs,
-                                    _coach_cache)
+                                    _coach_cache, assignment=_asg8)
                                 
                                 for attr in developable_attrs:
                                     if hasattr(player, attr):
