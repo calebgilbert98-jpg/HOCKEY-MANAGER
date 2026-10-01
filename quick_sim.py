@@ -16,7 +16,9 @@ Ownership: the quick-sim engine. Coordinate with the tactics/mesh owners
 before changing scoring-affecting code here -- balance changes must be made
 in BOTH engines (see docs/TACTICS_REWORK_GUIDE.md).
 """
+import math
 import random
+from typing import NamedTuple
 
 from collections import deque
 _SCORE_NOISE_FLOOR = 0.601856  # floor under per-game scoring noise
@@ -488,6 +490,175 @@ def resolve_game_lineup(team):
     return lineup
 
 
+# ---------------------------------------------------------------------------
+# D11 (2026-09-30, per Muck: CONSOLIDATE): AdvGS speed-optimized
+# approximation of the ONE shared shot-fate decision
+# (mesh_system.shot_fate). Same inputs, same formula -- the ONLY
+# differences are computational:
+#   1. The defending unit's best blocker is resolved ONCE PER UNIT (not
+#      per shot) and cached as (blocker, unit_battle, unit_tendency,
+#      unit_composite). The D corps does not change within a QS shift,
+#      so this is exact while the unit is unchanged; the cache key is
+#      the unit's composition.
+#   2. Per shot, only the shooter's two battle attributes are read; the
+#      defender side comes from the cache. No per-attribute lookups over
+#      the D corps per shot.
+# What is NOT approximated: the formula itself. This computes literally
+# mesh_system.shot_block_prob's math (0.08 + battle*0.004, lane mult,
+# situation mults, 0.01-0.50 rails) and mesh_system.shot_miss_prob's
+# math. Proof: qa_d11_parity.py feeds identical contexts to both paths
+# and reports the agreement rate.
+# Engine-fidelity INPUT differences (documented, not formula
+# differences -- AdvGS genuinely lacks this state):
+#   - location: derived from the shooter's rink coordinates via the
+#     shared _SHOT_SPOTS geometry (nearest spot in the attacking
+#     orientation). GameSim passes its live ShotLocation.
+#   - distance: coordinate distance to the goal mouth. GameSim passes
+#     its location-based distance.
+#   - situation: AdvGS has no defensive-system / DZ-tactic / pressure /
+#     installed-tactics state (the deployment layer is GameSim-only;
+#     queued parity work) -> neutral 1.0 for sys/dz/pressure/tactics.
+#     tendency + composite come from the cached best blocker (the
+#     composite WITHOUT energy, exactly as GameSim's block path calls
+#     it); fatigue is the live shift-fatigue curve value.
+# ---------------------------------------------------------------------------
+class ApproxFate(NamedTuple):
+    """Result of approx_shot_fate. fate/blocker mirror mesh ShotFate;
+    p_block/p_miss expose the probabilities for the equivalence proof."""
+    fate: str
+    blocker: object
+    p_block: float
+    p_miss: float
+
+
+def _qs_shot_spots():
+    """GameSim's _SHOT_SPOTS geometry (single source of truth, lazy to
+    avoid import weight at module load). Never raises."""
+    try:
+        from simulation import GameSim as _GS
+        return dict(_GS._SHOT_SPOTS)
+    except Exception:
+        return {}
+
+
+def qs_shot_location(shooter_x, shooter_y, attacking_plus_x=True):
+    """Nearest _SHOT_SPOTS location key to a rink coordinate, in the
+    attacking orientation. AdvGS's documented proxy for GameSim's live
+    ShotLocation (AdvGS does not track it). Never raises; None when the
+    geometry is unavailable."""
+    try:
+        _spots = _qs_shot_spots()
+        if not _spots:
+            return None
+        _x = float(shooter_x)
+        if not attacking_plus_x:
+            _x = 200.0 - _x
+        _y = float(shooter_y)
+        _best, _best_d = None, None
+        for _k, (_sx, _sy) in _spots.items():
+            _d = (_x - _sx) ** 2 + (_y - _sy) ** 2
+            if _best_d is None or _d < _best_d:
+                _best, _best_d = _k, _d
+        return _best
+    except Exception:
+        return None
+
+
+def qs_shot_distance(shooter_x, shooter_y, attacking_plus_x=True):
+    """Coordinate distance (feet) from the shooter to the goal mouth.
+    AdvGS's documented proxy for GameSim's location-based distance.
+    Never raises; None when coordinates are unusable."""
+    try:
+        _gx = 189.0 if attacking_plus_x else 11.0
+        return float(math.hypot(float(shooter_x) - _gx,
+                                float(shooter_y) - 42.5))
+    except Exception:
+        return None
+
+
+def approx_block_prob(shooter, unit, location=None, situation=None,
+                      _rng=None):
+    """The block arm of approx_shot_fate: the SAME math as
+    mesh_system.shot_block_prob (0.08 + battle*0.004, lane mult,
+    situation mults, 0.01-0.50 rails), with the defender's battle half
+    arriving pre-resolved in `unit` = (blocker, unit_battle,
+    unit_tendency, unit_composite). Returns (blocked, blocker, p_block).
+    An explicitly passed situation tendency/composite wins over the
+    unit's cached values. Never raises."""
+    try:
+        from mesh_system import (_lane_mult as _lm,
+                                 SHOT_FATE_SITUATION_KEYS as _KEYS)
+        _rand = _rng.random if _rng is not None else random.random
+        _blocker, _ubattle, _utend, _ucomp = unit
+        if _blocker is None or _ubattle is None:
+            return (False, None, 0.0)
+        _sht = (float(getattr(shooter, "offensive_awareness", 10)) * 0.50
+                + float(getattr(shooter, "composure", 10)) * 0.50)
+        _battle = _ubattle - _sht
+        _p = 0.08 + _battle * 0.004
+        _p *= _lm(location)
+        _sit = dict(situation or {})
+        _sit.setdefault("tendency", _utend)
+        _sit.setdefault("composite", _ucomp)
+        for _k in _KEYS:
+            try:
+                _p *= float(_sit.get(_k, 1.0))
+            except Exception:
+                pass
+        _p = max(0.01, min(0.50, _p))
+        return (_rand() < _p, _blocker, _p)
+    except Exception:
+        return (False, None, 0.0)
+
+
+def approx_shot_fate(shooter, defenders, grade="B", location=None,
+                     distance=None, situation=None, weights=None,
+                     unit=None, _rng=None) -> ApproxFate:
+    """Speed-optimized approximation of mesh_system.shot_fate: the SAME
+    decision, with the defending unit pre-resolved.
+
+    unit: optional (blocker, unit_battle, unit_tendency, unit_composite)
+    tuple from the per-unit cache -- skips the per-shot blocker
+    resolution and per-attribute lookups. When None, the blocker is
+    resolved exactly (same as the shared path); the equivalence proof
+    uses this mode against mesh_system.shot_fate.
+    situation: same keys as the shared decision; sys/dz/pressure/
+    tactics default to 1.0. tendency/composite default to 1.0 unless
+    supplied by `unit` or `situation`.
+    Never raises.
+    """
+    try:
+        from mesh_system import (resolve_blocker as _rb,
+                                 defensive_positioning as _dp,
+                                 shot_miss_prob as _smp)
+        _rand = _rng.random if _rng is not None else random.random
+        _blocker, _ubattle, _utend, _ucomp = None, None, 1.0, 1.0
+        if unit is not None:
+            _blocker, _ubattle, _utend, _ucomp = unit
+        else:
+            _blocker = _rb(defenders, weights) if defenders else None
+        _unit2 = (_blocker, _ubattle, _utend, _ucomp)
+        if _blocker is not None and _ubattle is None:
+            # Exact-resolution mode: the defender's battle HALF from the
+            # resolved blocker (approx_block_prob subtracts the
+            # shooter's live half itself) -- same math as the shared
+            # path's full battle.
+            _unit2 = (_blocker,
+                      _dp(_blocker) * 0.50
+                      + float(getattr(_blocker, "shot_blocking", 10)) * 0.50,
+                      _utend, _ucomp)
+        _blocked, _blocker2, _p_block = approx_block_prob(
+            shooter, _unit2, location, situation, _rng=_rng)
+        if _blocked:
+            return ApproxFate("blocked", _blocker2, _p_block, 0.0)
+        _p_miss = _smp(shooter, grade, distance)
+        if _rand() < _p_miss:
+            return ApproxFate("missed", None, _p_block, _p_miss)
+        return ApproxFate("on_net", None, _p_block, _p_miss)
+    except Exception:
+        return ApproxFate("on_net", None, 0.0, 0.0)
+
+
 class AdvancedGameSim:
     """Simulates a hockey game and produces a structured event log for visualization."""
 
@@ -631,6 +802,10 @@ class AdvancedGameSim:
         # EHM shift-fatigue: continuous seconds the current on-ice unit has
         # been out. Most shifts rotate; stuck units accumulate and degrade.
         self._shift_age = {home_team.team_name: 0.0, away_team.team_name: 0.0}
+        # D11: per-unit cached block resolution for approx_shot_fate --
+        # keyed on the D corps' composition (blocker, unit_battle,
+        # unit_tendency, unit_composite). Cleared per game in run().
+        self._block_unit_cache = {}
         # Last-change edge: home responds to the away line declaration.
         # Recomputed per shift; 1.0 when the home coach just rolls.
         self._matchup_edge = {home_team.team_name: 1.0, away_team.team_name: 1.0}
@@ -1648,6 +1823,11 @@ class AdvancedGameSim:
         # NHL rules: 5-minute 3v3 sudden-death OT, then shootout
         overtime_limit = 300  # 5 minutes OT (NHL regular season)
         shootout_rounds = 3  # Initial shootout rounds, then sudden death
+        # D11: fresh game -> fresh per-unit block cache.
+        try:
+            self._block_unit_cache = {}
+        except Exception:
+            pass
 
         # OT drama (ot_drama, additive): the live levers (pull aggression,
         # OT matchup tilt, shootout edge) read this context. OT itself is
@@ -2745,26 +2925,35 @@ class AdvancedGameSim:
         # Last change: the home coach got his matchup this shift.
         shot_chance *= self._matchup_edge.get(puck_team_name, 1.0)
 
-        # Shot fate (2026-09-29, per Muck: shot-volume truthfulness): the
-        # ONE shared block/miss/on-net decision from mesh_system.
-        # Grade-aware (clean looks rarely miss) and attribute-driven
-        # (the defender's lane vs the shooter's composure). The block
-        # rolls here (a blocked shot never reaches the goal roll); the
-        # miss rolls after a failed goal roll below. Fate never changes
-        # P(goal|attempt) -- the goal roll is independent; fate only
-        # decides whether a non-goal attempt is a save (on net) or a
-        # miss/block (off net), so the visible SOG becomes NHL-truthful
-        # (~29.5) while scoring volume is preserved exactly.
+        # Shot fate, block arm -- D11 (2026-09-30, Muck: CONSOLIDATE):
+        # AdvGS's speed-optimized approximation of the ONE shared block
+        # decision (approx_block_prob -- the same formula as
+        # mesh_system.shot_block_prob; the unit's best blocker resolves
+        # once per unit via _block_unit, not per shot). Location is the
+        # nearest-spot proxy from the shooter's rink coordinates;
+        # fatigue is the live shift-fatigue curve. sys/dz/pressure/
+        # tactics are neutral -- AdvGS has no deployment-layer state
+        # (documented fidelity gap, not a formula difference). A blocked
+        # shot never reaches the goal roll; the miss arm rolls after a
+        # failed goal roll below, so fate never changes P(goal|attempt).
         _fate_missed = False
+        _blocked_now = False
+        _defender = None
+        _plus_x = (puck_team_name == self.home_team.team_name)
+        _qs_loc = qs_shot_location(getattr(shooter, "x", 100.0),
+                                   getattr(shooter, "y", 42.5),
+                                   attacking_plus_x=_plus_x)
+        _qs_dist = qs_shot_distance(getattr(shooter, "x", 100.0),
+                                    getattr(shooter, "y", 42.5),
+                                    attacking_plus_x=_plus_x)
         try:
-            from mesh_system import shot_block_prob as _sbp
             _def_team = (self.away_team if puck_team_name == self.home_team.team_name
                          else self.home_team)
-            _d_onice = (self.on_ice.get(_def_team.team_name, {}) or {}).get("Defense", [])
-            _d_cands = [d for d in _d_onice if d]
-            _defender = random.choice(_d_cands) if _d_cands else None
-            _blocked_now = (_defender is not None
-                            and random.random() < _sbp(_defender, shooter))
+            _dtn = _def_team.team_name
+            _was_blocked, _pdef, _p_block = approx_block_prob(
+                shooter, self._block_unit(_dtn), location=_qs_loc,
+                situation={"fatigue": self._shift_fatigue_mult(_dtn)})
+            _blocked_now, _defender = _was_blocked, _pdef
             if _blocked_now:
                 self.events.append({
                     'time': self.time, 'period': self.period,
@@ -2874,15 +3063,18 @@ class AdvancedGameSim:
                 self.pk_team = None
                 self.pp_end_time = None
         elif goalie:
-            # Shared grade-aware miss (mesh_system.shot_miss_prob): clean
-            # looks rarely miss, perimeter prayers often do. A miss is
-            # off-net (not a save); otherwise the goalie stops it.
-            # The old flat 0.8 save rate is gone.
+            # Shared grade-aware miss, D11: the ONE shared miss decision
+            # (mesh_system.shot_miss_prob) -- clean looks rarely miss,
+            # perimeter prayers often do, with the coordinate-derived
+            # distance folded in (AdvGS's documented proxy for GameSim's
+            # location-based distance). A miss is off-net (not a save);
+            # otherwise the goalie stops it. Rolls AFTER the failed goal
+            # roll: fate never changes P(goal|attempt).
             _missed = False
             try:
                 from mesh_system import shot_miss_prob as _smp
                 _miss_grade = str(getattr(self, "_last_chance_grade", "B") or "B")
-                _missed = random.random() < _smp(shooter, _miss_grade)
+                _missed = random.random() < _smp(shooter, _miss_grade, _qs_dist)
             except Exception:
                 _missed = False
             if _missed:
@@ -3007,108 +3199,59 @@ class AdvancedGameSim:
             
         return max(5, base_skill)
     
-    def _check_shot_blocking_coordinate(self, opp_team_name, shot_details, fatigue_factor):
-        """Enhanced shot blocking with coordinate-based positioning"""
-        defenders = [p for p in self.on_ice[opp_team_name]['Defense'] if p]
-        if not defenders:
-            return False
-            
-        shot_pos = shot_details['puck_start_pos']
-        danger_level = shot_details['danger_level']
-        
-        # Higher chance of blocks in high danger areas (defenders collapse)
-        base_block_chance = {
-            'very_high': 0.25,  # Defenders pack the crease
-            'high': 0.15,       # Active shot blocking in slot
-            'medium': 0.08,     # Some blocking from point
-            'low': 0.03         # Minimal blocking from distance
-        }.get(danger_level, 0.08)
-        
-        # Find closest defender to shot location
-        closest_defender = min(defenders, key=lambda d: (
-            (self.coordinate_engine.player_positions.get(d.id, (d.x, d.y))[0] - shot_pos[0])**2 +
-            (self.coordinate_engine.player_positions.get(d.id, (d.x, d.y))[1] - shot_pos[1])**2
-        ))
-        
-        # Calculate block skill
-        block_skill = (
-            getattr(closest_defender, 'shot_blocking', 10) * 0.5 +
-            getattr(closest_defender, 'defensive_awareness', 10) * 0.3 +
-            getattr(closest_defender, 'aggressiveness', 10) * 0.2
-        ) * fatigue_factor
-        
-        # Distance factor - closer defenders more likely to block
-        defender_pos = self.coordinate_engine.player_positions.get(closest_defender.id, (closest_defender.x, closest_defender.y))
-        distance_to_shot = ((defender_pos[0] - shot_pos[0])**2 + (defender_pos[1] - shot_pos[1])**2)**0.5
-        distance_factor = max(0.3, 1.0 - (distance_to_shot / 30))  # Reduced effectiveness beyond 30 feet
-        
-        final_block_chance = base_block_chance * (block_skill / 15) * distance_factor
-        # --- attribute composites (additive, bounded) ---
-        # Defensive-play composite on the blocker's block chance.
-        # Rails [0.94, 1.06].
+    def _block_unit(self, defending_team_name):
+        """D11: resolve the defending unit's block components ONCE per unit
+        composition: (blocker, unit_battle, unit_tendency, unit_composite)
+        for approx_shot_fate. The D corps does not change within a QS
+        shift, so the cached resolution is exact while the unit is
+        unchanged; any lineup change produces a new cache key (self-
+        invalidating). The composite is called WITHOUT energy, exactly
+        as GameSim's block path calls it. Never raises; returns
+        (None, None, 1.0, 1.0) when unusable.
+        """
         try:
-            from attribute_composites import apply_amplifier as _ac_qsb
-            final_block_chance = _ac_qsb(final_block_chance, closest_defender,
-                                        "defensive_play", sim=self,
-                                        team=opp_team_name,
-                                        energy=fatigue_factor * 100)
+            from mesh_system import (resolve_blocker as _rb,
+                                     defensive_positioning as _dp)
+            _corps = [d for d in (self.on_ice.get(defending_team_name, {})
+                                  or {}).get("Defense", []) if d]
+            if not _corps:
+                return (None, None, 1.0, 1.0)
+            _key = (defending_team_name,
+                    tuple(sorted(getattr(d, "id", 0) for d in _corps)))
+            try:
+                _hit = self._block_unit_cache.get(_key)
+            except Exception:
+                _hit = None
+            if _hit is not None:
+                return _hit
+            try:
+                from player_archetypes import get_tendency as _gt
+                _w = {d: max(0.05, _gt(d, "block")) for d in _corps}
+            except Exception:
+                _w = None
+            _blocker = _rb(_corps, weights=(_w.get if _w else None))
+            if _blocker is None:
+                _res = (None, None, 1.0, 1.0)
+            else:
+                _ubattle = (_dp(_blocker) * 0.50
+                            + float(getattr(_blocker, "shot_blocking", 10)) * 0.50)
+                _utend = float(_w.get(_blocker, 1.0)) if _w else 1.0
+                try:
+                    from attribute_composites import (
+                        apply_amplifier as _ac)
+                    _ucomp = _ac(1.0, _blocker, "defensive_play",
+                                 sim=self, team=defending_team_name)
+                except Exception:
+                    _ucomp = 1.0
+                _res = (_blocker, _ubattle, _utend, _ucomp)
+            try:
+                self._block_unit_cache[_key] = _res
+            except Exception:
+                pass
+            return _res
         except Exception:
-            pass
-        
-        if random.random() < final_block_chance:
-            self.events.append({
-                'time': self.time, 
-                'period': self.period, 
-                'team': opp_team_name, 
-                'player': closest_defender, 
-                'event': 'Shot Blocked'
-            })
-            return True
-        
-        return False
+            return (None, None, 1.0, 1.0)
 
-    def _check_shot_blocking(self, defending_team, fatigue_factor):
-        """Legacy shot blocking method for compatibility"""
-        # Installed systems: passive-box teams sell out to block.
-        try:
-            _mm = self._systems_matchup or {}
-            _mh = defending_team == self.home_team.team_name
-            _block_mult = _mm.get("home_blocks" if _mh else "away_blocks", 1.0)
-        except Exception:
-            _block_mult = 1.0
-        if random.random() > 0.05 * _block_mult:  # Drastically reduced from 0.12 to 0.05 (only 5% block rate)
-            return False
-            
-        defenders = [p for p in self.on_ice[defending_team]['Defense'] if p]
-        if not defenders:
-            return False
-            
-        defender = random.choice(defenders)
-        block_skill = (
-            getattr(defender, 'shot_blocking', 10) * 0.5 +
-            getattr(defender, 'defensive_awareness', 10) * 0.3 +
-            getattr(defender, 'aggressiveness', 10) * 0.2
-        ) * fatigue_factor
-        # --- attribute composites (additive, bounded) ---
-        # Defensive-play composite on the blocker's skill before the
-        # >15 gate. Rails [0.94, 1.06].
-        try:
-            from attribute_composites import apply_amplifier as _ac_qsb2
-            block_skill = _ac_qsb2(block_skill, defender, "defensive_play",
-                                  sim=self, team=defending_team,
-                                  energy=fatigue_factor * 100)
-        except Exception:
-            pass
-        
-        if block_skill > 15:  # Made it harder to block (was 12, now 15)
-            self.events.append({
-                'time': self.time, 'period': self.period, 
-                'team': defending_team, 'player': defender, 
-                'event': 'Shot Blocked'
-            })
-            return True
-        return False
-    
     def _resolve_pass_event(self, passer, shooters, puck_team_name, opp_team_name, fatigue_factor):
         """Enhanced pass resolution"""
         if len(shooters) <= 1:

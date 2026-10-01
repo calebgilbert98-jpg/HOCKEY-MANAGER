@@ -29,6 +29,7 @@ the old behavior.
 
 import math
 import random
+from typing import NamedTuple
 
 MESH_VERSION = 1
 
@@ -971,12 +972,161 @@ def shot_block_prob(defender, shooter) -> float:
 # (A<B<C miss ordering, accuracy scaling) is the truthful part; the
 # absolute level is calibrated to the sim's attempt volume.
 #
+# D11 CONSOLIDATION (2026-09-30, per Muck: CONSOLIDATE, sequenced first
+# in the re-tune): the genuinely-differing block/miss formulas lived in
+# three places -- GameSim._check_shot_blocking/_check_shot_miss
+# (location-based, system/tactic/pressure-aware), quick_sim's legacy
+# _check_shot_blocking/_check_shot_blocking_coordinate (flat gates),
+# and these shared helpers (attribute battle + grade-aware miss).
+# There is now ONE decision: shot_fate(), composed of the shared arms
+# shot_block_prob() (with resolve_blocker) and shot_miss_prob().
+# GameSim calls it DIRECTLY; AdvGS calls approx_shot_fate(), the
+# speed-optimized approximation of this same formula (one decision,
+# two fidelities). All of GameSim's live situational modifiers fold in
+# as `situation` INPUTS -- none dropped (see SHOT_FATE_SITUATION_KEYS).
+#
 # CRITICAL INVARIANT: fate never changes P(goal|attempt). Goals are
 # decided at the attempt level by the conversion pipeline; fate only
 # decides whether a non-goal attempt is recorded as a save (on net) or
 # a miss/block (off net). Scoring volume is therefore preserved
 # exactly while the visible shot count becomes truthful. Both engines
 # consume this one decision (one decision, two fidelities).
+
+# Location lane availability (D11): GameSim's live location block table
+# (CREASE 0.4 ... wings 0.1), NORMALIZED to a mean of 1.0 over GameSim's
+# _determine_shot_location mix (weighted mean of the table = 0.200) so
+# the absolute level stays on Muck's approved ~8% block calibration
+# (2026-09-29) while the location STRUCTURE becomes honest: slot shots
+# meet more bodies in the lane, perimeter shots meet fewer.
+SHOT_BLOCK_LANE_MULT = {
+    "crease": 2.00,
+    "low_slot": 1.50,
+    "high_slot": 1.00,
+    "left_circle": 0.75,
+    "right_circle": 0.75,
+    "point": 1.25,
+    "left_wing": 0.50,
+    "right_wing": 0.50,
+    "behind_net": 0.50,
+}
+
+# Canonical situation-modifier keys for shot_block_prob(). Every engine
+# folds its live situational modifiers in as INPUTS under these keys
+# (each default 1.0) -- no live modifier is ever silently dropped by
+# the shared decision.
+SHOT_FATE_SITUATION_KEYS = (
+    "sys",        # defensive system (GameSim: shell 1.2 / forecheck 0.9)
+    "dz",         # DZ-coverage tactic (GameSim: collapse 1.25 / open 0.85)
+    "pressure",   # defensive pressure scalar
+    "tactics",    # installed-tactics "blocks" factor
+    "tendency",   # the blocker's archetype block tendency
+    "composite",  # defensive-play composite amplifier (bounded rails)
+    "fatigue",    # shift-fatigue multiplier (AdvGS live; GameSim treats
+                  # fatigue as a volume channel -> 1.0 here)
+)
+
+
+def _lane_mult(location) -> float:
+    """Lane-availability multiplier for a shot location. Accepts a
+    ShotLocation enum, a location-name string, or None (neutral 1.0).
+    Unknown locations -> 1.0. Never raises."""
+    try:
+        if location is None:
+            return 1.0
+        _k = getattr(location, "value", location)
+        return float(SHOT_BLOCK_LANE_MULT.get(str(_k).lower(), 1.0))
+    except Exception:
+        return 1.0
+
+
+def shot_block_battle(defender, shooter) -> float:
+    """The attribute lane battle (may be negative): the defender's lane
+    presence minus the shooter's lane-finding. Split-aware --
+    defensive_positioning (not the pre-split `positioning`) feeds
+    blocks, per Muck's attribute-split directive. Never raises."""
+    try:
+        _blk = (defensive_positioning(defender) * 0.50
+                + float(getattr(defender, "shot_blocking", 10)) * 0.50)
+        _sht = (float(getattr(shooter, "offensive_awareness", 10)) * 0.50
+                + float(getattr(shooter, "composure", 10)) * 0.50)
+        return _blk - _sht
+    except Exception:
+        return 0.0
+
+
+def resolve_blocker(defenders, weights=None):
+    """Resolve the best blocker from the defending unit, by attributes.
+
+    Score: shot_blocking 0.50 (commit) + defensive_positioning 0.30
+    (close the lane) + defensive_awareness 0.20 (read the release),
+    times the optional weight -- a callable defender->multiplier
+    (e.g. archetype block tendency x trait bonus) or a dict keyed by
+    defender. The CANDIDATE POOL is the caller's honest input: GameSim
+    passes its proximity-filtered skaters (nobody blocks a shot from
+    across the ice); AdvGS passes its D corps. Returns None when the
+    pool is empty. Never raises.
+    """
+    try:
+        _best, _best_s = None, None
+        for _d in defenders or ():
+            try:
+                _s = (float(getattr(_d, "shot_blocking", 10)) * 0.50
+                      + defensive_positioning(_d) * 0.30
+                      + float(getattr(_d, "defensive_awareness", 10)) * 0.20)
+                if weights is not None:
+                    _w = weights(_d) if callable(weights) else weights.get(_d)
+                    _s *= max(0.0, float(_w) if _w is not None else 1.0)
+            except Exception:
+                continue
+            if _best_s is None or _s > _best_s:
+                _best, _best_s = _d, _s
+        return _best
+    except Exception:
+        return None
+
+
+def shot_block_prob(defender, shooter, location=None, situation=None) -> float:
+    """Probability defender blocks the shot attempt (0-1). THE shared
+    block decision -- both engines consume it (GameSim directly, AdvGS
+    via its speed-optimized approximation of this same formula).
+
+    Defender: defensive_positioning 0.50 (be in the lane, split-aware)
+    + shot_blocking 0.50 (commit). Shooter: offensive_awareness 0.50
+    (find the lane) + composure 0.50 (get it through). Ties into
+    defensive_contest_mult (the per-shot conversion effect); this is
+    the discrete block event.
+
+    location: shot location -> lane-availability multiplier (GameSim's
+    live table, normalized to mean 1.0 so the absolute level stays on
+    the approved ~8% calibration).
+    situation: dict of situational multipliers (see
+    SHOT_FATE_SITUATION_KEYS) -- defensive system, DZ tactic,
+    pressure, installed tactics, tendency, composite, fatigue.
+
+    Base recalibrated 2026-09-29 (per Muck: shot-volume truthfulness):
+    the discrete block event targets ~8%. The sim generates ~38 attempts
+    (not NHL's 60), so the VISIBLE SOG (~29) is the truth target -- the
+    per-attempt block rate is calibrated to the sim's attempt volume,
+    while the grade-aware miss below carries the truthful structure
+    (clean looks rarely miss, perimeter prayers often do).
+
+    Cap 0.50 (GameSim's live cap, unified -- the old 0.30 shared cap
+    was calibrated for the location-blind version of this formula).
+    """
+    try:
+        _p = 0.08 + shot_block_battle(defender, shooter) * 0.004
+        _p *= _lane_mult(location)
+        if situation:
+            for _k in SHOT_FATE_SITUATION_KEYS:
+                try:
+                    _p *= float(situation.get(_k, 1.0))
+                except Exception:
+                    pass
+        return max(0.01, min(0.50, _p))
+    except Exception:
+        return 0.08
+
+
 SHOT_MISS_BY_GRADE = {
     # Grade-aware miss base: A (slot, clean) rarely misses; C (perimeter,
     # rushed) misses often. Scaled 2026-09-29 to land ~23% total cull
@@ -987,17 +1137,27 @@ SHOT_MISS_BY_GRADE = {
 }
 
 
-def shot_miss_prob(shooter, grade="B") -> float:
+def shot_miss_prob(shooter, grade="B", distance=None) -> float:
     """Probability a non-blocked attempt misses the net entirely.
 
     Grade-aware base (clean looks rarely miss) scaled by the shooter's
     accuracy+composure: elite finishers miss less, rushed depth
-    shooters miss more. Scale-agnostic (handles 1-20 and 1-100
-    attribute scales). Never raises.
+    shooters miss more. distance (feet, optional): GameSim's live
+    distance term, folded into the shared decision (D11) -- longer
+    shots miss more. The old quality-bucket modifier is subsumed by
+    the grade (grade IS the shared quality measure now).
+    Scale-agnostic (handles 1-20 and 1-100 attribute scales).
+    Never raises.
     """
     try:
         _g = str(grade or "B").upper()
         _base = float(SHOT_MISS_BY_GRADE.get(_g, 0.32))
+        if distance is not None:
+            # GameSim's live term: distance(feet) * 0.005, additive on
+            # the base before the accuracy scaling (same structure as
+            # the old (0.15 + d*0.005) * acc_factor, with the grade base
+            # replacing 0.15 and the grade replacing the quality bucket).
+            _base += max(0.0, float(distance)) * 0.005
         _acc = (_chance_attr(shooter, "shooting_accuracy", 50.0)
                 + _chance_attr(shooter, "composure", 50.0)) / 2.0
         # Scale-agnostic normalize to 0..1
@@ -1010,23 +1170,42 @@ def shot_miss_prob(shooter, grade="B") -> float:
         return 0.32
 
 
-def shot_fate(shooter, defender, grade="B") -> str:
-    """One shared decision: does the attempt get blocked, miss, or reach
-    the net? Returns 'blocked' | 'missed' | 'on_net'.
+class ShotFate(NamedTuple):
+    """Result of the one shared shot-fate decision."""
+    fate: str        # 'blocked' | 'missed' | 'on_net'
+    blocker: object  # the defender credited with the block, else None
 
-    Block rolls first (attribute-driven lane battle), then the
-    grade-aware miss. Both engines call this; the goal roll happens
-    independently at the attempt level in each engine. Never raises.
+
+def shot_fate(shooter, defenders=None, grade="B", location=None,
+              distance=None, situation=None, weights=None,
+              _rng=None) -> ShotFate:
+    """One shared decision: does the attempt get blocked, miss, or reach
+    the net? (D11, per Muck: CONSOLIDATE.)
+
+    Block rolls first: the best blocker is resolved from the defending
+    unit by attributes (resolve_blocker -- the candidate pool is the
+    caller's honest input), then the attribute lane battle rolls with
+    the location and situational inputs. Then the grade-aware miss
+    (with distance). Both engines consume this decision: GameSim calls
+    it directly; AdvGS calls its speed-optimized approximation of this
+    same formula (one decision, two fidelities). The goal roll happens
+    independently at the attempt level in each engine.
+
+    _rng: optional random.Random for seeded/paired use (testing).
+    Never raises.
     """
     try:
-        if defender is not None:
-            if random.random() < shot_block_prob(defender, shooter):
-                return "blocked"
-        if random.random() < shot_miss_prob(shooter, grade):
-            return "missed"
-        return "on_net"
+        _rand = _rng.random if _rng is not None else random.random
+        _blocker = resolve_blocker(defenders, weights) if defenders else None
+        if _blocker is not None:
+            if _rand() < shot_block_prob(_blocker, shooter,
+                                         location, situation):
+                return ShotFate("blocked", _blocker)
+        if _rand() < shot_miss_prob(shooter, grade, distance):
+            return ShotFate("missed", None)
+        return ShotFate("on_net", None)
     except Exception:
-        return "on_net"
+        return ShotFate("on_net", None)
 
 
 # ---------------------------------------------------------------------------

@@ -4782,10 +4782,80 @@ class GameSim:
         chance_grade = self._roll_chance_grade(
             shot_location, None, shooter, attacking_team, defending_team)
 
-        # Check for blocked shot first
-        blocking_outcome = self._check_shot_blocking(shooter, defending_team, shot_location)
-        if blocking_outcome['blocked']:
-            self._handle_blocked_shot(shooter, blocking_outcome['blocker'], attacking_team, defending_team)
+        # Check for blocked shot first -- D11 (2026-09-30, Muck: CONSOLIDATE):
+        # the ONE shared block decision (mesh_system.shot_block_prob with
+        # resolve_blocker). Candidate pool: the defending unit's on-ice
+        # skaters; proximity (3 nearest to the shooter) is GameSim's
+        # positional input -- nobody blocks a shot from across the ice.
+        # The shared layer resolves the best blocker by attributes x
+        # archetype tendency x trait bonus. Situational modifiers fold in
+        # as inputs, none dropped: defensive system, DZ-coverage tactic,
+        # defensive pressure, installed-tactics blocks factor, the
+        # blocker's archetype tendency, the defensive-play composite.
+        # (Note: DEFENSIVE_SHELL pairs sys 1.2 x pressure 0.8 = 0.96 and
+        # AGGRESSIVE_FORECHECK pairs 0.9 x 1.3 = 1.17 -- the two Stage-4
+        # systems were calibrated independently; preserved as-is, not
+        # "fixed": that is a tuning call, not consolidation.)
+        _blocked, _blocker = False, None
+        try:
+            from mesh_system import (resolve_blocker as _d11_rb,
+                                     shot_block_prob as _d11_sbp)
+            _d11_cands = [p for p in self._get_on_ice(defending_team)
+                          if p.primary_position != PlayerPosition.GOALIE]
+            if _d11_cands:
+                _d11_sp = self._ppos_get(shooter)
+                _d11_near = sorted(
+                    _d11_cands,
+                    key=lambda p: self._ppos_dist(_d11_sp,
+                                                  self._ppos_get(p)))[:3]
+                _d11_w = {}
+                for _d11_p in _d11_near:
+                    try:
+                        _d11_w[_d11_p] = (
+                            max(0.05, get_tendency(_d11_p, "block"))
+                            * _trait_bonus(_d11_p, "block_chance_mult"))
+                    except Exception:
+                        _d11_w[_d11_p] = 1.0
+                _blocker = _d11_rb(_d11_near, weights=_d11_w.get)
+                if _blocker is not None:
+                    _d11_sys = self.current_defensive_system
+                    _d11_sit = {
+                        "sys": (1.2 if _d11_sys == DefensiveSystem.DEFENSIVE_SHELL
+                                else (0.9 if _d11_sys == DefensiveSystem.AGGRESSIVE_FORECHECK
+                                      else 1.0)),
+                        "dz": {"collapse": 1.25, "positional": 1.0,
+                               "open": 0.85}.get(
+                            getattr(defending_team, "tactic_dz_coverage",
+                                    "positional"), 1.0),
+                        "pressure": self.defensive_pressure,
+                        "tendency": _d11_w.get(_blocker, 1.0),
+                    }
+                    try:
+                        import tactics as _d11_tx
+                        _d11_sit["tactics"] = _d11_tx.resolve_team_tactics(
+                            defending_team).get("blocks", 1.0)
+                    except Exception:
+                        pass
+                    try:
+                        from attribute_composites import (
+                            apply_amplifier as _d11_ac)
+                        # apply_amplifier is probability-independent
+                        # (returns the bounded composite multiplier).
+                        _d11_sit["composite"] = _d11_ac(
+                            1.0, _blocker, "defensive_play",
+                            sim=self, team=defending_team)
+                    except Exception:
+                        pass
+                    if random.random() < _d11_sbp(
+                            _blocker, shooter, location=shot_location,
+                            situation=_d11_sit):
+                        _blocked = True
+                        self._record_defensive_success(
+                            _blocker, DefensiveAction.SHOT_BLOCK)
+        except Exception:
+            _blocked, _blocker = False, None
+        if _blocked:
+            self._handle_blocked_shot(shooter, _blocker, attacking_team, defending_team)
             # Module 04: blocked attempts still count as shot attempts.
             self._analytics_record_shot(shooter, attacking_team,
                                         defending_team, shot_location,
@@ -4830,8 +4900,14 @@ class GameSim:
             defending_team, pressurer=pressurer,
             pressure_dist=pressure_dist)
 
-        # Check if shot misses the net
-        if self._check_shot_miss(shooter, shot_quality, distance):
+        # Check if shot misses the net -- D11 (2026-09-30, Muck:
+        # CONSOLIDATE): the ONE shared miss decision
+        # (mesh_system.shot_miss_prob). Grade-aware (clean looks rarely
+        # miss) with GameSim's live distance term folded in as an input;
+        # the old quality-bucket modifier is subsumed by the grade.
+        from mesh_system import shot_miss_prob as _d11_smp
+        if random.random() < _d11_smp(shooter, grade=chance_grade,
+                                      distance=distance):
             self._handle_missed_shot(shooter, attacking_team, shot_location, shot_type)
             self._record_chance_grade(shooter, chance_grade, False)
             return
@@ -4892,87 +4968,6 @@ class GameSim:
             ShotLocation.BEHIND_NET: 10
         }
         return distance_map.get(location, 30) + random.randint(-3, 3)
-
-    def _check_shot_blocking(self, shooter, defending_team, location):
-        """
-        Stage 4 Enhancement: Check if the shot gets blocked by a defending player with detailed tracking.
-        """
-        defending_skaters = [p for p in self._get_on_ice(defending_team) if p.primary_position != PlayerPosition.GOALIE]
-        
-        if not defending_skaters:
-            return {'blocked': False, 'blocker': None}
-        
-        # Higher chance of blocks from closer to goal
-        base_block_chance = {
-            ShotLocation.CREASE: 0.4,
-            ShotLocation.LOW_SLOT: 0.3,
-            ShotLocation.HIGH_SLOT: 0.2,
-            ShotLocation.LEFT_CIRCLE: 0.15,
-            ShotLocation.RIGHT_CIRCLE: 0.15,
-            ShotLocation.POINT: 0.25,
-            ShotLocation.LEFT_WING: 0.1,
-            ShotLocation.RIGHT_WING: 0.1
-        }.get(location, 0.1)
-        
-        # Apply defensive system modifier (Stage 4)
-        if self.current_defensive_system == DefensiveSystem.DEFENSIVE_SHELL:
-            base_block_chance *= 1.2
-        elif self.current_defensive_system == DefensiveSystem.AGGRESSIVE_FORECHECK:
-            base_block_chance *= 0.9
-        # E1 DZ coverage tactic: collapse packs the slot (more blocks),
-        # open is aggressive (fewer bodies in shooting lanes).
-        dz = getattr(defending_team, "tactic_dz_coverage", "positional")
-        base_block_chance *= {"collapse": 1.25, "positional": 1.0,
-                              "open": 0.85}.get(dz, 1.0)
-        
-        # Apply defensive pressure modifier (Stage 4)
-        base_block_chance *= self.defensive_pressure
-
-        # Installed systems: passive-box teams sell out to block, swarm
-        # teams chase and block less.
-        try:
-            import tactics as _txb
-            base_block_chance *= _txb.resolve_team_tactics(
-                defending_team).get("blocks", 1.0)
-        except Exception:
-            pass
-        
-        # Choose the blocker by weighted draw: attributes x archetype block
-        # tendency, so defensive D/grinders block most but not exclusively.
-        # Proximity: only nearby defenders can get in the lane.
-        best_blocker = self._weighted_skater_choice(
-            defending_skaters, "block", near=self._ppos_get(shooter))
-        if best_blocker is None:
-            return {'blocked': False, 'blocker': None}
-        
-        # Calculate block probability with Stage 4 enhancements
-        blocker_skill = (best_blocker.defensive_awareness + best_blocker.checking + best_blocker.anticipation + best_blocker.positioning) / 4
-        shooter_skill = (shooter.shooting_accuracy + shooter.shooting_power) / 2
-        
-        block_chance = base_block_chance * (blocker_skill / max(shooter_skill, 1))
-        # Archetype tendency: defensive defensemen and grinders sell out to
-        # block; snipers and offensive defensemen rarely do.
-        try:
-            block_chance *= get_tendency(best_blocker, "block")
-        except Exception:
-            pass
-        # --- attribute composites (additive, bounded) ---
-        # Defensive-play composite: the blocker's full defensive toolkit.
-        # Rails [0.94, 1.06]; applied before the 50% cap.
-        try:
-            from attribute_composites import apply_amplifier as _ac_blk
-            block_chance = _ac_blk(block_chance, best_blocker, "defensive_play",
-                                  sim=self, team=defending_team)
-        except Exception:
-            pass
-        block_chance = min(block_chance, 0.5)  # Cap at 50%
-        
-        if random.random() < block_chance:
-            # Record defensive play (Stage 4)
-            self._record_defensive_success(best_blocker, DefensiveAction.SHOT_BLOCK)
-            return {'blocked': True, 'blocker': best_blocker}
-        
-        return {'blocked': False, 'blocker': None}
 
     def _determine_shot_type(self, shooter, location, distance):
         """Determine the type of shot based on player attributes and situation."""
@@ -5336,29 +5331,6 @@ class GameSim:
                 _st[_gk] = _st.get(_gk, 0) + 1
         except Exception:
             pass
-
-    def _check_shot_miss(self, shooter, quality, distance):
-        """Check if shot misses the net entirely."""
-        accuracy = (shooter.shooting_accuracy + shooter.composure) / 2
-        
-        # Base miss chance
-        base_miss = 0.15
-        
-        # Adjust for distance
-        distance_penalty = distance * 0.005
-        
-        # Adjust for quality
-        quality_modifier = {"high": 0.7, "medium": 1.0, "low": 1.4}[quality]
-        
-        miss_chance = base_miss + distance_penalty
-        miss_chance *= quality_modifier
-        # Accuracy is on the 1-100 scale: rescale the original 1-20 intent
-        # (factor = 1 - accuracy_20/20) so better shooters miss less.
-        # At 75 accuracy the factor is 0.25; floored so elites still
-        # rarely (not never) miss. League-wide miss rate lands ~10%.
-        miss_chance *= max(0.05, 1.0 - accuracy / 100.0)
-
-        return random.random() < miss_chance
 
     def _weighted_random_choice(self, weights_dict):
         """Helper method to make weighted random choices."""
