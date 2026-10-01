@@ -2094,6 +2094,38 @@ class AdvancedGameSim:
         position_skill = (off_the_puck + anticipation + hockey_iq) / 3
         return 1.0 + (position_skill - 10) * 0.03
     
+    def _pp_forecheck_sustenance(self):
+        """Shared PP zone-sustenance for the WS4 zone hooks (fast fidelity).
+
+        Returns line_chemistry.pp_zone_sustenance for the on-ice 5-man PP
+        unit (0.75..1.25 from formation completeness), or 1.0 when no PP
+        is running. The same shared function the watched path calls on
+        its forecheck/keep-in/strip hooks -- one decision, two fidelities.
+        Never raises.
+        """
+        try:
+            _pp_tn = getattr(self, "pp_team", None)
+            if _pp_tn is None:
+                return 1.0
+            from line_chemistry import pp_zone_sustenance as _pzs_h
+            _onice = getattr(self, "on_ice", {}).get(_pp_tn, {}) or {}
+            _unit = []
+            for _slot, _pl in _onice.items():
+                if _slot == "Goalie":
+                    continue
+                # on_ice slots hold lists (Forwards/Defense), not players
+                if isinstance(_pl, (list, tuple)):
+                    _unit.extend([p for p in _pl if p is not None])
+                elif _pl is not None:
+                    _unit.append(_pl)
+            if not _unit:
+                return 1.0
+            _tm = (self.home_team
+                   if _pp_tn == self.home_team.team_name else self.away_team)
+            return float(_pzs_h(_unit, sim=self, team=_tm))
+        except Exception:
+            return 1.0
+
     def _determine_event_type(self, player, shooters, fatigue_factor, team=None,
                                 opp_team_name=None):
         """Determine what type of event occurs based on player attributes"""
@@ -2247,6 +2279,21 @@ class AdvancedGameSim:
                 if _unit_qs:
                     _tm_qs = self.home_team if _pp_tn == self.home_team.team_name else self.away_team
                     shot_prob *= _pzs_qs(_unit_qs, sim=self, team=_tm_qs)
+        except Exception:
+            pass
+
+        # WS4 H2 -- NZ forecheck strip (GameSim simulation.py:2957, fast
+        # fidelity): the 5-man PP hunts the puck in the neutral zone and
+        # strips re-entries, manufacturing 1v1 transition looks back the
+        # other way. A well-structured unit (sustenance > 1) creates more
+        # deke/rush chances; a malformed one fewer. Event-mix channel --
+        # the scenario battle on resolution (WS4 gap 1) decides the 1v1,
+        # this only decides how often the forecheck earns the look.
+        try:
+            _pp_tn2 = getattr(self, "pp_team", None)
+            if (_pp_tn2 is not None and team is not None
+                    and getattr(team, "team_name", "") == _pp_tn2):
+                deke_prob *= self._pp_forecheck_sustenance()
         except Exception:
             pass
 
@@ -3002,7 +3049,8 @@ class AdvancedGameSim:
         self._last_chance_grade = _grade
         return shot_chance
 
-    def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters):
+    def _resolve_shot_event(self, shooter, goalie, puck_team_name, opp_team_name, fatigue_factor, pressure_modifier, position_factor, shooters,
+                            sh_rush_sus=None):
         """Enhanced shot resolution using multiple attributes"""
         # Determine shot type based on position and situation
         wristshot_val = getattr(shooter, 'wristshot', 10)
@@ -3399,6 +3447,38 @@ class AdvancedGameSim:
         # (5v3's 3.0x has no quick-sim state to key off; accepted gap.)
         if getattr(self, "pp_team", None) == puck_team_name:
             shot_chance *= 1.6
+        # WS4 H1 -- zone-entry quality (GameSim _determine_zone_entry_type,
+        # simulation.py:3051, fast fidelity): a structured PP carries the
+        # puck in with control (clean looks off the entry); a malformed
+        # unit dumps it in and grinds (worse looks). The shared
+        # pp_zone_sustenance differentiates the unit's entries --
+        # conversion channel (the volume half already lives on the
+        # event-type gate above). Bounded [0.875, 1.125]; additive.
+        try:
+            if getattr(self, "pp_team", None) == puck_team_name:
+                _entry_q = 1.0 + 0.5 * (
+                    self._pp_forecheck_sustenance() - 1.0)
+                if _entry_q != 1.0:
+                    shot_chance *= _entry_q
+        except Exception:
+            pass
+        # WS4 H4 -- 5v4 rush defense (GameSim simulation.py:3173, fast
+        # fidelity): the PP covers the ice with five, so the shorthanded
+        # rush meets structure -- def_roll *= 1.0 + 0.42*(sus-0.68) on the
+        # watched path. No defender roll exists in this engine's shot
+        # resolution, so the same shape suppresses the chance directly
+        # (direction-identical: better structure -> worse SH look).
+        # Only on SH-rush chances (sh_rush_sus set by the strip-back
+        # branch); every other caller is untouched.
+        try:
+            if (sh_rush_sus is not None
+                    and getattr(self, "pp_team", None) is not None
+                    and puck_team_name == getattr(self, "pk_team", None)):
+                _rush_d = 1.0 + 0.42 * (float(sh_rush_sus) - 0.68)
+                if _rush_d != 1.0 and _rush_d > 0:
+                    shot_chance *= 1.0 / _rush_d
+        except Exception:
+            pass
         shot_chance = self._apply_chance_grade(
             shot_chance, shooter, goalie, shot_type, puck_team_name,
             opp_team_name, _contest, _screened_now, shooters)
@@ -4015,7 +4095,56 @@ class AdvancedGameSim:
             pass
         
         pass_success = pass_skill > defense_skill or random.random() < 0.7
-        
+
+        # WS4 H3 -- forecheck strip-back (GameSim simulation.py:3025 DZ /
+        # 8822 OZ swarm, fast fidelity): when the PP coughs the puck up,
+        # the 5-man forecheck hunts it -- numbers + structure tell. A
+        # well-drilled unit strips the interceptor and goes back to work;
+        # a malformed one gets burned the other way (shorthanded rush).
+        # GameSim's strip shape: (hunter / (hunter + carrier)) * 1.08 *
+        # the shared sustenance. EV passes are untouched.
+        _sh_rush = False
+        try:
+            if (not pass_success and defender is not None
+                    and getattr(self, "pp_team", None) == puck_team_name):
+                _sus3 = self._pp_forecheck_sustenance()
+                _pp_onice3 = (self.on_ice.get(puck_team_name, {}) or {})
+                _pp_unit3 = [p for p in (
+                    (_pp_onice3.get("Forwards", []) or [])
+                    + (_pp_onice3.get("Defense", []) or [])) if p]
+                if _pp_unit3:
+                    _hunter3 = max(
+                        _pp_unit3,
+                        key=lambda pl: (float(getattr(pl, "checking", 10)
+                                             or 10)
+                                        + float(getattr(pl, "anticipation",
+                                                        10) or 10)))
+                    _hs3 = (float(getattr(_hunter3, "checking", 10) or 10)
+                            + float(getattr(_hunter3, "anticipation", 10)
+                                    or 10)
+                            + float(getattr(_hunter3, "skating", 10) or 10)
+                            ) / 3.0
+                    _cs3 = (float(getattr(defender, "puck_handling", 10)
+                                  or 10)
+                            + float(getattr(defender, "composure", 10)
+                                    or 10)
+                            + float(getattr(defender, "skating", 10) or 10)
+                            ) / 3.0
+                    _strip3 = ((_hs3 / max(1.0, _hs3 + _cs3)) * 1.08
+                               * _sus3)
+                    if random.random() < _strip3:
+                        # Stripped back -- the PP retains, play continues.
+                        pass_success = True
+                    else:
+                        # Burned -- the interceptor walks in shorthanded.
+                        _sh_rush = True
+                    _wh3 = getattr(self, "_ws4_scenario_hits", None)
+                    if _wh3 is None:
+                        _wh3 = self._ws4_scenario_hits = {}
+                    _wh3["pp_strip_back"] = _wh3.get("pp_strip_back", 0) + 1
+        except Exception:
+            pass
+
         # Log pass event
         puck_start = (passer.x, passer.y)
         puck_end = (receiver.x, receiver.y)
@@ -4043,24 +4172,107 @@ class AdvancedGameSim:
         else:
             if defender:
                 self.puck_x, self.puck_y = defender.x, defender.y
+
+        # WS4 H3 (cont.): the strip-back lost -- the interceptor's
+        # shorthanded rush resolves immediately, before the next event.
+        if _sh_rush and defender is not None:
+            try:
+                self._resolve_sh_rush_event(defender, puck_team_name,
+                                             opp_team_name,
+                                             self._pp_forecheck_sustenance())
+            except Exception:
+                pass
     
+    def _resolve_sh_rush_event(self, rusher, pp_team_name, pk_team_name,
+                               sus):
+        """Shorthanded rush off a burned PP pass (WS4 H3/H4).
+
+        The forecheck's strip-back lost, so the interceptor walks in
+        alone on the PP's goalie. Resolves through the standard shot
+        path (grades, goalie, impacts all apply); the PP's structure
+        suppresses the look via sh_rush_sus (WS4 H4 -- GameSim's
+        1.0 + 0.42*(sus-0.68) rush-defense shape). The PP continues
+        afterward (no goal was scored by the PP team).
+        """
+        try:
+            _pp_goalie = (self.on_ice.get(pp_team_name, {}) or {}).get(
+                "Goalie")
+            _pk_onice = self.on_ice.get(pk_team_name, {}) or {}
+            _pk_skaters = [p for p in (
+                (_pk_onice.get("Forwards", []) or [])
+                + (_pk_onice.get("Defense", []) or [])) if p]
+            if rusher is None:
+                return
+            _ff = self._calculate_fatigue_factor(rusher, pk_team_name)
+            _pm = self._calculate_pressure_modifier(rusher)
+            _pf = self._calculate_position_factor(rusher, pk_team_name)
+            self.events.append({
+                'time': self.time, 'period': self.period,
+                'team': pk_team_name, 'player': rusher,
+                'event': 'Shorthanded Rush'})
+            self._resolve_shot_event(rusher, _pp_goalie, pk_team_name,
+                                     pp_team_name, _ff, _pm, _pf,
+                                     _pk_skaters, sh_rush_sus=sus)
+        except Exception:
+            pass
+
     def _resolve_deke_event(self, deker, puck_team_name, fatigue_factor):
-        """Resolve deke attempt"""
+        """Resolve deke attempt -- the 1v1 rush battle, fast fidelity.
+
+        The deker takes on the NEAREST checker (not a random defender
+        across the ice), exactly the battle GameSim runs in
+        _determine_next_event. The shared rush_chance scenario
+        (scenario_composites) resolves it -- skating / chance_creation /
+        finishing vs defensive_play / goalie_save -- REPLACING the old
+        skating single-composite hook (§6 rule 2: the scenario already
+        contains those composites; never stack).
+        """
         deke_skill = (
             getattr(deker, 'stickhandling', 10) * 0.4 +
             getattr(deker, 'agility', 10) * 0.3 +
             getattr(deker, 'anticipation', 10) * 0.3
         ) * fatigue_factor
-        # --- attribute composites (additive, bounded) ---
-        # Skating composite on deke success. Rails [0.95, 1.05].
+        # --- rush_chance scenario (shared battle, 2026-10-01 WS4) ---
+        # One decision, two fidelities: the same apply_scenario call
+        # shape GameSim uses (attacker-side player vs defender-side
+        # player, sim + team context). The battle multiplies the deke
+        # roll inside the scenario's rails -- no local reimplementation.
         try:
-            from attribute_composites import apply_amplifier as _ac_deke
-            deke_skill = _ac_deke(deke_skill, deker, "skating", sim=self,
-                                 team=puck_team_name,
-                                 energy=fatigue_factor * 100)
+            from scenario_composites import apply_scenario as _asc_deke
+            _opp_deke = (self.away_team
+                         if puck_team_name == self.home_team.team_name
+                         else self.home_team)
+            _dskaters = [p for p in (
+                (self.on_ice.get(_opp_deke.team_name, {}) or {})
+                .get("Forwards", []) or []) if p]
+            _dskaters += [p for p in (
+                (self.on_ice.get(_opp_deke.team_name, {}) or {})
+                .get("Defense", []) or []) if p]
+            _dpos0 = self.coordinate_engine.player_positions.get(
+                getattr(deker, "id", None), (100, 42.5))
+
+            def _ddist(_d):
+                try:
+                    _pp = self.coordinate_engine.player_positions.get(
+                        getattr(_d, "id", None), (100, 42.5))
+                    return ((_pp[0] - _dpos0[0]) ** 2
+                            + (_pp[1] - _dpos0[1]) ** 2)
+                except Exception:
+                    return 1e18
+
+            _near = min(_dskaters, key=_ddist, default=None)
+            deke_skill = _asc_deke(
+                deke_skill, [deker],
+                [_near] if _near is not None else [],
+                "rush_chance", sim=self,
+                off_team=puck_team_name, def_team=_opp_deke.team_name)
+            _wh = getattr(self, "_ws4_scenario_hits", None)
+            if _wh is None:
+                _wh = self._ws4_scenario_hits = {}
+            _wh["rush_chance"] = _wh.get("rush_chance", 0) + 1
         except Exception:
             pass
-        
+
         if deke_skill > 12:
             self.events.append({
                 'time': self.time, 'period': self.period, 
@@ -4179,6 +4391,35 @@ class AdvancedGameSim:
             # D discount + sniper tilt still apply (a D deflecting his own
             # point shot doesn't get forward conversion)
             goal_chance *= _dpsd(deflector) * _aft(deflector)
+            # --- netfront_scramble scenario (shared battle, 2026-10-01 WS4)
+            # ---
+            # The tip/deflection converts through the netfront_scramble
+            # battle -- forward vs (defense + goalie) combined, exactly as
+            # GameSim resolves TIP_IN/DEFLECTION/REBOUND shots in its main
+            # shot resolution. Same apply_scenario call shape (shooter vs
+            # goalie + the spot-battle defender). EV only, never on the PP
+            # and never into an empty net -- mirrors the watched call-site
+            # gating. One scenario per event; the spot-win above is the
+            # chance-earning gate, this is the conversion battle.
+            try:
+                if self.pp_team is None and goalie is not None:
+                    from scenario_composites import (
+                        apply_scenario as _asc_nf)
+                    _dside_nf = [goalie]
+                    if _defender is not None:
+                        _dside_nf.append(_defender)
+                    goal_chance = _asc_nf(
+                        goal_chance, [deflector], _dside_nf,
+                        "netfront_scramble", sim=self,
+                        off_team=puck_team_name,
+                        def_team=opp_team_name)
+                    _wh2 = getattr(self, "_ws4_scenario_hits", None)
+                    if _wh2 is None:
+                        _wh2 = self._ws4_scenario_hits = {}
+                    _wh2["netfront_scramble"] = _wh2.get(
+                        "netfront_scramble", 0) + 1
+            except Exception:
+                pass
 
             if random.random() < goal_chance:
                 self.score[puck_team_name] += 1
