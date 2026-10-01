@@ -1740,14 +1740,17 @@ class AdvancedGameSim:
             if self._pull_eligible(team, team.team_name):
                 # RC3 parity (2026-10-01): GameSim pulls only with
                 # possession in the OZ (NZ for the aggressive coach, DZ
-                # never). AdvGS has no possession/zone state, so the
+                # never). AdvGS has no possession/zone state; the
                 # fast-fidelity approximation is a per-shift opportunity
-                # roll: 0.5 (has the puck -- AdvGS's own puck model) x 0.5
-                # (in the OZ while pressing) = 0.25; the aggressive coach
-                # also takes NZ gambles (0.5 x 0.75 = 0.375). The style
-                # gate is the shared goalie_pull.pull_style decision. A
-                # failed roll tries again next shift -- the pull waits for
-                # its opportunity instead of firing at the window's edge.
+                # roll. A shift holds several puck-events, so P(an OZ
+                # possession arises during the shift) is high: 0.65 for
+                # balanced/conservative (OZ only), 0.80 for aggressive
+                # (NZ gambles count). The style gate is the shared
+                # goalie_pull.pull_style decision. A failed roll tries
+                # again next shift -- the pull waits for its opportunity
+                # instead of firing at the window's edge, but with a
+                # 120s window the wait is short (GameSim pulls within
+                # seconds of eligibility on a per-tick check).
                 _pstyle = "balanced"
                 try:
                     from goalie_pull import (pull_style as _pstyle_f,
@@ -1757,8 +1760,8 @@ class AdvancedGameSim:
                                if isinstance(_ps, dict) else str(_ps))
                 except Exception:
                     pass
-                _zone_p = 0.75 if _pstyle == "aggressive" else 0.5
-                if random.random() >= 0.5 * _zone_p:
+                _opp_p = 0.80 if _pstyle == "aggressive" else 0.65
+                if random.random() >= _opp_p:
                     continue
                 _tn = team.team_name
                 self._pull_goalie(_tn)
@@ -3675,13 +3678,15 @@ class AdvancedGameSim:
         # reality of an EN chance -- GameSim's EN fires on a turnover,
         # usually in the pressing team's OZ (the shooting team's DZ).
         # Roll the zone from the turnover distribution instead of reading
-        # stale coordinates: DZ 0.70 / NZ 0.25 / OZ-deep 0.05. Small
-        # impact, but the direction matches GameSim (most EN chances are
-        # long-range).
+        # stale coordinates. GameSim rolls per turnover; AdvGS rolls per
+        # shot (rarer), so the mix is weighted toward higher-probability
+        # zones to compensate: DZ 0.60 / NZ 0.30 / OZ-deep 0.10, expected
+        # ~0.08 per EN shot, targeting ~0.08 EN/g (NHL strategic-pull
+        # rate; the phantom delayed-penalty EN is fixed by RC2).
         _en_zone_roll = random.random()
-        if _en_zone_roll < 0.70:
+        if _en_zone_roll < 0.60:
             _en_prob = 0.03
-        elif _en_zone_roll < 0.95:
+        elif _en_zone_roll < 0.90:
             _en_prob = 0.10
         else:
             _en_prob = 0.30
