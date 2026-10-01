@@ -873,17 +873,20 @@ def _find_bidders(app, league, listing, today, ramp):
 # market-layer overlay only.
 # ---------------------------------------------------------------------------
 def _is_headliner(player):
-    """A Quinn Hughes-caliber piece: Very good+ tier, or Good+ at age <= 26.
+    """A Quinn Hughes-caliber piece: Generational/Elite at any age, or a
+    Very good piece at age <= 26.
 
-    Tier-based (Muck 2026-10-01): the old 85+ / 83+-young cutoffs become
-    tier reads -- the same gauge the human sees on the trade screen.
+    Tier-based via the canonical attribute_composites API (talent-tiers).
+    Thresholds from Wave B D43 (verified): Very good at 30 is not a
+    headliner; Good never is, even young. The package overlay demands a
+    real star, not just a good player.
     """
     try:
         from attribute_composites import talent_tier_for_player as _ttf_h
-        from attribute_composites import tier_index as _tix_h
-        tidx = _tix_h(_ttf_h(player))
+        tl = _ttf_h(player)
         age = getattr(player, "age", 99)
-        return tidx <= 2 or (age <= HEADLINER_YOUNG_AGE and tidx <= 3)
+        return tl in ("Generational", "Elite") or \
+            (tl == "Very good" and age <= HEADLINER_YOUNG_AGE)
     except Exception:
         return False
 
