@@ -5583,6 +5583,19 @@ class GameSim:
         # windows for breakouts; stars stay at the envelope max. Applied
         # to the final goal probability, after all amplifiers.
         # League max unchanged; no caps, no dampers -- pure talent.
+        # -- Impact scaling (additive): apply the classified tier BEFORE the
+        # personal clamp (matches quick_sim ordering -- one decision, two
+        # fidelities). Big shots beat goalies cleaner; tired ones are easier.
+        # Applied before the clamp so the clamp bounds the final result.
+        try:
+            _seff = _imp.shot_effects(shot_impact)
+            _sm = _seff["save_prob_mult"]
+            if _sm != 1.0:
+                _gp = (1.0 - adjusted_save_prob) / _sm
+                adjusted_save_prob = 1.0 - min(0.98, max(0.0, _gp))
+        except Exception:
+            pass
+
         try:
             from mesh_system import personal_grade_ceiling as _pgc3
             from mesh_system import ceiling_scenario_mult as _csm3
@@ -5605,18 +5618,6 @@ class GameSim:
                 adjusted_save_prob = 1.0 - _ghi3
             elif _gp3 < _glo3:
                 adjusted_save_prob = 1.0 - _glo3
-        except Exception:
-            pass
-
-        # -- Impact scaling (additive): apply the classified tier on top
-        # of the existing math, exactly like the scoring-level preference
-        # above. Big shots beat goalies cleaner; tired ones are easier.
-        try:
-            _seff = _imp.shot_effects(shot_impact)
-            _sm = _seff["save_prob_mult"]
-            if _sm != 1.0:
-                _gp = (1.0 - adjusted_save_prob) / _sm
-                adjusted_save_prob = 1.0 - min(0.98, max(0.0, _gp))
         except Exception:
             pass
         
