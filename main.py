@@ -2808,6 +2808,25 @@ class HockeyManagerGUI(tk.Tk):
                 self.quit()
                 return
             
+    def get_live_cap(self) -> int:
+        """Current league salary cap, delegated to the game manager.
+
+        Added 2026-10-01 (playthrough BUG-CAP-001): handle_contract_offer
+        (:19307), update_finances_panel (:5058) and the trade-value helper
+        (:16277) called self.get_live_cap() on the GUI, but the method only
+        existed on GameManager (:219) -> AttributeError crash on live UFA
+        negotiation submit. Same source as GameManager.get_live_cap; falls
+        back to SALARY_CAP when the manager is unavailable.
+        """
+        try:
+            fn = getattr(getattr(self, "game_manager", None),
+                         "get_live_cap", None)
+            if callable(fn):
+                return int(fn())
+        except Exception:
+            pass
+        return SALARY_CAP
+
     def _rebuild_news_log_from_stories(self):
         """Rebuild the GUI news feed from the canonical news_stories list.
 
