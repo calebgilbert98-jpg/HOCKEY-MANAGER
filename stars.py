@@ -132,6 +132,7 @@ def select_three_stars(game_result: Dict[str, Any],
             shutout = allowed == 0 and saves > 0
             score = saves * 0.12 + (6.0 if shutout else 0.0) \
                 + (2.0 if won else 0.0)
+            clutch = 0  # goalies don't score OT winners; keeps ranked.append safe
             line = f"{saves} saves" + (" (shutout)" if shutout else "")
         else:
             clutch = 1 if getattr(p, "id", pid) == ot_id else 0
