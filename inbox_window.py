@@ -973,6 +973,30 @@ class InboxView(ctk.CTkFrame):
                 self._iwrap(f"\u201C{opt.get('text', '')}\u201D",
                             size=10, dim=True, padx=20)
 
+        # ---- Coach's instruction (D1) ----
+        self._action_section("COACH'S INSTRUCTION")
+        instr_options = data.get("instruction_options") or []
+        instr_chosen = data.get("instruction_chosen")
+        if instr_chosen is not None:
+            chosen_opt = next(
+                (o for o in instr_options if o.get("id") == instr_chosen),
+                {})
+            self._iwrap(f"\u2713 \u201C{chosen_opt.get('label', '')}\u201D",
+                        size=11, pady=(4, 2))
+        else:
+            self._iwrap("The bench's marching orders for tonight:",
+                        size=11, dim=True, pady=(4, 2))
+            for opt in instr_options:
+                oid = opt.get("id")
+                self._secondary_button(
+                    self.interactive_frame,
+                    text=str(opt.get("label", "")),
+                    command=lambda oid=oid, m=message:
+                        self._on_bundle_instruction(m, oid)
+                ).pack(anchor='w', padx=14, pady=2)
+                self._iwrap(f"\u201C{opt.get('text', '')}\u201D",
+                            size=10, dim=True, padx=20)
+
         # ---- Watch / Quick ----
         self._action_section("HOW TO PLAY TONIGHT")
         btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
@@ -1461,6 +1485,13 @@ class InboxView(ctk.CTkFrame):
     def _on_bundle_team_talk(self, message, oi):
         try:
             self.app._answer_bundle_team_talk(message, oi)
+        except Exception:
+            pass
+        self._show_interactive_action(message)
+
+    def _on_bundle_instruction(self, message, opt_id):
+        try:
+            self.app._answer_bundle_instruction(message, opt_id)
         except Exception:
             pass
         self._show_interactive_action(message)

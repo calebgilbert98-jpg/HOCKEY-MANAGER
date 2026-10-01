@@ -11326,9 +11326,12 @@ class HockeyManagerGUI(tk.Tk):
             _bundle_res = getattr(self, '_game_day_resolution', None)
             _bundle_active = (_bundle_res is not None
                               and _bundle_res.get("date") == self.current_date)
+            _bundle_instruction = None  # D1: only the bundle carries one
             if _bundle_active:
                 use_game_viewer = bool(_bundle_res.get("watch"))
                 _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
+                # D1: the user's explicit coach instruction from the bundle.
+                _bundle_instruction = _bundle_res.get("instruction")
                 self._game_day_resolution = None  # consume once
             elif getattr(self, '_bulk_simming', False):
                 use_game_viewer = False
@@ -11359,7 +11362,8 @@ class HockeyManagerGUI(tk.Tk):
                 # Modern visual play-by-play (rink + live player bubbles).
                 # Modal: returns the standard 6-tuple once watched to the end.
                 result = self._simulate_game_with_pbp_visual(
-                    home_team, away_team, outdoor=_outdoor_info)
+                    home_team, away_team, outdoor=_outdoor_info,
+                    coach_instruction=_bundle_instruction)
                 winner, loser, scores, events, notable_events, sim_engine = result
                 # GameSim already updated player season stats itself; the
                 # event-based stat pass below must be skipped to avoid
@@ -11468,6 +11472,17 @@ class HockeyManagerGUI(tk.Tk):
                     league=getattr(self, "league", None))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
+                # D1: the user's explicit coach instruction from the
+                # game-day bundle -- uniform channel, inert on the quick
+                # path (no hit classifier), but accepted for parity.
+                # "none" is the explicit no-instruction call: nothing to set.
+                if (_bundle_instruction and _bundle_instruction != "none"
+                        and self.user_team is not None):
+                    try:
+                        sim_engine.set_coach_instruction(
+                            self.user_team.team_name, _bundle_instruction)
+                    except Exception:
+                        pass
                 # Pregame ceremony (if one is queued): electric building via
                 # the atmosphere flag above, plus the room's one-game bump.
                 try:
@@ -14021,7 +14036,7 @@ class HockeyManagerGUI(tk.Tk):
         return winner, loser, scores, events, notable_events, sim_engine
 
     def _simulate_game_with_pbp_visual(self, home_team, away_team,
-                                       outdoor=None):
+                                       outdoor=None, coach_instruction=None):
         """Run the modern visual play-by-play window modally for a user game.
 
         Opens the live PBP viewer (rink + player bubbles driven by real sim
@@ -14029,6 +14044,9 @@ class HockeyManagerGUI(tk.Tk):
         the final whistle and the window is closed. Returns the standard
         6-tuple (winner, loser, scores, events, notable_events, sim_engine)
         so the result processes exactly like any other sim.
+
+        D1: coach_instruction is the user's explicit game-day call,
+        forwarded to open_pbp_window (applied via the standard channel).
         """
         from pbp_visual_sim import open_pbp_window
 
@@ -14101,7 +14119,8 @@ class HockeyManagerGUI(tk.Tk):
                               rivalries=getattr(getattr(self, "league", None),
                                                 "rivalries", []),
                               user_team=getattr(self, "user_team", None),
-                              outdoor=outdoor)
+                              outdoor=outdoor,
+                              coach_instruction=coach_instruction)
         win_ref['win'] = win
         # Prevent closing before the sim finishes: the result is needed below.
         # (Re-enabled by _on_done when game_end plays.)
@@ -17402,6 +17421,22 @@ class HockeyManagerGUI(tk.Tk):
                 "talk_context": talk_ctx,
                 "talk_chosen": None,
                 "talk_boost": 1.0,
+                # D1: coach's instruction. The engine understands
+                # "play_harder" (heavier, more physical); "none" = the user
+                # explicitly wants no instruction (distinct from None =
+                # unchosen, where the AI fill may still act). The user's
+                # call always wins over the AI fill
+                # (simulation._ai_coach_instructions).
+                "instruction_options": [
+                    {"id": "play_harder",
+                     "label": "🔥 Demand more: play harder",
+                     "text": "The bench wants a heavier, more physical "
+                             "sixty minutes."},
+                    {"id": "none",
+                     "label": "🧊 No special instruction",
+                     "text": "Let the game come to us."},
+                ],
+                "instruction_chosen": None,
             })
 
     def _maybe_open_game_day_bundle(self, todays_games) -> bool:
@@ -17457,17 +17492,36 @@ class HockeyManagerGUI(tk.Tk):
             print(f"Bundle team talk error (non-fatal): {e}")
             return ""
 
+    def _answer_bundle_instruction(self, message, opt_id) -> None:
+        """Inbox callback: the coach's instruction for tonight (D1).
+
+        Stored on the bundle; applied to the sim at game construction
+        (watch: open_pbp_window; quick: AdvancedGameSim). Explicit user
+        choice -- the AI fill never overwrites it.
+        """
+        try:
+            data = message.action_data or {}
+            valid = {o.get("id") for o in (data.get("instruction_options")
+                                           or [])}
+            data["instruction_chosen"] = (opt_id if opt_id in valid
+                                          else None)
+        except Exception as e:
+            print(f"Bundle instruction error (non-fatal): {e}")
+
     def _resolve_game_day(self, watch: bool):
         """Inbox callback: Watch Live / Quick Sim picked. Close the inbox
         and run the day with the bundle's collected choices."""
         try:
             msg = self._find_game_day_bundle(self.current_date)
             talk_boost = 1.0
+            instruction = None
             if msg is not None:
                 talk_boost = float((msg.action_data or {}).get("talk_boost", 1.0) or 1.0)
+                instruction = (msg.action_data or {}).get("instruction_chosen")
                 msg.action_done = True
             self._game_day_resolution = {
                 "watch": bool(watch), "talk_boost": talk_boost,
+                "instruction": instruction,
                 "date": self.current_date,
             }
             try:

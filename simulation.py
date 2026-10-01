@@ -674,6 +674,12 @@ class GameSim:
         # Pre-game punishment orders need score/period fields set first.
         self._init_situations()
         self._evaluate_punishment_orders()
+        # D1: AI coaches set their own instructions pregame (the user's
+        # explicit game-day call always wins -- see _ai_coach_instructions).
+        try:
+            self._ai_coach_instructions()
+        except Exception:
+            pass
         # Hostile homecomings: first game back in the old barn after a
         # perceived betrayal. The building is rowdy -- crowd energy and mood
         # carry it (the designed channel: mood moves finishing), and the
@@ -2295,6 +2301,13 @@ class GameSim:
             if p in (1, 2):
                 # Coaches who own the whiteboard adjust between periods.
                 self._ai_tactics_intermission()
+                # D1: instructions get a second look between periods --
+                # a demanding coach now trailing (or no longer chasing)
+                # adjusts the ask, announced on the feed.
+                try:
+                    self._ai_coach_instructions()
+                except Exception:
+                    pass
                 # W3: intermission breather -- stamina-scaled energy recovery.
                 try:
                     self._apply_intermission_recovery()
@@ -7180,14 +7193,21 @@ class GameSim:
         """Set a coach instruction for a team (e.g. "play_harder").
 
         Consumed by the impact-tier classifiers. Pass None to clear.
+        Explicit sets (game-day bundle / team talk) always win over the
+        AI fill below -- provenance is tracked so the AI never
+        overwrites a human call.
         """
         try:
             if not hasattr(self, "_coach_instructions"):
                 self._coach_instructions = {}
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
             if instruction:
                 self._coach_instructions[team_name] = instruction
+                self._coach_instruction_source[team_name] = "explicit"
             else:
                 self._coach_instructions.pop(team_name, None)
+                self._coach_instruction_source.pop(team_name, None)
         except Exception:
             pass
 
@@ -7197,6 +7217,78 @@ class GameSim:
                 getattr(team, "team_name", None))
         except Exception:
             return None
+
+    # -- D1: AI coach instructions (additive) ------------------------------
+    def _ai_instruction_for(self, team, coach):
+        """The instruction an AI coach would set for himself right now.
+
+        Mirrors the derived fallback in impact_system._coach_play_harder
+        (a demanding coach trailing late demands more): the only delta
+        is derived 0.7 -> explicit 1.0 intensity. Returns "play_harder"
+        or None. Never touches finishing or grades -- the instruction
+        channel only nudges the hit-impact distribution.
+        """
+        try:
+            diff = self.home_score - self.away_score
+            if team is not self.home_team:
+                diff = -diff
+            period = int(getattr(self, "period", 1) or 1)
+            if coach is None:
+                return None
+            discipline = float(getattr(coach, "discipline", 10) or 10)
+            motivating = float(getattr(coach, "motivating", 10) or 10)
+            if discipline >= 14 and motivating >= 13:
+                if period >= 3 and diff < 0:
+                    return "play_harder"
+        except Exception:
+            pass
+        return None
+
+    def _ai_coach_instructions(self):
+        """D1: AI coaches set their own instructions.
+
+        Fills in an instruction for teams that don't have one; a team
+        with an explicit instruction (the user's game-day call, or an
+        AI call from an earlier stoppage) keeps it -- explicit always
+        wins. Called pregame and at each intermission (beside
+        _ai_tactics_intermission); changes are announced on the
+        broadcast feed.
+        """
+        try:
+            if not hasattr(self, "_coach_instruction_source"):
+                self._coach_instruction_source = {}
+            pairs = ((self.home_team, getattr(self, "_home_coach", None)),
+                     (self.away_team, getattr(self, "_away_coach", None)))
+            for team, coach in pairs:
+                if team is None:
+                    continue
+                tname = getattr(team, "team_name", "") or ""
+                if not tname:
+                    continue
+                if self._coach_instruction_source.get(tname) == "explicit":
+                    continue  # the human call wins, always
+                want = self._ai_instruction_for(team, coach)
+                have = self._coach_instructions.get(tname)
+                if want == have:
+                    continue
+                if want:
+                    self._coach_instructions[tname] = want
+                    self._coach_instruction_source[tname] = "ai"
+                    line = (f"{tname}: the coach is demanding more -- "
+                            f"{want.replace('_', ' ')}.")
+                else:
+                    self._coach_instructions.pop(tname, None)
+                    self._coach_instruction_source.pop(tname, None)
+                    line = (f"{tname}: the coach calls the dogs off -- "
+                            f"back to even keel.")
+                self._log_event(line, "COACH_INSTRUCTION")
+                try:
+                    self._emit_pbp("coach_instruction", team=tname,
+                                   instruction=want or "none", text=line)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _live_tension(self):
         return min(100.0, self._tension_base + self._live_heat)

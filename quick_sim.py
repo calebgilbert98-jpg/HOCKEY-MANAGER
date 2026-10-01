@@ -643,6 +643,31 @@ class AdvancedGameSim:
         """FM-style: apply a team-talk/morale multiplier to a team's scoring."""
         self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
 
+    # -- D1: coach-instruction channel (uniform with GameSim) ------------
+    # AdvancedGameSim never classifies hits, so an instruction is
+    # currently INERT on the quick path -- the channel exists so the
+    # game-day bundle can set one uniformly and any future consumer
+    # reads the same _coach_instructions shape. Never raises.
+    def set_coach_instruction(self, team_name, instruction):
+        """Set a coach instruction for a team (e.g. "play_harder").
+        Pass None to clear."""
+        try:
+            if not hasattr(self, "_coach_instructions"):
+                self._coach_instructions = {}
+            if instruction:
+                self._coach_instructions[team_name] = instruction
+            else:
+                self._coach_instructions.pop(team_name, None)
+        except Exception:
+            pass
+
+    def get_coach_instruction(self, team):
+        try:
+            return self._coach_instructions.get(
+                getattr(team, "team_name", None))
+        except Exception:
+            return None
+
     # -- Crowd (arena_atmosphere) -------------------------------------------
     def _init_crowd(self, atmosphere):
         """Seed crowd state from a pregame_crowd() dict (or a quiet default)."""
