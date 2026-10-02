@@ -10095,6 +10095,16 @@ class GameSim:
             victim.games_remaining_injured = games_missed
             victim.last_injury = injury_type
             victim.injured_today = True
+            # Muck 2026-10-02: record to injury_history (was missing on this path)
+            try:
+                _hist = getattr(victim, "injury_history", None)
+                if not isinstance(_hist, list):
+                    _hist = []
+                _hist.append({"type": injury_type, "region": "?",
+                             "games": games_missed, "concussion": False})
+                victim.injury_history = _hist[-8:]
+            except Exception:
+                pass
             try:
                 self._log_event(
                     f"{victim.full_name} injured ({injury_type}, "

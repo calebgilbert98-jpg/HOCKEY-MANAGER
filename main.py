@@ -5232,11 +5232,26 @@ class HockeyManagerGUI(tk.Tk):
             if hasattr(player, 'is_injured') and player.is_injured:
                 # Random chance to get injury update for actually injured players
                 if random.random() < 0.3:  # 30% chance per day
-                    injury_types = ["Upper body injury", "Lower body injury", "Day-to-day", "Concussion protocol"]
+                    # Use the player's ACTUAL injury data, not random flavor text
+                    # (Muck 2026-10-02: fake injury reports were confusing)
+                    try:
+                        _itype = str(getattr(player, 'injury_type', '') or '').strip()
+                        if not _itype or _itype.lower() in ('none', 'healthy', ''):
+                            _itype = "Undisclosed injury"
+                    except Exception:
+                        _itype = "Undisclosed injury"
+                    try:
+                        _games = int(getattr(player, 'games_remaining_injured', 0) or 0)
+                    except Exception:
+                        _games = 0
+                    if _games > 0:
+                        _return = f"~{_games} games"
+                    else:
+                        _return = "Day-to-day"
                     injury_email = EmailGenerator.create_injury_report_email(
                         player.full_name,
-                        random.choice(injury_types),
-                        f"{random.randint(1, 4)} weeks"
+                        _itype,
+                        _return
                     )
                     self.send_email_to_user(injury_email)
         
@@ -5413,19 +5428,10 @@ class HockeyManagerGUI(tk.Tk):
                 recognition_email.is_important = True
                 self.send_email_to_user(recognition_email)
         
-        # 3. Injury reports from game (if any occurred)
-        # Note: This would need actual injury tracking in the simulation
-        if random.random() < 0.05:  # 5% chance of injury report after game
-            roster_players = [p for p in self.user_team.roster if random.random() < 0.1]  # Random subset
-            if roster_players:
-                player = random.choice(roster_players)
-                injury_email = EmailGenerator.create_injury_report_email(
-                    player.full_name,
-                    "Game-related injury - evaluation in progress",
-                    "Day-to-day"
-                )
-                injury_email.is_urgent = True
-                self.send_email_to_user(injury_email)
+        # 3. Injury reports from game — only for ACTUAL injuries tracked by the
+        # sim (Muck 2026-10-02: removed fake random injury reports that were
+        # sent for healthy players without setting any injury fields).
+        # Real injuries are reported via _generate_daily_emails above.
     
     def _show_email_notification(self, message):
         """Show a popup notification for urgent emails."""
@@ -19505,6 +19511,17 @@ class HockeyManagerGUI(tk.Tk):
                 victim.is_injured = True
                 victim.injury_type = "Training knock"
                 victim.games_remaining_injured = _r.randint(1, 4)
+                # Muck 2026-10-02: record to injury_history (was missing on this path)
+                try:
+                    _hist = getattr(victim, "injury_history", None)
+                    if not isinstance(_hist, list):
+                        _hist = []
+                    _hist.append({"type": "Training knock", "region": "?",
+                                 "games": victim.games_remaining_injured,
+                                 "concussion": False})
+                    victim.injury_history = _hist[-8:]
+                except Exception:
+                    pass
                 self.add_news(f"🤕 {victim.first_name} {victim.last_name} injured in training "
                               f"({victim.games_remaining_injured} games).")
         # Player concerns -> inbox (max 2 per week)
