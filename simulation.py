@@ -9099,6 +9099,9 @@ class GameSim:
         momentum risk reading shifts it +-15s. Conversion is untouched --
         this is risk, not a boost.
         """
+        # BUG-005: teamless (None) team -> not eligible, no crash.
+        if team is None:
+            return False
         if getattr(self, "period", 1) != 3:
             return False
         if team.team_name in getattr(self, "goalie_pulled", set()):
@@ -9136,6 +9139,9 @@ class GameSim:
         strategic pull) -- logged distinctly so it never reads as a coach's
         late-game decision.
         """
+        # BUG-005: teamless (None) team -> nothing to pull.
+        if team is None:
+            return
         if team.team_name in self.goalie_pulled:
             return
         self.goalie_pulled.add(team.team_name)
@@ -9161,6 +9167,9 @@ class GameSim:
 
     def _return_goalie(self, team):
         """Goalie back in the net (whistles, goals, period ends)."""
+        # BUG-005: teamless (None) team -> nothing to return.
+        if team is None:
+            return
         if team.team_name not in self.goalie_pulled:
             return
         self.goalie_pulled.discard(team.team_name)
@@ -10808,6 +10817,9 @@ class GameSim:
         """
         Stage 6: Apply coaching bonuses based on game situation and team strategy.
         """
+        # BUG-005: teamless (None) team -> no adjustments.
+        if team is None:
+            return 1.0
         team_name = team.team_name
         
         # Get base coaching adjustment for situation
