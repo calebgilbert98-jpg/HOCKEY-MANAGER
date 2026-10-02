@@ -123,7 +123,7 @@ PROSPECT_POOL_SIZE = 15
 GAMES_PER_SIM_DAY = 8 
 SALARY_CAP = 104_000_000  # 2026-27 NHL cap (modern day)
 PLAYER_BUDGET = 92_000_000
-START_DATE = date(datetime.now().year, 10, 1)
+START_DATE = date(datetime.now().year, 9, 1)  # start of preseason; captains named before opening night
 
 # --- Game Engine Class ---
 class GameManager:
@@ -746,18 +746,17 @@ NHL League Office""",
                 team.games_played = 0
         print("Clean season records initialized for NHL teams")
 
-        # NHL Rule 6.1: every club opens with exactly one captain (never a
-        # goaltender) and two alternates. Leadership is picked, not dealt.
-        # Item 7: the human GM names his own letters -- a mandatory,
-        # non-dismissible chooser replaces auto-repair for the user club.
-        # No display exists yet this early, so _require_captaincy_choice
-        # defers via _captaincy_choice_pending and the app raises the
-        # blocker on startup.
+        # NHL Rule 6.1: every club must have 1C+2As before opening night.
+        # Setup does NOT enforce this -- the game starts at preseason and
+        # the phase check (first preseason + first regular-season game day)
+        # handles it. AI clubs get silent auto-repair here so they're valid
+        # from day one; the human club is left alone (no blocker at setup)
+        # and will be prompted during preseason.
         for team in self.league.teams:
             if team.league_name == "National Hockey League":
                 try:
-                    self._opening_night_captaincy_check(
-                        team, getattr(self, "user_team", None))
+                    if team is not getattr(self, "user_team", None):
+                        self._ensure_captaincy(team)
                 except Exception:
                     pass
 
@@ -1661,13 +1660,25 @@ NHL League Office""",
             pass
 
     def _opening_night_captaincy_check(self, team, user_team):
-        """One club's opening-night captaincy step. Returns the new
-        captain's name when auto-repair named one (for the news story),
-        else None. Human club without exactly 1 C + 2 As -> the mandatory
-        user-choice blocker; AI clubs keep the auto-repair path. Shared by
-        both _ensure_captaincy call sites so the firing logic is identical.
+        """One club's captaincy step. Returns the new captain's name when
+        auto-repair named one (for the news story), else None.
+
+        Phase-aware: during preseason the human club gets a non-blocking
+        reminder (inbox task) instead of the modal picker -- captains are
+        required before opening night, not before preseason. At the
+        regular-season phase the mandatory picker blocks until the user
+        chooses. AI clubs always take the silent auto-repair path.
         """
         if team is user_team and self._captaincy_needs_choice(team):
+            phase = getattr(self, "_captaincy_check_phase", "regular")
+            if phase == "preseason":
+                # Non-blocking: remind the user to name captains before
+                # opening night. The regular-season phase will enforce it.
+                try:
+                    self._captaincy_choice_pending = True
+                except Exception:
+                    pass
+                return None
             self._require_captaincy_choice(team)
             return None
         return self._ensure_captaincy(team)
@@ -1731,18 +1742,16 @@ NHL League Office""",
         return ok
 
     def _claim_user_team_captaincy(self, team) -> bool:
-        """Item 7 follow-up: whenever the human club is (re)determined, make
-        sure the user -- not auto-repair -- chose its letters.
+        """Reclaim the human club's letters from auto-repair.
 
         New-game setup auto-repairs every club before the user's team is
         known; without this, the user would silently inherit those letters
         and never be asked. When the club's letters came from auto-repair
-        (stamped by _ensure_captaincy), strip them and arm the mandatory
-        picker. When the club simply has no valid 1C+2As (a broken save, a
-        scrambled post-fantasy-draft roster, a league that never ran the
-        setup pass), arm the picker too -- the human club is never
-        auto-repaired. A club that already wears a valid, human-chosen
-        1C+2As is left untouched. Returns True when the blocker was armed.
+        (stamped by _ensure_captaincy), strip them so the user picks during
+        preseason. The picker is NOT armed here -- captaincy is required
+        before opening night, not at setup. The phase check (first
+        preseason + first regular-season game day) prompts the user.
+        Returns True when letters were stripped.
         """
         if team is None:
             return False
@@ -1757,10 +1766,13 @@ NHL League Office""",
                     team._captaincy_auto_assigned = False
                 except Exception:
                     pass
-                self._captaincy_choice_pending = True
+                # Do NOT arm _captaincy_choice_pending -- no blocker at
+                # setup. The preseason phase check will prompt the user.
                 return True
+            # If the club has no valid letters, leave it letter-less; the
+            # preseason phase check will prompt. Never auto-repair the
+            # human club, never block at setup.
             if self._captaincy_needs_choice(team):
-                self._captaincy_choice_pending = True
                 return True
         except Exception:
             pass
@@ -2526,13 +2538,9 @@ class HockeyManagerGUI(tk.Tk):
 
         # Item 7: a captaincy choice deferred from headless new-game setup
         # (no display existed to ask) is raised here as a mandatory,
-        # non-dismissible blocker before the user can continue.
-        # NOTE: must be after(), not after_idle(): update_idletasks() calls
-        # later in __init__ (e.g. _create_nav_pill) flush idle callbacks, so
-        # after_idle would raise the modal mid-construction and hang/crash
-        # startup. Timer callbacks are not processed by update_idletasks,
-        # so this only fires once mainloop() is running and __init__ done.
-        self.after(250, self._raise_captaincy_blocker_if_pending)
+        # Captaincy is NOT enforced at startup -- the game begins at
+        # preseason and captains are required before opening night (the
+        # phase check handles it). No blocker on boot.
         
         # Set application icon
         self._set_application_icon()
@@ -7236,13 +7244,12 @@ class HockeyManagerGUI(tk.Tk):
                     and self._maybe_open_game_day_bundle(todays_games)):
                 return
 
-            # NHL Rule 6.1, season start: every club must have exactly one
-            # captain (never a goaltender). Runs once per phase -- at the
-            # first preseason game day AND the first regular-season game
-            # day -- so post-fantasy-draft rosters (letter-less by design)
-            # get their captains at the start of preseason, and any
-            # preseason departures are caught on opening night. A valid
-            # existing captain is never overwritten.
+            # NHL Rule 6.1: every club must have 1C+2As before opening night.
+            # Runs once per phase -- at the first preseason game day AND the
+            # first regular-season game day. Preseason: AI clubs auto-repair,
+            # human club gets a non-blocking reminder. Regular season: the
+            # mandatory picker blocks the human GM until captains are named.
+            # A valid existing captain is never overwritten.
             if todays_games:
                 _sy = getattr(getattr(self, 'league', None), 'season_year', None)
                 _phase = "preseason" if _all_preseason else "regular"
@@ -7253,12 +7260,14 @@ class HockeyManagerGUI(tk.Tk):
                     _ut = getattr(self, 'user_team', None)
                     # Fantasy-draft deferral ends here: the first game day
                     # of preseason (or the regular season, if preseason was
-                    # skipped) is when captains get set, so the normal
-                    # mandatory-picker rules apply from this point on.
+                    # skipped) is when captains get set.
                     try:
                         _dgm = getattr(self, 'game_manager', None)
                         if _dgm is not None:
                             _dgm._fantasy_draft_captaincy_deferred = False
+                            # Tell the captaincy check which phase we're in
+                            # so it knows whether to remind or block.
+                            _dgm._captaincy_check_phase = _phase
                     except Exception:
                         pass
                     # NOTE (Item 7): the captaincy helpers live on
@@ -7282,6 +7291,19 @@ class HockeyManagerGUI(tk.Tk):
                                     f"{getattr(_t, 'team_name', 'club')}.")
                         except Exception:
                             pass
+                    # Preseason reminder: if the human club still needs
+                    # captains, post a non-blocking inbox task. The
+                    # regular-season phase will enforce it with the picker.
+                    try:
+                        if (_phase == "preseason" and _gm is not None
+                                and getattr(_gm, "_captaincy_choice_pending",
+                                            False)):
+                            self.add_news(
+                                "Ⓒ Preseason task: name your captain (C) and "
+                                "two alternates (A) before opening night. "
+                                "Open the roster to choose.")
+                    except Exception:
+                        pass
                     # Numbers finalized with the captaincy: freed favorites
                     # get claimed unless the player started a legacy with
                     # his current number. Old saves backfill retired
