@@ -1961,6 +1961,35 @@ def _untouchable_names(partner_team, partner_assets, tiers):
     return names
 
 
+def franchise_price_mult(asset, owning_team):
+    """Price multiplier for franchise-caliber pieces (L6 best-of-both).
+
+    The system identifies franchise players (franchise_score 80+), but the
+    GM's loyalty determines the price: high loyalty = effectively
+    untouchable (10x), medium = very expensive (4x), low = expensive but
+    movable (2x). The user GM's manual untouchables are handled separately
+    (absolute, their choice). Never raises; returns 1.0 for non-franchise.
+    """
+    try:
+        from ai_extension_planning import franchise_score
+        ident = partner_gm_identity(owning_team)
+        score = franchise_score(asset, ident)
+        if score < 80.0:
+            return 1.0
+        try:
+            loyalty = float(getattr(ident, "loyalty", 0.5) or 0.5)
+        except Exception:
+            loyalty = 0.5
+        if loyalty >= 0.8:
+            return 10.0  # Effectively untouchable
+        elif loyalty >= 0.5:
+            return 4.0   # Very expensive
+        else:
+            return 2.0   # Expensive but movable
+    except Exception:
+        return 1.0
+
+
 def rivalry_trade_gate(situational, partner_team, partner_assets,
                        ident=None, tiers=None):
     """Circumstantial rivalry gate: ("open" | "taxed" | "closed", tax_mult,
@@ -2304,16 +2333,19 @@ def ai_consider_trade(partner_team, user_assets, partner_assets,
     _ident = partner_gm_identity(partner_team)
     _tiers = asset_franchise_tiers(partner_team, partner_assets, _ident)
 
-    # D31 -- untouchables can't be had. An UNTOUCHABLE-tier piece
-    # (franchise_score 80+, the face of the franchise to THIS GM) is a
-    # flat, plain-spoken no -- not a price, not a counter.
+    # D31 (revised L6, Muck 2026-10-02 "best of both worlds"): the system
+    # identifies franchise-caliber pieces (franchise_score 80+), but the
+    # GM makes the final call. Instead of a flat "not at any price"
+    # rejection, franchise players carry a massive price multiplier
+    # modulated by the GM's loyalty: a loyal GM prices them effectively
+    # out of reach (true untouchable), a pragmatic GM prices them very
+    # high but listenable for a franchise-altering offer. The user GM's
+    # manually-set untouchables remain absolute (their choice, not the
+    # system's). The multiplier is applied downstream in the valuation;
+    # here we just flag and continue to normal negotiation.
     _untouch = _untouchable_names(partner_team, partner_assets, _tiers)
-    if _untouch:
-        _nm = _untouch[0]
-        return AIResponse(
-            'reject',
-            f"{_nm} isn't available at any price -- he's the face of "
-            f"this franchise.")
+    # (No flat rejection — franchise pricing is handled in the valuation
+    # layer via _franchise_price_mult, modulated by GM loyalty.)
 
     # D40 -- the circumstantial rivalry gate (open / taxed / closed).
     # Never a blanket veto: role players move between rivals; the crown

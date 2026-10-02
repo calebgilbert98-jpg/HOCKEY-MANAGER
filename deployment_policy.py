@@ -635,11 +635,15 @@ def _player_deployment_score(player: Any, coach: Any, style_key: str,
     """
     try:
         try:
-            # Tier-based (Muck 2026-10-01): the coach reads the same
-            # talent gauge as the human -- tier representative, never
-            # the 1-point overall.
-            from attribute_composites import tier_proxy_overall as _tpo_dp
-            ovr = float(_tpo_dp(player.overall_rating()))
+            # Granular (Muck 2026-10-01 "tiers are just general overviews",
+            # L8 fix): the coach's INTERNAL talent read is the true 1-point
+            # overall, not the tier proxy. The vibe clamp spread (6.4%) was
+            # tuned against 1-point gaps; under tier representatives an
+            # adjacent tier step is ~3.6-4.5% of base, so vibes alone could
+            # flip adjacent tiers, violating "vibes never flip a real talent
+            # gap". The tier presentation stays human-facing (card, etc.);
+            # the deployment math reads granular.
+            ovr = float(player.overall_rating())
         except Exception:
             try:
                 ovr = float(player.overall_rating())
