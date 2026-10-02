@@ -14646,16 +14646,39 @@ class HockeyManagerGUI(tk.Tk):
                             str(getattr(self.league, "season_year", 0) + 1))
                     except Exception:
                         pass
-                # Calder bump: winning rookie of the year jumps potential
-                # one full letter grade (C+ -> B+). The award proves the
-                # ceiling was wrong.
-                if 'calder' in name_to_awards.get(p.full_name, []):
+                # Award bump: a player still on the development path
+                # (age < 27) who wins a major award proves the ceiling was
+                # wrong -- potential jumps one full letter grade (C+ -> B+).
+                # One bump per season max, no matter how many trophies.
+                _major = {'calder', 'conn_smythe', 'norris', 'rocket',
+                          'art_ross', 'vezina'}
+                _won = [a for a in name_to_awards.get(p.full_name, [])
+                        if a in _major]
+                # Conn Smythe is decided at Cup time, not in the regular-
+                # season calculator -- check the bracket too.
+                if 'conn_smythe' not in _won:
+                    try:
+                        _br = getattr(self, '_playoff_bracket', None)
+                        _sn = getattr(_br, 'conn_smythe_name', None)
+                        if _sn and _sn == p.full_name:
+                            _won.append('conn_smythe')
+                    except Exception:
+                        pass
+                if _won and getattr(p, 'age', 99) < 27:
                     try:
                         _bumped, _old, _new = p.bump_potential_full_grade()
                         if _bumped:
                             try:
+                                _anames = {
+                                    'calder': 'Calder Trophy',
+                                    'conn_smythe': 'Conn Smythe Trophy',
+                                    'norris': 'Norris Trophy',
+                                    'rocket': 'Rocket Richard Trophy',
+                                    'art_ross': 'Art Ross Trophy',
+                                    'vezina': 'Vezina Trophy'}
+                                _lbl = _anames.get(_won[0], 'major award')
                                 self.add_news(
-                                    f"🏆 {p.full_name} wins the Calder Trophy! "
+                                    f"🏆 {p.full_name} wins the {_lbl}! "
                                     f"Potential rises from {_old} to {_new}.")
                             except Exception:
                                 pass
