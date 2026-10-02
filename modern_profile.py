@@ -265,6 +265,7 @@ class PlayerProfile(InGamePopup):
     # -- tab pages -------------------------------------------------------
     def _page_overview(self, parent):
         self._create_stats(parent)
+        self._create_contract_card(parent)
         self._create_attributes(parent)
 
     def _page_personality(self, parent):
@@ -616,11 +617,119 @@ class PlayerProfile(InGamePopup):
                 bits.append(f"${salary:,} / yr")
             if years is not None:
                 bits.append(f"{years} yr{'s' if years != 1 else ''} left")
+            # Muck 2026-10-02: contract type on the strip (ELC / 2-way /
+            # NTC-NMC / UFA-RFA status) -- never raises.
+            try:
+                _ct = self._contract_type_label()
+                if _ct:
+                    bits.append(_ct)
+            except Exception:
+                pass
             strip = tk.Label(info, text="   •   ".join(bits),
                              font=AppFonts.SMALL,
                              fg=AppColors.TEXT_SECONDARY,
                              bg=AppColors.BG)
             strip.pack(anchor="w", pady=(8, 0))
+        except Exception:
+            pass
+
+        # Muck 2026-10-02: rights + league strip -- immediately visible under
+        # the contract strip. Never raises.
+        try:
+            self._create_rights_league_strip(info)
+        except Exception:
+            pass
+
+    def _contract_type_label(self):
+        """Short contract-type label: ELC / 2-way / NTC / NMC / UFA / RFA."""
+        try:
+            p = self.player
+            c = getattr(p, "contract", None)
+            labels = []
+            if c is not None and getattr(c, "entry_level", False):
+                labels.append("ELC")
+            if c is not None and getattr(c, "two_way", False):
+                labels.append("2-way")
+            if c is not None and getattr(c, "no_movement_clause", False):
+                labels.append("NMC")
+            elif c is not None and getattr(c, "no_trade_clause", False):
+                labels.append("NTC")
+            elif c is not None and int(getattr(c, "modified_ntc_teams", 0) or 0) > 0:
+                labels.append("M-NTC")
+            # UFA / RFA status (only meaningful when a contract exists).
+            try:
+                import rfa_system as _rs
+                if _rs.is_ufa(p):
+                    labels.append("UFA")
+                elif _rs.is_rfa(p):
+                    labels.append("RFA")
+            except Exception:
+                pass
+            return " / ".join(labels) if labels else ""
+        except Exception:
+            return ""
+
+    def _player_league(self):
+        """Best-effort league label: NHL / AHL / Europe / Junior / Free Agent."""
+        try:
+            p = self.player
+            league = getattr(getattr(self, "parent_app", None), "league", None)
+            if league is not None:
+                try:
+                    for t in (getattr(league, "teams", []) or []):
+                        try:
+                            if p in (getattr(t, "roster", []) or []):
+                                return "NHL"
+                            if p in (getattr(t, "ahl_roster", []) or []):
+                                return "AHL"
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+            _tn = str(getattr(p, "team_name", "") or "")
+            if _tn.lower() == "europe":
+                return "Europe"
+            # Unsigned prospect with rights held: show junior/rights league.
+            _rt = str(getattr(p, "rights_type", "") or "").upper()
+            if _rt in ("CHL", "NCAA", "EUROPE"):
+                return {"CHL": "CHL", "NCAA": "NCAA",
+                        "EUROPE": "Europe"}.get(_rt, _rt)
+            _jl = str(getattr(p, "junior_league", "") or "").strip()
+            if _jl:
+                return _jl
+            if not _tn or _tn.lower() == "free agent":
+                return "Free Agent"
+            return _tn
+        except Exception:
+            return ""
+
+    def _create_rights_league_strip(self, info):
+        """Rights holder + league line under the contract strip."""
+        try:
+            p = self.player
+            bits = []
+            # League -- always shown.
+            _lg = self._player_league()
+            if _lg:
+                bits.append(f"League: {_lg}")
+            # Rights -- only when held by a club.
+            _rt_team = str(getattr(p, "rights_team", "") or "").strip()
+            if _rt_team:
+                _rt_type = str(getattr(p, "rights_type", "") or "").strip()
+                _rt_exp = getattr(p, "rights_expiry_year", 0) or 0
+                _r = f"Rights: {_rt_team}"
+                if _rt_type:
+                    _r += f" ({_rt_type})"
+                if _rt_exp:
+                    _r += f" thru {_rt_exp}"
+                bits.append(_r)
+            if not bits:
+                return
+            strip = tk.Label(info, text="   •   ".join(bits),
+                             font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_SECONDARY,
+                             bg=AppColors.BG)
+            strip.pack(anchor="w", pady=(4, 0))
         except Exception:
             pass
 
@@ -708,6 +817,93 @@ class PlayerProfile(InGamePopup):
                              font=AppFonts.SMALL,
                              fg=AppColors.TEXT_PRIMARY,
                              bg=card.card_bg).pack(anchor="w")
+        except Exception:
+            pass
+
+    def _create_contract_card(self, parent):
+        """Muck 2026-10-02: full contract / rights / league details on the
+        Overview page. Never raises."""
+        try:
+            card = AppCard(parent)
+            card.pack(fill="x", pady=(0, 16))
+            content = card.get_content_frame()
+
+            title = tk.Label(content, text="Contract",
+                             font=AppFonts.H2,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=card.card_bg)
+            title.pack(anchor="w", pady=(0, 12))
+
+            p = self.player
+            c = getattr(p, "contract", None)
+            rows = []
+            try:
+                _team = self._find_team()
+                _tname = getattr(_team, "team_name", None) or \
+                    str(getattr(p, "team_name", "") or "Free Agent")
+                rows.append(("Club", _tname))
+                rows.append(("League", self._player_league() or "--"))
+                if c is not None:
+                    _sal = getattr(c, "salary", 0) or 0
+                    rows.append(("Salary", f"${_sal:,}" if _sal else "--"))
+                    _yrs = getattr(c, "years_remaining", None)
+                    rows.append(("Term", f"{_yrs} yr{'s' if _yrs != 1 else ''} left"
+                                  if _yrs is not None else "--"))
+                    _ctype = self._contract_type_label()
+                    rows.append(("Type", _ctype or "--"))
+                    _sb = getattr(c, "signing_bonus", 0) or 0
+                    if _sb:
+                        rows.append(("Signing bonus", f"${_sb:,}"))
+                    if getattr(c, "two_way", False):
+                        _ahl = getattr(c, "ahl_salary", 0) or 0
+                        rows.append(("AHL salary", f"${_ahl:,}" if _ahl else "--"))
+                    _clauses = []
+                    if getattr(c, "no_movement_clause", False):
+                        _clauses.append("NMC")
+                    if getattr(c, "no_trade_clause", False):
+                        _clauses.append("NTC")
+                    _mntc = int(getattr(c, "modified_ntc_teams", 0) or 0)
+                    if _mntc:
+                        _clauses.append(f"M-NTC ({_mntc} teams)")
+                    if _clauses:
+                        rows.append(("Clauses", ", ".join(_clauses)))
+                # Rights (prospects).
+                _rt_team = str(getattr(p, "rights_team", "") or "").strip()
+                if _rt_team:
+                    _rt_type = str(getattr(p, "rights_type", "") or "").strip()
+                    _rt_exp = getattr(p, "rights_expiry_year", 0) or 0
+                    _r = _rt_team
+                    if _rt_type:
+                        _r += f" ({_rt_type})"
+                    if _rt_exp:
+                        _r += f" -- thru {_rt_exp}"
+                    rows.append(("Rights", _r))
+                # Draft info.
+                _dy = getattr(p, "draft_year", None)
+                _dp = str(getattr(p, "draft_position", "") or "").strip()
+                if _dy or _dp:
+                    rows.append(("Drafted", f"{_dy or '?'} {_dp}".strip()))
+            except Exception:
+                pass
+
+            if not rows:
+                rows.append(("Contract", "No contract on file"))
+
+            for _k, _v in rows:
+                try:
+                    _row = tk.Frame(content, bg=card.card_bg)
+                    _row.pack(fill="x", pady=2)
+                    tk.Label(_row, text=_k, font=AppFonts.SMALL_BOLD,
+                             fg=AppColors.TEXT_SECONDARY,
+                             bg=card.card_bg, width=14,
+                             anchor="w").pack(side="left")
+                    tk.Label(_row, text=str(_v), font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=card.card_bg,
+                             anchor="w").pack(side="left", fill="x",
+                                              expand=True)
+                except Exception:
+                    continue
         except Exception:
             pass
 
