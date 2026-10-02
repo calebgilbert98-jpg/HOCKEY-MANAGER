@@ -21,14 +21,24 @@ never show up as an NHL point or vice versa. No bleeding, by construction.
 Perf: ~800 AHL players x a few RNG calls per simmed day -- microseconds,
 no per-frame cost. Skipped entirely outside the AHL regular-season window
 (Oct 1 - Apr 20) and never during the NHL playoffs.
+
+D41 Phase 2 made the AHL a real scheduled league (see ahl_league.py).
+When a Phase 2 schedule is live, per-player lines are logged per
+scheduled game via log_scheduled_game_for_club -- a player's GP can
+never exceed his club's GP, so the ledger stays truthful. The daily
+probability rolls in simulate_ahl_day then only cover farm lists with
+no AHL club, and remain the fallback when no schedule exists.
 """
 
 import math
 import random
 
 # Chance an AHL player logs a game on a given simmed NHL day.
-# 0.39 x ~184 days ~= 72 games, the real AHL schedule length.
-GAME_PROBABILITY = 0.39
+# 0.26 x ~184 days ~= 48 games, matching the Phase 2 schedule length
+# (ahl_league.GAMES_PER_TEAM). Only used for farm lists with no AHL
+# club and as the no-schedule fallback; scheduled clubs log their
+# lines per real game via log_scheduled_game_for_club instead.
+GAME_PROBABILITY = 0.26
 # Chance an AHL goalie is his club's starter on a game day (~2-3 goalies
 # per farm roster, one net).
 GOALIE_START_PROBABILITY = 0.45
@@ -206,20 +216,42 @@ def note_ahl_appearance(player):
         pass
 
 
-def simulate_ahl_day(league):
+def simulate_ahl_day(league, only_unscheduled=False):
     """Roll one day of AHL stat lines for every farm roster in the league.
 
     Called from the daily maintenance path in main.py. Cheap by design:
     a probability roll per player, and only players who "played" get a
     generated line. No standings, no schedules, nothing persisted beyond
     the per-player ledger.
+
+    When ``only_unscheduled`` is true (the normal path while a Phase 2
+    schedule is live), farm lists whose NHL club has an AHL affiliate
+    are skipped -- those players log their lines per scheduled game via
+    log_scheduled_game_for_club, so their GP stays truthful. Only
+    unaffiliated farm lists (no AHL club) still roll here.
     """
     try:
         teams = getattr(league, "teams", None) or []
     except Exception:
         return
+    scheduled_ids = set()
+    if only_unscheduled:
+        try:
+            import ahl_league as _ahl2
+            if _ahl2.ahl_schedule_active(league):
+                for _at in _ahl2.ahl_team_list(league):
+                    try:
+                        _p = getattr(_at, "parent_team", None)
+                        if _p is not None:
+                            scheduled_ids.add(id(_p))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
     for team in teams:
         try:
+            if only_unscheduled and id(team) in scheduled_ids:
+                continue
             farm = getattr(team, "ahl_roster", None) or []
         except Exception:
             continue
@@ -242,6 +274,49 @@ def simulate_ahl_day(league):
                     note_ahl_appearance(player)
             except Exception:
                 continue
+
+
+def log_scheduled_game_for_club(ahl_team):
+    """Log one dressed AHL game for every player on a club's farm roster.
+
+    Called by ahl_league.simulate_ahl_scheduled_day once per real
+    scheduled game. Skaters all dress (background fidelity -- the same
+    per-game lines the old daily system generated); goalies roll the
+    usual starter probability and non-starters don't dress. Because
+    lines are logged per scheduled game, a player's GP can never
+    exceed his club's GP -- the ledger stays truthful. Dressed
+    appearances count toward the new-CBA recall gate via
+    note_ahl_appearance. Returns players logged. Never raises.
+    """
+    try:
+        parent = getattr(ahl_team, "parent_team", None)
+        farm = (getattr(parent, "ahl_roster", None)
+                if parent is not None else None)
+        if not farm:
+            return 0
+        n = 0
+        for player in list(farm):
+            try:
+                ledger = ensure_ahl_stats(player)
+                if ledger is None:
+                    continue
+                if _is_goalie(player):
+                    if random.random() < GOALIE_START_PROBABILITY:
+                        _goalie_game(player, ledger)
+                        # He dressed: counts toward the recall gate.
+                        note_ahl_appearance(player)
+                        n += 1
+                    # Non-starters don't dress: no GP, no line.
+                else:
+                    _skater_game(player, ledger)
+                    # He dressed: counts toward the recall gate.
+                    note_ahl_appearance(player)
+                    n += 1
+            except Exception:
+                continue
+        return n
+    except Exception:
+        return 0
 
 
 def top_skaters(league, limit=25):

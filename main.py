@@ -1377,6 +1377,13 @@ NHL League Office""",
             pool = getattr(league, "free_agent_staff", None)
             if pool is not None and staff in pool:
                 pool.remove(staff)
+            # Muck 2026-10-02: a coaching-carousel hire leaves the
+            # carousel, so the AI doesn't hire the same coach too.
+            try:
+                from reputation_system import drop_from_carousel as _drop
+                _drop(staff)
+            except Exception:
+                pass
             try:
                 staff.salary = int(salary)
                 staff.contract_years = int(years)
@@ -11318,18 +11325,23 @@ class HockeyManagerGUI(tk.Tk):
                 and getattr(_bracket, "stanley_cup_champion", None) is None
                 and getattr(_bracket, "playoff_series", None))
             if _in_window and not _playoffs_live:
-                _ahl.simulate_ahl_day(self.league)
                 # D41 Phase 2: the AHL is a real scheduled league now. When
-                # a Phase 2 schedule is live for this season, sim today's
-                # scheduled games (standings come from real games); when
-                # it isn't (generation failure, <2 AHL clubs), keep Phase
-                # 1's abstract standings day as the fallback.
+                # a Phase 2 schedule is live for this season, per-player
+                # stat lines are logged per scheduled game (truthful GP --
+                # a player can never exceed his club's GP); the daily
+                # probability ledger then only covers farm lists with no
+                # AHL club. When it isn't (generation failure, <2 AHL
+                # clubs), keep the old daily ledger plus Phase 1's
+                # abstract standings day as the fallback.
                 try:
                     import ahl_league as _ahl2
                     if _ahl2.ahl_schedule_active(self.league):
                         _ahl2.simulate_ahl_scheduled_day(
                             self.league, self.current_date)
+                        _ahl.simulate_ahl_day(self.league,
+                                              only_unscheduled=True)
                     else:
+                        _ahl.simulate_ahl_day(self.league)
                         _ahl.simulate_ahl_standings_day(self.league)
                 except Exception:
                     try:

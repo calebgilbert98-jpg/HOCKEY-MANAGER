@@ -24,8 +24,9 @@ ROSTER ALIASING (the no-conflict guarantee):
     the SOLE source of truth. We never copy it, never cache it, never
     migrate players. Callups/senddowns change the list in place and
     the AHL club's lineup updates automatically.
-  - Waivers, cap, development, and the per-player stat ledger
-    (ahl_system.simulate_ahl_day) are untouched.
+  - Waivers, cap, and development are untouched. The per-player stat
+    ledger (ahl_system) logs one line per dressed player per scheduled
+    game, so player GP can never exceed team GP.
 
 PERSISTENCE: everything lives as additive attributes on the league
 (pickle saves carry them automatically). Old saves are backfilled
@@ -553,14 +554,22 @@ def simulate_ahl_scheduled_day(league, current_date):
     """Sim every scheduled AHL game dated on/before today that hasn't run.
 
     Called from the daily maintenance path (next to
-    ahl_system.simulate_ahl_day, whose per-player stat rolls are
-    untouched). Catch-up safe: if days were skipped, all unplayed games
-    up to today run. When the last scheduled game finishes, the Calder
-    Cup trigger is checked. Returns games simmed. Never raises.
+    ahl_system.simulate_ahl_day). After each team-vs-team final, the
+    two clubs' players log their individual stat lines via
+    ahl_system.log_scheduled_game_for_club -- so per-player GP can
+    never exceed the club's GP and the ledger stays truthful.
+
+    Catch-up safe: if days were skipped, all unplayed games up to today
+    run. When the last scheduled game finishes, the Calder Cup trigger
+    is checked. Returns games simmed. Never raises.
     """
     try:
         if not ahl_schedule_active(league):
             return 0
+        try:
+            import ahl_system as _ahls
+        except Exception:
+            _ahls = None
         sched = getattr(league, "ahl_schedule", None) or []
         played = getattr(league, "ahl_played", None)
         if not isinstance(played, set):
@@ -588,6 +597,14 @@ def simulate_ahl_scheduled_day(league, current_date):
                 update_ahl_standings(league, hi, ai, hs, aws, ot)
                 played.add(i)
                 simmed += 1
+                # D41-2b: truthful per-player stat lines for the two
+                # dressed clubs (player GP can never exceed team GP).
+                if _ahls is not None:
+                    try:
+                        _ahls.log_scheduled_game_for_club(teams[hi])
+                        _ahls.log_scheduled_game_for_club(teams[ai])
+                    except Exception:
+                        pass
                 # Record the final for the UI scores tab (ring buffer).
                 try:
                     _record_result(league, dstr, hi, ai, hs, aws, ot)
