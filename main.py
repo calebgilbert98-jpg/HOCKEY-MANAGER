@@ -437,9 +437,10 @@ class GameManager:
     
     def configure_season_length(self, season_length):
         """Configure the number of games in the season"""
-        if "20 games" in season_length:
+        _sl = (season_length or "").lower()
+        if "20 games" in _sl:
             self.games_per_season = 20
-        elif "41 games" in season_length:
+        elif "41 games" in _sl:
             self.games_per_season = 41
         else:
             self.games_per_season = 84

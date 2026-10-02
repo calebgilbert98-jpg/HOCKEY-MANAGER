@@ -107,6 +107,19 @@ class DatabaseConfig:
 
 # Database size configurations inspired by EHM
 DATABASE_CONFIGURATIONS = {
+    "Default": DatabaseConfig(
+        name="Default Database",
+        description="Puck Dynasty tuned standard: 84-game NHL+AHL world with full prospect depth (336/draft) and deep staff pool. Recommended.",
+        total_players=8000,
+        prospects_per_draft=336,
+        leagues_count=2,
+        teams_per_league=32,
+        depth_factor=1.0,
+        veteran_distribution=0.7,
+        international_factor=1.0,
+        minor_league_depth=2,
+        staff_count=28
+    ),
     "Small": DatabaseConfig(
         name="Small Database",
         description="Quick start with essential players only. Perfect for faster gameplay and learning.",

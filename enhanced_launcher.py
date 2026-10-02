@@ -180,9 +180,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         
         # Game setup variables
         self.setup_options = {
-            'database_size': tk.StringVar(master=self, value="Small (8K players, 32 NHL+AHL teams)"),
+            'database_size': tk.StringVar(master=self, value="Default (Recommended)"),
             'start_date': tk.StringVar(master=self, value="October 1, 2024"),
-            'season_length': tk.StringVar(master=self, value="Full Season (84 Games)"),
+            'season_length': tk.StringVar(master=self, value="Default (84 Games)"),
             'difficulty': tk.StringVar(master=self, value="Realistic"),
             'fantasy_draft': tk.BooleanVar(master=self, value=False),
             'salary_cap': tk.BooleanVar(master=self, value=True),
@@ -1304,11 +1304,12 @@ This profile will influence player relationships, media interactions, and trade 
         
         self._create_advanced_option_row(league_grid, 0, "Database Size:",
                                        self.setup_options['database_size'],
-                                       ["Small (8K players, 32 NHL+AHL teams)", 
+                                       ["Default (Recommended)",
+                                        "Small (8K players, 32 NHL+AHL teams)", 
                                         "Medium (25K players, 5 leagues)", 
                                         "Large (50K players, 12 leagues)", 
                                         "Massive (100K players, 25 leagues)"],
-                                       "Determines the number of teams, players, and depth of the hockey world")
+                                       "Determines the number of teams, players, and depth of the hockey world. Default is the Puck Dynasty tuned standard.")
         
         self._create_advanced_option_row(league_grid, 1, "International Players:",
                                        self.setup_options['international_players'],
@@ -1338,9 +1339,9 @@ This profile will influence player relationships, media interactions, and trade 
         
         self._create_advanced_option_row(season_grid, 1, "Season Length:",
                                        self.setup_options['season_length'],
-                                       ["Short Season (20 Games)", "Half Season (41 Games)", 
+                                       ["Default (84 Games)", "Short Season (20 Games)", "Half Season (41 Games)", 
                                         "Full Season (84 Games)", "Extended Season (100+ Games)"],
-                                       "Number of regular season games per team")
+                                       "Number of regular season games per team. Default is the standard 84-game NHL season.")
         
         # Realism & Difficulty
         realism_frame = SectionCard(scrollable_frame, text="  Realism & Difficulty  ",
@@ -1871,8 +1872,8 @@ This profile will influence player relationships, media interactions, and trade 
         # Database Size
         self._create_option_row(options_grid, 0, "Database Size:",
                                self.setup_options['database_size'],
-                               ["Minimal (8 Teams)", "Small (16 Teams)", "Full Database (32 Teams)", "Extended (40+ Teams)"],
-                               "Choose the number of teams and depth of player database")
+                               ["Default (Recommended)", "Minimal (8 Teams)", "Small (16 Teams)", "Full Database (32 Teams)", "Extended (40+ Teams)"],
+                               "Choose the number of teams and depth of player database. Default is the Puck Dynasty tuned standard.")
         
         # Start Date
         self._create_option_row(options_grid, 1, "Season Start Date:",
@@ -1883,8 +1884,8 @@ This profile will influence player relationships, media interactions, and trade 
         # Season Length
         self._create_option_row(options_grid, 2, "Season Length:",
                                self.setup_options['season_length'],
-                               ["Short Season (20 Games)", "Half Season (41 Games)", "Full Season (84 Games)", "Extended Season (100 Games)"],
-                               "How many regular season games per team?")
+                               ["Default (84 Games)", "Short Season (20 Games)", "Half Season (41 Games)", "Full Season (84 Games)", "Extended Season (100 Games)"],
+                               "How many regular season games per team? Default is the standard 84-game season.")
         
         # Difficulty
         self._create_option_row(options_grid, 3, "Difficulty:",

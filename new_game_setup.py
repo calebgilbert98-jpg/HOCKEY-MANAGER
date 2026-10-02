@@ -110,6 +110,13 @@ ACCENT = "#00ceb8"
 FONT = "Segoe UI"
 
 DATABASE_SIZES = {
+    "default": {
+        "label": "Default",
+        "tagline": "~8,000 players \u2022 recommended",
+        "desc": "Puck Dynasty tuned standard: 84-game NHL+AHL world with full prospect depth (336/draft) and deep staff pool.",
+        "total_players": 8000,
+        "prospects_per_draft": 336,
+    },
     "small": {
         "label": "Small",
         "tagline": "~2,500 players \u2022 fastest",
@@ -297,7 +304,7 @@ class NewGameSetupView(tk.Frame):
 
         # State
         self.mode_var = tk.StringVar(value="quick")
-        self.size_var = tk.StringVar(value="medium")
+        self.size_var = tk.StringVar(value="default")
         self.league_vars = {k: tk.BooleanVar(value=(k in ("NHL", "AHL")))
                             for k in WIZARD_LEAGUES}
         self.detail_vars = {k: tk.StringVar(value=WIZARD_LEAGUES[k]["detail_default"])
