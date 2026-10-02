@@ -6943,6 +6943,10 @@ class DraftView(ctk.CTkFrame):
         self._heading(title_box, text="NHL Entry Draft", size=18).pack(anchor='w')
         self.draft_status_label = self._body(title_box, text="Draft Night", dim=True)
         self.draft_status_label.pack(anchor='w')
+        # Draft capital: the rebuild's payoff, visible at a glance.
+        # "Your capital: 9 picks (4x 1st)" -- updates as picks are made.
+        self.draft_capital_label = self._body(title_box, text="", dim=True)
+        self.draft_capital_label.pack(anchor='w')
         # On-the-clock spotlight
         self.clock_frame = ctk.CTkFrame(header, fg_color=ct['CARD'],
                                        corner_radius=10)
@@ -7147,7 +7151,7 @@ class DraftView(ctk.CTkFrame):
                                            command=self.make_user_pick)
         self.draft_button.pack(fill='x', pady=2)
         self.auto_button = self._secondary_button(btn_col,
-                                            text="Auto Pick (My Board)",
+                                            text="Sim Pick (Head Scout)",
                                             command=self.auto_pick)
         self.auto_button.pack(fill='x', pady=2)
         self.trade_pick_button = self._secondary_button(btn_col,
@@ -7824,6 +7828,11 @@ class DraftView(ctk.CTkFrame):
         self.ticker.delete(0, tk.END)
         self._ticker("Welcome to draft night. The floor is buzzing.")
         self._refresh_shortlist()
+        # Draft capital: show the rebuild's payoff from the first pick.
+        try:
+            self._refresh_draft_capital()
+        except Exception:
+            pass
         # BUG-2 fix: league-own the session. The view may be destroyed at
         # any time; the draft lives on in league.entry_draft_session and a
         # rebuilt view resumes from it. If the session can't be created,
@@ -8159,6 +8168,67 @@ class DraftView(ctk.CTkFrame):
         player = self._shortlist_players[idx]
         PlayerContextMenu(self).show_context_menu(
             event, player, quick_scout=True)
+
+    def _refresh_draft_capital(self):
+        """Update the draft-capital header: the rebuild's payoff at a glance.
+
+        Shows remaining user picks + picks already made, e.g.
+        "Your capital: 7 picks left (3x 1st) -- 2 drafted".
+        Never raises.
+        """
+        try:
+            label = getattr(self, 'draft_capital_label', None)
+            if label is None:
+                return
+            try:
+                uname = getattr(getattr(self.app, 'user_team', None),
+                                'team_name', '')
+            except Exception:
+                uname = ''
+            if not uname:
+                return
+            try:
+                _made = {int(p.get('overall', -1))
+                         for p in (getattr(self, '_session', None).picks or [])} \
+                    if getattr(self, '_session', None) is not None else set()
+            except Exception:
+                _made = set()
+            try:
+                _made |= {int(_ov) for _tn, _ov, _pl in (self.picks_made or [])
+                          if _tn == uname}
+            except Exception:
+                pass
+            _left = []
+            try:
+                for _idx, (_r, _t, _dp) in enumerate(self.draft_order or []):
+                    try:
+                        if (getattr(_t, 'team_name', '') == uname
+                                and (_idx + 1) not in _made):
+                            _left.append((_idx + 1, int(_r or 0)))
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            if not _left and not _made:
+                try:
+                    label.configure(text="")
+                except Exception:
+                    pass
+                return
+            _firsts = sum(1 for _ov, _r in _left if _r == 1)
+            _txt = f"Your capital: {len(_left)} pick{'s' if len(_left) != 1 else ''} left"
+            if _firsts:
+                _txt += f" ({_firsts}x 1st)"
+            _done = len([1 for _tn, _ov, _pl in (self.picks_made or [])
+                         if _tn == uname])
+            if _done:
+                _txt += f" -- {_done} drafted"
+            try:
+                label.configure(text=_txt)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _refresh_shortlist(self):
         self.shortlist.delete(0, tk.END)
@@ -8716,9 +8786,37 @@ class DraftView(ctk.CTkFrame):
                 _drafted.append((_ppos, _prnd))
         except Exception:
             _drafted = []
-        selected, reach, steal = self.dn.ai_select_prospect(
-            team_on_clock, available, board, needs, round_num, priority,
-            self._draft_rng, overall=overall, drafted=_drafted)
+        # Scout delegation (Muck 2026-10-02): clubs that trust their head
+        # scout let the scout make the call.
+        _delegate = False
+        try:
+            _delegate = self.dn.team_delegates_to_scout(team_on_clock)
+        except Exception:
+            _delegate = False
+        if _delegate:
+            try:
+                selected, _rationale = self.dn.head_scout_pick(
+                    team_on_clock, available, board, needs, round_num,
+                    priority, self._draft_rng, overall=overall,
+                    drafted=_drafted)
+            except Exception:
+                selected, _rationale = None, ""
+            if selected is None:
+                selected, reach, steal = self.dn.ai_select_prospect(
+                    team_on_clock, available, board, needs, round_num,
+                    priority, self._draft_rng, overall=overall,
+                    drafted=_drafted)
+            else:
+                try:
+                    _idx = available.index(selected)
+                except ValueError:
+                    _idx = 0
+                reach = _idx >= 8
+                steal = _idx == 0 and overall >= 5
+        else:
+            selected, reach, steal = self.dn.ai_select_prospect(
+                team_on_clock, available, board, needs, round_num, priority,
+                self._draft_rng, overall=overall, drafted=_drafted)
         if selected is None:
             self.end_draft()
             return (False, False)
@@ -8806,6 +8904,12 @@ class DraftView(ctk.CTkFrame):
             pass
 
     def auto_pick(self):
+        """Sim Pick: the head scout makes the user's pick.
+
+        DRAFT AGENCY (Muck 2026-10-02): user picks are never auto-drafted
+        by raw BPA logic -- the head scout decides, and scout quality
+        matters. Shows the scout's rationale in the ticker.
+        """
         _r, team_on_clock, _dp = self.draft_order[self.current_pick]
         if team_on_clock != self.app.user_team:
             return
@@ -8821,20 +8925,59 @@ class DraftView(ctk.CTkFrame):
         if not available:
             self.end_draft()
             return
-        if self.strategy_var.get() == "Need":
-            needs = self.te.team_needs(self.app.user_team)
-            pick = None
-            for p in available[:8]:
-                try:
-                    pos = p.primary_position.value
-                except Exception:
-                    pos = "?"
-                if pos in needs[:3]:
-                    pick = p
-                    break
-            selected = pick or available[0]
-        else:
-            selected = available[0]
+        # Head scout makes the call.
+        selected, rationale = None, ""
+        try:
+            board = (getattr(self, 'team_boards', None) or {}).get(
+                getattr(team_on_clock, 'team_name', None))
+        except Exception:
+            board = None
+        try:
+            needs = self.te.team_needs(team_on_clock)
+        except Exception:
+            needs = []
+        try:
+            _strat = self.app.ai_manager.get_team_strategy(
+                getattr(team_on_clock, 'team_name', ''))
+            priority = getattr(_strat, 'priority', None)
+        except Exception:
+            priority = None
+        try:
+            round_num = self.draft_order[self.current_pick][0]
+        except Exception:
+            round_num = 7
+        try:
+            overall = self.current_pick + 1
+        except Exception:
+            overall = 1
+        try:
+            selected, rationale = self.dn.head_scout_pick(
+                team_on_clock, available, board, needs, round_num,
+                priority, self._draft_rng, overall=overall)
+        except Exception:
+            selected, rationale = None, ""
+        if selected is None:
+            try:
+                selected = available[0]
+            except Exception:
+                self.end_draft()
+                return
+        try:
+            _sname = "Head Scout"
+            try:
+                _sc = self.dn.get_head_scout(team_on_clock)
+                if _sc is not None:
+                    _sname = ((getattr(_sc, 'first_name', '') or '') + ' ' +
+                              (getattr(_sc, 'last_name', '') or '')).strip() \
+                        or "Head Scout"
+            except Exception:
+                pass
+            self._ticker(f"Sim Pick -- {_sname} selects "
+                         f"{getattr(selected, 'full_name', '?')}.")
+            if rationale:
+                self._ticker(rationale)
+        except Exception:
+            pass
         self.execute_pick(team_on_clock, selected)
 
     def _redraft_banned(self, team, player) -> bool:
@@ -8969,6 +9112,11 @@ class DraftView(ctk.CTkFrame):
         self._disarm_draft_button()
         self.selected_label.configure(text="No prospect selected")
         self._refresh_shortlist()
+        # Draft capital: keep the rebuild's payoff visible after every pick.
+        try:
+            self._refresh_draft_capital()
+        except Exception:
+            pass
         # The research strip names available prospects: keep it in step
         # with the pool after every pick.
         try:
