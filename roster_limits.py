@@ -65,13 +65,18 @@ def has_active_contract(p) -> bool:
 
 
 def is_available(p) -> bool:
-    """Can dress tonight: under contract, not injured, not Dec-1 ineligible."""
+    """Can dress tonight: under contract, not injured, not Dec-1 ineligible,
+    not stashed on IR/LTIR (ir_system.py -- a healed player blocked from
+    activation by the 7-day minimum or LTIR cap room stays on IR and
+    cannot dress)."""
     try:
         if not has_active_contract(p):
             return False
         if bool(getattr(p, "is_injured", False)):
             return False
         if bool(getattr(p, "season_ineligible", False)):
+            return False
+        if str(getattr(p, "ir_status", "None") or "None") in ("IR", "LTIR"):
             return False
         return True
     except Exception:
@@ -489,16 +494,28 @@ def _player_nhl_salary(p) -> int:
 
 def _recall_fits_cap(team, player) -> bool:
     """Best-effort: would recalling this player keep the club cap-compliant?
-    Fillers are cap-exempt, so a recall that breaks the cap is skipped and
-    the shortfall falls through to fillers. If the cap infrastructure is
+    Honors LTIR relief (ir_system.effective_cap_ceiling). Fillers are
+    cap-exempt, so a recall that breaks the cap is skipped and the
+    shortfall falls through to fillers. If the cap infrastructure is
     unavailable, allow the recall -- the day-gate cap check is the backstop."""
     try:
-        from salary_cap_system import cap_breakdown, compliance_charge
-        bd = cap_breakdown(team)
-        cap = int((bd or {}).get("cap", 0) or 0)
+        from salary_cap_system import compliance_charge
+        current = int(compliance_charge(team) or 0)
+        cap = 0
+        try:
+            import ir_system as _irs
+            cap = int(_irs.effective_cap_ceiling(team) or 0)
+        except Exception:
+            pass
+        if cap <= 0:
+            try:
+                from salary_cap_system import cap_breakdown
+                bd = cap_breakdown(team)
+                cap = int((bd or {}).get("cap", 0) or 0)
+            except Exception:
+                pass
         if cap <= 0:
             return True
-        current = int(compliance_charge(team) or 0)
         return current + _player_nhl_salary(player) <= cap
     except Exception:
         return True
