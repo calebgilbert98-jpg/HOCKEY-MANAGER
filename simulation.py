@@ -2579,8 +2579,14 @@ class GameSim:
                 _pl = _stats.get('player')
                 if _pl is None:
                     continue
+                # Goalies: feed saves/shots-against so the last-10
+                # performance ledger grades on save% (Muck 2026-10-01),
+                # matching the quick-sim path.
+                _sv = _stats.get('saves', 0) or 0
+                _sa = _stats.get('shots_against', 0) or 0
                 _note = _rec(_pl, _stats.get('g', 0), _stats.get('a', 0),
-                             is_playoff=_is_po)
+                             is_playoff=_is_po,
+                             saves=_sv, shots_against=_sa)
                 if _note:
                     self.notable_events.append({'player': _pl, 'event': _note})
         except Exception:

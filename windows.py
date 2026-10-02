@@ -1513,16 +1513,23 @@ class RosterView(ctk.CTkFrame):
         on both sim paths -- skaters graded on points vs expectation,
         goalies on save% vs the .905 league line. Recent form, never
         overall: this kills the old overall-leak and makes the column
-        honest. "-" until he has played.
+        honest.
+
+        Shows the game count when fewer than 10 games are banked
+        (e.g. "72 (5)"). "—" until he has played, or when the ledger
+        is missing (old saves).
         """
         try:
             grades = getattr(player, "recent_game_grades", None) or []
             recent = [float(g) for g in grades[-10:]]
             if not recent:
-                return "-"
-            return f"{sum(recent) / len(recent):.0f}"
+                return "—"
+            avg = sum(recent) / len(recent)
+            if len(recent) < 10:
+                return f"{avg:.0f} ({len(recent)})"
+            return f"{avg:.0f}"
         except Exception:
-            return "-"
+            return "—"
 
     def calculate_nhl_readiness(self, player):
         """NHL readiness for AHL players: talent grade adjusted by the
