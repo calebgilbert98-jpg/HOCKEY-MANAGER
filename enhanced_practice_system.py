@@ -250,7 +250,7 @@ class PracticeEngine:
     def execute_practice(self, player, practice_type: PracticeType,
                         intensity: PracticeIntensity, duration_minutes: int = 60,
                         trainer_quality: int = 10,
-                        team=None) -> PracticeSession:
+                        team=None, offseason: bool = False) -> PracticeSession:
         """Execute a practice session and apply improvements.
 
         When ``team`` is given, the flat ``trainer_quality`` is replaced by
@@ -259,6 +259,10 @@ class PracticeEngine:
         fit, and whether the drill fits the club's system
         (coach_practice.practice_breakdown). Without a team the legacy
         trainer_quality path runs unchanged.
+
+        When ``offseason`` is True, gains are scaled by 0.8x (no game reps
+        to reinforce the work) and no fatigue is applied (players rest
+        between sessions in summer).
         """
 
         # Coaching-aware effectiveness (additive: legacy path untouched).
@@ -293,14 +297,18 @@ class PracticeEngine:
                 improvement = self._calculate_skill_improvement(
                     current_value, base_effectiveness * multiplier, player.age
                 )
+                # Offseason: 0.8x (no game reps to lock in the work).
+                if offseason:
+                    improvement *= 0.8
 
                 if improvement > 0:
                     new_value = min(100, current_value + improvement)  # native 100-scale cap
                     setattr(player, attribute, new_value)
                     skill_gains[attribute] = improvement
 
-        # Calculate fatigue cost (a motivating coach manages load better)
-        fatigue_cost = self._calculate_fatigue_cost(intensity, duration_minutes)
+        # Calculate fatigue cost (a motivating coach manages load better).
+        # Offseason: no fatigue -- summer rest between sessions.
+        fatigue_cost = 0 if offseason else self._calculate_fatigue_cost(intensity, duration_minutes)
         try:
             fatigue_cost = max(1, int(round(fatigue_cost * fatigue_mult)))
         except Exception:

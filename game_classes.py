@@ -432,6 +432,12 @@ class Player:
     second_number: int = 0
     jersey_number_since: int = None
     captaincy: str = None # 'C', 'A', or None
+    # Offseason training program: {'focus', 'intensity', 'assigned'} --
+    # set by the GM in June, runs weekly Jul-Aug (offseason_programs).
+    offseason_program: dict = None
+    # Season goal: {'type', 'target', 'set_date'} -- set by the GM in
+    # preseason, evaluated at season end (season_goals).
+    season_goal: dict = None
     icon_team: str = ""  # franchise where he is a team icon as a PLAYER
     # ("" = none). Stamped when legendary-captain status is earned; the
     # Coffey rule: icon status is team-specific and never reassigned.
