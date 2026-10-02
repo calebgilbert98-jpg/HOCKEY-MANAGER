@@ -4,7 +4,7 @@
 Part 1: schedule structure (seeds 2026/2027/2028/2031)
   - exactly 64 preseason entries, 4 per club (2026-27 CBA cap), Sep 22 - Oct 7 window
   - no club twice on one day, 3H/3A-ish band (2-4)
-  - regular season untouched: 1312 games, 82 per club, no date overlap
+  - regular season untouched: 1344 games, 84 per club, no date overlap
 Part 2: template cache round-trip preserves the preseason flag
 Part 3: sim guards -- standings, player stats, career GP all untouched
   by preseason games (unbound method calls on stubs, no GUI boot)
@@ -103,13 +103,13 @@ for seed in (2026, 2027, 2028, 2031):
     maxday = Counter(e["date"] for e in pre)
     check("<= 8 games/day", max(maxday.values()) <= 8,
           f"max {max(maxday.values())}")
-    check("1312 regular-season games", len(reg) == 1312, f"got {len(reg)}")
+    check("1344 regular-season games", len(reg) == 1344, f"got {len(reg)}")
     regper = Counter()
     for e in reg:
         regper[e["home_team"].team_name] += 1
         regper[e["away_team"].team_name] += 1
-    check("82 regular games per club",
-          all(v == 82 for v in regper.values()) and len(regper) == 32)
+    check("84 regular games per club",
+          all(v == 84 for v in regper.values()) and len(regper) == 32)
     predates = {e["date"] for e in pre}
     regdates = {e["date"] for e in reg}
     check("no date overlap pre/regular", not (predates & regdates))
@@ -128,9 +128,9 @@ lg2 = make_league()
 ok = lg2._apply_schedule_template(tpl)
 check("template applied", ok)
 pre1, reg1 = entries(lg2)
-check("preseason count survives round-trip", len(pre1) == len(pre0) == 96,
+check("preseason count survives round-trip", len(pre1) == len(pre0) == 64,
       f"{len(pre0)} -> {len(pre1)}")
-check("regular count survives round-trip", len(reg1) == len(reg0) == 1312,
+check("regular count survives round-trip", len(reg1) == len(reg0) == 1344,
       f"{len(reg0)} -> {len(reg1)}")
 sig = lambda es: sorted((e["date"].isoformat(), e["home_team"].team_name,
                          e["away_team"].team_name, bool(e.get("preseason")))
