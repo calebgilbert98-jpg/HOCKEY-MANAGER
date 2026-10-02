@@ -12627,7 +12627,17 @@ class ContractNegotiationView(ctk.CTkFrame):
         salary_row.pack(fill=tk.X, pady=4)
         ttk.Label(salary_row, text="Annual salary: $",
                   style="TLabel").pack(side=tk.LEFT)
-        init_sal = self._session.get("draft_salary") or "750000"
+        init_sal = self._session.get("draft_salary")
+        if not init_sal:
+            # Start at the league minimum for the current season (not a
+            # hardcoded 750k) -- the displayed minimum and the starting
+            # value must match.
+            try:
+                import salary_cap_system as _scs_min
+                _sy = getattr(getattr(app, "league", None), "season_year", None)
+                init_sal = str(_scs_min.league_minimum_salary(_sy))
+            except Exception:
+                init_sal = "850000"
         if self.is_elc and self._elc_floor is not None:
             # Never prefill below the displayed ELC floor -- the offer
             # would be dead on arrival.
@@ -12663,11 +12673,16 @@ class ContractNegotiationView(ctk.CTkFrame):
             max_years = 7 if self.is_extension else 6  # new CBA: 7 to re-sign, 6 external
             self.years_var = tk.IntVar(master=self,
                                        value=int(self._session.get("draft_years") or 1))
-            ttk.Scale(years_row, from_=1, to=max_years, variable=self.years_var,
-                      orient="horizontal", length=220).pack(side=tk.LEFT, padx=8)
-            ttk.Label(years_row, textvariable=self.years_var,
-                      style="TLabel", width=3).pack(side=tk.LEFT)
-            ttk.Label(years_row, text=f"year(s)  (max {max_years})",
+            # Fixed year options (1-6 UFA, 1-7 extension) -- no slider.
+            # A 1-year deal runs through the end of the current season.
+            _yr_btn_frame = ttk.Frame(years_row, style="Card.TFrame")
+            _yr_btn_frame.pack(side=tk.LEFT, padx=8)
+            for _yr in range(1, max_years + 1):
+                _rb = ttk.Radiobutton(_yr_btn_frame, text=str(_yr),
+                                      variable=self.years_var, value=_yr,
+                                      style="TLabel")
+                _rb.pack(side=tk.LEFT, padx=2)
+            ttk.Label(years_row, text="year(s)",
                       style="Secondary.TLabel").pack(side=tk.LEFT)
 
         # ---- ELC bonuses (instead of trade protection) ----
@@ -14132,10 +14147,14 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         ttk.Label(years_frame, text="Contract Length (years):", style='Info.TLabel').pack(side='left')
         
         self.years_var = tk.IntVar(master=self, value=min(5, max_years))
-        years_scale = ttk.Scale(years_frame, from_=1, to=max_years, variable=self.years_var, 
-                               orient='horizontal', length=200)
-        years_scale.pack(side='left', padx=10)
-        
+        # Fixed year options -- no slider. 1-year = through end of season.
+        _yr_btns = ttk.Frame(years_frame)
+        _yr_btns.pack(side='left', padx=10)
+        for _yr in range(1, max_years + 1):
+            ttk.Radiobutton(_yr_btns, text=str(_yr),
+                            variable=self.years_var, value=_yr,
+                            style='TLabel').pack(side='left', padx=2)
+
         years_label = ttk.Label(years_frame, textvariable=self.years_var, style='Info.TLabel')
         years_label.pack(side='left')
         
@@ -14301,8 +14320,16 @@ class ExtensionNegotiationView(ctk.CTkFrame):
             bonus = int(bonus_str) if bonus_str else 0
 
             # Validate inputs (in-view banner, not a popup)
-            if salary < 750000:
-                self._say("Salary must be at least $750,000 (NHL minimum).")
+            # League minimum is season-dependent -- never hardcode 750k.
+            try:
+                import salary_cap_system as _scs_v
+                _sy_v = getattr(getattr(self.app, "league", None),
+                                "season_year", None)
+                _min_sal = _scs_v.league_minimum_salary(_sy_v)
+            except Exception:
+                _min_sal = 850000
+            if salary < _min_sal:
+                self._say(f"Salary must be at least ${_min_sal:,} (NHL minimum).")
                 return
 
             if years < 1 or years > self.max_years:
