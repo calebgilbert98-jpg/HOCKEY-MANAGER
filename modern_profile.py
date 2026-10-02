@@ -204,6 +204,7 @@ class PlayerProfile(InGamePopup):
         # FM24-style tab strip
         tab_defs = [
             ("Overview", self._page_overview),
+            ("Health", self._page_health),
             ("Analytics", self._page_analytics),
             ("Personality", self._page_personality),
             ("Scout Report", self._page_scout),
@@ -278,6 +279,9 @@ class PlayerProfile(InGamePopup):
         self._create_stats(parent)
         self._create_contract_card(parent)
         self._create_attributes(parent)
+
+    def _page_health(self, parent):
+        self._create_health(parent)
 
     def _page_personality(self, parent):
         self._create_personality_traits(parent)
@@ -987,23 +991,8 @@ class PlayerProfile(InGamePopup):
                 pass
         # -- end composite ratings ------------------------------------------
 
-        # W6: one-row canonical Condition bar at the top of the Attributes
-        # card, color-coded on the shared condition scale.
-        try:
-            import condition_ui as _cu
-            _cond = _cu.get_condition(self.player)
-            self._create_attribute_bar(content, "Condition", _cond,
-                                       card.card_bg, compact=True,
-                                       fill_color=_cu.condition_color(_cond))
-            _inj = _cu.injury_status(self.player)
-            if _inj:
-                inj_row = tk.Label(content, text=f"Injury: {_inj}",
-                                   font=AppFonts.SMALL_BOLD,
-                                   fg=AppColors.DANGER,
-                                   bg=card.card_bg)
-                inj_row.pack(anchor="w", pady=(0, 6))
-        except Exception:
-            pass
+        # Muck 2026-10-02: the Condition bar + injury row moved to the
+        # Health tab (_create_health). Overview keeps attributes only.
 
         try:
             is_goalie = 'GOALIE' in str(self.player.primary_position).upper()
@@ -1036,6 +1025,196 @@ class PlayerProfile(InGamePopup):
                     continue
                 self._create_attribute_bar(col, label, val, card.card_bg,
                                            compact=True)
+
+    def _create_health(self, parent):
+        """Health tab: condition, active injury + recovery timeline, history.
+
+        Muck 2026-10-02: the player card's medical home -- active injuries
+        with estimated return, full injury history, and the Condition bar
+        (moved here from the Overview Attributes card). Never raises.
+        """
+        p = self.player
+        try:
+            import condition_ui as _cu
+        except Exception:
+            _cu = None
+
+        def _row(host, label, value, value_fg=None):
+            r = tk.Frame(host, bg=card_bg)
+            r.pack(fill="x", pady=3)
+            tk.Label(r, text=label, font=AppFonts.SMALL,
+                     fg=AppColors.TEXT_SECONDARY, bg=card_bg,
+                     width=24, anchor="w").pack(side="left")
+            tk.Label(r, text=str(value), font=AppFonts.SMALL_BOLD,
+                     fg=value_fg or AppColors.TEXT_PRIMARY,
+                     bg=card_bg, anchor="w").pack(side="left", fill="x",
+                                                  expand=True)
+
+        # --- Medical Status card (condition lives here now) ---------------
+        card = AppCard(parent)
+        card.pack(fill="x", pady=(0, 16))
+        content = card.get_content_frame()
+        card_bg = card.card_bg
+        tk.Label(content, text="Medical Status",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card_bg).pack(anchor="w", pady=(0, 12))
+
+        try:
+            if _cu is not None:
+                _cond = _cu.get_condition(p)
+                self._create_attribute_bar(
+                    content, "Condition", _cond, card_bg, compact=True,
+                    fill_color=_cu.condition_color(_cond))
+                _row(content, "Condition:",
+                     f"{_cond} ({_cu.condition_label(_cond)})",
+                     _cu.condition_color(_cond))
+        except Exception:
+            pass
+
+        try:
+            _injured = bool(getattr(p, "is_injured", False))
+            _status = _cu.injury_status(p) if _cu is not None else None
+            if _injured and _status:
+                _row(content, "Status:", f"🚑 {_status}", AppColors.DANGER)
+            elif _injured:
+                _row(content, "Status:", "🚑 Injured", AppColors.DANGER)
+            else:
+                _row(content, "Status:", "✅ Healthy", AppColors.SUCCESS)
+        except Exception:
+            pass
+
+        try:
+            _prone = getattr(p, "injury_proneness",
+                             getattr(p, "injury_prone", 50))
+            _prone = int(_prone or 0)
+            _dur = max(0, min(100, 100 - _prone))
+            _dlab = ("Durable" if _prone <= 25 else
+                     "Average" if _prone <= 55 else "Fragile")
+            _dcol = (AppColors.SUCCESS if _prone <= 25 else
+                     AppColors.TEXT_PRIMARY if _prone <= 55
+                     else AppColors.WARNING)
+            _row(content, "Durability:", f"{_dur}/100 ({_dlab})", _dcol)
+        except Exception:
+            pass
+
+        # --- Active Injury card ------------------------------------------
+        try:
+            if bool(getattr(p, "is_injured", False)):
+                acard = AppCard(parent)
+                acard.pack(fill="x", pady=(0, 16))
+                acontent = acard.get_content_frame()
+                card_bg = acard.card_bg
+                tk.Label(acontent, text="Active Injury",
+                         font=AppFonts.H2, fg=AppColors.DANGER,
+                         bg=card_bg).pack(anchor="w", pady=(0, 12))
+
+                _itype = str(getattr(p, "injury_type", "Injured") or
+                             "Injured").strip() or "Injured"
+                _row(acontent, "Injury:", _itype, AppColors.DANGER)
+
+                try:
+                    _n = int(getattr(p, "games_remaining_injured", 0) or 0)
+                except Exception:
+                    _n = 0
+                if _n > 0:
+                    _row(acontent, "Est. return:",
+                         f"~{_n} game{'s' if _n != 1 else ''}",
+                         AppColors.WARNING)
+                    tk.Label(
+                        acontent,
+                        text="Recovery counts down per game played.",
+                        font=AppFonts.CAPTION,
+                        fg=AppColors.TEXT_SECONDARY,
+                        bg=card_bg).pack(anchor="w", pady=(6, 0))
+                else:
+                    _row(acontent, "Est. return:", "Day-to-day",
+                         AppColors.WARNING)
+
+                # Region from the most recent history entry, if recorded.
+                try:
+                    _hist = getattr(p, "injury_history", None) or []
+                    if _hist:
+                        _last = _hist[-1]
+                        _reg = str(_last.get("region", "") or "").strip()
+                        if _reg and _reg != "?":
+                            _row(acontent, "Area:", _reg)
+                        if bool(_last.get("concussion", False)):
+                            _row(acontent, "Note:",
+                                 "🧠 Concussion protocol",
+                                 AppColors.WARNING)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # --- Injury History card -----------------------------------------
+        hcard = AppCard(parent)
+        hcard.pack(fill="x", pady=(0, 16))
+        hcontent = hcard.get_content_frame()
+        card_bg = hcard.card_bg
+        tk.Label(hcontent, text="Injury History",
+                 font=AppFonts.H2, fg=AppColors.TEXT_PRIMARY,
+                 bg=card_bg).pack(anchor="w", pady=(0, 4))
+        tk.Label(hcontent,
+                 text="Most recent first. Career totals below.",
+                 font=AppFonts.CAPTION, fg=AppColors.TEXT_SECONDARY,
+                 bg=card_bg).pack(anchor="w", pady=(0, 12))
+
+        _entries = []
+        try:
+            _raw = getattr(p, "injury_history", None) or []
+            _entries = [e for e in reversed(_raw) if isinstance(e, dict)]
+        except Exception:
+            pass
+
+        if _entries:
+            for _e in _entries:
+                try:
+                    _t = str(_e.get("type", "Injury") or "Injury")
+                    _reg = str(_e.get("region", "") or "").strip()
+                    _g = _e.get("games", 0)
+                    try:
+                        _g = int(_g or 0)
+                    except Exception:
+                        _g = 0
+                    _bits = _t
+                    if _reg and _reg != "?":
+                        _bits += f" ({_reg})"
+                    _bits += f" — {_g} game{'s' if _g != 1 else ''} missed"
+                    if bool(_e.get("concussion", False)):
+                        _bits += "  🧠"
+                    tk.Label(hcontent, text=f"• {_bits}",
+                             font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_PRIMARY,
+                             bg=card_bg, anchor="w",
+                             justify="left").pack(anchor="w", fill="x",
+                                                  pady=2)
+                except Exception:
+                    continue
+        else:
+            tk.Label(hcontent, text="No recorded injuries.",
+                     font=AppFonts.SMALL, fg=AppColors.TEXT_SECONDARY,
+                     bg=card_bg).pack(anchor="w", pady=(0, 6))
+
+        try:
+            _cgm = int(getattr(p, "career_games_missed", 0) or 0)
+        except Exception:
+            _cgm = 0
+        try:
+            _dms = int(getattr(p, "days_missed", 0) or 0)
+        except Exception:
+            _dms = 0
+        try:
+            _cc = int(getattr(p, "career_concussions", 0) or 0)
+        except Exception:
+            _cc = 0
+        _sep = tk.Frame(hcontent, bg=card_bg, height=1)
+        _sep.pack(fill="x", pady=(10, 8))
+        _row(hcontent, "Career games missed:", f"{_cgm}")
+        _row(hcontent, "Days missed (season):", f"{_dms}")
+        if _cc:
+            _row(hcontent, "Career concussions:", f"{_cc}",
+                 AppColors.WARNING)
 
     def _create_personality_traits(self, parent):
         """Personality: character, morale, reputation -- who he is."""
