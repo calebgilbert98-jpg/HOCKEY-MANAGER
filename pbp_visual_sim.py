@@ -827,21 +827,44 @@ class PBPVisualSim(tk.Toplevel):
         return cv
 
     def _build_widgets(self):
-        # Broadcast score bug: [BOS][1 – 2][BUF][P3 04:32]  WIN PROB  LIVE
+        # Broadcast score bug: [jersey][BOS][1 – 2][BUF][jersey][P3 04:32]  WIN PROB  LIVE
         top = tk.Frame(self, bg=BG)
         top.pack(fill="x", padx=10, pady=(10, 6))
+        # Broadcast score bug: [jersey][EDM][3 – 2][STL][jersey][P3 04:32]
         bug = tk.Frame(top, bg="#16161a")
         bug.pack(side="left")
         self._jersey_icon(bug, self.home_team.team_name,
                           self._home_tc).pack(side="left")
+        # Muck 2026-10-02: score must be prominent right up top with the
+        # teams -- big score, team-colored abbreviation pills flanking it.
+        try:
+            _hbg = (self._home_tc[0] if self._home_tc and self._home_tc[0]
+                    else ACCENT)
+            _hfg = (self._home_tc[1] if self._home_tc and self._home_tc[1]
+                    else "white")
+        except Exception:
+            _hbg, _hfg = ACCENT, "white"
+        tk.Label(bug, text=_abbr(self.home_team.team_name), bg=_hbg, fg=_hfg,
+                 font=_vfont(17, "bold"), padx=8, pady=2).pack(side="left",
+                                                               padx=(8, 2))
         self.score_var = tk.StringVar(value="0 – 0")
         tk.Label(bug, textvariable=self.score_var, bg="#16161a", fg="white",
-                 font=_vfont(18, "bold"), padx=10).pack(side="left")
+                 font=_vfont(30, "bold"), padx=12).pack(side="left")
+        try:
+            _abg = (self._away_tc[0] if self._away_tc and self._away_tc[0]
+                    else ACCENT)
+            _afg = (self._away_tc[1] if self._away_tc and self._away_tc[1]
+                    else "white")
+        except Exception:
+            _abg, _afg = ACCENT, "white"
+        tk.Label(bug, text=_abbr(self.away_team.team_name), bg=_abg, fg=_afg,
+                 font=_vfont(17, "bold"), padx=8, pady=2).pack(side="left",
+                                                               padx=(2, 8))
         self._jersey_icon(bug, self.away_team.team_name,
                           self._away_tc).pack(side="left")
         self.clock_var = tk.StringVar(value="P1 20:00")
         tk.Label(bug, textvariable=self.clock_var, bg="#23262e", fg=_user_accent(),
-                 font=_vfont(14, "bold"), padx=10, pady=6).pack(side="left")
+                 font=_vfont(16, "bold"), padx=12, pady=8).pack(side="left")
 
         # Win probability (home perspective), next to the bug
         probf = tk.Frame(top, bg=BG)
