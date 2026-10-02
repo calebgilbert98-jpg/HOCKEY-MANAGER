@@ -987,6 +987,23 @@ class PBPVisualSim(tk.Toplevel):
         self.canvas.bind("<Button-1>", self._on_canvas_click)
         rink_frame.bind("<Configure>", self._on_rink_frame_configure)
 
+        # Team comparison header: makes the live stats strip below
+        # unmissable. Team abbreviations in team colors so it's clear
+        # which number belongs to which club. (Muck 2026-10-02)
+        try:
+            cmp_head = tk.Frame(rink_frame, bg=BG)
+            cmp_head.pack(fill="x", padx=4, pady=(0, 2))
+            tk.Label(cmp_head, text="TEAM COMPARISON", bg=BG, fg=MUTED,
+                     font=_vfont(9, "bold")).pack(side="left", padx=(6, 0))
+            tk.Label(cmp_head, text=_abbr(self.away_team.team_name), bg=BG,
+                     fg=self._away_fg, font=_vfont(10, "bold")).pack(side="right", padx=(0, 6))
+            tk.Label(cmp_head, text="@", bg=BG, fg=MUTED,
+                     font=_vfont(10)).pack(side="right")
+            tk.Label(cmp_head, text=_abbr(self.home_team.team_name), bg=BG,
+                     fg=self._home_fg, font=_vfont(10, "bold")).pack(side="right")
+        except Exception:
+            pass
+
         # Live team-stats strip under the rink (Shots / Hits / Faceoffs / PIM)
         self.team_stats = {"home": {"Shots": 0, "Hits": 0, "FO": 0, "PIM": 0},
                            "away": {"Shots": 0, "Hits": 0, "FO": 0, "PIM": 0}}
