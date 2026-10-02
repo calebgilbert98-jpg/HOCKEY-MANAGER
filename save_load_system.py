@@ -1856,7 +1856,7 @@ class GameSaveManager:
             # real options. Never raises; generation is bounded.
             try:
                 _pool = getattr(league, "free_agent_staff", None) or []
-                if len(_pool) < 400:
+                if len(_pool) < 840:
                     from database_generator import DatabaseGenerator as _DG
                     _gen = _DG.__new__(_DG)
                     _need = 450 - len(_pool)

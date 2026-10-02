@@ -472,7 +472,7 @@ class DatabaseGenerator:
         # dense + diverse so every position has real options).
         # Target ~450: deep enough for genuine choice at every position,
         # small enough that save/load stays fast (Staff objects are tiny).
-        free_agent_staff_count = max(420, int(len(main_league.teams) * 14))
+        free_agent_staff_count = max(840, int(len(main_league.teams) * 28))
         free_agent_staff = self._generate_free_agent_staff(free_agent_staff_count)
         main_league.free_agent_staff.extend(free_agent_staff)
 
