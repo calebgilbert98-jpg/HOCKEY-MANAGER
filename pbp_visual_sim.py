@@ -467,7 +467,7 @@ def _best_line(team):
 # The visualizer window
 # ----------------------------------------------------------------------------
 class PBPVisualSim(tk.Toplevel):
-    GAME_RATE = 8.0  # game-seconds per real second at 1x
+    GAME_RATE = 4.0  # game-seconds per real second at 1x
     TICK_DT = 1.0 / 30.0  # real seconds per animation frame (~30fps)
     # Dot skating speeds in rink-feet per GAME-second. Like puck flights,
     # dots move in game-time (scaled by playback speed) so they track the
@@ -3520,6 +3520,9 @@ class PBPVisualSim(tk.Toplevel):
         ps = self._pending_shot
         if ps is None:
             return
+        if not self.playing:
+            # Paused: the shooter holds his lane; the shot fires on resume.
+            return
         if self._faceoff_ceremony:
             # Whistle blew while the shooter was skating in: the play is
             # dead. Discard the shot -- its outcome was already flushed and
@@ -5482,9 +5485,9 @@ class PBPVisualSim(tk.Toplevel):
                 # ground at a steady pace instead of zooming then crawling.
                 # Game-time: scaled by playback speed like puck flights, so
                 # dots track the sim's discrete positions at 1x and 4x alike.
-                dt_gs = self.TICK_DT * (self._auto_speed()
-                                        if self.auto_pace else self.speed) \
-                    * self.GAME_RATE
+                dt_gs = (self.TICK_DT * (self._auto_speed()
+                                        if self.auto_pace else self.speed)
+                    * self.GAME_RATE) if self.playing else 0.0
                 if d.get("ceremony_glide"):
                     step = self.CEREMONY_SPEED * self.TICK_DT  # broadcast beat
                 elif d["role"] == "G":
@@ -5605,9 +5608,9 @@ class PBPVisualSim(tk.Toplevel):
                     pdist = math.hypot(pdx, pdy)
                     # game-time like everything else (was real-time: froze
                     # relative to the sim at higher playback speeds)
-                    pstep = 5.0 * self.TICK_DT * (
+                    pstep = (5.0 * self.TICK_DT * (
                         self._auto_speed() if self.auto_pace
-                        else self.speed) * self.GAME_RATE
+                        else self.speed) * self.GAME_RATE) if self.playing else 0.0
                     if pdist <= pstep:
                         self.puck["x"], self.puck["y"] = tx, ty
                     elif pdist > 0:
