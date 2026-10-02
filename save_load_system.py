@@ -539,6 +539,10 @@ class GameSaveManager:
             # milestone. Missing key = old save -> rebuilt from scratch.
             '_milestone_celebrated': [list(k) for k in
                                      (getattr(league, '_milestone_celebrated', None) or set())],
+            # Bucket 4: carryover-chase idempotency -- which seasons already
+            # got their "the chase resumes" notes. Missing = old save -> empty.
+            '_milestone_carryover_noted': sorted(
+                list(getattr(league, '_milestone_carryover_noted', None) or set())),
             # Draft-steal retrospective idempotency: which players already
             # got their steal story. Same bug class as milestones -- a load
             # re-fires every past retrospective without this.
@@ -1720,6 +1724,13 @@ class GameSaveManager:
                     (league_data.get('_milestone_celebrated', None) or []))
             except Exception:
                 league._milestone_celebrated = set()
+            # Bucket 4: carryover-chase idempotency. Absent in old
+            # saves -> empty, same as a fresh league.
+            try:
+                league._milestone_carryover_noted = set(
+                    league_data.get('_milestone_carryover_noted', None) or [])
+            except Exception:
+                league._milestone_carryover_noted = set()
             # Draft-steal retrospective idempotency. Absent in old
             # saves -> empty, same as a fresh league.
             try:

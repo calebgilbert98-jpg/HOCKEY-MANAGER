@@ -11679,8 +11679,9 @@ class HockeyManagerGUI(tk.Tk):
 
         Caches the watch list for the post-game check and the set of teams
         with a tonight-watch (feeds arena_atmosphere's milestone_home flag).
-        Pre-game news only when a watch is within 2 -- tonight could be the
-        night. Never spams for distant watches.
+        Pre-game news when a watch is within 2 -- tonight could be the
+        night. Mid-range chases (3-5 away) get a throttled weekly mention
+        so anticipation builds without spam. Never spams for distant watches.
         """
         self._milestone_watches = []
         self._milestone_watch_teams = set()
@@ -11694,9 +11695,26 @@ class HockeyManagerGUI(tk.Tk):
                 return
             _led = _al()
             _by_team: dict = {}
+            _mid_range: dict = {}
             for _w in watches:
                 if _w["remaining"] <= 2:
                     _by_team.setdefault(_w["team_name"], []).append(_w)
+                elif _w["remaining"] <= 5:
+                    _mid_range.setdefault(_w["team_name"], []).append(_w)
+            # Bucket 4: mid-range chase anticipation, throttled to weekly.
+            try:
+                _today = getattr(self, "current_date", None)
+                _doy = int(getattr(_today, "timetuple", lambda: None)()
+                           .tm_yday) if _today else 0
+            except Exception:
+                _doy = 0
+            if _mid_range and _doy % 7 == 0:
+                for _tn, _ws in _mid_range.items():
+                    try:
+                        _w0 = _ws[0]
+                        self.add_news(_ms.chase_copy(_w0))
+                    except Exception:
+                        continue
             if not _by_team:
                 return
             for game in todays_games or []:
@@ -11709,12 +11727,17 @@ class HockeyManagerGUI(tk.Tk):
                     for _w in _by_team.get(hn, []):
                         _note = _ms.venue_note(_w, home, away, _led)
                         _suffix = f" ({_note})" if _note else ""
-                        self.add_news(
-                            f"Milestone watch: {_w['player_name']} is "
-                            f"{_w['remaining']} away from his {_w['label']}"
-                            f"{_suffix}.")
+                        # Bucket 4: escalating chase copy, not a flat "N away".
+                        _chase = _ms.chase_copy(_w)
+                        self.add_news(f"{_chase}{_suffix}.")
                 except Exception:
                     continue
+        except Exception:
+            pass
+        # Bucket 4: cross-season chase continuity -- "the chase resumes".
+        try:
+            import milestones as _ms2
+            _ms2.carryover_chases(self)
         except Exception:
             pass
 
