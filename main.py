@@ -1470,6 +1470,51 @@ NHL League Office""",
         if len(leaders) > 2:
             leaders[2].captaincy = 'A'
     
+    def get_captaincy_deadline_info(self):
+        """Days until opening night (first regular-season game) and deadline date.
+
+        Used for the visible preseason captaincy timeline. Returns
+        (days_remaining, deadline_date) or (None, None) if the schedule
+        isn't available. Display-free, headless-safe.
+        """
+        try:
+            from datetime import date as _date
+            today = getattr(self, "current_date", None)
+            if today is None:
+                return None, None
+            sched = getattr(getattr(self, "league", None), "schedule", None)
+            if not sched:
+                return None, None
+            # Find the earliest non-preseason game on/after today.
+            best = None
+            for g in sched:
+                try:
+                    if isinstance(g, dict):
+                        gd = g.get("date")
+                        is_pre = bool(g.get("preseason"))
+                    else:
+                        gd = g[0] if len(g) > 0 else None
+                        is_pre = False
+                        # tuple schedules don't flag preseason; infer by
+                        # month: September games are preseason.
+                        try:
+                            if getattr(gd, "month", 10) == 9:
+                                is_pre = True
+                        except Exception:
+                            pass
+                    if is_pre or gd is None or gd < today:
+                        continue
+                    if best is None or gd < best:
+                        best = gd
+                except Exception:
+                    continue
+            if best is None:
+                return None, None
+            days = (best - today).days
+            return max(0, days), best
+        except Exception:
+            return None, None
+
     def _ensure_captaincy(self, team) -> "str | None":
         """NHL Rule 6.1: every club must have exactly one captain -- and it
         can't be a goaltender. Idempotent: a valid existing captain is
@@ -7294,14 +7339,27 @@ class HockeyManagerGUI(tk.Tk):
                     # Preseason reminder: if the human club still needs
                     # captains, post a non-blocking inbox task. The
                     # regular-season phase will enforce it with the picker.
+                    # Preseason reminder with visible timeline: the user sees
+                    # exactly how long they have before the picker blocks
+                    # at opening night.
                     try:
                         if (_phase == "preseason" and _gm is not None
                                 and getattr(_gm, "_captaincy_choice_pending",
                                             False)):
+                            _days, _ddl = _gm.get_captaincy_deadline_info()
+                            if _days is not None and _ddl is not None:
+                                _when = (f"Opening night is in {_days} day"
+                                         f"{'s' if _days != 1 else ''} "
+                                         f"({_ddl.strftime('%b %d')})")
+                            else:
+                                _when = "before opening night"
                             self.add_news(
-                                "Ⓒ Preseason task: name your captain (C) and "
-                                "two alternates (A) before opening night. "
-                                "Open the roster to choose.")
+                                f"Ⓒ Preseason tasks: name your captain (C) and "
+                                f"two alternates (A) {_when}. "
+                                f"Open the roster to choose -- the picker "
+                                f"will block you at opening night if "
+                                f"it's still not done. You can also assign "
+                                f"jersey numbers from the roster.")
                     except Exception:
                         pass
                     # Numbers finalized with the captaincy: freed favorites
@@ -20135,6 +20193,75 @@ class HockeyManagerGUI(tk.Tk):
             return
         self.open_contract_negotiation_window(
             person, is_extension=bool(data.get("is_extension", False)))
+
+    def open_jersey_numbers_window(self):
+        """Dedicated jersey number editor: full roster, click to reassign.
+
+        More discoverable than the right-click context menu. Retired
+        numbers stay retired, goalie numbers stay with goalies, and
+        duplicates are blocked -- same rules as assign_jersey_number.
+        """
+        try:
+            from popup_system import InGamePopup
+        except Exception:
+            return
+        team = getattr(self, "user_team", None)
+        if team is None:
+            return
+        roster = sorted(list(getattr(team, "roster", None) or []),
+                        key=lambda p: (getattr(p, "jersey_number", 99),
+                                       getattr(p, "full_name", "")))
+
+        win = InGamePopup(self, modal=False)
+        win.title(f"Jersey Numbers -- {getattr(team, 'team_name', 'Roster')}")
+        try:
+            win.geometry("420x560")
+        except Exception:
+            pass
+
+        import tkinter as tk
+        from tkinter import ttk
+
+        hdr = ttk.Label(win, text="Click a player to reassign their number.",
+                        font=("Segoe UI", 10))
+        hdr.pack(pady=(10, 4))
+
+        frame = ttk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=4)
+        lb = tk.Listbox(frame, font=("Segoe UI", 11), height=20)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        players = []
+        for p in roster:
+            num = getattr(p, "jersey_number", 0)
+            cap = getattr(p, "captaincy", "") or ""
+            pos = getattr(getattr(p, "primary_position", None), "name", "")
+            label = f"#{num:2d}  {cap:1s}  {getattr(p, 'full_name', '?')}  ({pos})"
+            lb.insert("end", label)
+            players.append(p)
+
+        def _reassign(_ev=None):
+            sel = lb.curselection()
+            if not sel:
+                return
+            p = players[sel[0]]
+            self.assign_jersey_number(p)
+            # Refresh the list entry in place.
+            num = getattr(p, "jersey_number", 0)
+            cap = getattr(p, "captaincy", "") or ""
+            pos = getattr(getattr(p, "primary_position", None), "name", "")
+            lb.delete(sel[0])
+            lb.insert(sel[0],
+                      f"#{num:2d}  {cap:1s}  {getattr(p, 'full_name', '?')}  ({pos})")
+            lb.selection_set(sel[0])
+
+        lb.bind("<Double-Button-1>", _reassign)
+        btn = ttk.Button(win, text="Reassign Selected",
+                         command=_reassign)
+        btn.pack(pady=(4, 10))
 
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)
