@@ -70,6 +70,9 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "league_digest": _league_digest_headline,
         "rivalry_pregame": _rivalry_pregame_headline,
         "ahl_story": _ahl_story_headline,
+        "trade_speculation": _trade_speculation_headline,
+        "fan_narrative": _fan_narrative_headline,
+        "board_narrative": _board_narrative_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -181,6 +184,55 @@ def _trade_request_headline(game_date, player_name, team_name, age=None,
         category="Trade",
         priority=3,
         is_important=True,
+    )
+
+
+def _trade_speculation_headline(game_date, team_a, team_b, pieces_a,
+                                pieces_b, winner_name="", loser_name="",
+                                **kw):
+    """Media/fan speculation on a lopsided trade.
+
+    D48 (L2): Per Muck's directive, "fleece" is media/fan speculation, not
+    an objective league judgment. This headline is ALWAYS framed as opinion
+    -- "pundits are saying...", "some fans think..." -- never as fact.
+    It NEVER blocks or penalizes trades; it's narrative flavor only.
+    """
+    from game_classes import EmailMessage
+    try:
+        import random as _r
+        _templates = [
+            (f"🤔 Did {loser_name} just get fleeced?",
+             f"{team_a} receive: {pieces_a}\n"
+             f"{team_b} receive: {pieces_b}\n\n"
+             f"Some pundits are already calling this a fleece for "
+             f"{winner_name}. Others say it's too early to judge -- "
+             f"but the phones are buzzing."),
+            (f"📊 Pundits split on {team_a}-{team_b} deal",
+             f"{team_a} receive: {pieces_a}\n"
+             f"{team_b} receive: {pieces_b}\n\n"
+             f"Talk radio is divided. Some fans think {winner_name} "
+             f"won this one big; others argue {loser_name} got exactly "
+             f"what they needed. Only time will tell."),
+            (f"🔥 Hot take: {winner_name} won the trade?",
+             f"{team_a} receive: {pieces_a}\n"
+             f"{team_b} receive: {pieces_b}\n\n"
+             f"Early grades are in, and some analysts have {winner_name} "
+             f"winning comfortably. {loser_name} fans aren't happy -- "
+             f"but the front office clearly saw something they liked."),
+        ]
+        _subject, _content = _r.choice(_templates)
+    except Exception:
+        _subject = f"Trade speculation: {team_a} / {team_b}"
+        _content = (f"{team_a} receive: {pieces_a}\n"
+                    f"{team_b} receive: {pieces_b}")
+    return EmailMessage(
+        sender="League Insider",
+        sender_type="Media",
+        subject=_subject,
+        content=_content,
+        category="Trade",
+        priority=2,
+        is_important=False,
     )
 
 
@@ -546,6 +598,25 @@ def _fan_narrative_headline(game_date, headline="", body="", tier="",
         subject=f"{emoji} {headline}",
         content=f"{body}\n\n— Fan Pulse, {team_name} beat",
         category="Fan Narrative",
+        priority=2,
+    )
+
+
+def _board_narrative_headline(game_date, headline="", body="",
+                              team_name="", gm_name="", **kw):
+    """Boardroom narrative headline (L4 wire, Muck 2026-10-02).
+
+    Ownership losing patience, hot-seat stories, votes of confidence --
+    the board-pressure nudge made visible. Delivered via the same
+    pipeline as fan narratives.
+    """
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="Insider",
+        sender_type="Media",
+        subject=f"🏢 {headline}",
+        content=f"{body}\n\n— Insider, {team_name} beat",
+        category="Board Narrative",
         priority=2,
     )
 

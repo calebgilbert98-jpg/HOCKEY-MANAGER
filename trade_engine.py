@@ -3242,6 +3242,17 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                              board_a=board)
     except Exception:
         pass
+    # D48 (L2): media/fan speculation on lopsided trades. Framed as opinion,
+    # never fact -- "pundits are saying...", "some fans think...".
+    # Note: record_gm_dealing is already called via record_trade_outcome
+    # above (which routes through the D48 ledger internally). We don't
+    # call it again here to avoid double-counting.
+    try:
+        _maybe_fire_trade_speculation(league, user_team, partner_team,
+                                      user_assets, partner_assets,
+                                      user_ratio, date_str)
+    except Exception:
+        pass
     # D4: trading away a star is a board headline (star_leaves fuel).
     # One headline per trade, even in a multi-star blockbuster.
     try:
@@ -3282,6 +3293,70 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
         pass
     return CompletedTrade(date_str, user_team.team_name, partner_team.team_name,
                           a_labels, b_labels, summary)
+
+
+def _maybe_fire_trade_speculation(league, user_team, partner_team,
+                                  user_assets, partner_assets,
+                                  user_ratio, date_str) -> None:
+    """D48 (L2): fire media/fan speculation on lopsided trades.
+
+    Per Muck's directive, "fleece" is speculation, not fact. This fires a
+    headline framed as opinion when the trade looks lopsided on paper.
+    It NEVER blocks, modifies, or penalizes the trade -- pure narrative.
+
+    Only fires on genuinely lopsided deals (ratio >= 1.5 or <= 0.67) to
+    avoid spamming every minor trade.
+    """
+    try:
+        if user_ratio >= 1.5:
+            _winner, _loser = user_team, partner_team
+        elif user_ratio <= 0.67:
+            _winner, _loser = partner_team, user_team
+        else:
+            return  # not lopsided enough for speculation
+        from headlines import make_headline
+        from datetime import date as _date
+        try:
+            _gdate = _date.fromisoformat(str(date_str)[:10])
+        except Exception:
+            _gdate = _date.today()
+        # Asset labels for the headline.
+        def _labels(assets):
+            _out = []
+            for a in (assets or [])[:4]:
+                _nm = getattr(a, "name", None) or getattr(
+                    a, "full_name", None) or "pick"
+                _out.append(str(_nm))
+            return ", ".join(_out) or "assets"
+        _msg = make_headline(
+            "trade_speculation", _gdate,
+            team_a=getattr(user_team, "team_name", "?"),
+            team_b=getattr(partner_team, "team_name", "?"),
+            pieces_a=_labels(user_assets),
+            pieces_b=_labels(partner_assets),
+            winner_name=getattr(_winner, "team_name", "?"),
+            loser_name=getattr(_loser, "team_name", "?"),
+        )
+        if _msg is None:
+            return
+        # Deliver to the league inbox via the standard pipeline.
+        try:
+            import main as _main
+            _deliver = getattr(_main, "deliver_headline", None)
+            if _deliver is not None:
+                _deliver(league, _msg)
+                return
+        except Exception:
+            pass
+        # Fallback: append to league inbox directly.
+        try:
+            _inbox = getattr(league, "inbox", None)
+            if _inbox is not None:
+                _inbox.append(_msg)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _post_trade_effects(user_team, partner_team, user_assets, partner_assets,
