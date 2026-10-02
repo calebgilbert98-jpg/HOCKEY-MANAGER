@@ -19,6 +19,97 @@ import customtkinter as ctk
 from popup_system import InGamePopup
 
 
+def compute_line_ratings(lines_snapshot, game_stats, by_id):
+    """Pure: per-line player grades + combined line ratings for the Lines tab.
+
+    lines_snapshot: {'Forwards': [[pid..] x4], 'Defense': [[pid..] x3]}
+      (player IDs, as stamped on the game result by
+      HockeyManagerGUI._snapshot_game_lines).
+    game_stats: {pid: {'g': int, 'a': int}} for that game.
+    by_id: {pid: Player}.
+
+    Returns a list of
+      {'label': 'Line 1', 'players': [{'player', 'pos', 'g', 'a', 'p',
+                                       'grade'}], 'rating': float|None}
+    'grade' is the player's 0-10 game grade for THIS game (the exact
+    formula record_performance appends to recent_game_grades, /10) or None
+    when the player has no stats for the game. 'rating' is the mean of the
+    available grades, or None when nobody on the unit has a grade.
+    Never raises. (Muck 2026-10-02: "that way we know if lines are working".)
+    """
+    out = []
+    try:
+        from mesh_system import compute_skater_game_grade
+    except Exception:
+        compute_skater_game_grade = None
+    try:
+        from game_classes import position_label as _pos_label
+    except Exception:
+        _pos_label = None
+
+    def _grade(player, pid):
+        if compute_skater_game_grade is None:
+            return None
+        try:
+            if pid not in (game_stats or {}):
+                # No stats recorded for this player in this game: honest
+                # "no data", never a neutral-looking 5.0.
+                return None
+            gs = game_stats.get(pid) or {}
+            if not isinstance(gs, dict):
+                return None
+            return round(compute_skater_game_grade(
+                player, gs.get('g', 0), gs.get('a', 0)) / 10.0, 1)
+        except Exception:
+            return None
+
+    def _pos(player):
+        try:
+            if _pos_label is not None:
+                return _pos_label(player)
+        except Exception:
+            pass
+        try:
+            pos = getattr(player, 'primary_position', None)
+            return str(getattr(pos, 'value', None)
+                       or getattr(pos, 'name', '') or '?')
+        except Exception:
+            return '?'
+
+    try:
+        snap = lines_snapshot or {}
+        units = []
+        for i, line in enumerate((snap.get('Forwards') or [])[:4]):
+            units.append((f"Line {i + 1}", line or []))
+        for i, pair in enumerate((snap.get('Defense') or [])[:3]):
+            units.append((f"Pair {i + 1}", pair or []))
+        for label, pids in units:
+            players = []
+            grades = []
+            for pid in pids or []:
+                try:
+                    p = (by_id or {}).get(pid)
+                    if p is None:
+                        continue
+                    gs = (game_stats or {}).get(pid) or {}
+                    g = int(gs.get('g', 0) or 0)
+                    a = int(gs.get('a', 0) or 0)
+                    grade = _grade(p, pid)
+                    if grade is not None:
+                        grades.append(grade)
+                    players.append({'player': p, 'pos': _pos(p),
+                                    'g': g, 'a': a, 'p': g + a,
+                                    'grade': grade})
+                except Exception:
+                    continue
+            rating = round(sum(grades) / len(grades), 1) if grades else None
+            out.append({'label': label, 'players': players,
+                        'rating': rating})
+    except Exception:
+        pass
+    return out
+
+
 class GameBoxScoreView(ctk.CTkFrame):
     """Game box score view (embedded full-screen).
 
@@ -26,7 +117,7 @@ class GameBoxScoreView(ctk.CTkFrame):
     main window (the default, via HockeyManagerGUI.show_screen) or inside
     the legacy GameBoxScoreWindow popup card.
     """
-    TABS = ("Scoring Summary", "Player Stats", "Team Stats")
+    TABS = ("Scoring Summary", "Player Stats", "Lines", "Team Stats")
 
     def __init__(self, parent, game_result, initial_tab="Scoring Summary", app=None):
         from ctk_theme import (
@@ -161,6 +252,7 @@ class GameBoxScoreView(ctk.CTkFrame):
             self.tabs.add(name)
         self._fill_scoring(self.tabs.tab("Scoring Summary"))
         self._fill_players(self.tabs.tab("Player Stats"))
+        self._fill_lines(self.tabs.tab("Lines"))
         self._fill_teams(self.tabs.tab("Team Stats"))
         if initial_tab in self.TABS:
             try:
@@ -351,6 +443,128 @@ class GameBoxScoreView(ctk.CTkFrame):
                 widths=[220, 52, 64, 64, 52],
                 rows=grows,
                 players=[p for p, gs in goalies])
+
+    # ------------------------------------------------------------------
+    # Lines tab (Muck 2026-10-02): even-strength combos with combined
+    # per-line game ratings, so you can see whether lines are working.
+    # ------------------------------------------------------------------
+    def _fill_lines(self, tab):
+        c = self._c
+        top = ctk.CTkFrame(tab, fg_color='transparent')
+        top.pack(fill='x', padx=10, pady=(8, 4))
+        ctk.CTkLabel(top, text="Team:", font=('Segoe UI', 11, 'bold'),
+                     text_color=c['TEXT_DIM']).pack(side='left')
+        self._lines_team_var = ctk.StringVar(value=self._home_name)
+        combo = ctk.CTkComboBox(top, variable=self._lines_team_var,
+                                values=[self._away_name, self._home_name],
+                                state='readonly', width=220,
+                                fg_color=c['CARD'], border_color=c['BORDER'],
+                                button_color=c['TEAL'],
+                                command=lambda _v: self._refresh_lines())
+        combo.pack(side='left', padx=8)
+        ctk.CTkLabel(top, text="Even-strength lines with combined ratings (0-10).",
+                     font=('Segoe UI', 10), text_color=c['TEXT_FAINT']
+                     ).pack(side='left', padx=12)
+
+        self._lines_body = ctk.CTkScrollableFrame(tab, fg_color='transparent')
+        self._lines_body.pack(fill='both', expand=True, padx=6, pady=4)
+        self._refresh_lines()
+
+    def _refresh_lines(self):
+        body = getattr(self, '_lines_body', None)
+        if body is None:
+            return
+        c = self._c
+        for child in body.winfo_children():
+            child.destroy()
+        try:
+            self._render_lines(body)
+        except Exception:
+            ctk.CTkLabel(body, text="Line data unavailable for this game.",
+                         font=('Segoe UI', 12), text_color=c['TEXT_DIM']
+                         ).pack(pady=40)
+
+    def _render_lines(self, body):
+        c = self._c
+        game_stats = self.result.get('game_stats') or {}
+        by_id = self._roster_lookup()
+        # Merge game_stats-embedded players (traded away since, etc.).
+        for pid, gs in (game_stats or {}).items():
+            try:
+                p = gs.get('player') if isinstance(gs, dict) else None
+                if p is not None and pid not in by_id:
+                    by_id[pid] = p
+            except Exception:
+                continue
+
+        team_name = self._lines_team_var.get()
+        snap = (self.result.get('lines') or {}).get(team_name)
+        caveat = ""
+        if not snap:
+            # Fallback for saves predating line stamping: current lines.
+            try:
+                from game_classes import snapshot_team_lines as _snap_fn
+                team = None
+                for t in (self.result.get('home_team'),
+                          self.result.get('away_team')):
+                    if getattr(t, 'team_name', None) == team_name:
+                        team = t
+                        break
+                snap = _snap_fn(team) if team is not None else None
+                if snap:
+                    caveat = " (current lines -- game-time combos not recorded)"
+            except Exception:
+                snap = None
+
+        if not snap:
+            ctk.CTkLabel(body,
+                         text="Line combinations unavailable for this game.",
+                         font=('Segoe UI', 12), text_color=c['TEXT_DIM']
+                         ).pack(pady=40)
+            return
+
+        lines = compute_line_ratings(snap, game_stats, by_id)
+        if not lines or not any(L['players'] for L in lines):
+            ctk.CTkLabel(body,
+                         text="Line combinations unavailable for this game.",
+                         font=('Segoe UI', 12), text_color=c['TEXT_DIM']
+                         ).pack(pady=40)
+            return
+
+        if caveat:
+            ctk.CTkLabel(body, text=f"Showing {team_name}'s{caveat}",
+                         font=('Segoe UI', 10, 'italic'),
+                         text_color=c['TEXT_FAINT'], anchor='w'
+                         ).pack(anchor='w', padx=8, pady=(2, 6))
+
+        for L in lines:
+            rating = L['rating']
+            if rating is None:
+                rtxt, rcolor = "--", c['TEXT_DIM']
+            else:
+                rtxt = f"{rating:.1f}"
+                rcolor = (c['GREEN'] if rating >= 7.0
+                          else c['GOLD'] if rating >= 5.5 else c['RED'])
+            hdr = ctk.CTkFrame(body, fg_color='transparent')
+            hdr.pack(fill='x', padx=8, pady=(10, 2))
+            ctk.CTkLabel(hdr, text=L['label'], font=('Segoe UI', 13, 'bold'),
+                         text_color=c['TEAL'], anchor='w').pack(side='left')
+            ctk.CTkLabel(hdr, text=f"Rating  {rtxt}",
+                         font=('Segoe UI', 13, 'bold'),
+                         text_color=rcolor, anchor='e').pack(side='right',
+                                                            padx=4)
+            rows, players = [], []
+            for pl in L['players']:
+                p = pl['player']
+                grade = pl['grade']
+                rows.append([getattr(p, 'full_name', '?'), pl['pos'],
+                             pl['g'], pl['a'], pl['p'],
+                             f"{grade:.1f}" if grade is not None else "--"])
+                players.append(p)
+            self._grid_table(body,
+                             headers=["Player", "Pos", "G", "A", "P", "Grade"],
+                             widths=[220, 52, 40, 40, 40, 64],
+                             rows=rows, players=players)
 
     @staticmethod
     def _pos_short(player):

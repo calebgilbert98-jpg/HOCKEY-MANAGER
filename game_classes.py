@@ -168,6 +168,53 @@ def position_label(player) -> str:
         return "?"
 
 
+def snapshot_team_lines(team):
+    """Snapshot one club's even-strength line combos as player IDs.
+
+    Returns {'Forwards': [[pid, pid, pid] x4], 'Defense': [[pid, pid] x3]}
+    or None when the club has no usable lines stored. Player IDs (not
+    objects) keep game results save-safe. Used by the game-result stamping
+    (main.py) and the box score Lines tab fallback (game_box_score.py).
+    Never raises. (Muck 2026-10-02: post-game lines with combined ratings.)
+    """
+    try:
+        lineup = getattr(team, "lineup", None)
+        if not isinstance(lineup, dict) or not lineup:
+            return None
+
+        def _pid(p):
+            try:
+                return getattr(p, "id", p)
+            except Exception:
+                return None
+
+        forwards = []
+        for line in (lineup.get("Forwards") or [])[:4]:
+            try:
+                if not isinstance(line, (list, tuple)):
+                    forwards.append([])
+                    continue
+                ids = [_pid(p) for p in (line or []) if p is not None]
+                forwards.append([i for i in ids if i is not None])
+            except Exception:
+                forwards.append([])
+        defense = []
+        for pair in (lineup.get("Defense") or [])[:3]:
+            try:
+                if not isinstance(pair, (list, tuple)):
+                    defense.append([])
+                    continue
+                ids = [_pid(p) for p in (pair or []) if p is not None]
+                defense.append([i for i in ids if i is not None])
+            except Exception:
+                defense.append([])
+        if not any(forwards) and not any(defense):
+            return None
+        return {"Forwards": forwards, "Defense": defense}
+    except Exception:
+        return None
+
+
 class PlayerRole(Enum):
     SNIPER = "Sniper"
     PLAYMAKER = "Playmaker"

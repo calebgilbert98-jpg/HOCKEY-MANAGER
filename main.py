@@ -5643,6 +5643,33 @@ class HockeyManagerGUI(tk.Tk):
             return "N/A"
         return f"{total // 60}:{total % 60:02d}"
 
+    @staticmethod
+    def _snapshot_team_lines(team):
+        """Snapshot one club's even-strength line combos as player IDs.
+
+        Thin wrapper over game_classes.snapshot_team_lines (the shared
+        implementation also used by the box score Lines tab fallback).
+        Never raises. (Muck 2026-10-02: post-game lines with combined
+        ratings.)"""
+        try:
+            from game_classes import snapshot_team_lines as _snap
+            return _snap(team)
+        except Exception:
+            return None
+
+    def _snapshot_game_lines(self, home_team, away_team):
+        """Stamp both clubs' line combos onto a game result. Never raises."""
+        try:
+            out = {}
+            for team in (home_team, away_team):
+                name = getattr(team, "team_name", None) or str(team)
+                snap = self._snapshot_team_lines(team)
+                if snap:
+                    out[name] = snap
+            return out
+        except Exception:
+            return {}
+
     def _on_schedule_double_click(self, event):
         """Handle double-click on schedule item to view game results"""
         selection = self.schedule_tree.selection()
@@ -13171,7 +13198,9 @@ class HockeyManagerGUI(tk.Tk):
                            if game_result_team_stats
                            else getattr(sim_engine, 'team_stats', {})),
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
-            'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
+            'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0,
+            # Post-game Lines tab: the combos actually dressed (Muck 2026-10-02).
+            'lines': self._snapshot_game_lines(home_team, away_team),
         }
         # NEW-A6: per-game TOI + fatigue snapshots from the sim that ran
         # the game (integration read; missing data stays missing).
@@ -14553,7 +14582,10 @@ class HockeyManagerGUI(tk.Tk):
                 'player_ratings': {},  # No player ratings
                 'event_log': [],  # No event log
                 'overtime': went_to_ot,  # Track OT for OTL points
-                'shootout': False
+                'shootout': False,
+                # Post-game Lines tab: the combos actually dressed
+                # (Muck 2026-10-02). Never raises; empty when unknown.
+                'lines': self._snapshot_game_lines(home_team, away_team),
             }
             if full_sim is not None:
                 # Full-detail league: keep the event stream for reports/viewer

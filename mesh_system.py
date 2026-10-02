@@ -712,6 +712,23 @@ def _append_game_grade(player, grade: float) -> None:
         pass
 
 
+def compute_skater_game_grade(player, goals: int, assists: int) -> float:
+    """Pure 0-100 game grade for a skater -- byte-identical to what
+    record_performance() appends to recent_game_grades (points vs talent
+    expectation, clamped to the mesh form's [-1.5, 2.0] window, rounded to
+    1 decimal). Exposed so the box score Lines tab can grade any stored
+    game from its per-game stats without depending on the rolling ledger.
+    Never raises."""
+    try:
+        points = float(goals or 0) + float(assists or 0)
+        expected = _expected_points(player)
+        surprise = (points - expected) / max(0.5, expected)
+        return round(max(0.0, min(100.0,
+                                 50.0 + 25.0 * max(-1.5, min(2.0, surprise)))), 1)
+    except Exception:
+        return 50.0
+
+
 def record_performance(player, goals: int, assists: int, team=None,
                        is_playoff=False, saves: int = 0,
                        shots_against: int = 0) -> str | None:
@@ -758,7 +775,8 @@ def record_performance(player, goals: int, assists: int, team=None,
     # Game grade: 50 for meeting expectation, +/-25 per unit of surprise
     # (clamped to the mesh form's [-1.5, 2.0] window). A point-per-game
     # player going scoreless grades ~25; a 2-point night grades ~88.
-    _append_game_grade(player, 50.0 + 25.0 * max(-1.5, min(2.0, surprise)))
+    # compute_skater_game_grade is the pure form of this exact formula.
+    _append_game_grade(player, compute_skater_game_grade(player, goals, assists))
 
     form = getattr(player, "mesh_form", 0.0) or 0.0
     try:
