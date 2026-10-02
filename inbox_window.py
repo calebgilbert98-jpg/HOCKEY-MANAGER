@@ -47,6 +47,7 @@ class InboxView(ctk.CTkFrame):
         ("Unread", "unread"),
         ("Urgent", "urgent"),
         ("Saved", "saved"),
+        ("📖 Story", "story"),
         ("Trade", "Trade"),
         ("Scouting", "Scouting"),
         ("Contracts", "Contracts"),
@@ -175,8 +176,21 @@ class InboxView(ctk.CTkFrame):
                                      corner_radius=12)
         preview_frame.grid(row=1, column=0, sticky='nsew', pady=(6, 0))
 
+        self._content_frame = content_frame
+        self._list_frame = list_frame
+        self._preview_frame = preview_frame
+
         self._create_email_list(list_frame)
         self._create_email_preview(preview_frame)
+
+        # Season Story view (Muck 2026-10-02): a unified chronological
+        # narrative surface -- storylines, rivalries, milestones, digest --
+        # in the inbox, EHM/FM-style. Hidden until the Story filter pill
+        # is selected; spans both content rows when shown.
+        self._story_frame = ctk.CTkScrollableFrame(
+            content_frame, fg_color=ct['CARD'], corner_radius=12)
+        self._story_frame.grid(row=0, column=0, rowspan=2, sticky='nsew')
+        self._story_frame.grid_remove()
 
     def _create_filter_pills(self, parent):
         """Two rows of rounded CTk filter pills (selected pill is teal).
@@ -565,6 +579,11 @@ class InboxView(ctk.CTkFrame):
         """Apply filter to email list."""
         self._current_filter = filter_type
         self._paint_filter_pills()
+        # Season Story view replaces the email list entirely.
+        if filter_type == "story":
+            self._show_story_view()
+            return
+        self._show_email_view()
         # Clear current view
         for item in self.email_tree.get_children():
             self.email_tree.delete(item)
@@ -612,6 +631,7 @@ class InboxView(ctk.CTkFrame):
             'all': len(unread),
             'unread': len(unread),
             'urgent': len(urgent_unread),
+            'story': self._story_badge_count(),
         }
         for category in ('Trade', 'Scouting', 'Contracts', 'Injuries', 'Media', 'League'):
             counts[category] = sum(
@@ -1802,6 +1822,364 @@ class InboxView(ctk.CTkFrame):
 
         # Refresh per-filter unread badges
         self._update_filter_badges()
+
+    # ------------------------------------------------------------------
+    # Season Story view (Muck 2026-10-02)
+    #
+    # A unified chronological narrative surface inside the inbox,
+    # EHM/FM-style: the inbox is where the season story unfolds. Pulls
+    # together active storylines, rivalry heat, milestones, the league
+    # digest and past-season context into one readable narrative.
+    # Every data access is guarded -- old/odd saves degrade to empty
+    # sections, never crashes.
+    # ------------------------------------------------------------------
+    _STORY_KIND_ICONS = {
+        'cup_window': '🏆', 'legacy_chase': '⏳', 'prospect_watch': '🌱',
+        'trust_process': '🧱', 'hot_seat': '🪑', 'trade_rumor': '🔄',
+        'goalie': '🥅', 'leadership': '🎖️', 'deadline_race': '🏁',
+    }
+
+    def _show_story_view(self):
+        """Swap the email list/preview for the Season Story narrative."""
+        for attr in ('_list_frame', '_preview_frame'):
+            try:
+                getattr(self, attr).grid_remove()
+            except Exception:
+                pass
+        try:
+            self._story_frame.grid()
+        except Exception:
+            pass
+        self._populate_season_story()
+        try:
+            self._update_filter_badges()
+        except Exception:
+            pass
+
+    def _show_email_view(self):
+        """Restore the email list/preview (no-op when already shown)."""
+        try:
+            self._story_frame.grid_remove()
+        except Exception:
+            pass
+        for attr in ('_list_frame', '_preview_frame'):
+            try:
+                getattr(self, attr).grid()
+            except Exception:
+                pass
+
+    def _story_ctx(self):
+        """Best-effort (game_manager, league, user_team, current_date)."""
+        gm = league = team = now = None
+        try:
+            gm = getattr(self.app, 'game_manager', None)
+        except Exception:
+            gm = None
+        try:
+            league = getattr(gm, 'league', None) if gm is not None else None
+        except Exception:
+            league = None
+        try:
+            team = getattr(self.app, 'user_team', None)
+        except Exception:
+            team = None
+        try:
+            now = getattr(gm, 'current_date', None)
+        except Exception:
+            now = None
+        return gm, league, team, now
+
+    def _collect_developing(self):
+        """Live narrative state: active storylines + hot rivalries."""
+        items = []
+        gm, league, team, now = self._story_ctx()
+        # 1. media narratives (media_engine.Narrative)
+        try:
+            for n in (getattr(league, 'media_narratives', None) or []):
+                try:
+                    heat = float(getattr(n, 'heat', 0) or 0)
+                    kind = str(getattr(n, 'kind', '') or '')
+                    items.append({
+                        'icon': self._STORY_KIND_ICONS.get(kind, '📰'),
+                        'title': str(getattr(n, 'title', 'Developing storyline') or ''),
+                        'desc': f"{getattr(n, 'team_name', '')} · heat {heat:.0f}/100",
+                        'heat': heat,
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # 2. media-system storylines (MediaStoryline, date-bound)
+        try:
+            ms = getattr(gm, 'media_system', None) if gm is not None else None
+            for s in (getattr(ms, 'storylines', None) or []):
+                try:
+                    try:
+                        active = s.is_active(now) if now is not None else True
+                    except Exception:
+                        active = True
+                    if not active:
+                        continue
+                    inten = int(getattr(s, 'intensity', 5) or 5)
+                    stype = getattr(getattr(s, 'type', None), 'value', '') or ''
+                    desc = f"intensity {inten}/10" + (f" · {stype}" if stype else '')
+                    items.append({
+                        'icon': '📰',
+                        'title': str(getattr(s, 'title', '') or 'Storyline'),
+                        'desc': desc,
+                        'heat': inten * 10.0,
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # 3. hot rivalries (team_team, intensity >= 50)
+        try:
+            import reputation_system as _rs  # noqa: F401 (namespace pin)
+            rivs = getattr(league, 'rivalries', None) or []
+            seen = set()
+            for r in rivs:
+                try:
+                    if not isinstance(r, dict):
+                        continue
+                    if r.get('kind') != 'team_team':
+                        continue
+                    heat = float(r.get('intensity', 0) or 0)
+                    if heat < 50:
+                        continue
+                    key = (r.get('a'), r.get('b'))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    an = r.get('a_name') or '?'
+                    bn = r.get('b_name') or '?'
+                    label = 'Bad blood' if heat >= 65 else 'Heated'
+                    origin = r.get('origin') or ''
+                    desc = f"{label} · {heat:.0f}/100" + (f" · {origin}" if origin else '')
+                    items.append({'icon': '🔥', 'title': f"{an} vs {bn}",
+                                  'desc': desc, 'heat': heat})
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        items.sort(key=lambda d: d.get('heat', 0), reverse=True)
+        return items[:8]
+
+    def _collect_story_feed(self, limit=80):
+        """Chronological backbone: recent Media/League inbox messages."""
+        out = []
+        try:
+            msgs = [m for m in (getattr(self.inbox, 'messages', None) or [])
+                    if getattr(m, 'category', '') in ('Media', 'League')]
+        except Exception:
+            return out
+
+        def _d(m):
+            try:
+                return (getattr(m, 'game_date_sent', None)
+                        or getattr(m, 'date_sent', None))
+            except Exception:
+                return None
+
+        try:
+            msgs.sort(key=lambda m: (_d(m) is not None, _d(m)), reverse=True)
+        except Exception:
+            pass
+        for m in msgs[:limit]:
+            try:
+                d = _d(m)
+                subj = str(getattr(m, 'subject', '') or '')
+                low = subj.lower()
+                if (getattr(m, 'is_milestone', False) or 'milestone' in low
+                        or 'record' in low):
+                    icon = '⭐'
+                elif 'around the league' in low:
+                    icon = '🌐'
+                elif 'bad blood' in low or 'rivalry' in low:
+                    icon = '🔥'
+                elif getattr(m, 'category', '') == 'League':
+                    icon = '📢'
+                else:
+                    icon = '🎙️'
+                snippet = str(getattr(m, 'content', '') or '').replace('\n', ' ').strip()
+                if len(snippet) > 150:
+                    snippet = snippet[:147] + '...'
+                out.append({'date': d, 'icon': icon, 'subject': subj,
+                            'snippet': snippet,
+                            'sender': str(getattr(m, 'sender', '') or '')})
+            except Exception:
+                continue
+        return out
+
+    def _collect_history_lines(self, count=4):
+        """Past-season context from LeagueHistory (newest first)."""
+        lines = []
+        try:
+            gm, league, team, now = self._story_ctx()
+            lh = getattr(gm, 'league_history', None)
+            seasons = list(getattr(lh, 'seasons', None) or [])
+            tname = getattr(team, 'team_name', '') or ''
+            for s in reversed(seasons[-count:]):
+                try:
+                    if not isinstance(s, dict):
+                        continue
+                    yr = s.get('year', '?')
+                    champ = s.get('champion') or '—'
+                    runner = s.get('runner_up') or ''
+                    text = f"{yr}: {champ} champions" + (f" over {runner}" if runner else '')
+                    lines.append({'text': text, 'mine': champ == tname and bool(tname)})
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return lines
+
+    def _story_hook(self):
+        """One-line narrative framing for the season header."""
+        try:
+            gm, league, team, now = self._story_ctx()
+            tname = getattr(team, 'team_name', '') or 'your team'
+            year = getattr(league, 'season_year', '') or ''
+            title = f"📖 {tname} — {year} Season Story" if year else "📖 Season Story"
+            lh = getattr(gm, 'league_history', None)
+            seasons = list(getattr(lh, 'seasons', None) or [])
+            last_cup = None
+            for s in reversed(seasons):
+                try:
+                    if isinstance(s, dict) and s.get('champion') == tname:
+                        last_cup = s.get('year')
+                        break
+                except Exception:
+                    continue
+            if seasons and isinstance(seasons[-1], dict) \
+                    and seasons[-1].get('champion') == tname:
+                hook = "Defending the crown. All 31 teams are coming for you."
+            elif last_cup is not None:
+                try:
+                    n = int(str(year)[:4]) - int(last_cup)
+                    if n > 0:
+                        hook = (f"It's been {n} year{'s' if n != 1 else ''} since "
+                                f"{tname} lifted the Cup. The clock is ticking.")
+                    else:
+                        hook = f"{tname} are champions. The encore starts now."
+                except Exception:
+                    hook = f"{tname} have tasted glory before. Time to chase it again."
+            else:
+                hook = (f"No banners yet in the {tname} rafters. "
+                        "Every dynasty starts with a season like this one.")
+            return title, hook
+        except Exception:
+            return "📖 Season Story", "Every season tells a story. This is yours."
+
+    def _story_badge_count(self):
+        try:
+            return len(self._collect_developing())
+        except Exception:
+            return 0
+
+    def _populate_season_story(self):
+        """Build the Season Story view. Never raises."""
+        ct = self._ct
+        frame = self._story_frame
+        try:
+            for w in frame.winfo_children():
+                w.destroy()
+        except Exception:
+            return
+        try:
+            # -- header ------------------------------------------------
+            title, hook = self._story_hook()
+            head = ctk.CTkFrame(frame, fg_color=ct['PANEL'], corner_radius=10)
+            head.pack(fill='x', padx=10, pady=(10, 8))
+            self._heading(head, title, size=17).pack(anchor='w', padx=14, pady=(10, 2))
+            self._body(head, hook, size=12, dim=True).pack(anchor='w', padx=14, pady=(0, 10))
+
+            # -- developing now ----------------------------------------
+            developing = self._collect_developing()
+            self._heading(frame, "🔥 Developing now", size=14).pack(
+                anchor='w', padx=14, pady=(6, 4))
+            if not developing:
+                self._body(frame,
+                           "Nothing simmering yet — the season is young. "
+                           "Storylines ignite from games, trades and streaks.",
+                           size=11, dim=True).pack(anchor='w', padx=18, pady=(0, 6))
+            for it in developing:
+                card = ctk.CTkFrame(frame, fg_color=ct['CARD'], corner_radius=8,
+                                    border_width=1, border_color=ct['BORDER'])
+                card.pack(fill='x', padx=12, pady=4)
+                row = ctk.CTkFrame(card, fg_color='transparent')
+                row.pack(fill='x', padx=10, pady=(8, 2))
+                self._body(row, f"{it['icon']}  {it['title']}", size=12,
+                           bold=True).pack(side='left')
+                heat = it.get('heat')
+                if heat:
+                    bar = ctk.CTkProgressBar(row, width=110, height=8,
+                                             progress_color=ct['GOLD'])
+                    bar.pack(side='right', padx=(8, 0))
+                    try:
+                        bar.set(max(0.0, min(1.0, float(heat) / 100.0)))
+                    except Exception:
+                        pass
+                self._body(card, it.get('desc', ''), size=11, dim=True).pack(
+                    anchor='w', padx=14, pady=(0, 8))
+
+            # -- the story so far --------------------------------------
+            feed = self._collect_story_feed()
+            self._heading(frame, "📅 The story so far", size=14).pack(
+                anchor='w', padx=14, pady=(10, 4))
+            if not feed:
+                self._body(frame,
+                           "No league stories in your inbox yet. "
+                           "Headlines land here as the season unfolds.",
+                           size=11, dim=True).pack(anchor='w', padx=18, pady=(0, 6))
+            last_month = None
+            for e in feed:
+                d = e.get('date')
+                try:
+                    mkey = (d.year, d.month) if d is not None else None
+                    mlabel = d.strftime('%B %Y') if d is not None else 'Earlier'
+                except Exception:
+                    mkey, mlabel = None, 'Earlier'
+                if mkey != last_month:
+                    last_month = mkey
+                    self._body(frame, mlabel, size=11, bold=True).pack(
+                        anchor='w', padx=16, pady=(8, 2))
+                row = ctk.CTkFrame(frame, fg_color='transparent')
+                row.pack(fill='x', padx=16, pady=2)
+                try:
+                    dstr = d.strftime('%m/%d') if d is not None else '—'
+                except Exception:
+                    dstr = '—'
+                self._body(row, dstr, size=10, dim=True, width=44).pack(side='left')
+                self._body(row, e['icon'], size=12, width=26).pack(side='left')
+                txt = ctk.CTkFrame(row, fg_color='transparent')
+                txt.pack(side='left', fill='x', expand=True)
+                self._body(txt, e['subject'], size=11, bold=True).pack(anchor='w')
+                if e.get('snippet'):
+                    self._body(txt, e['snippet'], size=10, dim=True).pack(anchor='w')
+
+            # -- where we've been --------------------------------------
+            hist = self._collect_history_lines()
+            if hist:
+                self._heading(frame, "🏆 Where we've been", size=14).pack(
+                    anchor='w', padx=14, pady=(10, 4))
+                for h in hist:
+                    lbl = self._body(frame,
+                                     ("★ " if h['mine'] else "    ") + h['text'],
+                                     size=11, dim=not h['mine'])
+                    if h['mine']:
+                        try:
+                            lbl.configure(text_color=ct['GOLD'])
+                        except Exception:
+                            pass
+                    lbl.pack(anchor='w', padx=18, pady=1)
+                ctk.CTkFrame(frame, fg_color='transparent', height=10).pack()
+
+            self.stats_label.configure(
+                text=f"Season Story · {len(developing)} developing · "
+                     f"{len(feed)} moments")
+        except Exception:
+            pass
 
     def request_close(self):
         """Close the view: refresh the nav badge, then hand off."""
