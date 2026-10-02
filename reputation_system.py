@@ -6589,12 +6589,25 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
                     pass
         elif 0.90 <= ratio <= 1.10:
             # Fair dealing builds the personal ledger: mutual respect up,
-            # no stature swing either way.
+            # no stature swing either way. D48 (Muck 2026-10-02): route
+            # through record_gm_dealing so the recency-weighted ledger,
+            # diminishing returns, and tier-change notifications engage.
             try:
-                _bump_gm_respect(league, team_a, team_b, 4)
+                record_gm_dealing(league, team_a, team_b, 4, "fair_deal")
             except Exception:
                 pass
             out["notes"].append("a fair deal -- respect grows")
+    except Exception:
+        pass
+    # D48: every completed trade writes to the deal ledger, not just fair
+    # ones. The ledger drives diminishing returns and respect trends.
+    try:
+        _outcome = "fair_deal" if 0.90 <= ratio <= 1.10 else (
+            "fleece" if ratio >= 1.30 else ("fleeced" if ratio <= 0.75 else "deal"))
+        # Only record once — the fair branch already called it above.
+        if _outcome != "fair_deal":
+            _delta = 6 if _outcome == "fleece" else (-4 if _outcome == "fleeced" else 2)
+            record_gm_dealing(league, team_a, team_b, _delta, _outcome)
     except Exception:
         pass
     return out
