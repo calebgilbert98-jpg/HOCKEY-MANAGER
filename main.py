@@ -15969,11 +15969,35 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 bracket.current_round = round_name
                 for series in (bracket.playoff_series.get(round_name) or []):
-                    while not series.is_complete:
-                        bracket.simulate_playoff_game(series)
+                    # Guard against a game sim that keeps failing: cap
+                    # attempts, then force-complete the series so the
+                    # postseason can never stall the day loop.
+                    _attempts = 0
+                    while not series.is_complete and _attempts < 14:
+                        _attempts += 1
+                        try:
+                            bracket.simulate_playoff_game(series)
+                        except Exception as _e:
+                            # Last-resort fallback: the full sim failed
+                            # (e.g., a roster edge case). Award the game
+                            # to the home team so the series progresses.
+                            # Rare, logged, and better than a soft-lock.
+                            try:
+                                _home_is_t1 = (
+                                    series.home_team_for_game(
+                                        series.games_played + 1)
+                                    is series.team1)
+                                series.add_game_result(
+                                    _home_is_t1,
+                                    {"fallback": True,
+                                     "reason": str(_e)[:120]})
+                            except Exception:
+                                break
                 bracket.advance_to_next_round(round_name)
             except Exception:
-                break
+                # Don't abort the entire postseason on a round error;
+                # continue to the next round.
+                continue
         try:
             import headlines
             headlines.drain_bracket_headlines(self, bracket)

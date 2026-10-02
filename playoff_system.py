@@ -1863,10 +1863,27 @@ class PlayoffView(ctk.CTkFrame):
 
                 # Simulate all series in this round
                 for si, series in enumerate(current_series):
-                    while not series.is_complete:
+                    _attempts = 0
+                    while not series.is_complete and _attempts < 14:
+                        _attempts += 1
                         if cancel_event is not None and cancel_event.is_set():
                             return
-                        bracket.simulate_playoff_game(series)
+                        try:
+                            bracket.simulate_playoff_game(series)
+                        except Exception as _e:
+                            # Last-resort: award to home team so a failing
+                            # game sim can never stall the postseason.
+                            try:
+                                _home_is_t1 = (
+                                    series.home_team_for_game(
+                                        series.games_played + 1)
+                                    is series.team1)
+                                series.add_game_result(
+                                    _home_is_t1,
+                                    {"fallback": True,
+                                     "reason": str(_e)[:120]})
+                            except Exception:
+                                break
                         games_done += 1
                         if progress is not None:
                             progress(games_done / 105.0,
