@@ -1148,6 +1148,16 @@ class PBPVisualSim(InGamePopup):
 
         self._update_goalie_labels()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Sync control labels with initial state (playing=False -> "Play";
+        # speed=1 -> 1x dotted). Never raises.
+        try:
+            self._refresh_play_btn()
+        except Exception:
+            pass
+        try:
+            self._refresh_speed_btns()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Tactics tab: EHM-style in-game whiteboard
@@ -4004,8 +4014,25 @@ class PBPVisualSim(InGamePopup):
     # Smart broadcast pacing
     # ------------------------------------------------------------------
     def _toggle_auto(self):
-        self.auto_pace = not self.auto_pace
-        self._refresh_toggle_btn(self.auto_btn, self.auto_pace)
+        """Never raises."""
+        try:
+            self.auto_pace = not self.auto_pace
+        except Exception:
+            return
+        try:
+            self._refresh_toggle_btn(self.auto_btn, self.auto_pace)
+        except Exception:
+            pass
+        # When Auto takes over, no manual speed pill is active; when it
+        # turns off, re-dot the current manual speed. Never raises.
+        try:
+            if self.auto_pace:
+                for b in (getattr(self, "speed_btns", None) or {}).values():
+                    self._refresh_toggle_btn(b, False)
+            else:
+                self._refresh_speed_btns()
+        except Exception:
+            pass
         self._feed("Auto pacing " + ("ON — broadcast-style speed control."
                                      if self.auto_pace else "off."),
                    tag="info")
@@ -4019,11 +4046,9 @@ class PBPVisualSim(InGamePopup):
         except Exception:
             pass
 
-    def _set_speed(self, v):
-        self.speed = v
-        if self.auto_pace:
-            self.auto_pace = False
-            self._refresh_toggle_btn(self.auto_btn, False)
+    # NOTE: canonical _set_speed lives in the Controls section below
+    # (it also refreshes the speed pill states). This stub removed
+    # 2026-10-02: duplicate defs silently overrode each other.
 
     def _auto_speed(self):
         """Broadcast-style speed: slow in the zones, fast through neutral."""
@@ -5065,19 +5090,61 @@ class PBPVisualSim(InGamePopup):
     # Controls
     # ------------------------------------------------------------------
     def _toggle_play(self):
-        self.playing = not self.playing
+        """Never raises."""
+        try:
+            self.playing = not self.playing
+        except Exception:
+            return
         self._refresh_play_btn()
 
     def _refresh_play_btn(self):
-        if RoundedButton is None:
-            return
+        """Sync the Play/Pause label with self.playing. Never raises.
+
+        Works for both RoundedButton (set_text) and plain tk.Button
+        (config) -- the old version early-returned when RoundedButton
+        was unavailable, freezing the label at its initial text.
+        """
         try:
-            self.play_btn.set_text("Play" if not self.playing else "Pause")
+            label = "Play" if not getattr(self, "playing", False) else "Pause"
+            btn = getattr(self, "play_btn", None)
+            if btn is None:
+                return
+            if hasattr(btn, "set_text"):
+                btn.set_text(label)
+            else:
+                btn.config(text=label)
         except Exception:
             pass
 
     def _set_speed(self, v):
-        self.speed = v
+        """Manual speed select: 1x/2x/4x. Never raises.
+
+        A manual pick always wins over Auto pacing (the old duplicate def
+        at 4022 was dead code, so Auto silently swallowed manual clicks).
+        Refreshes the speed pills so the active rate is visible.
+        """
+        try:
+            self.speed = v
+        except Exception:
+            return
+        try:
+            if getattr(self, "auto_pace", False):
+                self.auto_pace = False
+                self._refresh_toggle_btn(self.auto_btn, False)
+        except Exception:
+            pass
+        try:
+            self._refresh_speed_btns()
+        except Exception:
+            pass
+
+    def _refresh_speed_btns(self):
+        """Dot the active speed pill. Never raises."""
+        try:
+            for val, b in (getattr(self, "speed_btns", None) or {}).items():
+                self._refresh_toggle_btn(b, val == getattr(self, "speed", 1))
+        except Exception:
+            pass
 
     def _sim_to_end(self):
         self._cancel_replay()
