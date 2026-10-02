@@ -15,6 +15,11 @@ import tkinter as tk
 from popup_system import InGamePopup
 from tkinter import ttk
 from modern_ui import (AppColors, AppFonts, AppCard, PillBadge)
+try:
+    from scroll_manager import register_scrollable
+except Exception:
+    def register_scrollable(canvas):
+        pass
 
 
 def composites_visible(parent_app):
@@ -237,6 +242,12 @@ class PlayerProfile(InGamePopup):
 
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+
+        # Muck 2026-10-02: register scrollable canvas for global wheel routing
+        try:
+            register_scrollable(canvas)
+        except Exception:
+            pass
 
         content = tk.Frame(main, bg=AppColors.BG)
         content.pack(fill="both", expand=True, padx=24, pady=16)

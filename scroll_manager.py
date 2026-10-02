@@ -12,12 +12,16 @@ This module replaces that pattern with a single global handler that routes
 the wheel event to the scrollable canvas under the mouse pointer:
 
     from scroll_manager import register_scrollable
-    register_scrollable(canvas)   # instead of canvas.bind_all("<MouseWheel>", ...)
+    register_scrollable(canvas)   # explicit registration (optional)
 
 The global handler is installed once (idempotent) and covers:
   - Windows/macOS: <MouseWheel> (event.delta)
   - Linux: <Button-4> (up) / <Button-5> (down)
   - Shift+wheel: horizontal scroll where the canvas supports it
+
+Auto-detection: canvases with a scrollbar attached (yscrollcommand or
+xscrollcommand configured) are detected automatically -- explicit
+registration is optional but recommended for clarity.
 
 All handlers are try/except guarded and never raise.
 """
@@ -49,8 +53,43 @@ def unregister_scrollable(canvas):
         pass
 
 
+def _is_scrollable_canvas(w):
+    """Check if widget is a Canvas with a scrollbar attached (yscrollcommand
+    or xscrollcommand configured). Auto-detects scrollable canvases that
+    were never explicitly registered. Never raises."""
+    try:
+        # Must be a Canvas (or subclass)
+        try:
+            cls = w.winfo_class()
+        except Exception:
+            return False
+        if cls != "Canvas":
+            return False
+        # Must have a scrollbar attached via yscrollcommand/xscrollcommand
+        try:
+            yscroll = w.cget("yscrollcommand")
+            if yscroll:
+                return True
+        except Exception:
+            pass
+        try:
+            xscroll = w.cget("xscrollcommand")
+            if xscroll:
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return False
+
+
 def _find_scrollable(widget, root):
-    """Walk up from widget to find the nearest registered scrollable canvas."""
+    """Walk up from widget to find the nearest scrollable canvas.
+
+    Checks the explicit registry first, then auto-detects any Canvas with
+    a scrollbar attached (yscrollcommand/xscrollcommand). This means
+    scrollable canvases work even if they were never registered.
+    """
     try:
         w = widget
         seen = set()
@@ -58,6 +97,12 @@ def _find_scrollable(widget, root):
             seen.add(w)
             try:
                 if w in _registry:
+                    return w
+            except Exception:
+                pass
+            # Auto-detect: Canvas with scrollbar attached
+            try:
+                if _is_scrollable_canvas(w):
                     return w
             except Exception:
                 pass
@@ -190,12 +235,23 @@ def _on_wheel(event):
 
 
 def _track_enter(event):
-    """Remember the canvas the pointer is over (fallback routing)."""
+    """Remember the scrollable canvas the pointer is over (fallback routing).
+    Uses auto-detection so unregistered canvases are tracked too."""
     global _last_active
     try:
         w = event.widget
-        if w in _registry:
-            _last_active = w
+        try:
+            if w in _registry:
+                _last_active = w
+                return
+        except Exception:
+            pass
+        # Auto-detect unregistered scrollable canvases
+        try:
+            if _is_scrollable_canvas(w):
+                _last_active = w
+        except Exception:
+            pass
     except Exception:
         pass
 
