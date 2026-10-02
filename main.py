@@ -15619,7 +15619,12 @@ class HockeyManagerGUI(tk.Tk):
             pass
         # Bank regular-season reputations before anything else touches stats.
         # (Has its own once-per-season guard; safe under the re-entry guard above.)
-        self._update_player_reputations()
+        # Never raises -- a reputation failure must not stall the season-end
+        # transition (the day loop aborts without advancing the date).
+        try:
+            self._update_player_reputations()
+        except Exception:
+            pass
         # Wave B D48: season-end respect decay -- a season's dealings fade
         # toward each GM's stature-derived baseline (goodwill k=0.25,
         # forgiveness k=0.10). Fires once per season, under the guard above.
