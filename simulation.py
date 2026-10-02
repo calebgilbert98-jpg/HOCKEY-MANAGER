@@ -2978,11 +2978,15 @@ class GameSim:
 
         
         # Update stats
-        self.game_stats[player.id]['zone_entries'] += 1
+        # BUG-001: player can be a non-roster on-ice player (no game_stats
+        # entry) -- guard per the _turnover_possession idiom below.
+        if player.id in self.game_stats:
+            self.game_stats[player.id]['zone_entries'] += 1
         self.team_stats[team.team_name]['zone_entries'] += 1
-        
+
         if entry_type == ZoneEntryType.CONTROLLED_CARRY:
-            self.game_stats[player.id]['controlled_zone_entries'] += 1
+            if player.id in self.game_stats:
+                self.game_stats[player.id]['controlled_zone_entries'] += 1
             self.team_stats[team.team_name]['controlled_entries'] += 1
             self._log_event(f"{player.full_name} carries the puck into the zone", "ZONE_ENTRY")
         

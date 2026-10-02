@@ -25,6 +25,7 @@ import simulation
 class _FakePlayer:
     def __init__(self, pid):
         self.id = pid
+        self.full_name = f"Fake Player {pid}"
 
 
 class _FakeTeam:
@@ -53,7 +54,9 @@ def _make_sim(home_roster):
         'player_development': {'training_data': [], 'prediction_count': 0},
         'injury_prediction': {'training_data': []},
     }
-    sim.clock = 1200.0
+    sim.clock = 1200
+    sim.period = 1
+    sim.game_log = []
     sim.player_fatigue = {}
     sim.home_team = _FakeTeam("Home", home_roster)
     sim.away_team = _FakeTeam("Away", [])
@@ -121,9 +124,25 @@ def test_shot_stats_non_roster_no_crash():
     print("PASS: _update_shot_stats degrades gracefully for untracked shooter")
 
 
+def test_zone_entry_non_roster_no_crash():
+    """_successful_zone_entry with an untracked carrier (BUG-001 KeyError)."""
+    from simulation import ZoneEntryType
+    ghost = _FakePlayer(77703)
+    sim = _make_sim(home_roster=[])
+    sim.team_stats["Home"]['zone_entries'] = 0
+    sim.team_stats["Home"]['controlled_entries'] = 0
+    # no game_stats entry -- must not raise; team aggregate still counted
+    sim._successful_zone_entry(ghost, sim.home_team,
+                               ZoneEntryType.CONTROLLED_CARRY)
+    assert sim.team_stats["Home"]['zone_entries'] == 1
+    assert sim.team_stats["Home"]['controlled_entries'] == 1
+    print("PASS: _successful_zone_entry degrades gracefully for untracked carrier")
+
+
 if __name__ == "__main__":
     test_non_roster_player_no_crash()
     test_rostered_player_still_counted()
     test_hit_stats_non_roster_no_crash()
     test_shot_stats_non_roster_no_crash()
-    print("qa_bug001_none_team_guard: 4/4 passed")
+    test_zone_entry_non_roster_no_crash()
+    print("qa_bug001_none_team_guard: 5/5 passed")
