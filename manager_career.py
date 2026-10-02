@@ -1160,10 +1160,13 @@ def _fill(template: str, ctx: dict) -> str:
 
 
 def build_prematch_presser(user_team, opponent, ctx: dict) -> List[dict]:
-    """Return 3 question dicts: {id, journalist, question, answers[...]}."""
+    """Return 2 question dicts: {id, journalist, question, answers[...]}.
+
+    Muck 2026-10-02: trimmed from 3 to 2 -- the pre-game presser was
+    too long. Two sharp questions keep the flavor without the drag."""
     journalists = ["Sarah Chen (Hockey Night)", "Mike Ross (The Athletic)",
                    "Dave Tremblay (TSN)", "Lisa Park (Sportsnet)"]
-    picked = random.sample(PREMATCH_QUESTIONS, min(3, len(PREMATCH_QUESTIONS)))
+    picked = random.sample(PREMATCH_QUESTIONS, min(2, len(PREMATCH_QUESTIONS)))
     out = []
     for i, q in enumerate(picked):
         answers = []

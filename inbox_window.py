@@ -1016,23 +1016,35 @@ class InboxView(ctk.CTkFrame):
         questions = data.get("presser") or []
         answered = data.get("presser_answered") or []
         reactions = data.get("presser_reactions") or {}
-        for qi, q in enumerate(questions):
-            is_answered = qi < len(answered) and answered[qi]
-            self._iwrap(f"Q{qi + 1}: {q.get('question', '')}", size=11,
-                        pady=(8, 2))
-            self._iwrap(f"\u2014 {q.get('journalist', '')}", size=10, dim=True)
-            if is_answered:
-                self._iwrap("\u2713 Answered", size=10, dim=True)
-                if reactions.get(qi):
-                    self._iwrap(f"\u201C{reactions.get(qi)}\u201D",
-                                size=10, dim=True, pady=(0, 4))
-            else:
-                for ai, ans in enumerate(q.get("answers") or []):
-                    self._secondary_button(
-                        self.interactive_frame, text=ans.get("label", ""),
-                        command=lambda qi=qi, ai=ai, m=message:
-                            self._on_bundle_presser_answer(m, qi, ai)
-                    ).pack(anchor='w', padx=14, pady=2)
+        all_answered = answered and all(answered)
+        # Muck 2026-10-02: presser was too long -- offer a one-tap skip.
+        if not all_answered and questions:
+            self._secondary_button(
+                self.interactive_frame, text="\u23e9 Skip presser",
+                command=lambda m=message:
+                    self._on_bundle_presser_skip(m)
+            ).pack(anchor='w', padx=14, pady=(0, 4))
+        if data.get("presser_skipped"):
+            self._iwrap("\u2713 Skipped -- no comment for the press today.",
+                        size=10, dim=True, pady=(0, 4))
+        elif questions:
+            for qi, q in enumerate(questions):
+                is_answered = qi < len(answered) and answered[qi]
+                self._iwrap(f"Q{qi + 1}: {q.get('question', '')}", size=11,
+                            pady=(8, 2))
+                self._iwrap(f"\u2014 {q.get('journalist', '')}", size=10, dim=True)
+                if is_answered:
+                    self._iwrap("\u2713 Answered", size=10, dim=True)
+                    if reactions.get(qi):
+                        self._iwrap(f"\u201C{reactions.get(qi)}\u201D",
+                                    size=10, dim=True, pady=(0, 4))
+                else:
+                    for ai, ans in enumerate(q.get("answers") or []):
+                        self._secondary_button(
+                            self.interactive_frame, text=ans.get("label", ""),
+                            command=lambda qi=qi, ai=ai, m=message:
+                                self._on_bundle_presser_answer(m, qi, ai)
+                        ).pack(anchor='w', padx=14, pady=2)
 
         # ---- Team talk ----
         self._action_section("DRESSING ROOM: TEAM TALK")
@@ -1712,6 +1724,14 @@ class InboxView(ctk.CTkFrame):
     def _on_bundle_presser_answer(self, message, qi, ai):
         try:
             self.app._answer_bundle_presser(message, qi, ai)
+        except Exception:
+            pass
+        self._show_interactive_action(message)
+
+    def _on_bundle_presser_skip(self, message):
+        """Muck 2026-10-02: one-tap skip for a presser that's too long."""
+        try:
+            self.app._skip_bundle_presser(message)
         except Exception:
             pass
         self._show_interactive_action(message)

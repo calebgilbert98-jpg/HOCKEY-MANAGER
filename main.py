@@ -19850,6 +19850,25 @@ class HockeyManagerGUI(tk.Tk):
             print(f"Bundle presser answer error (non-fatal): {e}")
             return ""
 
+    def _skip_bundle_presser(self, message) -> None:
+        """Inbox callback: skip the pre-match presser entirely.
+
+        Muck 2026-10-02: the pre-game presser was too long -- this lets
+        the GM say "no comment" to the whole thing and move on. No
+        morale/board/fan effects applied (neutral); never raises."""
+        try:
+            data = message.action_data
+            if not data:
+                data = {}
+                message.action_data = data
+            questions = data.get("presser") or []
+            data["presser_answered"] = [True] * len(questions)
+            data["presser_skipped"] = True
+            data.setdefault("presser_reactions", {})[-1] = (
+                "No comment -- the GM had nothing for the press today.")
+        except Exception as e:
+            print(f"Bundle presser skip error (non-fatal): {e}")
+
     def _answer_bundle_team_talk(self, message, opt_index: int) -> str:
         """Inbox callback: deliver the pre-match team talk."""
         try:
