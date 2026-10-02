@@ -66,6 +66,9 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "international_results": _intl_headline,
         "line_chemistry": _line_chemistry_headline,
         "scenario_moment": _scenario_moment_headline,
+        "special_event": _special_event_headline,
+        "league_digest": _league_digest_headline,
+        "rivalry_pregame": _rivalry_pregame_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -470,6 +473,55 @@ def _label(story_kind):
     return {"hat_trick": "Hat trick", "shutout": "Shutout",
             "goalie_steal": "Goalie steal", "blowout": "Statement win",
             "ot_thriller": "OT thriller"}.get(story_kind, "Big night")
+
+
+def _special_event_headline(game_date, event_kind="", text="",
+                            home="", away="", **kw):
+    """Can't-miss league events: outdoor games, jersey retirements.
+    Narrative ignition (Muck 2026-10-02): these used to vanish into the news
+    log. Now they get headlines."""
+    from game_classes import EmailMessage
+    _emoji = {"outdoor_game": "🏟️",
+              "jersey_retirement": "🎖️"}.get(event_kind, "⭐")
+    _subj = {"outdoor_game": "Outdoor game",
+             "jersey_retirement": "Jersey retirement"}.get(event_kind,
+                                                           "Special event")
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"{_emoji} {_subj}: {text[:60]}",
+        content=f"{text}\n\nA night for the history books.",
+        category="Special Event",
+        priority=3,
+        is_important=True,
+    )
+
+
+def _league_digest_headline(game_date, text="", digest_count=0, **kw):
+    """Header for the end-of-day "Around the League" digest.
+    Narrative ignition (Muck 2026-10-02)."""
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"📰 Around the league: {digest_count} stories tonight",
+        content=(f"{text}\n\nThe best of what you missed around the NHL tonight."),
+        category="League",
+        priority=2,
+    )
+
+
+def _rivalry_pregame_headline(game_date, text="", home="", away="", **kw):
+    """Pregame hype for high-heat rivalry games. Narrative ignition."""
+    from game_classes import EmailMessage
+    return EmailMessage(
+        sender="League News Desk",
+        sender_type="Media",
+        subject=f"🔥 Rivalry night: {away} at {home}",
+        content=f"{text}\n\nExpect a playoff atmosphere.",
+        category="Rivalry",
+        priority=2,
+    )
 
 
 def _grudge_callback_headline(game_date, home="", away="", short="",

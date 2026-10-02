@@ -382,4 +382,20 @@ def record_outdoor_result(app: Any, info: Dict[str, Any],
             )
     except Exception:
         pass
+    # Narrative ignition (Muck 2026-10-02): outdoor games are can't-miss
+    # events -- they get a headline, not just a ledger entry.
+    try:
+        from headlines import deliver_spec as _deliver_spec
+        _deliver_spec(app, {
+            "kind": "special_event",
+            "event_kind": "outdoor_game",
+            "text": f"{winner} won the {info.get('season')} "
+                    f"{info.get('event')} {home_score}-{away_score} at "
+                    f"{info.get('venue')} "
+                    f"({info.get('attendance', '')} fans braved the cold).",
+            "home": host, "away": away,
+            "involved": (host, away),
+        })
+    except Exception:
+        pass
     return rec

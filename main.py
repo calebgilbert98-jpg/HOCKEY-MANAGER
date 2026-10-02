@@ -7474,6 +7474,10 @@ class HockeyManagerGUI(tk.Tk):
                 self._milestone_pregame(
                     [g for g in todays_games
                      if not (isinstance(g, dict) and g.get('preseason'))])
+                # Narrative ignition: rivalry pregame hype for user games.
+                self._rivalry_pregame(
+                    [g for g in todays_games
+                     if not (isinstance(g, dict) and g.get('preseason'))])
                 self._process_todays_games(todays_games)
                 if getattr(self, '_abort_day_sim', False):
                     # Mid-team-talk save/load orphaned this day sim (the
@@ -11587,6 +11591,50 @@ class HockeyManagerGUI(tk.Tk):
             pass
 
     # -- Grudge-week presentation --------------------------------------------
+    def _rivalry_pregame(self, todays_games):
+        """Pregame rivalry hype for the user's games.
+
+        Narrative ignition (Muck 2026-10-02): rivalry heat was visible in the
+        calendar but never reached the user before puck drop. Now high-heat
+        rivalry games involving the user's team get a pregame headline.
+        Never raises.
+        """
+        try:
+            from narrative_ledger import matchup_narrative as _mn
+            from headlines import deliver_spec as _deliver_spec
+            user_team = getattr(self, "user_team", None)
+            if user_team is None:
+                return
+            user_name = getattr(user_team, "team_name", "")
+            league = getattr(self, "league", None)
+            for game in todays_games or []:
+                try:
+                    if isinstance(game, dict):
+                        home, away = game.get("home_team"), game.get("away_team")
+                    else:
+                        home, away = game[1], game[2]
+                    hn = getattr(home, "team_name", "")
+                    an = getattr(away, "team_name", "")
+                    if user_name not in (hn, an):
+                        continue
+                    narr = _mn(home, away, league=league) or {}
+                    heat = float(narr.get("rivalry_heat", 0) or 0)
+                    if heat < 50:
+                        continue
+                    tags = narr.get("hype_tags", []) or []
+                    tag_str = f" ({', '.join(tags)})" if tags else ""
+                    _deliver_spec(self, {
+                        "kind": "rivalry_pregame",
+                        "text": f"Bad blood tonight: {away} at {home}. "
+                                f"The rivalry is at a boil{tag_str}.",
+                        "home": hn, "away": an,
+                        "involved": (hn, an),
+                    })
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
     def _deliver_outdoor_pregame(self, info, home_team, away_team):
         """Inbox billing card for a Winter Classic / Stadium Series game.
 
@@ -11712,6 +11760,15 @@ class HockeyManagerGUI(tk.Tk):
                         })
                 except Exception:
                     pass
+            elif res.get("stories"):
+                # Narrative ignition (Muck 2026-10-02): AI-game stories
+                # don't vanish anymore -- they accumulate for the end-of-day
+                # "Around the League" digest.
+                try:
+                    import league_digest as _ld
+                    _ld.collect_game_stories(self, res["stories"])
+                except Exception:
+                    pass
             return res
         except Exception:
             return {}
@@ -11768,6 +11825,19 @@ class HockeyManagerGUI(tk.Tk):
                      if getattr(t, "team_name", "") == snap.get("team_name")),
                     None)
                 if team is not None and _im.retire_number(team, snap, year):
+                    try:
+                        from headlines import deliver_spec as _deliver_spec
+                        _deliver_spec(self, {
+                            "kind": "special_event",
+                            "event_kind": "jersey_retirement",
+                            "text": f"{getattr(team, 'team_name', '')} will retire "
+                                    f"{snap['name']}'s No. {snap['number']} -- "
+                                    f"a pregame ceremony at the next home game.",
+                            "home": getattr(team, 'team_name', ''),
+                            "involved": (getattr(team, 'team_name', ''),),
+                        })
+                    except Exception:
+                        pass
                     self.add_news(
                         f"{getattr(team, 'team_name', '')} will retire "
                         f"{snap['name']}'s No. {snap['number']} -- "
@@ -15735,6 +15805,14 @@ class HockeyManagerGUI(tk.Tk):
                 pass
             try:
                 self.game_manager.current_date = self.current_date
+            except Exception:
+                pass
+            # Narrative ignition (Muck 2026-10-02): deliver the day's
+            # "Around the League" digest -- the top AI-game stories the
+            # user didn't see live.
+            try:
+                import league_digest as _ld
+                _ld.deliver_digest(self)
             except Exception:
                 pass
             try:

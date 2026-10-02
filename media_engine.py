@@ -127,7 +127,9 @@ class Narrative:
     def __init__(self, kind: str, team_name: str, title: str,
                  subjects: Optional[List[str]] = None, heat: float = 45.0):
         self.id = f"{kind}:{team_name}:{random.randrange(10**6)}"
-        self.kind = kind  # hot_seat | leadership | goalie | trade_rumor
+        self.kind = kind  # hot_seat | leadership | goalie | trade_rumor |
+                          # prospect_watch | trust_process | cup_window |
+                          # legacy_chase | deadline_race (narrative ignition)
         self.team_name = team_name
         self.title = title
         self.subjects = list(subjects or [])
@@ -524,7 +526,11 @@ def _gm_backing_likelihood(gm: Any, narr: Any) -> float:
 # speech every Tuesday.
 # ---------------------------------------------------------------------------
 
-_MOMENT_COOLDOWNS = {"bullet": 8, "rally": 10, "shield": 6, "backing": 25}
+_MOMENT_COOLDOWNS = {"bullet": 5, "rally": 7, "shield": 4, "backing": 15}
+# Narrative ignition (Muck 2026-10-02): old cooldowns (8/10/6/25) meant the
+# room's voices went silent for weeks. In an 84-game season these now fire
+# roughly: bullet 16x, rally 12x, shield 21x, backing 5x -- present but not
+# spammy.
 
 
 def _moment_clock(team: Any) -> int:
@@ -658,6 +664,9 @@ def _cover_game_inner(league, home_team, away_team, winner, loser,
     # silly stuff -- nobody starts a goalie controversy in May.
     if not playoffs:
         _maybe_spawn_narrative(league, loser, game_date, rng, events)
+        # Narrative ignition: winners get context arcs too (Cup window,
+        # legacy chase for contenders; prospect watch for rebuilds).
+        _maybe_spawn_context_narrative(league, winner, game_date, rng, events)
 
     # ---- 4. Between-periods leadership: fully simmed, never interrupts.
     # A captain's/coach's intermission word in a tight game lifts the room.
@@ -1008,11 +1017,13 @@ def _run_coach_availability(league, team, team_name, reporter,
 
 
 def _maybe_spawn_narrative(league, loser, game_date, rng, events) -> None:
-    """Losing grows storylines. Rare, capped league-wide, most fizzle."""
+    """Losing grows storylines. Rare, capped league-wide, most fizzle.
+    Narrative ignition (Muck 2026-10-02): 0.05 -> 0.12. The old rate meant
+    ~4 storylines per team per season; the league felt storyless."""
     narrs = getattr(league, "media_narratives", None)
     if narrs is None or len(narrs) >= 6:
         return
-    if rng.random() >= 0.05:
+    if rng.random() >= 0.12:
         return
     team_name = _team_name(loser)
     if _narrative_for(team_name, league) is not None:
@@ -1060,6 +1071,92 @@ def _maybe_spawn_narrative(league, loser, game_date, rng, events) -> None:
     narrs.append(narr)
     events.append({"kind": "narrative_spawn", "team": team_name,
                    "narrative": title})
+
+
+def _maybe_spawn_context_narrative(league, team, game_date, rng, events) -> None:
+    """Team-context storylines: rebuilds and contenders get different narratives.
+
+    Narrative ignition (Muck 2026-10-02): the old system only spawned storylines
+    for spiraling losers. A rebuild's story should feel different from a
+    contender's -- prospect watch vs Cup window, trust-the-process vs legacy chase.
+    Called for the WINNER (contender arcs) and for young teams (rebuild arcs).
+    Never raises.
+    """
+    try:
+        narrs = getattr(league, "media_narratives", None)
+        if narrs is None or len(narrs) >= 8:  # slightly higher cap for variety
+            return
+        team_name = _team_name(team)
+        if _narrative_for(team_name, league) is not None:
+            return  # one storyline per team at a time
+        # Only ~8% per game -- these are season arcs, not nightly noise.
+        if rng.random() >= 0.08:
+            return
+
+        roster = list(getattr(team, "roster", []) or [])
+        if not roster:
+            return
+
+        # Team context: contender (high win%) vs rebuild (young roster, low win%).
+        try:
+            wpct = _win_pct(team)
+        except Exception:
+            wpct = 0.5
+        try:
+            avg_age = sum(int(getattr(p, "age", 28) or 28) for p in roster) / len(roster)
+        except Exception:
+            avg_age = 28
+
+        kind, title, subjects = None, "", []
+        is_contender = wpct >= 0.60
+        is_rebuild = avg_age <= 25.5 and wpct < 0.50
+
+        if is_rebuild and rng.random() < 0.5:
+            # Prospect watch: the kids are the story.
+            try:
+                kids = [p for p in roster
+                        if int(getattr(p, "age", 99) or 99) <= 22]
+                if kids:
+                    kid = max(kids, key=lambda p: _overall(p))
+                    kname = getattr(kid, "full_name",
+                                    getattr(kid, "last_name", "the kid"))
+                    kind = "prospect_watch"
+                    title = f"{kname} is the future in {team_name} -- and the future is now"
+                    subjects = [getattr(kid, "id", "")]
+                else:
+                    kind = "trust_process"
+                    title = f"Trust the process? {team_name} is betting on patience"
+            except Exception:
+                kind = "trust_process"
+                title = f"Trust the process? {team_name} is betting on patience"
+        elif is_contender and rng.random() < 0.5:
+            # Cup window / legacy chase: the pressure is the story.
+            try:
+                vets = [p for p in roster
+                        if int(getattr(p, "age", 0) or 0) >= 33
+                        and _overall(p) >= 82]
+                if vets and rng.random() < 0.6:
+                    vet = max(vets, key=lambda p: _overall(p))
+                    vname = getattr(vet, "full_name",
+                                    getattr(vet, "last_name", "the veteran"))
+                    kind = "legacy_chase"
+                    title = f"{vname} is running out of chances at the Cup"
+                    subjects = [getattr(vet, "id", "")]
+                else:
+                    kind = "cup_window"
+                    title = f"The window is open in {team_name} -- is this the year?"
+            except Exception:
+                kind = "cup_window"
+                title = f"The window is open in {team_name} -- is this the year?"
+
+        if kind is None:
+            return
+        narr = Narrative(kind, team_name, title, subjects)
+        narrs.append(narr)
+        events.append({"kind": "narrative_spawn", "team": team_name,
+                       "narrative": title})
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
