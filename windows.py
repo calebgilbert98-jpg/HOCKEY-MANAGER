@@ -9648,6 +9648,15 @@ class DraftView(ctk.CTkFrame):
             _lg.undrafted_pool = _left
         except Exception:
             pass
+        # Eastside-style undrafted flow (Muck 2026-10-02): older undrafted
+        # sign AHL deals, Euros may return to Europe. Uses existing mechanics.
+        try:
+            from draft_night import process_undrafted_pool as _pup
+            _dy2 = int(getattr(_lg, 'draft_prospects_year', None)
+                       or getattr(_lg, 'season_year', 0) or 0)
+            _pup(_lg, _dy2)
+        except Exception:
+            pass
         # Stamp this draft year as conducted (idempotency guard): the
         # headless conductor and the offseason guarantee both respect it,
         # so a war-room draft can never be re-conducted by the sim.

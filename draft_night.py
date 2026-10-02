@@ -1065,6 +1065,13 @@ def resume_entry_draft_session(league, session, app=None):
         league.undrafted_pool = list(pool)
     except Exception:
         pass
+    # Eastside-style undrafted flow (Muck 2026-10-02): older undrafted sign
+    # AHL deals, Euros may return to Europe, young ones re-enter.
+    # Uses existing AHL mechanics only.
+    try:
+        _ahl, _eur, _re = process_undrafted_pool(league, year)
+    except Exception:
+        pass
     try:
         league.draft_prospects = []
     except Exception:
@@ -1344,6 +1351,12 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None,
         league.undrafted_pool = list(pool)
     except Exception:
         pass
+    # Eastside-style undrafted flow (Muck 2026-10-02): older undrafted sign
+    # AHL deals, Euros may return to Europe, young ones re-enter.
+    try:
+        _ahl, _eur, _re = process_undrafted_pool(league, year)
+    except Exception:
+        pass
     try:
         league.draft_prospects = []
     except Exception:
@@ -1370,3 +1383,142 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None,
     except Exception:
         pass
     return picks_made
+
+
+# ---------------------------------------------------------------------------
+# Undrafted prospect flow (Muck 2026-10-02 — Eastside-style)
+# ---------------------------------------------------------------------------
+# After the draft, undrafted prospects don't just vanish. Using EXISTING
+# mechanics only:
+# - Young + still eligible → re-enter next year's draft (existing behavior,
+#   handled by main.py's re-entry logic via league.undrafted_pool)
+# - Older (20+ NA, 22+ Euro) → sign AHL contracts with AHL teams using the
+#   existing AHL contract system (determine_contract_info "AHL_VETERAN")
+# - Euros who don't land AHL deals → return to Europe (abstract: they're
+#   out of the NA system, tracked via team_name)
+#
+# A few undrafted have hidden NHL potential (late bloomers) — the Eastside
+# magic of finding a gem.
+
+def process_undrafted_pool(league, year):
+    """Route undrafted prospects to AHL deals, Europe, or re-entry.
+
+    Called after conduct_entry_draft sets league.undrafted_pool.
+    Uses existing AHL mechanics — no new systems.
+    Returns (ahl_signed, euro_returned, reentry_count).
+    """
+    try:
+        pool = list(getattr(league, "undrafted_pool", None) or [])
+    except Exception:
+        return (0, 0, 0)
+    if not pool:
+        return (0, 0, 0)
+
+    try:
+        from draft_generator import age_on_sept15, is_draft_eligible
+    except Exception:
+        return (0, 0, 0)
+
+    # Split the pool
+    reentry = []      # young + eligible → next year's draft
+    ahl_candidates = []  # older → AHL contract candidates
+    euro_return = []  # Euros who don't sign → back to Europe
+
+    for p in pool:
+        try:
+            age = age_on_sept15(getattr(p, "birth_date", ""),
+                                year)
+            nat = getattr(p, "nationality", "") or ""
+            is_euro = nat not in ("Canada", "USA", "United States")
+
+            # Still young enough to re-enter?
+            if age is not None and is_draft_eligible(
+                    getattr(p, "birth_date", ""), nat, year + 1):
+                # 18-19 year olds re-enter; 20+ start looking at AHL
+                if (not is_euro and age < 20) or (is_euro and age < 21):
+                    reentry.append(p)
+                    continue
+
+            # Older → AHL candidate (or Euro return)
+            if is_euro:
+                # Euros: 50/50 AHL vs return to Europe
+                import random as _r
+                if _r.random() < 0.5:
+                    ahl_candidates.append(p)
+                else:
+                    euro_return.append(p)
+            else:
+                ahl_candidates.append(p)
+        except Exception:
+            continue
+
+    # AHL signings: best available undrafted get AHL deals
+    # Sort by overall (best first) — AHL teams want the best talent
+    ahl_signed = 0
+    try:
+        ahl_candidates.sort(
+            key=lambda p: getattr(p, "overall", 0) or 0, reverse=True)
+
+        # Get AHL teams from league
+        ahl_teams = [t for t in (getattr(league, "teams", None) or [])
+                     if getattr(t, "league_name", "") == "American Hockey League"]
+        if not ahl_teams:
+            # Fallback: use affiliate teams
+            ahl_teams = []
+            for t in (getattr(league, "teams", None) or []):
+                aff = getattr(t, "affiliate_team", None)
+                if aff is not None and aff not in ahl_teams:
+                    ahl_teams.append(aff)
+
+        if ahl_teams:
+            from player_generator import PlayerGenerator
+            _gen = PlayerGenerator()
+
+            # Each AHL team signs 2-4 undrafted (Eastside-style depth)
+            import random as _r
+            _idx = 0
+            for team in ahl_teams:
+                if _idx >= len(ahl_candidates):
+                    break
+                num_sign = _r.randint(2, 4)
+                for _ in range(num_sign):
+                    if _idx >= len(ahl_candidates):
+                        break
+                    p = ahl_candidates[_idx]
+                    _idx += 1
+                    try:
+                        # Existing AHL contract mechanics
+                        salary, years, two_way, ahl_salary = \
+                            _gen.determine_contract_info(p, "AHL_VETERAN")
+                        p.contract.salary = salary
+                        p.contract.years_remaining = years
+                        p.contract.two_way = two_way
+                        p.contract.ahl_salary = ahl_salary
+                        # Add to AHL roster (existing mechanics)
+                        team.add_player(p, "ahl")
+                        ahl_signed += 1
+                    except Exception:
+                        continue
+    except Exception:
+        pass
+
+    # Euros returning to Europe: abstract (out of NA system)
+    euro_count = 0
+    try:
+        for p in euro_return:
+            try:
+                p.team_name = "Europe"
+                euro_count += 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Update the undrafted pool: only re-entry candidates remain
+    # (AHL-signed and Euro-returned are out of the pool)
+    try:
+        league.undrafted_pool = list(reentry)
+    except Exception:
+        pass
+
+    return (ahl_signed, euro_count, len(reentry))
