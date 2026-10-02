@@ -180,11 +180,14 @@ def _on_wheel(event):
         # Determine scroll direction / magnitude across platforms.
         units = 0
         horizontal = bool(getattr(event, "state", 0) & 0x1)  # Shift held
-        ev_type = getattr(event, "type", None)
-        ev_type_name = str(ev_type)
-        if getattr(event, "num", None) == 4 or "Button-4" in ev_type_name or event.type == "4":
+        # X11 wheel: Button-4 = up, Button-5 = down. event.num is the
+        # reliable discriminator -- do NOT use event.type here: tkinter's
+        # EventType is a str-enum with ButtonPress == '4', so
+        # `event.type == "4"` is True for Button-5 too.
+        ev_num = getattr(event, "num", None)
+        if ev_num == 4:
             units = -1
-        elif getattr(event, "num", None) == 5 or "Button-5" in ev_type_name or event.type == "5":
+        elif ev_num == 5:
             units = 1
         else:
             delta = getattr(event, "delta", 0) or 0
