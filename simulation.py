@@ -5629,6 +5629,22 @@ class GameSim:
         expected_goal = min(0.95, expected_goal * self._parity_factor(
             attacking_team, defending_team))
 
+        # OT-parity: per-game shared shooting luck (Muck 2026-10-02).
+        # A mean-one factor shared by both teams creates positive score
+        # correlation (open games: both score more; tight games: both score
+        # less), raising P(regulation tie) toward the NHL's ~22% OT rate
+        # without changing mean GPG. Applied here in the xG multiplier
+        # chain (symmetric min(0.95, ...) capping like every other factor),
+        # NOT on the final goal_prob after the 0.98 cap -- that placement
+        # was asymmetric (high-luck upside clipped, low-luck downside kept)
+        # and silently erased the s3 xG re-anchor. Never raises.
+        try:
+            _luck = float(getattr(self, "_game_shoot_luck", 1.0) or 1.0)
+        except Exception:
+            _luck = 1.0
+        if _luck != 1.0:
+            expected_goal = min(0.95, expected_goal * _luck)
+
         # Man-advantage finishing: extra space and tired penalty killers mean
         # markedly better looks; shorthanded shots are desperate heaves.
         expected_goal = min(0.95, expected_goal * self._man_advantage_xg_factor(
@@ -5773,14 +5789,6 @@ class GameSim:
         mult = getattr(self, "scoring_multiplier", 1.0)
         if mult != 1.0:
             goal_prob = (1.0 - adjusted_save_prob) * mult
-            adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
-        # OT-parity: per-game shared shooting luck (additive, mean-one).
-        try:
-            _luck = float(getattr(self, "_game_shoot_luck", 1.0) or 1.0)
-        except Exception:
-            _luck = 1.0
-        if _luck != 1.0:
-            goal_prob = (1.0 - adjusted_save_prob) * _luck
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
 
         # Superstar tune 2026-09-28 (shared decisions, one decision two
