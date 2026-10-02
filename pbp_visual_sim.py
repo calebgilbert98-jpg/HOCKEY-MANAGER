@@ -274,6 +274,35 @@ _FIGHT_T = [
     "Fight! {P} drops the gloves!",
     "They're going! {P} in a fight at center ice.",
 ]
+# Muck 2026-10-02: fights are EVENTS -- name both fighters, declare the
+# winner, and show how the bench and crowd reacted.
+_FIGHT_START_T = [
+    "{A} and {B} drop the gloves at center ice — here we go!",
+    "Gloves off! {A} ({TA}) squares up with {B} ({TB})!",
+    "They're throwing! {A} and {B} go at it!",
+    "{A} ({TA}) challenges {B} ({TB}) — the gloves are off!",
+]
+_FIGHT_WIN_T = [
+    "{W} takes the fight {M}!",
+    "{W} stands tall — {M} win!",
+    "It's {W} {M} — the decision goes to {W}!",
+]
+_FIGHT_DRAW_T = [
+    "They grapple to a standstill — the officials step in. A draw!",
+    "Neither man backs down — it's ruled a draw!",
+]
+_FIGHT_BENCH_T = [
+    "The {T} bench is on its feet — sticks banging the boards!",
+    "{T} teammates swarm the bench door, screaming encouragement!",
+    "Towels waving on the {T} bench — they absolutely love it!",
+    "The {T} bench erupts — helmets off, sticks slamming the ice!",
+]
+_FIGHT_CROWD_T = [
+    "The crowd is on its feet — this building is shaking!",
+    "A deafening roar — the fans are eating this up!",
+    "The barn is electric — you can feel it through the glass!",
+    "Chants rain down — this crowd came alive!",
+]
 _ICING_T = [
     "Icing against {team}.",
     "Icing called on {team}.",
@@ -2632,6 +2661,29 @@ class PBPVisualSim(tk.Toplevel):
         return f"#{num} {last}"
 
     @staticmethod
+    def _fname(x):
+        """Fighter display name: handles Player objects AND plain strings.
+
+        The fight PBP event carries `player` as a Player object but
+        `opponent`/`winner` as full-name strings -- this normalizes both.
+        Never raises."""
+        try:
+            if x is None:
+                return "?"
+            last = getattr(x, "last_name", "") or ""
+            full = getattr(x, "full_name", "") or ""
+            if last:
+                num = getattr(x, "jersey_number", None)
+                return f"#{num} {last}" if num not in (None, "?") else str(last)
+            if full:
+                return str(full)
+            if isinstance(x, str) and x.strip():
+                return x.strip()
+            return "?"
+        except Exception:
+            return "?"
+
+    @staticmethod
     def _gname(p):
         """Short goalie name for the stats strip (last name only)."""
         if p is None:
@@ -4471,21 +4523,111 @@ class PBPVisualSim(tk.Toplevel):
             self._banner_show("milestone", title, sub, color=color)
 
     def _on_fight(self, ev):
-        msg = random.choice(_FIGHT_T).format(
-            P=self._pname(ev.get("player")))
-        self._feed(msg, tag="fight", ev=ev)
-        self._push_momentum(self._side_of(ev.get("team")), 2)
-        self._note("fight", msg, ev)
-        self._save_highlight(ev, "fight", msg)
-        if not self._instant:
-            self._banner_show("fight", "FIGHT!",
-                              self._pname(ev.get("player")), color="#ff8a5c")
-            self._shake(mag=4.0, dur=0.5)
-        # Fights spike the intensity.
+        # Muck 2026-10-02: fights are EVENTS. Name BOTH fighters and their
+        # teams, declare the winner (delayed for drama), and show the
+        # bench + crowd reaction. All never-raises.
         try:
-            self._tension_add(f"Fight: {self._pname(ev.get('player'))}", 6.0)
+            a = self._fname(ev.get("player"))
+            b = self._fname(ev.get("opponent"))
+            team_a = str(ev.get("team") or "")
+            # Opponent's team: whichever side isn't the instigator's.
+            team_b = ""
+            try:
+                hn = getattr(getattr(self, "home_team", None), "team_name", "")
+                an = getattr(getattr(self, "away_team", None), "team_name", "")
+                team_b = an if team_a == hn else hn
+            except Exception:
+                pass
+            ta, tb = _abbr(team_a), _abbr(team_b)
+            winner = self._fname(ev.get("winner"))
+            method = str(ev.get("method") or "decision").lower()
+            winner_team = str(ev.get("winner_team") or "")
+
+            # --- the drop of the gloves ---
+            start = random.choice(_FIGHT_START_T).format(
+                A=a, B=b, TA=ta, TB=tb)
+            self._feed(start, tag="fight", ev=ev)
+            self._push_momentum(self._side_of(team_a), 2)
+            self._note("fight", f"{a} ({ta}) vs {b} ({tb})", ev)
+            self._save_highlight(ev, "fight", start)
+            if not self._instant:
+                self._banner_show("fight", "🥊 FIGHT!",
+                                  f"{a} ({ta})  vs  {b} ({tb})",
+                                  color="#ff8a5c")
+                self._shake(mag=4.0, dur=0.5)
+            # Fights spike the intensity.
+            try:
+                self._tension_add(f"Fight: {a} vs {b}", 6.0)
+            except Exception:
+                pass
+
+            # --- the verdict: bench + crowd + winner ---
+            def _reveal():
+                try:
+                    if getattr(self, "closed", False):
+                        return
+                    wt_abbr = _abbr(winner_team)
+                    if method == "draw":
+                        wmsg = random.choice(_FIGHT_DRAW_T)
+                        title, sub = "DRAW!", f"{a} vs {b} — nobody backs down"
+                    else:
+                        mtxt = ("by KNOCKDOWN!" if method == "knockdown"
+                                else "by decision")
+                        wmsg = random.choice(_FIGHT_WIN_T).format(
+                            W=winner, M=mtxt)
+                        # Loser: the fighter whose name doesn't match the
+                        # winner (names may be formatted differently).
+                        try:
+                            wl = winner.split()[-1].lower()
+                            loser = (b if wl in a.lower()
+                                     else a if wl in b.lower() else b)
+                        except Exception:
+                            loser = b
+                        title = f"🏆 {winner} WINS!"
+                        sub = f"{mtxt} over {loser}"
+                    bench = ""
+                    crowd = ""
+                    try:
+                        if winner_team:
+                            bench = random.choice(
+                                _FIGHT_BENCH_T).format(T=winner_team)
+                    except Exception:
+                        pass
+                    try:
+                        crowd = random.choice(_FIGHT_CROWD_T)
+                    except Exception:
+                        pass
+                    self._feed(wmsg, tag="fight", ev=ev)
+                    if bench:
+                        self._feed(bench, tag="fight", ev=ev)
+                    if crowd:
+                        self._feed(crowd, tag="fight", ev=ev)
+                    self._note("fight", wmsg, ev)
+                    if not self._instant:
+                        self._banner_show("fight", title, sub,
+                                          color="#ffd166")
+                        self._shake(mag=6.0 if method == "knockdown" else 4.0,
+                                    dur=0.7)
+                    try:
+                        self._tension_add(f"Fight result: {winner}", 4.0)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+            if self._instant:
+                _reveal()
+            else:
+                try:
+                    self.after(2200, _reveal)
+                except Exception:
+                    _reveal()
         except Exception:
-            pass
+            # Absolute fallback: never let a fight break the visualizer.
+            try:
+                self._feed("A fight breaks out!", tag="fight", ev=ev)
+            except Exception:
+                pass
 
     def _on_shootout_attempt(self, ev):
         shooter = ev.get("shooter")
