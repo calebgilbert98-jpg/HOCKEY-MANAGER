@@ -3880,25 +3880,22 @@ class HockeyManagerGUI(tk.Tk):
         nav_container = tk.Frame(parent, bg=menu_bg)
         nav_container.grid(row=0, column=0, sticky="ew")
         
-        # Use tk.Frame with modern background instead of ttk for consistent theming
+        # Use tk.Frame with modern background instead of ttk for consistent theming.
+        # Layout: side groups pack to the edges (taking only the space they
+        # need) while the Advance button is place-centered on the bar --
+        # true window centering. (The old uniform-column grid reserved a full
+        # left-width column on the right too, pushing Save/Load + Settings
+        # off-screen at common laptop widths -- Muck 2026-10-02.)
         menu_bar = tk.Frame(nav_container, bg=menu_bg, padx=4, pady=4)
         menu_bar.pack(fill="x")
-        
+
         # Subtle bottom border
         border = tk.Frame(nav_container, bg=border_color, height=1)
         border.pack(fill="x")
-        
+
         # Far left: back/forward screen navigation + section dropdowns.
-        # Column 0 (weight 1) and column 2 (weight 1) are equal so the
-        # center column -- and the Advance button in it -- stays centered.
         left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        left_menu_frame.grid(row=0, column=0, sticky="w")
-        # Both side columns share a uniform group: they always get IDENTICAL
-        # widths, so the center column -- and the Advance button -- is
-        # pixel-centered on the bar no matter how asymmetric the content.
-        menu_bar.grid_columnconfigure(0, weight=1, uniform="sides")
-        menu_bar.grid_columnconfigure(1, weight=0)
-        menu_bar.grid_columnconfigure(2, weight=1, uniform="sides")
+        left_menu_frame.pack(side="left")
         self._back_btn = self._create_nav_pill(left_menu_frame, "\u25c0",
                                                self._nav_back,
                                                tooltip="Back to previous screen")
@@ -3992,7 +3989,8 @@ class HockeyManagerGUI(tk.Tk):
         # self._next_day_btn keeps its name so refresh_next_day_button()
         # and the MP continue UI keep working untouched.
         center_frame = tk.Frame(menu_bar, bg=menu_bg)
-        center_frame.grid(row=0, column=1)
+        # (Positioned by _layout_menu_bar below: place-centered when the bar
+        # is wide enough, own row under the pills when narrow.)
         try:
             from modern_widgets import RoundedButton as _RB
             _advance_btn = _RB(
@@ -4014,7 +4012,7 @@ class HockeyManagerGUI(tk.Tk):
 
         # --- Right: save + settings ---
         right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        right_menu_frame.grid(row=0, column=2, sticky="e")
+        right_menu_frame.pack(side="right")
 
         # --- Date + next-game countdown (Muck 2026-10-02) ---
         # Fills the blank space on the right side of the menu bar so the
@@ -4057,6 +4055,68 @@ class HockeyManagerGUI(tk.Tk):
             self.refresh_menu_date()
         except Exception:
             pass
+        # --- Responsive menu-bar layout (Muck 2026-10-02) ---
+        # Guarantee the big centered Advance button never covers, clips, or
+        # pushes out a menu group at any window width.
+        #   Wide:   single row -- pills hug the edges, button place-centered.
+        #   Narrow: pills stay on top, button drops to its own centered row.
+        self._menu_layout_mode = None
+        # Invisible strut: pins the bar height to fit the 56px Advance
+        # button in wide mode. (The place()d center_frame contributes
+        # nothing to the bar's requested height, and an explicit
+        # height=68 configure was observed not to stick -- a real widget
+        # in the normal pack flow sizes the bar reliably.)
+        _menu_strut = tk.Frame(menu_bar, bg=menu_bg, width=1, height=64)
+        _menu_strut.pack_forget()
+
+        def _layout_menu_bar(event=None):
+            try:
+                bar_w = menu_bar.winfo_width()
+                if bar_w <= 1:
+                    return
+                btn_w = center_frame.winfo_reqwidth()
+                left_w = left_menu_frame.winfo_reqwidth()
+                right_w = right_menu_frame.winfo_reqwidth()
+                # The button's center must clear both side groups. Clamp the
+                # ideal window-center so it never overlaps a menu group; if
+                # the clamped position would look off-center (>40px), drop
+                # to the two-row narrow layout instead.
+                ideal_cx = bar_w / 2.0
+                min_cx = left_w + 8 + btn_w / 2.0
+                max_cx = bar_w - right_w - 8 - btn_w / 2.0
+                if min_cx > max_cx:
+                    mode = "narrow"
+                    cx = ideal_cx
+                else:
+                    cx = min(max(ideal_cx, min_cx), max_cx)
+                    mode = "narrow" if abs(cx - ideal_cx) > 40 else "wide"
+                if mode == self._menu_layout_mode:
+                    return
+                self._menu_layout_mode = mode
+                # Re-pack in dependency order for the target mode.
+                center_frame.pack_forget()
+                center_frame.place_forget()
+                left_menu_frame.pack_forget()
+                right_menu_frame.pack_forget()
+                _menu_strut.pack_forget()
+                if mode == "narrow":
+                    # Button first so it takes the full-width bottom parcel;
+                    # pills share the top row at their natural height.
+                    center_frame.pack(side="bottom", pady=(2, 4))
+                    left_menu_frame.pack(side="left")
+                    right_menu_frame.pack(side="right")
+                else:
+                    left_menu_frame.pack(side="left")
+                    right_menu_frame.pack(side="right")
+                    _menu_strut.pack(side="left")
+                    center_frame.place(relx=cx / bar_w, rely=0.5,
+                                       anchor="center")
+            except Exception:
+                pass
+
+        menu_bar.bind("<Configure>", _layout_menu_bar)
+        self._relayout_menu_bar = _layout_menu_bar
+        menu_bar.after_idle(_layout_menu_bar)
 
     # ------------------------------------------------------------------
     # Screen navigation history (back/forward)
