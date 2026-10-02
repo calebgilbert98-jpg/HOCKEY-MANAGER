@@ -5493,13 +5493,121 @@ class GameSim:
         # Superstar tune 2026-09-28 (shared decisions, one decision two
         # fidelities): D point-shot conversion discount + sniper archetype
         # finishing tilt -- the same multipliers quick-sim applies.
+        # STACKING (2026-09-30, workstream C, Muck): the opportunity
+        # amplifiers on one chance (finishing tilt, schemed relief,
+        # chemistry) combine sub-multiplicatively below -- collected
+        # here, applied once. The D point-shot discount is a suppressor
+        # and keeps full multiplicative power (honest brake).
+        _gs_boosters = []
         try:
             from mesh_system import (defense_point_shot_discount as _dpsd,
                                      archetype_finish_tilt as _aft)
-            _tilt = _dpsd(shooter) * _aft(shooter)
-            if _tilt != 1.0:
-                goal_prob = (1.0 - adjusted_save_prob) * _tilt
+            _dpsd_f = _dpsd(shooter)
+            _aft_f = _aft(shooter)
+            if _dpsd_f != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _dpsd_f
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+            if _aft_f != 1.0:
+                _gs_boosters.append(_aft_f)
+        except Exception:
+            pass
+
+        # Schemed-against superstars (2026-09-30, Muck): the scenario
+        # battle (scenario_composites.schemed_factor_for_shooter) — the
+        # defending TEAM shades an elite/generational threat. One factor
+        # per chance, never stacked. Same shared decision quick-sim calls.
+        try:
+            from scenario_composites import (schemed_factor_for_shooter
+                                             as _sffs2)
+            try:
+                _onice_a = self._on_ice_skaters(attacking_team)
+            except Exception:
+                try:
+                    _onice_a = self._get_on_ice(attacking_team)
+                except Exception:
+                    _onice_a = []
+            try:
+                _onice_d = self._on_ice_skaters(defending_team)
+            except Exception:
+                try:
+                    _onice_d = self._get_on_ice(defending_team)
+                except Exception:
+                    _onice_d = []
+            _a_unit = [p for p in (_onice_a or []) if p is not None]
+            _d_unit = [p for p in (_onice_d or []) if p is not None]
+            _loc_s = getattr(location, "name", str(location)).lower()
+            _schemed_f2 = _sffs2(shooter, _a_unit, _d_unit, _loc_s,
+                                 sim=self, off_team=attacking_team,
+                                 def_team=defending_team)
+            if _schemed_f2 != 1.0:
+                _gs_boosters.append(_schemed_f2)
+        except Exception:
+            pass
+
+        # Line chemistry (2026-09-30, Muck): the shared unit-efficiency
+        # multiplier — same helper, same point as quick-sim (one decision,
+        # two fidelities). Situation-aware, bounded per-line, truthful.
+        # Never touches finishing or grade ceilings.
+        try:
+            from line_chemistry import (unit_efficiency as _lcef2,
+                                        pk_denial_factor as _lkdf2,
+                                        detect_situation as _lcdet2)
+            _sit_lc2 = _lcdet2(sim=self, team=attacking_team)
+            _lc_eff2 = _lcef2(_a_unit, situation=_sit_lc2, sim=self,
+                              team=attacking_team)
+            if _lc_eff2 != 1.0:
+                _gs_boosters.append(_lc_eff2)
+            # detect_situation returns the ATTACKING team's view: the
+            # defending PK unit's denial applies when the attack is on
+            # the PP ("pp"), not when the attack is shorthanded.
+            if _sit_lc2 == "pp":
+                _deny2 = _lkdf2(_d_unit, sim=self, team=defending_team)
+                if _deny2 != 1.0:
+                    goal_prob = (1.0 - adjusted_save_prob) * _deny2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # STACKING (2026-09-30, workstream C, Muck): the collected
+        # opportunity amplifiers combine sub-multiplicatively
+        # (strongest boost keeps full value, further boosts keep 30%
+        # of their excess). Denials collected here pass through at
+        # full multiplicative power -- honest brakes, never muted.
+        try:
+            from scenario_composites import (
+                combine_stacked_amplifiers as _csa2)
+        except Exception:
+            _csa2 = None
+        try:
+            _free2 = 1.0
+            for _b in _gs_boosters:
+                _free2 *= _b
+            if _gs_boosters and _free2 > 0.0:
+                _combined2 = _csa2(*_gs_boosters) if _csa2 else _free2
+                if _combined2 != _free2:
+                    goal_prob = ((1.0 - adjusted_save_prob)
+                                 * (_combined2 / _free2))
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # OT drama, live lever (2026-09-30 rebuild): 3v3 matchup choices.
+        # Regular-season OT only -- the coach's personnel acumen plus the
+        # room/crowd edge tilt OT finishing a touch, bounded small.
+        try:
+            if (getattr(self, "_ot_sudden_death", False)
+                    and not getattr(self, "is_playoff", False)
+                    and getattr(self, "period", 0) == 4):
+                from ot_drama import ot_matchup_tilt as _omt2
+                _tilt2 = _omt2(
+                    self._drama_ctx_lazy(),
+                    home_coach=getattr(self, "_home_coach", None),
+                    away_coach=getattr(self, "_away_coach", None))
+                if _tilt2:
+                    _m2 = (1.0 + _tilt2 if attacking_team is self.home_team
+                           else 1.0 - _tilt2)
+                    goal_prob = (1.0 - adjusted_save_prob) * _m2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
         except Exception:
             pass
 
