@@ -718,6 +718,13 @@ def run_calder_cup(league):
         hist.append(info)
         league.ahl_calder_done = label
 
+        # Trophy case: stamp the Cup onto the champion roster + AHL staff
+        # so it follows them through their individual histories.
+        try:
+            _bank_calder_accolades(teams[champion], label)
+        except Exception:
+            pass
+
         # The champion headline: one inbox note for the user. Light by
         # design -- no per-series narratives.
         try:
@@ -727,6 +734,42 @@ def run_calder_cup(league):
         return info
     except Exception:
         return None
+
+
+def _bank_calder_accolades(ahl_team, season_label):
+    """Bank 'calder_cup' accolades on the champion club's roster and AHL
+    staff -- the players' and coaches' permanent trophy case (their
+    individual histories, same mechanism as Stanley Cup banking).
+
+    The roster is the parent NHL club's live ``ahl_roster`` (playoff
+    roster at championship time); the staff are the parent club's
+    ``assignment == "ahl"`` staff (AHL head coach, assistants, goalie
+    coach, GM). Idempotent: ``bank_accolade`` dedupes on (award, year).
+    Never raises.
+    """
+    try:
+        import accolades as _acc
+    except Exception:
+        return
+    try:
+        for p in get_ahl_roster(ahl_team) or []:
+            try:
+                _acc.bank_accolade(p, "calder_cup", season_label)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        parent = getattr(ahl_team, "parent_team", None)
+        for stf in getattr(parent, "staff", None) or []:
+            try:
+                if str(getattr(stf, "assignment", "") or "").lower() != "ahl":
+                    continue
+                _acc.bank_accolade(stf, "calder_cup", season_label)
+            except Exception:
+                continue
+    except Exception:
+        pass
 
 
 def _post_calder_headline(league, info):
