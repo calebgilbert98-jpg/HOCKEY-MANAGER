@@ -145,10 +145,10 @@ rg = ar.rookie_goalies([rg1, g1])
 check("rookie goalies only rookies", len(rg) == 1 and rg[0]["player"] is rg1)
 
 # --- Award definitions complete ---
-check("10 awards defined", len(ar.AWARD_DEFINITIONS) == 10)
+check("11 awards defined", len(ar.AWARD_DEFINITIONS) == 11)
 keys = {k for _n, _d, k in ar.AWARD_DEFINITIONS}
 check("all award keys have race functions",
-      keys <= {"hart", "art_ross", "rocket", "norris", "vezina",
+      keys <= {"hart", "ted_lindsay", "art_ross", "rocket", "norris", "vezina",
                "calder", "selke", "byng", "adams", "jennings"})
 
 print(f"\n{passed} passed, {failed} failed")

@@ -14606,6 +14606,7 @@ class HockeyManagerGUI(tk.Tk):
         awards = self._calculate_season_awards(all_players)
         award_key_map = {
             'Hart Trophy (MVP)': 'hart',
+            'Ted Lindsay Award (Most Outstanding Player)': 'ted_lindsay',
             'Art Ross Trophy (Scoring Leader)': 'art_ross',
             'Maurice "Rocket" Richard Trophy': 'rocket',
             'Vezina Trophy (Best Goalie)': 'vezina',
@@ -14651,7 +14652,7 @@ class HockeyManagerGUI(tk.Tk):
                 # wrong -- potential jumps one full letter grade (C+ -> B+).
                 # One bump per season max, no matter how many trophies.
                 _major = {'calder', 'conn_smythe', 'norris', 'rocket',
-                          'art_ross', 'vezina'}
+                          'art_ross', 'vezina', 'ted_lindsay'}
                 _won = [a for a in name_to_awards.get(p.full_name, [])
                         if a in _major]
                 # Conn Smythe is decided at Cup time, not in the regular-
@@ -14675,7 +14676,8 @@ class HockeyManagerGUI(tk.Tk):
                                     'norris': 'Norris Trophy',
                                     'rocket': 'Rocket Richard Trophy',
                                     'art_ross': 'Art Ross Trophy',
-                                    'vezina': 'Vezina Trophy'}
+                                    'vezina': 'Vezina Trophy',
+                                    'ted_lindsay': 'Ted Lindsay Award'}
                                 _lbl = _anames.get(_won[0], 'major award')
                                 self.add_news(
                                     f"🏆 {p.full_name} wins the {_lbl}! "
@@ -15529,6 +15531,16 @@ class HockeyManagerGUI(tk.Tk):
         if info:
             info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
         awards["Hart Trophy (MVP)"] = info
+
+        # Ted Lindsay - most outstanding player, voted by the players
+        # (less team-success bias than the Hart)
+        e = _top(lambda: ar.lindsay_race(players, team_pct,
+                                      roster_map=roster_map),
+                 "Ted Lindsay Award")
+        info = _info(e)
+        if info:
+            info["stats"] = f"{e['points']} pts ({e['team_pct']:.3f} team)"
+        awards["Ted Lindsay Award (Most Outstanding Player)"] = info
 
         # Art Ross - pure points
         e = _top(lambda: ar.art_ross_race(players), "Art Ross Trophy")

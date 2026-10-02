@@ -283,6 +283,42 @@ def hart_race(players: List[Any], team_pct: Dict[str, float],
     return out
 
 
+def lindsay_race(players: List[Any], team_pct: Dict[str, float],
+                 min_gp: int = 20,
+                 roster_map: Dict[int, str] = None) -> List[Dict[str, Any]]:
+    """Ted Lindsay Award: most outstanding player as voted by the players.
+
+    Real history: the NHLPA vote tracks the Hart closely but with less
+    team-success bias -- players respect pure individual brilliance even
+    on losing teams (McDavid won it in 2017-18 while Edmonton missed
+    the playoffs). Score = points + 0.5*goals with only a mild team
+    factor, so it can diverge from the Hart on bad teams.
+    """
+    out = []
+    for p in players:
+        if _is_goalie(p) or _gp(p) < min_gp:
+            continue
+        pts = _pts(p)
+        goals = _stat(p, "goals") or 0
+        try:
+            pid = int(getattr(p, "id", -1) or -1)
+        except Exception:
+            pid = -1
+        if roster_map is not None and pid in roster_map:
+            team = roster_map[pid]
+        else:
+            team = getattr(p, "team_name", "") or ""
+        pct = team_pct.get(team, 0.5)
+        # Players discount losing teams far less than writers do.
+        team_factor = 0.90 + 0.20 * min(1.0, max(0.0, pct))
+        score = (pts + 0.5 * goals) * team_factor
+        score += _star_race_bonus(score, p)
+        out.append({"player": p, "score": score, "points": pts,
+                    "goals": goals, "team_pct": pct})
+    out.sort(key=lambda r: r["score"], reverse=True)
+    return out
+
+
 def art_ross_race(players: List[Any], min_gp: int = 20) -> List[Dict[str, Any]]:
     """Art Ross Trophy: most points. Pure scoring title."""
     out = []
@@ -564,6 +600,9 @@ AWARD_DEFINITIONS = [
     ("Hart Memorial Trophy",
      "League MVP — voted by the PHWA. History: elite point production on a winning team.",
      "hart"),
+    ("Ted Lindsay Award",
+     "Most outstanding player — voted by the NHLPA. Pure brilliance, less team bias than the Hart.",
+     "ted_lindsay"),
     ("Art Ross Trophy",
      "Scoring champion — most points. Pure.",
      "art_ross"),

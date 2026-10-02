@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Tuple
 ACCOLADE_LABELS: Dict[str, str] = {
     "stanley_cup": "Stanley Cup",
     "hart": "Hart Trophy",
+    "ted_lindsay": "Ted Lindsay Award",
     "art_ross": "Art Ross Trophy",
     "rocket": "Rocket Richard Trophy",
     "norris": "Norris Trophy",
@@ -84,7 +85,7 @@ ACCOLADE_LABELS: Dict[str, str] = {
 # then the junior/college trophy case (a prospect's story arc reads
 # pro-first, junior-below on the player card).
 ACCOLADE_ORDER: List[str] = [
-    "stanley_cup", "conn_smythe", "hart", "art_ross", "rocket",
+    "stanley_cup", "conn_smythe", "hart", "ted_lindsay", "art_ross", "rocket",
     "norris", "vezina", "selke", "byng", "calder", "jennings",
     "jack_adams", "all_star", "player_of_month", "rookie_of_month",
     # --- Junior / college (prospect_accolades.py) ---

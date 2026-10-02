@@ -937,6 +937,20 @@ class StatsStandingsView(ctk.CTkFrame):
                                  r["goals"],
                                  (getattr(p, "assists", 0) or 0),
                                  r["points"], f"{r['team_pct']:.3f}")))
+        elif key == "ted_lindsay":
+            columns = {"rank": ("#", 36), "player": ("Player", 160),
+                       "team": ("Team", 52), "gp": ("GP", 44),
+                       "g": ("G", 40), "a": ("A", 40), "p": ("P", 44),
+                       "tpct": ("Team P%", 64)}
+            for i, r in enumerate(ar.lindsay_race(players, team_pct,
+                                                  roster_map=roster_map)[:15], 1):
+                p = r["player"]
+                rows.append((p, (i, self._pname(p),
+                                 self._pteam_abbr(p, teams),
+                                 getattr(p, "games_played", 0) or 0,
+                                 r["goals"],
+                                 (getattr(p, "assists", 0) or 0),
+                                 r["points"], f"{r['team_pct']:.3f}")))
         elif key == "art_ross":
             columns = {"rank": ("#", 36), "player": ("Player", 160),
                        "team": ("Team", 52), "gp": ("GP", 44),
