@@ -212,7 +212,26 @@ def _on_wheel(event):
         except Exception:
             target = None
 
-        # Fallback: last canvas the pointer was over (tracked via <Enter>).
+        # Fallback 1: walk up from event.widget directly. This is robust
+        # against winfo_containing failures -- e.g., on Windows with OS-level
+        # DPI scaling, x_root/y_root can be in a different coordinate space
+        # than winfo_containing expects, returning None even though the
+        # pointer is over content. event.widget is set by Tk's event dispatch
+        # and needs no coordinate lookup. (Muck 2026-10-02: wheel dead over
+        # dashboard content on Windows, scrollbar worked via TTK's native
+        # binding which doesn't use coordinates.)
+        if target is None:
+            try:
+                ew = getattr(event, "widget", None)
+                if ew is not None and root is not None:
+                    _t2 = _find_scrollable(ew, root)
+                    if _t2 is not None:
+                        target = _t2
+                        under = ew
+            except Exception:
+                pass
+
+        # Fallback 2: last canvas the pointer was over (tracked via <Enter>).
         if target is None:
             target = _last_active
             try:
