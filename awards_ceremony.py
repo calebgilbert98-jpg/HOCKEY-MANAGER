@@ -103,8 +103,9 @@ def build_ceremony_data(gui) -> List[Dict[str, Any]]:
 
     Each entry: award_key, trophy, flavor, winner (player or team name),
     winner_team, winner_stats, finalists (list of dicts),
-    voting (simulate_voting result), is_team_award.
-    Results are deterministic per season.
+    electorate (who would decide it, or None for pure-stat awards).
+    Winners match the official season awards -- the ceremony is the
+    presentation, not a second election. No ballots are simulated.
     """
     import awards_race as ar
 
@@ -172,17 +173,13 @@ def build_ceremony_data(gui) -> List[Dict[str, Any]]:
         entry = {"award_key": key, "trophy": trophy, "flavor": flavor,
                  "is_team_award": key in ("jennings", "adams"),
                  "winner": None, "winner_team": "", "winner_stats": "",
-                 "finalists": [], "voting": None}
+                 "finalists": [], "electorate": ar.AWARD_ELECTORATE.get(key)}
         try:
             if key == "conn_smythe":
                 # Playoff MVP: winner from the bracket; finalists are the
                 # Cup finalists' top playoff scorers (best available story).
                 entry["winner"] = smythe_name or "TBD"
                 entry["winner_stats"] = "Playoff MVP"
-                entry["voting"] = ar.simulate_voting(
-                    [], None, "conn_smythe", season_year)
-                if entry["voting"]["voting_body"] and smythe_name:
-                    entry["voting"]["results"] = []
             elif entry["is_team_award"]:
                 disp = _AWARD_DISPLAY_NAMES.get(key)
                 info = (official.get(disp) or {}) if disp else {}
@@ -222,8 +219,7 @@ def build_ceremony_data(gui) -> List[Dict[str, Any]]:
                             "team": _player_team(fp, roster_map),
                             "stats": _stat_line(fp, key),
                         })
-                    entry["voting"] = ar.simulate_voting(
-                        race, winner_p, key, season_year)
+                    pass
         except Exception:
             pass
         script.append(entry)
@@ -373,54 +369,32 @@ class AwardsCeremonyWindow(tk.Toplevel):
         if entry.get("winner_stats"):
             tk.Label(card, text=entry["winner_stats"], bg=PANEL,
                      fg="#c8cdd3", font=("Segoe UI", 13)).pack(pady=(6, 0))
-        # Voting / coronation story
-        story = self._voting_story(entry)
+        # Electorate line: who would decide this award
+        story = self._electorate_story(entry)
         if story:
             tk.Label(self._stage, text=story, bg=CHARCOAL, fg="#8a9199",
                      font=("Segoe UI", 12, "italic"), wraplength=800,
                      justify="center").pack(pady=(16, 0))
-        # Runner-up table for voted awards
-        self._show_vote_table(entry)
 
-    def _voting_story(self, entry) -> str:
-        v = entry.get("voting") or {}
-        body = v.get("voting_body")
-        if not body:
+    def _electorate_story(self, entry) -> str:
+        electorate = entry.get("electorate")
+        if not electorate:
             # Pure-stat coronation.
             stats = entry.get("winner_stats", "")
             if entry["award_key"] == "rocket":
-                return f"No vote needed — the goals speak for themselves: {stats}."
+                return f"No vote — the goals speak for themselves: {stats}."
             if entry["award_key"] == "art_ross":
-                return f"No vote needed — the scoring title is decided on the ice: {stats}."
+                return f"No vote — the scoring title is decided on the ice: {stats}."
             if entry["award_key"] == "jennings":
-                return "No vote needed — fewest goals against wins it outright."
-            if entry["award_key"] == "conn_smythe":
-                return "Voted by the PHWA at the Final — the playoff story in one name."
+                return "No vote — fewest goals against wins it outright."
             return ""
-        pts = v.get("winner_points", 0)
-        firsts = v.get("winner_first", 0)
-        voters = v.get("voters", 0)
-        share = v.get("winner_share", 0) * 100
-        return (f"{body} vote: {pts:,} points from {voters} ballots "
-                f"({firsts} first-place, {share:.0f}% of the vote).")
-
-    def _show_vote_table(self, entry):
-        v = entry.get("voting") or {}
-        results = (v.get("results") or [])[1:4]  # runners-up
-        if not results:
-            return
-        tk.Label(self._stage, text="Also receiving votes:", bg=CHARCOAL,
-                 fg="#8a9199", font=("Segoe UI", 11, "bold")).pack(pady=(14, 4))
-        for r in results:
-            p = r.get("player")
-            if p is None:
-                continue
-            tk.Label(
-                self._stage,
-                text=(f"{_player_name(p)} — {r['points']:,} pts "
-                      f"({r['first_place']} 1st)"),
-                bg=CHARCOAL, fg="#6b7178",
-                font=("Segoe UI", 11)).pack()
+        if entry["award_key"] == "conn_smythe":
+            return ("Decided by the PHWA at the Final — "
+                    "the playoff story in one name.")
+        if entry["award_key"] == "ted_lindsay":
+            return ("Voted on by his fellow players — "
+                    "the one the dressing room respects most.")
+        return f"Voted on by the {electorate}."
 
     def _show_finale(self):
         self._progress.configure(text="Ceremony complete")
