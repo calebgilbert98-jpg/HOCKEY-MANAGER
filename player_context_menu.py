@@ -1725,4 +1725,174 @@ def add_player_context_menu(treeview, parent_window):
             context_menu_manager.show_context_menu(event, player)
     
     treeview.bind('<Button-3>', on_right_click)
+
+
+class StaffContextMenu:
+    """Universal staff context menu — the FM/EHM right-click on any staff name.
+
+    Mirrors PlayerContextMenu: every staff name in the game opens this menu.
+    Primary action is View Profile; the menu stays small and never raises.
+    """
+
+    def __init__(self, parent_window):
+        self.parent = parent_window
+
+    def _app(self):
+        """Walk up .parent/.master/.app chain to the app object."""
+        seen = set()
+        obj = self.parent
+        for _ in range(10):
+            if obj is None or id(obj) in seen:
+                break
+            seen.add(id(obj))
+            if hasattr(obj, "user_team") and getattr(obj, "user_team") is not None:
+                return obj
+            _app = getattr(obj, "app", None)
+            if _app is not None and hasattr(_app, "user_team"):
+                return _app
+            nxt = getattr(obj, "parent", None)
+            if nxt is None:
+                nxt = getattr(obj, "master", None)
+            obj = nxt
+        return self.parent
+
+    def show_context_menu(self, event, staff, additional_options=None):
+        """Show context menu for a staff member. Never raises."""
+        try:
+            context_menu = tk.Menu(self.parent, tearoff=0)
+
+            if hasattr(self.parent, 'CONTENT_BG'):
+                try:
+                    context_menu.configure(
+                        bg=self.parent.CONTENT_BG,
+                        fg=self.parent.TEXT_COLOR,
+                        activebackground=self.parent.ACCENT_COLOR,
+                        activeforeground='white',
+                        font=('Segoe UI', 9)
+                    )
+                except Exception:
+                    pass
+
+            name = getattr(staff, 'full_name', None) or 'Staff'
+            context_menu.add_command(
+                label=f"View {name}'s Profile",
+                command=lambda: self._view_staff_profile(staff)
+            )
+
+            if additional_options:
+                context_menu.add_separator()
+                for label, cmd in additional_options:
+                    try:
+                        context_menu.add_command(label=label, command=cmd)
+                    except Exception:
+                        pass
+
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _view_staff_profile(self, staff):
+        """Open the staff profile card. Never raises."""
+        try:
+            app = self._app()
+            opener = getattr(app, "open_staff_profile", None)
+            if callable(opener):
+                opener(staff)
+                return
+            # Fallback: basic info popup so the click always does something.
+            try:
+                from popup_system import InGamePopup
+                dlg = InGamePopup(self.parent)
+                dlg.title(f"Staff Profile - {getattr(staff, 'full_name', 'Staff')}")
+                dlg.geometry("380x420")
+                import tkinter as _tk
+                role = getattr(getattr(staff, 'role', None), 'value', '')
+                lines = [
+                    f"Name: {getattr(staff, 'full_name', '?')}",
+                    f"Role: {role}",
+                    f"Age: {getattr(staff, 'age', '?')}",
+                    f"Nationality: {getattr(staff, 'nationality', '?')}",
+                ]
+                try:
+                    lines.append(f"Rating: {staff.overall_rating():.0f}")
+                except Exception:
+                    pass
+                for i, ln in enumerate(lines):
+                    _tk.Label(dlg, text=ln, anchor="w").pack(fill="x", padx=16, pady=2)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def bind_staff_context(widget, staff_or_getter, parent_window):
+    """Right-click (or Shift+F10) on ANY widget showing a staff name.
+
+    The EHM/FM24 interaction: every staff name in the game opens the
+    standard staff menu. staff_or_getter is either a staff object or a
+    callable(event) -> staff (for rows/cells resolved at click time).
+
+    One line per surface:
+        bind_staff_context(name_label, staff, self)
+    """
+    mgr = StaffContextMenu(parent_window)
+
+    def _show(event):
+        try:
+            staff = (staff_or_getter(event) if callable(staff_or_getter)
+                     else staff_or_getter)
+        except Exception:
+            staff = None
+        if staff is not None:
+            mgr.show_context_menu(event, staff)
+
+    try:
+        widget.bind("<Button-3>", _show)
+    except Exception:
+        pass
+    try:
+        widget.bind("<Shift-F10>", _show)
+    except Exception:
+        pass
+    return mgr
+
+
+def add_staff_context_menu(treeview, parent_window, tree_map_getter=None):
+    """Add staff context menu to a treeview widget.
+
+    tree_map_getter: optional callable(treeview, item_id) -> staff.
+    Defaults to the parent_window.tree_maps convention.
+    """
+    mgr = StaffContextMenu(parent_window)
+
+    def on_right_click(event):
+        try:
+            item_id = treeview.identify_row(event.y)
+            if not item_id:
+                return
+            treeview.selection_set(item_id)
+            staff = None
+            if callable(tree_map_getter):
+                try:
+                    staff = tree_map_getter(treeview, item_id)
+                except Exception:
+                    staff = None
+            else:
+                maps = getattr(parent_window, 'tree_maps', None)
+                if maps is None and hasattr(parent_window, 'parent'):
+                    maps = getattr(parent_window.parent, 'tree_maps', None)
+                if maps:
+                    staff = maps.get(treeview, {}).get(item_id)
+            if staff:
+                mgr.show_context_menu(event, staff)
+        except Exception:
+            pass
+
+    try:
+        treeview.bind('<Button-3>', on_right_click)
+    except Exception:
+        pass
     return context_menu_manager

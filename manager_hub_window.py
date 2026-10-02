@@ -487,6 +487,11 @@ class ManagerHubView(ctk.CTkFrame):
                     return int(p.overall_rating())
                 except Exception:
                     return 0
+            try:
+                from player_context_menu import PlayerContextMenu
+                _pros_mgr = PlayerContextMenu(self)
+            except Exception:
+                _pros_mgr = None
             for p in sorted(prospects, key=_ovr, reverse=True):
                 try:
                     pos = p.primary_position.value
@@ -503,9 +508,36 @@ class ManagerHubView(ctk.CTkFrame):
                     _ptier = _tt(_ovr(p))
                 except Exception:
                     _ptier = "Decent"
+                # EHM/FM24: right-click a name -> player menu. Tag the
+                # name span (line starts with "• ").
+                try:
+                    _lstart = box.index("end-1c")
+                except Exception:
+                    _lstart = None
                 box.insert("end",
                            f"• {name}, {age} — {pos} "
                            f"({_ptier}, POT {grade})\n")
+                try:
+                    if (_lstart is not None and _pros_mgr is not None
+                            and hasattr(p, 'full_name')):
+                        _m = _pros_mgr
+                        _pp = p
+
+                        def _show(_e, _p=_pp, _mm=_m):
+                            try:
+                                _mm.show_context_menu(_e, _p)
+                            except Exception:
+                                pass
+
+                        _tag = f"mh-pros-{getattr(p, 'id', id(p))}"
+                        _ns = f"{_lstart}+2c"
+                        _ne = f"{_lstart}+{2 + len(str(name))}c"
+                        box.tag_add(_tag, _ns, _ne)
+                        box.tag_config(_tag, underline=True)
+                        box.tag_bind(_tag, "<Button-3>", _show)
+                        box.tag_bind(_tag, "<Shift-F10>", _show)
+                except Exception:
+                    pass
         box.config(state="disabled")
 
     # ------------------------------------------------------------------

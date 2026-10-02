@@ -175,6 +175,31 @@ class PlayerBrowserView(ctk.CTkFrame):
         # Bind events
         self.tree.bind('<Button-1>', self.on_player_select)
         self.tree.bind('<Double-1>', self.on_player_draft)
+        # EHM/FM24: right-click a player row -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _pb_getter(event):
+                try:
+                    item = self.tree.identify_row(event.y)
+                except Exception:
+                    return None
+                if not item:
+                    return None
+                try:
+                    idx = int(self.tree.set(item, '#0'))
+                except Exception:
+                    return None
+                try:
+                    if 0 <= idx < len(self.filtered_players):
+                        return self.filtered_players[idx]
+                except Exception:
+                    pass
+                return None
+
+            bind_player_context(self.tree, _pb_getter, self)
+        except Exception:
+            pass
         
         # Button frame
         button_frame = tk.Frame(main_frame, bg='#181818')
@@ -317,6 +342,13 @@ class PlayerBrowserView(ctk.CTkFrame):
                     self.info_label.configure(text=f"Selected: {self.selected_player.full_name} "
                                             f"({self.selected_player.primary_position.value}, "
                                             f"{_tier})")
+                    # EHM/FM24: right-click the selected name -> player menu.
+                    try:
+                        from player_context_menu import bind_player_context
+                        bind_player_context(self.info_label,
+                                            self.selected_player, self)
+                    except Exception:
+                        pass
                 else:
                     self.selected_player = None
                     self.draft_btn.configure(state='disabled')
@@ -458,6 +490,28 @@ class SimpleDraftOrderView(ctk.CTkFrame):
         # Pack tree and scrollbar
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        # EHM/FM24: right-click a drafted player's row -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _do_getter(event):
+                try:
+                    item = self.tree.identify_row(event.y)
+                except Exception:
+                    return None
+                if not item:
+                    return None
+                try:
+                    idx = self.tree.index(item)
+                    pick = self.draft_manager.draft_picks[:200][idx]
+                except Exception:
+                    return None
+                p = getattr(pick, 'player', None)
+                return p if p is not None and hasattr(p, 'full_name') else None
+
+            bind_player_context(self.tree, _do_getter, self)
+        except Exception:
+            pass
         
         # Close button
         close_btn = tk.Button(main_frame, text="Close", command=self.close_view,

@@ -5129,6 +5129,30 @@ class HockeyManagerGUI(tk.Tk):
         
         listbox.pack(side='left', fill='both', expand=True)
         scrollbar.pack(side='right', fill='y')
+        # EHM/FM24: right-click a player row -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _sel_getter(event):
+                try:
+                    idx = listbox.nearest(event.y)
+                except Exception:
+                    return None
+                if idx is None or idx < 0:
+                    return None
+                try:
+                    ordered = sorted(self.user_team.roster,
+                                     key=lambda p: p.overall_rating(),
+                                     reverse=True)
+                    if idx >= len(ordered):
+                        return None
+                    return ordered[idx]
+                except Exception:
+                    return None
+
+            bind_player_context(listbox, _sel_getter, self)
+        except Exception:
+            pass
         
         # Buttons
         button_frame = ttk.Frame(selection_window, style='Panel.TFrame')
@@ -6238,6 +6262,12 @@ class HockeyManagerGUI(tk.Tk):
             f"{_tier_label(focused_player)}"
         )
         self.player_focus_label.config(text=info_text)
+        # EHM/FM24: right-click the focus panel -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(self.player_focus_label, focused_player, self)
+        except Exception:
+            pass
 
     def update_top_lines_panel(self):
         info = self._get_top_lines_info()
@@ -6695,6 +6725,13 @@ class HockeyManagerGUI(tk.Tk):
             
             # Update player name
             self.focus_player_name_label.config(text=focus_player.full_name)
+            # EHM/FM24: right-click the focus name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(self.focus_player_name_label,
+                                    focus_player, self)
+            except Exception:
+                pass
             
             # Update player info
             contract_info = f"${focus_player.contract.salary:,}/year" if hasattr(focus_player, 'contract') and focus_player.contract else "No contract"
@@ -17354,8 +17391,15 @@ class HockeyManagerGUI(tk.Tk):
                 pts = getattr(stats, 'points', 0)
                 g = getattr(stats, 'goals', 0)
                 a = getattr(stats, 'assists', 0)
-                ttk.Label(parent, text=f"  {player.full_name}: {g}G {a}A = {pts} pts", 
-                         style='TLabel').pack(anchor='w', padx=20)
+                _tsl = ttk.Label(parent, text=f"  {player.full_name}: {g}G {a}A = {pts} pts", 
+                         style='TLabel')
+                _tsl.pack(anchor='w', padx=20)
+                # EHM/FM24: right-click a scorer -> player menu.
+                try:
+                    from player_context_menu import bind_player_context
+                    bind_player_context(_tsl, player, self)
+                except Exception:
+                    pass
     
     def _guarantee_offseason_tentpoles(self):
         """Run the draft lottery + entry draft when the calendar skipped them.
@@ -20869,6 +20913,9 @@ class HockeyManagerGUI(tk.Tk):
         if not staff: return
 
         menu = tk.Menu(self, tearoff=0, bg="#3C3C3C", fg="white")
+        menu.add_command(label=f"View {staff.full_name}'s Profile",
+                         command=lambda: self.open_staff_profile(staff))
+        menu.add_separator()
         menu.add_command(label="Offer Contract",
                          command=lambda: self._offer_staff_contract(staff))
         menu.tk_popup(event.x_root, event.y_root)
@@ -20951,7 +20998,87 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return None
-        
+
+    def open_staff_profile(self, staff):
+        """Open a staff member's profile card. Never raises.
+
+        Used by the universal right-click staff context menu
+        (player_context_menu.bind_staff_context). Shows a popup with the
+        staff member's details — role, attributes for their role, contract,
+        and background. Falls back to a basic info dialog if anything fails.
+        """
+        try:
+            import tkinter as tk
+            from popup_system import InGamePopup, messagebox
+        except Exception:
+            return None
+
+        name = getattr(staff, 'full_name', None) or 'Staff'
+        try:
+            dlg = InGamePopup(self)
+        except Exception:
+            try:
+                dlg = tk.Toplevel(self)
+            except Exception:
+                return None
+        try:
+            dlg.title(f"Staff Profile - {name}")
+            dlg.geometry("440x560")
+        except Exception:
+            pass
+
+        try:
+            role = getattr(getattr(staff, 'role', None), 'value', '') or ''
+            header = tk.Label(dlg, text=name,
+                              font=('Segoe UI', 14, 'bold'), anchor='w')
+            header.pack(fill='x', padx=16, pady=(12, 0))
+            if role:
+                tk.Label(dlg, text=role, font=('Segoe UI', 11),
+                         anchor='w').pack(fill='x', padx=16)
+
+            try:
+                rating = staff.overall_rating()
+                tk.Label(dlg, text=f"Overall: {rating:.0f}",
+                         font=('Segoe UI', 12, 'bold'),
+                         anchor='w').pack(fill='x', padx=16, pady=(6, 0))
+            except Exception:
+                pass
+
+            info = [
+                f"Age: {getattr(staff, 'age', '?')}",
+                f"Nationality: {getattr(staff, 'nationality', '?')}",
+                f"Salary: ${getattr(staff, 'salary', 0):,}",
+                f"Contract: {getattr(staff, 'contract_years', '?')} years",
+                f"Morale: {getattr(staff, 'morale', '?')}",
+            ]
+            for ln in info:
+                tk.Label(dlg, text=ln, anchor='w').pack(fill='x', padx=16, pady=1)
+
+            # Role-relevant attributes
+            try:
+                attrs = (staff.get_attributes_for_role()
+                         if hasattr(staff, 'get_attributes_for_role') else {})
+            except Exception:
+                attrs = {}
+            if attrs:
+                tk.Label(dlg, text="Attributes",
+                         font=('Segoe UI', 11, 'bold'),
+                         anchor='w').pack(fill='x', padx=16, pady=(10, 2))
+                for attr_name, attr_value in attrs.items():
+                    try:
+                        label = attr_name.replace('_', ' ').title()
+                        tk.Label(dlg, text=f"  {label}: {attr_value}",
+                                 anchor='w').pack(fill='x', padx=16, pady=1)
+                    except Exception:
+                        pass
+        except Exception as e:
+            try:
+                messagebox.showinfo("Staff Profile",
+                                    f"Could not load the profile for {name}.\n\n{e}")
+            except Exception:
+                pass
+        return None
+
     def send_to_ahl(self, player):
         # R1 (roster limits): the club must always be able to dress 18+2.
         # A demotion that breaks the dressed minimum is refused up front.
@@ -22442,7 +22569,14 @@ class HockeyManagerGUI(tk.Tk):
             dlg = tk.Toplevel(win)
             dlg.title("Set Goal")
             dlg.geometry("300x180")
-            ttk.Label(dlg, text=f"{getattr(p, 'full_name', '?')}").pack(pady=6)
+            _sg_name_lbl = ttk.Label(dlg, text=f"{getattr(p, 'full_name', '?')}")
+            _sg_name_lbl.pack(pady=6)
+            # EHM/FM24: right-click the name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(_sg_name_lbl, p, self)
+            except Exception:
+                pass
             tvar = tk.StringVar(value=list(types.keys())[0])
             ttk.Combobox(dlg, textvariable=tvar,
                          values=[f"{k} ({v[1]})" for k, v in types.items()],
@@ -22809,6 +22943,23 @@ class CleanEditLinesView(ctk.CTkFrame):
         self._sel_hint = tk.Label(hdr, text="", bg=self.C_BG, fg=self.C_ACCENT,
                                   font=self._font(9))
         self._sel_hint.pack(side='left', padx=(10, 0))
+        # EHM/FM24: right-click the selection hint -> menu for the
+        # currently selected/moved player.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _hint_getter(event):
+                try:
+                    sel = getattr(self, '_selection', None)
+                    if isinstance(sel, dict):
+                        return sel.get('player')
+                except Exception:
+                    pass
+                return None
+
+            bind_player_context(self._sel_hint, _hint_getter, self)
+        except Exception:
+            pass
 
         self._search_var = tk.StringVar()
         search = tk.Entry(panel, textvariable=self._search_var, bg=self.C_CARD2,
@@ -22967,6 +23118,12 @@ class CleanEditLinesView(ctk.CTkFrame):
         name_l = tk.Label(info, text=player.full_name, bg=self.C_CARD, fg=self.C_TEXT,
                           font=self._font(10, 'bold'), anchor='w')
         name_l.pack(anchor='w')
+        # EHM/FM24: right-click the card name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_l, player, self)
+        except Exception:
+            pass
         sub = tk.Frame(info, bg=self.C_CARD)
         sub.pack(anchor='w', pady=(3, 0))
         pos_l = tk.Label(sub, text=self._pos_short(player), bg=self.C_CARD2,
@@ -22999,10 +23156,19 @@ class CleanEditLinesView(ctk.CTkFrame):
 
         bound = [outer, card, face, info, name_l, sub, pos_l, arch_l,
                  right, ovr_l, cond_l]
+        try:
+            from player_context_menu import bind_player_context as _bpc
+        except Exception:
+            _bpc = None
         for w in bound:
             w.bind('<Button-1>', lambda e, p=player: self._on_row_click(p))
             w.bind('<Enter>', lambda e, c=card: c.config(bg=self.C_CARD2))
             w.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD))
+            if _bpc is not None:
+                try:
+                    _bpc(w, player, self)
+                except Exception:
+                    pass
 
         pid = getattr(player, 'id', None)
         self.player_widgets[pid] = {
@@ -23985,6 +24151,12 @@ class CleanEditLinesView(ctk.CTkFrame):
                           fg=self.C_TEXT, font=self._font(10, 'bold'),
                           anchor='w')
         name_l.pack(anchor='w')
+        # EHM/FM24: right-click the card name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_l, player, self)
+        except Exception:
+            pass
         sub = tk.Frame(mid, bg=self.C_CARD2)
         sub.pack(anchor='w', pady=(2, 0))
         try:
@@ -24017,12 +24189,21 @@ class CleanEditLinesView(ctk.CTkFrame):
         clear_l.bind('<Leave>', lambda e: clear_l.config(fg=self.C_TER))
 
         bound = [card, face, mid, name_l, sub, arch_l, ovr_l]
+        try:
+            from player_context_menu import bind_player_context as _bpc2
+        except Exception:
+            _bpc2 = None
         for widget in bound:
             widget.bind('<Button-1>', lambda e, s=drop_zone: self._on_slot_click(s))
             widget.bind('<Double-Button-1>',
                         lambda e, s=drop_zone: self._on_slot_double_click(s))
             widget.bind('<Enter>', lambda e, c=card: c.config(bg='#232328'))
             widget.bind('<Leave>', lambda e, c=card: c.config(bg=self.C_CARD2))
+            if _bpc2 is not None:
+                try:
+                    _bpc2(widget, player, self)
+                except Exception:
+                    pass
 
         # Store assignment
         drop_zone.assigned_player = player
@@ -24179,10 +24360,17 @@ class CleanEditLinesView(ctk.CTkFrame):
         for p in players:
             arch = get_archetype(p)
             strength = ARCHETYPE_STRENGTHS.get(arch, "")
-            tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
+            _arch_l = tk.Label(legend, text=f"• {p.full_name}: {arch}" + (f" — {strength}" if strength else ""),
                      bg="#16161a", fg="white",
                      font=self._font(9), wraplength=420,
-                     justify="left", anchor="w").pack(anchor="w")
+                     justify="left", anchor="w")
+            _arch_l.pack(anchor="w")
+            # EHM/FM24: right-click a name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(_arch_l, lambda e, _p=p: _p, self)
+            except Exception:
+                pass
 
     def _refresh_ratings_for_zone(self, zone_id):
         """Refresh line/pair/unit rating labels affected by a slot change."""

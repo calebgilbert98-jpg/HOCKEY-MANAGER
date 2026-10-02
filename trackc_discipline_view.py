@@ -48,8 +48,8 @@ class TrackCDisciplineView(ctk.CTkFrame):
                 except (TypeError, ValueError):
                     rem = 0
                 if rem > 0:
-                    active.append({"name": tc.player_name(p), "team": tname,
-                                   "games": rem})
+                    active.append({"name": tc.player_name(p), "player": p,
+                                   "team": tname, "games": rem})
                 susp_evs = []
                 for e in (getattr(p, "controversy_history", None) or []):
                     if not isinstance(e, dict):
@@ -82,8 +82,17 @@ class TrackCDisciplineView(ctk.CTkFrame):
             rowf = ctk.CTkFrame(card, fg_color="transparent")
             rowf.pack(fill="x", pady=1)
             tc.chip(self, rowf, "SUSPENDED", "RED").pack(side="left", padx=(0, 8))
-            ctk.CTkLabel(rowf, text=a["name"], width=180, anchor="w",
-                         font=("Segoe UI", 12)).pack(side="left")
+            _ds = ctk.CTkLabel(rowf, text=a["name"], width=180, anchor="w",
+                         font=("Segoe UI", 12))
+            _ds.pack(side="left")
+            # EHM/FM24: right-click the name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                _dp = a.get("player")
+                if _dp is not None and hasattr(_dp, 'full_name'):
+                    bind_player_context(_ds, _dp, self)
+            except Exception:
+                pass
             ctk.CTkLabel(rowf, text=a["team"], width=200, anchor="w",
                          font=("Segoe UI", 12)).pack(side="left")
             ctk.CTkLabel(rowf, text=f"{a['games']} game{'s' if a['games'] != 1 else ''}",

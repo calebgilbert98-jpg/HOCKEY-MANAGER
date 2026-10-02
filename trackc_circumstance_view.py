@@ -150,7 +150,8 @@ class TrackCCircumstanceView(ctk.CTkFrame):
                         r_term = (0.6 if kind == "physical" else -0.6) * heat
                     except Exception:
                         r_term = 0.0
-                rows.append({"name": tc.player_name(p), "total": float(total),
+                rows.append({"name": tc.player_name(p), "player": p,
+                             "total": float(total),
                              "energy": e_term, "morale": mo_term,
                              "home": h_term, "rivalry": r_term})
             except Exception:
@@ -214,7 +215,8 @@ class TrackCCircumstanceView(ctk.CTkFrame):
         for r in rows[:40]:
             vals = [r["name"]] + [f"{r[k]:+.2f}" for k in
                                   ("total", "energy", "morale", "home", "rivalry")]
-            tc.row(self, card, vals, widths=[240, 70, 70, 70, 70, 70])
+            tc.row(self, card, vals, widths=[240, 70, 70, 70, 70, 70],
+                   player=r.get("player"))
         if len(rows) > 40:
             self._body(card, text=f"…and {len(rows) - 40} more (scroll).", dim=True).pack(
                 anchor="w", padx=4)

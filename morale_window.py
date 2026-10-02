@@ -156,6 +156,11 @@ class MoraleView(ctk.CTkFrame):
         for tag, kw in self.tree_tags.items():
             self.tree.tag_configure(tag, **kw)
         self.tree.pack(fill='x', padx=12, pady=(0, 6))
+        # EHM/FM24: right-click a player row -> player context menu.
+        try:
+            self.app._bind_player_context_menu(self.tree, 'morale', False)
+        except Exception:
+            pass
 
         # Row 3: Dynamics feed + Hierarchy/Social
         row3 = ctk.CTkFrame(main, fg_color=ct['BG'])
@@ -470,12 +475,17 @@ class MoraleView(ctk.CTkFrame):
         # Player response table
         for row in self.tree.get_children():
             self.tree.delete(row)
+        try:
+            _mtm = self.app.tree_maps.setdefault(self.tree, {})
+            _mtm.clear()
+        except Exception:
+            _mtm = None
         for p in sorted(roster, key=lambda x: rs.hierarchy_score(x), reverse=True):
             rs.ensure_reputation_fields(p)
             resp = rs.player_coach_response(p, coach, ctx) if coach else \
                 {"label": "Neutral", "engagement": rs.engagement_style(p)["label"]}
             tag = self.RESPONSE_TAGS.get(resp["label"], "resp_neutral")
-            self.tree.insert('', 'end', values=(
+            _iid = self.tree.insert('', 'end', values=(
                 getattr(p, 'full_name', 'Unknown'),
                 resp["engagement"],
                 resp["label"],
@@ -483,6 +493,8 @@ class MoraleView(ctk.CTkFrame):
                 rs.describe_attitude(p),
                 tier_of.get(id(p), '-'),
             ), tags=(tag,))
+            if _mtm is not None:
+                _mtm[_iid] = p
 
         # Dynamics feed
         for wdg in self.feed_frame.winfo_children():

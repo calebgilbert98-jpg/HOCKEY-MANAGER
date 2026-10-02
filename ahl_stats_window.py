@@ -87,7 +87,22 @@ class AHLStatsView(ctk.CTkFrame):
         tree.configure(yscrollcommand=vsb.set)
         tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
+        # EHM/FM24: right-click a player row -> player context menu.
+        # Rows resolve through app.tree_maps (registered in refresh_view).
+        try:
+            self.app._bind_player_context_menu(tree, 'ahl', False)
+        except Exception:
+            pass
         return tree
+
+    def _reg_tree_map(self, tree):
+        """Fresh item->player map for a tree; returns the map (or None)."""
+        try:
+            tm = self.app.tree_maps.setdefault(tree, {})
+            tm.clear()
+            return tm
+        except Exception:
+            return None
 
     def close_view(self):
         fn = getattr(self, "_close_screen", None)
@@ -238,6 +253,9 @@ class AHLStatsView(ctk.CTkFrame):
                          self.goalies_tree):
                 for item in tree.get_children():
                     tree.delete(item)
+            _sm = self._reg_tree_map(self.scorers_tree)
+            _cm = self._reg_tree_map(self.cooking_tree)
+            _gm = self._reg_tree_map(self.goalies_tree)
             if league is None:
                 self.status_label.configure(
                     text="No league loaded yet.")
@@ -251,25 +269,31 @@ class AHLStatsView(ctk.CTkFrame):
             for i, (p, tname, led) in enumerate(skaters, 1):
                 pts = led.goals + led.assists
                 gp = max(1, led.games_played)
-                self.scorers_tree.insert("", "end", values=(
+                _iid = self.scorers_tree.insert("", "end", values=(
                     i, self._pname(p), tname, self._pos(p),
                     getattr(p, "age", ""), led.games_played, led.goals,
                     led.assists, pts, f"{pts / gp:.2f}"))
+                if _sm is not None:
+                    _sm[_iid] = p
 
             for i, (p, tname, led, ppg) in enumerate(cooks, 1):
-                self.cooking_tree.insert("", "end", values=(
+                _iid = self.cooking_tree.insert("", "end", values=(
                     i, self._pname(p), tname, self._pos(p),
                     getattr(p, "age", ""), led.games_played,
                     led.goals + led.assists, f"{ppg:.2f}"))
+                if _cm is not None:
+                    _cm[_iid] = p
 
             for i, (p, tname, led) in enumerate(goalies, 1):
                 svp = getattr(led, "save_percentage", 0) or 0
-                self.goalies_tree.insert("", "end", values=(
+                _iid = self.goalies_tree.insert("", "end", values=(
                     i, self._pname(p), tname, led.games_played, led.wins,
                     led.losses,
                     f"{getattr(led, 'goals_against_avg', 0) or 0:.2f}",
                     f"{svp:.3f}"[1:] if led.shots_against else "\u2014",
                     led.shutouts))
+                if _gm is not None:
+                    _gm[_iid] = p
 
             n_skaters = len(skaters)
             if n_skaters == 0:

@@ -214,6 +214,31 @@ class GMRelationshipsView(ctk.CTkFrame):
         for tag, kw in self._tree_tags.items():
             self._tree.tag_configure(tag, **kw)
 
+        # EHM/FM24: right-click a GM row -> staff context menu.
+        self._row_staff = {}
+        try:
+            from player_context_menu import bind_staff_context
+
+            def _gm_getter(event):
+                try:
+                    item = self._tree.identify_row(event.y)
+                except Exception:
+                    return None
+                if not item:
+                    return None
+                try:
+                    self._tree.selection_set(item)
+                except Exception:
+                    pass
+                try:
+                    return self._row_staff.get(item)
+                except Exception:
+                    return None
+
+            bind_staff_context(self._tree, _gm_getter, self)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # Data
     # ------------------------------------------------------------------
@@ -260,6 +285,7 @@ class GMRelationshipsView(ctk.CTkFrame):
                     "heat": heat,
                     "trend": trend,
                     "arrow": arrow,
+                    "_staff": rs._team_gm_staff(team),
                 })
             except Exception:
                 continue
@@ -309,6 +335,10 @@ class GMRelationshipsView(ctk.CTkFrame):
         except Exception:
             return
         try:
+            self._row_staff = {}
+        except Exception:
+            pass
+        try:
             col = self._sort_col
             rev = self._sort_rev
             ordered = sorted(self._rows,
@@ -327,8 +357,12 @@ class GMRelationshipsView(ctk.CTkFrame):
                     row["heat"],
                     row["arrow"],
                 )
-                self._tree.insert("", "end", values=values,
-                                  tags=self._row_tags(row))
+                _iid = self._tree.insert("", "end", values=values,
+                                         tags=self._row_tags(row))
+                try:
+                    self._row_staff[_iid] = row.get("_staff")
+                except Exception:
+                    pass
             except Exception:
                 continue
 

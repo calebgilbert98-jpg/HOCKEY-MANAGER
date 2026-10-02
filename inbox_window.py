@@ -912,12 +912,13 @@ class InboxView(ctk.CTkFrame):
 
     def _action_section(self, title):
         ct = self._ct
-        self._heading(self.interactive_frame, title, size=13,
-                      wraplength=300, justify='left', anchor='w').pack(
-            anchor='w', padx=10, pady=(12, 4))
+        lbl = self._heading(self.interactive_frame, title, size=13,
+                            wraplength=300, justify='left', anchor='w')
+        lbl.pack(anchor='w', padx=10, pady=(12, 4))
         sep = ctk.CTkFrame(self.interactive_frame, height=1,
                            fg_color=ct['BORDER'])
         sep.pack(fill='x', padx=10, pady=(0, 6))
+        return lbl
 
     def _iwrap(self, text, size=11, dim=False, bold=False, padx=14, pady=2):
         """Wrapped label for the interactive pane (preview is narrow)."""
@@ -929,6 +930,45 @@ class InboxView(ctk.CTkFrame):
                              wraplength=270, justify='left', anchor='w')
         lbl.pack(anchor='w', padx=padx, pady=pady)
         return lbl
+
+    def _bind_name_label_menu(self, lbl, name):
+        """EHM/FM24: right-click a player-name label -> player menu."""
+        try:
+            from player_context_menu import bind_player_context
+            p = self._build_player_name_index().get(name)
+            if lbl is not None and p is not None:
+                bind_player_context(lbl, p, self)
+        except Exception:
+            pass
+
+    def _bind_staff_name_menu(self, lbl, name):
+        """EHM/FM24: right-click a staff-name label -> staff menu."""
+        try:
+            from player_context_menu import bind_staff_context
+            st = None
+            try:
+                for s in getattr(getattr(self.app, 'user_team', None),
+                                 'staff', []) or []:
+                    if getattr(s, 'full_name', None) == name:
+                        st = s
+                        break
+            except Exception:
+                pass
+            if lbl is not None and st is not None:
+                bind_staff_context(lbl, st, self)
+        except Exception:
+            pass
+
+    def _bind_asset_row_menu(self, lbl, asset_dict):
+        """EHM/FM24: right-click a trade-asset row label -> player menu."""
+        try:
+            import trade_negotiation as tn
+            from player_context_menu import bind_player_context
+            objs, _ = tn.resolve_assets(self.app, [asset_dict])
+            if objs and hasattr(objs[0], 'full_name'):
+                bind_player_context(lbl, objs[0], self)
+        except Exception:
+            pass
 
     def _render_game_day_bundle(self, message):
         """Pre-match presser + team talk + Watch/Quick, all in the inbox."""
@@ -1137,10 +1177,14 @@ class InboxView(ctk.CTkFrame):
         self._action_section("THE DEAL ON THE TABLE")
         self._iwrap("YOU SEND:", size=10, dim=True, padx=10, pady=(2, 0))
         for ad in neg.user_assets or []:
-            self._iwrap("\u2022 " + tn.asset_summary([ad]), size=11, padx=18)
+            _albl = self._iwrap("\u2022 " + tn.asset_summary([ad]),
+                                size=11, padx=18)
+            self._bind_asset_row_menu(_albl, ad)
         self._iwrap("YOU GET:", size=10, dim=True, padx=10, pady=(6, 0))
         for ad in neg.partner_assets or []:
-            self._iwrap("\u2022 " + tn.asset_summary([ad]), size=11, padx=18)
+            _albl = self._iwrap("\u2022 " + tn.asset_summary([ad]),
+                                size=11, padx=18)
+            self._bind_asset_row_menu(_albl, ad)
 
         self._action_section("YOUR MOVE")
         btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
@@ -1234,9 +1278,10 @@ class InboxView(ctk.CTkFrame):
             self._iwrap("This negotiation is closed.", size=11, dim=True,
                         padx=10)
             return
-        self._iwrap(f"{name} rejected your offer but will sign for "
-                    f"${asking:,} per year over {years} year(s).",
-                    size=11, padx=10, pady=(4, 2))
+        _nm_lbl = self._iwrap(f"{name} rejected your offer but will sign for "
+                              f"${asking:,} per year over {years} year(s).",
+                              size=11, padx=10, pady=(4, 2))
+        self._bind_name_label_menu(_nm_lbl, name)
         # Market-demand context (qualitative): same signal the negotiation
         # context box shows, read from action_data so the inbox path matches
         # the legacy popup path (UI-BUG-01).
@@ -1312,7 +1357,8 @@ class InboxView(ctk.CTkFrame):
             name = c.get("name", "Unknown")
             qo = c.get("qo_amount", 0)
             prior = c.get("prior_salary", 0)
-            self._action_section(name.upper())
+            _rfa_hdr = self._action_section(name.upper())
+            self._bind_name_label_menu(_rfa_hdr, name)
             self._iwrap(f"Qualifying offer: ${qo:,}  (was ${prior:,})",
                         size=11, padx=10, pady=(2, 4))
             btn_row = ctk.CTkFrame(self.interactive_frame,
@@ -1361,7 +1407,9 @@ class InboxView(ctk.CTkFrame):
             pid = str(c.get("player_id"))
             name = c.get("name", "Unknown")
             flag = "  ⚠️ DEAD WEIGHT" if c.get("dead_weight") else ""
-            self._action_section(f"{name.upper()}{flag}")
+            _hdr = self._action_section(f"{name.upper()}{flag}")
+            # EHM/FM24: right-click the candidate name -> player menu.
+            self._bind_name_label_menu(_hdr, name)
             self._iwrap(
                 f"Age {c.get('age')} • {c.get('overall')} ovr • "
                 f"${c.get('cap_hit'):,}/yr × {c.get('years_left')} left",
@@ -1422,7 +1470,8 @@ class InboxView(ctk.CTkFrame):
             sid = str(o.get("staff_id"))
             name = o.get("name", "Unknown")
             role = o.get("role", "staffer")
-            self._action_section(f"{name.upper()} — {role.upper()}")
+            _st_hdr = self._action_section(f"{name.upper()} — {role.upper()}")
+            self._bind_staff_name_menu(_st_hdr, name)
             self._iwrap(
                 f"Age {o.get('age')} • career standing "
                 f"{o.get('reputation')}/100 • "

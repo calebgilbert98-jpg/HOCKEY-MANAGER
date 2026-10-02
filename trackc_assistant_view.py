@@ -100,8 +100,17 @@ class TrackCAssistantView(ctk.CTkFrame):
             form = f"{drift:+.0f}" if abs(drift) >= 0.5 else "on résumé"
             rowf = ctk.CTkFrame(card, fg_color="transparent")
             rowf.pack(fill="x", pady=2)
-            ctk.CTkLabel(rowf, text=ac["name"], width=220, anchor="w",
-                         font=("Segoe UI", 12)).pack(side="left")
+            _ac_lbl = ctk.CTkLabel(rowf, text=ac["name"], width=220, anchor="w",
+                         font=("Segoe UI", 12))
+            _ac_lbl.pack(side="left")
+            # EHM/FM24: right-click the coach name -> staff menu.
+            try:
+                from player_context_menu import bind_staff_context
+                _as = ac.get("staff")
+                if _as is not None and hasattr(_as, 'full_name'):
+                    bind_staff_context(_ac_lbl, _as, self)
+            except Exception:
+                pass
             ctk.CTkLabel(rowf, text=ac["specialty"].title(), width=110, anchor="w",
                          font=("Segoe UI", 12)).pack(side="left")
             ctk.CTkLabel(rowf, text=f"{ac['prowess']:.0f}", width=90, anchor="w",

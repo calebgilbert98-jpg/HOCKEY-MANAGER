@@ -1031,10 +1031,22 @@ class PlayerProfileView(ctk.CTkFrame):
             ttk.Label(section, text=title, style='PlayerInfo.TLabel',
                       font=(self.app.FONT_FAMILY, 12, 'bold')).pack(anchor='w', pady=(8, 2))
 
-        def _row(name, detail, descriptor):
+        def _row(name, detail, descriptor, obj=None, is_staff=False):
             row = ttk.Frame(section, style='PlayerTab.TFrame')
             row.pack(fill='x', pady=2)
-            ttk.Label(row, text=name, style='PlayerValue.TLabel', width=26).pack(side='left')
+            _nl = ttk.Label(row, text=name, style='PlayerValue.TLabel', width=26)
+            _nl.pack(side='left')
+            # EHM/FM24: right-click a name -> player/staff menu.
+            try:
+                if obj is not None:
+                    if is_staff:
+                        from player_context_menu import bind_staff_context
+                        bind_staff_context(_nl, obj, self)
+                    else:
+                        from player_context_menu import bind_player_context
+                        bind_player_context(_nl, obj, self)
+            except Exception:
+                pass
             ttk.Label(row, text=detail, style='PlayerInfo.TLabel').pack(side='left', padx=(8, 0))
             if descriptor:
                 ttk.Label(row, text=f"\u2022 {descriptor}",
@@ -1050,7 +1062,7 @@ class PlayerProfileView(ctk.CTkFrame):
                 pos = getattr(getattr(fp, 'primary_position', ''), 'value', '')
                 _row(fp.full_name,
                      f"{getattr(fp, 'team_name', '')} {('\u2022 ' + pos) if pos else ''}".strip(),
-                     "Family")
+                     "Family", obj=fp)
         else:
             _empty("No family in the league.")
 
@@ -1060,7 +1072,7 @@ class PlayerProfileView(ctk.CTkFrame):
             for f in data["friends"]:
                 p, s = f["player"], f["score"]
                 _row(p.full_name, getattr(p, 'team_name', ''),
-                     self._bond_label(s))
+                     self._bond_label(s), obj=p)
         else:
             _empty("No close friendships yet \u2014 bonds form as the season unfolds.")
 
@@ -1069,7 +1081,7 @@ class PlayerProfileView(ctk.CTkFrame):
         if data["teammate"]:
             p, s = data["teammate"]["player"], data["teammate"]["score"]
             pos = getattr(getattr(p, 'primary_position', ''), 'value', '')
-            _row(p.full_name, pos, self._bond_label(s))
+            _row(p.full_name, pos, self._bond_label(s), obj=p)
         else:
             _empty("No standout bond on the roster yet.")
 
@@ -1078,7 +1090,8 @@ class PlayerProfileView(ctk.CTkFrame):
         if data["staff"]:
             s, fit = data["staff"]["staff"], data["staff"]["fit"]
             role = getattr(getattr(s, 'role', ''), 'value', '')
-            _row(s.full_name, role, self._fit_label(fit))
+            _row(s.full_name, role, self._fit_label(fit),
+                 obj=s, is_staff=True)
         else:
             _empty("No coaching staff found.")
 

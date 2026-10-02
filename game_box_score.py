@@ -213,13 +213,26 @@ class GameBoxScoreView(ctk.CTkFrame):
             row = ctk.CTkFrame(header, fg_color='transparent')
             row.pack(pady=(0, 10))
             medals = ["1st", "2nd", "3rd"]
+            try:
+                _name_to_player = {getattr(p, 'full_name', ''): p
+                                   for p in self._roster_lookup().values()}
+            except Exception:
+                _name_to_player = {}
             for i, (name, team_name, rating) in enumerate(stars[:3]):
-                ctk.CTkLabel(
+                _star_lbl = ctk.CTkLabel(
                     row,
                     text=f"★ {medals[i]}: {name} ({team_name})",
                     font=('Segoe UI', 11, 'bold' if i == 0 else 'normal'),
                     text_color=c['GOLD'] if i == 0 else c['TEXT_DIM']
-                ).pack(side='left', padx=10)
+                )
+                _star_lbl.pack(side='left', padx=10)
+                # Right-click a star's name for the player menu
+                try:
+                    _sp = _name_to_player.get(name)
+                    if _sp is not None:
+                        bind_player_context(_star_lbl, _sp, self)
+                except Exception:
+                    pass
 
     def _three_stars(self):
         # Prefer the stars recorded at game time (stars.record_game_stars)
@@ -320,9 +333,17 @@ class GameBoxScoreView(ctk.CTkFrame):
             card.pack(fill='x', padx=8, pady=3)
             left = ctk.CTkFrame(card, fg_color='transparent')
             left.pack(side='left', fill='x', expand=True, padx=10, pady=8)
-            ctk.CTkLabel(left, text=f"{scorer}{assist_txt}",
+            _name_lbl = ctk.CTkLabel(left, text=f"{scorer}{assist_txt}",
                          font=('Segoe UI', 12, 'bold'), text_color=c['TEXT'],
-                         anchor='w').pack(anchor='w')
+                         anchor='w')
+            _name_lbl.pack(anchor='w')
+            # Right-click the scorer name for the player menu
+            try:
+                _sp = by_id.get(d.get('scorer_id'))
+                if _sp is not None:
+                    bind_player_context(_name_lbl, _sp, self)
+            except Exception:
+                pass
             sub = f"{time_str}"
             if strength and strength != 'EV':
                 sub += f"  •  {strength}"

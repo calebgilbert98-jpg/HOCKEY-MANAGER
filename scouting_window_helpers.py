@@ -390,10 +390,17 @@ class ShortlistAddView(tk.Frame):
         inner = tk.Frame(wrap, bg=bg, width=440)
         inner.pack(pady=14)
 
-        tk.Label(inner,
+        _sl_hdr = tk.Label(inner,
                  text=f"Add {getattr(player, 'full_name', '?')} to Shortlist",
                  font=("Segoe UI", 13, "bold"),
-                 fg="white", bg=bg).pack(pady=(14, 6))
+                 fg="white", bg=bg)
+        _sl_hdr.pack(pady=(14, 6))
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(_sl_hdr, player, self)
+        except Exception:
+            pass
 
         cat_frame = tk.LabelFrame(inner, text="Category", fg="white", bg=bg)
         cat_frame.pack(fill="x", padx=20, pady=8)
@@ -757,6 +764,19 @@ class ScoutingAssignmentView(tk.Frame):
                                 fg="#7fd4ff", bg=bg,
                                 font=("Segoe UI", 10, "bold"))
         target_label.pack(anchor="w", padx=20, pady=(2, 6))
+        # EHM/FM24: right-click the chosen target -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _target_getter(_e):
+                try:
+                    return chosen.get("player")
+                except Exception:
+                    return None
+
+            bind_player_context(target_label, _target_getter, self)
+        except Exception:
+            pass
 
         search_var = tk.StringVar()
         if player is None:
@@ -766,6 +786,26 @@ class ScoutingAssignmentView(tk.Frame):
             search_entry.pack(fill="x", padx=20, pady=(2, 4))
             results = tk.Listbox(inner, height=8)
             results.pack(fill="both", expand=True, padx=20, pady=(0, 6))
+            # EHM/FM24: right-click a search hit -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+
+                def _res_getter(_e):
+                    try:
+                        _sel = results.curselection()
+                        if not _sel:
+                            _sel = (results.nearest(_e.y),)
+                        _shown = _cache.get("shown") or []
+                        _i = _sel[0]
+                        if 0 <= _i < len(_shown):
+                            return _shown[_i]
+                    except Exception:
+                        pass
+                    return None
+
+                bind_player_context(results, _res_getter, self)
+            except Exception:
+                pass
 
             _cache = {"players": None, "shown": []}
 

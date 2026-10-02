@@ -49,7 +49,8 @@ class TrackCFanBuzzView(ctk.CTkFrame):
                 try:
                     res = rs.fan_favourite_score(p, team, rivalries=rivs) or {}
                     score = float(res.get("score", 0) or 0)
-                    rows.append({"name": tc.player_name(p), "score": score,
+                    rows.append({"name": tc.player_name(p), "player": p,
+                                 "score": score,
                                  "tier": str(res.get("tier", "")),
                                  "reasons": [str(x) for x in
                                              (res.get("reasons", None) or [])]})
@@ -67,8 +68,17 @@ class TrackCFanBuzzView(ctk.CTkFrame):
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=4, pady=(8, 0))
         tc.chip(self, head, f"{r['score']:.0f}", color).pack(side="left", padx=(0, 10))
-        ctk.CTkLabel(head, text=r["name"], anchor="w",
-                     font=("Segoe UI", 13, "bold")).pack(side="left")
+        _fb = ctk.CTkLabel(head, text=r["name"], anchor="w",
+                     font=("Segoe UI", 13, "bold"))
+        _fb.pack(side="left")
+        # EHM/FM24: right-click the name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            _fp = r.get("player")
+            if _fp is not None and hasattr(_fp, 'full_name'):
+                bind_player_context(_fb, _fp, self)
+        except Exception:
+            pass
         if r["tier"]:
             self._body(head, text=f"·  {r['tier']}", dim=True).pack(side="left", padx=(8, 0))
         tc.hbar(self, head, max(0.0, min(100.0, r["score"])) / 100.0, width=140,

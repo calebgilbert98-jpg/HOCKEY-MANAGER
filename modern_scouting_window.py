@@ -360,6 +360,23 @@ class ModernScoutingView(ctk.CTkFrame):
         
         # Bind events
         self.scouts_tree.bind('<Double-1>', self._view_scout_details)
+        # EHM/FM24: right-click a scout row -> staff context menu.
+        try:
+            from player_context_menu import bind_staff_context
+
+            def _scout_getter(event):
+                try:
+                    _item = self.scouts_tree.identify_row(event.y)
+                    if _item:
+                        return self.app.tree_maps.get(
+                            'scouts_tree', {}).get(_item)
+                except Exception:
+                    pass
+                return None
+
+            bind_staff_context(self.scouts_tree, _scout_getter, self)
+        except Exception:
+            pass
         
         # Action buttons
         btn_frame = tk.Frame(list_frame, bg=self.app.CONTENT_BG)
@@ -392,17 +409,29 @@ class ModernScoutingView(ctk.CTkFrame):
             tree.column(c, width=w, anchor="center" if c != "Player" else "w")
         tree.pack(fill="both", expand=True, padx=12, pady=(0, 12))
 
+        # EHM/FM24: right-click a draft-class row -> player context menu.
+        try:
+            _dtm = self.app.tree_maps.setdefault(tree, {})
+            _dtm.clear()
+        except Exception:
+            _dtm = None
         for p in self.game_data.get("draft_class", [])[:200]:
             try:
                 pos = getattr(p.primary_position, "value", None)
                 if pos is None:
                     pos = str(p.primary_position)
-                tree.insert("", "end", values=(
+                _iid = tree.insert("", "end", values=(
                     getattr(p, "full_name", "?"), pos,
                     getattr(p, "age", "?"),
                     getattr(p, "potential_grade", getattr(p, "potential", "?"))))
+                if _dtm is not None:
+                    _dtm[_iid] = p
             except Exception:
                 continue
+        try:
+            self.app._bind_player_context_menu(tree, 'modern_scouting_draft', False)
+        except Exception:
+            pass
 
     def _create_assignments_tab(self):
         """Create scouting assignments tab"""

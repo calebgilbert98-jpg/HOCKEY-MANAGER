@@ -1098,9 +1098,17 @@ class SeasonMeetingView(ctk.CTkFrame):
         ctk.CTkLabel(title_row, text="Season Meeting",
                      font=_font(self.app, 20, "bold"),
                      text_color=_TEXT).pack(side="left")
-        ctk.CTkLabel(title_row, text=f"{cname}  ·  {_coach_role(self.coach)}",
+        _sm_lbl = ctk.CTkLabel(title_row, text=f"{cname}  ·  {_coach_role(self.coach)}",
                      font=_font(self.app, 13),
-                     text_color=_MUTED).pack(side="left", padx=(14, 0))
+                     text_color=_MUTED)
+        _sm_lbl.pack(side="left", padx=(14, 0))
+        # EHM/FM24: right-click the coach name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            if getattr(self, 'coach', None) is not None:
+                bind_staff_context(_sm_lbl, self.coach, self)
+        except Exception:
+            pass
         chips = ctk.CTkFrame(header, fg_color="transparent")
         chips.pack(fill="x", padx=20, pady=(0, 12))
         for label, value in _personality_chips(self.coach):

@@ -906,6 +906,12 @@ class RosterView(ctk.CTkFrame):
 
         self.contract_tree.pack(side="left", fill="both", expand=True)
         contract_scroll.pack(side="right", fill="y")
+        # EHM/FM24: right-click a contract row -> player context menu.
+        try:
+            self.app._bind_player_context_menu(self.contract_tree,
+                                               'contracts', False)
+        except Exception:
+            pass
 
         # Populate contract data
         self.populate_contract_tree()
@@ -914,6 +920,11 @@ class RosterView(ctk.CTkFrame):
         """Populate the contract breakdown table."""
         # Clear existing items
         self.contract_tree.delete(*self.contract_tree.get_children())
+        try:
+            _ctm = self.app.tree_maps.setdefault(self.contract_tree, {})
+            _ctm.clear()
+        except Exception:
+            _ctm = None
 
         # Get all NHL roster players
         for player in sorted(self.app.user_team.roster, key=lambda p: p.overall_rating(), reverse=True):
@@ -942,7 +953,9 @@ class RosterView(ctk.CTkFrame):
                 status
             ]
 
-            self.contract_tree.insert('', 'end', values=values)
+            _iid = self.contract_tree.insert('', 'end', values=values)
+            if _ctm is not None:
+                _ctm[_iid] = player
 
     def create_action_footer(self, parent):
         """Create action buttons footer."""
@@ -2979,7 +2992,16 @@ class FreeAgencyView(ctk.CTkFrame):
             sort_cmd=self.app._sort_treeview_generic)
 
         # Bind events
-        add_player_context_menu(self.fa_player_tree, self)
+        # (add_player_context_menu resolves via parent_window chains that
+        # this view doesn't have; the app helper reads the widget-keyed
+        # tree_maps map populated in populate_filtered_players. Bind it
+        # BEFORE Double-1 so the FA screen's negotiate-on-double-click
+        # contract (below) wins over the helper's profile-on-double-click.)
+        try:
+            self.app._bind_player_context_menu(self.fa_player_tree,
+                                               'free_agency', False)
+        except Exception:
+            pass
         self.fa_player_tree.bind('<Double-1>', self.negotiate_with_player)
         self.fa_player_tree.bind('<<TreeviewSelect>>', self.on_player_selection_changed)
 
@@ -3308,6 +3330,30 @@ class FreeAgencyView(ctk.CTkFrame):
         top_tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         top_tree.bind('<Double-1>',
                       lambda e: self.handle_market_overview_double_click(e, top_tree))
+        # EHM/FM24: right-click a player row -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _fa_getter(event):
+                try:
+                    item = top_tree.identify_row(event.y)
+                except Exception:
+                    return None
+                if not item:
+                    return None
+                try:
+                    name = top_tree.item(item, 'values')[0]
+                    for _p in (getattr(getattr(self.app, 'game_manager', None),
+                                      'free_agents', None) or []):
+                        if getattr(_p, 'full_name', None) == name:
+                            return _p
+                except Exception:
+                    pass
+                return None
+
+            bind_player_context(top_tree, _fa_getter, self)
+        except Exception:
+            pass
 
     def handle_market_overview_double_click(self, event, tree):
         """Handle double-click on market overview player."""
@@ -3521,6 +3567,14 @@ class FreeAgencyView(ctk.CTkFrame):
             if 'fa_players' not in self.app.tree_maps:
                 self.app.tree_maps['fa_players'] = {}
             self.app.tree_maps['fa_players'][item_id] = player
+            # Widget-keyed map feeds the right-click player menu
+            # (player_context_menu.add_player_context_menu resolves via
+            # parent_window tree_maps[treeview]).
+            try:
+                self.app.tree_maps.setdefault(
+                    self.fa_player_tree, {})[item_id] = player
+            except Exception:
+                pass
 
         self.player_results_label.configure(text=f"Showing {len(filtered_players)} players")
         set_tree_empty_state(self.fa_player_tree, "No players match your filters")
@@ -3894,7 +3948,14 @@ class FreeAgencyView(ctk.CTkFrame):
         tier_color = (ct['GREEN'] if rating >= 85 else ct['TEAL'] if rating >= 78
                       else ct['GOLD'] if rating >= 70 else ct['TEXT_DIM'])
 
-        self._heading(scroll, text=staff.full_name, size=16).pack(anchor="w")
+        _fa_staff_lbl = self._heading(scroll, text=staff.full_name, size=16)
+        _fa_staff_lbl.pack(anchor="w")
+        # EHM/FM24: right-click the staff name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            bind_staff_context(_fa_staff_lbl, staff, self)
+        except Exception:
+            pass
         self._body(scroll, text=staff.role.value, dim=True, size=12).pack(anchor="w")
         ctk.CTkLabel(scroll, text=f"{rating:.0f}", font=("Segoe UI", 28, "bold"),
                      text_color=tier_color).pack(anchor="w", pady=(6, 2))
@@ -4225,9 +4286,16 @@ class FreeAgencyView(ctk.CTkFrame):
                      text_color=ct['TEXT_DIM'], width=180, anchor="w").pack(
             side="left", padx=10, pady=8)
         for player in players:
-            ctk.CTkLabel(header, text=player.full_name,
+            _cmp_lbl = ctk.CTkLabel(header, text=player.full_name,
                          font=("Segoe UI", 10, "bold"), text_color=ct['TEXT'],
-                         width=130).pack(side="left", padx=4, pady=8)
+                         width=130)
+            _cmp_lbl.pack(side="left", padx=4, pady=8)
+            # EHM/FM24: right-click a name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(_cmp_lbl, player, self)
+            except Exception:
+                pass
 
         # Comparison sections
         self.add_comparison_section(scroll, "Basic Info", players,
@@ -4372,9 +4440,16 @@ class FreeAgencyView(ctk.CTkFrame):
                      text_color=ct['TEXT_DIM'], width=180, anchor="w").pack(
             side="left", padx=10, pady=8)
         for staff in staff_list:
-            ctk.CTkLabel(header, text=staff.full_name,
+            _cmp_slbl = ctk.CTkLabel(header, text=staff.full_name,
                          font=("Segoe UI", 10, "bold"), text_color=ct['TEXT'],
-                         width=130).pack(side="left", padx=4, pady=8)
+                         width=130)
+            _cmp_slbl.pack(side="left", padx=4, pady=8)
+            # EHM/FM24: right-click a name -> staff menu.
+            try:
+                from player_context_menu import bind_staff_context
+                bind_staff_context(_cmp_slbl, staff, self)
+            except Exception:
+                pass
 
         self.add_comparison_section(scroll, "Basic Info", staff_list,
                                     [('Role', lambda s: s.role.value),
@@ -4522,17 +4597,29 @@ class FreeAgencyView(ctk.CTkFrame):
                              anchor='w' if col == 'name' else 'center')
         make_tree_sortable(comp_tree)
 
+        try:
+            _cptm = self.app.tree_maps.setdefault(comp_tree, {})
+            _cptm.clear()
+        except Exception:
+            _cptm = None
         for comp_player, score in comparable[:10]:
             salary = getattr(comp_player, "salary", getattr(comp_player.contract, "salary", 750000))
             ovr = to_100_scale(comp_player.overall_rating())
             tag = self._ovr_tag(ovr)
-            comp_tree.insert('', 'end',
+            _iid = comp_tree.insert('', 'end',
                              values=[comp_player.full_name, comp_player.age,
                                      _tier_label(comp_player),
                                      f"${salary:,}", f"{score:.1f}"],
                              tags=(tag,) if tag else ())
+            if _cptm is not None:
+                _cptm[_iid] = comp_player
 
         comp_tree.pack(fill="both", expand=True, padx=14, pady=(0, 10))
+        # EHM/FM24: right-click a comparable row -> player context menu.
+        try:
+            self.app._bind_player_context_menu(comp_tree, 'free_agency', False)
+        except Exception:
+            pass
 
     def create_contract_projection(self, parent, player):
         """Create the contract projection section."""
@@ -5377,10 +5464,30 @@ class TradeWindow(ctk.CTkFrame):
         try:
             from player_context_menu import PlayerContextMenu
             mgr = PlayerContextMenu(self)
+            self._player_menu_mgr = mgr
             self.user_list.on_right_click = (
                 lambda e, p: mgr.show_context_menu(e, p))
             self.partner_list.on_right_click = (
                 lambda e, p: mgr.show_context_menu(e, p))
+            for _side, _lst in (('user', self.user_offer_list),
+                                ('partner', self.partner_offer_list)):
+                _lst.on_right_click = (
+                    lambda e, idx, _s=_side: self._offer_row_menu(e, idx, _s))
+        except Exception:
+            pass
+
+    def _offer_row_menu(self, event, idx, side):
+        """Right-click an asset row in the trade offer lists -> player menu."""
+        try:
+            mgr = getattr(self, '_player_menu_mgr', None)
+            if mgr is None:
+                return
+            assets = (self.trade_offers or {}).get(side, [])
+            if idx is None or idx < 0 or idx >= len(assets):
+                return
+            asset = assets[idx]
+            if hasattr(asset, 'full_name'):
+                mgr.show_context_menu(event, asset)
         except Exception:
             pass
 
@@ -5787,7 +5894,14 @@ class TradeWindow(ctk.CTkFrame):
                 name = f"{p.full_name} (${hit / 1e6:.2f}M)"
             except Exception:
                 name = str(p)
-            _body(row, name, size=11).pack(side='left', padx=(4, 8))
+            _ret_lbl = _body(row, name, size=11)
+            _ret_lbl.pack(side='left', padx=(4, 8))
+            # EHM/FM24: right-click the name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(_ret_lbl, p, self)
+            except Exception:
+                pass
             var = ctk.StringVar(
                 value=f"{self._retention.get(getattr(p, 'id', None), 0):g}%")
             seg = ctk.CTkSegmentedButton(
@@ -6604,7 +6718,8 @@ class ScoutingView(ctk.CTkFrame):
                   font=_sfont(self.app.FONT_FAMILY, 10, 'bold')).pack(anchor='w', pady=(0, 4))
         self.scouts_tree = self.app._create_treeview(
             left, {'name': ('Name', 120), 'jpa': ('JPA', 36),
-                   'jpp': ('JPP', 36), 'region': ('Region', 90)}, height=6)
+                   'jpp': ('JPP', 36), 'region': ('Region', 90)}, height=6,
+            is_staff=True)
         self.scouts_tree.pack(fill='x', pady=(0, 4))
         self.scouts_tree.bind('<<TreeviewSelect>>', self._on_scout_selected)
 
@@ -6701,6 +6816,29 @@ class ScoutingView(ctk.CTkFrame):
                                      highlightthickness=1,
                                      highlightbackground='#2e2e38')
         self.board_list.pack(fill='both', expand=True)
+        # EHM/FM24: right-click a board entry -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _board_getter(event):
+                try:
+                    idx = self.board_list.nearest(event.y)
+                except Exception:
+                    return None
+                if idx is None or idx < 0:
+                    return None
+                try:
+                    ids = self.scmod.get_draft_board(self.app.user_team)
+                    by_id = {pp.id: pp for pp in
+                             getattr(self.app.league, 'draft_prospects', []) or []}
+                    pid = ids[idx] if idx < len(ids) else None
+                    return by_id.get(pid)
+                except Exception:
+                    return None
+
+            bind_player_context(self.board_list, _board_getter, self)
+        except Exception:
+            pass
         brow = ttk.Frame(right, style='Panel.TFrame')
         brow.pack(fill='x', pady=(6, 0))
         ttk.Button(brow, text="▲", width=3, command=lambda: self._move_board(-1),
@@ -7065,6 +7203,12 @@ class ScoutingView(ctk.CTkFrame):
             pos = "?"
         self.rep_title.config(
             text=f"{p.full_name}  ·  {pos}  ·  {p.age}  ·  {getattr(p, 'nationality', '?')}")
+        # EHM/FM24: right-click the report title -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(self.rep_title, p, self)
+        except Exception:
+            pass
         if report:
             pot = self.scmod.report_potential_display(report, p)
             top = pot.split("–")[-1].strip()
@@ -7420,6 +7564,29 @@ class DraftView(ctk.CTkFrame):
         self._research_list.pack(side='left', fill='x', expand=True)
         self._research_list.bind(
             '<Double-1>', lambda _e=None: self._research_quick_scout())
+        # EHM/FM24: right-click a research entry -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _research_getter(event):
+                try:
+                    idx = self._research_list.nearest(event.y)
+                except Exception:
+                    return None
+                if idx is None or idx < 0:
+                    return None
+                try:
+                    pls = getattr(self, '_research_players', []) or []
+                    if idx >= len(pls):
+                        return None
+                    p = pls[idx]
+                    return p if p is not None and hasattr(p, 'full_name') else None
+                except Exception:
+                    return None
+
+            bind_player_context(self._research_list, _research_getter, self)
+        except Exception:
+            pass
         _rs_btns = tk.Frame(_rs_row, bg=ct['CARD'])
         _rs_btns.pack(side='left', padx=(6, 0))
         self._research_scout_btn = self._secondary_button(
@@ -7495,6 +7662,29 @@ class DraftView(ctk.CTkFrame):
         self.shortlist.pack(fill='x', padx=12, pady=(0, 4))
         self.shortlist.bind('<<ListboxSelect>>', self._on_shortlist_select)
         self.shortlist.bind('<Double-1>', self._on_shortlist_double)
+        # EHM/FM24: right-click a shortlist entry -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _sl_getter(event):
+                try:
+                    idx = self.shortlist.nearest(event.y)
+                except Exception:
+                    return None
+                if idx is None or idx < 0:
+                    return None
+                try:
+                    pls = getattr(self, '_shortlist_players', []) or []
+                    if idx >= len(pls):
+                        return None
+                    p = pls[idx]
+                    return p if p is not None and hasattr(p, 'full_name') else None
+                except Exception:
+                    return None
+
+            bind_player_context(self.shortlist, _sl_getter, self)
+        except Exception:
+            pass
 
         self.selected_label = self._body(center, text="No prospect selected",
                                    dim=True)
@@ -7968,9 +8158,17 @@ class DraftView(ctk.CTkFrame):
             crank = None
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill='x', padx=10, pady=(8, 0))
-        ctk.CTkLabel(head, text=name,
+        _pc_lbl = ctk.CTkLabel(head, text=name,
                      font=("Segoe UI", 13, 'bold'),
-                     text_color=ct['TEXT']).pack(side='left')
+                     text_color=ct['TEXT'])
+        _pc_lbl.pack(side='left')
+        # EHM/FM24: right-click the prospect name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(_pc_lbl, p, self)
+            bind_player_context(head, p, self)
+        except Exception:
+            pass
         if crank:
             ctk.CTkLabel(head, text=f"Consensus #{crank}",
                          font=("Segoe UI", 10, 'bold'),
@@ -8660,6 +8858,12 @@ class DraftView(ctk.CTkFrame):
             pos = "?"
         self.selected_label.configure(
             text=f"Selected: {p.full_name} ({pos}, {p.age}) — Potential {pot}")
+        # EHM/FM24: right-click the selected name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(self.selected_label, p, self)
+        except Exception:
+            pass
         self._render_prospect_card(p)
 
     # -- M5: draft pace ----------------------------------------------------
@@ -15113,8 +15317,15 @@ class StaffContractView(ctk.CTkFrame):
                                                                 pady=(8, 0))
             return
 
-        self._heading(body, text=f"{staff.full_name}",
-                      size=16).pack(anchor="w")
+        _sp_lbl = self._heading(body, text=f"{staff.full_name}",
+                                 size=16)
+        _sp_lbl.pack(anchor="w")
+        # EHM/FM24: right-click the staff name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            bind_staff_context(_sp_lbl, staff, self)
+        except Exception:
+            pass
         try:
             _role = staff.role.value
         except Exception:
@@ -15327,8 +15538,15 @@ class StaffContractView(ctk.CTkFrame):
                                        anchor="w", pady=(8, 0))
             return
 
-        self._heading(body, text=f"Negotiating with {staff.full_name}",
-                      size=14).pack(anchor="w", pady=(0, 2))
+        _neg_lbl = self._heading(body, text=f"Negotiating with {staff.full_name}",
+                                  size=14)
+        _neg_lbl.pack(anchor="w", pady=(0, 2))
+        # EHM/FM24: right-click the staff name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            bind_staff_context(_neg_lbl, staff, self)
+        except Exception:
+            pass
         try:
             _role = staff.role.value
         except Exception:

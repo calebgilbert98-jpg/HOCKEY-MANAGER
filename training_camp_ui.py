@@ -49,26 +49,30 @@ class TrainingCampWindow(InGamePopup):
     def __init__(self, parent, *args, **kwargs):
         super().__init__(parent)
         self.title("Training Camp")
-        self.app = parent
+        # show_screen passes app=self as a kwarg; fall back to a parent-held
+        # app ref, then to the parent itself.
+        self.app = (kwargs.get("app")
+                    or getattr(parent, "app", None)
+                    or parent)
         try:
             self.geometry("1050x640")
         except Exception:
             pass
 
-        team = getattr(parent, "user_team", None)
+        team = getattr(self.app, "user_team", None)
         tname = getattr(team, "team_name", "Your Club") if team else "Your Club"
         try:
-            year = getattr(getattr(parent, "current_date", None), "year", "")
+            year = getattr(getattr(self.app, "current_date", None), "year", "")
         except Exception:
             year = ""
 
         header = ctk.CTkLabel(
             self, text=f"Training Camp -- {tname} ({year})",
-            font=(getattr(parent, "FONT_FAMILY", "Arial"), 16, "bold"))
+            font=(getattr(self.app, "FONT_FAMILY", "Arial"), 16, "bold"))
         header.pack(anchor="w", padx=14, pady=(10, 2))
 
         self._status = ctk.CTkLabel(
-            self, text="", font=(getattr(parent, "FONT_FAMILY", "Arial"), 11),
+            self, text="", font=(getattr(self.app, "FONT_FAMILY", "Arial"), 11),
             text_color="gray70")
         self._status.pack(anchor="w", padx=14, pady=(0, 6))
 
@@ -82,6 +86,11 @@ class TrainingCampWindow(InGamePopup):
 
         self._ratings_tree = ttk.Treeview(ratings_frame, show="headings")
         self._ratings_tree.pack(fill="both", expand=True, padx=6, pady=6)
+        # EHM/FM24: right-click a camp row -> player context menu.
+        try:
+            self.app._bind_player_context_menu(self._ratings_tree, 'camp', False)
+        except Exception:
+            pass
 
         self._scrims_tree = ttk.Treeview(
             scrims_frame, columns=("date", "score", "stars"), show="headings")
@@ -145,6 +154,11 @@ class TrainingCampWindow(InGamePopup):
                                       anchor="w" if c in ("name", "note")
                                       else "center")
         self._ratings_tree.delete(*self._ratings_tree.get_children())
+        try:
+            _tcm = self.app.tree_maps.setdefault(self._ratings_tree, {})
+            _tcm.clear()
+        except Exception:
+            _tcm = None
         for p, ratings, avg, standout in rows:
             try:
                 vals = [getattr(p, "full_name", "?"),
@@ -172,7 +186,9 @@ class TrainingCampWindow(InGamePopup):
                         and len(ratings) >= 2):
                     note = "Pushing for a spot"
                 vals.append(note)
-                self._ratings_tree.insert("", "end", values=vals)
+                _iid = self._ratings_tree.insert("", "end", values=vals)
+                if _tcm is not None:
+                    _tcm[_iid] = p
             except Exception:
                 continue
         if not rows:

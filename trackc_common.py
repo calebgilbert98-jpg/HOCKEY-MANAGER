@@ -66,8 +66,12 @@ def section(parent_view, body, title, note=None):
     return inner
 
 
-def row(parent_view, parent, texts, widths=None, bold_first=False):
-    """One table row: texts aligned in fixed-width columns (single-level scroll)."""
+def row(parent_view, parent, texts, widths=None, bold_first=False, player=None):
+    """One table row: texts aligned in fixed-width columns (single-level scroll).
+
+    player: optional player object -- when given, the first-column name
+    label gets the EHM/FM24 right-click player menu.
+    """
     import customtkinter as ctk
     ct = parent_view._ct
     f = ctk.CTkFrame(parent, fg_color="transparent")
@@ -79,6 +83,13 @@ def row(parent_view, parent, texts, widths=None, bold_first=False):
                            anchor="w", font=("Segoe UI", 12,
                                              "bold" if (bold_first and i == 0) else "normal"))
         lbl.pack(side="left", padx=(0, 10))
+        if i == 0 and player is not None and hasattr(player, 'full_name'):
+            # Right-click the name column -> player context menu.
+            try:
+                from player_context_menu import bind_player_context
+                bind_player_context(lbl, player, parent_view)
+            except Exception:
+                pass
     return f
 
 

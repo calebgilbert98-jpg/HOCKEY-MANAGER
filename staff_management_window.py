@@ -1665,8 +1665,14 @@ class StaffManagementView(ctk.CTkFrame):
         # Fixed header
         header = ctk.CTkFrame(details_window, fg_color="transparent")
         header.pack(fill="x", padx=14, pady=(14, 4))
-        self._heading(header, text=staff.full_name, size=18).pack(
-            anchor="w", pady=(0, 2))
+        _st_name_lbl = self._heading(header, text=staff.full_name, size=18)
+        _st_name_lbl.pack(anchor="w", pady=(0, 2))
+        # EHM/FM24: right-click the staff name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            bind_staff_context(_st_name_lbl, staff, self)
+        except Exception:
+            pass
         ctk.CTkLabel(header,
                      text=f"{staff.role.value}  •  Rating {staff.overall_rating}",
                      font=self._sfont(11), text_color=ct['TEAL']).pack(
@@ -2531,9 +2537,16 @@ class StaffManagementView(ctk.CTkFrame):
             staff_frame = ctk.CTkFrame(scroll, fg_color="transparent")
             staff_frame.pack(fill='x', pady=5, padx=10)
 
-            ctk.CTkLabel(staff_frame, text=f"{staff.full_name}:",
+            _rsl_lbl = ctk.CTkLabel(staff_frame, text=f"{staff.full_name}:",
                          font=self._sfont(10),
-                         text_color=ct['TEXT']).pack(side='left')
+                         text_color=ct['TEXT'])
+            _rsl_lbl.pack(side='left')
+            # EHM/FM24: right-click a staff name -> staff menu.
+            try:
+                from player_context_menu import bind_staff_context
+                bind_staff_context(_rsl_lbl, lambda e, _s=staff: _s, self)
+            except Exception:
+                pass
 
             role_combo = ctk.CTkComboBox(
                 staff_frame, values=[role.value for role in StaffRole],

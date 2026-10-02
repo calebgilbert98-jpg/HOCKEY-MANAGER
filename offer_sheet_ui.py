@@ -191,6 +191,11 @@ class OfferSheetWindow(ctk.CTkFrame):
                               ("player", "team") else "center")
         self._tree.pack(fill="both", expand=True, padx=12, pady=(0, 4))
         self._tree.bind("<<TreeviewSelect>>", self._on_select)
+        # EHM/FM24: right-click a target row -> player context menu.
+        try:
+            self.app._bind_player_context_menu(self._tree, 'offer_sheet', False)
+        except Exception:
+            pass
         body(left, text="Compensation picks must be your own — check the "
              "preview before presenting.",
              font=("Segoe UI", 10), text_color=ct["TEXT_FAINT"]).pack(
@@ -428,6 +433,19 @@ class OfferSheetWindow(ctk.CTkFrame):
                     _money(market)), tags=(str(id(p)),))
             except Exception:
                 continue
+        # Register item -> player for the right-click player menu.
+        try:
+            _tm = self.app.tree_maps.setdefault(self._tree, {})
+            _tm.clear()
+            _by_tag = {str(id(p)): p for (p, _t, _m) in self._targets}
+            for _item in self._tree.get_children():
+                _tags = self._tree.item(_item, "tags")
+                if _tags:
+                    _p = _by_tag.get(str(_tags[0]))
+                    if _p is not None:
+                        _tm[_item] = _p
+        except Exception:
+            pass
         self._update_status_line()
 
     def _update_status_line(self):

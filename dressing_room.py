@@ -2472,8 +2472,18 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                              font=("Segoe UI", 11, "bold"),
                              text_color=ct["GOLD"] if badge in "CA"
                              else ct["TEXT_FAINT"]).pack(side="left")
-                ctk.CTkLabel(fr, text=row["name"], width=150, anchor="w",
-                             font=("Segoe UI", 11)).pack(side="left")
+                _hier_lbl = ctk.CTkLabel(fr, text=row["name"], width=150,
+                                         anchor="w",
+                                         font=("Segoe UI", 11))
+                _hier_lbl.pack(side="left")
+                # EHM/FM24: right-click a name -> player menu.
+                try:
+                    from player_context_menu import bind_player_context
+                    _hp = row.get("player")
+                    if _hp is not None and hasattr(_hp, 'full_name'):
+                        bind_player_context(_hier_lbl, _hp, self)
+                except Exception:
+                    pass
                 bar = ctk.CTkProgressBar(fr, width=90, height=8)
                 bar.pack(side="left", padx=6)
                 try:
@@ -2610,6 +2620,13 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
                 info = (f"{cname}\n{style.replace('_', ' ').title()} "
                         f"({ax_label})\nGM trust {trust}/100{shelf}")
             self._coach_info.configure(text=info)
+            # EHM/FM24: right-click the coach name -> staff menu.
+            try:
+                from player_context_menu import bind_staff_context
+                if coach is not None:
+                    bind_staff_context(self._coach_info, coach, self)
+            except Exception:
+                pass
             self._coach_cands = coaching_candidates(team)
             # Interviews: rank the candidates and show the impression, not
             # the raw numbers (analytics is a puzzle). Stable per candidate

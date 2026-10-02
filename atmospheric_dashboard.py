@@ -1261,6 +1261,7 @@ class AtmosphericDashboard:
                 top_players.append({
                     "name": getattr(player, 'full_name', 'Unknown'),
                     "points": pts,
+                    "player_id": getattr(player, 'id', None),
                 })
         except Exception:
             pass
@@ -2209,6 +2210,7 @@ class AtmosphericDashboard:
                                   fg=self.theme.colors.text_light,
                                   bg=self.theme.colors.secondary)
             leader_label.pack(anchor='w', padx=12, pady=(0, 8))
+            self._bind_leader_label(leader_label, leader_data)
         
         # League leaders column
         league_column = tk.Frame(columns_frame, bg=self.theme.colors.background)
@@ -2241,6 +2243,7 @@ class AtmosphericDashboard:
                                   fg=self.theme.colors.text_light,
                                   bg=self.theme.colors.secondary)
             leader_label.pack(anchor='w', padx=12, pady=(0, 8))
+            self._bind_leader_label(leader_label, leader_data)
 
     def _get_standings_data(self):
         """Get current league standings data"""
@@ -2299,6 +2302,28 @@ class AtmosphericDashboard:
             ]
         }
 
+    def _bind_leader_label(self, label, leader_data):
+        """EHM/FM24: right-click a leader name -> player context menu."""
+        try:
+            from player_context_menu import bind_player_context
+            _pid = leader_data.get('player_id')
+            if _pid is None:
+                return
+            _teams = getattr(getattr(self.parent, 'league', None),
+                             'teams', None) or []
+            _found = None
+            for _t in _teams:
+                for _x in (getattr(_t, 'roster', None) or []):
+                    if getattr(_x, 'id', None) == _pid:
+                        _found = _x
+                        break
+                if _found is not None:
+                    break
+            if _found is not None:
+                bind_player_context(label, _found, self.parent)
+        except Exception:
+            pass
+
     def _get_team_leaders_data(self):
         """Get team statistical leaders"""
         try:
@@ -2313,14 +2338,17 @@ class AtmosphericDashboard:
                     return {
                         "Goals": {
                             'player': goals_leader.full_name,
+                            'player_id': getattr(goals_leader, 'id', None),
                             'value': getattr(goals_leader, 'goals', 0)
                         },
                         "Assists": {
                             'player': assists_leader.full_name,
+                            'player_id': getattr(assists_leader, 'id', None),
                             'value': getattr(assists_leader, 'assists', 0)
                         },
                         "Points": {
                             'player': points_leader.full_name,
+                            'player_id': getattr(points_leader, 'id', None),
                             'value': getattr(points_leader, 'goals', 0) + getattr(points_leader, 'assists', 0)
                         }
                     }
@@ -2352,16 +2380,19 @@ class AtmosphericDashboard:
                     return {
                         "Goals": {
                             'player': goals_leader.full_name,
+                            'player_id': getattr(goals_leader, 'id', None),
                             'team': goals_leader.team_name,
                             'value': getattr(goals_leader, 'goals', 0)
                         },
                         "Assists": {
                             'player': assists_leader.full_name,
+                            'player_id': getattr(assists_leader, 'id', None),
                             'team': assists_leader.team_name,
                             'value': getattr(assists_leader, 'assists', 0)
                         },
                         "Points": {
                             'player': points_leader.full_name,
+                            'player_id': getattr(points_leader, 'id', None),
                             'team': points_leader.team_name,
                             'value': getattr(points_leader, 'goals', 0) + getattr(points_leader, 'assists', 0)
                         }
@@ -2534,9 +2565,23 @@ class GamePreviewView(ctk.CTkFrame):
                      anchor='w', padx=12, pady=(12, 8))
         for player in data.get('top_players', []):
             player_text = f"• {player.get('name', 'Unknown')} - {player.get('points', 0)} points"
-            tk.Label(players_frame, text=player_text,
-                     font=body, fg=text_light, bg=secondary).pack(
-                         anchor='w', padx=24, pady=1)
+            _pl = tk.Label(players_frame, text=player_text,
+                           font=body, fg=text_light, bg=secondary)
+            _pl.pack(anchor='w', padx=24, pady=1)
+            # EHM/FM24: right-click a key player -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                _pid = player.get('player_id')
+                _pp = None
+                if _pid is not None:
+                    _roster = getattr(getattr(self.app, 'user_team', None),
+                                      'roster', None) or []
+                    _pp = next((x for x in _roster
+                                if getattr(x, 'id', None) == _pid), None)
+                if _pp is not None:
+                    bind_player_context(_pl, _pp, self.app)
+            except Exception:
+                pass
 
         # Close button
         tk.Button(content_frame, text="Close Preview",

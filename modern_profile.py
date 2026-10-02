@@ -547,6 +547,13 @@ class PlayerProfile(InGamePopup):
                              fg=AppColors.TEXT_PRIMARY,
                              bg=AppColors.BG)
         name_label.pack(anchor="w")
+        # EHM/FM24: right-click the name -> player context menu
+        # (Scout/Compare are handy straight off the profile).
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_label, self.player, self.parent_app)
+        except Exception:
+            pass
 
         # Pills row
         pills = tk.Frame(info, bg=AppColors.BG)

@@ -2281,6 +2281,19 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         self.integrated_info_label = ttk.Label(left_button_frame, text="Select a player to draft", 
                                              style='Info.TLabel')
         self.integrated_info_label.pack(side=tk.LEFT, pady=8)
+        # EHM/FM24: right-click the selected-player line -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _sel_getter(event):
+                try:
+                    return getattr(self, 'selected_player', None)
+                except Exception:
+                    return None
+
+            bind_player_context(self.integrated_info_label, _sel_getter, self)
+        except Exception:
+            pass
         
         # Right side - Draft controls (make more prominent)
         right_button_frame = ttk.Frame(content_frame, style='Panel.TFrame')
@@ -2964,6 +2977,12 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         name_label = ttk.Label(header_frame, text=player.full_name, 
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_label, player, self)
+        except Exception:
+            pass
         
         position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • {_tier_label(player)}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
@@ -3229,6 +3248,12 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         name_label = ttk.Label(header_frame, text=player.full_name, 
                               style='Header.TLabel', font=('Segoe UI', 16, 'bold'))
         name_label.pack()
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_label, player, self)
+        except Exception:
+            pass
         
         position_label = ttk.Label(header_frame, text=f"{player.primary_position.value} • {_tier_label(player)}", 
                                   style='Info.TLabel', font=('Segoe UI', 12))
@@ -3824,8 +3849,15 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         name_frame = ttk.Frame(self.player_info_frame, style='Panel.TFrame')
         name_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(name_frame, text=player.full_name, 
-                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 14, 'bold')).pack()
+        _pi_name_lbl = ttk.Label(name_frame, text=player.full_name, 
+                 style='Header.TLabel', font=(self.app.FONT_FAMILY, 14, 'bold'))
+        _pi_name_lbl.pack()
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(_pi_name_lbl, lambda e, _p=player: _p, self)
+        except Exception:
+            pass
         
         info_text = f"{player.primary_position.value} • {player.age} years old • {_tier_label(player)}"
         ttk.Label(name_frame, text=info_text, 
@@ -5464,6 +5496,12 @@ NHL League Office""",
         name_label = ttk.Label(header_frame, text=player.full_name, 
                               style='Header.TLabel', font=('Segoe UI', 13, 'bold'))
         name_label.pack(anchor='w')
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_label, player, self)
+        except Exception:
+            pass
         
         pos_overall_frame = ttk.Frame(header_frame, style='Panel.TFrame')
         pos_overall_frame.pack(fill=tk.X, pady=(2, 0))

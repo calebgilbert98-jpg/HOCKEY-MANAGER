@@ -937,6 +937,19 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         self.player_name_label = ttk.Label(self.player_info_frame, text="Select a player to begin practice", 
                                          style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 14, 'bold'))
         self.player_name_label.pack()
+        # EHM/FM24: right-click the selected-player line -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+
+            def _prac_getter(event):
+                try:
+                    return getattr(self, 'selected_player', None)
+                except Exception:
+                    return None
+
+            bind_player_context(self.player_name_label, _prac_getter, self)
+        except Exception:
+            pass
         
         # Practice type selection
         type_frame = ttk.LabelFrame(parent, text="Practice Type", style='Card.TLabelframe')
@@ -1275,6 +1288,12 @@ class DevelopmentOverviewView(ctk.CTkFrame):
         name_label = ttk.Label(header_frame, text=player.full_name, 
                               style='Title.TLabel', font=_sfont(self.app.FONT_FAMILY, 16, 'bold'))
         name_label.pack()
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(name_label, player, self)
+        except Exception:
+            pass
         
         # Talent tier (Muck's directive 2026-10-01: numeric overall is never
         # shown to the user).
@@ -2097,8 +2116,16 @@ class PracticeCenterView(ctk.CTkFrame):
         player_frame = ttk.Frame(self.controls_frame, style='Content.TFrame')
         player_frame.pack(fill='x', pady=(0, 10))
         
-        ttk.Label(player_frame, text=f"Practice for {self.selected_player.full_name}",
-                 style='Subtitle.TLabel').pack()
+        _prac_lbl = ttk.Label(player_frame, text=f"Practice for {self.selected_player.full_name}",
+                 style='Subtitle.TLabel')
+        _prac_lbl.pack()
+        # EHM/FM24: right-click the name -> player context menu.
+        try:
+            from player_context_menu import bind_player_context
+            bind_player_context(_prac_lbl,
+                                lambda e, _p=self.selected_player: _p, self)
+        except Exception:
+            pass
         
         history = self.practice_engine.get_player_history(self.selected_player.id)
         ttk.Label(player_frame, text=f"Current Fatigue: {history.current_fatigue}%"

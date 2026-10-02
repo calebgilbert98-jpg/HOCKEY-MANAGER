@@ -409,9 +409,17 @@ class CheckinView(ctk.CTkFrame):
             gp = 0
         header = ctk.CTkFrame(main, fg_color="transparent")
         header.grid(row=0, column=0, sticky="w", pady=(0, 4))
-        ctk.CTkLabel(header, text=f"{qlabel} Check-In -- {cname}",
+        _ci_lbl = ctk.CTkLabel(header, text=f"{qlabel} Check-In -- {cname}",
                      font=_font(self.app, 20, "bold"),
-                     text_color=_TEXT, anchor="w").pack(anchor="w")
+                     text_color=_TEXT, anchor="w")
+        _ci_lbl.pack(anchor="w")
+        # EHM/FM24: right-click the coach name -> staff menu.
+        try:
+            from player_context_menu import bind_staff_context
+            if self._coach is not None:
+                bind_staff_context(_ci_lbl, self._coach, self)
+        except Exception:
+            pass
         ctk.CTkLabel(
             header,
             text=(f"Game {gp} -- a temperature check on the season mandate. "

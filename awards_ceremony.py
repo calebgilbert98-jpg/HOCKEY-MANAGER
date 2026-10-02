@@ -362,9 +362,19 @@ class AwardsCeremonyWindow(tk.Toplevel):
         for f in finalists[:3]:
             card = tk.Frame(row, bg=PANEL, padx=26, pady=18)
             card.pack(side="left", padx=12)
-            tk.Label(card, text=f["name"], bg=PANEL, fg="white",
+            _f_lbl = tk.Label(card, text=f["name"], bg=PANEL, fg="white",
                      font=("Segoe UI", 14, "bold"), wraplength=220,
-                     justify="center").pack()
+                     justify="center")
+            _f_lbl.pack()
+            # EHM/FM24: right-click a finalist's name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                _fp = f.get("player") if isinstance(f, dict) else None
+                if _fp is not None and hasattr(_fp, 'full_name'):
+                    bind_player_context(_f_lbl, _fp, self)
+                    bind_player_context(card, _fp, self)
+            except Exception:
+                pass
             tk.Label(card, text=f["team"], bg=PANEL, fg=TEAL,
                      font=("Segoe UI", 12)).pack(pady=(4, 2))
             tk.Label(card, text=f["stats"], bg=PANEL, fg="#8a9199",
@@ -386,9 +396,18 @@ class AwardsCeremonyWindow(tk.Toplevel):
         # but the ceremony stage earns one celebratory mark).
         tk.Label(card, text="🏆", bg=PANEL, fg=GOLD,
                  font=("Segoe UI", 44)).pack()
-        tk.Label(card, text=name, bg=PANEL, fg="white",
+        _name_lbl = tk.Label(card, text=name, bg=PANEL, fg="white",
                  font=("Segoe UI", 24, "bold"), wraplength=700,
-                 justify="center").pack(pady=(6, 2))
+                 justify="center")
+        _name_lbl.pack(pady=(6, 2))
+        # EHM/FM24: right-click the winner's name -> player menu.
+        try:
+            from player_context_menu import bind_player_context
+            if w is not None and hasattr(w, 'full_name'):
+                bind_player_context(_name_lbl, w, self)
+                bind_player_context(card, w, self)
+        except Exception:
+            pass
         if entry.get("winner_team"):
             tk.Label(card, text=entry["winner_team"], bg=PANEL, fg=TEAL,
                      font=("Segoe UI", 15, "bold")).pack()
@@ -445,9 +464,16 @@ class AwardsCeremonyWindow(tk.Toplevel):
             tk.Label(row, text=s["trophy"], bg=CHARCOAL, fg=GOLD,
                      font=("Segoe UI", 12), width=38, anchor="e").pack(
                          side="left", padx=(0, 14))
-            tk.Label(row, text=name, bg=CHARCOAL, fg="white",
-                     font=("Segoe UI", 12, "bold"), anchor="w").pack(
-                         side="left")
+            _w_lbl = tk.Label(row, text=name, bg=CHARCOAL, fg="white",
+                     font=("Segoe UI", 12, "bold"), anchor="w")
+            _w_lbl.pack(side="left")
+            # EHM/FM24: right-click a winner's name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                if w is not None and hasattr(w, 'full_name'):
+                    bind_player_context(_w_lbl, w, self)
+            except Exception:
+                pass
             if s.get("winner_team"):
                 tk.Label(row, text=f"({s['winner_team']})", bg=CHARCOAL,
                          fg="#8a9199", font=("Segoe UI", 11)).pack(

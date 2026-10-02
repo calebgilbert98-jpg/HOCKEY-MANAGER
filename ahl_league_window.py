@@ -110,7 +110,23 @@ class AHLLeagueView(ctk.CTkFrame):
             tree.column(key, width=width, anchor="center")
         tree.column(list(columns.keys())[1], anchor="w")
         tree.pack(fill="both", expand=True)
+        # EHM/FM24: right-click a player row -> player context menu.
+        # Rows resolve through app.tree_maps (registered in the refresh
+        # methods below).
+        try:
+            self.app._bind_player_context_menu(tree, 'ahl', False)
+        except Exception:
+            pass
         return tree
+
+    def _reg_tree_map(self, tree):
+        """Fresh item->player map for a tree; returns the map (or None)."""
+        try:
+            tm = self.app.tree_maps.setdefault(tree, {})
+            tm.clear()
+            return tm
+        except Exception:
+            return None
 
     def close_view(self):
         fn = getattr(self, "_close_screen", None)
@@ -637,6 +653,7 @@ class AHLLeagueView(ctk.CTkFrame):
             # roster (live alias of the parent NHL club's ahl_roster)
             for item in self.team_roster_tree.get_children():
                 self.team_roster_tree.delete(item)
+            _rtm = self._reg_tree_map(self.team_roster_tree)
             roster = _al.get_ahl_roster(team)
             n = 0
             for p in roster or []:
@@ -657,9 +674,11 @@ class AHLLeagueView(ctk.CTkFrame):
                         gp = getattr(led, "games_played", 0) or 0
                         g = getattr(led, "goals", 0) or 0
                         a = getattr(led, "assists", 0) or 0
-                    self.team_roster_tree.insert("", "end", values=(
+                    _iid = self.team_roster_tree.insert("", "end", values=(
                         nm, pos, getattr(p, "age", ""), ovr, gp, g, a,
                         g + a))
+                    if _rtm is not None:
+                        _rtm[_iid] = p
                     n += 1
                 except Exception:
                     continue
@@ -741,6 +760,9 @@ class AHLLeagueView(ctk.CTkFrame):
                          self.pros_goalies):
                 for item in tree.get_children():
                     tree.delete(item)
+            _psm = self._reg_tree_map(self.pros_scorers)
+            _pcm = self._reg_tree_map(self.pros_cooking)
+            _pgm = self._reg_tree_map(self.pros_goalies)
             league = self._league()
             if league is None:
                 return
@@ -768,26 +790,32 @@ class AHLLeagueView(ctk.CTkFrame):
 
             for i, (p, tname, led) in enumerate(skaters, 1):
                 try:
-                    self.pros_scorers.insert("", "end", values=(
+                    _iid = self.pros_scorers.insert("", "end", values=(
                         i, _pname(p), tname, _pos(p), led.games_played,
                         led.goals, led.assists,
                         led.goals + led.assists))
+                    if _psm is not None:
+                        _psm[_iid] = p
                 except Exception:
                     continue
             for i, (p, tname, led, ppg) in enumerate(cooks, 1):
                 try:
-                    self.pros_cooking.insert("", "end", values=(
+                    _iid = self.pros_cooking.insert("", "end", values=(
                         i, _pname(p), tname, led.games_played,
                         led.goals + led.assists, f"{ppg:.2f}"))
+                    if _pcm is not None:
+                        _pcm[_iid] = p
                 except Exception:
                     continue
             for i, (p, tname, led) in enumerate(goalies, 1):
                 try:
                     svp = getattr(led, "save_percentage", 0) or 0
-                    self.pros_goalies.insert("", "end", values=(
+                    _iid = self.pros_goalies.insert("", "end", values=(
                         i, _pname(p), tname, led.games_played, led.wins,
                         f"{getattr(led, 'goals_against_avg', 0) or 0:.2f}",
                         f"{svp:.3f}"[1:] if led.shots_against else "\u2014"))
+                    if _pgm is not None:
+                        _pgm[_iid] = p
                 except Exception:
                     continue
             self.pros_status.configure(

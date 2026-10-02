@@ -831,6 +831,12 @@ class StatsStandingsView(ctk.CTkFrame):
         tree_s = self._make_tree(left, cols_s, height=18, padx=10, pady=6)
         self._bind_leader_menu(tree_s)
         tree_s._player_rows = {}
+        # _bind_leader_menu resolves via app.tree_maps -- register the map
+        # so right-click on rookie rows opens the player menu.
+        try:
+            self.app.tree_maps[tree_s] = tree_s._player_rows
+        except Exception:
+            pass
 
         # Right: rookie goalies
         right = ctk.CTkFrame(body, fg_color=ct['CARD'])
@@ -844,6 +850,10 @@ class StatsStandingsView(ctk.CTkFrame):
         tree_g = self._make_tree(right, cols_g, height=18, padx=10, pady=6)
         self._bind_leader_menu(tree_g)
         tree_g._player_rows = {}
+        try:
+            self.app.tree_maps[tree_g] = tree_g._player_rows
+        except Exception:
+            pass
 
         for i, r in enumerate(ar.rookie_skaters(players, season_year=self._calder_year)[:25], 1):
             p = r["player"]
@@ -1072,6 +1082,12 @@ class StatsStandingsView(ctk.CTkFrame):
         tree._player_rows = {}
         if not is_team_award:
             self._bind_leader_menu(tree)
+            # _bind_leader_menu resolves via app.tree_maps -- register the
+            # map so right-click on award-race rows opens the player menu.
+            try:
+                self.app.tree_maps[tree] = tree._player_rows
+            except Exception:
+                pass
         for p, vals in rows:
             iid = tree.insert("", "end", values=vals)
             if p is not None:

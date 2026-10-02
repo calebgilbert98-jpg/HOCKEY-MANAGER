@@ -310,6 +310,8 @@ class CTkOfferList(ctk.CTkScrollableFrame):
         self._selected_idx = None
         self._selected_frame = None
         self._empty_label = None
+        # Optional: on_right_click(event, index) -- EHM/FM24 menu hook.
+        self.on_right_click = None
 
     def set_items(self, labels):
         """labels: list of display strings. Selection index maps 1:1."""
@@ -337,7 +339,17 @@ class CTkOfferList(ctk.CTkScrollableFrame):
                 w.bind("<Button-1>", lambda e, f=row, idx=i: self._select(f, idx))
                 w.bind("<Enter>", lambda e, f=row: self._hover(f, True))
                 w.bind("<Leave>", lambda e, f=row: self._hover(f, False))
+                w.bind("<Button-3>", lambda e, idx=i: self._fire_right_click(e, idx))
+                w.bind("<Shift-F10>", lambda e, idx=i: self._fire_right_click(e, idx))
             self._items.append((row, text, i))
+
+    def _fire_right_click(self, event, idx):
+        cb = getattr(self, "on_right_click", None)
+        if callable(cb):
+            try:
+                cb(event, idx)
+            except Exception:
+                pass
 
     def _hover(self, frame, on):
         if frame is self._selected_frame:

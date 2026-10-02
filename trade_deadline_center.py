@@ -1315,7 +1315,58 @@ class QuickTradeInterface(_DeadlineScreenBase):
         offer_lb.configure(yscrollcommand=offer_sb.set)
         offer_lb.pack(side='left', fill='x', expand=True)
         offer_sb.pack(side='right', fill='y')
+        # EHM/FM24: right-click a player row for the player menu. Getters
+        # resolve the listbox entry under the cursor to the live asset.
+        try:
+            self._bind_trade_listbox_context(pool_lb, side, 'pool')
+            self._bind_trade_listbox_context(offer_lb, side, 'offer')
+        except Exception:
+            pass
         return pool_lb, offer_lb
+
+    def _bind_trade_listbox_context(self, lb, side, kind):
+        """Right-click a trade-listbox row -> player context menu."""
+        try:
+            from player_context_menu import bind_player_context
+        except Exception:
+            return
+        try:
+            from game_classes import DraftPick as _DraftPick
+        except Exception:
+            _DraftPick = ()
+
+        def _player_only(asset):
+            if asset is None or isinstance(asset, _DraftPick):
+                return None
+            return asset if hasattr(asset, 'full_name') else None
+
+        def _getter(event, _lb=lb, _side=side, _kind=kind):
+            try:
+                idx = _lb.nearest(event.y)
+            except Exception:
+                return None
+            if idx is None or idx < 0:
+                return None
+            try:
+                if _kind == 'pool':
+                    pool = (self._your_pool if _side == 'user'
+                            else self._their_pool)
+                    if idx >= len(pool):
+                        return None
+                    entry = pool[idx]
+                    asset = (entry[1] if isinstance(entry, (tuple, list))
+                             else entry)
+                else:
+                    assets = (self.user_assets if _side == 'user'
+                              else self.partner_assets)
+                    if idx >= len(assets):
+                        return None
+                    asset = assets[idx]
+            except Exception:
+                return None
+            return _player_only(asset)
+
+        bind_player_context(lb, _getter, self)
 
     def _create_asset_columns(self, parent):
         """Create the two asset columns."""

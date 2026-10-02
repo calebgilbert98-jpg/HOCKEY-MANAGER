@@ -1086,6 +1086,22 @@ class ProfessionalScoutingView(ctk.CTkFrame):
             scout_name = scout.full_name
             scout_ability = getattr(scout, 'judging_player_ability', 'Unknown')
             scout_listbox.insert(tk.END, f"{scout_name} (Ability: {scout_ability})")
+        # EHM/FM24: right-click a scout row -> staff context menu.
+        try:
+            from player_context_menu import bind_staff_context
+
+            def _dlg_scout_getter(event, _sc=scouts):
+                try:
+                    _i = scout_listbox.nearest(event.y)
+                    if _i is not None and 0 <= _i < len(_sc):
+                        return _sc[_i]
+                except Exception:
+                    pass
+                return None
+
+            bind_staff_context(scout_listbox, _dlg_scout_getter, self)
+        except Exception:
+            pass
 
         # Real estimated completion, derived from live state
         pace_label = tk.Label(dialog, text="",

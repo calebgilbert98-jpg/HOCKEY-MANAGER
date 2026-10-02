@@ -97,8 +97,17 @@ class TrackCConditionView(ctk.CTkFrame):
         for r in rows:
             rowf = ctk.CTkFrame(card, fg_color="transparent")
             rowf.pack(fill="x", pady=2)
-            ctk.CTkLabel(rowf, text=r["name"], width=220, anchor="w",
-                         font=("Segoe UI", 12)).pack(side="left")
+            _nm = ctk.CTkLabel(rowf, text=r["name"], width=220, anchor="w",
+                         font=("Segoe UI", 12))
+            _nm.pack(side="left")
+            # EHM/FM24: right-click the name -> player menu.
+            try:
+                from player_context_menu import bind_player_context
+                _cp = r.get("player")
+                if _cp is not None and hasattr(_cp, 'full_name'):
+                    bind_player_context(_nm, _cp, self)
+            except Exception:
+                pass
             ctk.CTkLabel(rowf, text=r["pos"], width=60, anchor="w",
                          font=("Segoe UI", 12)).pack(side="left")
             barw = ctk.CTkFrame(rowf, fg_color="transparent", width=170, height=22)
