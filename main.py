@@ -7008,7 +7008,17 @@ class HockeyManagerGUI(tk.Tk):
 
         Falls back to the legacy button lookup when the modern dashboard
         helper is unavailable.
+
+        Also manages the day-sim loading overlay (Muck 2026-10-02): a
+        modal spinner + status dialog shown while the day sim blocks the
+        main thread, so the app doesn't look crashed.
         """
+        # Loading overlay: show on busy, hide when done. Runs regardless
+        # of which button-feedback path is taken below.
+        try:
+            self._update_day_sim_overlay(busy, status)
+        except Exception:
+            pass
         dashboard = getattr(self, 'dashboard', None)
         helper = getattr(dashboard, 'set_continue_busy', None)
         if callable(helper):
@@ -7039,6 +7049,41 @@ class HockeyManagerGUI(tk.Tk):
                 self.update()
             except Exception:
                 pass
+
+    def _update_day_sim_overlay(self, busy, status=""):
+        """Show/hide the day-sim loading overlay (Muck 2026-10-02).
+
+        The day sim blocks the main thread; without a visible loading
+        prompt the app looks crashed. The overlay is a modal spinner +
+        status dialog. Never raises.
+        """
+        try:
+            overlay = getattr(self, '_day_sim_overlay', None)
+            if busy:
+                if overlay is None or not overlay.is_showing:
+                    try:
+                        from day_sim_loading import DaySimLoadingOverlay
+                        overlay = DaySimLoadingOverlay(self)
+                        self._day_sim_overlay = overlay
+                    except Exception:
+                        return
+                if status:
+                    try:
+                        overlay.set_status(status)
+                    except Exception:
+                        pass
+            else:
+                if overlay is not None:
+                    try:
+                        overlay.destroy()
+                    except Exception:
+                        pass
+                    try:
+                        self._day_sim_overlay = None
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Trade deadline day: 30-minute game clock (9 AM -> 3 PM ET)
@@ -7409,6 +7454,7 @@ class HockeyManagerGUI(tk.Tk):
 
             if season_complete:
                 self.end_of_season()
+                self._set_continue_feedback(False)
                 return
 
             last_game_date = getattr(self, '_season_last_game_date', None)
@@ -7423,6 +7469,7 @@ class HockeyManagerGUI(tk.Tk):
                 self._season_last_game_date = last_game_date
             if last_game_date and self.current_date > last_game_date + timedelta(days=7):
                 self.end_of_season()
+                self._set_continue_feedback(False)
                 return
 
             # Process daily maintenance tasks FIRST (before checking games)
@@ -7516,6 +7563,9 @@ class HockeyManagerGUI(tk.Tk):
                 for g in todays_games)
             if (not _resuming_after_bundle and not _all_preseason
                     and self._maybe_open_game_day_bundle(todays_games)):
+                # Bundle opened: the day waits for the user's Watch/Quick
+                # pick. Dismiss the loading overlay so they can interact.
+                self._set_continue_feedback(False)
                 return
 
             # NHL Rule 6.1: every club must have 1C+2As before opening night.
