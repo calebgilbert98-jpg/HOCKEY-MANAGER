@@ -11401,6 +11401,16 @@ class HockeyManagerGUI(tk.Tk):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
 
+        # UFA consideration period (Muck 2026-10-02): tick open bidding
+        # windows -- AI clubs add competing offers, expired windows resolve
+        # with the player signing the most appealing bid. Guarded: never
+        # breaks day advancement.
+        try:
+            import ufa_consideration as _uc
+            _uc.tick_ufa_considerations(self, getattr(self, "league", None))
+        except Exception:
+            pass
+
         # Eastside-style auto fillers (user side): release fill-ins no
         # longer needed and auto-summon any dressed-lineup shortfall, so
         # the user can always ice a team exactly like AI clubs. Guarded:
@@ -21127,6 +21137,25 @@ class HockeyManagerGUI(tk.Tk):
                 return False
         except Exception:
             pass
+        # No renegotiation (Muck 2026-10-02): a signed player can't be
+        # re-offered as a UFA. Extensions go through is_extension=True;
+        # 1-year deals may extend via the normal extension flow.
+        if not extension:
+            try:
+                _fa_pool = getattr(getattr(self, "league", None),
+                                   "free_agents", None)
+                if isinstance(_fa_pool, list) and person not in _fa_pool:
+                    try:
+                        messagebox.showwarning(
+                            "Already signed",
+                            f"{getattr(person, 'full_name', 'This player')} "
+                            f"is already under contract -- you can't "
+                            f"renegotiate a signed deal.")
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                pass
         # NHL contract rules (cap-relative: uses the live league cap):
         # notify: "popup" (legacy messagebox), "inbox" (FM24/EHM-style
         # inbox message; counter-offers become interactive), "quiet" (no
@@ -21252,6 +21281,30 @@ class HockeyManagerGUI(tk.Tk):
             asking_price = int(asking_price * 1.08)
 
         if _effective_salary >= asking_price * 0.9: # Accepts if offer is 90% or more of asking
+            # UFA consideration period (Muck 2026-10-02): no more instant
+            # signings. A qualifying UFA offer becomes a BID -- the player
+            # fields offers from every club for 3-7 days, then signs with
+            # the most appealing one per contract_appeal(). Extensions keep
+            # the instant path (they're re-signings, not market bids).
+            if not extension:
+                try:
+                    import ufa_consideration as _uc
+                    _cons = _uc.submit_ufa_offer(
+                        self, getattr(self, "league", None), person,
+                        getattr(self, "user_team", None),
+                        person.salary, person.contract_years,
+                        is_user=True,
+                        clause_kind=_clause_kind,
+                        clause_size=_clause_size)
+                    if _cons is not None:
+                        _uc.notify_consideration_started(
+                            self, person, person.salary,
+                            person.contract_years,
+                            int(_cons.get("days_left", 4) or 4))
+                        self._clear_offered_clause(person)
+                        return "consideration"
+                except Exception:
+                    pass
             self._finalize_contract_signing(person, person.salary,
                                             person.contract_years,
                                             asking_price, extension)
@@ -21584,6 +21637,27 @@ class HockeyManagerGUI(tk.Tk):
                 data.get("clause_list_size", 10) or 10)
         except Exception:
             person.offered_clause_list_size = 10
+        # UFA consideration period (Muck 2026-10-02): accepting the
+        # counter opens a bidding window -- it doesn't sign instantly.
+        # Extensions keep the instant path.
+        if not extension:
+            try:
+                import ufa_consideration as _uc
+                _cons = _uc.submit_ufa_offer(
+                    self, getattr(self, "league", None), person,
+                    getattr(self, "user_team", None),
+                    asking, years, is_user=True,
+                    clause_kind=person.offered_clause_kind,
+                    clause_size=person.offered_clause_list_size)
+                if _cons is not None:
+                    _uc.notify_consideration_started(
+                        self, person, asking, years,
+                        int(_cons.get("days_left", 4) or 4))
+                    self._clear_offered_clause(person)
+                    message.action_done = True
+                    return True
+            except Exception:
+                pass
         self._finalize_contract_signing(person, asking, years, asking,
                                         extension)
         self._inbox_contract_result("accepted", person,

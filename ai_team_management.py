@@ -1189,6 +1189,19 @@ class AITeamManager:
                 current = 0
             if salary > (strategy.budget_limit - current):
                 return False
+            # UFA consideration period (Muck 2026-10-02): no more instant
+            # AI signings either. A qualifying, affordable offer becomes a
+            # bid; the player picks the most appealing one when the window
+            # closes. (Salary-floor compliance below keeps its instant
+            # path -- that's a league rule, not a bidding war.)
+            try:
+                import ufa_consideration as _uc
+                _bid = _uc.submit_ufa_offer(
+                    None, league, p, team, salary, years, is_user=False)
+                if _bid is not None:
+                    return True
+            except Exception:
+                pass
             # The handshake: offer is estimated market value -- accepted.
             p.salary = salary
             p.contract_years = years

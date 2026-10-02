@@ -160,14 +160,19 @@ def _prod_ask(_pos):
 asking = _prod_ask("LEFT_WING")   # fa is a winger...
 asking_c = _prod_ask("C")         # ...p2/p3/p4 are centers (5% nudge)
 
-# accept path via inbox notify
+# accept path via inbox notify -> consideration period (Muck 2026-10-02):
+# no more instant UFA signings; a qualifying offer becomes a bid.
 fa.salary, fa.contract_years = asking, 3
 res = fake.handle_contract_offer(fa, extension=False, notify="inbox")
-check("accept returns True", res is True)
-check("accept -> inbox message", len(fake.inbox) == 1 and
-      fake.inbox[0].subject.startswith("Signed"), str([m.subject for m in fake.inbox]))
-check("accept -> news logged", any("have signed" in n["story"] for n in fake.news_log))
-check("accept -> removed from FA", fa not in fake.league.free_agents)
+check("accept returns 'consideration'", res == "consideration", repr(res))
+check("accept -> consideration inbox message",
+      len(fake.inbox) == 1 and "considering" in fake.inbox[0].subject.lower(),
+      str([m.subject for m in fake.inbox]))
+check("accept -> consideration active",
+      any(getattr(m, "category", "") == "Contracts" and "considering" in
+          getattr(m, "subject", "").lower() for m in fake.inbox))
+check("accept -> stays in FA until decided",
+      fa in fake.league.free_agents)
 
 # counter path -> interactive inbox message
 p2 = SimpleNamespace(
@@ -195,13 +200,12 @@ check("counter -> interactive inbox message", len(cm) == 1)
 check("counter action_data pickle-safe",
       all(isinstance(v, (str, int, float, bool)) for v in cm[0].action_data.values()))
 
-# accept the counter from the inbox
+# accept the counter from the inbox -> consideration (Muck 2026-10-02)
 ok = fake.accept_contract_counter(cm[0])
-check("inbox accept signs player",
-      ok and p3.salary == cm[0].action_data["asking_price"]
-      and cm[0].action_done)
-check("inbox accept posts confirmation",
-      any(m.subject.startswith("Signed") for m in fake.inbox))
+check("inbox accept starts consideration",
+      ok and cm[0].action_done)
+check("inbox accept posts consideration notice",
+      any("considering" in m.subject.lower() for m in fake.inbox))
 
 # reject path
 p4 = SimpleNamespace(

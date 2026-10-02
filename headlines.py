@@ -73,6 +73,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "trade_speculation": _trade_speculation_headline,
         "fan_narrative": _fan_narrative_headline,
         "board_narrative": _board_narrative_headline,
+        "ufa_decision": _ufa_decision_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -620,6 +621,20 @@ def _board_narrative_headline(game_date, headline="", body="",
         category="Board Narrative",
         priority=2,
     )
+
+
+def _ufa_decision_headline(game_date, **kw):
+    """UFA sweepstakes headline (Muck 2026-10-02).
+
+    Delegates to ufa_consideration.ufa_decision_headline -- the templates
+    live with the consideration logic. Stages: considering / frontrunner
+    / signed.
+    """
+    try:
+        import ufa_consideration as _uc
+        return _uc.ufa_decision_headline(game_date, **kw)
+    except Exception:
+        return None
 
 
 def _ahl_story_headline(game_date, headline="", body="", story_type="",

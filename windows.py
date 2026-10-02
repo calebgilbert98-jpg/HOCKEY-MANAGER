@@ -3306,8 +3306,21 @@ class FreeAgencyView(ctk.CTkFrame):
             contract_years = getattr(player, "contract_years", getattr(player.contract, "years_remaining", 1))
             ovr = to_100_scale(player.overall_rating())
 
+            # UFA consideration period (Muck 2026-10-02): mark players
+            # fielding offers so the user knows a bidding war is on.
+            try:
+                import ufa_consideration as _uc
+                _ustatus = _uc.get_player_status(
+                    getattr(getattr(self, "app", None), "league", None),
+                    player)
+            except Exception:
+                _ustatus = None
+            _dname = player.full_name
+            if _ustatus:
+                _dname = f"⏳ {_dname}"
+
             values = [
-                player.full_name,
+                _dname,
                 player.primary_position.value,
                 player.age,
                 _tier_label(player),
@@ -13090,7 +13103,19 @@ class ContractNegotiationView(ctk.CTkFrame):
             p.offered_clause_kind, p.offered_clause_list_size)
         accepted = self.app.handle_contract_offer(
             p, extension=self.is_extension, notify="inbox")
-        if accepted:
+        if accepted == "consideration":
+            # UFA consideration period (Muck 2026-10-02): the offer is a
+            # bid now, not a signing. The player decides in a few days.
+            import ufa_consideration as _uc
+            _cons = _uc.get_consideration(
+                getattr(self.app, "league", None), p)
+            _days = int((_cons or {}).get("days_left", 4) or 4)
+            self._record_offer(
+                salary, years,
+                f"under consideration ({_days}d)")
+            self._close_session()
+            self.close_view()
+        elif accepted:
             self._record_offer(salary, years, f"accepted ✓ ({_clause_txt})")
             self._close_session()
             self.close_view()
