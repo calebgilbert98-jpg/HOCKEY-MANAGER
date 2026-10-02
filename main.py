@@ -1900,6 +1900,35 @@ NHL League Office""",
             if hasattr(self, 'user_team') and team == self.user_team:
                 if hasattr(self, 'news_log'):
                     self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
+            # IR/LTIR return flow (ir_system.py, Muck 2026-10-02): a healed
+            # player on IR/LTIR must be activated. IR needs the 7-day minimum;
+            # LTIR needs cap room for the returning hit. Never raises.
+            try:
+                import ir_system as _irs
+                _st = _irs.ir_status_of(player)
+                if _st in ("IR", "LTIR"):
+                    _is_user = (hasattr(self, 'user_team')
+                                and team == self.user_team)
+                    ok, reason = _irs.activate_player(
+                        team, player, getattr(self, 'current_date', None))
+                    if ok:
+                        if hasattr(self, 'news_log'):
+                            self.news_log.append({
+                                'date': self.current_date,
+                                'story': (
+                                    f"📋 {player.first_name} {player.last_name} "
+                                    f"activated from {_st}.")})
+                    elif _is_user and hasattr(self, 'news_log'):
+                        # Healed but blocked (IR minimum or LTIR cap room):
+                        # surface it so the GM knows what to do.
+                        self.news_log.append({
+                            'date': self.current_date,
+                            'story': (
+                                f"📋 {player.first_name} {player.last_name} "
+                                f"is healthy but cannot come off {_st} yet: "
+                                f"{reason}")})
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1991,6 +2020,16 @@ NHL League Office""",
 
                     if player.games_remaining_injured <= 0:
                         self._heal_injured_player(team, player, _inj)
+            # IR/LTIR (ir_system.py, Muck 2026-10-02): AI GMs stash their
+            # long-term injuries and activate the healed, same as a human
+            # would. User team is managed by the player. Never raises.
+            try:
+                if not (hasattr(self, 'user_team')
+                        and team == self.user_team):
+                    import ir_system as _irs
+                    _irs.ai_manage_ir(team, getattr(self, 'current_date', None))
+            except Exception:
+                pass
 
     def _process_suspension_service(self, teams_played=None):
         """Tick down DoPS suspensions once per GAME PLAYED (not per day).
@@ -6525,8 +6564,17 @@ class HockeyManagerGUI(tk.Tk):
         try:
             # Pending wire resolves it -- not a hard block. The filler
             # charge is excluded first (the league exception: emergency
-            # fill-ins are cap-exempt at the day gate).
-            if int(compliance_charge(team)) - _filler_charge <= int(bd["cap"]):
+            # fill-ins are cap-exempt at the day gate). LTIR relief raises
+            # the effective ceiling (ir_system.py) -- a team using LTIR
+            # space is compliant by design.
+            _ltir_relief = 0
+            try:
+                import ir_system as _irs
+                _ltir_relief = int(_irs.ltir_relief(team) or 0)
+            except Exception:
+                pass
+            if (int(compliance_charge(team)) - _filler_charge
+                    <= int(bd["cap"]) + _ltir_relief):
                 return None
         except Exception:
             pass

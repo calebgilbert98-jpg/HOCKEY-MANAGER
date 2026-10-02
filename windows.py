@@ -1433,6 +1433,16 @@ class RosterView(ctk.CTkFrame):
             _is_filler = bool(getattr(player, 'emergency_filler', False))
             if _is_filler:
                 injury_status = "EMERGENCY FILL-IN"
+            # IR/LTIR (ir_system.py, Muck 2026-10-02): badged in the status
+            # column -- the GM sees at a glance who's stashed and where.
+            try:
+                _ir = str(getattr(player, 'ir_status', 'None') or 'None')
+                if _ir == 'LTIR':
+                    injury_status = "LTIR"
+                elif _ir == 'IR':
+                    injury_status = "IR"
+            except Exception:
+                pass
 
             # Basic values for all roster types (tier label, never numeric --
             # Muck's directive 2026-10-01; `overall` stays numeric for the
@@ -1801,6 +1811,15 @@ class RosterView(ctk.CTkFrame):
             except Exception:
                 _cnt = f"{len(players)}/23"
             summary = f"Players: {_cnt} | Selected: {selected_count} | Total Salary: ${total_salary:,} | Avg Age: {avg_age:.1f}"
+            # IR/LTIR (ir_system.py, Muck 2026-10-02): surface who's stashed
+            # and the LTIR relief pool right in the roster summary.
+            try:
+                import ir_system as _irs
+                _ir_line = _irs.ir_summary_line(self.app.user_team)
+                if _ir_line:
+                    summary += f" | {_ir_line}"
+            except Exception:
+                pass
             self.nhl_summary_label.configure(text=summary)
 
         elif roster_type == 'ahl':

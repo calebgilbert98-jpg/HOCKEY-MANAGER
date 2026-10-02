@@ -93,11 +93,15 @@ def active_roster_count(team) -> int:
     fillers exempt (NHL emergency-recall exemption). Players currently on
     the waiver wire are excluded -- they're in transit off the roster and
     the 2-day clock ticks in daily maintenance; counting them softlocked
-    the day advance (blocker armed, clock never ticked)."""
+    the day advance (blocker armed, clock never ticked). IR/LTIR players
+    are excluded -- they don't count against the 23-man limit (real NHL;
+    ir_system.py)."""
     try:
         return sum(1 for p in (getattr(team, "roster", None) or [])
                    if has_active_contract(p) and not is_emergency_filler(p)
-                   and not getattr(p, "on_waivers", False))
+                   and not getattr(p, "on_waivers", False)
+                   and str(getattr(p, "ir_status", "None") or "None")
+                   not in ("IR", "LTIR"))
     except Exception:
         return 0
 

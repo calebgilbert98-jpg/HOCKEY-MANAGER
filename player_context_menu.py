@@ -313,6 +313,28 @@ class PlayerContextMenu:
                     label="Move Between Rosters",
                     command=lambda: self._move_between_rosters(player)
                 )
+                # IR/LTIR (ir_system.py, Muck 2026-10-02): stash injured
+                # players off the 23-man roster; LTIR brings cap relief.
+                try:
+                    import ir_system as _irs
+                    _st = _irs.ir_status_of(player)
+                    if _st == "None":
+                        _ok_ir, _ = _irs.eligible_for_ir(player)
+                        _ok_ltir, _ = _irs.eligible_for_ltir(player)
+                        if _ok_ir:
+                            context_menu.add_command(
+                                label="Place on IR",
+                                command=lambda: self._ir_place(player, "IR"))
+                        if _ok_ltir:
+                            context_menu.add_command(
+                                label="Place on LTIR",
+                                command=lambda: self._ir_place(player, "LTIR"))
+                    else:
+                        context_menu.add_command(
+                            label=f"Activate from {_st}",
+                            command=lambda: self._ir_activate(player))
+                except Exception:
+                    pass
         
         # Add window-specific options if provided
         if additional_options:
@@ -1156,6 +1178,81 @@ class PlayerContextMenu:
                 f"Status: {status}"
             )
     
+    def _ir_place(self, player, kind):
+        """Place a player on IR/LTIR (ir_system.py). Never raises."""
+        try:
+            app = self._app()
+            team = getattr(app, 'user_team', None) if app is not None else None
+            if team is None:
+                messagebox.showwarning("Injured Reserve", "No team loaded.")
+                return
+            import ir_system as _irs
+            today = getattr(app, 'current_date', None)
+            if kind == "LTIR":
+                ok, reason = _irs.place_on_ltir(team, player, today)
+            else:
+                ok, reason = _irs.place_on_ir(team, player, today)
+            if ok:
+                try:
+                    _relief = _irs.ltir_relief(team) if kind == "LTIR" else 0
+                    _extra = (f" Cap relief pool is now ${_relief:,}, "
+                              f"raising your effective ceiling."
+                              if kind == "LTIR" else
+                              " He still counts against the cap, but not "
+                              "the 23-man roster.")
+                    messagebox.showinfo(
+                        "Injured Reserve",
+                        f"{player.full_name} placed on {kind}.{_extra}")
+                except Exception:
+                    pass
+                # News it.
+                try:
+                    if hasattr(app, 'news_log'):
+                        app.news_log.append({
+                            'date': today,
+                            'story': (f"📋 {player.full_name} placed on {kind}."
+                                      if kind == "IR" else
+                                      f"📋 {player.full_name} placed on LTIR -- "
+                                      f"cap relief activated.")})
+                except Exception:
+                    pass
+            else:
+                messagebox.showwarning("Injured Reserve", reason or
+                                       f"Could not place on {kind}.")
+            # Refresh the roster view if it's showing.
+            try:
+                if hasattr(app, '_refresh_all_roster_tabs'):
+                    app._refresh_all_roster_tabs()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _ir_activate(self, player):
+        """Activate a player off IR/LTIR (ir_system.py). Never raises."""
+        try:
+            app = self._app()
+            team = getattr(app, 'user_team', None) if app is not None else None
+            if team is None:
+                messagebox.showwarning("Injured Reserve", "No team loaded.")
+                return
+            import ir_system as _irs
+            today = getattr(app, 'current_date', None)
+            ok, reason = _irs.activate_player(team, player, today)
+            if ok:
+                messagebox.showinfo("Injured Reserve",
+                                    f"{player.full_name} activated.")
+            else:
+                messagebox.showwarning("Injured Reserve", reason or
+                                       "Could not activate.")
+            try:
+                if hasattr(app, '_refresh_all_roster_tabs'):
+                    app._refresh_all_roster_tabs()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
     def _move_between_rosters(self, player):
         """Move player between rosters via the real transaction machinery.
 

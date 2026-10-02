@@ -537,6 +537,11 @@ class Player:
     injury_type: str = "None"
     games_remaining_injured: int = 0
 
+    # IR/LTIR (ir_system.py, Muck 2026-10-02): injured reserve designations.
+    # "None" | "IR" | "LTIR". Old-save safe: read via getattr, default "None".
+    ir_status: str = "None"
+    ir_placed_date: str = ""  # ISO date string
+
     # Discipline: DoPS suspensions. Served in TEAM GAMES (not days) --
     # the countdown ticks once per game the player's team plays, mirroring
     # injury recovery. Repeat-offender history lives on the existing
