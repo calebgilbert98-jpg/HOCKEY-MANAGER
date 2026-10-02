@@ -191,6 +191,23 @@ class InboxView(ctk.CTkFrame):
             content_frame, fg_color=ct['CARD'], corner_radius=12)
         self._story_frame.grid(row=0, column=0, rowspan=2, sticky='nsew')
         self._story_frame.grid_remove()
+        # Same scroll-speedup as the interactive frame (story cards pile up).
+        self._speed_up_scroll(self._story_frame)
+
+    def _speed_up_scroll(self, scrollable_frame, increment=90):
+        """Make wheel scrolling snappy on widget-heavy CTkScrollableFrames.
+
+        CTkScrollableFrame redraws all child widgets on each scroll step;
+        with 30+ widgets each 30px step costs 20-50ms (visibly choppy).
+        Bumping yscrollincrement 3x means 3x fewer steps to cover the same
+        distance. Applies to both the frame's own wheel handler and the
+        global scroll_manager (both scroll in "units"). Never raises.
+        """
+        try:
+            scrollable_frame._parent_canvas.configure(
+                yscrollincrement=increment)
+        except Exception:
+            pass
 
     def _create_filter_pills(self, parent):
         """Two rows of rounded CTk filter pills (selected pill is teal).
@@ -337,6 +354,11 @@ class InboxView(ctk.CTkFrame):
         self.interactive_frame = ctk.CTkScrollableFrame(
             parent, fg_color=ct['PANEL'], border_width=1,
             border_color=ct['BORDER'], corner_radius=10)
+        # Muck 2026-10-02: snappier wheel scrolling. CTkScrollableFrame
+        # redraws every child widget on each scroll step; the game-day
+        # bundle / pressers pack 30-100+ widgets, so each 30px step takes
+        # 20-50ms (choppy). A 3x increment means 3x fewer steps.
+        self._speed_up_scroll(self.interactive_frame)
 
         # Action buttons row
         action_frame = ctk.CTkFrame(parent, fg_color="transparent")
