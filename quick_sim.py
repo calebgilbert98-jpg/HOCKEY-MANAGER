@@ -2090,6 +2090,17 @@ class AdvancedGameSim:
         
         # Generate realistic events per shift (reduced from 6-12 to 2-4 for performance)
         num_events = random.randint(2, 4)  # Reduced event count for better performance
+        # OT-parity calibration (Muck 2026-10-02): per-shift puck tilt.
+        # AdvGS's independent 50/50 puck assignment per event produces too
+        # many regulation ties (28% vs NHL ~22%). A per-shift tilt makes
+        # possession "streaky" within a shift (like GameSim's sticky
+        # possession), spreading the goal distribution and reducing ties.
+        # Mean-zero, so long-run puck share stays 50/50; GPG unchanged.
+        try:
+            _tilt = random.gauss(0, 0.25)
+            self._shift_tilt = max(-0.4, min(0.4, _tilt))
+        except Exception:
+            self._shift_tilt = 0.0
         for _ in range(num_events):
             self._simulate_event()
             # Slightly larger time increments between events
@@ -2102,7 +2113,10 @@ class AdvancedGameSim:
         self._record_state()
 
     def _simulate_event(self):
-        puck_team_name = self.home_team.team_name if random.random() < 0.5 else self.away_team.team_name
+        # OT-parity: per-shift tilt (set by _simulate_shift); 0.0 if unset.
+        _tilt = getattr(self, "_shift_tilt", 0.0) or 0.0
+        _p_home = max(0.1, min(0.9, 0.5 + _tilt))
+        puck_team_name = self.home_team.team_name if random.random() < _p_home else self.away_team.team_name
         # 6-on-5 (workstream B, 2026-09-30): the pulled-goalie unit camps in
         # the zone -- the shared OZ-sustenance fidelity for this engine
         # weights puck-event retention toward the pulling team (personnel-

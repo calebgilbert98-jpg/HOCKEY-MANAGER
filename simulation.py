@@ -850,6 +850,16 @@ class GameSim:
         # a factor, never the game. Applied on xG in _resolve_shot_on_goal.
         self._crowd_home_mult = 1.0
         self._crowd_away_mult = 1.0
+        # OT-parity calibration (Muck 2026-10-02): per-game shared shooting
+        # luck. GameSim's OT rate (18.7%) sits below NHL ~22%. A mean-one
+        # factor shared by both teams creates positive score correlation
+        # (open games: both score more; tight games: both score less),
+        # raising P(regulation tie) without changing mean GPG. Never raises.
+        try:
+            import random as _r
+            self._game_shoot_luck = max(0.7, min(1.3, _r.gauss(1.0, 0.12)))
+        except Exception:
+            self._game_shoot_luck = 1.0
         # Readable momentum (momentum.py): rolling event log; read-only for
         # the visualizer, risk-only for AI decisions. Never touches conversion.
         self._momentum_events = []
@@ -5763,6 +5773,14 @@ class GameSim:
         mult = getattr(self, "scoring_multiplier", 1.0)
         if mult != 1.0:
             goal_prob = (1.0 - adjusted_save_prob) * mult
+            adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        # OT-parity: per-game shared shooting luck (additive, mean-one).
+        try:
+            _luck = float(getattr(self, "_game_shoot_luck", 1.0) or 1.0)
+        except Exception:
+            _luck = 1.0
+        if _luck != 1.0:
+            goal_prob = (1.0 - adjusted_save_prob) * _luck
             adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
 
         # Superstar tune 2026-09-28 (shared decisions, one decision two
