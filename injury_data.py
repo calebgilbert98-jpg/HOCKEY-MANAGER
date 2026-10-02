@@ -167,6 +167,14 @@ SEVERITY_TIERS = [
 ]
 MAX_GAMES_MISSED = 82
 
+# Career-ending injury benchmark (Muck 2026-10-02):
+# Real NHL 2016-2026: ~1 acute career-ending injury per decade league-wide
+# (Cody McCormick, blood clots, 2016 — the clearest case). Chronic-degenerative
+# endings (Hossa, Seabrook, Weber, Price) go through the 3-year LTIR decision,
+# not this path. This is the catastrophic single-event tier.
+# Rate: 0.001 of all injuries (1 in 1000) ~= 0.8 per decade league-wide.
+CAREER_ENDING_RATE = 0.001
+
 
 def _roll_region():
     r = random.random()
@@ -328,6 +336,9 @@ def apply_injury(player, spec, team=None):
     Medical staff quality scales the diagnosed absence (recovery_time_mult);
     10+ game injuries flag the AI-replacement bookkeeping. Returns the final
     games_remaining_injured. Never raises.
+
+    Career-ending check (Muck 2026-10-02): ~0.1% of injuries are catastrophic
+    and end the career immediately (real NHL benchmark: ~1 per decade).
     """
     try:
         games = max(1, int(spec.get("games", 1)))
@@ -339,6 +350,13 @@ def apply_injury(player, spec, team=None):
         except Exception:
             pass
     type_label = spec.get("type", "Undisclosed injury")
+    # Career-ending roll: only on serious injuries (13+ games), very rare
+    _career_ending = False
+    try:
+        if games >= 13 and random.random() < CAREER_ENDING_RATE:
+            _career_ending = True
+    except Exception:
+        pass
     try:
         player.is_injured = True
         player.injury_type = type_label
@@ -347,6 +365,9 @@ def apply_injury(player, spec, team=None):
         player.injured_today = True  # countdown starts with the NEXT game
         # Concussion protocol flag (additive; old-save safe via getattr).
         player.in_concussion_protocol = bool(spec.get("concussion", False))
+        # Career-ending flag
+        if _career_ending:
+            player.career_ending_injury = True
     except Exception:
         pass
     # Career ledgers: these were seeded at generation and never updated.
