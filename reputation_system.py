@@ -6539,10 +6539,10 @@ def record_trade_outcome(league: Any, team_a: Any, team_b: Any, ratio_a: float,
             except Exception:
                 pass
             out["notes"].append("fans cheer the fleece")
-            try:
-                _bump_gm_respect(league, team_a, team_b, -8)
-            except Exception:
-                pass
+            # Muck D48 2026-10-01: NO respect-sting on fleeces. There is no
+            # objective league-wide fairness judge. The teeth stay in the
+            # counterparty's personal grudge (already recorded), fans/room,
+            # and owners' board. Respect only nudges the trade pass.
             if board_a is not None:
                 try:
                     board_a.record_big_event("good_trade")
