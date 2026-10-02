@@ -366,7 +366,11 @@ def apply_scenario(prob, offense, defense, scenario, sim=None, off_team=None,
 # ---------------------------------------------------------------------------
 _SCHEME_THREAT_FLOOR = 90.0   # overall below this: zero threat, nothing felt
 _SCHEME_THREAT_RAMP = 7.0     # 90 -> 0.0 threat, 97 -> 1.0 threat
-_SCHEME_RAILS = (0.82, 1.00)  # star suppression: bounded shave, never a wall
+_SCHEME_RAILS = (0.95, 1.00)  # star suppression: bounded shave, never a wall
+# E3 FIX (Muck 2026-10-02): the old (0.82, 1.00) rail was theater — max
+# _suppression is 0.044 (gate·wheel·effect·0.044), so 1.0-0.044=0.956 was
+# the actual floor. The 0.82 bound was unreachable. Rail now reflects
+# reality: max 5% suppression, hierarchy never inverts.
 _SCHEME_RELIEF_RAILS = (1.00, 1.10)  # linemate dividend rails
 _SCHEME_OFF_WHEELHOUSE = 0.45  # denial outside his preferred zones — the
                                # scheme takes away his SPOTS; he can shoot

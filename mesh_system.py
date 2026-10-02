@@ -1984,11 +1984,16 @@ def ceiling_scenario_mult(player, linemates=None) -> float:
                         _raw = 0.20 * min(1.0, (_best - 90.0) / 10.0 + 0.5)
                         _mult *= 1.0 + _raw * _fit01
                     # 4. Line chemistry: great chemistry lifts everyone.
+                    # E1 FIX (Muck 2026-10-02): import from player_archetypes,
+                    # not line_chemistry (dead import, swallowed by except).
+                    # E2 FIX: re-anchor gate to realistic range. The old
+                    # >=70 gate was unreachable (3-man QS maxes ~24, 5-skater
+                    # GS maxes ~40-60). New gate: >=25 with 25->45 ramp.
                     try:
-                        from line_chemistry import line_chemistry_score as _lcs
+                        from player_archetypes import line_chemistry_score as _lcs
                         _chem = float(_lcs([player] + _mates))
-                        if _chem >= 70.0:
-                            _mult *= 1.0 + 0.12 * min(1.0, (_chem - 70.0) / 30.0)
+                        if _chem >= 25.0:
+                            _mult *= 1.0 + 0.12 * min(1.0, (_chem - 25.0) / 20.0)
                     except Exception:
                         pass
                     # 5. Schemed-against relief, SCALED BY FIT: a star linemate
