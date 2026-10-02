@@ -871,6 +871,206 @@ def _rivalry_lines(app, team, year):
     return lines
 
 
+_NARRATIVE_KIND_LABELS = {
+    "hot_seat": "Hot seat", "leadership": "Leadership", "goalie": "Crease",
+    "trade_rumor": "Trade rumor", "prospect_watch": "Prospect watch",
+    "trust_process": "Trust the process", "cup_window": "Cup window",
+    "legacy_chase": "Legacy chase", "deadline_race": "Deadline race",
+}
+
+
+def _injury_lines(app, team, year):
+    """IR/LTIR casualty list at season's end + relief used. Never raises."""
+    lines = []
+    try:
+        import ir_system as _ir
+    except Exception:
+        return []
+    try:
+        cur = getattr(app, "current_date", None)
+        ltir = _ir.ltir_players(team)
+        irp = _ir.ir_players(team)
+        if not ltir and not irp:
+            return []
+        def _nm(p):
+            return str(getattr(p, "full_name", None)
+                       or getattr(p, "last_name", "Unknown"))
+        for p in sorted(ltir, key=lambda p: _ir.days_on_ir(p, cur),
+                        reverse=True)[:4]:
+            inj = str(getattr(p, "injury_type", "") or "injury")
+            days = _ir.days_on_ir(p, cur)
+            lines.append(f"- {_nm(p)} -- LTIR ({inj}, {days}d on reserve).")
+        for p in sorted(irp, key=lambda p: _ir.days_on_ir(p, cur),
+                        reverse=True)[:3]:
+            inj = str(getattr(p, "injury_type", "") or "injury")
+            days = _ir.days_on_ir(p, cur)
+            lines.append(f"- {_nm(p)} -- IR ({inj}, {days}d on reserve).")
+        try:
+            relief = int(_ir.ltir_relief(team) or 0)
+        except Exception:
+            relief = 0
+        if relief > 0:
+            lines.append(f"LTIR cap relief carried at year's end: ${relief:,}.")
+    except Exception:
+        pass
+    return lines
+
+
+def _storyline_lines(app, team, year):
+    """Season-long narrative arcs and how they ended. Never raises."""
+    lines = []
+    try:
+        league = getattr(app, "league", None)
+        narrs = [n for n in (getattr(league, "media_narratives", None) or [])
+                 if getattr(n, "team_name", "") == team.team_name]
+        if not narrs:
+            return []
+        ranked = sorted(narrs,
+                        key=lambda n: float(getattr(n, "heat", 0) or 0),
+                        reverse=True)[:4]
+        for n in ranked:
+            title = str(getattr(n, "title", "") or "").strip()
+            if not title:
+                continue
+            kind = str(getattr(n, "kind", "") or "")
+            label = _NARRATIVE_KIND_LABELS.get(kind, kind.replace("_", " "))
+            heat = float(getattr(n, "heat", 0) or 0)
+            if heat >= 60:
+                tail = "still burning"
+            elif heat >= 30:
+                tail = "simmering into the offseason"
+            else:
+                tail = "fizzled out"
+            prefix = f"{label}: " if label else ""
+            lines.append(f"- {prefix}{title} -- {tail}.")
+    except Exception:
+        pass
+    return lines
+
+
+def _rivalry_watch_lines(app, team, year):
+    """League's hottest feud + this club's key on-ice flashpoints.
+
+    Complements BAD BLOOD REPORT (per-team heat detail) with the
+    league-wide picture and the year's defining incidents.
+    Never raises.
+    """
+    lines = []
+    me = getattr(team, "team_name", "")
+    try:
+        league = getattr(app, "league", None)
+        rivalries = list(getattr(league, "rivalries", None) or [])
+        best = None
+        for r in rivalries:
+            try:
+                if not isinstance(r, dict) or r.get("kind") != "team_team":
+                    continue
+                inten = _num(r.get("intensity", 0))
+                if best is None or inten > best[0]:
+                    a = str(r.get("a_name", ""))
+                    b = str(r.get("b_name", ""))
+                    if a and b:
+                        best = (inten, a, b)
+            except Exception:
+                continue
+        if best and best[0] >= 40:
+            inten, a, b = best
+            tag = "the league's fiercest feud" if {a, b} != {me} and me not in (a, b) else "your fiercest feud"
+            lines.append(f"- Hottest rivalry ({inten:.0f}): {a} vs {b} -- {tag}.")
+    except Exception:
+        pass
+    # Defining on-ice flashpoints from the ledger.
+    try:
+        from narrative_ledger import get_ledger
+        led = get_ledger(app)
+        kinds = {"brawl_game", "incident"}
+        evs = [e for e in (led.events or [])
+               if e.get("season") == year
+               and me in (e.get("teams") or [])
+               and e.get("kind") in kinds]
+        evs.sort(key=lambda e: e.get("weight", 0), reverse=True)
+        for e in evs[:2]:
+            txt = (e.get("text") or "").strip()
+            if txt:
+                txt = (txt[:110] + "...") if len(txt) > 110 else txt
+                lines.append(f"- Flashpoint: {txt}")
+    except Exception:
+        pass
+    return lines
+
+
+def _milestone_lines(app, team, year):
+    """Records broken and career achievements. Never raises."""
+    lines = []
+    try:
+        from narrative_ledger import get_ledger
+        led = get_ledger(app)
+        evs = [e for e in (led.events or [])
+               if e.get("season") == year
+               and team.team_name in (e.get("teams") or [])
+               and e.get("kind") == "milestone"]
+        evs.sort(key=lambda e: e.get("weight", 0), reverse=True)
+        for e in evs[:5]:
+            txt = (e.get("text") or "").strip()
+            if txt:
+                lines.append(f"- {txt}.")
+        if not lines:
+            return []
+    except Exception:
+        return []
+    return lines
+
+
+def _history_lines(app, team, year):
+    """Where this season sits in franchise history. Never raises."""
+    lines = []
+    try:
+        hist = getattr(app, "league_history", None)
+        seasons = list(getattr(hist, "seasons", None) or []) if hist else []
+        if not seasons:
+            return []
+        champ = prev_champ = None
+        for s in seasons:
+            try:
+                y = int(s.get("year", 0) or 0)
+            except Exception:
+                continue
+            if y == year:
+                champ = s.get("champion")
+            elif y == year - 1:
+                prev_champ = s.get("champion")
+        me = getattr(team, "team_name", "")
+        if champ and prev_champ:
+            if champ == prev_champ:
+                lines.append(f"- Back-to-back: {champ} repeat as champions.")
+            else:
+                lines.append(f"- {prev_champ}'s reign ends; {champ} crowned.")
+        elif champ:
+            lines.append(f"- {champ} lift the Cup.")
+        last_cup = None
+        for s in sorted(seasons, key=lambda s: _num(s.get("year", 0)),
+                        reverse=True):
+            if s.get("champion") == me:
+                try:
+                    last_cup = int(s.get("year", 0) or 0)
+                except Exception:
+                    last_cup = None
+                break
+        if last_cup is None:
+            lines.append("- Still chasing the franchise's first Cup.")
+        else:
+            drought = year - last_cup
+            if drought <= 0:
+                lines.append("- Champions. Enjoy it -- dynasties are rare.")
+            elif drought == 1:
+                lines.append(f"- Defending champions (won {last_cup}).")
+            else:
+                lines.append(f"- {drought} years since the {last_cup} Cup.")
+    except Exception:
+        pass
+    return lines
+
+
 def _club_board_facts(app, team, year):
     """Minimal season facts for a non-user club (Cup win flag).
 
@@ -927,6 +1127,26 @@ def build_review(app, team=None):
     blood = _rivalry_lines(app, team, year)
     if blood:
         sections.append(("BAD BLOOD REPORT", blood))
+
+    rwatch = _rivalry_watch_lines(app, team, year)
+    if rwatch:
+        sections.append(("RIVALRY WATCH", rwatch))
+
+    arcs = _storyline_lines(app, team, year)
+    if arcs:
+        sections.append(("SEASON STORYLINES", arcs))
+
+    inj = _injury_lines(app, team, year)
+    if inj:
+        sections.append(("INJURY REPORT", inj))
+
+    miles = _milestone_lines(app, team, year)
+    if miles:
+        sections.append(("MILESTONES", miles))
+
+    hist = _history_lines(app, team, year)
+    if hist:
+        sections.append(("HISTORICAL CONTEXT", hist))
 
     discipline = _discipline_lines(app, team, year)
     if discipline:
@@ -1029,11 +1249,70 @@ def _record_season_stories(app, review):
                            teams=[t.team_name], text=headline, season=year,
                            facts={"w": w, "l": l, "otl": otl,
                                   "predicted_rank": pred,
-                                  "longest_win_streak": streak})
+                                  "longest_win_streak": streak,
+                                  **_season_story_extra_facts(app, t)})
             except Exception:
                 continue
     except Exception:
         pass
+
+
+def _season_story_extra_facts(app, team):
+    """Enrich the season_story ledger event so next year's lore can
+    reference this season's injuries, arcs, milestones and feuds.
+    Never raises; returns {} on any failure."""
+    facts = {}
+    try:
+        import ir_system as _ir
+        try:
+            facts["ltir_relief"] = int(_ir.ltir_relief(team) or 0)
+        except Exception:
+            pass
+        try:
+            facts["ir_count"] = len(_ir.ir_players(team))
+            facts["ltir_count"] = len(_ir.ltir_players(team))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    try:
+        league = getattr(app, "league", None)
+        narrs = [n for n in (getattr(league, "media_narratives", None) or [])
+                 if getattr(n, "team_name", "") == getattr(team, "team_name", "")]
+        if narrs:
+            top = max(narrs, key=lambda n: float(getattr(n, "heat", 0) or 0))
+            facts["top_storyline_kind"] = str(getattr(top, "kind", "") or "")
+            facts["top_storyline"] = str(getattr(top, "title", "") or "")[:120]
+    except Exception:
+        pass
+    try:
+        from narrative_ledger import get_ledger
+        from reputation_system import get_rivalries_for
+        led = get_ledger(app)
+        me = getattr(team, "team_name", "")
+        try:
+            miles = sum(1 for e in (led.events or [])
+                        if e.get("kind") == "milestone"
+                        and me in (e.get("teams") or []))
+            facts["milestones"] = miles
+        except Exception:
+            pass
+        try:
+            league = getattr(app, "league", None)
+            rivalries = list(getattr(league, "rivalries", None) or [])
+            mine = [r for r in get_rivalries_for(rivalries, team, 1)
+                    if isinstance(r, dict) and r.get("kind") == "team_team"]
+            if mine:
+                top_r = max(mine, key=lambda r: _num(r.get("intensity", 0)))
+                other = (top_r.get("b_name") if top_r.get("a_name") == me
+                         else top_r.get("a_name"))
+                facts["hottest_rival"] = str(other or "")
+                facts["hottest_rival_heat"] = _num(top_r.get("intensity", 0))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return facts
 
 
 def _archive_review(team, review):
