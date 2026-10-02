@@ -189,5 +189,21 @@ check("save/load preserves seeded penalties",
       real_cap_data.seeded_dead_cap_total(t_ld) == 615_000
       and t_ld.real_dead_cap_seeded is True)
 
+# -- 8. Eastside trade fluidity (Chris's call 2026-10-02) ----------------------
+# Cap is NOT a trade-time veto: a deal that leaves a club over the cap
+# executes; compliance is enforced by the pre-game day gate instead.
+import trade_engine as te
+ua, pa = mkteam("UT"), mkteam("PA")
+ua.roster.extend([mkplayer(5_000_000) for _ in range(20)])   # $100M
+star_out = mkplayer(1_000_000); ua.roster.append(star_out)   # $101M
+star_in = mkplayer(9_000_000); pa.roster.append(star_in)
+res = te.execute_trade(ua, pa, [star_out], [star_in], date_str="2026-10-02")
+check("over-cap trade is NOT blocked at trade time",
+      not res.summary.startswith("BLOCKED"))
+check("over-cap trade moves assets",
+      len(res.b_gave) == 1 and len(res.a_gave) == 1)
+check("user club is over the cap after the deal",
+      scs.cap_breakdown(ua)["total"] > ua.salary_cap)
+
 print(f"\n{len(passed)} passed, {len(failed)} failed")
 sys.exit(1 if failed else 0)

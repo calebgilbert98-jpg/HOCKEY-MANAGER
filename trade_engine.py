@@ -2965,7 +2965,7 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     return _blocked(
                         f"The {getattr(a, 'year', '?')} "
                         f"{getattr(a, 'round', '?')} round pick is expired "
-                        f"-- that draft already happened. No assets moved.")
+                        f"-- that draft already happened.")
             elif a not in _all_owned:
                 _pname = getattr(a, "full_name", str(a))
                 return _blocked(
@@ -2973,8 +2973,14 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     f"or prospect list.")
 
     # R1 (roster limits): emergency fill-ins are league-exception recalls,
-    # not trade assets -- they can never be moved. And neither club may be
-    # left unable to dress a legal lineup (18 skaters + 2 goalies).
+    # not trade assets -- they can never be moved. Otherwise trades carry
+    # NO roster vetoes (Eastside-style, Chris's call 2026-10-02): clubs
+    # routinely chain moves -- deal A brings the assets that deal B flips --
+    # so a trade is never blocked for roster size. The 50-contract limit,
+    # the 23-man max, and the dressed minimum are enforced AFTER the deal
+    # by the day gates (user) and auto-compliance (AI); short lineups are
+    # auto-filled. Blocking the trade would kill legitimate multi-move
+    # strategy for no reason.
     try:
         import roster_limits as _rl
         for _src_team, _assets in ((user_team, user_assets),
@@ -2987,18 +2993,8 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     return _blocked(
                         f"{_pname} is an emergency fill-in -- league-exception "
                         f"recalls can't be traded.")
-        for (_src_team, _assets, _incoming) in (
-                (user_team, user_assets, partner_assets),
-                (partner_team, partner_assets, user_assets)):
-            _out = [a for a in (_assets or [])
-                    if not isinstance(a, DraftPick)]
-            _in = [a for a in (_incoming or [])
-                   if not isinstance(a, DraftPick)]
-            if _out and _rl.would_break_dress_minimum(_src_team, _out, _in):
-                _sname = getattr(_src_team, "team_name", "?")
-                return _blocked(
-                    f"{_sname} would be unable to dress a legal lineup (18 "
-                    f"skaters + 2 goalies) after this deal.")
+    except Exception:
+        pass
     except Exception:
         pass
 
@@ -3099,22 +3095,13 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
             return _blocked(
                 f"{pname} used his {v['detail']} to veto "
                 f"the move to {_dst.team_name}.")
-    # Cap legality -- the league office rejects cap-violating deals, for
-    # AI and user clubs alike. Retention terms are modeled: the retaining
-    # side keeps the slice as dead cap, the receiving side's hit drops.
-    _ret_map = {}
-    for _k, _v in _all_terms.items():
-        _ret_map[_k] = _v  # string form
-        try:
-            _ret_map[int(_k)] = _v  # raw-id form (_retention_adjustment)
-        except Exception:
-            pass
-    for _team, _out, _inc in ((user_team, user_assets, partner_assets),
-                              (partner_team, partner_assets, user_assets)):
-        if not _cap_ok_after(_team, _out, _inc, retention=_ret_map):
-            return _blocked(
-                f"the deal leaves {getattr(_team, 'team_name', 'a club')} "
-                f"over the salary cap.")
+    # Cap is NOT a trade-time veto (Eastside-style, Chris's call 2026-10-02):
+    # the only restriction is that cap + the 23-man active roster are
+    # sufficient before a game is played. A club may go over the cap
+    # mid-day and fix it with follow-up moves (deal A funds deal B);
+    # the day gate (_cap_compliance_blocker) enforces compliance before
+    # games, for user and AI alike. Retention terms below are still
+    # modeled and applied -- they just don't veto the deal.
     def _source_roster_type(team, player):
         # A traded player should land on the receiving club's matching
         # list: prospects stay prospects, AHLers stay AHLers -- only NHL
@@ -3149,7 +3136,6 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
             if pick not in dst_team.draft_picks[pick.year]:
                 dst_team.draft_picks[pick.year].append(pick)
             pick.current_team = dst_team.team_name
-
     for a in user_assets:
         if isinstance(a, DraftPick):
             _move_pick(a, user_team, partner_team)

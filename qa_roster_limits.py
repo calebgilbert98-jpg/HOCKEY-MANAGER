@@ -85,8 +85,19 @@ t4 = mkteam(user=True)
 for _ in range(51):
     p = mkplayer()
     (t4.roster if len(t4.roster) < 23 else t4.ahl_roster).append(p)
-ids = [b["id"] for b in rl.roster_limit_blockers(App(t4))]
-check("over-50 SPC blocks the day", "roster_limit_50" in ids)
+app4 = App(t4)
+app4.news_log = []
+app4.inbox_messages = []
+app4.current_date = datetime.date(2026, 10, 2)
+ids = [b["id"] for b in rl.roster_limit_blockers(app4)]
+check("over-50 SPC does NOT block the day (advisory only)",
+      "roster_limit_50" not in ids)
+check("over-50 SPC posts a league-office FYI",
+      any("50-contract" in getattr(m, "subject", "") for m in app4.inbox_messages))
+rl.roster_limit_blockers(app4)  # second call, same day
+check("over-50 SPC FYI fires once per day",
+      len([m for m in app4.inbox_messages
+           if "50-contract" in getattr(m, "subject", "")]) == 1)
 
 t5 = mkteam(user=True)
 fill_dressable(t5)

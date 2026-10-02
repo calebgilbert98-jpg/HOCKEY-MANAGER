@@ -209,9 +209,55 @@ def can_sign_player(player):
 
 
 # --- Day gates (user) ----------------------------------------------------------
+def _warn_spc_over_limit(app, team, s):
+    """Soft FYI when over the 50-contract NHL limit (Chris's call 2026-10-02:
+    the only HARD pre-game gates are cap compliance + the 23-man active
+    roster; the 50 SPC total is advisory). News_log + inbox, once per day.
+    Never raises, never blocks."""
+    try:
+        date = _current_date(app)
+        if getattr(team, "_spc_warn_date", None) == date:
+            return
+        team._spc_warn_date = date
+        story = (f"Roster note: {s} standard player contracts on the books "
+                 f"-- over the NHL's 50-contract limit. Not a blocker, but "
+                 f"the league office frowns on it: move contracts out when "
+                 f"you get a chance.")
+        try:
+            log = getattr(app, "news_log", None)
+            if isinstance(log, list):
+                log.append({"date": date, "story": f"📋 {story}"})
+        except Exception:
+            pass
+        try:
+            from game_classes import EmailMessage
+            msg = EmailMessage(
+                sender="League Office",
+                sender_type="System",
+                subject="Over the 50-contract limit",
+                content=(story + "\n\nThis won't stop you playing -- only "
+                         "the salary cap and the 23-man active roster are "
+                         "hard gates before a game. But a big contract "
+                         "ledger ties up flexibility."),
+                category="Roster",
+                is_important=False,
+                requires_response=False,
+                action_type="spc_over_limit_notice",
+            )
+            inbox = getattr(app, "inbox_messages", None)
+            if isinstance(inbox, list):
+                inbox.append(msg)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def roster_limit_blockers(app):
-    """Blocker dicts in the get_continue_state shape. 23-man max, 50 SPC,
-    and the dressed-lineup minimum (with a summon-fillers action)."""
+    """Blocker dicts in the get_continue_state shape. Hard pre-game gates
+    (Chris's call 2026-10-02): the 23-man active max and the dressed-lineup
+    minimum (with a summon-fillers action). The 50-contract total is
+    advisory only -- a daily FYI, never a blocker."""
     blockers = []
     try:
         team = getattr(app, "user_team", None)
@@ -231,15 +277,10 @@ def roster_limit_blockers(app):
             })
         s = spc_count(team)
         if s > SPC_LIMIT:
-            blockers.append({
-                'id': 'roster_limit_50',
-                'title': 'Over the 50-contract limit',
-                'detail': (f"{s} standard player contracts -- the NHL limit "
-                           f"is {SPC_LIMIT}. Move contracts out before "
-                           f"advancing."),
-                'action': ('Open Roster', getattr(app, 'open_roster_window',
-                                                  lambda: None)),
-            })
+            # Advisory only (Chris's call 2026-10-02): the 50-contract total
+            # is not a hard gate -- only cap + 23-man block games. Warn once
+            # per day; never block.
+            _warn_spc_over_limit(app, team, s)
         _recall_blocker_added = False
         if not can_dress_lineup(team):
             sk_need, go_need = lineup_shortfall(team)

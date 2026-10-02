@@ -7016,9 +7016,11 @@ class HockeyManagerGUI(tk.Tk):
                 blockers.append(floor_blocker)
         except Exception:
             pass
-        # R1 (roster limits, true NHL): 23-man max, 50 SPC max, and the
+        # R1 (roster limits, true NHL): the 23-man active max and the
         # dressed-lineup minimum (18+2) are hard day gates for the user --
-        # the AI side is kept compliant by ai_roster_compliance. Guarded
+        # the AI side is kept compliant by ai_roster_compliance. The 50 SPC
+        # total is advisory only (Chris's call 2026-10-02): only cap +
+        # active roster block games. Guarded
         # import so a roster_limits bug can never break day advancement.
         try:
             import roster_limits as _rl
@@ -11510,28 +11512,50 @@ class HockeyManagerGUI(tk.Tk):
     def _audit_season_slate(self):
         """SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005).
 
-        Compare every NHL club's games played against the league's
-        scheduled slate length (season_games_count, default 82 for old
-        saves). Returns [(team_name, gp, target)] for clubs short of the
-        slate -- [] when the season is whole. A club missing from the
-        standings entirely counts as 0 GP (all of its games vanished).
+        Compare every NHL club's games played against its ACTUALLY
+        SCHEDULED regular-season games (counted from league.schedule).
+        This is version-proof: an 82-game schedule expects 82 even when
+        the code default has moved to 84 (mid-save slate changes must not
+        halt a legitimately completed season). Dropped games are still
+        caught -- played < scheduled flags regardless of slate length.
+        Falls back to season_games_count when the schedule is unavailable.
+        Returns [(team_name, gp, target)] -- [] when the season is whole.
+        A club missing from the standings entirely counts as 0 GP.
         """
         shortfalls = []
         try:
             _lg = getattr(self, 'league', None)
-            # Slate length: the league's persisted value first (84 from
-            # 2026-27 on); old saves without the attribute fall back to 82.
-            # Evaluated lazily -- the self-level default must not be read
-            # unless the league lacks the attribute.
-            _target = getattr(_lg, 'season_games_count', None)
-            if _target is None:
-                _target = getattr(self, 'season_games_count', 82)
-            _target = _target or 82
             _standings = getattr(_lg, 'standings', None) or {}
             _nhl_names = {t.team_name
                           for t in (getattr(_lg, 'teams', None) or [])
                           if getattr(t, 'league_name', '')
                           == 'National Hockey League'}
+
+            # Count scheduled regular-season NHL games per team.
+            _scheduled = {}
+            try:
+                for _e in (getattr(_lg, 'schedule', None) or []):
+                    if not isinstance(_e, dict):
+                        continue
+                    if _e.get('preseason'):
+                        continue
+                    _h = _e.get('home_team')
+                    _a = _e.get('away_team')
+                    _hn = (getattr(_h, 'team_name', None)
+                           or (str(_h) if _h else None))
+                    _an = (getattr(_a, 'team_name', None)
+                           or (str(_a) if _a else None))
+                    for _nm in (_hn, _an):
+                        if _nm in _nhl_names:
+                            _scheduled[_nm] = _scheduled.get(_nm, 0) + 1
+            except Exception:
+                _scheduled = {}
+
+            # Fallback target when the schedule can't be counted.
+            _fallback = getattr(_lg, 'season_games_count', None)
+            if _fallback is None:
+                _fallback = getattr(self, 'season_games_count', 82)
+            _fallback = _fallback or 82
 
             def _gp(stats):
                 return (stats.get('W', stats.get('Wins', 0))
@@ -11540,8 +11564,9 @@ class HockeyManagerGUI(tk.Tk):
 
             for _name in sorted(_nhl_names):
                 _played = _gp(_standings.get(_name) or {})
-                if _played < _target:
-                    shortfalls.append((_name, _played, _target))
+                _expect = _scheduled.get(_name, _fallback)
+                if _played < _expect:
+                    shortfalls.append((_name, _played, _expect))
         except Exception as _e:
             print(f"Season slate audit failed (non-fatal): {_e}")
         return shortfalls
@@ -15000,6 +15025,22 @@ class HockeyManagerGUI(tk.Tk):
         # the squad's raw confidence level).
         home_goal_expectation *= self._career_morale_modifier(home_team)
         away_goal_expectation *= self._career_morale_modifier(away_team)
+
+        # In-game fatigue (team_fatigue.py): the event sim scales each
+        # shooter's shot/deke/pass volume by shift fatigue, paced by the
+        # stamina/endurance/durability blend (condition_system, canonical).
+        # The ~20% mean scoring drag is already absorbed in the calibrated
+        # base_goals; this adds ONLY the team-level variation (iron-lung
+        # rooms generate more volume than fragile ones), mean-neutral by
+        # construction so the baseline doesn't move. Guarded -> 1.0 when
+        # rosters/attributes are missing (exhibition, old saves). Applies
+        # to every team, user or AI.
+        try:
+            from team_fatigue import team_fatigue_factor as _tff
+            home_goal_expectation *= _tff(home_team)
+            away_goal_expectation *= _tff(away_team)
+        except Exception:
+            pass
         
         # Generate goals with realistic NHL distribution
         # Use round() not int() to avoid truncation bias (~0.5 goals lost per team)

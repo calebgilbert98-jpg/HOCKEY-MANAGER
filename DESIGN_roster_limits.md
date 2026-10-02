@@ -4,7 +4,9 @@
 - **23-man active roster max**: day gate for user AND AI. Emergency fillers
   exempt (NHL emergency-recall exemption). Unsigned players (no active
   contract) don't count — they're not under contract.
-- **50 SPC limit**: day gate + AI prevention. Same exemptions.
+- **50 SPC limit**: ADVISORY ONLY (Chris's call 2026-10-02) -- a daily
+  league-office FYI, never a blocker. The only hard pre-game gates are
+  cap compliance + the 23-man active roster. Same exemptions.
 - **Minimums**: the NHL has no roster minimum. Enforced at the dressed
   lineup: 18 skaters + 2 goalies must be available (not injured, not
   season-ineligible). Outbound moves (demote / waive / trade) that would
