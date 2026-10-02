@@ -236,7 +236,7 @@ def ask_heavy_sim(parent, title, detail, on_yes=None, on_answer=None):
         confirm_card = None
         cards_available = None
     if confirm_card is None or (cards_available is not None
-                                and not cards_available()):
+                                and not cards_available(parent)):
         if on_yes is not None and confirm_heavy_sim(parent, title, detail):
             on_yes()
         elif on_answer is not None:

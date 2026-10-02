@@ -7083,7 +7083,7 @@ class DraftView(ctk.CTkFrame):
             highlightbackground=ct['BORDER'])
         self._research_list.pack(side='left', fill='x', expand=True)
         self._research_list.bind(
-            '<Double-1>', lambda _e: self._research_quick_scout())
+            '<Double-1>', lambda _e=None: self._research_quick_scout())
         _rs_btns = tk.Frame(_rs_row, bg=ct['CARD'])
         _rs_btns.pack(side='left', padx=(6, 0))
         self._research_scout_btn = self._secondary_button(

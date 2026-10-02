@@ -1675,7 +1675,7 @@ class PlayoffView(ctk.CTkFrame):
         quiet=True skips the popup: used for the automatic bracket at
         season's end so the playoffs open seamlessly on the bracket.
         """
-        if not self._mp_guard("generate the playoff bracket"):
+        if not getattr(self, "_mp_guard", lambda a: True)("generate the playoff bracket"):
             return
         try:
             if not hasattr(self.app, 'league') or not self.app.league:
@@ -1760,7 +1760,7 @@ class PlayoffView(ctk.CTkFrame):
     
     def _simulate_current_round(self):
         """Simulate all series in the current round"""
-        if not self._mp_guard("simulate a playoff round"):
+        if not getattr(self, "_mp_guard", lambda a: True)("simulate a playoff round"):
             return
         if not self.playoff_bracket:
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
@@ -1839,7 +1839,7 @@ class PlayoffView(ctk.CTkFrame):
         ~69s main-thread freeze is gone). Cancel keeps every game already
         played. Headless/bulk path: synchronous, unchanged.
         """
-        if not self._mp_guard("simulate the playoffs"):
+        if not getattr(self, "_mp_guard", lambda a: True)("simulate the playoffs"):
             return
         if not self.playoff_bracket:
             messagebox.showwarning("Warning", "Please generate playoff bracket first")
