@@ -13167,7 +13167,7 @@ class HockeyManagerGUI(tk.Tk):
             # draft_year / reentries params land with the draft_worker pass;
             # only pass what the installed signature accepts so un-patched
             # generators (and old saves) keep working.
-            _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+            _gen_kwargs = {"num_prospects": 336, "quality": draft_quality}
             try:
                 import inspect as _inspect
                 _params = _inspect.signature(generate_draft_class).parameters
@@ -15421,6 +15421,33 @@ class HockeyManagerGUI(tk.Tk):
                 champion_name = getattr(champ, 'team_name', None)
         except Exception:
             pass
+        # Bucket 5 (Muck 2026-10-02): cross-season fanbase memory.
+        # Cup wins buy goodwill; missing playoffs extends the losing streak.
+        try:
+            from fan_narratives import apply_season_memory
+            playoff_teams = set()
+            try:
+                if bracket is not None:
+                    # Collect playoff participants from the bracket
+                    for rnd in getattr(bracket, 'rounds', []) or []:
+                        for series in getattr(rnd, 'series', []) or []:
+                            for t in (getattr(series, 'home_team', None),
+                                     getattr(series, 'away_team', None)):
+                                tn = getattr(t, 'team_name', getattr(t, 'name', None))
+                                if tn:
+                                    playoff_teams.add(str(tn))
+            except Exception:
+                pass
+            for _t in getattr(getattr(self, 'league', None), 'teams', []) or []:
+                try:
+                    _tn = str(getattr(_t, 'name', ''))
+                    _won = bool(champion_name and _tn == str(champion_name))
+                    _po = _tn in playoff_teams or _won
+                    apply_season_memory(_t, won_cup=_won, made_playoffs=_po)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # League-average scoring pace for the reputation recompute below.
         league_avg_ppg = 0.8
         try:
@@ -16953,7 +16980,7 @@ class HockeyManagerGUI(tk.Tk):
         # clear the list.
         draft_quality = self.get_settings().get('simulation', {}).get('draft_class_quality', 'Normal')
         from draft_generator import generate_draft_class
-        _gen_kwargs = {"num_prospects": 224, "quality": draft_quality}
+        _gen_kwargs = {"num_prospects": 336, "quality": draft_quality}  # 7 rounds x 32 = 224 picks + ~112 undrafted (Eastside-style)
         try:
             import inspect as _inspect
             _params = _inspect.signature(generate_draft_class).parameters
@@ -18552,6 +18579,14 @@ class HockeyManagerGUI(tk.Tk):
         try:
             from fan_sentiment import tick_fan_sentiment
             tick_fan_sentiment(team, current_date=self.current_date)
+        except Exception:
+            pass
+        # Bucket 5 (Muck 2026-10-02): fan-driven narratives fire on
+        # sentiment tier changes / extreme tiers (with cooldown).
+        try:
+            from fan_narratives import maybe_fire_fan_narrative
+            maybe_fire_fan_narrative(team, game_manager=self,
+                                     current_date=self.current_date)
         except Exception:
             pass
         # Training effects: morale + injury risk
