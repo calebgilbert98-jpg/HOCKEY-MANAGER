@@ -98,7 +98,32 @@ def test_rostered_player_still_counted():
     print("PASS: rostered player still updates team aggregates")
 
 
+def test_hit_stats_non_roster_no_crash():
+    """_record_hit_stats with a teamless hitter (BUG-001 traceback site)."""
+    ghost = _FakePlayer(77701)
+    sim = _make_sim(home_roster=[])
+    sim.game_stats[ghost.id] = _blank_stats()
+    sim.team_stats["Home"]['hits'] = 0
+    # hitter has stats but no team; target likewise teamless
+    sim._record_hit_stats(ghost, ghost, None, 1)
+    assert sim.team_stats["Home"]['hits'] == 0
+    print("PASS: _record_hit_stats degrades gracefully for teamless players")
+
+
+def test_shot_stats_non_roster_no_crash():
+    """_update_shot_stats with an untracked shooter (BUG-001 KeyError site)."""
+    ghost = _FakePlayer(77702)
+    sim = _make_sim(home_roster=[])
+    home = sim.home_team
+    away = sim.away_team
+    # no game_stats entry at all -- must not raise
+    sim._update_shot_stats(ghost, home, away, "low", 30.0, None)
+    print("PASS: _update_shot_stats degrades gracefully for untracked shooter")
+
+
 if __name__ == "__main__":
     test_non_roster_player_no_crash()
     test_rostered_player_still_counted()
-    print("qa_bug001_none_team_guard: 2/2 passed")
+    test_hit_stats_non_roster_no_crash()
+    test_shot_stats_non_roster_no_crash()
+    print("qa_bug001_none_team_guard: 4/4 passed")

@@ -2846,12 +2846,16 @@ class GameSim:
                 self.possession_team = attacking_team
                 self.possession_player = best_attacker
                 self._log_event(f"{best_attacker.full_name} wins the puck battle", "PUCK_RECOVERY")
-                self.game_stats[best_attacker.id]['puck_battles_won'] += 1
+                # BUG-001: best_attacker can be a non-roster on-ice player
+                # (no game_stats entry) -- degrade, never crash.
+                if best_attacker.id in self.game_stats:
+                    self.game_stats[best_attacker.id]['puck_battles_won'] += 1
             else:
                 self.possession_team = defending_team
                 self.possession_player = best_defender
                 self._log_event(f"{best_defender.full_name} clears the puck", "ZONE_CLEAR")
-                self.game_stats[best_defender.id]['puck_battles_won'] += 1
+                if best_defender.id in self.game_stats:
+                    self.game_stats[best_defender.id]['puck_battles_won'] += 1
                 # Forechecker finishes his check while the D retrieves the puck
                 self._maybe_throw_hit(attacking_team, defending_team, best_defender, 0.40)
                 return self._zone_clear(defending_team)
@@ -7650,6 +7654,10 @@ class GameSim:
         Stage 3 Enhancement: Enhanced shot stats with special teams tracking.
         """
         # Basic shot stats (Stage 1)
+        # BUG-001: shooter can be a non-roster on-ice player (no game_stats
+        # entry) -- skip stat recording rather than crashing the game.
+        if shooter.id not in self.game_stats:
+            return
         self.game_stats[shooter.id]['shots_on_goal'] += 1
         self.game_stats[shooter.id]['shot_attempts'] += 1
         self.game_stats[shooter.id]['shot_distance_total'] += distance
@@ -9728,8 +9736,12 @@ class GameSim:
             self.game_stats[target_player.id]['hits_taken'] += 1
         
         # Update team stats
-        hitting_team_name = hitting_team.team_name
-        target_team_name = target_team.team_name
+        # BUG-001: hitting/target players can be non-roster (Default Goalie,
+        # emergency filler) -> _get_player_team returns None. Degrade
+        # gracefully per the established idiom (10396); the `in
+        # self.team_stats` checks below already skip None safely.
+        hitting_team_name = hitting_team.team_name if hitting_team else None
+        target_team_name = target_team.team_name if target_team else None
         
         if hitting_team_name in self.team_stats:
             self.team_stats[hitting_team_name]['hits'] += 1
