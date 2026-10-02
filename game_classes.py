@@ -974,9 +974,10 @@ class Player:
         """Jump potential one full letter grade (C+ -> B+, B -> A, etc).
 
         The +/- modifier is preserved; the base letter rises one step.
-        At the top of the ladder (A-, A, A+) there is nowhere to go.
-        Also nudges the numeric potential +8 to match the new grade.
-        Returns (bumped, old_grade, new_grade).
+        At the top of the ladder there is no full grade left, so it
+        climbs one rung instead: A- -> A, A -> A+. Only A+ has nowhere
+        to go. Also nudges the numeric potential +8 to match the new
+        grade. Returns (bumped, old_grade, new_grade).
         """
         try:
             cur = (getattr(self, "potential_grade", "") or "").strip().upper()
@@ -992,15 +993,23 @@ class Player:
             new_base = _up.get(base)
             if new_base is None:
                 return False, cur, cur
-            if new_base == "A" and base == "A":
-                return False, cur, cur  # already at the top
-            new_grade = new_base + mod
-            # Validate against the ladder; fall back to base if the
-            # modifier combo isn't on it (e.g. F+ which doesn't exist).
-            if new_grade not in self.POTENTIAL_LADDER:
-                new_grade = new_base
-            if new_grade not in self.POTENTIAL_LADDER:
-                return False, cur, cur
+            if base == "A":
+                # Top of the ladder: climb one rung instead of a full
+                # grade (A- -> A, A -> A+). A+ is already the ceiling.
+                if cur == "A+":
+                    return False, cur, cur
+                _rung = {"A-": "A", "A": "A+"}
+                new_grade = _rung.get(cur, cur)
+                if new_grade == cur:
+                    return False, cur, cur
+            else:
+                new_grade = new_base + mod
+                # Validate against the ladder; fall back to the bare base
+                # if the modifier combo isn't on it (e.g. F+).
+                if new_grade not in self.POTENTIAL_LADDER:
+                    new_grade = new_base
+                if new_grade not in self.POTENTIAL_LADDER:
+                    return False, cur, cur
             self.potential_grade = new_grade
             try:
                 self.potential = min(100, int(getattr(self, "potential", 50) or 50) + 8)
