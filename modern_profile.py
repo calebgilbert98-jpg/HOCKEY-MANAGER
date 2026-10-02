@@ -560,6 +560,17 @@ class PlayerProfile(InGamePopup):
                                  fg=AppColors.ACCENT)
             pos_pill.pack(side="left", padx=(0, 8))
 
+            # Archetype pill (Muck 2026-10-02: show archetype on player cards)
+            try:
+                _arch = getattr(self.player, 'archetype', None)
+                if _arch:
+                    arch_pill = PillBadge(pills, text=str(_arch),
+                                         bg=AppColors.BG_ELEVATED,
+                                         fg=AppColors.TEXT_PRIMARY)
+                    arch_pill.pack(side="left", padx=(0, 8))
+            except Exception:
+                pass
+
             age = getattr(self.player, 'age', '?')
             age_pill = PillBadge(pills, text=f"Age {age}",
                                  bg=AppColors.BG_ELEVATED,
