@@ -928,7 +928,7 @@ class GameSim:
         # Enhanced stats tracking for Stages 1, 2 & 3
         # BUG-003: defaultdict so untracked on-ice players degrade,
         # never crash the batch sim. `in` checks are unaffected.
-        self.game_stats = collections.defaultdict(_new_player_game_stats)
+        self.game_stats = defaultdict(_new_player_game_stats)
         for p in home_team.roster + away_team.roster:
             self.game_stats[p.id] = _new_player_game_stats(p)
         
