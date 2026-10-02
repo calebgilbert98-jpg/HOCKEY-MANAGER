@@ -348,8 +348,8 @@ def maybe_fire_fan_narrative(team: Any, game_manager: Any = None,
 
         # Deliver via headlines system
         try:
-            from headlines import build_headline
-            msg = build_headline(
+            from headlines import make_headline
+            msg = make_headline(
                 "fan_narrative",
                 game_date=current_date,
                 headline=narrative["headline"],
