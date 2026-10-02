@@ -14,12 +14,13 @@ import dressing_room as dr
 
 
 def make_player(name, nat="Canada", tenure="4+ years", letter="",
-                leadership=60, morale=70, pid=None):
+                leadership=60, morale=70, pid=None, reputation=40):
     return SimpleNamespace(
         id=pid if pid is not None else name,
         full_name=name, name=name,
         nationality=nat, team_tenure=tenure,
         captaincy=letter, leadership=leadership, morale=morale,
+        reputation=reputation,
         stats=SimpleNamespace(games_played=20),
     )
 

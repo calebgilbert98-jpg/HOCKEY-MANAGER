@@ -641,6 +641,236 @@ def store_fight(sim: Any, fighter_a: Any, team_a: Any, fighter_b: Any,
 
 
 # ---------------------------------------------------------------------------
+# Fight consequences (D33, Wave D): fights have teeth now.
+# ---------------------------------------------------------------------------
+# Before Wave D, a fight resolved (winner/loser/draw) and nothing happened
+# after. Now: injury risk via the SHARED injury path (injury_data.apply_injury
+# -- never a separate one, per B17/B18), suspension risk for the instigator
+# of egregious fights (DoPS pattern), and fines into the league media_fines
+# ledger (Wave C D36). All additive, never raises.
+
+# Injury odds per fight (design, bounded): most fighters walk away, but
+# bare-knuckle hockey hurts. Losers and knockdown victims run hotter.
+_FIGHT_INJURY_BASE = 0.06
+_FIGHT_INJURY_LOSER_ADD = 0.06
+_FIGHT_INJURY_KNOCKDOWN_ADD = 0.08
+
+# Fine bands (design): the league fines the instigator of egregious fights.
+# Repeat offenders pay more -- the ledger is performative (no cap teeth),
+# per Muck's D36 call.
+_FIGHT_FINE_FIRST = 2500
+_FIGHT_FINE_REPEAT = 5000
+_FIGHT_FINE_EGREGIOUS = 10000
+
+
+def _fight_prior_fights(player: Any) -> int:
+    """Repeat-fighter count from controversy_history (fight events)."""
+    try:
+        hist = getattr(player, "controversy_history", None) or []
+        return sum(1 for e in hist
+                   if isinstance(e, dict) and e.get("type") == "fight")
+    except Exception:
+        return 0
+
+
+def _fight_prior_suspensions(player: Any) -> int:
+    """Repeat-offender count from controversy_history (suspensions)."""
+    try:
+        hist = getattr(player, "controversy_history", None) or []
+        return sum(1 for e in hist
+                   if isinstance(e, dict) and e.get("type") == "suspension")
+    except Exception:
+        return 0
+
+
+def _roll_fight_injury_spec(loser: bool, knockdown: bool) -> Optional[Dict[str, Any]]:
+    """Injury spec for a hurt fighter, or None if he walks away.
+
+    Uses the shared grounded tables (region/type) -- the spec feeds the
+    SHARED apply_injury path, never a fight-specific one.
+    """
+    try:
+        import injury_data as _ij
+    except Exception:
+        return None
+    try:
+        p = _FIGHT_INJURY_BASE
+        if loser:
+            p += _FIGHT_INJURY_LOSER_ADD
+        if knockdown:
+            p += _FIGHT_INJURY_KNOCKDOWN_ADD
+        if random.random() >= p:
+            return None
+        # Severity: fights are 1-4 games; knockdowns can stretch to 6.
+        games = random.randint(1, 4)
+        if knockdown and random.random() < 0.35:
+            games = random.randint(4, 6)
+        # Concussion risk: real in fights, hotter on knockdowns.
+        conc_p = 0.10 if knockdown else 0.04
+        if random.random() < conc_p:
+            cg = _ij.concussion_games(None)
+            return {"games": max(games, cg), "type": "Concussion",
+                    "region": "HEAD", "concussion": True}
+        region = _ij._roll_region()
+        type_label = random.choice(
+            _ij.REGION_TYPES.get(region, _ij.REGION_TYPES.get("OTHER", ["Bruise"])))
+        return {"games": games, "type": type_label, "region": region,
+                "concussion": False}
+    except Exception:
+        return None
+
+
+def apply_fight_consequences(sim: Any, fighter_a: Any, team_a: Any,
+                            fighter_b: Any, team_b: Any,
+                            winner: Any, loser: Any, method: str,
+                            instigator: Any = None,
+                            league: Any = None) -> Dict[str, Any]:
+    """D33: a resolved fight now has consequences.
+
+    - Injury: each fighter rolls (loser + knockdown = higher risk) via the
+      SHARED injury_data.apply_injury path.
+    - Suspension: the instigator of an egregious fight (repeat offender,
+      injured victim, star victim) can sit, DoPS pattern.
+    - Fine: egregious fights hit league.media_fines (Wave C D36 ledger).
+
+    instigator: the fighter who started it (None = unknown, no suspension/
+    fine risk beyond the base). league: for the fines ledger (None = skip
+    fines gracefully). Returns a summary dict. Never raises.
+    """
+    out: Dict[str, Any] = {"injuries": [], "suspension": None, "fine": None}
+    try:
+        lg = league if league is not None else getattr(sim, "league", None)
+        game_date = str(getattr(sim, "game_date", "") or "")[:10]
+        knockdown = (str(method or "").lower() == "knockdown")
+
+        # -- Injuries (shared path) --
+        try:
+            import injury_data as _ij
+            for fighter, team, is_loser in (
+                    (fighter_a, team_a, loser is fighter_a),
+                    (fighter_b, team_b, loser is fighter_b)):
+                if fighter is None:
+                    continue
+                spec = _roll_fight_injury_spec(is_loser, knockdown)
+                if spec is None:
+                    continue
+                games = _ij.apply_injury(fighter, spec, team)
+                out["injuries"].append({
+                    "name": getattr(fighter, "full_name", "?"),
+                    "type": spec["type"], "games": games,
+                })
+                # The room notices: record the controversy.
+                try:
+                    from reputation_system import record_controversy_event
+                    record_controversy_event(
+                        fighter, "fight", 4,
+                        f"Hurt in a fight ({spec['type']}, ~{games} games)",
+                        game_date=game_date or None)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # -- Suspension (instigator only; DoPS pattern) --
+        # The responder answered the bell -- the league punishes the one
+        # who started an egregious fight.
+        try:
+            inst = instigator if instigator is not None else fighter_a
+            if inst is not None:
+                victim = fighter_b if inst is fighter_a else fighter_a
+                prior_fights = _fight_prior_fights(inst)
+                prior_susp = _fight_prior_suspensions(inst)
+                victim_injured = any(
+                    i["name"] == getattr(victim, "full_name", "?")
+                    for i in out["injuries"]) if victim is not None else False
+                try:
+                    star_victim = bool(
+                        victim is not None and victim.overall_rating() >= 90)
+                except Exception:
+                    star_victim = False
+                # Egregious = repeat fighter + (injury | star victim | knockdown)
+                egregious = (prior_fights >= 2 and
+                             (victim_injured or star_victim or knockdown))
+                p = 0.0
+                if egregious:
+                    p = (0.25 + 0.15 * min(prior_fights, 4)
+                         + (0.15 if victim_injured else 0.0)
+                         + (0.10 if star_victim else 0.0)
+                         + 0.15 * min(prior_susp, 2))
+                    p = min(p, 0.85)
+                if p > 0 and random.random() < p:
+                    games = 1
+                    if victim_injured:
+                        games += 1
+                    if star_victim:
+                        games += 1
+                    games += min(prior_susp, 3)
+                    games = min(games, 8)
+                    inst.suspension_games_remaining = games
+                    inst.suspension_reason = (
+                        f"Instigating a fight"
+                        + (f" injuring {getattr(victim, 'full_name', '?')}"
+                           if victim_injured else ""))
+                    inst.suspended_today = True
+                    try:
+                        from reputation_system import record_controversy_event
+                        record_controversy_event(
+                            inst, "suspension", min(10, 4 + games),
+                            f"Suspended {games} games for instigating a fight"
+                            + (" injuring "
+                               f"{getattr(victim, 'full_name', '?')}"
+                               if victim_injured else ""),
+                            game_date=game_date or None)
+                    except Exception:
+                        pass
+                    out["suspension"] = {
+                        "name": getattr(inst, "full_name", "?"),
+                        "games": games,
+                    }
+        except Exception:
+            pass
+
+        # -- Fine (egregious fights; Wave C D36 ledger) --
+        try:
+            if lg is not None and (out["suspension"] is not None or
+                                   any(i for i in out["injuries"])):
+                inst = instigator if instigator is not None else fighter_a
+                if inst is not None:
+                    prior_fights = _fight_prior_fights(inst)
+                    if out["suspension"] is not None:
+                        amount = _FIGHT_FINE_EGREGIOUS
+                    elif prior_fights >= 1:
+                        amount = _FIGHT_FINE_REPEAT
+                    else:
+                        amount = _FIGHT_FINE_FIRST
+                    iname = getattr(inst, "full_name", "?")
+                    iteam = getattr(team_a if inst is fighter_a else team_b,
+                                    "team_name", "")
+                    reason = "instigating a fight" + (
+                        " resulting in injury" if out["injuries"] else "")
+                    try:
+                        fines = getattr(lg, "media_fines", None)
+                        if fines is None:
+                            lg.media_fines = fines = []
+                        fines.append({
+                            "date": game_date,
+                            "name": iname,
+                            "team": iteam,
+                            "amount": amount,
+                            "reason": reason,
+                        })
+                        out["fine"] = {"name": iname, "amount": amount,
+                                       "reason": reason}
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Live heat decay
 # ---------------------------------------------------------------------------
 

@@ -4422,6 +4422,38 @@ class GameSim:
             shot_location, distance, shot_type, attacking_team, shooter,
             pressure_dist=pressure_dist, pressurer=pressurer)
 
+        # -- 6v5 scramble tilt (workstream B, 2026-09-30) ---------------
+        # Generation side only: the six-man unit's net-front chaos
+        # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+        # earns grade A. Finishing constants/clamps untouched.
+        _tilt65 = 1.0
+        try:
+            if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                from six_on_five import grade_tilt_ctx as _gtc65
+                _opp65g = (self.away_team if attacking_team is self.home_team
+                           else self.home_team)
+                _tilt65 = _gtc65(self._get_on_ice(attacking_team),
+                                 self._get_on_ice(_opp65g)
+                                 ).get("six_on_five_tilt", 1.0)
+        except Exception:
+            pass
+        # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+        # Generation side only: 3v3 OT's open ice tilts grade-A earning
+        # by the on-ice units' skating/chance-creation. The live lever
+        # for (e), alongside the volume bump in
+        # _apply_situation_modifiers.
+        _tilt3v3 = 1.0
+        try:
+            if getattr(self, "_ot_sudden_death", False) and not getattr(
+                    self, "is_playoff", False):
+                from six_on_five import ot_open_ice_tilt as _ot33
+                _opp3v3 = (self.away_team if attacking_team is self.home_team
+                           else self.home_team)
+                _tilt3v3 = _ot33(self._get_on_ice(attacking_team),
+                                 self._get_on_ice(_opp3v3))
+        except Exception:
+            pass
+
         # Re-grade with full info (shot type + pressure now known) -- the
         # shared A/B/C decision both engines use.
         chance_grade = self._roll_chance_grade(
@@ -6965,7 +6997,74 @@ class GameSim:
                 "FIGHT")
         else:
             self._log_event(f"{player.full_name} drops the gloves!", "FIGHT")
-        self._emit_pbp("fight", player=player, team=team.team_name)
+
+        # W5: fights have winners now, and winning matters. The winner's
+        # bench gets a short-term spark (explicit finishing lift, bigger in
+        # heated/rivalry games); the barn's intensity rises with the heat;
+        # and the fight is STORED -- rivalry record, game fight log, and a
+        # deeper grudge floor so the feud decays slower.
+        _winner, _loser, _method = player, opponent, "decision"
+        _winner_team = team
+        try:
+            _w, _l, _m = _physicality.fight_outcome(player, opponent)
+            _winner, _loser, _method = _w, _l, _m
+            _wt = self._get_player_team(_winner)
+            if _wt is not None:
+                _winner_team = _wt
+        except Exception:
+            pass
+        try:
+            _rheat = _physicality.rivalry_heat_between(
+                self.rivalries, self.home_team, self.away_team)
+            _heated = _rheat >= 40.0 or self._live_tension() >= 65.0
+            _physicality.apply_fight_spark(self, _winner_team, heated=_heated)
+            _physicality.store_fight(self, player, team, opponent,
+                                     opposing_team, _winner, _method)
+            # D33 (Wave D): fights have consequences now -- injury risk via
+            # the shared path, suspension risk for egregious instigators,
+            # fines into the league ledger. The instigator is `player`
+            # (picked by pick_fight_instigator); the opponent answered.
+            try:
+                _cons = _physicality.apply_fight_consequences(
+                    self, player, team, opponent, opposing_team,
+                    _winner, _loser, _method, instigator=player,
+                    league=getattr(self, "league", None))
+                for _inj in (_cons.get("injuries") or []):
+                    self._log_event(
+                        f"{_inj['name']} is hurt in the fight "
+                        f"({_inj['type']}, ~{_inj['games']} games) -- "
+                        f"he'll miss time.", "INJURY")
+                _susp = _cons.get("suspension")
+                if _susp:
+                    self._log_event(
+                        f"{_susp['name']} suspended {_susp['games']} games "
+                        f"for instigating the fight.", "SUSPENSION")
+                _fine = _cons.get("fine")
+                if _fine:
+                    self._log_event(
+                        f"{_fine['name']} fined ${_fine['amount']:,} "
+                        f"({_fine['reason']}).", "FINE")
+            except Exception:
+                pass
+            if opponent is not None:
+                _wname = getattr(_winner, "full_name", "?")
+                self._log_event(
+                    f"{_wname} takes the fight ({_method}) -- the "
+                    f"{_winner_team.team_name} bench is buzzing.", "FIGHT")
+        except Exception:
+            pass
+        try:
+            for _fp in (player, opponent):
+                if _fp is not None and getattr(_fp, "id", None) in self.game_stats:
+                    self.game_stats[_fp.id]['fights'] = \
+                        self.game_stats[_fp.id].get('fights', 0) + 1
+        except Exception:
+            pass
+        self._emit_pbp("fight", player=player, team=team.team_name,
+                       opponent=getattr(opponent, "full_name", None),
+                       winner=getattr(_winner, "full_name", None),
+                       method=_method,
+                       winner_team=getattr(_winner_team, "team_name", ""))
         try:
             from momentum import observe as _mom_observe4
             _mom_observe4(self, "fight", team)
