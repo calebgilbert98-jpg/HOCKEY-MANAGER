@@ -3359,8 +3359,8 @@ class SaveLoadView(ctk.CTkFrame):
                                     style='Content.TLabel')
         instruction_label.pack(pady=(0, 10))
 
-        # File list
-        self._create_file_list(parent, "Available Save Files")
+        # File list (enhanced: has the filepath column _refresh_file_list needs)
+        self._create_enhanced_file_list(parent, "Available Save Files")
 
         # Load buttons
         load_buttons_frame = ttk.Frame(parent, style='Content.TFrame')
