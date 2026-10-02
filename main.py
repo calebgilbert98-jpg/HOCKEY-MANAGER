@@ -3855,6 +3855,11 @@ class HockeyManagerGUI(tk.Tk):
                               self.open_morale_window,
                               tooltip="Morale: team chemistry, hierarchy, and player attitudes")
 
+        # GM Relationships button (Wave B D48: stature, respect, heat, trends)
+        self._create_nav_pill(left_menu_frame, "GM Relations",
+                              self.open_gm_relationships_window,
+                              tooltip="GM Relationships: what every rival GM thinks of you")
+
         # Dressing Room button (module 03: social groups, talks, cascades)
         self._create_nav_pill(left_menu_frame, "Dressing Room",
                               self.open_dressing_room,
@@ -3974,6 +3979,7 @@ class HockeyManagerGUI(tk.Tk):
             'finances': self.open_finances_window,
             'staff': self.open_staff_management_window,
             'morale': self.open_morale_window,
+            'gm_relationships': self.open_gm_relationships_window,
             'media': self.open_media_center,
             'playoffs': self.open_playoffs_window,
             'development': self.open_development_window,
@@ -16993,6 +16999,19 @@ class HockeyManagerGUI(tk.Tk):
     def open_morale_window(self):
         """Open the Team Morale tab (chemistry, hierarchy, social groups)."""
         return self.show_screen('morale', 'Team Morale', MoraleView)
+
+    def open_gm_relationships_window(self):
+        """Open the GM Relationships dashboard (stature, respect, heat,
+        trend arrows for all 31 rival GMs). Read-only."""
+        from gm_relationships_window import GMRelationshipsView
+        try:
+            league = getattr(self, 'league', None)
+            user_team = getattr(self, 'user_team', None)
+            return self.show_screen(
+                'gm_relationships', 'GM Relationships', GMRelationshipsView,
+                league=league, user_team=user_team)
+        except Exception:
+            return None
 
     def open_dressing_room(self):
         """Open the Dressing Room screen (module 03: hierarchy, social
