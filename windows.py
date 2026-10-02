@@ -329,8 +329,7 @@ class RosterView(ctk.CTkFrame):
                                   'prospects': 'Club View'}
         self._club_view_columns = {}
         self._roster_view_ctx_obj = None  # lazy ViewContext(mode='full')
-        self._roster_filterbars = {}
-        self._roster_view_selectors = {}
+        self._roster_panels = {}
 
         # Current tab names (counts change -> tabview.rename)
         self._tab_names = {}
@@ -1154,21 +1153,17 @@ class RosterView(ctk.CTkFrame):
             self._secondary_button(actions, text="Rights Watch",
                                    command=self.open_rights_watch).pack(side="left", padx=3)
 
-        # ---- FM/Eastside-style view selector (additive) ----
-        from player_view_ui import ViewSelector
-        selector = ViewSelector(
-            actions, default_label="Club View",
-            initial=self._roster_view_name.get(roster_type, "Club View"),
-            on_change=lambda name, rt=roster_type: self._set_roster_view(rt, name))
-        selector.pack(side="left", padx=(12, 3))
-        self._roster_view_selectors[roster_type] = selector
-
-        # ---- Elite filter bar (additive): text search + attribute thresholds
-        from player_filters import FilterBar
-        filterbar = FilterBar(parent,
-                              on_change=self._refresh_all_roster_tabs)
-        filterbar.pack(fill="x", padx=10, pady=(6, 0))
-        self._roster_filterbars[roster_type] = filterbar
+        # ---- Unified Views & Filters panel (Eastside-style): view buttons
+        # + inline filter controls in one solidified section. Replaces the
+        # separate view combobox + filter bar.
+        from player_view_ui import ViewsFiltersPanel
+        panel = ViewsFiltersPanel(
+            parent, default_label="Club View",
+            initial_view=self._roster_view_name.get(roster_type, "Club View"),
+            on_view_change=lambda name, rt=roster_type: self._set_roster_view(rt, name),
+            on_filter_change=self._refresh_all_roster_tabs)
+        panel.pack(fill="x", padx=10, pady=(6, 0))
+        self._roster_panels[roster_type] = panel
 
     # ------------------------------------------------------------------
     # Player views (FM/Eastside-style column presets)
@@ -1319,7 +1314,7 @@ class RosterView(ctk.CTkFrame):
             pass
         # Elite filter bar (text search + attribute thresholds), if present.
         if roster_type is not None:
-            fb = self._roster_filterbars.get(roster_type)
+            fb = self._roster_panels.get(roster_type)
             if fb is not None:
                 pf = fb.get_filter()
                 if not pf.is_empty() and not pf.matches(player, self._roster_view_ctx()):
@@ -1340,7 +1335,7 @@ class RosterView(ctk.CTkFrame):
         except Exception:
             pass
         try:
-            for fb in (getattr(self, '_roster_filterbars', None) or {}).values():
+            for fb in (getattr(self, '_roster_panels', None) or {}).values():
                 if fb is not None and not fb.get_filter().is_empty():
                     return True
         except Exception:
@@ -1517,7 +1512,7 @@ class RosterView(ctk.CTkFrame):
             set_tree_empty_state(tree, "No players on this roster")
 
     def _update_filterbar_count(self, tree, players, roster_type):
-        fb = self._roster_filterbars.get(roster_type)
+        fb = self._roster_panels.get(roster_type)
         if fb is not None:
             try:
                 fb.set_count(len(tree.get_children()), len(players))
@@ -6767,22 +6762,18 @@ class ScoutingView(ctk.CTkFrame):
                               "Goalies", "Top 50", "Not Scouted")],
             self._set_prospect_filter, self.app.FONT_FAMILY)
         self._paint_prospect_pills()
-        # FM/Eastside-style view selector (column presets) -- additive.
-        from player_view_ui import ViewSelector
         self._scout_view_name = "Scouting Board"
         self._scout_view_ctx = None
         self._scout_sort_col = None
         self._scout_sort_rev = False
-        self._scout_selector = ViewSelector(
-            top_row, default_label="Scouting Board",
-            on_change=self._set_scout_view)
-        self._scout_selector.pack(side='left', padx=4)
-        # Elite filter bar (text search + attribute thresholds) -- additive.
-        # It replaces the old single search box (kept as fallback below).
-        from player_filters import FilterBar
-        self._scout_filterbar = FilterBar(center,
-                                          on_change=self._refresh_prospects)
-        self._scout_filterbar.pack(fill='x', pady=(0, 4))
+        # Unified Views & Filters panel (Eastside-style) -- replaces the
+        # separate view combobox + filter bar.
+        from player_view_ui import ViewsFiltersPanel
+        self._scout_panel = ViewsFiltersPanel(
+            center, default_label="Scouting Board",
+            on_view_change=self._set_scout_view,
+            on_filter_change=self._refresh_prospects)
+        self._scout_panel.pack(fill='x', pady=(0, 4))
 
         self.prospects_tree = self.app._create_treeview(
             center, {'rank': ('#', 36), 'name': ('Name', 140), 'pos': ('Pos', 40),
@@ -7015,7 +7006,7 @@ class ScoutingView(ctk.CTkFrame):
         # Elite filter bar: text search + attribute thresholds.
         # Thresholds evaluate through the scout-perception lens, so a
         # barely-scouted prospect filters on what you actually know.
-        fb = getattr(self, '_scout_filterbar', None)
+        fb = getattr(self, '_scout_panel', None)
         if fb is not None:
             pf = fb.get_filter()
             fq = (pf.text or "").lower().strip()
@@ -7122,7 +7113,7 @@ class ScoutingView(ctk.CTkFrame):
             values = [column_text(c, p, ctx) for c in cols]
             item = tree.insert('', 'end', values=values)
             tm[item] = p
-        fb = getattr(self, '_scout_filterbar', None)
+        fb = getattr(self, '_scout_panel', None)
         if fb is not None:
             try:
                 total = len(getattr(self.app.league, 'draft_prospects', [])

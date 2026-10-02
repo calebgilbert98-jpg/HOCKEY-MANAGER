@@ -18,13 +18,26 @@ def _ensure_view_styles():
         _ensure_filterbar_styles()
     except Exception:
         pass
+    # Active view button: accent-tinted so the current view is obvious.
+    try:
+        from tkinter import ttk as _ttk
+        _style = _ttk.Style()
+        _style.configure("FilterBar.Active.TButton",
+                         background="#0e4f4a", foreground="#ffffff",
+                         font=("Segoe UI", 10, "bold"),
+                         relief="flat", padding=(8, 4))
+        _style.map("FilterBar.Active.TButton",
+                   background=[("active", "#137a70")])
+    except Exception:
+        pass
 
 
-class ViewSelector(ttk.Frame):
-    """'View:' label + preset combobox + Manage button.
+class ViewButtonRow(ttk.Frame):
+    """Row of toggle buttons for view selection (Eastside-style).
 
-    The first entry is always ``default_label`` (the screen's native column
-    set); the rest come from player_views.list_view_names().
+    One click switches the view -- no dropdown, no selection event to
+    misfire, no popup. The active view is accent-highlighted. Custom
+    views appear as extra buttons; refresh() rebuilds the row.
     """
 
     def __init__(self, parent, default_label="Club View", initial=None,
@@ -34,142 +47,112 @@ class ViewSelector(ttk.Frame):
         super().__init__(parent, **kw)
         self._default_label = default_label
         self._on_change = on_change
-        ttk.Label(self, text="View:",
-                  style="FilterBar.TLabel").pack(side="left", padx=(0, 4))
-        self._var = tk.StringVar(value=initial or default_label)
-        self._combo = ttk.Combobox(self, textvariable=self._var,
-                                   state="readonly", width=16)
-        self._combo.pack(side="left")
-        self._combo.bind("<<ComboboxSelected>>", self._picked)
-        ttk.Button(self, text="Manage\u2026", style="FilterBar.TButton",
-                   command=self._open_editor).pack(side="left", padx=(6, 0))
+        self._current = initial or default_label
+        self._buttons = {}  # name -> ttk.Button
+        ttk.Label(self, text="View:", style="FilterBar.TLabel").pack(
+            side="left", padx=(0, 6))
+        self._btn_frame = ttk.Frame(self, style="FilterBar.TFrame")
+        self._btn_frame.pack(side="left", fill="x", expand=True)
         self.refresh()
 
     def refresh(self):
+        """Rebuild the button row (picks up new/deleted custom views)."""
         from player_views import list_view_names
         names = [self._default_label] + list_view_names()
-        self._combo.configure(values=names)
-        if self._var.get() not in names:
-            self._var.set(self._default_label)
+        for w in self._btn_frame.winfo_children():
+            w.destroy()
+        self._buttons = {}
+        for name in names:
+            # Shorten long labels for button fit; full name in tooltip-ish.
+            short = name.replace(" View", "").replace(" + ", "+")
+            btn = ttk.Button(self._btn_frame, text=short,
+                             style="FilterBar.TButton",
+                             command=lambda n=name: self._picked(n))
+            btn.pack(side="left", padx=2, pady=2)
+            self._buttons[name] = btn
+        if self._current not in names:
+            self._current = self._default_label
+        self._set_active(self._current)
+
+    def _set_active(self, name):
+        self._current = name
+        for n, btn in self._buttons.items():
+            try:
+                btn.configure(style="FilterBar.Active.TButton"
+                            if n == name else "FilterBar.TButton")
+            except Exception:
+                pass
 
     @property
     def current(self):
-        return self._var.get()
+        return self._current
 
-    def _picked(self, _event=None):
+    def set_view(self, name):
+        """Programmatic selection (e.g. restoring a saved view)."""
+        if name in self._buttons:
+            self._picked(name)
+
+    def _picked(self, name):
+        self._set_active(name)
         if callable(self._on_change):
             try:
-                self._on_change(self._var.get())
+                self._on_change(name)
             except Exception:
                 pass
 
-    def _open_editor(self):
-        open_view_editor(self, on_saved=self._editor_saved)
 
-    def _editor_saved(self, name):
-        self.refresh()
-        self._var.set(name)
-        self._picked()
+class ViewsFiltersPanel(ttk.Frame):
+    """Solidified Eastside-style panel: view buttons + filter bar in one.
 
+    A single titled section holding the :class:`ViewButtonRow` (top) and
+    the elite :class:`FilterBar` (bottom). No popups, no dialogs --
+    everything the user needs to slice the player list lives here.
+    Delegates the filter API (get_filter/set_count/clear) to the bar.
+    """
 
-def open_view_editor(parent, on_saved=None):
-    """Non-modal custom-view editor: name + grouped column checklist."""
-    from player_views import (COLUMN_DEFS, VIEWS, get_view_columns,
-                              save_custom_view, delete_custom_view,
-                              load_custom_views)
+    def __init__(self, parent, default_label="Club View", initial_view=None,
+                 on_view_change=None, on_filter_change=None, **kw):
+        _ensure_view_styles()
+        kw.setdefault("style", "FilterBar.TFrame")
+        super().__init__(parent, **kw)
+        self._on_view_change = on_view_change
 
-    dlg = tk.Toplevel(parent)
-    dlg.title("Manage views")
-    try:
-        dlg.transient(parent.winfo_toplevel())
-    except Exception:
-        pass
-    # Non-modal: the screen stays usable underneath.
-    dlg.geometry("560x520")
+        # Title
+        ttk.Label(self, text="Views & Filters",
+                  style="FilterBar.TLabel",
+                  font=("Segoe UI", 10, "bold")).pack(anchor="w",
+                                                      padx=8, pady=(6, 2))
+        # View buttons
+        self.view_row = ViewButtonRow(
+            self, default_label=default_label, initial=initial_view,
+            on_change=self._view_picked)
+        self.view_row.pack(fill="x", padx=8, pady=(0, 4))
 
-    top = ttk.Frame(dlg, padding=12)
-    top.pack(fill="x")
-    ttk.Label(top, text="View name:").pack(side="left")
-    name_var = tk.StringVar()
-    ttk.Entry(top, textvariable=name_var, width=28).pack(side="left", padx=6)
+        # Filter bar (search + inline add + chips + count)
+        from player_filters import FilterBar
+        self.filter_bar = FilterBar(self, on_change=on_filter_change)
+        self.filter_bar.pack(fill="x", padx=8, pady=(0, 6))
 
-    # Existing custom views (delete)
-    mid = ttk.Frame(dlg, padding=(12, 0))
-    mid.pack(fill="x")
-    ttk.Label(mid, text="Saved views:").pack(side="left")
-    custom_names = [n for n in load_custom_views() if n not in VIEWS]
-    saved_var = tk.StringVar()
-    saved_combo = ttk.Combobox(mid, textvariable=saved_var,
-                               values=custom_names, state="readonly",
-                               width=24)
-    saved_combo.pack(side="left", padx=6)
-
-    def _delete_saved():
-        n = saved_var.get()
-        if n:
-            delete_custom_view(n)
-            dlg.destroy()
-            open_view_editor(parent, on_saved=on_saved)
-
-    ttk.Button(mid, text="Delete", command=_delete_saved).pack(side="left")
-
-    # Scrollable grouped checklist
-    body = ttk.Frame(dlg, padding=(12, 6))
-    body.pack(fill="both", expand=True)
-    canvas = tk.Canvas(body, highlightthickness=0)
-    vsb = ttk.Scrollbar(body, orient="vertical", command=canvas.yview)
-    inner = ttk.Frame(canvas)
-    inner.bind("<Configure>",
-               lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
-    canvas.create_window((0, 0), window=inner, anchor="nw")
-    canvas.configure(yscrollcommand=vsb.set)
-    canvas.pack(side="left", fill="both", expand=True)
-    vsb.pack(side="right", fill="y")
-
-    groups = {}
-    for k, d in COLUMN_DEFS.items():
-        groups.setdefault(d.group, []).append((k, d.header))
-    check_vars = {}
-    for gname in sorted(groups):
-        ttk.Label(inner, text=gname,
-                  font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(8, 2))
-        grid = ttk.Frame(inner)
-        grid.pack(anchor="w", fill="x")
-        for i, (k, header) in enumerate(sorted(groups[gname],
-                                               key=lambda x: x[1].lower())):
-            var = tk.BooleanVar(value=False)
-            check_vars[k] = var
-            ttk.Checkbutton(grid, text=header, variable=var).grid(
-                row=i // 3, column=i % 3, sticky="w", padx=(0, 12))
-
-    err_var = tk.StringVar(value="")
-    ttk.Label(dlg, textvariable=err_var, foreground="#e5484d").pack()
-
-    def _load_into_editor(_event=None):
-        n = saved_var.get()
-        cols = get_view_columns(n) or []
-        for k, var in check_vars.items():
-            var.set(k in cols)
-        name_var.set(n)
-
-    saved_combo.bind("<<ComboboxSelected>>", _load_into_editor)
-
-    def _save():
-        cols = [k for k, var in check_vars.items() if var.get()]
-        try:
-            save_custom_view(name_var.get(), cols)
-        except ValueError as e:
-            err_var.set(str(e))
-            return
-        dlg.destroy()
-        if callable(on_saved):
+    def _view_picked(self, name):
+        if callable(self._on_view_change):
             try:
-                on_saved(name_var.get().strip())
+                self._on_view_change(name)
             except Exception:
                 pass
 
-    btns = ttk.Frame(dlg, padding=12)
-    btns.pack(fill="x")
-    ttk.Button(btns, text="Close", command=dlg.destroy).pack(side="right")
-    ttk.Button(btns, text="Save view", command=_save).pack(side="right",
-                                                            padx=(0, 8))
+    # -- filter API (delegated) -------------------------------------------
+    def get_filter(self):
+        return self.filter_bar.get_filter()
+
+    def set_count(self, shown, total):
+        self.filter_bar.set_count(shown, total)
+
+    def clear(self):
+        self.filter_bar.clear()
+
+    @property
+    def current_view(self):
+        return self.view_row.current
+
+    def refresh_views(self):
+        self.view_row.refresh()

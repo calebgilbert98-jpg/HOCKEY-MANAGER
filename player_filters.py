@@ -6,10 +6,11 @@ attribute/composite threshold rows (AND semantics), evaluated through a
 war (thresholds match on the *perceived* midpoint of what your scouts
 actually know).
 
-:class:`FilterBar` is the reusable widget: a search entry, an "+ Add
-filter" button opening a small non-modal picker (attribute + min/max),
-active filters as removable chips, and a Clear button. Screens call
-:meth:`FilterBar.get_filter` and run :meth:`PlayerFilter.matches`.
+:class:`FilterBar` is the reusable widget: a search entry, inline
+attribute/min/max filter controls with an Add button, active filters as
+removable chips, and a Clear button. Everything lives inline in the bar --
+no popup dialogs. Screens call :meth:`FilterBar.get_filter` and run
+:meth:`PlayerFilter.matches`.
 """
 
 import tkinter as tk
@@ -173,10 +174,21 @@ def _ensure_filterbar_styles():
                     foreground=_FB_DIM, font=("Segoe UI", 10, "bold"),
                     relief="flat", padding=(2, 0))
     style.map("FilterBar.Chip.TButton", foreground=[("active", _FB_TEXT)])
+    # Readonly combobox (attribute picker): dark field in all states.
+    style.configure("FilterBar.TCombobox", fieldbackground="#0e0e11",
+                    background=_FB_CARD, foreground=_FB_TEXT,
+                    font=("Segoe UI", 10), padding=4)
+    style.map("FilterBar.TCombobox",
+              fieldbackground=[("readonly", "#0e0e11"), ("disabled", "#0e0e11")],
+              foreground=[("readonly", _FB_TEXT)])
 
 
 class FilterBar(ttk.Frame):
-    """Search entry + add-filter button + active-filter chips + clear."""
+    """Search entry + inline add-filter controls + chips + clear.
+
+    All controls live inline in the bar -- no popup dialog. The user
+    picks an attribute, types min/max, hits Add, and the chip appears.
+    """
 
     def __init__(self, parent, on_change=None, **kw):
         _ensure_filterbar_styles()
@@ -187,28 +199,58 @@ class FilterBar(ttk.Frame):
         self._targets = filter_targets()
         self._chip_frames = []  # [(AttrThreshold, widget)]
 
-        # Search entry
-        ttk.Label(self, text="Search:", style="FilterBar.TLabel").pack(
+        # -- Row 1: search + inline filter builder -------------------------
+        row1 = ttk.Frame(self, style="FilterBar.TFrame")
+        row1.pack(fill="x", pady=(0, 4))
+
+        ttk.Label(row1, text="Search:", style="FilterBar.TLabel").pack(
             side="left", padx=(0, 4))
         self._search_var = tk.StringVar()
-        entry = ttk.Entry(self, textvariable=self._search_var, width=18,
+        entry = ttk.Entry(row1, textvariable=self._search_var, width=18,
                           style="FilterBar.TEntry")
-        entry.pack(side="left", padx=(0, 8))
+        entry.pack(side="left", padx=(0, 12))
         entry.bind("<KeyRelease>", self._on_search)
 
-        # Add-filter button
-        ttk.Button(self, text="+ Add filter", style="FilterBar.TButton",
-                   command=self._open_add_dialog).pack(side="left", padx=(0, 8))
+        ttk.Label(row1, text="Filter:", style="FilterBar.TLabel").pack(
+            side="left", padx=(0, 4))
+        labels = [lbl for lbl, _ in self._targets]
+        self._attr_var = tk.StringVar(value=labels[0] if labels else "")
+        self._attr_combo = ttk.Combobox(row1, textvariable=self._attr_var,
+                                        values=labels, state="readonly",
+                                        width=20, style="FilterBar.TCombobox")
+        self._attr_combo.pack(side="left", padx=(0, 6))
+
+        ttk.Label(row1, text="Min:", style="FilterBar.Dim.TLabel").pack(
+            side="left", padx=(0, 2))
+        self._min_var = tk.StringVar()
+        ttk.Entry(row1, textvariable=self._min_var, width=6,
+                  style="FilterBar.TEntry").pack(side="left", padx=(0, 6))
+        ttk.Label(row1, text="Max:", style="FilterBar.Dim.TLabel").pack(
+            side="left", padx=(0, 2))
+        self._max_var = tk.StringVar()
+        ttk.Entry(row1, textvariable=self._max_var, width=6,
+                  style="FilterBar.TEntry").pack(side="left", padx=(0, 6))
+        ttk.Button(row1, text="Add", style="FilterBar.TButton",
+                   command=self._add_inline).pack(side="left")
+        # Inline validation error (replaces the dialog's error label).
+        self._err_var = tk.StringVar(value="")
+        ttk.Label(row1, textvariable=self._err_var,
+                  foreground="#e5484d",
+                  background=_FB_BG).pack(side="left", padx=(8, 0))
+
+        # -- Row 2: chips + count + clear ----------------------------------
+        row2 = ttk.Frame(self, style="FilterBar.TFrame")
+        row2.pack(fill="x")
 
         # Chips live here
-        self._chips = ttk.Frame(self, style="FilterBar.TFrame")
+        self._chips = ttk.Frame(row2, style="FilterBar.TFrame")
         self._chips.pack(side="left", fill="x", expand=True)
 
         # Count + clear
         self._count_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self._count_var,
+        ttk.Label(row2, textvariable=self._count_var,
                   style="FilterBar.Dim.TLabel").pack(side="left", padx=(8, 4))
-        ttk.Button(self, text="Clear", style="FilterBar.TButton",
+        ttk.Button(row2, text="Clear", style="FilterBar.TButton",
                    command=self.clear).pack(side="left")
 
     # -- public API ----------------------------------------------------------
@@ -241,79 +283,26 @@ class FilterBar(ttk.Frame):
         self._filter.text = self._search_var.get()
         self._changed()
 
-    def _open_add_dialog(self):
-        _ensure_filterbar_styles()
-        dlg = tk.Toplevel(self)
-        dlg.title("Add filter")
-        try:
-            dlg.configure(bg=_FB_BG)
-            dlg.transient(self.winfo_toplevel())
-        except Exception:
-            pass
-        # Non-modal: no grab_set -- the screen stays usable (Eastside-style).
-        frm = ttk.Frame(dlg, padding=14, style="FilterBar.TFrame")
-        frm.pack(fill="both", expand=True)
-
-        ttk.Label(frm, text="Attribute:",
-                  style="FilterBar.TLabel").grid(row=0, column=0, sticky="w",
-                                                 pady=(0, 4))
-        labels = [lbl for lbl, _ in self._targets]
-        combo_var = tk.StringVar(value=labels[0] if labels else "")
-        combo = ttk.Combobox(frm, textvariable=combo_var, values=labels,
-                             state="readonly", width=28)
-        combo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10))
-
-        ttk.Label(frm, text="Min:",
-                  style="FilterBar.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(frm, text="Max:",
-                  style="FilterBar.TLabel").grid(row=2, column=1, sticky="w")
-        min_var, max_var = tk.StringVar(), tk.StringVar()
-        ttk.Entry(frm, textvariable=min_var, width=10,
-                  style="FilterBar.TEntry").grid(
-            row=3, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(frm, textvariable=max_var, width=10,
-                  style="FilterBar.TEntry").grid(
-            row=3, column=1, sticky="w")
-
-        err_var = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=err_var, foreground="#e5484d",
-                  background=_FB_BG).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
-
-        btns = ttk.Frame(frm, style="FilterBar.TFrame")
-        btns.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
-        ttk.Button(btns, text="Cancel", style="FilterBar.TButton",
-                   command=dlg.destroy).pack(side="right")
-        ttk.Button(btns, text="Add", style="FilterBar.TButton",
-                   command=lambda: self._add_from_dialog(
-            dlg, combo_var, min_var, max_var, err_var)).pack(
-                side="right", padx=(0, 6))
-
-        try:
-            x = self.winfo_rootx() + 40
-            y = self.winfo_rooty() + 40
-            dlg.geometry(f"+{x}+{y}")
-        except Exception:
-            pass
-
-    def _add_from_dialog(self, dlg, combo_var, min_var, max_var, err_var):
-        label = combo_var.get()
+    def _add_inline(self):
+        """Validate the inline min/max and add the threshold chip."""
+        label = self._attr_var.get()
         key = next((k for lbl, k in self._targets if lbl == label), None)
         if key is None:
-            err_var.set("Pick an attribute.")
+            self._err_var.set("Pick an attribute.")
             return
         try:
-            mn = float(min_var.get()) if min_var.get().strip() else None
-            mx = float(max_var.get()) if max_var.get().strip() else None
+            mn = float(self._min_var.get()) if self._min_var.get().strip() else None
+            mx = float(self._max_var.get()) if self._max_var.get().strip() else None
         except ValueError:
-            err_var.set("Min/Max must be numbers.")
+            self._err_var.set("Min/Max must be numbers.")
             return
         if mn is None and mx is None:
-            err_var.set("Set a min, a max, or both.")
+            self._err_var.set("Set a min, a max, or both.")
             return
         if mn is not None and mx is not None and mn > mx:
-            err_var.set("Min can't exceed max.")
+            self._err_var.set("Min can't exceed max.")
             return
+        self._err_var.set("")
         # Replace an existing row on the same attribute (FM behavior).
         self._filter.thresholds = [t for t in self._filter.thresholds
                                    if t.key != key]
@@ -324,7 +313,8 @@ class FilterBar(ttk.Frame):
         th = AttrThreshold(key=key, label=label, min=mn, max=mx)
         self._filter.thresholds.append(th)
         self._make_chip(th)
-        dlg.destroy()
+        self._min_var.set("")
+        self._max_var.set("")
         self._changed()
 
     def _make_chip(self, th):

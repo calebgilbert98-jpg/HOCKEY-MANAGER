@@ -266,22 +266,18 @@ class ModernScoutingView(ctk.CTkFrame):
         profiles_btn.pack(side='left', padx=5)
         self._refresh_profile_combo()
 
-        # FM/Eastside-style view selector (column presets) -- additive.
-        from player_view_ui import ViewSelector
+        # Unified Views & Filters panel (Eastside-style) -- replaces the
+        # separate view combobox + filter bar.
+        from player_view_ui import ViewsFiltersPanel
         self._pro_view_name = "Scouting Board"
         self._pro_view_ctx = None
         self._pro_sort_col = None
         self._pro_sort_rev = False
-        self._pro_selector = ViewSelector(
-            filter_row, default_label="Scouting Board",
-            on_change=self._set_pro_view)
-        self._pro_selector.pack(side='left', padx=(15, 0))
-
-        # Elite filter bar (text search + attribute thresholds) -- additive.
-        from player_filters import FilterBar
-        self._pro_filterbar = FilterBar(tab_frame,
-                                        on_change=self._filter_players)
-        self._pro_filterbar.pack(fill='x', padx=10, pady=(0, 2))
+        self._pro_panel = ViewsFiltersPanel(
+            tab_frame, default_label="Scouting Board",
+            on_view_change=self._set_pro_view,
+            on_filter_change=self._filter_players)
+        self._pro_panel.pack(fill='x', padx=10, pady=(0, 2))
 
         # Players list
         list_frame = tk.LabelFrame(tab_frame, text="Available Players", 
@@ -1111,7 +1107,7 @@ class ModernScoutingView(ctk.CTkFrame):
                 print(f"Error adding player {getattr(player, 'full_name', 'Unknown')}: {e}")
                 continue
 
-        fb = getattr(self, '_pro_filterbar', None)
+        fb = getattr(self, '_pro_panel', None)
         if fb is not None:
             try:
                 fb.set_count(len(self.players_tree.get_children()),
@@ -1290,7 +1286,7 @@ class ModernScoutingView(ctk.CTkFrame):
         
         # Name search (legacy box removed; the elite filter bar owns search
         # now -- skip the dead StringVar when the bar exists)
-        if hasattr(self, 'name_search') and not hasattr(self, '_pro_filterbar'):
+        if hasattr(self, 'name_search') and not hasattr(self, '_pro_panel'):
             search = self.name_search.get().lower()
             if search:
                 filtered = [p for p in filtered if search in p.full_name.lower()]
@@ -1312,7 +1308,7 @@ class ModernScoutingView(ctk.CTkFrame):
         # Elite filter bar (text search + attribute thresholds), additive.
         # Thresholds use the scout-perception lens: barely-scouted players
         # filter on what your scouts actually know.
-        fb = getattr(self, '_pro_filterbar', None)
+        fb = getattr(self, '_pro_panel', None)
         if fb is not None:
             pf = fb.get_filter()
             if not pf.is_empty():

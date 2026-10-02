@@ -236,7 +236,7 @@ def _stub_app(players):
         def __bool__(self):
             return True
 
-    def _stub_treeview(parent, columns, height=15):
+    def _stub_treeview(parent, columns, height=15, **kw):
         from tkinter import ttk
         cols = list(columns.keys())
         tree = ttk.Treeview(parent, columns=cols, show="headings",
@@ -309,7 +309,7 @@ def part2():
         try:
             from player_filters import AttrThreshold
             rv._set_roster_view("nhl", "Overview")
-            fb = rv._roster_filterbars["nhl"]
+            fb = rv._roster_panels["nhl"].filter_bar
             th = AttrThreshold(key="attr:skating", label="Skating", min=85)
             fb._filter.thresholds.append(th)
             fb._make_chip(th)
