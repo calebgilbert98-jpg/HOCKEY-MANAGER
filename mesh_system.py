@@ -932,33 +932,6 @@ def tip_goal_chance(tipper, goalie, goalie_skill: float, screened: bool = False)
         return 0.14
 
 
-def netfront_finish_chance(finisher, goalie, goalie_skill: float) -> float:
-    """Goal probability on a net-front rebound/loose puck.
-
-    (2026-10-01, per Muck: CONSOLIDATE.) The finisher side now reads the
-    ONE shared finishing_rating() -- the old bespoke blend (loose_puck
-    0.40 + tight-shot 0.40 + composure 0.20) is retired so the rebound
-    finish can't disagree with the composite either. The scramble WIN is
-    still decided upstream (anticipation + offensive_awareness battle in
-    each engine's rebound event); this is the finish once he has the
-    puck in tight. Rebounds are high-danger: calibrated base ~22% and
-    the [0.05, 0.55] bounds are untouched -- wiring, not recalibration.
-    Never raises.
-    """
-    try:
-        _fin = finishing_rating(finisher)
-        _gsave = 50.0
-        if goalie is not None:
-            _gsave = (float(getattr(goalie, "reflexes", 10)) * 0.50
-                      + float(getattr(goalie, "positioning", 10)) * 0.30
-                      + float(getattr(goalie, "rebound_control", 10)) * 0.20)
-        _diff = _fin - _gsave
-        _p = 0.22 + _diff * 0.005
-        return max(0.05, min(0.55, _p))
-    except Exception:
-        return 0.22
-
-
 # Defenseman shot-volume adjustment (superstar mechanics 2026-09-28).
 # Measured: D take 47.6% of shots (should be ~33%, real NHL). The sqrt
 # flattening in shooter_choice_weight compresses archetype differences.

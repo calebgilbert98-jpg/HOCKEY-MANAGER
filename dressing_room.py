@@ -3646,6 +3646,13 @@ def hire_coach(team: Any, candidate: Dict[str, Any],
                 continue
     except Exception:
         pass
+    # Capture the outgoing NHL head coach's ID BEFORE overwriting —
+    # the staff-list cleanup below needs it to avoid dropping the AHL
+    # head coach (Muck 2026-10-02 bug fix).
+    try:
+        _outgoing_hc_id = _staff_id(getattr(team, "head_coach", None))
+    except Exception:
+        _outgoing_hc_id = None
     try:
         team.head_coach = coach
         coach.shelf_weeks = 0
@@ -3655,9 +3662,12 @@ def hire_coach(team: Any, candidate: Dict[str, Any],
         pass
     # The hire lands in team.staff with the Head Coach role: promotions
     # get their role updated (no duplicate entry), outside hires are
-    # appended, and any stale head-coach listing vacates the chair.
+    # appended, and the outgoing NHL head coach's stale listing vacates.
+    # BUG FIX (Muck 2026-10-02): only the outgoing NHL head coach (by ID,
+    # captured above) is dropped — never the AHL head coach or other staff.
     try:
         cid = _staff_id(coach)
+        _old_hc_id = _outgoing_hc_id  # captured before the head_coach overwrite
         staff = getattr(team, "staff", None)
         if not isinstance(staff, list):
             staff = []
@@ -3667,8 +3677,8 @@ def hire_coach(team: Any, candidate: Dict[str, Any],
             if _staff_id(stf) == cid:
                 _set_head_coach_role(stf)
                 kept.append(stf)
-            elif _is_head_coach_role(stf):
-                continue  # stale listing vacates the chair
+            elif _old_hc_id is not None and _staff_id(stf) == _old_hc_id:
+                continue  # stale NHL head-coach listing vacates the chair
             else:
                 kept.append(stf)
         if all(_staff_id(s) != cid for s in kept):
