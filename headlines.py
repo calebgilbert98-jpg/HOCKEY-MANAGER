@@ -69,6 +69,7 @@ def make_headline(kind: str, game_date: date, **kw) -> Optional["EmailMessage"]:
         "special_event": _special_event_headline,
         "league_digest": _league_digest_headline,
         "rivalry_pregame": _rivalry_pregame_headline,
+        "ahl_story": _ahl_story_headline,
     }
     fn = builders.get(kind)
     if fn is None:
@@ -545,6 +546,32 @@ def _fan_narrative_headline(game_date, headline="", body="", tier="",
         subject=f"{emoji} {headline}",
         content=f"{body}\n\n— Fan Pulse, {team_name} beat",
         category="Fan Narrative",
+        priority=2,
+    )
+
+
+def _ahl_story_headline(game_date, headline="", body="", story_type="",
+                        team_name="", **kw):
+    """AHL narrative headline (D41 AHL UI).
+
+    Calder Cup races, standout prospects knocking on the door, Cinderella
+    runs -- the AHL as part of the living story ecosystem, not a
+    separate world.
+    """
+    from game_classes import EmailMessage
+    emoji = {
+        "calder_race": "\U0001f3c6",
+        "prospect_watch": "\U0001f440",
+        "cinderella": "\U0001f451",
+        "callup": "\u2b06\ufe0f",
+    }.get(str(story_type).lower(), "\U0001f3d2")
+    return EmailMessage(
+        sender="AHL Wire",
+        sender_type="Media",
+        subject=f"{emoji} {headline}",
+        content=f"{body}\n\n\u2014 AHL Wire, {team_name} beat"
+                if team_name else body,
+        category="AHL Story",
         priority=2,
     )
 

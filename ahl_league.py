@@ -222,6 +222,7 @@ def generate_ahl_schedule(league):
         league.ahl_schedule_label = _season_label(sy)
         league.ahl_standings = {}
         league.ahl_played = set()
+        league.ahl_results = []  # ring buffer of recent finals (UI scores tab)
         league.ahl_calder_done = None
         league.ahl_bracket = None
         return True
@@ -412,6 +413,129 @@ def get_ahl_standings(league):
 
 
 # ---------------------------------------------------------------------------
+# Results & schedule queries (UI: scores tab, team view)
+# ---------------------------------------------------------------------------
+
+_AHL_RESULTS_CAP = 120  # ring buffer: enough for ~2 weeks of daily scores
+
+
+def _record_result(league, date_str, home_idx, away_idx, home_score,
+                   away_score, went_ot=False):
+    """Append one final to the league's recent-results ring buffer."""
+    try:
+        buf = getattr(league, "ahl_results", None)
+        if not isinstance(buf, list):
+            buf = []
+            league.ahl_results = buf
+        buf.append({
+            "date": str(date_str or ""),
+            "home": int(home_idx), "away": int(away_idx),
+            "home_score": int(home_score), "away_score": int(away_score),
+            "ot": bool(went_ot),
+        })
+        while len(buf) > _AHL_RESULTS_CAP:
+            del buf[0]
+        return True
+    except Exception:
+        return False
+
+
+def get_ahl_recent_results(league, n=15):
+    """Newest-first list of recent AHL finals (dicts). Never raises."""
+    try:
+        buf = getattr(league, "ahl_results", None) or []
+        return list(reversed(buf[-n:]))
+    except Exception:
+        return []
+
+
+def get_ahl_upcoming(league, current_date, n=15):
+    """Next n unplayed scheduled games on/after current_date.
+
+    Returns dicts: date, home_idx, away_idx, home_name, away_name.
+    Never raises.
+    """
+    try:
+        sched = getattr(league, "ahl_schedule", None) or []
+        played = getattr(league, "ahl_played", None)
+        if not isinstance(played, set):
+            played = set()
+        today = _datestr(current_date)
+        teams = ahl_team_list(league)
+        out = []
+        for i, game in enumerate(sched):
+            try:
+                if i in played:
+                    continue
+                dstr, hi, ai = game[0], int(game[1]), int(game[2])
+                if today and dstr < today:
+                    continue
+                if not (0 <= hi < len(teams) and 0 <= ai < len(teams)):
+                    continue
+                out.append({
+                    "date": dstr, "home_idx": hi, "away_idx": ai,
+                    "home_name": _tname(teams, hi),
+                    "away_name": _tname(teams, ai),
+                })
+                if len(out) >= n:
+                    break
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def get_ahl_team_schedule(league, ahl_idx, current_date, n=10):
+    """Upcoming games for one AHL club (by ahl_team_list index)."""
+    try:
+        import ahl_league as _self
+        sched = getattr(league, "ahl_schedule", None) or []
+        played = getattr(league, "ahl_played", None)
+        if not isinstance(played, set):
+            played = set()
+        today = _datestr(current_date)
+        teams = ahl_team_list(league)
+        out = []
+        for i, game in enumerate(sched):
+            try:
+                if i in played:
+                    continue
+                dstr, hi, ai = game[0], int(game[1]), int(game[2])
+                if hi != ahl_idx and ai != ahl_idx:
+                    continue
+                if today and dstr < today:
+                    continue
+                opp = ai if hi == ahl_idx else hi
+                out.append({
+                    "date": dstr,
+                    "opponent": _tname(teams, opp),
+                    "home": hi == ahl_idx,
+                })
+                if len(out) >= n:
+                    break
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def _tname(teams, idx):
+    """AHL club display name by index. Never raises."""
+    try:
+        t = teams[idx]
+        name = getattr(t, "team_name", None)
+        if name:
+            return str(name)
+        parent = getattr(t, "parent_team", None)
+        pname = getattr(parent, "team_name", "") if parent else ""
+        return f"{pname} (AHL)" if pname else f"AHL club {idx}"
+    except Exception:
+        return f"AHL club {idx}"
+
+
+# ---------------------------------------------------------------------------
 # Daily hook: sim today's scheduled games
 # ---------------------------------------------------------------------------
 
@@ -464,6 +588,11 @@ def simulate_ahl_scheduled_day(league, current_date):
                 update_ahl_standings(league, hi, ai, hs, aws, ot)
                 played.add(i)
                 simmed += 1
+                # Record the final for the UI scores tab (ring buffer).
+                try:
+                    _record_result(league, dstr, hi, ai, hs, aws, ot)
+                except Exception:
+                    pass
             except Exception:
                 continue
         if len(played) >= len(sched) and len(sched) > 0:

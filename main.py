@@ -23,6 +23,7 @@ from professional_scouting_window import ProfessionalScoutingView
 from modern_scouting_window import ModernScoutingView
 from stats_standings_window import StatsStandingsView
 from ahl_stats_window import AHLStatsView
+from ahl_league_window import AHLLeagueView
 from GAME_VIEWER import launch_game_viewer
 from draft_generator import generate_draft_class
 from draft_generator import age_on_sept15 as _age_on_sept15
@@ -3990,10 +3991,10 @@ class HockeyManagerGUI(tk.Tk):
                               self.open_stats_standings_window,
                               tooltip="Stats: standings, scoring leaders, and team analytics")
 
-        # AHL Stats button (minors only -- separate screen per design)
+        # AHL button (the full AHL league hub: standings, scores, Calder Cup)
         self._create_nav_pill(left_menu_frame, "AHL",
                               self.open_ahl_stats_window,
-                              tooltip="AHL Stats: top farm performers -- who's cooking on the minors")
+                              tooltip="AHL: standings, scores, Calder Cup, farm teams & prospects")
 
         # League History button
         self._create_nav_pill(left_menu_frame, "History",
@@ -11345,6 +11346,14 @@ class HockeyManagerGUI(tk.Tk):
             _ahl2b.maybe_run_calder_cup(self.league, self.current_date)
         except Exception:
             pass
+        # AHL UI story ecosystem: Calder Cup races, prospect watch,
+        # Cinderella runs -- wired into the shared headline system.
+        try:
+            import ahl_narratives as _ahln
+            _ahln.maybe_fire_ahl_narratives(self, self.league,
+                                            self.current_date)
+        except Exception:
+            pass
     
     def _process_training_programs(self):
         """Run one weekly session for each active Development-Center program.
@@ -17887,8 +17896,9 @@ class HockeyManagerGUI(tk.Tk):
         return window
 
     def open_ahl_stats_window(self):
-        """Open the AHL Stats screen (minors only -- separate from NHL numbers)."""
-        return self.show_screen('ahl_stats', 'AHL Stats', AHLStatsView)
+        """Open the AHL League hub (standings, scores, Calder Cup, team,
+        prospects) -- the AHL as a real followable league."""
+        return self.show_screen('ahl_league', 'AHL', AHLLeagueView)
 
     def open_league_history_window(self):
         """Open the League History window (champions, awards, leaders, HOF)."""
