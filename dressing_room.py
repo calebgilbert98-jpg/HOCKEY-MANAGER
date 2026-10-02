@@ -3556,6 +3556,23 @@ def fire_coach(team: Any, reason: str = "fired",
         goal_met=True)
     for ln in lines:
         _log(team, ln)
+    # Staff pool (Muck 2026-10-02): the fired coach returns to the free
+    # agent pool so he can be hired elsewhere. Never raises.
+    try:
+        if league is not None and coach is not None:
+            _pool = getattr(league, "free_agent_staff", None)
+            if isinstance(_pool, list):
+                # Avoid duplicates; reset team-specific state.
+                _cid = getattr(coach, "id", None)
+                if not any(getattr(s, "id", None) == _cid for s in _pool):
+                    try:
+                        coach.current_club = ""
+                        coach.years_with_team = 0
+                    except Exception:
+                        pass
+                    _pool.append(coach)
+    except Exception:
+        pass
     return entry
 
 

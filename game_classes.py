@@ -2461,6 +2461,14 @@ class Staff:
     # Career leap count: how many breakthrough seasons this coach has had.
     # The story of a riser, shown on the staff card.
     career_breakthroughs: int = 0
+    # Coaching philosophy (Muck 2026-10-02, staff pool expansion): distinct
+    # identities so replacing a coach feels like a philosophical shift.
+    # Values: "" (unset/old save), "defensive", "offensive", "developmental",
+    # "disciplinarian", "player_coach", "balanced".
+    coaching_philosophy: str = ""
+    # GM style (same): "trader", "draft_builder", "cap_wizard", "win_now",
+    # "patient", "balanced", "" (unset).
+    gm_style: str = ""
 
     @property
     def full_name(self) -> str:

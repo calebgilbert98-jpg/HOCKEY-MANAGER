@@ -468,9 +468,11 @@ class DatabaseGenerator:
         main_league.free_agents.extend(free_agents)
         players_created += len(free_agents)
         
-        # Generate free agent staff (R5 expanded: denser pool, bounded).
-        # 19 hireable roles x 6 minimum = 114 guaranteed, filled to the cap.
-        free_agent_staff_count = max(180, int(len(main_league.teams) * 6))
+        # Generate free agent staff (staff pool expansion, Muck 2026-10-02:
+        # dense + diverse so every position has real options).
+        # Target ~450: deep enough for genuine choice at every position,
+        # small enough that save/load stays fast (Staff objects are tiny).
+        free_agent_staff_count = max(420, int(len(main_league.teams) * 14))
         free_agent_staff = self._generate_free_agent_staff(free_agent_staff_count)
         main_league.free_agent_staff.extend(free_agent_staff)
 
@@ -886,65 +888,171 @@ class DatabaseGenerator:
     def _generate_free_agent_staff(self, count):
         """Generate unemployed staff members available for hiring.
 
-        R5 (UI repairs, expanded): real depth. Every hireable role
-        (HIREABLE_STAFF_ROLES) is guaranteed a minimum bench so hiring is
-        actually possible for any position; the rest of the pool is
-        weighted toward coaches/scouts, the roles clubs churn most.
-        Background roles (physio-type) are never free agents by design.
-        Bounded: the caller caps the total.
+        Staff pool expansion (Muck 2026-10-02): dense + diverse. Every
+        hireable role gets real depth so replacing a coach/GM feels like
+        a philosophical choice, not a warm body swap.
+
+        Philosophy archetypes drive coherent attribute profiles:
+        - Coaches: defensive / offensive / developmental / disciplinarian /
+          player_coach / balanced
+        - GMs: trader / draft_builder / cap_wizard / win_now / patient / balanced
+        Ratings spread across tiers (elite 85-95 / solid 65-84 / project 40-64)
+        and ages (young innovators / prime / veteran winners). Never raises.
         """
-        from game_classes import Staff
+        from game_classes import Staff, StaffRole
 
         free_agent_staff = []
-
-        # Staff roles that could be available as free agents
         available_roles = list(HIREABLE_STAFF_ROLES)
 
         first_names = [
             "Adam", "Alex", "Andrew", "Anthony", "Brian", "Bruce", "Carl", "Chris", "Craig", "Dan",
             "Dave", "David", "Doug", "Eric", "Frank", "Gary", "Glen", "Greg", "Jack", "James",
             "Jeff", "Jim", "Joe", "John", "Ken", "Kevin", "Larry", "Mark", "Matt", "Mike",
-            "Paul", "Peter", "Rick", "Rob", "Ron", "Scott", "Steve", "Tim", "Todd", "Tom"
+            "Paul", "Peter", "Rick", "Rob", "Ron", "Scott", "Steve", "Tim", "Todd", "Tom",
+            "Barry", "Dale", "Dean", "Don", "Gerard", "Guy", "Jacques", "Joel", "Lindy", "Marc",
+            "Michel", "Pascal", "Patrick", "Randy", "Roger", "Stan", "Terry", "Claude", "Alain",
         ]
-        
         last_names = [
             "Anderson", "Brown", "Clark", "Davis", "Evans", "Garcia", "Harris", "Johnson", "Jones",
             "Lee", "Lewis", "Martin", "Miller", "Moore", "Robinson", "Rodriguez", "Smith", "Taylor",
             "Thomas", "Thompson", "White", "Williams", "Wilson", "Young", "Adams", "Baker", "Campbell",
             "Carter", "Collins", "Cooper", "Edwards", "Green", "Hall", "Hill", "Jackson", "King",
-            "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker"
+            "Lopez", "Mitchell", "Nelson", "Parker", "Perez", "Phillips", "Roberts", "Turner", "Walker",
+            "Boudreau", "Carlyle", "Desjardins", "Gallant", "Hakstol", "Hitchcock", "Julien", "Keenan",
+            "Laviolette", "MacLean", "Maurice", "McLellan", "Nelson", "Quenneville", "Roy", "Sutter",
+            "Therrien", "Tippett", "Tortorella", "Vigneault", "Bowness", "Brunette", "Cassidy",
         ]
-        
-        def _make(role):
-            # Free agent staff tend to be experienced but currently unemployed
-            # This could be due to recent firing, retirement from previous role, etc.
-            return Staff(
+
+        # Coaching philosophy archetypes: attribute emphases for coherence.
+        # Each maps philosophy -> {attr: bonus} applied on top of the tier base.
+        COACH_ARCHETYPES = {
+            "defensive": {"defensive_coaching": 12, "tactical_knowledge": 8,
+                          "level_of_discipline": 8, "attacking_coaching": -6},
+            "offensive": {"attacking_coaching": 12, "coaching_forwards": 8,
+                          "game_preparation": 6, "defensive_coaching": -6},
+            "developmental": {"working_with_youngsters": 14, "player_development": 12,
+                              "mental_coaching": 8, "level_of_discipline": -4},
+            "disciplinarian": {"level_of_discipline": 14, "discipline": 12,
+                               "leadership": 8, "man_management": -8},
+            "player_coach": {"man_management": 14, "motivating": 12,
+                             "media_handling": 8, "level_of_discipline": -8},
+            "balanced": {},
+        }
+        GM_ARCHETYPES = {
+            "trader": {"adaptability": 10, "media_handling": 8, "determination": 6},
+            "draft_builder": {"judging_player_potential": 14, "judging_player_ability": 8,
+                              "working_with_youngsters": 8},
+            "cap_wizard": {"tactical_knowledge": 10, "determination": 8, "adaptability": 6},
+            "win_now": {"motivating": 10, "leadership": 8, "media_handling": 8},
+            "patient": {"judging_player_potential": 10, "man_management": 8,
+                        "determination": 8},
+            "balanced": {},
+        }
+
+        def _tier_base():
+            # Ratings spread: 15% elite, 55% solid, 30% project.
+            r = random.random()
+            if r < 0.15:
+                return random.randint(85, 95)  # elite: proven winners
+            elif r < 0.70:
+                return random.randint(65, 84)  # solid: NHL-calibre
+            return random.randint(40, 64)  # project: upside or retread
+
+        def _make(role, philosophy=""):
+            base = _tier_base()
+            # Age/experience cohere with tier: elites skew veteran, projects skew young.
+            if base >= 85:
+                age = random.randint(48, 70)
+                exp = random.randint(15, 30)
+            elif base >= 65:
+                age = random.randint(38, 60)
+                exp = random.randint(8, 22)
+            else:
+                age = random.randint(30, 48)
+                exp = random.randint(3, 12)
+
+            def _attr(bonus=0):
+                return max(1, min(99, int(random.gauss(base + bonus, 6))))
+
+            kwargs = dict(
                 first_name=random.choice(first_names),
                 last_name=random.choice(last_names),
                 role=role,
-                age=random.randint(30, 70),  # Wider age range for free agents
-                experience=random.randint(5, 25)  # Generally experienced
+                age=age,
+                experience=exp,
             )
+            # Apply philosophy archetype bonuses coherently.
+            arch = {}
+            if role in (StaffRole.HEAD_COACH, StaffRole.ASSOCIATE_COACH,
+                        StaffRole.ASSISTANT_COACH, StaffRole.GOALIE_COACH,
+                        StaffRole.POWER_PLAY_COACH, StaffRole.PENALTY_KILL_COACH):
+                if not philosophy:
+                    philosophy = random.choice(list(COACH_ARCHETYPES))
+                arch = COACH_ARCHETYPES.get(philosophy, {})
+                kwargs["coaching_philosophy"] = philosophy
+            elif role == StaffRole.GENERAL_MANAGER:
+                if not philosophy:
+                    philosophy = random.choice(list(GM_ARCHETYPES))
+                arch = GM_ARCHETYPES.get(philosophy, {})
+                kwargs["gm_style"] = philosophy
 
-        # Guarantee a minimum bench per hireable role so no position is
-        # ever unfillable...
-        per_role_min = 6
-        for role in available_roles:
-            for _ in range(per_role_min):
-                free_agent_staff.append(_make(role))
+            s = Staff(**kwargs)
+            # Nudge key attributes toward the archetype.
+            for attr, bonus in arch.items():
+                try:
+                    cur = getattr(s, attr, base)
+                    setattr(s, attr, max(1, min(99, int(cur + bonus))))
+                except Exception:
+                    pass
+            # Reputation tracks tier.
+            try:
+                s.reputation = max(10, min(95, int(random.gauss(base, 8))))
+            except Exception:
+                pass
+            return s
 
-        # ...then fill to the cap, weighted toward the churn roles.
         from game_classes import StaffRole as _SR
+        # Per-role depth targets: key positions get real benches.
+        depth_targets = {
+            _SR.HEAD_COACH: 28,
+            _SR.GENERAL_MANAGER: 24,
+            _SR.ASSISTANT_COACH: 24,
+            _SR.ASSOCIATE_COACH: 18,
+            _SR.HEAD_SCOUT: 22,
+            _SR.AMATEUR_SCOUT: 26,
+            _SR.PROFESSIONAL_SCOUT: 22,
+            _SR.EUROPEAN_SCOUT: 16,
+            _SR.GOALIE_COACH: 18,
+            _SR.POWER_PLAY_COACH: 14,
+            _SR.PENALTY_KILL_COACH: 14,
+            _SR.ANALYTICS_DIRECTOR: 14,
+            _SR.ADVANCE_SCOUT: 12,
+            _SR.SKILLS_COACH: 14,
+            _SR.VIDEO_COACH: 12,
+        }
+        for role in available_roles:
+            for _ in range(depth_targets.get(role, 8)):
+                try:
+                    free_agent_staff.append(_make(role))
+                except Exception:
+                    continue
+
+        # Fill to the cap, weighted toward churn roles.
         weighted = (
             [_SR.HEAD_COACH] * 4 + [_SR.ASSISTANT_COACH] * 4
             + [_SR.ASSOCIATE_COACH] * 3 + [_SR.GOALIE_COACH] * 3
             + [_SR.PROFESSIONAL_SCOUT] * 3 + [_SR.AMATEUR_SCOUT] * 3
             + [_SR.HEAD_SCOUT] * 2 + [_SR.SKILLS_COACH] * 2
-            + [_SR.ANALYTICS_DIRECTOR] * 2
+            + [_SR.ANALYTICS_DIRECTOR] * 2 + [_SR.GENERAL_MANAGER] * 2
         )
-        while len(free_agent_staff) < count:
-            role = random.choice(weighted or available_roles)
-            free_agent_staff.append(_make(role))
+        guard = 0
+        while len(free_agent_staff) < count and guard < count * 2:
+            guard += 1
+            try:
+                role = random.choice(weighted or available_roles)
+                free_agent_staff.append(_make(role))
+            except Exception:
+                continue
 
         return free_agent_staff
 

@@ -1851,6 +1851,23 @@ class GameSaveManager:
                     if s is not None]
             except Exception:
                 league.free_agent_staff = []
+            # Staff pool backfill (Muck 2026-10-02): old saves have ~192
+            # staff; top up to the new ~450 target so every position has
+            # real options. Never raises; generation is bounded.
+            try:
+                _pool = getattr(league, "free_agent_staff", None) or []
+                if len(_pool) < 400:
+                    from database_generator import DatabaseGenerator as _DG
+                    _gen = _DG.__new__(_DG)
+                    _need = 450 - len(_pool)
+                    _extra = _gen._generate_free_agent_staff(_need)
+                    _ids = {getattr(s, "id", None) for s in _pool}
+                    for _s in _extra:
+                        if getattr(_s, "id", None) not in _ids:
+                            _pool.append(_s)
+                    league.free_agent_staff = _pool
+            except Exception:
+                pass
             try:
                 league.overseas_staff = [
                     s for s in (self._restore_staff(d)
