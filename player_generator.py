@@ -610,6 +610,120 @@ class PlayerGenerator:
         except Exception:
             pass
 
+        # Archetype signature floors (2026-10-02, per Muck): each archetype's
+        # KEY composites follow the same pattern as the finishing floor --
+        # elite (NHL_ELITE tier) hits 80+, generational (A+ potential) hits
+        # 85+. A Sniper's finishing, a Playmaker's chance creation, a
+        # shutdown D's defensive play. Never touches composite formulas
+        # (protected levers) -- only attribute inputs.
+        #
+        # Busts preserved (Muck 2026-10-02): the generational floors are the
+        # BEST-CASE ceiling, not a guarantee. Prospects (age < 23) get NO
+        # generation floor -- they must earn 85+ through development, and a
+        # bad situation means they bust and never get there. Established
+        # players (23+) are proven: the floor applies.
+        try:
+            from player_archetypes import signature_composites as _sigs
+            from attribute_composites import bump_composite_to_floor as _bump
+            _pot_gs = str(getattr(player, "true_potential_grade", "") or
+                          getattr(player, "potential_grade", "") or "")
+            _is_gen = _pot_gs.strip().upper().startswith("A+")
+            _sigs_list = _sigs(player) or []
+            if skill_tier == "NHL_ELITE" and _sigs_list:
+                for _comp in _sigs_list:
+                    try:
+                        _bump(player, _comp, 80)
+                    except Exception:
+                        pass
+            if _is_gen and age >= 23 and _sigs_list:
+                for _comp in _sigs_list:
+                    try:
+                        _bump(player, _comp, 85, max_iter=80, step=5)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Generational overall floor (2026-10-02, per Muck): players with
+        # generational (A+) potential must be 85+ overall. Bump the weakest
+        # overall-contributing attributes until the composite hits 85. Never
+        # touches the overall formula itself (protected lever) -- only the
+        # inputs. Mirrors the elite-forward finishing floor above.
+        #
+        # Busts preserved: prospects (age < 23) get NO floor -- the 85 is
+        # their best-case development target, not a birthright.
+        try:
+            from game_classes import PlayerPosition as _PPG
+            _pot_g = str(getattr(player, "true_potential_grade", "") or
+                         getattr(player, "potential_grade", "") or "")
+            if _pot_g.strip().upper().startswith("A+") and age >= 23:
+                _pos_g = player.primary_position
+                if _pos_g == _PPG.GOALIE:
+                    _ovr_attrs = [
+                        "goaltending", "reflexes", "positioning",
+                        "rebound_control", "puck_handling", "glove_hand",
+                        "stick_side", "breakaway_skill", "confidence",
+                        "focus", "composure",
+                    ]
+                elif _pos_g == _PPG.CENTER:
+                    _ovr_attrs = [
+                        "skating", "shooting", "shooting_accuracy",
+                        "shooting_power", "passing", "passing_accuracy",
+                        "passing_creativity", "deking", "stickhandling",
+                        "vision", "hockey_iq", "offensive_awareness",
+                        "defensive_awareness", "faceoffs", "faceoff_wins",
+                        "composure", "endurance", "determination",
+                        "off_the_puck", "one_timer", "loose_puck",
+                    ]
+                elif _pos_g in (_PPG.LEFT_WING, _PPG.RIGHT_WING):
+                    _ovr_attrs = [
+                        "skating", "shooting", "shooting_accuracy",
+                        "shooting_power", "wristshot", "slapshot", "passing",
+                        "passing_accuracy", "passing_creativity", "deking",
+                        "stickhandling", "vision", "hockey_iq",
+                        "offensive_awareness", "defensive_awareness",
+                        "composure", "endurance", "determination",
+                        "off_the_puck", "one_timer", "backhand",
+                        "screen_shots",
+                    ]
+                else:
+                    _ovr_attrs = [
+                        "skating", "passing", "passing_accuracy",
+                        "passing_creativity", "strength", "checking",
+                        "bodycheck", "defensive_awareness", "shot_blocking",
+                        "pokecheck", "anticipation", "hockey_iq", "composure",
+                        "aggressiveness", "balance", "endurance",
+                        "determination", "slapshot", "loose_puck",
+                        "pressure_player",
+                    ]
+                for _iter in range(30):
+                    try:
+                        _ovr = player.overall_rating()
+                    except Exception:
+                        break
+                    if _ovr >= 85:
+                        break
+                    # Find the lowest overall-contributing attribute and bump it
+                    _lowest = None
+                    _lowest_val = 999
+                    for _attr in _ovr_attrs:
+                        try:
+                            _v = float(getattr(player, _attr, 50))
+                        except Exception:
+                            continue
+                        if _v < _lowest_val:
+                            _lowest_val = _v
+                            _lowest = _attr
+                    if _lowest is None:
+                        break
+                    try:
+                        setattr(player, _lowest,
+                                min(99, int(getattr(player, _lowest, 50)) + 4))
+                    except Exception:
+                        break
+        except Exception:
+            pass
+
         # Base reputation by tier (Muck 2026-10-02): stars arrive famous,
         # depth guys arrive known, prospects arrive unknown. The existing
         # reputation dynamics build/drift from here -- never from 0.

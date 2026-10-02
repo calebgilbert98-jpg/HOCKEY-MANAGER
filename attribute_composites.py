@@ -296,6 +296,75 @@ def get_composite_ratings(player):
             for key in _COMPOSITES}
 
 
+# ---------------------------------------------------------------------------
+# Composite floor helper (Muck 2026-10-02)
+# ---------------------------------------------------------------------------
+# Real attribute names backing each composite for floor-bumping. Finishing
+# uses the explicit 16-attribute bump list (the _shot_tool pseudo-member
+# resolves to the shooter's best release at rating time, so for bumping we
+# raise all four shot tools' weakest instead).
+FINISHING_BUMP_ATTRS = [
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness",
+    "wristshot", "slapshot", "one_timer", "backhand",
+]
+
+
+def composite_bump_attrs(key) -> list:
+    """Real attribute names to bump when raising a composite. Never raises."""
+    try:
+        if key == "finishing":
+            return list(FINISHING_BUMP_ATTRS)
+        members = _COMPOSITES.get(key, {}).get("members", [])
+        attrs = [a for a, _w in members if not a.startswith("_")]
+        return attrs or ["hockey_iq"]
+    except Exception:
+        return ["hockey_iq"]
+
+
+def bump_composite_to_floor(player, key, floor, max_iter=25, step=4) -> bool:
+    """Raise player's composite rating to `floor` by bumping its weakest
+    member attributes (+step each, capped at 99).
+
+    Never touches composite formulas (protected levers) -- only attribute
+    inputs. Never raises; returns True if the floor was reached.
+    """
+    try:
+        attrs = composite_bump_attrs(key)
+        if not attrs:
+            return True
+        for _ in range(max_iter):
+            try:
+                cur = float(raw_composite(player, key))
+            except Exception:
+                return False
+            if cur >= floor:
+                return True
+            lowest, lowest_val = None, 999.0
+            for attr in attrs:
+                try:
+                    v = float(getattr(player, attr, 50))
+                except Exception:
+                    continue
+                if v < lowest_val:
+                    lowest_val, lowest = v, attr
+            if lowest is None:
+                return False
+            try:
+                setattr(player, lowest,
+                        min(99, int(getattr(player, lowest, 50)) + step))
+            except Exception:
+                return False
+        try:
+            return float(raw_composite(player, key)) >= floor
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+
 def circumstance_shift(player, key, sim=None, team=None, energy=None):
     """Bounded circumstance shift in composite points. Range: [-3.0, +3.0].
 

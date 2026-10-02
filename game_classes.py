@@ -1391,6 +1391,48 @@ class Player:
             if random.random() < GameBalance.DECLINE_CHANCE:
                 self._change_random_attribute(-1)
 
+        # Signature composite guarantee (Muck 2026-10-02): elite (A-/A) and
+        # generational (A+) prospects must be ABLE to reach 80+/85+ on their
+        # archetype's signature composites in the best case. Overall-driven
+        # development can leave signature attributes behind (the finishing
+        # members that don't feed overall), so while still in the development
+        # window we top up lagging signature members directly. Never touches
+        # composite formulas -- only attribute inputs. Never raises.
+        #
+        # Busts preserved (Muck 2026-10-02): this is the BEST-CASE ceiling,
+        # not a guarantee. It only applies in a good development situation
+        # (env_factor >= 1.15: strong league, good morale, real opportunity).
+        # A prospect in a bad situation gets no top-up -- he busts and never
+        # hits the thresholds. Development variance is untouched.
+        try:
+            _gg = ((getattr(self, "true_potential_grade", "") or
+                    self.potential_grade) or "C").strip().upper()
+            _is_gen_d = _gg.startswith("A+")
+            _is_elite_d = _gg.startswith("A")
+            try:
+                _env_d = float(env_factor)
+            except Exception:
+                _env_d = 1.0
+            if ((_is_gen_d or _is_elite_d)
+                    and self.age <= dev["peak_age"] + peak_shift
+                    and _env_d >= 1.15):
+                _sig_floor = 85 if _is_gen_d else 80
+                from player_archetypes import signature_composites as _sigs_d
+                from attribute_composites import (
+                    raw_composite as _rc_d,
+                    bump_composite_to_floor as _bump_d,
+                )
+                for _comp_d in (_sigs_d(self) or []):
+                    try:
+                        if float(_rc_d(self, _comp_d)) < _sig_floor:
+                            _bump_d(self, _comp_d, _sig_floor,
+                                    max_iter=80 if _is_gen_d else 25,
+                                    step=5 if _is_gen_d else 4)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def _ovr_attributes(self) -> list:
         """Attribute names that feed this player's positional overall rating."""
         if self.primary_position == PlayerPosition.GOALIE:

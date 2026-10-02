@@ -401,6 +401,60 @@ ARCHETYPE_STRENGTHS = {
 
 
 # ---------------------------------------------------------------------------
+# Signature composites per archetype (Muck 2026-10-02)
+# ---------------------------------------------------------------------------
+# The composites that define what each archetype IS. Elite prospects must
+# reach 80+ and generational prospects 85+ on these in the best-case
+# development scenario -- a Sniper's finishing, a Playmaker's chance
+# creation, a shutdown D's defensive play. Thresholds are archetype-aware:
+# we never demand 80+ finishing from a Defensive Defenseman.
+ARCHETYPE_SIGNATURE_COMPOSITES = {
+    # Forwards
+    "Sniper": ["finishing"],
+    "Playmaker": ["chance_creation"],
+    "Power Forward": ["finishing", "physicality"],
+    "Two-Way Forward": ["defensive_play"],
+    "Grinder": ["puck_retrieval", "physicality"],
+    "Enforcer": ["physicality"],
+    "Depth Forward": ["physicality"],
+    # Defense
+    "Offensive Defenseman": ["chance_creation"],
+    "Defensive Defenseman": ["defensive_play"],
+    "Two-Way Defenseman": ["defensive_play", "chance_creation"],
+    "Physical Defenseman": ["physicality", "defensive_play"],
+    "Puck-Moving Defenseman": ["chance_creation", "skating"],
+    "Depth Defenseman": ["defensive_play"],
+    # Goalies
+    "Butterfly Goalie": ["goalie_save"],
+    "Hybrid Goalie": ["goalie_save"],
+    "Athletic Goalie": ["goalie_save"],
+    "Puck-Handling Goalie": ["goalie_save"],
+    "Backup Goalie": ["goalie_save"],
+}
+
+
+def signature_composites(player) -> list:
+    """Key composite names for the player's archetype. Never raises."""
+    try:
+        arch = get_archetype(player)
+        sigs = ARCHETYPE_SIGNATURE_COMPOSITES.get(arch)
+        if sigs:
+            return list(sigs)
+    except Exception:
+        pass
+    # Fallback by position group: never return empty.
+    try:
+        group = _pos_group(player)
+    except Exception:
+        group = "F"
+    return {
+        "F": ["finishing"],
+        "D": ["defensive_play"],
+        "G": ["goalie_save"],
+    }.get(group, ["finishing"])
+
+
+# ---------------------------------------------------------------------------
 # Reusable chemistry report for UI (lines editor, roster screens, etc.)
 # ---------------------------------------------------------------------------
 
