@@ -2457,6 +2457,18 @@ except Exception:
     pass
 
 
+class SeasonIntegrityError(Exception):
+    """Raised when the season ends with clubs short of the scheduled slate.
+
+    SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005): a short slate
+    must block LOUDLY, never stall silently. Raised by
+    _handle_slate_shortfall in headless/bulk mode (the bulk sim cannot
+    show a blocker card); the GUI arms the 'season_integrity' day-blocker
+    instead, since an exception out of end_of_season would surface as an
+    ugly tkinter callback traceback with no blocking behavior.
+    """
+
+
 class HockeyManagerGUI(tk.Tk):
     """Main GUI for the hockey manager application with modern UI design."""
     
@@ -2565,6 +2577,13 @@ class HockeyManagerGUI(tk.Tk):
 
         # FM-style career systems: bulk-sim flag suppresses interactive prompts
         self._bulk_simming = False
+
+        # SLATE GUARANTEE (2026-10-02): no-drop batch sim + season audit.
+        # _slate_fallbacks counts every fallback-tier sim (loud, never
+        # silent). _season_integrity_shortfall arms the 'season_integrity'
+        # day-blocker when the season ends with clubs short of the slate.
+        self._slate_fallbacks = 0
+        self._season_integrity_shortfall = None
 
         # use_game_viewer is now controlled through settings.json, no longer a hardcoded instance variable
 
@@ -6636,6 +6655,35 @@ class HockeyManagerGUI(tk.Tk):
             pass
         if blockers:
             return ("Continue", blockers)
+        # SLATE GUARANTEE, Part 2 (2026-10-02): a short season slate is a
+        # hard stop -- the season cannot advance into awards/playoffs with
+        # missing games. Armed by _handle_slate_shortfall (GUI mode); no
+        # user action can clear it -- the detail names the short clubs and
+        # says to report it -- so there is deliberately no 'action' jump.
+        # Dismissing the card never clears it: it persists until the data
+        # is repaired.
+        try:
+            _sis = getattr(self, '_season_integrity_shortfall', None)
+            if _sis:
+                if isinstance(_sis, list):
+                    _sis_det = "; ".join(
+                        f"{_n} {_gp}/{_t} (short {_t - _gp})"
+                        for _n, _gp, _t in _sis)
+                else:
+                    _sis_det = ("One or more clubs finished short of the "
+                                "scheduled slate.")
+                blockers.append({
+                    'id': 'season_integrity',
+                    'title': 'Season slate incomplete -- season halted',
+                    'detail': ("The regular season ended with clubs short "
+                               "of their scheduled games: "
+                               f"{_sis_det}. This is a data-integrity stop, "
+                               "not a task to complete -- report it so the "
+                               "missing games can be investigated. The "
+                               "season will not advance."),
+                })
+        except Exception:
+            pass
         # Gating T2-Phase 2: the pending-items registry is the unified read
         # path. BLOCKS_ADVANCE and PAUSES_DAY entries gate the day exactly
         # like the hardcoded blockers above; RESUMABLE entries never block
@@ -10753,6 +10801,120 @@ class HockeyManagerGUI(tk.Tk):
             return False
             return False
 
+    def _audit_season_slate(self):
+        """SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005).
+
+        Compare every NHL club's games played against the league's
+        scheduled slate length (season_games_count, default 82 for old
+        saves). Returns [(team_name, gp, target)] for clubs short of the
+        slate -- [] when the season is whole. A club missing from the
+        standings entirely counts as 0 GP (all of its games vanished).
+        """
+        shortfalls = []
+        try:
+            _lg = getattr(self, 'league', None)
+            # Slate length: the league's persisted value first (84 from
+            # 2026-27 on); old saves without the attribute fall back to 82.
+            # Evaluated lazily -- the self-level default must not be read
+            # unless the league lacks the attribute.
+            _target = getattr(_lg, 'season_games_count', None)
+            if _target is None:
+                _target = getattr(self, 'season_games_count', 82)
+            _target = _target or 82
+            _standings = getattr(_lg, 'standings', None) or {}
+            _nhl_names = {t.team_name
+                          for t in (getattr(_lg, 'teams', None) or [])
+                          if getattr(t, 'league_name', '')
+                          == 'National Hockey League'}
+
+            def _gp(stats):
+                return (stats.get('W', stats.get('Wins', 0))
+                        + stats.get('L', stats.get('Losses', 0))
+                        + stats.get('OTL', 0))
+
+            for _name in sorted(_nhl_names):
+                _played = _gp(_standings.get(_name) or {})
+                if _played < _target:
+                    shortfalls.append((_name, _played, _target))
+        except Exception as _e:
+            print(f"Season slate audit failed (non-fatal): {_e}")
+        return shortfalls
+
+    def _handle_slate_shortfall(self, shortfalls):
+        """Loud stop for a short season slate. Never silent, never a stall.
+
+        Prints a banner naming every short club and its deficit, writes it
+        to the news log, and creates an inbox item for the user. Then
+        blocks loudly:
+          - headless/bulk mode: raises SeasonIntegrityError with the full
+            shortfall detail (no GUI exists to show a blocker card);
+          - GUI mode: arms the 'season_integrity' day-blocker (picked up by
+            get_continue_state on the next Continue press) and returns, so
+            end_of_season bails BEFORE the season-end guard is set. An
+            exception here would propagate out of end_of_season through
+            simulate_day -- whose outer try has only a `finally`, no
+            `except` -- into tkinter's callback handler: an ugly stderr
+            traceback with no blocking behavior and a re-press loop.
+        """
+        _lines = [f"{_n}: {_gp}/{_t} (short {_t - _gp})"
+                  for _n, _gp, _t in shortfalls]
+        _detail = "; ".join(_lines)
+        _banner = ("\n"
+                   "🚨🚨🚨 SEASON SLATE SHORTFALL -- SEASON HALTED 🚨🚨🚨\n"
+                   "The regular season ended with clubs short of their "
+                   "scheduled games:\n"
+                   + "\n".join(f"  • {_l}" for _l in _lines) + "\n"
+                   "This is a data-integrity stop: awards, playoffs and the "
+                   "offseason will NOT run on a short slate.\n"
+                   "🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨🚨\n")
+        print(_banner)
+        try:
+            _nl = getattr(self, 'news_log', None)
+            if isinstance(_nl, list):
+                _nl.append({
+                    'date': getattr(self, 'current_date', None),
+                    'story': (f"🚨 Season integrity stop: slate shortfall -- "
+                              f"{_detail}. The season cannot advance until "
+                              f"the missing games are investigated.")})
+        except Exception:
+            pass
+        try:
+            _ut = getattr(self, 'user_team', None)
+            if _ut is not None and getattr(_ut, 'inbox', None) is not None:
+                from game_classes import EmailMessage
+                _ut.inbox.add_message(EmailMessage(
+                    sender="League Office",
+                    sender_type="League",
+                    subject="🚨 Season integrity stop: season slate shortfall",
+                    content=("Commissioner's Office -- URGENT\n\n"
+                             "The regular season has ended with clubs short "
+                             "of their scheduled games:\n\n"
+                             + "\n".join(f"• {_l}" for _l in _lines) + "\n\n"
+                             "The season is HALTED: no awards, no playoffs, "
+                             "no offseason until this is resolved. This is a "
+                             "data-integrity stop, not a task you can complete "
+                             "in the UI -- report it so the missing games can "
+                             "be investigated and restored."),
+                    date_sent=getattr(self, 'current_date', None) or date.today(),
+                    is_important=True,
+                    is_urgent=True,
+                    category="League",
+                    priority=4,
+                    requires_response=False,
+                ))
+        except Exception:
+            pass
+        if getattr(self, '_bulk_simming', False):
+            raise SeasonIntegrityError(
+                f"Season slate shortfall -- season halted: {_detail}")
+        # GUI mode: arm the day-blocker; the next Continue press shows it
+        # via get_continue_state instead of re-entering end_of_season.
+        try:
+            self._season_integrity_shortfall = [
+                (str(_n), int(_gp), int(_t)) for _n, _gp, _t in shortfalls]
+        except Exception:
+            self._season_integrity_shortfall = True
+
     def _process_daily_maintenance(self):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
@@ -13163,8 +13325,9 @@ class HockeyManagerGUI(tk.Tk):
         user_team = getattr(self, 'user_team', None)  # Add user_team reference
         
         for game in games:
+            # Extract game data. A malformed entry is a data problem, not a
+            # sim problem -- it is skipped loudly below, never silently.
             try:
-                # Extract game data
                 if isinstance(game, dict):
                     game_date = game.get('date')
                     home_team = game.get('home_team')
@@ -13173,10 +13336,24 @@ class HockeyManagerGUI(tk.Tk):
                     game_date, home_team, away_team = game[:3]
                 else:
                     continue
-                # Preseason exhibitions: quick-simmed with no footprint --
-                # no stats, no standings, no career GP, no lore.
-                is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
-                
+            except Exception:
+                continue
+            if home_team is None or away_team is None:
+                # Corrupt schedule entry: no two clubs, nothing to sim. Loud
+                # skip -- the season-slate audit flags the short clubs.
+                print(f"🛟 SLATE-GUARANTEE: corrupt schedule entry on "
+                      f"{game_date} -- missing "
+                      f"{'home' if home_team is None else 'away'} team; "
+                      f"entry skipped")
+                continue
+            # Preseason exhibitions: quick-simmed with no footprint --
+            # no stats, no standings, no career GP, no lore.
+            is_preseason = isinstance(game, dict) and bool(game.get('preseason'))
+
+            # Pregame presentation is best-effort: a failure here must never
+            # take the game down with it, and never `continue` past the sim.
+            _outdoor_info = None
+            try:
                 # Narrative ledger: grudge-week presentation for non-user games.
                 # One dict lookup per game; only genuine league-wide feuds
                 # (weight >= 60) earn the inbox card. Never blocks the sim.
@@ -13236,27 +13413,29 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
 
-                # Per-league sim detail (new-game setup): 'full' leagues get the
-                # event-by-event engine with player stats; everything else
-                # uses the ultra-fast lightweight path. Preseason always
-                # goes lightweight -- GameSim writes season stats itself and
-                # September hockey counts for nothing.
-                league_key = game.get('league') if isinstance(game, dict) else None
-                full_sim = None
-                if self._league_sim_detail(league_key) == 'full' and not is_preseason:
-                    winner, loser, scores, went_to_ot, full_sim = \
-                        self._simulate_game_full_batch(home_team, away_team)
-                else:
-                    # LIGHTWEIGHT simulation - just calculate winner and score.
-                    # Preseason suppresses the individual-stat pass: scores
-                    # stand, nobody's season line moves.
-                    result = self._simulate_game_lightweight(home_team, away_team,
-                                                             preseason=is_preseason)
-                    winner, loser, scores, went_to_ot = result
+            except Exception as _pre_e:
+                # Pregame presentation failed -- log it loudly, keep the
+                # game. The sim below still runs; nothing is dropped.
+                import traceback as _tb
+                print(f"Pregame presentation failed (non-fatal, game still "
+                      f"simmed): {_pre_e}")
+                _tb.print_exc()
 
-                batch_results.append((game_date, home_team, away_team, winner,
-                                      loser, scores, went_to_ot, full_sim))
+            # SLATE GUARANTEE (2026-10-02, BUG-003/004/005): the sim below
+            # NEVER raises and NEVER drops the game. Tier 0 is the normal
+            # path (full event sim for 'full' leagues, otherwise the
+            # lightweight sim); a failure retries via the lightweight sim;
+            # a further failure falls back to a deterministic, loudly-logged
+            # last-resort result. The preseason flag flows through every
+            # tier -- exhibitions never touch standings or stats.
+            winner, loser, scores, went_to_ot, full_sim = \
+                self._sim_game_guaranteed(home_team, away_team, game,
+                                           game_date, is_preseason)
 
+            # Post-game processing is best-effort too: even if it fails,
+            # the result is still recorded below -- the game is never
+            # dropped, and the season slate stays whole.
+            try:
                 # Career service time: every rostered player on both clubs
                 # banks one NHL game (waiver-exemption input). Not in
                 # preseason.
@@ -13297,15 +13476,22 @@ class HockeyManagerGUI(tk.Tk):
                     _tx.tick_tactics_familiarity(away_team)
                 except Exception:
                     pass
-                
-            except Exception as e:
-                # BUG-001 diagnostic: logging only str(e) hid the failing
-                # line for months while games were silently dropped. Log the
-                # full traceback so the next failure is root-causable.
-                import traceback as _tb
-                print(f"Error in batch simulation: {e}")
-                _tb.print_exc()
-                continue
+
+            except Exception as _post_e:
+                # Post-game processing failed -- log it loudly (BUG-001
+                # diagnostic: full traceback, never just str(e)) but keep
+                # the result anyway. The game is NEVER dropped.
+                import traceback as _tb2
+                print(f"Post-game processing failed (non-fatal, result "
+                      f"kept): {_post_e}")
+                _tb2.print_exc()
+
+            # GUARANTEED: a scheduled game always produces a recorded
+            # result -- this line is reached for every non-corrupt entry,
+            # no matter which sim tier produced the result or whether the
+            # presentation/processing above failed.
+            batch_results.append((game_date, home_team, away_team, winner,
+                                  loser, scores, went_to_ot, full_sim))
         
         # Store minimal game results for performance
         for game_date, home_team, away_team, winner, loser, scores, went_to_ot, full_sim in batch_results:
@@ -13460,7 +13646,164 @@ class HockeyManagerGUI(tk.Tk):
                 for player in team.roster:
                     if hasattr(player, '_game_added'):
                         delattr(player, '_game_added')
-    
+
+    # --- SLATE GUARANTEE (2026-10-02, BUG-003/004/005) ---------------------
+    # Batch-simulated games used to vanish silently: an exception anywhere
+    # in the sim section hit `continue`, the game never reached the
+    # standings, and clubs finished short of the slate -- stalling the
+    # season end. The tiered sim below makes a dropped game impossible:
+    # every scheduled game between two real clubs ALWAYS produces a result.
+
+    def _sim_game_guaranteed(self, home_team, away_team, game, game_date,
+                             is_preseason=False):
+        """Simulate one scheduled game; NEVER raises, NEVER drops the game.
+
+        Tiers:
+          0 -- normal path: the full event sim for 'full'-detail leagues
+               (regular season only), else the lightweight sim.
+          1 -- retry via the lightweight sim (skipped when tier 0 already
+               was the lightweight path).
+          2 -- deterministic last-resort result from roster strength
+               (seeded, reproducible, loudly logged).
+
+        The preseason flag flows through every tier: exhibitions never
+        touch standings or season stats, in ANY tier. Returns
+        (winner, loser, scores, went_to_ot, full_sim) with full_sim None
+        unless tier 0 ran the full event sim.
+        """
+        league_key = game.get('league') if isinstance(game, dict) else None
+        _want_full = False
+        try:
+            _want_full = (self._league_sim_detail(league_key) == 'full'
+                          and not is_preseason)
+        except Exception as _ld_e:
+            # Detail lookup failed: fall through to the lightweight sim.
+            self._log_slate_fallback(home_team, away_team, game_date,
+                                     _ld_e, tier="full->lightweight",
+                                     detail="sim-detail lookup failed")
+        if _want_full:
+            try:
+                winner, loser, scores, went_to_ot, full_sim = \
+                    self._simulate_game_full_batch(home_team, away_team)
+                return winner, loser, scores, went_to_ot, full_sim
+            except Exception as _full_e:
+                self._log_slate_fallback(
+                    home_team, away_team, game_date, _full_e,
+                    tier="full->lightweight",
+                    detail="full-batch sim failed; retrying lightweight")
+                # Fall through to the lightweight retry below.
+        try:
+            winner, loser, scores, went_to_ot = \
+                self._simulate_game_lightweight(home_team, away_team,
+                                                preseason=is_preseason)
+            return winner, loser, scores, went_to_ot, None
+        except Exception as _light_e:
+            self._log_slate_fallback(
+                home_team, away_team, game_date, _light_e,
+                tier="lightweight->deterministic",
+                detail=("lightweight sim failed"
+                        + (" after full-batch failure" if _want_full else "")))
+        # Tier 2: deterministic last resort. Built to not raise; the
+        # belt-and-braces except below is for pathological team objects.
+        try:
+            return self._slate_deterministic_result(home_team, away_team,
+                                                    game_date)
+        except Exception as _det_e:
+            self._log_slate_fallback(home_team, away_team, game_date,
+                                     _det_e, tier="deterministic->coinflip",
+                                     detail="deterministic builder failed; "
+                                            "absolute last resort")
+            import random as _r
+            _rng = _r.Random(f"coinflip|{game_date}|"
+                             f"{getattr(home_team, 'team_name', '?')}|"
+                             f"{getattr(away_team, 'team_name', '?')}")
+            if _rng.random() < 0.5:
+                return home_team, away_team, (2, 1), False, None
+            return away_team, home_team, (1, 2), False, None
+
+    def _slate_deterministic_result(self, home_team, away_team, game_date):
+        """Deterministic last-resort result (slate-guarantee tier 2).
+
+        Compares average roster overall_rating with a small home-ice edge,
+        rolls a seeded RNG (game date + team names -- reproducible), and
+        produces a plausible scoreline: winner 2-5, loser 0..winner-1,
+        occasional overtime (then a one-goal game). Team-symmetric apart
+        from the home edge -- swapping the clubs swaps the outcome
+        distribution. Writes no stats and touches no systems; the normal
+        post-processing (standings etc.) treats it like any result. This
+        is a FALLBACK, never a cheat path: every use is logged loudly via
+        _log_slate_fallback and counted in _slate_fallbacks.
+        """
+        import random
+
+        def _avg_overall(team):
+            try:
+                _rs = []
+                for _p in (getattr(team, 'roster', None) or []):
+                    try:
+                        _rs.append(float(_p.overall_rating()))
+                    except Exception:
+                        pass
+                if _rs:
+                    return sum(_rs) / len(_rs)
+            except Exception:
+                pass
+            return 75.0  # neutral rating when the roster is unreadable
+
+        _hn = getattr(home_team, 'team_name', None) or '?'
+        _an = getattr(away_team, 'team_name', None) or '?'
+        _home = _avg_overall(home_team) + 1.5  # small home-ice edge, rating pts
+        _away = _avg_overall(away_team)
+        _rng = random.Random(f"slate-guarantee|{game_date}|{_hn}|{_an}")
+        # Logistic win probability on the rating gap; symmetric in the two
+        # clubs apart from the home edge. ~8 rating points ~= 70/30.
+        _p_home = 1.0 / (1.0 + 10.0 ** (-(_home - _away) / 8.0))
+        _p_home = max(0.10, min(0.90, _p_home))
+        _home_wins = _rng.random() < _p_home
+        _wg = _rng.randint(2, 5)
+        _ot = _rng.random() < 0.22
+        _lg = _wg - 1 if _ot else _rng.randint(0, _wg - 1)
+        if _home_wins:
+            return home_team, away_team, (_wg, _lg), _ot, None
+        return away_team, home_team, (_lg, _wg), _ot, None
+
+    def _log_slate_fallback(self, home_team, away_team, game_date, err,
+                            tier, detail=""):
+        """LOUD logging for every slate-guarantee fallback. Never silent.
+
+        Prints a 🛟 SLATE-GUARANTEE line with game, error and fallback
+        tier (plus the BUG-001 full traceback), bumps the
+        self._slate_fallbacks counter, and appends to the news log when
+        one exists.
+        """
+        try:
+            self._slate_fallbacks = \
+                int(getattr(self, '_slate_fallbacks', 0) or 0) + 1
+        except Exception:
+            self._slate_fallbacks = 1
+        _hn = getattr(home_team, 'team_name', '?')
+        _an = getattr(away_team, 'team_name', '?')
+        _line = (f"🛟 SLATE-GUARANTEE [{tier}] {game_date} {_an} @ {_hn}: "
+                 f"{err}"
+                 + (f" -- {detail}" if detail else "")
+                 + f" (fallback #{self._slate_fallbacks})")
+        print(_line)
+        try:
+            import traceback as _tb
+            _tb.print_exc()
+        except Exception:
+            pass
+        try:
+            _nl = getattr(self, 'news_log', None)
+            if isinstance(_nl, list):
+                _d = getattr(self, 'current_date', None) or game_date
+                _nl.append({
+                    'date': _d,
+                    'story': (f"🛟 Slate guarantee ({tier}): {_an} @ {_hn} "
+                              f"simmed via fallback sim ({err}).")})
+        except Exception:
+            pass
+
     def _league_sim_detail(self, league_key):
         """Return the configured sim detail for a league ('full' | 'quick' | 'scores').
 
@@ -15127,6 +15470,16 @@ class HockeyManagerGUI(tk.Tk):
 
     def end_of_season(self):
         """Handle end of regular season with awards and transition options."""
+        # SLATE GUARANTEE, Part 2 (2026-10-02, BUG-003/004/005): audit the
+        # season slate BEFORE anything else -- before the once-per-season
+        # guard below. If any NHL club is short of its scheduled games the
+        # handler stops loudly (raise in headless/bulk, day-blocker in GUI)
+        # and we bail here, so a short season can never slide silently into
+        # awards, playoffs or the offseason.
+        _slate_short = self._audit_season_slate()
+        if _slate_short:
+            self._handle_slate_shortfall(_slate_short)
+            return
         # Guard: the season-end flow must only fire ONCE per season. Without
         # this, every Continue press after the playoffs start re-shows the
         # season summary / playoff prompt, and there is no path from a
