@@ -466,7 +466,7 @@ def _best_line(team):
 # ----------------------------------------------------------------------------
 # The visualizer window
 # ----------------------------------------------------------------------------
-class PBPVisualSim(InGamePopup):
+class PBPVisualSim(tk.Toplevel):
     GAME_RATE = 8.0  # game-seconds per real second at 1x
     TICK_DT = 1.0 / 30.0  # real seconds per animation frame (~30fps)
     # Dot skating speeds in rink-feet per GAME-second. Like puck flights,
