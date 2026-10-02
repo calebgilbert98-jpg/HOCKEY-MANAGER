@@ -547,6 +547,50 @@ class PlayerGenerator:
         except Exception:
             pass
 
+        # Elite forward finishing floor (2026-10-02, per Muck): NHL_ELITE
+        # forwards must have 80+ base finishing composite. The harmonic
+        # blend punishes low attributes, so we bump the weakest finishing
+        # attributes until the composite hits 80. Never touches the
+        # finishing formula itself (protected lever) -- only the inputs.
+        try:
+            from game_classes import PlayerPosition as _PP
+            if (skill_tier == "NHL_ELITE" and
+                    player.primary_position in (_PP.CENTER, _PP.LEFT_WING, _PP.RIGHT_WING)):
+                from attribute_composites import raw_composite as _rc
+                _fin_attrs = [
+                    "shooting_accuracy", "composure", "hockey_iq",
+                    "offensive_positioning", "off_the_puck", "anticipation",
+                    "pressure_player", "deflections", "balance", "strength",
+                    "determination", "aggressiveness",
+                    "wristshot", "slapshot", "one_timer", "backhand",
+                ]
+                for _iter in range(25):
+                    try:
+                        _fin = _rc(player, "finishing")
+                    except Exception:
+                        break
+                    if _fin >= 80:
+                        break
+                    # Find the lowest finishing attribute and bump it
+                    _lowest = None
+                    _lowest_val = 999
+                    for _attr in _fin_attrs:
+                        try:
+                            _v = float(getattr(player, _attr, 50))
+                        except Exception:
+                            continue
+                        if _v < _lowest_val:
+                            _lowest_val = _v
+                            _lowest = _attr
+                    if _lowest is None:
+                        break
+                    try:
+                        setattr(player, _lowest, min(99, int(getattr(player, _lowest, 50)) + 4))
+                    except Exception:
+                        break
+        except Exception:
+            pass
+
         return player
     
     def generate_rookie_class(self, size: int = 224) -> List[Player]:

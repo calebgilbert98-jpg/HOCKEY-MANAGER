@@ -10278,16 +10278,20 @@ class GameSim:
         One decision, two fidelities; never a second copy here.
         """
         # Base xG values by shot location (calibrated to NHL ~9% avg conversion)
+        # s3 re-anchor 2026-10-02 (84-game slate): +12.3% uplift to reach
+        # 2.58 GPG target in GameSim (was 2.30). QuickSim already at target
+        # via SHOT_BASE_CHANCE; this restores GameSim parity. Protected
+        # finishing constants and grade ceilings untouched.
         base_xg = {
-            ShotLocation.CREASE: 0.28,
-            ShotLocation.LOW_SLOT: 0.15,
-            ShotLocation.HIGH_SLOT: 0.09,
-            ShotLocation.LEFT_CIRCLE: 0.07,
-            ShotLocation.RIGHT_CIRCLE: 0.07,
-            ShotLocation.POINT: 0.03,
-            ShotLocation.LEFT_WING: 0.045,
-            ShotLocation.RIGHT_WING: 0.045
-        }.get(shot_location, 0.06)
+            ShotLocation.CREASE: 0.314,
+            ShotLocation.LOW_SLOT: 0.168,
+            ShotLocation.HIGH_SLOT: 0.101,
+            ShotLocation.LEFT_CIRCLE: 0.079,
+            ShotLocation.RIGHT_CIRCLE: 0.079,
+            ShotLocation.POINT: 0.034,
+            ShotLocation.LEFT_WING: 0.051,
+            ShotLocation.RIGHT_WING: 0.051
+        }.get(shot_location, 0.067)
 
         # Shot type modifiers
         type_modifier = {
