@@ -555,6 +555,39 @@ def record_assist_pair(ledger, passer, scorer, team_name):
         pass
 
 
+def select_setup_man(pool, shooter, team, is_playoff=False):
+    """ONE shared decision: pick the primary-assist setup man.
+
+    Playmaking x relationship-with-scorer x line chemistry -- the
+    canonical formula (GameSim's playmaking_score path). GameSim's
+    _award_assists and AdvGS's _credit_assists both call this; never a
+    second copy of the selection logic. Most real goals come off a pass;
+    this keeps the primary rate unified across engines.
+    Returns the chosen player or None. Never raises.
+    """
+    import random
+    try:
+        _pool = list(pool or [])
+        if not _pool or shooter is None:
+            return None
+        _iso = bool(is_playoff)
+        _w = []
+        for _pp in _pool:
+            try:
+                _wt = playmaking_score(_pp) * relationship_mult(_pp, shooter)
+                try:
+                    _wt *= mesh_chance_factor(_pp, [shooter], team,
+                                             is_playoff=_iso)
+                except Exception:
+                    pass
+                _w.append(max(1.0, _wt))
+            except Exception:
+                _w.append(1.0)
+        return random.choices(_pool, weights=_w, k=1)[0]
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Form / streak / breakout: the mesh writes what it reads.
 # ---------------------------------------------------------------------------

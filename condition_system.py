@@ -426,6 +426,39 @@ def condition_tier(player):
 BENCH_RECOVERY_PER_S = 0.22
 
 
+#: Base in-game energy drain per second of ice time -- the same base rate
+#: GameSim's per-tick loop uses (simulation._update_fatigue). AdvGS calls
+#: shift_energy_drain() once per 45s shift instead of per tick: same
+#: decision, speed-optimized approximation.
+SHIFT_DRAIN_PER_S = 0.55
+
+
+def shift_energy_drain(player, shift_seconds, on_pk=False, on_pp=False):
+    """Shared per-shift energy cost of a shift (AdvGS fidelity).
+
+    Mirrors GameSim's per-tick drain term-for-term: base rate x special-
+    teams term (PK 1.7x -- the most taxing hockey there is; PP 0.7x --
+    perimeter work) x the stamina term (1.3 - stamina/100). The tick
+    loop's zone factor (1.3x outside the neutral zone) is folded to
+    neutral: a 45s AdvGS shift is mixed-zone play and AdvGS tracks no
+    per-shift zone. Returns energy points (>= 0). Never raises.
+    """
+    try:
+        rate = SHIFT_DRAIN_PER_S
+        if on_pk:
+            rate *= 1.7
+        elif on_pp:
+            rate *= 0.7
+        try:
+            stamina = float(getattr(player, "stamina", 50) or 50)
+        except (TypeError, ValueError):
+            stamina = 50.0
+        rate *= (1.3 - stamina / 100.0)
+        return max(0.0, rate * max(0.0, float(shift_seconds or 0.0)))
+    except Exception:
+        return 0.0
+
+
 def condition_deployment_mult(player):
     """D17 -- persistent-condition factor on deployment quantity.
 
