@@ -327,6 +327,78 @@ def roll_defensive_game_stats(player, rng=None):
         return 0, 0, 0
 
 
+def roll_faceoff_game_stats(home_skaters, away_skaters, rng=None):
+    """One game's faceoff record for both teams' skaters, from attributes.
+
+    The single shared faceoff model behind every sim path: GameSim resolves
+    real faceoffs live; the quick-sim path calls this once per game so the
+    box score shows a realistic faceoff ledger instead of zeros. Never raises.
+
+    Total faceoffs ~62/game (NHL average). Draws go to centers weighted by
+    ice-time share x faceoff attribute; each draw's winner is decided by
+    comparing the two takers' faceoff skill. Returns
+    ({home_pid: (won, lost)}, {away_pid: (won, lost)}).
+    """
+    import math as _math
+    _r = rng or random
+    _home = {}
+    _away = {}
+    try:
+        def _takers(players):
+            out = []
+            for p in players or []:
+                try:
+                    _pos = str(getattr(getattr(p, "primary_position", None),
+                                       "value", "") or "").upper()
+                    if _pos in ("G", "GOALIE"):
+                        continue
+                    _fo = float(getattr(p, "faceoffs",
+                                        getattr(p, "faceoff_wins", 50)) or 50)
+                    _toi = float(getattr(getattr(p, "stats", None),
+                                         "time_on_ice", 0) or 0)
+                    # Centers take the bulk; weight by ice time x skill.
+                    _w = (3.0 if "C" in _pos else 0.4) * (0.3 + _toi / 600.0) \
+                        * (_fo / 50.0)
+                    if _w > 0:
+                        out.append((p, _w, _fo))
+                except Exception:
+                    continue
+            return out
+
+        _ht = _takers(home_skaters)
+        _at = _takers(away_skaters)
+        if not _ht or not _at:
+            return _home, _away
+        _hw = [w for _, w, _ in _ht]
+        _aw = [w for _, w, _ in _at]
+        _total = max(1, int(round(_r.gauss(62, 8))))
+        for _ in range(_total):
+            try:
+                _hi = _r.choices(range(len(_ht)), weights=_hw, k=1)[0]
+                _ai = _r.choices(range(len(_at)), weights=_aw, k=1)[0]
+                _hp, _, _hfo = _ht[_hi]
+                _ap, _, _afo = _at[_ai]
+                # Winner by skill comparison with noise.
+                _p_home = 0.5 + 0.004 * (_hfo - _afo)
+                _p_home = max(0.15, min(0.85, _p_home))
+                _hwon = _r.random() < _p_home
+                _hid = getattr(_hp, "id", None)
+                _aid = getattr(_ap, "id", None)
+                if _hid is not None:
+                    _w, _l = _home.get(_hid, (0, 0))
+                    _home[_hid] = (_w + (1 if _hwon else 0),
+                                   _l + (0 if _hwon else 1))
+                if _aid is not None:
+                    _w, _l = _away.get(_aid, (0, 0))
+                    _away[_aid] = (_w + (0 if _hwon else 1),
+                                   _l + (1 if _hwon else 0))
+            except Exception:
+                continue
+        return _home, _away
+    except Exception:
+        return {}, {}
+
+
 # --- Season-history stint tracker -------------------------------------------
 # Per-team stints for the player-card History tab. A stint opens when a
 # player joins an NHL roster (Team.add_player, roster only) and closes when

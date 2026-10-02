@@ -12993,10 +12993,27 @@ class HockeyManagerGUI(tk.Tk):
                 self.league.standings[loser.team_name]['Points'] += 1
             else:
                 self.league.standings[loser.team_name]['L'] += 1
+
+            # Sync the Team objects too (the dashboard, standings window,
+            # and season-review builder read team.wins/losses/ot_losses/
+            # games_played/goals_for/goals_against -- not league.standings).
+            # The canonical Team.update_record() keeps streaks consistent.
+            try:
+                _wl, _ll = (home_team, away_team) if winner == home_team \
+                    else (away_team, home_team)
+                _wl.update_record("WIN")
+                _ll.update_record("LOSS", overtime=went_to_ot)
+                home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+                home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+                away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+                away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+            except Exception:
+                pass
         
         # Store game result for later viewing
         player_ratings = self._calculate_player_ratings(getattr(sim_engine, 'stats', {}), events)
         game_stats = getattr(sim_engine, 'game_stats', None) or {}
+        game_result_team_stats = None
         if not game_stats:
             # AdvancedGameSim keeps per-game stats as {team_name: {pid: {...}}};
             # flatten to the {pid: {...}} shape the box score expects.
@@ -13010,6 +13027,23 @@ class HockeyManagerGUI(tk.Tk):
                 for _pid, _st in _pmap.items():
                     if not isinstance(_st, dict) or _pid not in by_id:
                         continue
+                    # Defensive record: the shared attribute-driven roll --
+                    # the same single decision GameSim applies live, so a
+                    # quick-simmed game leaves the same statistical trail.
+                    # Rolled ONCE here; the values below feed both the
+                    # per-game box score and (below, under stats_from_events)
+                    # the season totals, so the two always agree. Goalies
+                    # are skipped like GameSim's end-of-game roll.
+                    try:
+                        from game_classes import roll_defensive_game_stats as _rdg
+                        _pos = getattr(getattr(by_id[_pid], "primary_position",
+                                                None), "name", "")
+                        if _pos == "GOALIE":
+                            _dh, _dt, _db = 0, 0, 0
+                        else:
+                            _dh, _dt, _db = _rdg(by_id[_pid])
+                    except Exception:
+                        _dh, _dt, _db = 0, 0, 0
                     game_stats[_pid] = {
                         'player': by_id[_pid],
                         'g': _st.get('goals', 0), 'a': _st.get('assists', 0),
@@ -13017,11 +13051,52 @@ class HockeyManagerGUI(tk.Tk):
                         'saves': _st.get('saves', 0),
                         'shots_against': 0,  # derived in the box score
                         'goals_against': 0,
-                        'hits': _st.get('hits', 0),
-                        'blocked_shots': _st.get('blocked_shots', 0),
-                        'faceoffs_won': _st.get('faceoffs_won', 0),
-                        'faceoffs_lost': _st.get('faceoffs_lost', 0),
+                        'hits': _dh,
+                        'blocked_shots': _db,
+                        'takeaways': _dt,
+                        'giveaways': 0,
+                        'faceoffs_won': 0,   # filled by the faceoff roll below
+                        'faceoffs_lost': 0,
+                        '_def_roll': (_dh, _dt, _db),
                     }
+            # Faceoffs: the shared per-game model (GameSim resolves them
+            # live; the quick path was leaving zeros). Writes per-player
+            # won/lost into the game_stats built above.
+            try:
+                from game_classes import roll_faceoff_game_stats as _rfo
+                _fo_home, _fo_away = _rfo(home_team.roster, away_team.roster)
+                for _fo_map in (_fo_home, _fo_away):
+                    for _fpid, (_fw, _fl) in _fo_map.items():
+                        if _fpid in game_stats:
+                            game_stats[_fpid]['faceoffs_won'] = _fw
+                            game_stats[_fpid]['faceoffs_lost'] = _fl
+            except Exception:
+                pass
+            # Team aggregates for the box-score team-stats section
+            # (AdvGS has no team_stats of its own).
+            try:
+                _team_agg = {}
+                for _pid, _gs in game_stats.items():
+                    _pl = _gs.get('player')
+                    _tnm = getattr(_pl, 'team_name', None)
+                    if not _tnm:
+                        continue
+                    _ag = _team_agg.setdefault(_tnm, {
+                        'hits': 0, 'blocked_shots': 0, 'takeaways': 0,
+                        'giveaways': 0, 'faceoffs_won': 0, 'shots': 0,
+                    })
+                    _ag['hits'] += _gs.get('hits', 0)
+                    _ag['blocked_shots'] += _gs.get('blocked_shots', 0)
+                    _ag['takeaways'] += _gs.get('takeaways', 0)
+                    _ag['giveaways'] += _gs.get('giveaways', 0)
+                    _ag['faceoffs_won'] += _gs.get('faceoffs_won', 0)
+                    _ag['shots'] += _gs.get('shots_on_goal', 0)
+                if _team_agg:
+                    game_result_team_stats = dict(_team_agg)
+                else:
+                    game_result_team_stats = None
+            except Exception:
+                game_result_team_stats = None
             # GAP-001 (parity): the AdvGS records chance grades per game in
             # sim.stats but never flushed them to season stats. Mirror the
             # GameSim finalization flush so both engines feed the analytics
@@ -13065,7 +13140,11 @@ class HockeyManagerGUI(tk.Tk):
             'player_ratings': player_ratings,
             'event_log': getattr(sim_engine, 'event_log', []),  # Add event log for game viewer
             'game_stats': game_stats,  # Per-player game stats (g/a/shots/...), normalized
-            'team_stats': getattr(sim_engine, 'team_stats', {}),  # Per-team game stats
+            # Per-team game stats: AdvGS has none of its own, so use the
+            # aggregates built from the flattened per-player stats above.
+            'team_stats': (game_result_team_stats
+                           if game_result_team_stats
+                           else getattr(sim_engine, 'team_stats', {})),
             'overtime': away_score != home_score and len([e for e in notable_events if e.get('period', 0) > 3]) > 0,
             'shootout': len([e for e in notable_events if e.get('period', 0) == 5]) > 0
         }
@@ -13229,8 +13308,11 @@ class HockeyManagerGUI(tk.Tk):
                         _g.stats.losses += 1
                     if _opp_score == 0:
                         _g.stats.shutouts += 1
-            # Defensive record: same shared roll as every other sim path --
-            # shutdown defensemen leave a hits/takeaways/blocks trail.
+            # Defensive record: the per-game roll already happened once in
+            # the flattening above (stored as _def_roll on each game_stats
+            # entry) -- reuse those exact values so the season totals agree
+            # with the box score. Fall back to a fresh shared roll only if
+            # the flattening didn't run (shouldn't happen on this path).
             try:
                 from game_classes import roll_defensive_game_stats as _rdg
                 for team in [home_team, away_team]:
@@ -13239,7 +13321,11 @@ class HockeyManagerGUI(tk.Tk):
                             if getattr(getattr(player, "primary_position",
                                                None), "name", "") == "GOALIE":
                                 continue
-                            _h, _t, _b = _rdg(player)
+                            _gs = game_stats.get(getattr(player, "id", None), {})
+                            _roll = _gs.get("_def_roll") if isinstance(_gs, dict) else None
+                            if _roll is None:
+                                _roll = _rdg(player)
+                            _h, _t, _b = _roll
                             player.stats.hits += _h
                             player.stats.takeaways += _t
                             player.stats.blocked_shots += _b
@@ -13270,6 +13356,15 @@ class HockeyManagerGUI(tk.Tk):
                     _opp.stats.shots_against += 1
             except Exception:
                 pass
+        
+        # Strip the internal _def_roll bookkeeping (used above to sync
+        # season totals with the per-game box score) before storing.
+        try:
+            for _gs in game_stats.values():
+                if isinstance(_gs, dict):
+                    _gs.pop("_def_roll", None)
+        except Exception:
+            pass
         
         # Update news log for user team games
         if self.user_team in (home_team, away_team):
@@ -15583,6 +15678,18 @@ class HockeyManagerGUI(tk.Tk):
             self.league.standings[loser.team_name]["Points"] += 1
         else:
             self.league.standings[loser.team_name]["L"] += 1
+
+        # Sync the Team objects too (dashboard/standings UI read
+        # team.wins/losses/ot_losses/games_played/goals_for/goals_against).
+        try:
+            winner.update_record("WIN")
+            loser.update_record("LOSS", overtime=went_to_ot)
+            home_team.goals_for = getattr(home_team, 'goals_for', 0) + home_score
+            home_team.goals_against = getattr(home_team, 'goals_against', 0) + away_score
+            away_team.goals_for = getattr(away_team, 'goals_for', 0) + away_score
+            away_team.goals_against = getattr(away_team, 'goals_against', 0) + home_score
+        except Exception:
+            pass
 
     def _simulate_game_with_viewer(self, home_team, away_team):
         """Simulate a game using the visual game viewer"""
