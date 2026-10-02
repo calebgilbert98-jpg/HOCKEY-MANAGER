@@ -4201,8 +4201,270 @@ def _ai_hire_from_interviews(team, date_str, league, app=None, rng=None,
             pass
     lines = hire_coach(team, top["candidate"], date_str=date_str)
     _coach_headline(app, team, coach, "hired", date_str=date_str)
+    # New voice behind the bench: the incoming head coach sometimes wants
+    # his own guy on the staff. With modest probability he moves on the
+    # incumbent assistant whose philosophy fits him worst -- that chair is
+    # then refilled through the normal assistant pipeline (carousel first),
+    # so a fired head coach can land as someone else's assistant. Hockey-
+    # real, and it keeps the carousel moving. Never raises.
+    try:
+        _maybe_house_clean_assistants(team, coach, league, date_str,
+                                      app=app, rng=rng)
+    except Exception:
+        pass
     return {"name": top["name"], "interview_note": top["interview_note"],
             "interview_score": top["score"], "lines": lines}
+
+
+_ASST_TARGET = 2  # NHL assistants per club, mirroring database_generator
+
+
+def _nhl_assistants(team):
+    """Current NHL-assignment assistant coaches on team.staff."""
+    try:
+        from game_classes import StaffRole as _SR
+        out = []
+        for s in (getattr(team, "staff", None) or []):
+            try:
+                if (getattr(s, "role", None) == _SR.ASSISTANT_COACH
+                        and str(getattr(s, "assignment", "nhl") or "nhl"
+                                ).lower() == "nhl"):
+                    out.append(s)
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def _assistant_fit_score(cand, head_coach):
+    """Fit-first scoring for FA-pool assistant candidates.
+
+    Philosophy alignment with the current head coach outweighs raw
+    reputation -- the AI hires sensibly (a system fit), not just the
+    highest rated name. Mirrors the GM-hire "best of the top few"
+    variety pattern at the call site.
+    """
+    try:
+        score = 0.0
+        try:
+            hc_phil = str(getattr(head_coach, "coaching_philosophy", "")
+                          or "").lower()
+            c_phil = str(getattr(cand, "coaching_philosophy", "")
+                         or "").lower()
+            if hc_phil and c_phil and hc_phil == c_phil:
+                score += 25.0
+        except Exception:
+            pass
+        try:
+            score += float(getattr(cand, "reputation", 50) or 50) * 0.5
+        except Exception:
+            pass
+        try:
+            exp = max(0, int(getattr(cand, "age", 30) or 30) - 25)
+            score += min(exp, 15)
+        except Exception:
+            pass
+        return score
+    except Exception:
+        return 0.0
+
+
+def ai_hire_assistant_coach(team, league=None, date_str="", app=None,
+                            rng=None, exclude_coach=None):
+    """AI fills vacant NHL assistant-coach chairs (Muck 2026-10-02).
+
+    Mirrors the head-coach interview flow at background fidelity. The
+    coaching carousel -- unemployed ex-head coaches willing to step
+    down -- is checked first through the coach_job_appeal gates
+    (same-team demotion insult and bitter-rival refusal already filter
+    inside carousel_candidates_for_role). Failing that, the free-agent
+    pool is searched with fit scoring: philosophy alignment with the
+    current head coach beats raw reputation, so the AI hires sensibly
+    rather than grabbing the biggest name.
+
+    exclude_coach: a Staff to skip (e.g. the assistant just released in
+    a house-cleaning -- hiring him straight back would be absurd).
+    Never raises; returns the hired Staff, or None when there is no
+    vacancy / no candidate.
+    """
+    try:
+        from game_classes import StaffRole as _SR
+        import reputation_system as _rs
+    except Exception:
+        return None
+    try:
+        if team is None:
+            return None
+        if len(_nhl_assistants(team)) >= _ASST_TARGET:
+            return None
+        try:
+            _ex_id = getattr(exclude_coach, "id", None)
+        except Exception:
+            _ex_id = None
+
+        def _excluded(c):
+            try:
+                if exclude_coach is not None and c is exclude_coach:
+                    return True
+                if _ex_id is not None and getattr(c, "id", None) == _ex_id:
+                    return True
+            except Exception:
+                pass
+            return False
+
+        hired = None
+        # 1. Carousel: an ex-head coach rebuilding as an assistant.
+        try:
+            _rivs = (getattr(league, "rivalries", None)
+                     if league is not None else None)
+            _hc = _room_head_coach(team)
+            _ctx = {}
+            try:
+                _ctx = {"hc_philosophy": str(getattr(
+                    _hc, "coaching_philosophy", "") or "")}
+            except Exception:
+                pass
+            _cands = [d for d in _rs.carousel_candidates_for_role(
+                team, "assistant", team_context=_ctx, rivalries=_rivs,
+                date_str=str(date_str or "")[:10], league=league,
+                min_score=40)
+                if not _excluded(d.get("coach"))]
+            if _cands:
+                hired = _cands[0]["coach"]
+                try:
+                    _rs.drop_from_carousel(hired)
+                except Exception:
+                    pass
+        except Exception:
+            hired = None
+        # 2. Free-agent pool: fit over fame.
+        if hired is None and league is not None:
+            try:
+                pool = list(getattr(league, "free_agent_staff", None) or [])
+                cands = [s for s in pool
+                         if getattr(s, "role", None) == _SR.ASSISTANT_COACH
+                         and not _excluded(s)]
+                if cands:
+                    _hc = _room_head_coach(team)
+                    _r = rng if rng is not None else random
+                    try:
+                        cands.sort(
+                            key=lambda s: _assistant_fit_score(s, _hc),
+                            reverse=True)
+                    except Exception:
+                        pass
+                    try:
+                        hired = _r.choice(cands[:3])
+                    except Exception:
+                        hired = cands[0]
+                    try:
+                        pool_ref = getattr(league, "free_agent_staff", None)
+                        if pool_ref is not None and hired in pool_ref:
+                            pool_ref.remove(hired)
+                    except Exception:
+                        pass
+            except Exception:
+                hired = None
+        if hired is None:
+            return None
+        # Stamp the chair: ex-HCs arrive with role HEAD_COACH.
+        try:
+            hired.role = _SR.ASSISTANT_COACH
+        except Exception:
+            pass
+        try:
+            hired.assignment = "nhl"
+            hired.current_club = ""
+            hired.years_with_team = 0
+        except Exception:
+            pass
+        try:
+            if int(getattr(hired, "salary", 0) or 0) <= 0:
+                hired.salary = 275_000
+        except Exception:
+            pass
+        try:
+            if hired not in list(getattr(team, "staff", []) or []):
+                team.staff.append(hired)
+        except Exception:
+            pass
+        try:
+            _cname = getattr(hired, "name",
+                             getattr(hired, "full_name", "assistant coach"))
+            _log(team, f"{_cname} hired as assistant coach.")
+        except Exception:
+            pass
+        try:
+            _coach_headline(app, team, hired, "hired_assistant",
+                            date_str=date_str)
+        except Exception:
+            pass
+        return hired
+    except Exception:
+        return None
+
+
+def _maybe_house_clean_assistants(team, new_head_coach, league, date_str,
+                                  app=None, rng=None, p=0.35):
+    """A new head coach sometimes brings his own guy (Muck 2026-10-02).
+
+    With modest probability, the incumbent NHL assistant whose
+    philosophy fits the new head coach worst is released back to the
+    free-agent pool; the chair is then refilled through
+    ai_hire_assistant_coach (carousel first), so the ecosystem churns
+    the way real benches do. Never raises.
+    """
+    try:
+        if team is None or new_head_coach is None:
+            return
+        _r = rng if rng is not None else random
+        try:
+            if _r.random() >= float(p):
+                return
+        except Exception:
+            return
+        incumbents = _nhl_assistants(team)
+        if not incumbents:
+            return
+        # Worst philosophy fit goes.
+        try:
+            incumbents.sort(
+                key=lambda s: _assistant_fit_score(s, new_head_coach))
+        except Exception:
+            pass
+        out = incumbents[0]
+        try:
+            _remove_staff_member(team, out)
+        except Exception:
+            pass
+        try:
+            if league is not None:
+                _pool = getattr(league, "free_agent_staff", None)
+                if isinstance(_pool, list) and out not in _pool:
+                    try:
+                        out.assignment = ""
+                        out.current_club = ""
+                        out.years_with_team = 0
+                    except Exception:
+                        pass
+                    _pool.append(out)
+        except Exception:
+            pass
+        try:
+            _oname = getattr(out, "name",
+                             getattr(out, "full_name", "assistant coach"))
+            _log(team, f"{_oname} let go as the new head coach "
+                       f"brings in his own staff.")
+        except Exception:
+            pass
+        try:
+            ai_hire_assistant_coach(team, league=league, date_str=date_str,
+                                    app=app, rng=_r, exclude_coach=out)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def ai_coach_evaluation(team, date_str="", league=None, app=None, rng=None):

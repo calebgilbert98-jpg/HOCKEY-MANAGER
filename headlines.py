@@ -291,6 +291,7 @@ def _coaching_change_headline(game_date, team_name, coach_name,
             priority=2,
         )
     verb = "has been relieved of his duties" if change == "fired" else \
+        "has been named assistant coach" if change == "hired_assistant" else \
         "has been named head coach"
     return EmailMessage(
         sender="League News Desk",

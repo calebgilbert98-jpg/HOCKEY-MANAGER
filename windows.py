@@ -3440,6 +3440,14 @@ class FreeAgencyView(ctk.CTkFrame):
         elif sort_by == 'Age':
             filtered.sort(key=lambda e: e[0].age)
 
+        # Carousel lookup for the market: ex-head coaches willing to step
+        # down are flagged in the Club column so the user can spot them.
+        # Hoisted out of the row loop; never raises.
+        try:
+            from reputation_system import carousel_entry_for as _car_entry
+        except Exception:
+            _car_entry = None
+
         for staff, source, employer, ask in filtered:
             department = StaffClass.get_role_department(staff.role)
             experience = max(0, staff.age - 25)
@@ -3449,6 +3457,16 @@ class FreeAgencyView(ctk.CTkFrame):
                 staff, employer, user_team, current_date)
             if source == 'free_agent':
                 club = "Free agent"
+                # Muck 2026-10-02: flag coaching-carousel members -- an
+                # unemployed ex-head coach willing to take an assistant
+                # chair. The user hires through the normal flow; the flag
+                # is visibility only. Never raises.
+                try:
+                    if (_car_entry is not None
+                            and _car_entry(staff) is not None):
+                        club = "Free agent \u2022 Ex-HC carousel"
+                except Exception:
+                    pass
             elif source == 'overseas':
                 club = getattr(staff, 'current_club', '') or "Overseas"
             else:

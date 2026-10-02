@@ -395,6 +395,17 @@ class AITeamManager:
             # Weekly board review: the GM's job security moves with results,
             # and a change in seat status rewrites his strategy.
             self._weekly_board_review(team, current_date)
+            # Assistant-coach chairs: the AI keeps its bench staffed. A
+            # vacancy (new-HC house cleaning, old-save backfill) is filled
+            # from the carousel first, then the FA pool by fit. Cheap
+            # no-op when the bench is full. Never raises.
+            try:
+                import dressing_room as _dr
+                _dr.ai_hire_assistant_coach(
+                    team, league=getattr(self, "_league_ref", None),
+                    date_str=str(current_date)[:10])
+            except Exception:
+                pass
             strategy = self.team_strategies.get(team.team_name, strategy)
             identity = self.gm_identities.get(team.team_name)
             sec = self.gm_security.get(team.team_name)
