@@ -12,7 +12,7 @@ from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
 from ctk_theme import BG
 from datetime import datetime, date, timedelta
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import gzip
 import threading
 from dataclasses import asdict
