@@ -10729,8 +10729,14 @@ class HockeyManagerGUI(tk.Tk):
                     + stats.get('L', stats.get('Losses', 0))
                     + stats.get('OTL', 0))
         try:
-            # Get target games per team based on season length
-            target_games = getattr(self, 'season_games_count', 82)
+            # Get target games per team based on season length. Read the
+            # league's persisted slate length first (84 from 2026-27 on);
+            # old saves generated before the attribute existed fall back
+            # to 82, matching their schedules.
+            _lg = getattr(self, 'league', None)
+            target_games = getattr(
+                _lg, 'season_games_count',
+                getattr(self, 'season_games_count', 82))
 
             # Season is complete when every NHL team has played its full slate
             if self.league.standings:

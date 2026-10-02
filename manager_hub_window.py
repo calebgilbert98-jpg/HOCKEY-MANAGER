@@ -168,6 +168,11 @@ class ManagerHubView(ctk.CTkFrame):
         exp = board.expectation or "playoffs"
         gp = board.season_wins + board.season_losses + board.season_otl
         pts = board.season_wins * 2 + board.season_otl
+        # Slate length for pace math: 84 from the 2026-27 CBA; old saves
+        # (82-game schedules) carry no attribute and keep 82.
+        _gm = getattr(self.app, "game_manager", None)
+        _slate = getattr(getattr(_gm, "league", None),
+                         "season_games_count", 82) or 82
         target, note = self._EXPECTATION_TARGETS.get(exp, (94, ""))
         lines = []
 
@@ -175,9 +180,9 @@ class ManagerHubView(ctk.CTkFrame):
             lines.append("The season has not started, so there is no points "
                          "pace to measure yet.")
         else:
-            pace = pts / gp * 82
+            pace = pts / gp * _slate
             lines.append(f"Current pace: {pts} points in {gp} games "
-                         f"({pace:.1f} points per 82 games).")
+                         f"({pace:.1f} points per {_slate} games).")
             if target is None:
                 lines.append(f"Expectation ({mc.EXPECTATIONS[exp]['label']}): "
                              f"{note}.")
@@ -201,12 +206,13 @@ class ManagerHubView(ctk.CTkFrame):
         return "\n".join(lines)
 
     def _playoff_cutoff_pace(self):
-        """Approximate 82-game pace of the 16th-place team, or None."""
+        """Approximate full-slate pace of the 16th-place team, or None."""
         try:
             gm = getattr(self.app, "game_manager", None)
             if gm is None:
                 return None
             league = getattr(gm, "league", None)
+            _slate = getattr(league, "season_games_count", 82) or 82
             standings = (getattr(league, "standings", None)
                          or getattr(gm, "standings", None))
             if not standings or len(standings) < 16:
@@ -215,7 +221,7 @@ class ManagerHubView(ctk.CTkFrame):
             for s in standings.values():
                 g = s.get("W", 0) + s.get("L", 0) + s.get("OTL", 0)
                 if g > 0:
-                    paces.append(s.get("Points", 0) / g * 82)
+                    paces.append(s.get("Points", 0) / g * _slate)
             if len(paces) < 16:
                 return None
             return sorted(paces, reverse=True)[15]

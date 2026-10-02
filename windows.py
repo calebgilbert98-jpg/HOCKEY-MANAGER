@@ -16065,8 +16065,9 @@ class GMDashboardView(ctk.CTkFrame):
         if rank:
             self._line(card, f"League rank: {rank} of {len(ordered)}")
         if gp > 0:
-            pace = pts / gp * 82
-            self._line(card, f"82-game pace: {pace:.1f} pts", secondary=True)
+            _slate = getattr(league, "season_games_count", 82) or 82
+            pace = pts / gp * _slate
+            self._line(card, f"{_slate}-game pace: {pace:.1f} pts", secondary=True)
 
         # --- Salary cap ---
         card = self._card(self.grid_host, "Salary Cap", 0, 1)

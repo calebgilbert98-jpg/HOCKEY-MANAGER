@@ -4345,8 +4345,9 @@ class League:
     # ------------------------------------------------------------------
     # v2: template entries carry the preseason flag (6-tuples). v1 caches
     # predate preseason games and are ignored. v3: the Olympic break
-    # (Feb 10-24, Olympic years) keeps NHL games off those dates.
-    SCHEDULE_CACHE_VERSION = 3
+    # (Feb 10-24, Olympic years) keeps NHL games off those dates. v4: the
+    # 2026-27 CBA 84-game matrix (28+24+32) and 4-game preseason cap.
+    SCHEDULE_CACHE_VERSION = 4
     SCHEDULE_CACHE_DIR = _os.path.join("saves", "schedule_cache")
 
     def _schedule_cache_path(self, season_year, seed):
@@ -4438,7 +4439,7 @@ class League:
                     return False
         except (ValueError, IndexError, TypeError):
             return False
-        # Light validation: every NHL team must have exactly 82
+        # Light validation: every NHL team must have exactly 84
         # regular-season games (preseason exhibitions don't count).
         counts = {}
         for e in rebuilt:
@@ -4447,7 +4448,7 @@ class League:
                 for side in ('home_team', 'away_team'):
                     name = e[side].team_name
                     counts[name] = counts.get(name, 0) + 1
-        if counts and any(c != 82 for c in counts.values()):
+        if counts and any(c != 84 for c in counts.values()):
             return False
         self.schedule.clear()
         self.schedule.extend(rebuilt)
@@ -4466,6 +4467,13 @@ class League:
         if season_year is None:
             season_year = self.season_year
         print(f"🏒 Generating league schedule for {season_year}-{season_year+1} season...")
+
+        # NHL slate length, persisted on the league so season-completion,
+        # pace, and record code all read the number the schedule was
+        # built for. 2026-27 CBA: 84 games (was 82). Old saves whose
+        # schedules were generated before this attribute existed keep
+        # the default 82 via getattr fallbacks.
+        self.season_games_count = 84
 
         # Fresh schedule = fresh season: reset the parity engine's season
         # table (target-on-back / trap-game tiers) and every team's
@@ -4562,7 +4570,7 @@ class League:
         nhl_games = []
         self.games = {}
         
-        # Create all required matchups first (82 games per team = 1,312 total games)
+        # Create all required matchups first (84 games per team = 1,344 total games)
         all_matchups = self._create_all_nhl_matchups(nhl_teams)
         print(f"Created {len(all_matchups)} total matchups")
         
@@ -4613,15 +4621,17 @@ class League:
 
     def _generate_preseason_schedule(self, nhl_teams, season_year,
                                      rotation_seed=None):
-        """NHL preseason: 6 exhibitions per club (3 home / 3 away), played
+        """NHL preseason: 4 exhibitions per club (2 home / 2 away), played
         across late September into early October, before the Oct 8 opener --
         like the real league. Entries carry ``preseason: True`` so the
         daily sim quick-sims them without touching standings, season
         stats, career GP, board/morale, or milestones.
 
-        Pairing shape mirrors real preseason travel: 2 intra-division
-        rounds, 2 intra-conference rounds, 2 league-wide rounds (circle
-        method, so every club gets exactly 6 games; rematches across
+        The 2026-27 CBA caps preseason at 4 games per team (down from 6).
+
+        Pairing shape mirrors real preseason travel: 1 intra-division
+        round, 1 intra-conference round, 2 league-wide rounds (circle
+        method, so every club gets exactly 4 games; rematches across
         rounds are possible, like real September home-and-homes).
         """
         from datetime import date as _date, time as _time, timedelta as _td
@@ -4659,26 +4669,24 @@ class League:
         for t in teams:
             conferences.setdefault(getattr(t, 'conference', '?'), []).append(t)
 
-        pair_rounds = []  # 6 rounds x 16 pairings
-        # Rounds 1-2: intra-division (regional, like real September hockey).
+        pair_rounds = []  # 4 rounds x 16 pairings
+        # Round 1: intra-division (regional, like real September hockey).
         for div_teams in divisions.values():
             grp = sorted(div_teams, key=lambda t: t.team_name)
             rng.shuffle(grp)
-            for rnd in range(2):
-                pair_rounds.append(circle_round(grp, rnd))
-        # Rounds 3-4: intra-conference cross-division.
+            pair_rounds.append(circle_round(grp, 0))
+        # Round 2: intra-conference cross-division.
         for conf_teams in conferences.values():
             grp = sorted(conf_teams, key=lambda t: t.team_name)
             rng.shuffle(grp)
-            for rnd in range(2):
-                pair_rounds.append(circle_round(grp, rnd))
-        # Rounds 5-6: league-wide.
+            pair_rounds.append(circle_round(grp, 0))
+        # Rounds 3-4: league-wide.
         grp = sorted(teams, key=lambda t: t.team_name)
         rng.shuffle(grp)
         for rnd in range(2):
             pair_rounds.append(circle_round(grp, rnd))
 
-        # Balance home/away to 3 and 3 per club.
+        # Balance home/away to 2 and 2 per club.
         home_count = {t.team_name: 0 for t in teams}
         games_count = {t.team_name: 0 for t in teams}
         fixtures = []  # (team_a, team_b, home_team)
@@ -4695,12 +4703,12 @@ class League:
                 games_count[a.team_name] += 1
                 games_count[b.team_name] += 1
 
-        # Repair pass: flip venues until every club is exactly 3H/3A.
-        # (Total homes == 3 x clubs, so overs and unders always pair up.)
+        # Repair pass: flip venues until every club is exactly 2H/2A.
+        # (Total homes == 2 x clubs, so overs and unders always pair up.)
         for _pass in range(8):
-            over = [t for t in teams if home_count[t.team_name] > 3]
+            over = [t for t in teams if home_count[t.team_name] > 2]
             under = {t.team_name for t in teams
-                     if home_count[t.team_name] < 3}
+                     if home_count[t.team_name] < 2}
             if not over or not under:
                 break
             moved = False
@@ -4758,18 +4766,24 @@ class League:
                 print(f"⚠️ Preseason: could not place "
                       f"{a.team_name} vs {b.team_name}")
 
-        # Sanity: every club exactly 6 games; home split 2-4 (the real
+        # Sanity: every club exactly 4 games; home split 1-3 (the real
         # league doesn't play perfectly even September slates either).
         bad = [t.team_name for t in teams
-               if games_count.get(t.team_name, 0) != 6
-               or not 2 <= home_count.get(t.team_name, 0) <= 4]
+               if games_count.get(t.team_name, 0) != 4
+               or not 1 <= home_count.get(t.team_name, 0) <= 3]
         self.schedule.extend(entries)
         print(f"🏒 Preseason: {len(entries)} exhibitions scheduled "
               f"({start.isoformat()} -> {end.isoformat()})"
               + (f" -- ⚠️ imbalance: {bad}" if bad else ""))
 
     def _create_all_nhl_matchups(self, nhl_teams):
-        """Create all required NHL matchups in a simple way - exactly 82 games per team."""
+        """Create all required NHL matchups -- the real 84-game matrix.
+
+        2026-27 CBA (verified 2026-10-02 vs NHL.com/ESPN): 28 divisional
+        (4 x 7 rivals, 2H/2A) + 24 intra-conference (3 x 8, split 2H/1A vs
+        four clubs and 1H/2A vs the other four) + 32 inter-conference
+        (2 x 16, 1H/1A) = 84 games, 42 home / 42 away. 1,344 total games.
+        """
         print("Creating all NHL matchups...")
         
         # Organize teams by division and conference
@@ -4782,35 +4796,36 @@ class League:
         
         all_matchups = []
         
-        # Each team needs exactly 82 games total
-        # Simple approach: Each team plays every other team in the league ~2-3 times
-        
+        # Each team needs exactly 84 games total (2026-27 CBA matrix)
+        # Simple approach: Each team plays every other team in the league
+
         # For each team, schedule games against all 31 other teams
-        interconference_games_assigned = 0  # Track to keep total at 82 per team
-        
         for i, team1 in enumerate(nhl_teams):
             for j, team2 in enumerate(nhl_teams):
                 if i < j:  # Avoid duplicates - each pair only once
                     # Decide how many games between these teams based on relationship
                     if team1.division == team2.division:
-                        # Division rivals: 4 games each (4 × 7 = 28 games per team)
+                        # Division rivals: 4 games each (4 x 7 = 28 games per team)
                         games_count = 4
                     elif team1.conference == team2.conference:
-                        # Same conference, different division: 3 games each (3 × 8 = 24 games per team)
-                        games_count = 3  
+                        # Same conference, different division: 3 games each (3 x 8 = 24 games per team)
+                        games_count = 3
                     else:
-                        # Different conference: 2 games each (2 × 16 = 32 games per team)
-                        # Total: 28 + 24 + 32 = 84, which is 2 over our target
-                        # So reduce some inter-conference games from 2 to 1
-                        if (i + j) % 16 < 14:  # 14 out of 16 inter-conference matchups get 2 games
-                            games_count = 2
-                        else:  # 2 out of 16 inter-conference matchups get 1 game  
-                            games_count = 1
-                        # This gives: 28 + 24 + (2×14 + 1×2) = 28 + 24 + 30 = 82 games
-                    
-                    # Add the games (alternating home/away)
+                        # Different conference: 2 games each (2 x 16 = 32 games per team)
+                        # Total: 28 + 24 + 32 = 84 games
+                        games_count = 2
+
+                    # Add the games (alternating home/away). For the 3-game
+                    # intra-conference sets the extra home game alternates by
+                    # pair, matching the real matrix (4 clubs 2H/1A, 4 clubs
+                    # 1H/2A) instead of always favouring the lower index.
+                    first_hosts_extra = (i + j) % 2 == 0
                     for game_num in range(games_count):
-                        if game_num % 2 == 0:
+                        if games_count == 3 and game_num == 2:
+                            home_is_team1 = first_hosts_extra
+                        else:
+                            home_is_team1 = (game_num % 2 == 0)
+                        if home_is_team1:
                             all_matchups.append((team1, team2, 'HOME'))  # team1 hosts
                         else:
                             all_matchups.append((team2, team1, 'HOME'))  # team2 hosts
@@ -4858,7 +4873,7 @@ class League:
         
         # Season pacing - reduce daily games to spread over full calendar
         # Real NHL averages 6.9 games/day over 191 days
-        target_daily_games = max(4, min(16, int(1312 / total_season_days * 1.2)))  # Slight buffer
+        target_daily_games = max(4, min(16, int(1344 / total_season_days * 1.2)))  # Slight buffer
         
         while current_date <= season_end and remaining_matchups:
             days_into_season += 1
@@ -5179,8 +5194,8 @@ class League:
         
         # Check each team's game count
         for team_name, count in team_games_scheduled.items():
-            if count != 82:
-                print(f"⚠️ {team_name}: {count} games (target: 82)")
+            if count != 84:
+                print(f"⚠️ {team_name}: {count} games (target: 84)")
         
         print("✅ Fixed NHL scheduling - NO MORE MULTIPLE GAMES PER DAY!")
 
@@ -6144,7 +6159,7 @@ class League:
         special_events = []
         
         for game_item in self.schedule:
-            # Preseason exhibitions never count toward the 82-game slate.
+            # Preseason exhibitions never count toward the 84-game slate.
             if isinstance(game_item, dict) and game_item.get('preseason'):
                 continue
             # Handle both dictionary and tuple formats
@@ -6168,7 +6183,7 @@ class League:
                         if home_lg == 'National Hockey League' and away_lg == 'National Hockey League':
                             nhl_games.append(game_item)
         
-        # Verify NHL teams get exactly 82 games each
+        # Verify NHL teams get exactly 84 games each
         nhl_team_counts = {}
         for game_entry in nhl_games:
             # Handle different schedule formats
@@ -6195,11 +6210,11 @@ class League:
         
         # Check results
         total_teams = len(nhl_team_counts)
-        teams_with_82 = sum(1 for count in nhl_team_counts.values() if count == 82)
+        teams_with_84 = sum(1 for count in nhl_team_counts.values() if count == 84)
         
         print(f"📊 NHL Schedule Verification:")
         print(f"   Total teams: {total_teams}")
-        print(f"   Teams with 82 games: {teams_with_82}")
+        print(f"   Teams with 84 games: {teams_with_84}")
         print(f"   Total NHL games: {len(nhl_games)}")
         _preseason_n = sum(
             1 for g in self.schedule
@@ -6207,18 +6222,18 @@ class League:
         print(f"   Preseason exhibitions: {_preseason_n}")
         print(f"   Special events: {len(special_events)}")
         
-        if teams_with_82 == total_teams and len(nhl_games) == 1312:  # 32 teams * 82 games / 2
+        if teams_with_84 == total_teams and len(nhl_games) == 1344:  # 32 teams * 84 games / 2
             print("✅ PERFECT NHL SCHEDULE!")
-            print("   🎯 All teams: exactly 82 games")
-            print("   🎯 Total games: exactly 1,312")
+            print("   🎯 All teams: exactly 84 games")
+            print("   🎯 Total games: exactly 1,344")
             print("   🎯 Seasonal rotation: implemented")
             return True
         else:
             print("❌ Schedule verification failed!")
-            if teams_with_82 != total_teams:
-                print(f"   ⚠️ {total_teams - teams_with_82} teams don't have 82 games")
-            if len(nhl_games) != 1312:
-                print(f"   ⚠️ Expected 1,312 total games, got {len(nhl_games)}")
+            if teams_with_84 != total_teams:
+                print(f"   ⚠️ {total_teams - teams_with_84} teams don't have 84 games")
+            if len(nhl_games) != 1344:
+                print(f"   ⚠️ Expected 1,344 total games, got {len(nhl_games)}")
             return False
         
         # Free Agency begins (typically July 1st)
