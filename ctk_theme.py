@@ -207,7 +207,8 @@ class CTkPlayerList(ctk.CTkScrollableFrame):
             ovr = 0
         pos = ""
         try:
-            pos = player.primary_position.name.replace("_", " ").title()
+            from game_classes import position_label as _pl
+            pos = _pl(player)
         except Exception:
             pass
         try:

@@ -277,8 +277,8 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
         pos_label = ttk.Label(pos_frame, text="Position:", style='DarkBold.TLabel')
         pos_label.pack()
         pos_combo = ttk.Combobox(pos_frame, textvariable=self.position_filter, width=12,
-                                values=["All Positions", "Center", "Left Wing", "Right Wing", 
-                                       "Defense", "Goalie"], state='readonly')
+                                values=["All Positions", "C", "LW", "RW",
+                                       "D", "G"], state='readonly')
         pos_combo.pack(pady=(5, 0))
         pos_combo.bind('<<ComboboxSelected>>', lambda e: self._apply_filters())
         
@@ -961,7 +961,7 @@ class PlayerDevelopmentViewProfessional(ctk.CTkFrame):
             self.filtered_players.sort(key=lambda x: x['name'].lower(), reverse=reverse)
         elif col == 'pos':
             # Sort positions in logical order: C, LW, RW, D, G
-            pos_order = {'Center': 1, 'Left Wing': 2, 'Right Wing': 3, 'Defense': 4, 'Goalie': 5}
+            pos_order = {'C': 1, 'LW': 2, 'RW': 3, 'D': 4, 'G': 5}
             self.filtered_players.sort(key=lambda x: pos_order.get(x['pos'], 6), reverse=reverse)
         elif col in ['age', 'overall', 'potential']:
             # Internal numeric store: display shows tiers, sort stays numeric

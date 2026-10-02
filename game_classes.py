@@ -132,6 +132,42 @@ class PlayerPosition(Enum):
         }
         return weights[self]
 
+
+# Standard hockey position abbreviations for UI display (Muck 2026-10-02).
+# Keys are PlayerPosition enum names; values are the short labels.
+POSITION_ABBREV = {
+    "CENTER": "C",
+    "LEFT_WING": "LW",
+    "RIGHT_WING": "RW",
+    "LEFT_DEFENSE": "LD",
+    "RIGHT_DEFENSE": "RD",
+    "DEFENSE": "D",
+    "GOALIE": "G",
+}
+
+
+def position_label(player) -> str:
+    """Short position label for UI display, e.g. 'RW' or 'C/LW'.
+
+    Shows all playable positions: primary first, then secondaries.
+    Never raises -- returns '?' when the position can't be resolved.
+    """
+    try:
+        parts = []
+        primary = getattr(player, "primary_position", None)
+        if primary is not None:
+            key = primary.name if hasattr(primary, "name") else str(primary)
+            parts.append(POSITION_ABBREV.get(key, key[:2] if key else "?"))
+        for sec in getattr(player, "secondary_positions", None) or []:
+            key = sec.name if hasattr(sec, "name") else str(sec)
+            abbr = POSITION_ABBREV.get(key, key[:2] if key else "?")
+            if abbr not in parts:
+                parts.append(abbr)
+        return "/".join(parts) if parts else "?"
+    except Exception:
+        return "?"
+
+
 class PlayerRole(Enum):
     SNIPER = "Sniper"
     PLAYMAKER = "Playmaker"
@@ -422,6 +458,9 @@ class Player:
     last_name: str
     age: int
     primary_position: PlayerPosition
+    # Secondary playable positions (additive; empty = single-position player).
+    # Shown in UI as e.g. "C/LW" via position_label().
+    secondary_positions: list = field(default_factory=list)
     
     id: int = field(default_factory=lambda: next(player_id_counter), init=False)
     jersey_number: int = field(default_factory=lambda: random.randint(1, 98))

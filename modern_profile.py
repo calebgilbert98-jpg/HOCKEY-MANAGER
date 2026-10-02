@@ -542,7 +542,8 @@ class PlayerProfile(InGamePopup):
         pills.pack(anchor="w", pady=(12, 0))
 
         try:
-            pos_str = str(self.player.primary_position).split('.')[-1]
+            from game_classes import position_label as _pl
+            pos_str = _pl(self.player)
             pos_pill = PillBadge(pills, text=pos_str,
                                  bg=AppColors.ACCENT_BG,
                                  fg=AppColors.ACCENT)

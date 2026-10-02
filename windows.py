@@ -7,7 +7,8 @@ from tkinter import ttk
 from popup_system import (messagebox, InGamePopup, ask_card, confirm_card,
                           cards_available)
 import customtkinter as ctk
-from game_classes import (StaffRole, PlayerPosition, to_100_scale)
+from game_classes import (StaffRole, PlayerPosition, to_100_scale,
+    position_label,)
 import random
 import os
 import re
@@ -13350,7 +13351,7 @@ class WaiversView(ctk.CTkFrame):
             player_values = (
                 player.full_name,
                 player.age,
-                player.primary_position.name,
+                position_label(player),
                 _tier_label(player),
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",
@@ -13374,7 +13375,7 @@ class WaiversView(ctk.CTkFrame):
             player_values = (
                 player.full_name,
                 player.age,
-                player.primary_position.name,
+                position_label(player),
                 _tier_label(player),
                 getattr(player, 'nhl_games_played', 0),
                 f"${player.contract.salary:,}",

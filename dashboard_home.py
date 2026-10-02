@@ -1106,7 +1106,8 @@ class HomeDashboard:
                   reverse=True)
         for p in pool[:5]:
             try:
-                pos = p.primary_position.name
+                from game_classes import position_label as _pl
+                pos = _pl(p)
             except Exception:
                 pos = str(getattr(p, "primary_position", "?"))
             name = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()

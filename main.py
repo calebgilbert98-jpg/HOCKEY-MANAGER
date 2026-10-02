@@ -9,7 +9,7 @@ from popup_system import messagebox, InGamePopup, simpledialog
 import customtkinter as ctk
 from ctk_theme import (init_ctk_theme, primary_button, secondary_button, heading, TEAL, BG, PANEL, CARD, BORDER, TEXT, TEXT_DIM)
 from datetime import date, timedelta, datetime
-from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale
+from game_classes import League, Player, PlayerPosition, Staff, StaffRole, ScoutingReport, to_100_scale, position_label
 from game_classes import debug_print
 from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, ContractNegotiationView, ContractExtensionsView, ExtensionNegotiationView, ExtensionNegotiationWindow as _WindowsExtensionNegotiationWindow, SetCaptainsWindow, RosterView, FreeAgencyView, ScoutingView, DraftView, ScheduleView, FinancesView, NewsView, GMOptionsView, WaiversView, GMDashboardView, TeamAnalyticsView, make_tree_sortable, set_tree_empty_state, _mp_is_client, _mp_route)
 from ui_widgets import PillButton
@@ -5836,7 +5836,7 @@ class HockeyManagerGUI(tk.Tk):
                 
                 player_data.append((
                     player.full_name,
-                    player.primary_position.name if hasattr(player, 'primary_position') and player.primary_position else "N/A",
+                    position_label(player) if hasattr(player, 'primary_position') and player.primary_position else "N/A",
                     rating,
                     goals,
                     assists,
@@ -6009,7 +6009,7 @@ class HockeyManagerGUI(tk.Tk):
 
         info_text = (
             f"{focused_player.full_name}\n"
-            f"{focused_player.primary_position.name}\n"
+            f"{position_label(focused_player)}\n"
             f"Age: {focused_player.age}\n"
             f"{_tier_label(focused_player)}"
         )
@@ -20413,7 +20413,7 @@ class HockeyManagerGUI(tk.Tk):
                 values = (player.full_name, player.overall_rating())
             else:
                 salary_str = f"${player.contract.salary:,}" if player.contract.years_remaining > 0 else "Unsigned"
-                values = (player.captaincy or '', f"#{player.jersey_number}", player.full_name, player.primary_position.name, player.age, player.overall_rating(), player.potential_grade, player.morale, salary_str)
+                values = (player.captaincy or '', f"#{player.jersey_number}", player.full_name, position_label(player), player.age, player.overall_rating(), player.potential_grade, player.morale, salary_str)
             item_id = tree.insert('', 'end', values=values)
             tree_map[item_id] = player
         self.tree_maps[tree] = tree_map
@@ -25104,7 +25104,7 @@ class TradeBlockWindow(tk.Frame):
                 on_block,
                 f"#{player.jersey_number}",
                 player.full_name,
-                player.primary_position.name,
+                position_label(player),
                 _tier_label(player),
                 player.age,
                 salary_str,
@@ -25218,7 +25218,7 @@ class TradeBlockWindow(tk.Frame):
             discounted_value = int(player_value * 0.85)  # Trade block discount
             
             text.insert('end', f"Player: {player.full_name}\n", 'heading')
-            text.insert('end', f"Position: {player.primary_position.name}  |  {_tier_label(player)}  |  " +
+            text.insert('end', f"Position: {position_label(player)}  |  {_tier_label(player)}  |  " +
                              f"Age: {player.age}  |  Potential: {player.potential_grade}\n\n")
             
             text.insert('end', f"Market Value: ${player_value:,}\n")
@@ -26362,7 +26362,7 @@ class ContractExtensionsView(ctk.CTkFrame):
                 'D': 'defense',
                 'G': 'goalie'
             }
-            position_tag = position_tags.get(player.primary_position.name, '')
+            position_tag = position_tags.get(position_label(player).split('/')[0], '')
             
             # Format the rest
             salary_str = f"${current_salary:,}"
@@ -26386,7 +26386,7 @@ class ContractExtensionsView(ctk.CTkFrame):
             values = (
                 jersey,
                 player.full_name,
-                player.primary_position.name,
+                position_label(player),
                 player.age,
                 _tier_label(player),
                 player.potential_grade,

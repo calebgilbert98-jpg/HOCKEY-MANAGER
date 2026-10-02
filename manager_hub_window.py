@@ -309,7 +309,8 @@ class ManagerHubView(ctk.CTkFrame):
         for p in sorted(self.app.user_team.roster,
                         key=lambda x: (x.last_name, x.first_name)):
             try:
-                pos = p.primary_position.name if hasattr(p.primary_position, "name") else str(p.primary_position)
+                from game_classes import position_label as _pl
+                pos = _pl(p)
             except Exception:
                 pos = "?"
             letter = f" ({p.captaincy})" if getattr(p, "captaincy", None) else ""

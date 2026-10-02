@@ -6,7 +6,7 @@
 import random
 import itertools
 from typing import List, Dict, Tuple, Optional
-from game_classes import Player, PlayerPosition, GameBalance
+from game_classes import Player, PlayerPosition, GameBalance, position_label
 from draft_generator import (get_random_nationality, get_random_name, get_random_birthplace, get_random_position, get_archetype_for_position)
 
 # --- Enhanced Player Generation Constants ---
@@ -459,7 +459,26 @@ class PlayerGenerator:
         
         # Generate base attributes
         base_attributes = self.get_base_attributes(skill_tier, age, position)
-        
+
+        # Multi-position versatility (Muck 2026-10-02): some players can play
+        # a secondary position. Shown in UI as e.g. "C/LW".
+        try:
+            from game_classes import PlayerPosition as _PP
+            _roll = random.random()
+            if position == _PP.LEFT_WING and _roll < 0.35:
+                player.secondary_positions = [_PP.RIGHT_WING]
+            elif position == _PP.RIGHT_WING and _roll < 0.35:
+                player.secondary_positions = [_PP.LEFT_WING]
+            elif position == _PP.CENTER and _roll < 0.25:
+                player.secondary_positions = [random.choice([_PP.LEFT_WING, _PP.RIGHT_WING])]
+            elif position == _PP.LEFT_DEFENSE and _roll < 0.30:
+                player.secondary_positions = [_PP.RIGHT_DEFENSE]
+            elif position == _PP.RIGHT_DEFENSE and _roll < 0.30:
+                player.secondary_positions = [_PP.LEFT_DEFENSE]
+        except Exception:
+            pass
+
+        # Apply attributes to player
         # Apply attributes to player
         for attr, value in base_attributes.items():
             setattr(player, attr, value)
@@ -802,7 +821,7 @@ if __name__ == "__main__":
     # Test single player generation
     print("Testing single player generation...")
     test_player = generator.create_player("NHL_ELITE", "PRIME", PlayerPosition.CENTER)
-    print(f"Generated: {test_player.full_name}, {test_player.age} years old, {test_player.primary_position.name}")
+    print(f"Generated: {test_player.full_name}, {test_player.age} years old, {position_label(test_player)}")
     print(f"Overall: {test_player.overall_rating()}, Potential: {test_player.potential_grade}")
     print(f"Team: {test_player.team_name}, Salary: ${test_player.contract.salary:,}")
     
@@ -811,4 +830,4 @@ if __name__ == "__main__":
     rookies = generator.generate_rookie_class(50)
     print(f"Top 5 rookies:")
     for i, rookie in enumerate(rookies[:5]):
-        print(f"{i+1}. {rookie.full_name} ({rookie.primary_position.name}) - {rookie.overall_rating()} OVR")
+        print(f"{i+1}. {rookie.full_name} ({position_label(rookie)}) - {rookie.overall_rating()} OVR")
