@@ -8651,6 +8651,13 @@ class League:
         self.teams.append(team)
         # Initialize standings for this team
         self.standings[team.team_name] = {"W": 0, "L": 0, "OTL": 0, "Points": 0}
+        # Muck 2026-10-02: teams added after generation (expansion, etc.)
+        # must start fully staffed too. Never raises.
+        try:
+            from database_generator import backfill_team_staff as _bt
+            _bt(self)
+        except Exception:
+            pass
 
     def _simple_schedule_nhl_games(self):
         """Simple NHL scheduling that absolutely prevents 3+ consecutive games.

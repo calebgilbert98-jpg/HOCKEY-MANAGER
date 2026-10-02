@@ -519,6 +519,22 @@ class DatabaseGenerator:
         # Generate staff for teams
         self._generate_team_staff(main_league.teams)
 
+        # Muck 2026-10-02: verify EVERY NHL club (all 32, not just the
+        # user's) starts fully staffed; backfill any gaps immediately.
+        # Never raises -- a failed verification just logs.
+        try:
+            _gaps = verify_all_teams_staffed(main_league)
+            if _gaps:
+                debug_print(f"Staff verification found gaps in {len(_gaps)} teams; backfilling...")
+                backfill_team_staff(main_league)
+                _gaps2 = verify_all_teams_staffed(main_league)
+                if _gaps2:
+                    debug_print(f"Staff gaps remain after backfill: {list(_gaps2.keys())}")
+                else:
+                    debug_print("Staff backfill complete: all NHL clubs fully staffed.")
+        except Exception as _sve:
+            debug_print(f"Staff verification skipped (non-fatal): {_sve}")
+
         # Jersey numbers: seed every club's real retired numbers (plus
         # league-wide 99), then deal numbers in seniority order so
         # established players land their favorites.
@@ -872,12 +888,48 @@ class DatabaseGenerator:
             (StaffRole.GENERAL_MANAGER, 1, 150_000),
         ]
 
+        # AHL Team objects (separate from NHL clubs): the real AHL staff
+        # lives on the parent NHL club with assignment="ahl" (see
+        # ahl_league.py). These teams get a skeleton staff so no UI
+        # breaks on an empty list, but not the full NHL template.
+        # (Muck 2026-10-02: every team starts with the correct amount.)
+        ahl_team_positions = [
+            (StaffRole.HEAD_COACH, 1, 180_000),
+            (StaffRole.ASSISTANT_COACH, 1, 100_000),
+            (StaffRole.GENERAL_MANAGER, 1, 130_000),
+        ]
+
+        # Other leagues (European, ECHL, etc.): basic staff only.
+        other_league_positions = [
+            (StaffRole.HEAD_COACH, 1, 150_000),
+            (StaffRole.ASSISTANT_COACH, 1, 80_000),
+            (StaffRole.GENERAL_MANAGER, 1, 120_000),
+        ]
+
         for team in teams:
             debug_print(f"Generating staff for {team.team_name}...")
             # League-wide staff budget, tiered by market size.
             team.staff_budget = default_staff_budget(team.team_name)
 
-            for role, count, salary in staff_positions:
+            league_name = getattr(team, "league_name", "") or ""
+            is_nhl = league_name == "National Hockey League"
+            is_ahl = league_name == "American Hockey League"
+
+            if is_nhl:
+                # NHL clubs: full 27-role template + 4 AHL affiliate staff.
+                positions = staff_positions
+                ahl_extra = ahl_positions
+            elif is_ahl:
+                # AHL Team objects: skeleton staff only. The real AHL
+                # coaches/GM live on the parent NHL club.
+                positions = ahl_team_positions
+                ahl_extra = []
+            else:
+                # Other leagues: basic staff.
+                positions = other_league_positions
+                ahl_extra = []
+
+            for role, count, salary in positions:
                 for _ in range(count):
                     first_name = random.choice(first_names)
                     last_name = random.choice(last_names)
@@ -891,24 +943,31 @@ class DatabaseGenerator:
                         role=role,
                         age=random.randint(35, 65),
                         experience=random.randint(1, 20),
-                        assignment="nhl",
+                        assignment="ahl" if is_ahl else "nhl",
                         salary=salary + random.randint(-20_000, 20_000),
                     )
 
                     # Add to team staff
                     team.staff.append(staff_member)
 
-            for role, count, salary in ahl_positions:
+            for role, count, salary in ahl_extra:
                 for _ in range(count):
+                    first_name = random.choice(first_names)
+                    last_name = random.choice(last_names)
+
+                    # AHL affiliate staff: assignment="ahl" so the AHL
+                    # system finds them on the parent NHL club.
                     staff_member = Staff(
-                        first_name=random.choice(first_names),
-                        last_name=random.choice(last_names),
+                        first_name=first_name,
+                        last_name=last_name,
                         role=role,
                         age=random.randint(30, 60),
                         experience=random.randint(1, 15),
                         assignment="ahl",
                         salary=salary + random.randint(-15_000, 15_000),
                     )
+
+                    # Add to team staff
                     team.staff.append(staff_member)
     
     def _generate_free_agent_staff(self, count):
@@ -1728,7 +1787,7 @@ def backfill_team_staff(league):
     was.
     """
     try:
-        from game_classes import Staff, default_staff_budget
+        from game_classes import Staff, StaffRole, default_staff_budget
     except Exception:
         return
     try:
@@ -1744,17 +1803,25 @@ def backfill_team_staff(league):
                       "Moore", "Smith", "Taylor", "Thomas", "Thompson",
                       "White", "Williams", "Wilson", "Young"]
 
-        def _make(role, salary):
+        def _make(role, salary, assignment="nhl"):
             return Staff(
                 first_name=random.choice(first_names),
                 last_name=random.choice(last_names),
                 role=role,
                 age=random.randint(35, 65),
                 experience=random.randint(1, 20),
+                assignment=assignment,
                 salary=int(salary) + random.randint(-20_000, 20_000),
             )
 
         unique_roles = {StaffRole.GENERAL_MANAGER, StaffRole.HEAD_COACH}
+        # AHL affiliate positions (Muck 2026-10-02): old saves may lack
+        # the farm staff entirely; backfill them too.
+        ahl_backfill = [
+            (StaffRole.HEAD_COACH, 1, 200_000),
+            (StaffRole.ASSISTANT_COACH, 2, 120_000),
+            (StaffRole.GENERAL_MANAGER, 1, 150_000),
+        ]
         for team in teams:
             staff = getattr(team, "staff", None)
             if not isinstance(staff, list):
@@ -1768,25 +1835,47 @@ def backfill_team_staff(league):
                         getattr(team, "team_name", ""))
                 except Exception:
                     pass
+            league_name = getattr(team, "league_name", "") or ""
+            is_nhl = league_name == "National Hockey League"
             have = {}
+            have_ahl = {}
             for s in staff:
                 r = getattr(s, "role", None)
                 have[r] = have.get(r, 0) + 1
-            for role, count, salary in TEAM_STAFF_TEMPLATE:
-                try:
-                    missing = int(count) - int(have.get(role, 0))
-                except Exception:
-                    missing = 0
-                if missing <= 0:
-                    continue
-                if role in unique_roles and have.get(role, 0) >= 1:
-                    continue  # never double the GM / head coach
-                for _ in range(missing):
+                if str(getattr(s, "assignment", "") or "").lower() == "ahl":
+                    have_ahl[r] = have_ahl.get(r, 0) + 1
+            # NHL template backfill (skip for non-NHL teams; they get
+            # their own smaller complement at generation time).
+            if is_nhl:
+                for role, count, salary in TEAM_STAFF_TEMPLATE:
                     try:
-                        staff.append(_make(role, salary))
+                        missing = int(count) - int(have.get(role, 0))
                     except Exception:
-                        break
-                    have[role] = have.get(role, 0) + 1
+                        missing = 0
+                    if missing <= 0:
+                        continue
+                    if role in unique_roles and have.get(role, 0) >= 1:
+                        continue  # never double the GM / head coach
+                    for _ in range(missing):
+                        try:
+                            staff.append(_make(role, salary))
+                        except Exception:
+                            break
+                        have[role] = have.get(role, 0) + 1
+                # AHL affiliate staff backfill (assignment="ahl").
+                for role, count, salary in ahl_backfill:
+                    try:
+                        missing = int(count) - int(have_ahl.get(role, 0))
+                    except Exception:
+                        missing = 0
+                    if missing <= 0:
+                        continue
+                    for _ in range(missing):
+                        try:
+                            staff.append(_make(role, salary, assignment="ahl"))
+                        except Exception:
+                            break
+                        have_ahl[role] = have_ahl.get(role, 0) + 1
 
         # Free-agent pool: guarantee the per-role minimums for hireable
         # roles so old saves can hire into any position.
@@ -1827,6 +1916,59 @@ def generate_database(config_name: str) -> League:
     generator = DatabaseGenerator(config)
     
     return generator.generate_comprehensive_database()
+
+
+def verify_all_teams_staffed(league):
+    """Verify every NHL team has the full staff complement.
+
+    (Muck 2026-10-02: "every team*" -- ALL 32 clubs must start fully
+    staffed, not just the user's team.) Returns a dict mapping team name
+    to a list of missing (role, expected, actual) tuples; empty dict
+    means every NHL club is fully staffed. Never raises.
+    """
+    result = {}
+    try:
+        from game_classes import StaffRole
+    except Exception:
+        return result
+    try:
+        teams = list(getattr(league, "teams", None) or [])
+    except Exception:
+        return result
+    # Expected NHL complement: template counts for assignment="nhl"
+    # staff plus the AHL affiliate positions for assignment="ahl".
+    ahl_expected = {
+        StaffRole.HEAD_COACH: 1,
+        StaffRole.ASSISTANT_COACH: 2,
+        StaffRole.GENERAL_MANAGER: 1,
+    }
+    for team in teams:
+        try:
+            if (getattr(team, "league_name", "") or "") != "National Hockey League":
+                continue
+            staff = getattr(team, "staff", None) or []
+            have_nhl = {}
+            have_ahl = {}
+            for s in staff:
+                r = getattr(s, "role", None)
+                if str(getattr(s, "assignment", "") or "").lower() == "ahl":
+                    have_ahl[r] = have_ahl.get(r, 0) + 1
+                else:
+                    have_nhl[r] = have_nhl.get(r, 0) + 1
+            missing = []
+            for role, count, _salary in TEAM_STAFF_TEMPLATE:
+                actual = have_nhl.get(role, 0)
+                if actual < count:
+                    missing.append((role.value, count, actual))
+            for role, count in ahl_expected.items():
+                actual = have_ahl.get(role, 0)
+                if actual < count:
+                    missing.append((role.value + " (AHL)", count, actual))
+            if missing:
+                result[getattr(team, "team_name", "?")] = missing
+        except Exception:
+            continue
+    return result
 
 
 # Example usage and testing
