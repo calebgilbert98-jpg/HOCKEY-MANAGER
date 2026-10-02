@@ -1147,8 +1147,11 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
         _grades = list(getattr(player, "recent_game_grades", None) or [])[-10:]
         if len(_grades) >= 3:
             _avg = sum(_grades) / len(_grades)
-            # Expected grade rises with overall: stars should dominate.
-            _expected = 45.0 + (ovr - 70) * 0.8
+            # Expected grade is flat at 50 (meeting expectation): neutral
+            # penalizes no one regardless of overall. Game grades are
+            # already talent-normalized, so a rising bar double-counts
+            # talent and taxes stars for average play (L5, Muck 2026-10-02).
+            _expected = 50.0
             _gap = _avg - _expected
             if _gap < -10:
                 base *= max(0.75, 1.0 + _gap / 100.0)
@@ -1319,7 +1322,8 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         _perf_mult, _perf_why = 1.0, ""
         if len(_pgrades) >= 3:
             _pavg = sum(_pgrades) / len(_pgrades)
-            _pexp = 45.0 + (_ovr - 70) * 0.8
+            # Flat 50: neutral penalizes no one (L5, Muck 2026-10-02).
+            _pexp = 50.0
             _pgap = _pavg - _pexp
             if _pgap < -10:
                 _perf_mult = max(0.75, 1.0 + _pgap / 100.0)
