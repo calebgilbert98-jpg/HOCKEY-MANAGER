@@ -398,6 +398,97 @@ class PlayerProfile(InGamePopup):
         if _live:
             _add_season_block("Current season", _live, live=True)
 
+        # Career totals row: sum all finalized seasons (not the live one).
+        try:
+            _all_stints = []
+            for _s in _seasons:
+                _all_stints.extend(_by_season.get(_s, []))
+            if _all_stints:
+                _hdr = tk.Label(
+                    content, text="Career Totals",
+                    font=AppFonts.H3 if hasattr(AppFonts, "H3") else AppFonts.SMALL,
+                    fg=AppColors.TEXT_PRIMARY, bg=card.card_bg)
+                _hdr.pack(anchor="w", pady=(14, 4))
+                _tgp = sum(int(s.get("gp", 0) or 0) for s in _all_stints)
+                if is_goalie:
+                    _tw = sum(int(s.get("w", 0) or 0) for s in _all_stints)
+                    _tl = sum(int(s.get("l", 0) or 0) for s in _all_stints)
+                    _tsv = sum(int(s.get("sv", 0) or 0) for s in _all_stints)
+                    _tsa = sum(int(s.get("sa", 0) or 0) for s in _all_stints)
+                    _tsvp = (_tsv / _tsa) if _tsa > 0 else 0.0
+                    _tso = sum(int(s.get("so", 0) or 0) for s in _all_stints)
+                    _tot = (f"CAREER  {_tgp} GP   {_tw}-{_tl}   "
+                            f"{_tsvp:.3f} SV%   {_tso} SO")
+                else:
+                    _tg = sum(int(s.get("g", 0) or 0) for s in _all_stints)
+                    _ta = sum(int(s.get("a", 0) or 0) for s in _all_stints)
+                    _tpim = sum(int(s.get("pim", 0) or 0) for s in _all_stints)
+                    _tot = (f"CAREER  {_tgp} GP   {_tg} G   {_ta} A   "
+                            f"{_tg + _ta} PTS   {_tpim} PIM")
+                tk.Label(content, text=_tot, font=AppFonts.CAPTION,
+                         fg=AppColors.TEXT_SECONDARY,
+                         bg=card.card_bg).pack(anchor="w", pady=(2, 0))
+        except Exception:
+            pass
+
+        # Playoff stat lines: per-season playoff snapshots, newest first.
+        try:
+            _phist = [p for p in
+                      (getattr(self.player, "playoff_history", None) or [])
+                      if isinstance(p, dict) and int(p.get("gp", 0) or 0) > 0]
+            # Include the current in-progress playoffs if any.
+            try:
+                _cur_ps = getattr(self.player, "playoff_stats", None)
+                if _cur_ps is not None and \
+                        int(getattr(_cur_ps, "games_played", 0) or 0) > 0:
+                    _phist.append({
+                        "season": "Current", "gp": int(_cur_ps.games_played or 0),
+                        "g": int(_cur_ps.goals or 0),
+                        "a": int(_cur_ps.assists or 0),
+                        "pim": int(_cur_ps.penalties_in_minutes or 0),
+                        "w": int(_cur_ps.wins or 0),
+                        "l": int(_cur_ps.losses or 0),
+                        "sv": int(_cur_ps.saves or 0),
+                        "sa": int(_cur_ps.shots_against or 0),
+                        "so": int(_cur_ps.shutouts or 0),
+                        "live": True})
+            except Exception:
+                pass
+            if _phist:
+                _phdr = tk.Label(
+                    content, text="Playoffs",
+                    font=AppFonts.H3 if hasattr(AppFonts, "H3") else AppFonts.SMALL,
+                    fg=AppColors.TEXT_PRIMARY, bg=card.card_bg)
+                _phdr.pack(anchor="w", pady=(14, 4))
+                # Newest season first; "Current" (live) sorts last visually
+                # by placing it first in the list.
+                _phist.sort(key=lambda p: (
+                    0 if p.get("season") == "Current" else 1,
+                    -(p["season"] if isinstance(p.get("season"), int) else 0)))
+                for _p in _phist:
+                    _lbl = ("Current playoffs  (in progress)"
+                            if _p.get("season") == "Current"
+                            else self._history_season_label(_p.get("season")))
+                    _gp = int(_p.get("gp", 0) or 0)
+                    if is_goalie:
+                        _w = int(_p.get("w", 0) or 0)
+                        _l = int(_p.get("l", 0) or 0)
+                        _sv = int(_p.get("sv", 0) or 0)
+                        _sa = int(_p.get("sa", 0) or 0)
+                        _svp = (_sv / _sa) if _sa > 0 else 0.0
+                        _txt = (f"{_lbl}: {_gp} GP   {_w}-{_l}   "
+                                f"{_svp:.3f} SV%")
+                    else:
+                        _g = int(_p.get("g", 0) or 0)
+                        _a = int(_p.get("a", 0) or 0)
+                        _txt = (f"{_lbl}: {_gp} GP   {_g} G   {_a} A   "
+                                f"{_g + _a} PTS")
+                    tk.Label(content, text=_txt, font=AppFonts.SMALL,
+                             fg=AppColors.TEXT_SECONDARY,
+                             bg=card.card_bg).pack(anchor="w", pady=1)
+        except Exception:
+            pass
+
     def _create_header(self, parent):
         """Player header: avatar, name, pills, team + contract strip."""
         header = tk.Frame(parent, bg=AppColors.BG)

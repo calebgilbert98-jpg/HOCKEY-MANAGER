@@ -502,6 +502,12 @@ class Player:
     # stint tracker below. Plain dicts -- save/load safe (pickle).
     # Old-save safe: read via getattr(player, 'season_history', []).
     season_history: list = field(default_factory=list)
+    # Playoff history: per-season playoff stat snapshots, plain dicts like
+    # season_history: {"season": 2026, "gp": 12, "g": 5, "a": 7, ...}.
+    # Sealed at League.end_of_season alongside the stints, BEFORE the
+    # playoff_stats wipe. Only seasons with playoff GP > 0 are recorded.
+    # Old-save safe: read via getattr(player, 'playoff_history', []).
+    playoff_history: list = field(default_factory=list)
     # Live stint anchor: {"team": "OTT", "baseline": {stat: value}} while
     # the player is on an NHL roster, else None. Opened by Team.add_player
     # (roster only), closed by Team.remove_player / League.end_of_season.
@@ -7161,6 +7167,31 @@ class League:
                         player,
                         _team_abbr_safe(
                             getattr(_new_team, "team_name", "")))
+            except Exception:
+                pass
+            # Seal this season's playoff stats into playoff_history BEFORE
+            # the wipe below. Only seasons with playoff GP > 0 are recorded.
+            try:
+                _ps = getattr(player, "playoff_stats", None)
+                _pgp = int(getattr(_ps, "games_played", 0) or 0) if _ps else 0
+                if _pgp > 0 and _ps is not None:
+                    _ph = {"season": _season, "gp": _pgp,
+                           "g": int(getattr(_ps, "goals", 0) or 0),
+                           "a": int(getattr(_ps, "assists", 0) or 0),
+                           "pim": int(getattr(_ps, "penalties_in_minutes", 0) or 0),
+                           "shots": int(getattr(_ps, "shots", 0) or 0),
+                           "hits": int(getattr(_ps, "hits", 0) or 0),
+                           "w": int(getattr(_ps, "wins", 0) or 0),
+                           "l": int(getattr(_ps, "losses", 0) or 0),
+                           "sv": int(getattr(_ps, "saves", 0) or 0),
+                           "sa": int(getattr(_ps, "shots_against", 0) or 0),
+                           "ga": int(getattr(_ps, "goals_against", 0) or 0),
+                           "so": int(getattr(_ps, "shutouts", 0) or 0)}
+                    _phist = getattr(player, "playoff_history", None)
+                    if not isinstance(_phist, list):
+                        _phist = []
+                        player.playoff_history = _phist
+                    _phist.append(_ph)
             except Exception:
                 pass
             # Fresh playoff ledger for the new season (the Conn Smythe race
