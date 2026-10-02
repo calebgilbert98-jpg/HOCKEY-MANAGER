@@ -452,6 +452,10 @@ class GameSaveManager:
             # serialized; every save wiped it. Missing key = old save.
             'rivalries': [dict(r) for r in
                           (getattr(league, 'rivalries', None) or [])],
+            # Vezina GM vote results by season (plain dicts). Missing
+            # key = old save -> the vote runs fresh that season.
+            'vezina_votes': {str(k): dict(v) for k, v in
+                             (getattr(league, 'vezina_votes', None) or {}).items()},
             'lottery_results': {int(k): [dict(r) for r in v]
                                 for k, v in
                                 (getattr(league, 'lottery_results', None) or {}).items()},
@@ -1568,6 +1572,8 @@ class GameSaveManager:
                                        (league_data.get('all_star_rosters', None) or {}).items()}
             league.rivalries = [dict(r) for r in
                                 (league_data.get('rivalries', None) or [])]
+            league.vezina_votes = {str(k): dict(v) for k, v in
+                                   (league_data.get('vezina_votes', None) or {}).items()}
             league.cup_recap_sent = league_data.get('cup_recap_sent', None)
             # AI trade market: plain dicts; missing = old save -> lazy init.
             try:

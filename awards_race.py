@@ -656,3 +656,125 @@ AWARD_ELECTORATE = {
     "art_ross":    None,   # most points -- pure stat
     "jennings":    None,   # fewest team GA -- pure stat
 }
+
+
+# ---------------------------------------------------------------------------
+# Vezina Trophy: real GM voting
+# ---------------------------------------------------------------------------
+# The one award where the GMs actually vote. Each of the 32 GMs (31 AI +
+# the human) ranks their top 3 goaltenders; 5-3-1 points decide it.
+# AI GMs vote like GMs: base ranking from the Vezina race profile, shaded
+# by their team's situation. GMs cannot vote for their own goaltender
+# (real NHL rule).
+
+_VEZINA_BALLOT_POINTS = (5, 3, 1)
+
+
+def gm_vezina_ballot(team, candidates, team_pct_map, season_year=0):
+    """One AI GM's Vezina ballot: ranked top-3 player objects.
+
+    ``team``: the voting GM's team. ``candidates``: vezina_race entries
+    (top ~8). Own-team goalies are excluded from the ballot.
+    """
+    import random
+    try:
+        tid = int(getattr(team, "id", -1) or -1)
+    except Exception:
+        tid = -1
+    rng = random.Random(hash(("vezina_gm", int(season_year or 0), tid))
+                        & 0xFFFFFFFF)
+    team_name = getattr(team, "team_name", "") or ""
+    pct = float(team_pct_map.get(team_name, 0.5) or 0.5)
+
+    # The GM's own goalie IDs (ineligible).
+    own_ids = set()
+    try:
+        for p in (getattr(team, "roster", None) or []):
+            if "GOALIE" in str(getattr(
+                    getattr(p, "primary_position", None), "name", "")):
+                try:
+                    own_ids.add(int(getattr(p, "id", -1) or -1))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    scored = []
+    for r in candidates[:8]:
+        p = r.get("player")
+        if p is None:
+            continue
+        try:
+            pid = int(getattr(p, "id", -1) or -1)
+        except Exception:
+            continue
+        if pid in own_ids:
+            continue  # can't vote for your own guy
+        base = float(r.get("score", 0) or 0)
+        weight = base * rng.uniform(0.75, 1.25)
+        # Contending GMs respect winners on winning teams.
+        if pct >= 0.550:
+            try:
+                gpct = float(team_pct_map.get(
+                    getattr(p, "team_name", "") or "", 0.5) or 0.5)
+                if gpct >= 0.550:
+                    weight *= 1.25
+            except Exception:
+                pass
+        # Rebuilding GMs bet on the future: young goalies get a bump.
+        elif pct < 0.450:
+            try:
+                if int(getattr(p, "age", 99) or 99) <= 25:
+                    weight *= 1.35
+            except Exception:
+                pass
+        # Everyone loves shutouts; GMs remember the highlight reels.
+        try:
+            weight *= 1.0 + min(0.3, float(r.get("shutouts", 0) or 0) * 0.03)
+        except Exception:
+            pass
+        scored.append((weight, p))
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [p for _w, p in scored[:3]]
+
+
+def tally_vezina_ballots(ballots, candidates):
+    """Tally 5-3-1 ballots. Returns (winner_player, results list).
+
+    results: [{"player", "points", "first_place"}] in order. Tiebreak:
+    most first-place votes, then the race score.
+    """
+    pts = {}
+    firsts = {}
+    order = []
+    for ballot in ballots:
+        for rank, p in enumerate(ballot[:3]):
+            try:
+                pid = int(getattr(p, "id", -1) or -1)
+            except Exception:
+                continue
+            if pid not in pts:
+                pts[pid] = 0
+                firsts[pid] = 0
+                order.append((pid, p))
+            pts[pid] += _VEZINA_BALLOT_POINTS[rank]
+            if rank == 0:
+                firsts[pid] += 1
+    race_score = {}
+    for r in (candidates or []):
+        p = r.get("player")
+        if p is None:
+            continue
+        try:
+            race_score[int(getattr(p, "id", -1) or -1)] = float(
+                r.get("score", 0) or 0)
+        except Exception:
+            pass
+    ranked = sorted(order,
+                    key=lambda t: (pts[t[0]], firsts[t[0]],
+                                   race_score.get(t[0], 0)),
+                    reverse=True)
+    results = [{"player": p, "points": pts[pid],
+                "first_place": firsts[pid]} for pid, p in ranked]
+    winner = ranked[0][1] if ranked else None
+    return winner, results

@@ -14585,6 +14585,98 @@ class HockeyManagerGUI(tk.Tk):
 
         return winner, loser, scores, events, notable_events, sim
 
+    def _conduct_vezina_vote(self):
+        """Run the Vezina Trophy GM vote: 31 AI GMs + the human ballot.
+
+        Runs once per season at the end of the regular season, before
+        reputations/trophy cases are banked. The 5-3-1 tally decides the
+        winner; the result is stored on the league (persisted in saves)
+        so the awards calculator, ceremony, and history book all agree.
+        In bulk-sim mode the human ballot auto-fills from the model.
+        """
+        league = getattr(self, "league", None)
+        if league is None:
+            return
+        season_year = int(getattr(league, "season_year", 0) or 0)
+        votes = getattr(league, "vezina_votes", None) or {}
+        if str(season_year) in votes:
+            return  # already voted this season
+        try:
+            import awards_race as ar
+        except ImportError:
+            return
+        teams = list(getattr(league, "teams", []) or [])
+        players = [p for t in teams for p in (getattr(t, "roster", None) or [])]
+        goalies = [p for p in players if "GOALIE" in str(
+            getattr(getattr(p, "primary_position", None), "name", ""))]
+        try:
+            candidates = ar.vezina_race(goalies)
+        except Exception:
+            candidates = []
+        if not candidates:
+            return
+        team_pct = {}
+        for t in teams:
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[getattr(t, "team_name", "")] = (
+                pts / (2 * gp)) if gp else 0.5
+
+        user_team = getattr(self, "user_team", None)
+        user_name = getattr(user_team, "team_name", "") if user_team else ""
+        ballots = []
+        # 31 AI GMs vote their boards.
+        for t in teams:
+            if getattr(t, "team_name", "") == user_name:
+                continue
+            try:
+                b = ar.gm_vezina_ballot(t, candidates, team_pct,
+                                        season_year)
+                if b:
+                    ballots.append(b)
+            except Exception:
+                pass
+        # The human GM's ballot (auto-filled when bulk simming).
+        try:
+            if getattr(self, "_bulk_simming", False):
+                human = [r.get("player") for r in candidates[:3]]
+            else:
+                import awards_ceremony as ac
+                human = ac.collect_human_vezina_ballot(self, candidates)
+            if human:
+                ballots.append(human)
+        except Exception:
+            pass
+        try:
+            winner, results = ar.tally_vezina_ballots(ballots, candidates)
+        except Exception:
+            return
+        if winner is None:
+            return
+        try:
+            wid = int(getattr(winner, "id", -1) or -1)
+        except Exception:
+            wid = -1
+        votes[str(season_year)] = {
+            "winner_id": wid,
+            "winner_name": getattr(winner, "full_name",
+                                   getattr(winner, "name", "?")),
+            "ballots": len(ballots),
+            "runner_up": (getattr(results[1]["player"], "full_name",
+                                         "?") if len(results) > 1 else ""),
+        }
+        try:
+            league.vezina_votes = votes
+        except Exception:
+            pass
+        # News: the vote happened.
+        try:
+            self.add_news(
+                f"Vezina Trophy vote: {votes[str(season_year)]['winner_name']} "
+                f"wins the 5-3-1 ballot of {len(ballots)} GMs.")
+        except Exception:
+            pass
+
     def _update_player_reputations(self):
         """End-of-regular-season player reputation update.
 
@@ -15067,6 +15159,12 @@ class HockeyManagerGUI(tk.Tk):
             return
         self._season_end_handled_year = season_year
 
+        # Vezina GM vote first: 31 AI GMs + the human ballot decide it
+        # before anything banks awards off the model ranking.
+        try:
+            self._conduct_vezina_vote()
+        except Exception:
+            pass
         # Bank regular-season reputations before anything else touches stats.
         # (Has its own once-per-season guard; safe under the re-entry guard above.)
         self._update_player_reputations()
@@ -15565,13 +15663,40 @@ class HockeyManagerGUI(tk.Tk):
         # is the Maurice "Rocket" Richard Trophy -- no duplicates.
         awards['Maurice "Rocket" Richard Trophy'] = info
 
-        # Vezina - best goalie (SV%/GAA/wins + GSAx cross-check)
+        # Vezina - DECIDED BY GM VOTE (31 AI GMs + human ballot).
+        # The race models the profile GMs look for, but the 5-3-1 tally
+        # in league.vezina_votes is authoritative once the vote is held.
         e = _top(lambda: ar.vezina_race(players), "Vezina Trophy")
         info = _info(e)
         if info:
             p = e["player"]
             sv = getattr(p, "saves", 0) / max(1, getattr(p, "shots_against", 0) or 1)
             info["stats"] = f".{int(sv * 1000)} SV%, {getattr(p, 'wins', 0)}W"
+        # Override with the voted winner when the vote has been held.
+        try:
+            _vv = getattr(getattr(self, "league", None), "vezina_votes",
+                          None) or {}
+            _syr = str(int(getattr(getattr(self, "league", None),
+                                   "season_year", -1) or -1))
+            _voted = _vv.get(_syr)
+            if _voted and _voted.get("winner_id") not in (None, -1):
+                _wid = int(_voted["winner_id"])
+                for _pl in players:
+                    try:
+                        if int(getattr(_pl, "id", -2) or -2) == _wid:
+                            info = _info({"player": _pl})
+                            if info:
+                                _sv = getattr(_pl, "saves", 0) / max(
+                                    1, getattr(_pl, "shots_against", 0) or 1)
+                                info["stats"] = (
+                                    f".{int(_sv * 1000)} SV%, "
+                                    f"{getattr(_pl, 'wins', 0)}W "
+                                    f"(GM vote)")
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
         awards["Vezina Trophy (Best Goalie)"] = info
 
         # Norris - best defenseman (modern offense-first voting)

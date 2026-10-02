@@ -173,7 +173,8 @@ def build_ceremony_data(gui) -> List[Dict[str, Any]]:
         entry = {"award_key": key, "trophy": trophy, "flavor": flavor,
                  "is_team_award": key in ("jennings", "adams"),
                  "winner": None, "winner_team": "", "winner_stats": "",
-                 "finalists": [], "electorate": ar.AWARD_ELECTORATE.get(key)}
+                 "finalists": [], "electorate": ar.AWARD_ELECTORATE.get(key),
+                 "vote_story": ""}
         try:
             if key == "conn_smythe":
                 # Playoff MVP: winner from the bracket; finalists are the
@@ -222,6 +223,31 @@ def build_ceremony_data(gui) -> List[Dict[str, Any]]:
                     pass
         except Exception:
             pass
+        # Vezina: the GM vote is authoritative. Swap in the voted
+        # winner and the ballot story.
+        if key == "vezina":
+            try:
+                _vv = getattr(league, "vezina_votes", None) or {}
+                _voted = _vv.get(str(season_year))
+                if _voted and _voted.get("winner_id") not in (None, -1):
+                    _wid = int(_voted["winner_id"])
+                    for _pl in players:
+                        try:
+                            if int(getattr(_pl, "id", -2) or -2) == _wid:
+                                entry["winner"] = _pl
+                                entry["winner_team"] = _player_team(
+                                    _pl, roster_map)
+                                entry["winner_stats"] = _stat_line(_pl, key)
+                                break
+                        except Exception:
+                            continue
+                    _n = _voted.get("ballots", 32)
+                    _ru = _voted.get("runner_up", "")
+                    entry["vote_story"] = (
+                        f"Decided by a real vote: {_n} GM ballots, 5-3-1 "
+                        f"points.{' Edges out ' + _ru + '.' if _ru else ''}")
+            except Exception:
+                pass
         script.append(entry)
     return script
 
@@ -377,6 +403,8 @@ class AwardsCeremonyWindow(tk.Toplevel):
                      justify="center").pack(pady=(16, 0))
 
     def _electorate_story(self, entry) -> str:
+        if entry.get("vote_story"):
+            return entry["vote_story"]
         electorate = entry.get("electorate")
         if not electorate:
             # Pure-stat coronation.
@@ -469,3 +497,111 @@ def open_awards_ceremony(gui):
     except Exception:
         pass
     return win
+
+
+class VezinaBallotWindow(tk.Toplevel):
+    """The human GM's Vezina ballot: rank your top 3 goaltenders.
+
+    Real Vezina rules: GMs rank three goalies, 5-3-1 points. Your ballot
+    counts as one of 32 (31 AI GMs vote their own). Modal: returns the
+    ranked list via .result, or None if abstained.
+    """
+
+    def __init__(self, parent, candidates):
+        super().__init__(parent)
+        self.candidates = candidates[:8]
+        self.result = None
+        self.title("Vezina Trophy — Your Ballot")
+        self.configure(bg=CHARCOAL)
+        self.geometry("560x640")
+        self.resizable(False, False)
+
+        tk.Label(self, text="VEZINA TROPHY", bg=CHARCOAL, fg=GOLD,
+                 font=("Segoe UI", 18, "bold")).pack(pady=(18, 2))
+        tk.Label(self, text="Rank your top 3 goaltenders.\n"
+                            "31 fellow GMs are voting too — 5-3-1 points.",
+                 bg=CHARCOAL, fg="#8a9199", font=("Segoe UI", 11),
+                 justify="center").pack(pady=(0, 12))
+
+        # Candidate list with stats
+        list_frame = tk.Frame(self, bg=CHARCOAL)
+        list_frame.pack(padx=24, fill="x")
+        for i, r in enumerate(self.candidates):
+            p = r.get("player")
+            name = _player_name(p)
+            team = _player_team(p)
+            sv = r.get("sv_pct", 0) or 0
+            line = (f"{name} ({team}) — {r.get('wins', 0)}W, "
+                    f".{int(sv * 1000):03d} SV%, {r.get('gaa', 0):.2f} GAA, "
+                    f"{r.get('shutouts', 0)} SO")
+            tk.Label(list_frame, text=f"{i + 1}. {line}", bg=CHARCOAL,
+                     fg="#c8cdd3", font=("Segoe UI", 11), anchor="w",
+                     wraplength=510, justify="left").pack(fill="x", pady=2)
+
+        # Three rank pickers
+        self._vars = []
+        names = [f"{i + 1}. {_player_name(r.get('player'))}"
+                 for i, r in enumerate(self.candidates)]
+        pick_frame = tk.Frame(self, bg=CHARCOAL)
+        pick_frame.pack(pady=16)
+        for rank, label in (("1st", "1st place (5 pts)"),
+                            ("2nd", "2nd place (3 pts)"),
+                            ("3rd", "3rd place (1 pt)")):
+            row = tk.Frame(pick_frame, bg=CHARCOAL)
+            row.pack(fill="x", pady=4)
+            tk.Label(row, text=label, bg=CHARCOAL, fg=TEAL,
+                     font=("Segoe UI", 11, "bold"), width=16,
+                     anchor="w").pack(side="left")
+            var = tk.StringVar(value="")
+            self._vars.append(var)
+            menu = tk.OptionMenu(row, var, *names)
+            menu.configure(bg=PANEL, fg="white", font=("Segoe UI", 11),
+                           relief="flat", width=32)
+            menu.pack(side="left", padx=8)
+
+        self._err = tk.Label(self, text="", bg=CHARCOAL, fg="#ff6b6b",
+                             font=("Segoe UI", 11))
+        self._err.pack()
+
+        btnf = tk.Frame(self, bg=CHARCOAL)
+        btnf.pack(pady=12)
+        tk.Button(btnf, text="Submit Ballot", command=self._submit,
+                  bg=TEAL, fg="#0b0e11", font=("Segoe UI", 12, "bold"),
+                  relief="flat", padx=24, pady=8,
+                  cursor="hand2").pack(side="left", padx=6)
+        tk.Button(btnf, text="Abstain", command=self._abstain,
+                  bg=PANEL, fg="#8a9199", font=("Segoe UI", 11),
+                  relief="flat", padx=18, pady=8,
+                  cursor="hand2").pack(side="left", padx=6)
+
+    def _submit(self):
+        picks = [v.get() for v in self._vars]
+        if any(not p for p in picks):
+            self._err.configure(text="Rank all three spots.")
+            return
+        idxs = [int(p.split(".")[0]) - 1 for p in picks]
+        if len(set(idxs)) != 3:
+            self._err.configure(text="Pick three different goalies.")
+            return
+        self.result = [self.candidates[i].get("player") for i in idxs]
+        self.destroy()
+
+    def _abstain(self):
+        # Abstain: ballot auto-fills with the model's ranking.
+        self.result = [r.get("player") for r in self.candidates[:3]]
+        self.destroy()
+
+
+def collect_human_vezina_ballot(parent, candidates):
+    """Modal ballot window. Returns ranked top-3 players or model default."""
+    try:
+        win = VezinaBallotWindow(parent, candidates)
+        win.grab_set()
+        parent.wait_window(win)
+        res = win.result
+    except Exception:
+        res = None
+    if not res:
+        res = [r.get("player") for r in (candidates or [])[:3]
+               if r.get("player") is not None]
+    return res
