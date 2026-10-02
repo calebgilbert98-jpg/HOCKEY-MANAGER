@@ -13281,7 +13281,12 @@ class HockeyManagerGUI(tk.Tk):
                     pass
                 
             except Exception as e:
+                # BUG-001 diagnostic: logging only str(e) hid the failing
+                # line for months while games were silently dropped. Log the
+                # full traceback so the next failure is root-causable.
+                import traceback as _tb
                 print(f"Error in batch simulation: {e}")
+                _tb.print_exc()
                 continue
         
         # Store minimal game results for performance
