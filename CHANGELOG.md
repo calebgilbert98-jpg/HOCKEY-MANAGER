@@ -3,6 +3,22 @@
 All notable changes to Puck Dynasty are documented here. Dates are in
 America/Halifax time.
 
+## [0.13.0] - 2026-10-01
+
+### Highlights
+- Offseason training programs: GM assigns summer focus + intensity per
+  player in June; weekly development ticks Jul-Aug; results at camp.
+- Season goals: per-player preseason targets (one per type per team).
+  Hit: +4 to two attributes, +5 potential, +10 morale. Miss: -5 morale.
+- Major award winners under 27 jump one full potential grade
+  (Calder, Conn Smythe, Norris, Rocket, Art Ross, Ted Lindsay, Vezina).
+- Ted Lindsay Award added (NHLPA vote, less team bias than Hart).
+- NHL Awards Ceremony hub: 12 trophies, finalists, dramatic reveals.
+- Vezina Trophy decided by real GM vote: 31 AI GMs (can't vote own
+  goalie) + human ballot, 5-3-1 tally.
+- Merged collaborator's R1-R4 roster-limit/July-pass push; conflicts
+  resolved in favor of collaborator's versions.
+
 ## [0.12.0] - 2026-09-29
 
 ### Highlights
