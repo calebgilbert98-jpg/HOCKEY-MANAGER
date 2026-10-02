@@ -3576,6 +3576,11 @@ class GameSim:
         carrier_id = getattr(carrier, "id", None)
 
         for team in (attacking_team, defending_team):
+            if team is None:
+                # BUG-005: teamless gaining team -> nothing to shape
+                # (team.team_name below would crash). The real unit is
+                # positioned on the other loop pass.
+                continue
             is_att = (team == attacking_team)
             adir = 1 if team is self.home_team else -1  # direction team attacks
             att_net = 189.0 if adir == 1 else 11.0     # net this team attacks
@@ -8674,6 +8679,10 @@ class GameSim:
 
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
+        # BUG-005: positional helpers can receive a None team (e.g. a teamless
+        # interceptor in _resolve_turnover). No roster, no lineup -> empty.
+        if team is None:
+            return []
         is_home = team is self.home_team
         # Fast path: the answer only changes when the game state below
         # changes, but this runs ~5k times per game. Key on everything read.

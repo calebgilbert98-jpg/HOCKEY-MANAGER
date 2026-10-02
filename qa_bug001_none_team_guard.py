@@ -139,10 +139,68 @@ def test_zone_entry_non_roster_no_crash():
     print("PASS: _successful_zone_entry degrades gracefully for untracked carrier")
 
 
+class _FakeSkater:
+    def __init__(self, pid, pos):
+        self.id = pid
+        self.primary_position = pos
+
+    def overall_rating(self):
+        return 80.0
+
+
+def _make_positional_sim():
+    """GameSim stub with enough positional machinery for _shape_positions."""
+    sim = _make_sim(home_roster=[])
+    sim.period = 1
+    sim.clock = 1200
+    sim.home_penalties = []
+    sim.away_penalties = []
+    sim.home_score = 0
+    sim.away_score = 0
+    sim.is_playoff = False
+    sim.goalie_pulled = set()
+    sim.puck_pos = [100.0, 42.5]
+    sim.possession_player = None
+    return sim
+
+
+def test_get_on_ice_none_team():
+    """BUG-005 repro site: _get_on_ice(None) must return [], not raise."""
+    sim = _make_positional_sim()
+    assert sim._get_on_ice(None) == []
+    assert sim._on_ice_skaters(None) == []
+    assert sim._on_ice_goalie(None) is None
+    print("PASS: _get_on_ice(None) returns [], no crash")
+
+
+def test_shape_positions_none_attacking_team():
+    """BUG-005 chain: _shape_positions(None) (teamless interceptor) must not
+    raise -- the exact _resolve_turnover:9945 -> _shape_positions(None) ->
+    _on_ice_skaters(None) -> _get_on_ice:8827 chain that dropped batch games."""
+    from simulation import PlayerPosition
+    skaters = [_FakeSkater(101, PlayerPosition.CENTER),
+               _FakeSkater(102, PlayerPosition.LEFT_WING),
+               _FakeSkater(103, PlayerPosition.RIGHT_WING),
+               _FakeSkater(104, PlayerPosition.LEFT_DEFENSE),
+               _FakeSkater(105, PlayerPosition.RIGHT_DEFENSE),
+               _FakeSkater(106, PlayerPosition.GOALIE)]
+    sim = _make_positional_sim()
+    home = sim.home_team
+    home.roster = skaters
+    home.lineup = {"F1_C": skaters[0], "F1_LW": skaters[1],
+                   "F1_RW": skaters[2], "D1_L": skaters[3],
+                   "D1_R": skaters[4], "G1": skaters[5]}
+    sim._shape_positions(None, [100.0, 42.5])  # raised AttributeError pre-fix
+    assert sim.team_phases.get("Home") is not None
+    print("PASS: _shape_positions(None) degrades gracefully, no crash")
+
+
 if __name__ == "__main__":
     test_non_roster_player_no_crash()
     test_rostered_player_still_counted()
     test_hit_stats_non_roster_no_crash()
     test_shot_stats_non_roster_no_crash()
     test_zone_entry_non_roster_no_crash()
-    print("qa_bug001_none_team_guard: 5/5 passed")
+    test_get_on_ice_none_team()
+    test_shape_positions_none_attacking_team()
+    print("qa_bug001_none_team_guard: 7/7 passed")
