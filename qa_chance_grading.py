@@ -201,5 +201,103 @@ check("B in 40-65%", 0.40 <= pb <= 0.65, f"{pb:.1%}")
 check("C in 20-40%", 0.20 <= pc <= 0.40, f"{pc:.1%}")
 check("B most common", pb > pa and pb > pc)
 
+# 9. Finishing consolidation (2026-10-01, per Muck): one finishing, not two
+print("\n9. Finishing consolidation (single source of truth):")
+import attribute_composites as _ac
+_mesh_members = [(n, w) for n, w in mesh.FINISHING_MEMBERS]
+_ac_members = [(n, w) for n, w in _ac._COMPOSITES["finishing"]["members"]]
+check("member tables in sync", _mesh_members == _ac_members,
+      f"{_mesh_members} vs {_ac_members}")
+check("finishing weights sum to 1.0",
+      abs(sum(w for _, w in _mesh_members) - 1.0) < 1e-9)
+# The composite and the conversion path must agree exactly, on varied
+# profiles (including None attrs -> legacy positioning fallback).
+import random as _r
+_r.seed(7)
+_agree = True
+for _ in range(50):
+    _fp = Fake(**{_a: _r.randint(30, 97) for _a in (
+        "wristshot", "slapshot", "one_timer", "backhand",
+        "shooting_accuracy", "composure", "hockey_iq",
+        "offensive_positioning", "off_the_puck", "anticipation",
+        "pressure_player", "deflections", "balance", "strength",
+        "determination", "aggressiveness", "positioning")})
+    if _r.random() < 0.3:
+        _fp.offensive_positioning = None  # legacy fallback path
+    _rc = _ac.raw_composite(_fp, "finishing")
+    _fr = mesh.finishing_rating(_fp)
+    _ss = mesh.shooter_skill_composite(_fp, _fp.wristshot)
+    _fr_w = mesh.finishing_rating(_fp, _fp.wristshot)
+    if not (_rc == _fr and _ss == _fr_w):
+        _agree = False
+        break
+check("composite == finishing_rating == shooter_skill on 50 profiles", _agree)
+check("league max unchanged (95+ -> full A envelope)",
+      mesh.personal_grade_ceiling(
+          Fake(**{a: 97 for a in (
+              "wristshot", "slapshot", "one_timer", "backhand",
+              "shooting_accuracy", "composure", "hockey_iq",
+              "offensive_positioning", "off_the_puck", "anticipation",
+              "pressure_player", "deflections", "balance", "strength",
+              "determination", "aggressiveness")}), "A")[1]
+      == mesh.chance_grade_clamp("A")[1])
+_mid = Fake(**{a: 60 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+check("mid-band compressed (60 finishing A-ceiling < 0.18)",
+      mesh.personal_grade_ceiling(_mid, "A")[1] < 0.18,
+      f"{mesh.personal_grade_ceiling(_mid, 'A')[1]:.3f}")
+check("ceiling monotonic in finishing",
+      all(mesh.finishing_ceiling_fraction(x) <= mesh.finishing_ceiling_fraction(x + 5)
+          for x in range(40, 95, 5)))
+check("protected MULT untouched",
+      mesh.CHANCE_GRADE_FINISH_MULT == {"A": 1.75, "B": 1.00, "C": 0.35})
+check("protected CLAMP untouched",
+      mesh.CHANCE_GRADE_CLAMP == {"A": (0.10, 0.18), "B": (0.04, 0.12),
+                                  "C": (0.015, 0.09)})
+
+# 10. Scenario lift (2026-10-01, Muck): windows for breakouts, not caps
+print("\n10. Scenario lift (windows, not caps):")
+_hot = Fake(**{a: 70 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_hot.mesh_form = 1.0  # red-hot heater
+_base_hi = mesh.personal_grade_ceiling(_hot, "A")[1]
+_lift_hi = mesh.personal_grade_ceiling(_hot, "A", scenario_mult=1.5)[1]
+check("scenario lift raises the ceiling", _lift_hi > _base_hi,
+      f"{_base_hi:.3f} -> {_lift_hi:.3f}")
+check("scenario lift never exceeds envelope", _lift_hi <= 0.18,
+      f"{_lift_hi:.3f}")
+_star = Fake(**{a: 97 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_star_hi = mesh.personal_grade_ceiling(_star, "A", scenario_mult=1.8)[1]
+check("stars stay at envelope max (lift doesn't exceed)",
+      _star_hi == mesh.chance_grade_clamp("A")[1],
+      f"{_star_hi:.3f}")
+# Heat-based scenario mult
+_hm = mesh.ceiling_scenario_mult(_hot)
+check("heater lifts scenario mult above 1.0", _hm > 1.0, f"{_hm:.3f}")
+_cold = Fake(**{a: 70 for a in (
+    "wristshot", "slapshot", "one_timer", "backhand",
+    "shooting_accuracy", "composure", "hockey_iq",
+    "offensive_positioning", "off_the_puck", "anticipation",
+    "pressure_player", "deflections", "balance", "strength",
+    "determination", "aggressiveness")})
+_cold.mesh_form = -1.0  # ice cold
+_cm = mesh.ceiling_scenario_mult(_cold)
+check("cold doesn't penalize (stays 1.0)", _cm == 1.0, f"{_cm:.3f}")
+check("scenario mult capped at 1.8",
+      mesh.ceiling_scenario_mult(_hot, linemates=[_star, _star]) <= 1.8)
+
 print(f"\n{'='*40}\nPASS: {PASS}  FAIL: {FAIL}")
 sys.exit(1 if FAIL else 0)

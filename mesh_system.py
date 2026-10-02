@@ -305,11 +305,16 @@ def recalibrated_shot_chance(skill_diff: float) -> float:
     return SHOT_BASE_CHANCE + _d * _talent_sens(_d)
 
 
-def shooter_finish_mult(shooter_skill: float, mean_skill: float = 65.3) -> float:
+def shooter_finish_mult(shooter_skill: float, mean_skill: float = 65.4) -> float:
     """Multiplicative finishing factor (GameSim fidelity): 1.0 at
     league-average skill, piecewise slope (flat middle, convex top) -- the
     same talent decision quick-sim's additive model makes above. Clamped
     0.80-1.25. Never raises.
+
+    (2026-10-01: re-measured on the new finishing_rating blend --
+    mean 65.4, n=600 generated skaters, sd 2.8. The old blend measured
+    65.3, so the anchor is effectively unchanged; the constant is updated
+    so the comment stays truthful.)
     """
     try:
         _d = float(shooter_skill) - float(mean_skill)
@@ -432,30 +437,121 @@ def harmonic_bundle(pairs) -> float:
         return 50.0
 
 
-def shooter_skill_composite(shooter, shooting_base=None) -> float:
-    """Shooter talent on the native 1-100 scale.
+# ---------------------------------------------------------------------------
+# Finishing: the ONE shared finishing decision (2026-10-01, per Muck).
+#
+# WHY THIS EXISTS: the attribute_composites "finishing" was a +/-3%
+# amplifier (decorative) while real conversion ran through
+# shooter_skill_composite's 6-attribute blend -- two "finishings" that
+# disagreed (a 57.9-composite winger scoring 61 goals). Now there is one:
+# finishing_rating(). attribute_composites.raw_composite(player,
+# "finishing") delegates here, and shooter_skill_composite (kept for API
+# stability) is a thin wrapper. They cannot disagree again -- a repo QA
+# test asserts the member tables stay in sync.
+#
+# WHAT IT IS (Muck's directive: diverse, honest): the shot-type-specific
+# tool (wristshot/slapshot/one_timer/backhand, chosen per attempt -- the
+# release itself, never generic "shooting"), shooting_accuracy (placement:
+# corners, not crests), composure (hands under pressure), hockey_iq
+# (reading the goalie, picking the spot), offensive_positioning (being in
+# the right spot), off_the_puck (finding the seam, losing coverage),
+# anticipation (reacting to the developing chance), pressure_player (the
+# clutch release), deflections (tipping / hand-eye), balance (shooting in
+# stride, through contact), strength (net-front, winning the spot to
+# shoot), determination (second effort around the crease),
+# aggressiveness (attacking the net, not the perimeter).
+#
+# Aggregated by harmonic_bundle (the synergy gate, per Muck 2026-09-28):
+# a lone 95 wristshot with 45 composure and 50 IQ is a perimeter shooter,
+# not a finisher -- the weak links drag, the way real hockey works.
+# Form/heat/streak state is NEVER an input (see the composite module's
+# FORM/HEAT/STREAK STATEMENT). Never raises.
+# ---------------------------------------------------------------------------
 
-    Weights: shot-attr 0.25 + shooting_accuracy 0.20 + offensive_awareness
-    0.20 + skating 0.15 + off_the_puck 0.10 + composure 0.10. shooting_base
-    is the shot-type-specific base (wristshot/slapshot/one_timer/backhand);
-    each engine picks it from position/shot type the way it always has,
-    then shares this weighting. Aggregated by harmonic_bundle (synergy
-    gate) -- the "get open" attributes (awareness, skating) gate the shot.
+#: Canonical finishing member table: (attribute, weight); weights sum to
+#: 1.0 (asserted below). "_shot_tool" is the per-attempt shot-type value,
+#: substituted by finishing_rating(). attribute_composites documents the
+#: same table for the "finishing" composite (UI/introspection).
+FINISHING_MEMBERS = (
+    ("_shot_tool", 0.22),          # the release itself, per attempt
+    ("shooting_accuracy", 0.16),   # placement -- corners, not crests
+    ("composure", 0.10),           # hands under pressure
+    ("hockey_iq", 0.08),           # reading the goalie, picking the spot
+    ("offensive_positioning", 0.08),  # being in the right spot
+    ("off_the_puck", 0.08),        # finding the seam, losing coverage
+    ("anticipation", 0.06),        # reacting to the developing chance
+    ("pressure_player", 0.05),     # the clutch release
+    ("deflections", 0.05),         # tipping / hand-eye
+    ("balance", 0.04),             # shooting in stride, through contact
+    ("strength", 0.04),            # net-front, winning the spot to shoot
+    ("determination", 0.02),       # second effort around the crease
+    ("aggressiveness", 0.02),      # attacking the net, not the perimeter
+)
+
+# Weight-integrity gate: finishing weights must sum to 1.0.
+assert abs(sum(_w for _, _w in FINISHING_MEMBERS) - 1.0) < 1e-9, \
+    f"FINISHING_MEMBERS weights sum to {sum(_w for _, _w in FINISHING_MEMBERS)}"
+
+#: Shot-tool attributes, in the order finishing_rating prefers them when
+#: no per-attempt tool is supplied (best tool wins).
+FINISHING_SHOT_TOOLS = ("wristshot", "slapshot", "one_timer", "backhand")
+
+
+def _fin_attr(player, name, default=10.0):
+    """Read one finishing member defensively. None -> default; the
+    offensive/defensive_positioning split falls back to legacy
+    `positioning` (old saves / generated players), mirroring
+    mesh_system.offensive_positioning() and attribute_composites._attr.
+    Never raises."""
+    try:
+        v = getattr(player, name, None)
+        if v is None:
+            if name in ("offensive_positioning", "defensive_positioning"):
+                v = getattr(player, "positioning", None)
+            if v is None:
+                v = default
+        return float(v)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def finishing_rating(player, shot_tool=None) -> float:
+    """Canonical finishing rating on the native 1-100 scale.
+
+    shot_tool: the actual shot-type value used on this attempt
+    (wristshot/slapshot/one_timer/backhand -- each engine picks it from
+    position/shot type the way it always has). When None (UI, AI reads),
+    the shooter's best tool is used, so the stable rating reflects what
+    he actually shoots with. Harmonic aggregation (synergy gate).
     Never raises.
     """
     try:
-        if shooting_base is None:
-            shooting_base = getattr(shooter, "wristshot", 10)
-        return harmonic_bundle([
-            (0.25, shooting_base),
-            (0.20, getattr(shooter, "shooting_accuracy", 10)),
-            (0.20, getattr(shooter, "offensive_awareness", 10)),
-            (0.15, getattr(shooter, "skating", 10)),
-            (0.10, getattr(shooter, "off_the_puck", 10)),
-            (0.10, getattr(shooter, "composure", 10)),
-        ])
+        if shot_tool is None:
+            _tools = [_fin_attr(player, _t) for _t in FINISHING_SHOT_TOOLS]
+            shot_tool = max(_tools)
+        _pairs = []
+        for _name, _w in FINISHING_MEMBERS:
+            _v = (shot_tool if _name == "_shot_tool"
+                  else _fin_attr(player, _name))
+            _pairs.append((_w, _v))
+        return harmonic_bundle(_pairs)
     except Exception:
         return 50.0
+
+
+def shooter_skill_composite(shooter, shooting_base=None) -> float:
+    """Shooter talent on the native 1-100 scale.
+
+    (2026-10-01, per Muck: CONSOLIDATE.) The old 6-attribute blend
+    (shot-attr 0.25 + shooting_accuracy 0.20 + offensive_awareness 0.20
+    + skating 0.15 + off_the_puck 0.10 + composure 0.10) is retired --
+    it disagreed with the attribute_composites "finishing" (two
+    "finishings", one decorative). Now a thin wrapper over the ONE shared
+    finishing_rating(): the diverse 13-member harmonic blend.
+    shooting_base is the shot-type-specific base each engine picks from
+    position/shot type the way it always has. Never raises.
+    """
+    return finishing_rating(shooter, shooting_base)
 
 
 def goalie_skill_composite(goalie) -> float:
@@ -839,16 +935,18 @@ def tip_goal_chance(tipper, goalie, goalie_skill: float, screened: bool = False)
 def netfront_finish_chance(finisher, goalie, goalie_skill: float) -> float:
     """Goal probability on a net-front rebound/loose puck.
 
-    Finisher: loose_puck 0.40 (win the scramble) + shooting in tight
-    (wristshot/backhand blend) 0.40 + composure 0.20 (finish under
-    pressure). Rebounds are high-danger: base ~22%. Never raises.
+    (2026-10-01, per Muck: CONSOLIDATE.) The finisher side now reads the
+    ONE shared finishing_rating() -- the old bespoke blend (loose_puck
+    0.40 + tight-shot 0.40 + composure 0.20) is retired so the rebound
+    finish can't disagree with the composite either. The scramble WIN is
+    still decided upstream (anticipation + offensive_awareness battle in
+    each engine's rebound event); this is the finish once he has the
+    puck in tight. Rebounds are high-danger: calibrated base ~22% and
+    the [0.05, 0.55] bounds are untouched -- wiring, not recalibration.
+    Never raises.
     """
     try:
-        _tight = (float(getattr(finisher, "wristshot", 10))
-                  + float(getattr(finisher, "backhand", 10))) / 2.0
-        _fin = (float(getattr(finisher, "loose_puck", 10)) * 0.40
-                + _tight * 0.40
-                + float(getattr(finisher, "composure", 10)) * 0.20)
+        _fin = finishing_rating(finisher)
         _gsave = 50.0
         if goalie is not None:
             _gsave = (float(getattr(goalie, "reflexes", 10)) * 0.50
@@ -1812,6 +1910,164 @@ def chance_grade_clamp(grade: str):
         return CHANCE_GRADE_CLAMP.get(str(grade).upper(), (0.04, 0.16))
     except Exception:
         return (0.04, 0.16)
+
+
+# ---------------------------------------------------------------------------
+# Personal finishing ceiling (2026-10-01, per Muck).
+#
+# THE DISEASE: the grade clamp was FLAT -- every shooter at/above ~60
+# skill converted grade-A at the same 0.18. A 60-finishing winger with a
+# heavy grade-A diet scored like a generational sniper.
+#
+# THE FIX: the league envelope (CHANCE_GRADE_CLAMP -- PROTECTED, never
+# touched; the gate below asserts it) is the hard outer bound. WITHIN it,
+# each shooter's personal ceiling scales with his finishing_rating.
+# A 95+ finisher keeps the full envelope (league max unchanged -- the
+# 0.18 grade-A ceiling still exists for the players who earn it); the
+# mid-band compresses convexly so mediocre finishers can't ride volume
+# to 60 goals. Both engines apply this same shared decision at the same
+# point (the final clamp on goal probability). No caps, no dampers --
+# pure talent. Never raises.
+# ---------------------------------------------------------------------------
+
+def finishing_ceiling_fraction(finishing: float) -> float:
+    """Map a 1-100 finishing rating to [0, 1] of the grade envelope.
+
+    Linear (exponent 1.0, anchored at 35): stars (90+) keep ~95-100% of
+    the envelope, a 75-finishing shooter keeps 80%, a 60-finishing
+    shooter 50%. finishing >= 95 -> 1.0, so the league maximum is
+    unchanged. Lifted 2026-10-01 (was 40): the 40-anchor curve left QS
+    at 2.43 GPG, ~0.27 short of Muck's 2.70 floor -- the absolute level
+    was still too low. The scenario-window cap was tightened at the
+    same time (1.8 -> 1.5) so the level lift comes from talent-ordered
+    base, not wider windows. Separation by probability, not caps.
+    Never raises.
+    """
+    try:
+        _f = max(1.0, min(100.0, float(finishing)))
+        _x = max(0.0, min(1.0, (_f - 35.0) / 50.0))
+        return _x ** 1.0
+    except Exception:
+        return 1.0
+
+
+def ceiling_scenario_mult(player, linemates=None) -> float:
+    """Scenario lift for the personal finishing ceiling (2026-10-01, Muck).
+
+    The base ceiling is pure talent (finishing). But hockey has windows:
+    a heater, elite linemates, great chemistry, schemed-against relief.
+    Each factor >= 1.0; product capped at 1.5. Stars (95+) are already at
+    the envelope max, so the lift only creates windows for the middle --
+    separation by probability, not caps. Line FIT gates the linemate
+    lifts: an elite linemate only opens your window if you actually fit
+    with him (Muck 2026-10-01). Never raises.
+    """
+    try:
+        _mult = 1.0
+        # 1. Heat: a heater finishes better. 0.5 neutral -> 1.0;
+        #    1.0 (red-hot) -> 1.25. Cold doesn't penalize here (it already
+        #    hurts via the matchup tilt).
+        try:
+            _h = _player_heat(player)
+            if _h > 0.5:
+                _mult *= 1.0 + 0.50 * (_h - 0.5)
+        except Exception:
+            pass
+        # 2-5. Linemate effects (need the on-ice unit).
+        if linemates:
+            try:
+                _mates = [m for m in linemates if m is not None and m is not player]
+                if _mates:
+                    # 2. Line fit: how well the shooter's role complements his
+                    #    linemates (0..1, 0.5 neutral). A sniper stapled to a
+                    #    playmaker fits; two puck-hogs with no distributor
+                    #    don't. Fit GATES the linemate lifts below -- a bad
+                    #    fit means the elite linemate doesn't open your
+                    #    window. (Muck 2026-10-01: "factor in whether
+                    #    someones a fit on the line".)
+                    _fit01 = 0.5
+                    try:
+                        from line_chemistry import _pair_complementarity as _pc
+                        from line_chemistry import _role_name as _rn
+                        _srole = _rn(player)
+                        if _srole:
+                            _fits = []
+                            for _m in _mates:
+                                _mr = _rn(_m)
+                                if _mr:
+                                    _fits.append(max(0.0, min(1.0,
+                                        (_pc(_srole, _mr) + 10.0) / 22.0)))
+                            if _fits:
+                                _fit01 = sum(_fits) / len(_fits)
+                    except Exception:
+                        pass
+                    # 3. Elite linemate, SCALED BY FIT: a 90+ finisher on your
+                    #    line means better setups, more time/space -- but only
+                    #    if you fit with him. 90 -> up to 1.10, 95 -> up to
+                    #    1.15, 100 -> up to 1.20, all × fit01.
+                    _best = max((finishing_rating(m) for m in _mates),
+                                default=0.0)
+                    if _best >= 90.0:
+                        _raw = 0.20 * min(1.0, (_best - 90.0) / 10.0 + 0.5)
+                        _mult *= 1.0 + _raw * _fit01
+                    # 4. Line chemistry: great chemistry lifts everyone.
+                    try:
+                        from line_chemistry import line_chemistry_score as _lcs
+                        _chem = float(_lcs([player] + _mates))
+                        if _chem >= 70.0:
+                            _mult *= 1.0 + 0.12 * min(1.0, (_chem - 70.0) / 30.0)
+                    except Exception:
+                        pass
+                    # 5. Schemed-against relief, SCALED BY FIT: a star linemate
+                    #    drawing the shutdown coverage leaves easier looks --
+                    #    but only if you're a fit to exploit them.
+                    try:
+                        from line_chemistry import chemistry_relief_share as _crs
+                        _stars = [m for m in _mates if finishing_rating(m) >= 90.0]
+                        if _stars:
+                            _relief = max(_crs(player, _s, [player] + _mates)
+                                         for _s in _stars)
+                            _mult *= (1.0 + 0.15
+                                      * max(0.0, min(1.0, _relief)) * _fit01)
+                    except Exception:
+                        pass
+                    # 6. Pure fit bonus: a great fit alone opens a small
+                    #    window even without an elite linemate.
+                    if _fit01 > 0.65:
+                        _mult *= 1.0 + 0.10 * min(1.0, (_fit01 - 0.65) / 0.35)
+            except Exception:
+                pass
+        return min(1.5, _mult)
+    except Exception:
+        return 1.0
+
+
+def personal_grade_ceiling(player, grade, shot_tool=None, scenario_mult=1.0):
+    """(lo, hi): the shooter's personal conversion ceiling for a graded
+    chance. lo is the league floor for the grade; hi is the league
+    ceiling scaled by finishing_ceiling_fraction(finishing_rating),
+    lifted by scenario_mult (heat, linemates, chemistry, scheme relief)
+    up to the envelope max. League max unchanged (95+ finishing -> the
+    full envelope). Never raises.
+
+    The scenario lift is ADDITIVE with diminishing returns (Muck
+    2026-10-01): a hot 70-finisher gets a window, but cannot leapfrog
+    a cold 82-finisher. Multiplicative lifts flatten the hierarchy --
+    additive lifts preserve it. Separation by probability, not caps.
+    """
+    try:
+        _lo, _hi = chance_grade_clamp(grade)
+        _frac = finishing_ceiling_fraction(
+            finishing_rating(player, shot_tool))
+        # Additive lift: fills a portion of the headroom. A 0.4-base
+        # with 0.8 lift -> 0.4 + 0.8*0.6*0.5 = 0.64. A 0.65-base with
+        # no lift stays 0.65. Hierarchy preserved.
+        _sm = max(1.0, float(scenario_mult or 1.0))
+        _lift = _sm - 1.0  # 0.0 to 0.5 (cap 1.5)
+        _frac = min(1.0, _frac + _lift * (1.0 - _frac) * 0.5)
+        return (_lo, _lo + (_hi - _lo) * _frac)
+    except Exception:
+        return chance_grade_clamp(grade)
 
 
 # ---------------------------------------------------------------------------
