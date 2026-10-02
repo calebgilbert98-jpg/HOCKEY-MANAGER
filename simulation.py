@@ -6052,7 +6052,7 @@ class GameSim:
             return False
 
         goalie = self._selected_goalie(defending_team)
-        if goalie is not None:
+        if goalie is not None and goalie.id in self.game_stats:
             # The goalie kicked this puck out: he created the rebound.
             self.game_stats[goalie.id]['rebounds_created'] += 1
         
