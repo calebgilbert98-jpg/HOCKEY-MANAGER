@@ -7601,6 +7601,16 @@ class League:
                 pass
         self.generate_schedule(season_year=self.season_year)
 
+        # D41 Phase 2: roll the real AHL league -- Calder Cup backstop for
+        # the season just ended, then a fresh 48-game schedule + zeroed
+        # standings for the new season_year. Guarded so a data bug here
+        # can never break the season rollover.
+        try:
+            import ahl_league as _ahl2
+            _ahl2.ahl_season_rollover(self)
+        except Exception:
+            pass
+
         # Part 5: drafted-prospect rights lifecycle (unsigned rights expiry,
         # CHL draft re-entries, holdout warnings, leaving junior). Guarded so
         # a data bug here can never crash the season rollover.

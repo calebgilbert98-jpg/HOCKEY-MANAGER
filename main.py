@@ -11318,11 +11318,31 @@ class HockeyManagerGUI(tk.Tk):
                 and getattr(_bracket, "playoff_series", None))
             if _in_window and not _playoffs_live:
                 _ahl.simulate_ahl_day(self.league)
-                # D41 Phase 1: lightweight AHL standings from abstract matchups.
+                # D41 Phase 2: the AHL is a real scheduled league now. When
+                # a Phase 2 schedule is live for this season, sim today's
+                # scheduled games (standings come from real games); when
+                # it isn't (generation failure, <2 AHL clubs), keep Phase
+                # 1's abstract standings day as the fallback.
                 try:
-                    _ahl.simulate_ahl_standings_day(self.league)
+                    import ahl_league as _ahl2
+                    if _ahl2.ahl_schedule_active(self.league):
+                        _ahl2.simulate_ahl_scheduled_day(
+                            self.league, self.current_date)
+                    else:
+                        _ahl.simulate_ahl_standings_day(self.league)
                 except Exception:
-                    pass
+                    try:
+                        _ahl.simulate_ahl_standings_day(self.league)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # D41 Phase 2 backstop: the Calder Cup must fire even if the NHL
+        # playoffs gate swallowed the last AHL-window day. Instant (a few
+        # dozen ultra-fast games), once per season, never raises.
+        try:
+            import ahl_league as _ahl2b
+            _ahl2b.maybe_run_calder_cup(self.league, self.current_date)
         except Exception:
             pass
     
