@@ -140,7 +140,7 @@ DATABASE_SIZES = {
 WIZARD_LEAGUES = {
     "NHL":  {"db_name": "National Hockey League", "teams": 32, "country": "North America",
              "level": 1, "detail_default": "full",
-             "blurb": "The show. 32 teams, 82-game schedule."},
+             "blurb": "The show. 32 teams, 84-game schedule."},
     "AHL":  {"db_name": "American Hockey League", "teams": 30, "country": "North America",
              "level": 2, "detail_default": "quick",
              "blurb": "Top farm league. Affiliated with NHL clubs."},

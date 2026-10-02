@@ -182,7 +182,7 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         self.setup_options = {
             'database_size': tk.StringVar(master=self, value="Small (8K players, 32 NHL+AHL teams)"),
             'start_date': tk.StringVar(master=self, value="October 1, 2024"),
-            'season_length': tk.StringVar(master=self, value="Full Season (82 Games)"),
+            'season_length': tk.StringVar(master=self, value="Full Season (84 Games)"),
             'difficulty': tk.StringVar(master=self, value="Realistic"),
             'fantasy_draft': tk.BooleanVar(master=self, value=False),
             'salary_cap': tk.BooleanVar(master=self, value=True),
@@ -1339,7 +1339,7 @@ This profile will influence player relationships, media interactions, and trade 
         self._create_advanced_option_row(season_grid, 1, "Season Length:",
                                        self.setup_options['season_length'],
                                        ["Short Season (20 Games)", "Half Season (41 Games)", 
-                                        "Full Season (82 Games)", "Extended Season (100+ Games)"],
+                                        "Full Season (84 Games)", "Extended Season (100+ Games)"],
                                        "Number of regular season games per team")
         
         # Realism & Difficulty
@@ -1571,7 +1571,7 @@ This profile will influence player relationships, media interactions, and trade 
         """Apply realistic NHL preset"""
         # Game settings
         self.setup_options['database_size'].set("Large (50K players, 12 leagues)")
-        self.setup_options['season_length'].set("Full Season (82 Games)")
+        self.setup_options['season_length'].set("Full Season (84 Games)")
         self.setup_options['difficulty'].set("Realistic (Hard)")
         self.setup_options['trade_difficulty'].set("Realistic")
         self.setup_options['cpu_gm_intelligence'].set("High (Challenging)")
@@ -1630,7 +1630,7 @@ This profile will influence player relationships, media interactions, and trade 
         """Apply challenge mode preset"""
         # Game settings
         self.setup_options['database_size'].set("Massive (100K players, 25 leagues)")
-        self.setup_options['season_length'].set("Full Season (82 Games)")
+        self.setup_options['season_length'].set("Full Season (84 Games)")
         self.setup_options['difficulty'].set("Hall of Fame (Expert)")
         self.setup_options['trade_difficulty'].set("Nearly Impossible")
         self.setup_options['cpu_gm_intelligence'].set("Maximum (Ruthless)")
@@ -1883,7 +1883,7 @@ This profile will influence player relationships, media interactions, and trade 
         # Season Length
         self._create_option_row(options_grid, 2, "Season Length:",
                                self.setup_options['season_length'],
-                               ["Short Season (20 Games)", "Half Season (41 Games)", "Full Season (82 Games)", "Extended Season (100 Games)"],
+                               ["Short Season (20 Games)", "Half Season (41 Games)", "Full Season (84 Games)", "Extended Season (100 Games)"],
                                "How many regular season games per team?")
         
         # Difficulty

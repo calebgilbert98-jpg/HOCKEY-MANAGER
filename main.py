@@ -441,7 +441,7 @@ class GameManager:
         elif "41 games" in season_length:
             self.games_per_season = 41
         else:
-            self.games_per_season = 82
+            self.games_per_season = 84
             
         print(f"Season configured for {self.games_per_season} games")
     
@@ -560,7 +560,7 @@ class GameManager:
         
         # Basic game settings
         self.apply_game_difficulty(settings.get('difficulty', 'Normal'))
-        self.configure_season_length(settings.get('season_length', 'Full Season (82 games)'))
+        self.configure_season_length(settings.get('season_length', 'Full Season (84 games)'))
         
         # Financial and realism settings
         self.financial_realism_enabled = settings.get('financial_realism', True)
@@ -12276,7 +12276,7 @@ class HockeyManagerGUI(tk.Tk):
             self._generate_post_game_emails(game_result, opponent, result, user_score, opp_score, notable_events)
 
     # --- game_results indexes + history caps ---------------------------
-    # game_results grows by ~1312 entries per 82-game season and used to be
+    # game_results grows by ~1344 entries per 84-game season and used to be
     # scanned in full on EVERY day advance (plus pickled into every save).
     # These helpers keep two derived indexes and bound the history size.
     RESULTS_HISTORY_CAP = 4000   # ~3 seasons of games
