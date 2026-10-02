@@ -169,6 +169,14 @@ AAV, YEARS = 5_000_000, 5  # comp band: 1st + 3rd-round picks
 label, bands = rfa_s.offer_sheet_compensation(AAV)
 check("5M -> 1st+3rd comp", bands == [1, 3])
 
+def fill_legal_roster(team, n_skaters=18, n_goalies=2, salary=2_500_000, prefix="Fill"):
+    """Add signed skaters + goalies for a legal 18+2 roster (R1 gate)."""
+    for i in range(n_goalies):
+        team.roster.append(mksigned(f"{prefix} G{i}", 29, 75, salary,
+                                    pos=PlayerPosition.GOALIE))
+    for i in range(n_skaters):
+        team.roster.append(mksigned(f"{prefix} S{i}", 29, 74, salary))
+
 def build_ai_ai():
     original = mkteam("Original")
     offering = mkteam("Offering")
@@ -180,10 +188,10 @@ def build_ai_ai():
                   rfa_s._own_pick(offering, 2028, 3)]
     # Package candidate tuned to land inside [comp, 1.25*comp].
     pkg = tuned_package_player(offering, comp_picks)
-    for i in range(9):
-        offering.roster.append(mksigned(f"Depth D{i}", 29, 74, 2_500_000))
-    for i in range(9):
-        original.roster.append(mksigned(f"Reg R{i}", 29, 75, 3_000_000))
+    # Legal rosters: 18 skaters + 2 goalies (R1 dress-minimum gate).
+    # The RFA is unsigned (doesn't count); pkg counts for offering.
+    fill_legal_roster(offering, n_skaters=17, prefix="Depth")
+    fill_legal_roster(original, n_skaters=18, prefix="Reg")
     league = FakeLeague([original, offering])
     return league, original, offering, rfa, pkg
 
@@ -260,10 +268,8 @@ def build_ai_user(user_is_original=True):
     comp_picks = [rfa_s._own_pick(offering, 2028, 1),
                   rfa_s._own_pick(offering, 2028, 3)]
     pkg = tuned_package_player(offering, comp_picks)
-    for i in range(9):
-        offering.roster.append(mksigned(f"Depth D{i}", 29, 74, 2_500_000))
-    for i in range(9):
-        original.roster.append(mksigned(f"Reg R{i}", 29, 75, 3_000_000))
+    fill_legal_roster(offering, n_skaters=17, prefix="Depth")
+    fill_legal_roster(original, n_skaters=18, prefix="Reg")
     league = FakeLeague([original, offering])
     app = FakeApp(user, JULY)
     return league, app, user, ai, original, offering, rfa, pkg

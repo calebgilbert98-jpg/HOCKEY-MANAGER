@@ -29,6 +29,7 @@ def check(name, cond, extra=""):
 
 def mkteam(name):
     t = Team(name, "City", "Div", "Conf", "NHL", "GM", None)
+    t.league_name = "National Hockey League"  # real league name for staff tiers
     t.staff_budget = default_staff_budget(name)
     return t
 
@@ -120,7 +121,8 @@ for t in teams:
           len(ahl) == 4, f"got {len(ahl)}")
     check(f"{t.team_name}: AHL GM present",
           sum(1 for s in ahl if "General Manager" in s.role.value) == 1)
-    check(f"{t.team_name}: NHL staff intact", len(nhl) == 8,
+    # Full 27-role NHL template (staff-count fix expanded from 8).
+    check(f"{t.team_name}: NHL staff intact", len(nhl) == 27,
           f"got {len(nhl)}")
     check(f"{t.team_name}: budget assigned at gen",
           t.staff_budget == default_staff_budget(t.team_name))
@@ -220,6 +222,8 @@ host = SimpleNamespace(
 host._mp_hire_staff = main_mod.HockeyManagerGUI._mp_hire_staff.__get__(host)
 
 mp_team = mkteam("Seattle Kraken")
+# Budget 10M (default): hires at 1.0x market total ~7.4M, leaving room;
+# the 9M over-budget test then correctly refuses.
 mp_rival = mkteam("Boston Bruins")
 host.league.teams = [mp_team, mp_rival]
 
@@ -233,24 +237,38 @@ host.league.free_agent_staff.append(fa_s)
 host.league.overseas_staff.append(ov_s)
 mp_rival.staff.append(ahl_s)
 
-ok, msg = host._mp_hire_staff({"staff_id": "mp-fa-1", "salary": 1_000_000,
-                               "years": 2}, mp_team, None)
-check("MP hires free agent", ok, msg)
-check("MP FA leaves the pool", fa_s not in host.league.free_agent_staff)
-check("MP hire joins as NHL staff", fa_s in mp_team.staff
-      and fa_s.assignment == "nhl")
+# Offer at 2x market ask to guarantee acceptance (the acceptance roll
+# is real game logic -- lowball offers correctly decline).
+# Mock random.random to 0.0 for deterministic acceptance (the roll is
+# probabilistic; the test verifies mechanics, not probability).
+from game_classes import staff_market_ask as _sma
+import random as _test_random
+_real_random = _test_random.random
+_test_random.random = lambda: 0.0
+try:
+    ok, msg = host._mp_hire_staff({"staff_id": "mp-fa-1",
+                                   "salary": int(_sma(fa_s) * 1.0),
+                                   "years": 2}, mp_team, None)
+    check("MP hires free agent", ok, msg)
+    check("MP FA leaves the pool", fa_s not in host.league.free_agent_staff)
+    check("MP hire joins as NHL staff", fa_s in mp_team.staff
+          and fa_s.assignment == "nhl")
 
-ok, msg = host._mp_hire_staff({"staff_id": "mp-ov-1", "salary": 2_000_000,
-                               "years": 3}, mp_team, None)
-check("MP hires overseas coach", ok, msg)
-check("MP overseas hire leaves the pool",
-      ov_s not in host.league.overseas_staff)
+    ok, msg = host._mp_hire_staff({"staff_id": "mp-ov-1",
+                                   "salary": int(_sma(ov_s) * 1.0),
+                                   "years": 3}, mp_team, None)
+    check("MP hires overseas coach", ok, msg)
+    check("MP overseas hire leaves the pool",
+          ov_s not in host.league.overseas_staff)
 
-ok, msg = host._mp_hire_staff({"staff_id": "mp-ahl-1", "salary": 800_000,
-                               "years": 2}, mp_team, None)
-check("MP poaches rival AHL coach in offseason", ok, msg)
-check("MP poached coach leaves the old club",
-      ahl_s not in mp_rival.staff and ahl_s in mp_team.staff)
+    ok, msg = host._mp_hire_staff({"staff_id": "mp-ahl-1",
+                                   "salary": int(_sma(ahl_s) * 1.0),
+                                   "years": 2}, mp_team, None)
+    check("MP poaches rival AHL coach in offseason", ok, msg)
+    check("MP poached coach leaves the old club",
+          ahl_s not in mp_rival.staff and ahl_s in mp_team.staff)
+finally:
+    _test_random.random = _real_random
 
 # In-season AHL approach must be refused, staffer untouched.
 host.current_date = NOV

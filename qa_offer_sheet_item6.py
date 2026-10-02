@@ -128,9 +128,12 @@ def july_harness(monkey_match):
                                     for rnd in (1, 2, 3)]
     # Expected sheet terms, computed on the pristine player exactly the
     # way the July pass computes them (StubRng.random() == 0.0).
-    exp_aav = int(rfa._market_value(player) * 1.05)
-    _exp_label, exp_picks = rfa.offer_sheet_compensation(exp_aav)
+    # NOTE: includes _scarcity_mult (1.1 for centers) added after this test
+    # was written -- the game code is correct, this expectation was stale.
     league = FakeLeague([orig, offering])
+    exp_aav = int(rfa._market_value(player) * 1.05
+                  * rfa._scarcity_mult(league, player))
+    _exp_label, exp_picks = rfa.offer_sheet_compensation(exp_aav)
     calls = cap_recorder(league)
 
     import player_decision as _pd

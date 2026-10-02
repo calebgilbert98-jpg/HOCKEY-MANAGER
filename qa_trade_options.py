@@ -24,10 +24,12 @@ def mkteam(name, cap=104_000_000):
     t.salary_cap = cap
     return t
 
-def mkplayer(salary, ovr=75, age=27, name="Test Player"):
+def mkplayer(salary, ovr=75, age=27, name="Test Player",
+             pos=PlayerPosition.CENTER):
     p = g.Player(first_name=name.split()[0], last_name=" ".join(name.split()[1:]) or "X",
-                 age=age, primary_position=PlayerPosition.CENTER)
+                 age=age, primary_position=pos)
     p.contract.salary = salary
+    p.contract.years_remaining = 3  # active contract for R1 dress-minimum
     # overall_rating() derives from attributes; pin a few so OVR is sane
     for attr in ("skating", "shooting", "passing", "checking", "defense",
                  "hockey_iq", "strength", "speed"):
@@ -36,6 +38,14 @@ def mkplayer(salary, ovr=75, age=27, name="Test Player"):
         except Exception:
             pass
     return p
+
+def fill_legal(team, n=19, salary=4_000_000):
+    """Fill with signed skaters + 2 goalies for R1 dress-minimum."""
+    for i in range(2):
+        team.roster.append(mkplayer(salary, pos=PlayerPosition.GOALIE,
+                                    name=f"Goalie {i}"))
+    for i in range(n - 2):
+        team.roster.append(mkplayer(salary, name=f"Skater {i}"))
 
 def give_clause(p, kind="ntc", size=10):
     c = p.contract
@@ -55,8 +65,8 @@ print("== bilateral retention ==")
 u = mkteam("User"); p = mkteam("Partner")
 a = mkplayer(6_000_000); u.roster.append(a)
 b = mkplayer(4_000_000); p.roster.append(b)
-u.roster.extend(mkplayer(4_000_000) for _ in range(19))   # $82M total
-p.roster.extend(mkplayer(4_000_000) for _ in range(19))   # $82M total
+fill_legal(u, 19, 4_000_000)   # $82M total
+fill_legal(p, 19, 4_000_000)   # $82M total
 ret = {a.id: 50, b.id: 25}  # user retains 50% on a; partner retains 25% on b
 tr = te.execute_trade(u, p, [a], [b], retention=ret)
 check("bilateral retention trade completes", not tr.summary.startswith("BLOCKED"))
@@ -96,10 +106,10 @@ check("slot-blocked deal moves nothing", e in u3.roster)
 
 # retention-aware cap check, both sides
 u4 = mkteam("U4"); p4 = mkteam("P4")
-u4.roster.extend(mkplayer(5_000_000) for _ in range(20))  # $100M
+fill_legal(u4, 20, 5_000_000)  # $100M
 u4.roster.append(mkplayer(7_000_000))                      # $107M -> over cap
 big = u4.roster[-1]
-p4.roster.extend(mkplayer(5_000_000) for _ in range(20))  # $100M
+fill_legal(p4, 20, 5_000_000)  # $100M
 # Over-cap user sheds the $7M contract retaining 50%: burden drops
 # $107M -> $103.5M, a strict reduction -> legal.
 check("retention-aware: over-cap shed with retention legal",
@@ -126,6 +136,7 @@ check("empty label", te.protection_label("") == "")
 
 # protected pick survives a trade object move and keeps its term
 u5 = mkteam("U5"); p5 = mkteam("P5")
+fill_legal(u5, 20); fill_legal(p5, 19)
 sk = mkplayer(3_000_000); u5.roster.append(sk)
 pk2 = g.DraftPick(year=2027, round=1, original_team="U5", current_team="U5")
 pk2.protection = "lottery"
@@ -137,6 +148,7 @@ check("protected pick moves with protection intact",
 # ------------------------------------------------------- 3. clause blockers
 print("== NTC/NMC blockers ==")
 u6 = mkteam("U6"); p6 = mkteam("P6")
+fill_legal(u6, 18); fill_legal(p6, 19)
 ntc_guy = give_clause(mkplayer(7_000_000, name="Ntc Guy"), "ntc")
 u6.roster.append(ntc_guy)
 sweet = mkplayer(1_000_000); p6.roster.append(sweet)
@@ -151,6 +163,8 @@ tr = te.execute_trade(u6, p6, [nmc_guy], [sweet])
 check("NMC blocks the trade", tr.summary.startswith("BLOCKED"))
 
 mntc_guy = give_clause(mkplayer(5_000_000, name="Mntc Guy"), "mntc", size=12)
+# Explicitly put P6 on the list (deterministic hash varies with fixture order)
+mntc_guy.contract.no_trade_list = ["P6"]
 u6.roster.append(mntc_guy)
 tr = te.execute_trade(u6, p6, [mntc_guy], [sweet])
 check("M-NTC blocks the trade", tr.summary.startswith("BLOCKED"))
@@ -164,6 +178,7 @@ check("waived player moved", ntc_guy in p6.roster)
 
 # veto in the other direction (partner's clause player coming back)
 u7 = mkteam("U7"); p7 = mkteam("P7")
+fill_legal(u7, 18); fill_legal(p7, 18)
 mine = mkplayer(2_000_000); u7.roster.append(mine)
 theirs = give_clause(mkplayer(6_000_000, name="Their Star"), "ntc")
 p7.roster.append(theirs)
@@ -172,6 +187,7 @@ check("partner's NTC blocks inbound too", tr.summary.startswith("BLOCKED"))
 
 # picks never veto
 u8 = mkteam("U8"); p8 = mkteam("P8")
+fill_legal(u8, 20); fill_legal(p8, 19)
 plain = mkplayer(2_000_000); u8.roster.append(plain)
 pp = g.DraftPick(year=2027, round=2, original_team="P8", current_team="P8")
 tr = te.execute_trade(u8, p8, [plain], [pp])
@@ -254,8 +270,8 @@ refuser = give_clause(mkplayer(6_000_000, ovr=86, age=32, name="No Move D"), "nm
 refuser.happiness = 99; refuser.morale = 99
 refuser.contract.no_trade_list = ["UserB"]
 pa2.roster.append(refuser)
-pa2.roster.extend(mkplayer(3_000_000, ovr=76, age=28) for _ in range(6))
-ua2.roster.extend(mkplayer(3_000_000, ovr=76, age=28) for _ in range(6))
+fill_legal(pa2, 6, 3_000_000)
+fill_legal(ua2, 6, 3_000_000)
 cheap = mkplayer(1_500_000, ovr=72, age=26); ua2.roster.append(cheap)
 mid = mkplayer(4_000_000, ovr=80, age=29); pa2.roster.append(mid)
 resp = te.ai_consider_trade(pa2, [cheap], [mid], user_team=ua2)
@@ -281,7 +297,9 @@ check("inverted call does NOT hand the buyer a steal",
 # ------------------------------------------------------- 5. contract clauses
 print("== contract clause negotiation ==")
 star_vet = mkplayer(9_000_000, ovr=90, age=33, name="Old Star")
+star_vet.overall_rating = lambda: 90  # pin OVR directly (attr pinning doesn't reach 90)
 kid = mkplayer(1_000_000, ovr=72, age=21, name="Kid Winger")
+kid.overall_rating = lambda: 72  # pin OVR directly
 d_star = te.clause_demand_score(star_vet)
 d_kid = te.clause_demand_score(kid)
 check(f"vet demands more than kid ({d_star:.2f} > {d_kid:.2f})", d_star > d_kid)
@@ -387,7 +405,7 @@ from types import SimpleNamespace
 # -- 15% retained-salary aggregate (CBA: max 15% of the upper limit)
 u15 = mkteam("CapClub"); p15 = mkteam("Other")
 star15 = mkplayer(6_000_000, age=30, name="Big Ticket"); u15.roster.append(star15)
-u15.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(u15, 19, 4_000_000)
 u15.retained_salary = [
     {"player_id": "x1", "player_name": "X1", "amount": 7_000_000,
      "seasons_remaining": 2},
@@ -395,7 +413,7 @@ u15.retained_salary = [
      "seasons_remaining": 2},
 ]
 vic15 = mkplayer(4_000_000, name="Victim"); p15.roster.append(vic15)
-p15.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(p15, 19, 4_000_000)
 tr15 = te.execute_trade(u15, p15, [star15], [vic15],
                         retention={star15.id: 50})
 check("15% aggregate blocks the deal ($14M + $3M > $15.6M)",
@@ -420,9 +438,9 @@ ua3 = mkteam("Retainers"); pb3 = mkteam("Buyers")
 # test here.
 _cup_lg = SimpleNamespace(season_year=2028)
 gem = mkplayer(8_000_000, age=30, name="Gem Stone"); ua3.roster.append(gem)
-ua3.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(ua3, 19, 4_000_000)
 back3 = mkplayer(4_000_000, name="Return Piece"); pb3.roster.append(back3)
-pb3.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(pb3, 19, 4_000_000)
 tr3a = te.execute_trade(ua3, pb3, [gem], [back3], date_str="2026-11-01",
                         league=_cup_lg, retention={gem.id: 50})
 check("retention trade completes", not tr3a.summary.startswith("BLOCKED:"))
@@ -439,11 +457,11 @@ check("ban lifts after a year", not tr3c.summary.startswith("BLOCKED:"))
 # -- per-side retention slots (the other club's terms don't eat yours)
 ua4 = mkteam("UserA"); pa4 = mkteam("PartnerA")
 u1 = mkplayer(5_000_000, name="U One"); ua4.roster.append(u1)
-ua4.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(ua4, 19, 4_000_000)
 pps = [mkplayer(5_000_000, name=f"P{i}") for i in range(3)]
 for _x in pps:
     pa4.roster.append(_x)
-pa4.roster.extend(mkplayer(4_000_000) for _ in range(17))
+fill_legal(pa4, 17, 4_000_000)
 ret4 = {u1.id: 10, pps[0].id: 10, pps[1].id: 10, pps[2].id: 10}
 tr4 = te.execute_trade(ua4, pa4, [u1], pps, retention=ret4)
 check("per-side slots: partner's 3 terms don't eat user's slot",
@@ -451,10 +469,10 @@ check("per-side slots: partner's 3 terms don't eat user's slot",
 
 # -- league-office cap preflight (both clubs, over-cap shed exception)
 uo = mkteam("Overcaps"); po = mkteam("Partners")
-uo.roster.extend(mkplayer(4_000_000) for _ in range(27))  # $108M vs $104M
+fill_legal(uo, 27, 4_000_000)  # $108M vs $104M
 a_out = uo.roster[0]
 b_in = mkplayer(4_000_000, name="Sideways"); po.roster.append(b_in)
-po.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(po, 19, 4_000_000)
 tr5 = te.execute_trade(uo, po, [a_out], [b_in])
 check("neutral deal while over cap is blocked",
       tr5.summary.startswith("BLOCKED:"))
@@ -466,9 +484,9 @@ check("genuine salary shed while over cap is legal",
 # -- asset ownership: you can't trade a pick you don't own
 ux = mkteam("UserX"); px = mkteam("PartnerX")
 ax = mkplayer(4_000_000, name="Ax"); ux.roster.append(ax)
-ux.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(ux, 19, 4_000_000)
 bx = mkplayer(4_000_000, name="Bx"); px.roster.append(bx)
-px.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(px, 19, 4_000_000)
 ghost = g.DraftPick(year=2027, round=2, original_team="Ghosts",
                     current_team="Ghosts")
 tr6 = te.execute_trade(ux, px, [ax], [bx, ghost])
@@ -667,8 +685,8 @@ print("engine-audit fixes")
 _ue = mkteam("UE"); _pe = mkteam("PE")
 _ae = mkplayer(6_000_000); _ue.roster.append(_ae)
 _be = mkplayer(4_000_000); _pe.roster.append(_be)
-_ue.roster.extend(mkplayer(4_000_000) for _ in range(19))
-_pe.roster.extend(mkplayer(4_000_000) for _ in range(19))
+fill_legal(_ue, 19, 4_000_000)
+fill_legal(_pe, 19, 4_000_000)
 # MP builds retention with str keys (main.py _mp_accept_trade); the old
 # application loop read int ids and silently dropped every MP term.
 _tre = te.execute_trade(_ue, _pe, [_ae], [_be],

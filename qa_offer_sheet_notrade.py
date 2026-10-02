@@ -34,11 +34,13 @@ def mkteam(name, cap=104_000_000):
     t.salary_cap = cap
     return t
 
-def mkplayer(salary, ovr=75, age=27, name="Test Player"):
+def mkplayer(salary, ovr=75, age=27, name="Test Player",
+             pos=PlayerPosition.CENTER):
     p = g.Player(first_name=name.split()[0],
                  last_name=" ".join(name.split()[1:]) or "X",
-                 age=age, primary_position=PlayerPosition.CENTER)
+                 age=age, primary_position=pos)
     p.contract.salary = salary
+    p.contract.years_remaining = 3  # active contract -- dress-minimum gate
     for attr in ("skating", "shooting", "passing", "checking", "defense",
                  "hockey_iq", "strength", "speed"):
         try:
@@ -48,8 +50,12 @@ def mkplayer(salary, ovr=75, age=27, name="Test Player"):
     return p
 
 def fill(team, n=19, salary=4_000_000):
-    for _ in range(n):
-        team.roster.append(mkplayer(salary))
+    # Legal roster: 18 skaters + 2 goalies minimum. The dress-minimum gate
+    # (R1) correctly blocks trades leaving a club unable to dress 18+2,
+    # so test rosters must include goalies -- previously all-centers.
+    for i in range(n):
+        pos = PlayerPosition.GOALIE if i < 2 else PlayerPosition.CENTER
+        team.roster.append(mkplayer(salary, pos=pos))
 
 CAP = 104_000_000
 

@@ -1481,11 +1481,24 @@ def execute_offer_sheet_trade(league, offering_team, original_team, player,
                 _cd is not None and hasattr(_cd, "isoformat")) else ""
         except Exception:
             _date_str = ""
+        # NHL sign-and-trade: the original club signs the RFA at the sheet
+        # terms FIRST, then trades the signed player. This makes him
+        # "available" for the dress-minimum gate (an unsigned RFA's rights
+        # don't count as a roster player, which would incorrectly block
+        # the trade).
+        _sign_player(original_team, player, aav, years)
         done = _te.execute_trade(offering_team, original_team, package,
                                  [player], date_str=_date_str,
                                  league=league)
         if done is None or str(getattr(done, "summary", "")) \
                 .startswith("BLOCKED"):
+            # Trade failed: undo the signing (restore unsigned RFA state)
+            try:
+                c = getattr(player, "contract", None)
+                if c is not None:
+                    c.years_remaining = 0
+            except Exception:
+                pass
             return None
         # He signs with the offering club at the sheet terms (this also
         # clears the offer-sheet-pending flag).
