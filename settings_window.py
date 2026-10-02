@@ -3,6 +3,13 @@
 # Settings & preferences — modern dark UI matching the rest of Puck Dynasty.
 
 import tkinter as tk
+try:
+    from scroll_manager import register_scrollable
+    from scroll_manager import install_global_handler as _install_sw
+    _sw_handler_installed = False
+except Exception:
+    def register_scrollable(canvas):
+        pass
 from popup_system import messagebox, InGamePopup, confirm_card, ask_card
 from tkinter import ttk
 import json
@@ -426,12 +433,8 @@ class SettingsView(ctk.CTkFrame):
                         "content", width=e.width))
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        # Mousewheel scrolling
-        canvas.bind("<Enter>", lambda e, c=canvas: c.bind_all(
-            "<MouseWheel>", lambda ev: c.yview_scroll(
-                -1 * (ev.delta // 120), "units")))
-        canvas.bind("<Leave>", lambda e, c=canvas: c.unbind_all(
-            "<MouseWheel>"))
+        # Mousewheel scrolling (routed via scroll_manager)
+        register_scrollable(canvas)
         return holder, content
 
     # ------------------------------------------------------------------

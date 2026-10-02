@@ -2559,6 +2559,14 @@ class HockeyManagerGUI(tk.Tk):
     def __init__(self, game_manager, mp_host=None, mp_client=None):
         super().__init__()
 
+        # Global mouse-wheel routing: the wheel always scrolls the canvas
+        # under the cursor (scroll_manager), not the last-created screen.
+        try:
+            from scroll_manager import install_global_handler
+            install_global_handler(self)
+        except Exception:
+            pass
+
         # Square window corners: disable Windows 11 rounded-corner chrome so
         # the dashboard page itself never looks like its corners are cut out.
         # Silent no-op on other platforms. Deferred until the window is mapped
@@ -21983,13 +21991,12 @@ class CleanEditLinesView(ctk.CTkFrame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        def _wheel(event):
-            try:
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-        inner.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
-        inner.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+        # Mousewheel routing: global handler scrolls the canvas under the cursor.
+        try:
+            from scroll_manager import register_scrollable
+            register_scrollable(canvas)
+        except Exception:
+            pass
         return inner
 
     def create_roster_panel(self, parent):

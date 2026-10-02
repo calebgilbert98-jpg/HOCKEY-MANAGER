@@ -8,6 +8,20 @@ from tkinter import ttk
 import customtkinter as ctk
 from game_classes import PlayerPosition
 
+try:
+    from scroll_manager import register_scrollable
+except Exception:
+    def register_scrollable(canvas):
+        # Fallback (scroll_manager missing): widget-level bind only --
+        # never bind_all, which would clobber other screens.
+        try:
+            canvas.bind("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+            canvas.bind("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+            canvas.bind("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+        except Exception:
+            pass
+
 def _to_20_scale(value, default=10):
     """Convert a 50-point-scale attribute to the 1-20 display scale."""
     try:
@@ -160,10 +174,7 @@ class PlayerProfileView(ctk.CTkFrame):
         canvas.bind("<Configure>", _configure_scroll_region)
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Bind mousewheel to canvas
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        register_scrollable(canvas)
         
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
@@ -690,10 +701,7 @@ class PlayerProfileView(ctk.CTkFrame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Bind mousewheel to canvas
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        register_scrollable(canvas)
         
         # Traits banner at top (if player has traits)
         self._create_traits_banner(scrollable_frame)
@@ -827,9 +835,7 @@ class PlayerProfileView(ctk.CTkFrame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        register_scrollable(canvas)
 
         return scrollable_frame
 
@@ -1469,10 +1475,7 @@ class PlayerProfileView(ctk.CTkFrame):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
-        # Bind mousewheel to canvas
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        register_scrollable(canvas)
         
         # Current season summary
         self._create_current_season_stats(scrollable_frame)

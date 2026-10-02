@@ -16,6 +16,11 @@ import customtkinter as ctk
 from modern_ui import (AppColors, AppFonts, AppCard, StatCard, PillBadge)
 
 from ctk_theme import (init_ctk_theme, TEAL, TEAL_HOVER, BG, CARD, BORDER, TEXT)
+try:
+    from scroll_manager import register_scrollable
+except Exception:
+    def register_scrollable(canvas):
+        pass
 
 try:
     from manager_career import morale_label
@@ -207,10 +212,8 @@ class HomeDashboard:
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
-        # Mousewheel scrolling
-        def _on_wheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_wheel)
+        # Mousewheel scrolling (routed via scroll_manager)
+        register_scrollable(canvas)
 
         content = tk.Frame(scrollable, bg=AppColors.BG)
         content.pack(fill="both", expand=True, padx=24, pady=20)
