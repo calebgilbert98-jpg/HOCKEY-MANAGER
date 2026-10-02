@@ -1905,9 +1905,15 @@ class GameSim:
         self.game_stats[player_id]['career_projection_confidence'] = confidence
         
         # Update team predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['development_projections'] += 1
-        
+        # (BUG-001 guard: throwaway "Default Goalie"/emergency fillers are on
+        # the ice but in neither roster, so _get_player_team returns None.
+        # Degrade gracefully per the _update_ml_predictions precedent —
+        # player-level updates above already landed; only the team
+        # aggregate is skipped.)
+        _team = self._get_player_team(player)
+        if _team is not None:
+            self.team_stats[_team.team_name]['development_projections'] += 1
+
         return trajectory, confidence
 
     def _assess_injury_risk(self, player):
@@ -1936,8 +1942,10 @@ class GameSim:
         self.game_stats[player_id]['injury_risk_score'] = total_risk
         
         # Update team injury predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['injury_predictions'] += 1
+        # (BUG-001 guard: same None-team case as _predict_player_development.)
+        _team = self._get_player_team(player)
+        if _team is not None:
+            self.team_stats[_team.team_name]['injury_predictions'] += 1
         
         # Add to ML training data
         model_data = self.ml_models['injury_prediction']
