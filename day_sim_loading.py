@@ -31,6 +31,8 @@ class DaySimLoadingOverlay:
         self._window = None
         self._status_var = None
         self._bar = None
+        self._hint_label = None
+        self._auto_mode = False
         try:
             self._build(parent)
         except Exception:
@@ -67,6 +69,13 @@ class DaySimLoadingOverlay:
         # Stay on top so it's visible during the blocking sim
         try:
             win.attributes('-topmost', True)
+        except Exception:
+            pass
+        # Escape never destroys this dialog mid-sim (the app-wide Esc
+        # handler would otherwise tear it down). During auto-advance it
+        # stops the loop instead -- see set_auto_mode().
+        try:
+            win.bind('<Escape>', self._on_escape, add='+')
         except Exception:
             pass
 
@@ -135,6 +144,66 @@ class DaySimLoadingOverlay:
                 self._window.update()
         except Exception:
             pass
+
+    def set_auto_mode(self, on):
+        """Show/hide the auto-advance hint (Muck 2026-10-02).
+
+        While auto-advance owns this overlay, Escape stops the loop
+        instead of doing nothing.
+        """
+        try:
+            self._auto_mode = bool(on)
+            win = self._window
+            if win is None or not bool(win.winfo_exists()):
+                return
+            if on and self._hint_label is None:
+                try:
+                    from modern_ui import AppColors, AppFonts
+                    bg = AppColors.BG_ELEVATED
+                    fg = AppColors.TEXT_SECONDARY
+                    font_hint = AppFonts.CAPTION
+                except Exception:
+                    bg = '#1e1e1e'
+                    fg = '#aaaaaa'
+                    font_hint = ("Segoe UI", 9)
+                try:
+                    self._hint_label = tk.Label(
+                        win, text="Auto-advancing — press ESC to stop",
+                        font=font_hint, bg=bg, fg=fg)
+                    self._hint_label.pack(pady=(0, 12))
+                    win.geometry("380x190")
+                except Exception:
+                    self._hint_label = None
+            elif not on and self._hint_label is not None:
+                try:
+                    self._hint_label.destroy()
+                except Exception:
+                    pass
+                self._hint_label = None
+                try:
+                    win.geometry("380x160")
+                except Exception:
+                    pass
+            try:
+                win.update()
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _on_escape(self, event=None):
+        """Escape on the overlay: stop auto-advance, never close mid-sim."""
+        try:
+            parent = self._parent
+            if (parent is not None
+                    and getattr(parent, '_auto_advance', False)):
+                try:
+                    parent._auto_advance_stop("esc")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return 'break'
 
     def destroy(self):
         """Close the overlay and release the modal grab."""

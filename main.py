@@ -3853,6 +3853,18 @@ class HockeyManagerGUI(tk.Tk):
         self.continue_btn.pack(pady=(0, 5))
         _qol_add_tooltip(self.continue_btn,
                          "Continue: advance to the next day (shortcut: Space)")
+
+        # Auto-advance toggle (Muck 2026-10-02): keep simming until your
+        # game day or an actionable notification stops the loop.
+        self.auto_advance_btn = RoundedButton(season_controls_frame, text="⏩ Auto",
+                                              command=self._auto_advance_toggle,
+                                              bg="#3a3a4a", radius=10,
+                                              font=(self.FONT_FAMILY, 11, "bold"),
+                                              padx=18, pady=8)
+        self.auto_advance_btn.pack(pady=(0, 5))
+        _qol_add_tooltip(self.auto_advance_btn,
+                         "Auto-advance: keep simming until your game day or "
+                         "an urgent notification (Esc stops)")
         
     def _create_enhanced_menu_bar(self, parent):
         """Create a streamlined menu bar with dropdown organization."""
@@ -4265,11 +4277,33 @@ class HockeyManagerGUI(tk.Tk):
             return None
         if self._qol_modal_open():
             return None
+        if getattr(self, '_auto_advance', False):
+            return None  # auto-advance owns the cadence; Esc stops it
+        if self._sim_in_progress():
+            return None  # never double-trigger a running sim
         try:
             self._on_continue_pressed()
         except Exception:
             pass
         return 'break'
+
+    def _sim_in_progress(self):
+        """True while a day sim is running (loading overlay up or Continue
+        button disabled). Belt-and-braces against double-triggering."""
+        try:
+            overlay = getattr(self, '_day_sim_overlay', None)
+            if overlay is not None and bool(overlay.is_showing):
+                return True
+        except Exception:
+            pass
+        try:
+            dashboard = getattr(self, 'dashboard', None)
+            btn = getattr(dashboard, 'continue_btn', None)
+            if btn is not None and getattr(btn, '_enabled', True) is False:
+                return True
+        except Exception:
+            pass
+        return False
 
     def _qol_on_quick_save(self, event=None):
         """Ctrl+S: quick save without opening the save dialog."""
@@ -7052,6 +7086,18 @@ class HockeyManagerGUI(tk.Tk):
                     except Exception:
                         pass
             else:
+                # Auto-advance owns the overlay between days: keep it up
+                # (no flicker) and show the new date instead of tearing it
+                # down and rebuilding it every day.
+                if getattr(self, '_auto_advance', False):
+                    if overlay is not None and bool(overlay.is_showing):
+                        try:
+                            overlay.set_status(
+                                "Auto-advancing… %s  (ESC to stop)"
+                                % self.current_date.strftime('%b %d, %Y'))
+                        except Exception:
+                            pass
+                    return
                 if overlay is not None:
                     try:
                         overlay.destroy()
@@ -7956,17 +8002,13 @@ class HockeyManagerGUI(tk.Tk):
             if hasattr(self, 'dashboard') and hasattr(self.dashboard, 'refresh_dashboard'):
                 self.dashboard.refresh_dashboard()
             
-            # Show daily results window after processing games
-            settings = self.get_settings()
-            should_show_results = (
-                todays_games or  # Show if there were scheduled games today
-                settings.get('simulation', {}).get('always_show_daily_results', True) or  # Or if always show is enabled
-                len(self.game_results) > 0  # Or if there are any game results at all
-            )
-            
-            if should_show_results:
-                self._show_daily_results_window()
-            
+            # Muck 2026-10-02: post-advance landing -- game results only
+            # when games were actually played on the simmed day, otherwise
+            # the inbox. Deferred while auto-advance owns the flow (it
+            # applies the landing once when the loop stops).
+            if not getattr(self, '_auto_advance', False):
+                self._post_advance_landing()
+
             # Use async update to prevent blocking
             self.after_idle(self.update_all_views)
 
@@ -8057,6 +8099,220 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toggle_client_ready()
             return
         self.simulate_day()
+
+    # ------------------------------------------------------------------
+    # Auto-advance: keep simming until a game or a notification stops you
+    # (Muck 2026-10-02). Drives the normal Continue funnel -- blockers,
+    # game-day bundle, loading overlay -- so nothing is bypassed.
+    # ------------------------------------------------------------------
+    _AUTO_ADVANCE_TICK_MS = 800  # breathing room between simmed days
+    # Stop reasons that already own the UI (bundle inbox, blocker dialog,
+    # season-end flow): no landing screen applied on these.
+    _AUTO_ADVANCE_QUIET_STOPS = frozenset(
+        {"waiting on you", "season ended"})
+
+    def _auto_advance_supported(self):
+        """Auto-advance is single-player only."""
+        try:
+            if self._mp_host_mode() or self._mp_client_mode():
+                return False
+        except Exception:
+            pass
+        return True
+
+    def _auto_advance_toggle(self):
+        """The ⏩ Auto / ⏸ Stop button."""
+        try:
+            if getattr(self, '_auto_advance', False):
+                self._auto_advance_stop("toggled off")
+            else:
+                self._auto_advance_start()
+        except Exception:
+            pass
+
+    def _auto_advance_start(self):
+        if getattr(self, '_auto_advance', False):
+            return
+        if not self._auto_advance_supported():
+            return
+        # Snapshot the inbox: only NEW actionable messages stop the loop.
+        self._auto_advance_seen_ids = self._inbox_message_ids()
+        self._auto_advance = True
+        self._aa_in_sim = False
+        self._auto_advance_after_id = None
+        self._refresh_auto_advance_btn()
+        try:
+            overlay = getattr(self, '_day_sim_overlay', None)
+            if overlay is not None and bool(overlay.is_showing):
+                overlay.set_auto_mode(True)
+        except Exception:
+            pass
+        self._auto_advance_tick()
+
+    def _auto_advance_stop(self, reason=""):
+        if not getattr(self, '_auto_advance', False):
+            return
+        self._auto_advance = False
+        try:
+            after_id = getattr(self, '_auto_advance_after_id', None)
+            if after_id is not None:
+                self.after_cancel(after_id)
+        except Exception:
+            pass
+        self._auto_advance_after_id = None
+        self._refresh_auto_advance_btn()
+        # Release the held overlay (the flag is already False, so the
+        # normal destroy path runs).
+        try:
+            self._set_continue_feedback(False)
+        except Exception:
+            pass
+        # Muck's landing rule applies when the loop stops, unless the
+        # stop reason already owns the UI (bundle inbox, blockers,
+        # season-end flow) -- or a sim is still running (Esc mid-sim):
+        # the day's normal end-of-sim landing covers that case.
+        if (reason and reason not in self._AUTO_ADVANCE_QUIET_STOPS
+                and not getattr(self, '_aa_in_sim', False)):
+            try:
+                self._post_advance_landing()
+            except Exception:
+                pass
+
+    def _auto_advance_tick(self):
+        """Sim one day through the normal funnel, then check the stop
+        conditions once the funnel returns."""
+        if not getattr(self, '_auto_advance', False):
+            return
+        if not self._auto_advance_supported():
+            self._auto_advance_stop("multiplayer")
+            return
+        try:
+            date_before = self.current_date
+            season_end_before = getattr(self, '_season_end_handled_year', None)
+        except Exception:
+            self._auto_advance_stop("no date")
+            return
+        self._aa_in_sim = True
+        try:
+            self._on_continue_pressed()
+        except Exception:
+            self._auto_advance_stop("advance error")
+            return
+        finally:
+            try:
+                self._aa_in_sim = False
+            except Exception:
+                pass
+        try:
+            self.after(60, lambda: self._auto_advance_after_day(
+                date_before, season_end_before))
+        except Exception:
+            self._auto_advance_stop("scheduler error")
+
+    def _auto_advance_after_day(self, date_before, season_end_before):
+        if not getattr(self, '_auto_advance', False):
+            return
+        try:
+            # 1) Day didn't advance: game-day bundle opened, blockers were
+            #    shown, a modal is waiting, or the season-end flow took over.
+            if self.current_date == date_before:
+                self._auto_advance_stop("waiting on you")
+                return
+            # 2) Season-end flow ran (awards / playoff prompts need you).
+            if (getattr(self, '_season_end_handled_year', None)
+                    != season_end_before):
+                self._auto_advance_stop("season ended")
+                return
+            # 3) User's team plays today: stop before the bundle would open
+            #    on the next tick, so the interactive game-day experience
+            #    is preserved for manual play.
+            try:
+                if self._career_user_game_today() is not None:
+                    self._auto_advance_stop("game day")
+                    return
+            except Exception:
+                pass
+            # 4) New actionable notification arrived (trade offer, RFA
+            #    sheet, staff renewal, board ultimatum, ...).
+            if self._auto_advance_new_actionable():
+                self._auto_advance_stop("notification needs you")
+                return
+        except Exception:
+            self._auto_advance_stop("check error")
+            return
+        # Keep going: refresh the seen set, update the held overlay, and
+        # schedule the next day.
+        try:
+            self._auto_advance_seen_ids = self._inbox_message_ids()
+            overlay = getattr(self, '_day_sim_overlay', None)
+            if overlay is not None and bool(overlay.is_showing):
+                try:
+                    overlay.set_auto_mode(True)
+                except Exception:
+                    pass
+                try:
+                    overlay.set_status(
+                        "Auto-advancing… %s  (ESC to stop)"
+                        % self.current_date.strftime('%b %d, %Y'))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self._auto_advance_after_id = self.after(
+                self._AUTO_ADVANCE_TICK_MS, self._auto_advance_tick)
+        except Exception:
+            self._auto_advance_stop("scheduler error")
+
+    def _inbox_message_ids(self):
+        try:
+            msgs = self.user_team.inbox.messages or []
+            return {getattr(m, 'id', None) for m in msgs}
+        except Exception:
+            return set()
+
+    def _auto_advance_new_actionable(self):
+        """True when an unread actionable message arrived since the last
+        check. Actionable = requires_response or is_urgent (trade offers,
+        RFA sheets, renewals, ultimatums...). Never raises."""
+        try:
+            seen = getattr(self, '_auto_advance_seen_ids', None) or set()
+            msgs = self.user_team.inbox.messages or []
+            for m in msgs:
+                try:
+                    if getattr(m, 'id', None) in seen:
+                        continue
+                    if getattr(m, 'is_read', True):
+                        continue
+                    if (getattr(m, 'requires_response', False)
+                            or getattr(m, 'is_urgent', False)):
+                        return True
+                except Exception:
+                    continue
+            return False
+        except Exception:
+            return False
+
+    def _refresh_auto_advance_btn(self):
+        """Flip the ⏩ Auto / ⏸ Stop button label."""
+        try:
+            btn = getattr(self, 'auto_advance_btn', None)
+            if btn is None:
+                return
+            on = bool(getattr(self, '_auto_advance', False))
+            try:
+                btn.set_text("⏸ Stop" if on else "⏩ Auto")
+            except Exception:
+                try:
+                    btn.config(text="⏸ Stop" if on else "⏩ Auto")
+                except Exception:
+                    pass
+            try:
+                btn.set_fill("#c0392b" if on else "#3a3a4a")
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _mp_toggle_host_ready(self):
         # EHM rule: you can't vote to continue while your own club has
@@ -12897,6 +13153,31 @@ class HockeyManagerGUI(tk.Tk):
             self._rebuild_result_index()
         if len(self.news_log) > self.NEWS_HISTORY_CAP + self.NEWS_TRIM_BATCH:
             del self.news_log[:self.NEWS_TRIM_BATCH]
+
+    def _post_advance_landing(self):
+        """Muck 2026-10-02: post-advance landing rule.
+
+        After advancing a day, default to the inbox screen. Only when
+        games were actually played on the simmed day does the game
+        results screen show instead. Never raises.
+        """
+        try:
+            simulated_date = self.current_date - timedelta(days=1)
+            if isinstance(simulated_date, datetime):
+                simulated_date_only = simulated_date.date()
+            else:
+                simulated_date_only = simulated_date
+            try:
+                today_results = list(
+                    self._results_by_date_index().get(simulated_date_only, []))
+            except Exception:
+                today_results = []
+            if today_results:
+                self._show_daily_results_window()
+            else:
+                self.open_inbox_window()
+        except Exception:
+            pass
 
     def _show_daily_results_window(self):
         """Show the daily game results window after day advance"""
