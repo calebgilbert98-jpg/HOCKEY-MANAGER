@@ -235,16 +235,48 @@ def roster_limit_blockers(app):
                 'action': ('Open Roster', getattr(app, 'open_roster_window',
                                                   lambda: None)),
             })
+        _recall_blocker_added = False
         if not can_dress_lineup(team):
-            # Eastside-style auto: summon the fill-ins and keep the day
-            # moving (FYI note, never a hard blocker). The old blocker
-            # survives only as a last resort if summoning somehow failed.
-            ensure_dressed_lineup_auto(
-                team,
-                notify=lambda summoned: _notify_filler_summon(app, team,
-                                                              summoned),
-            )
-        if not can_dress_lineup(team):
+            sk_need, go_need = lineup_shortfall(team)
+            cands = recall_candidates(team, sk_need, go_need)
+            if cands:
+                # Real players are available on the farm -- don't mint
+                # fakes; route the user to the recall picker instead.
+                _recall_blocker_added = True
+                _need_bits = []
+                if sk_need:
+                    _need_bits.append(
+                        f"{sk_need} skater{'s' if sk_need != 1 else ''}")
+                if go_need:
+                    _need_bits.append(
+                        f"{go_need} goalie{'s' if go_need != 1 else ''}")
+                _top = ", ".join(
+                    f"{getattr(p, 'first_name', '?')} "
+                    f"{getattr(p, 'last_name', '')} "
+                    f"({_overall(p)})"
+                    for p in cands[:3])
+                blockers.append({
+                    'id': 'dress_minimum',
+                    'title': "Can't dress a legal lineup",
+                    'detail': (
+                        f"Only {dressable_skaters(team)} skaters and "
+                        f"{dressable_goalies(team)} goalies available "
+                        f"({', '.join(_need_bits)} short). Your AHL club "
+                        f"has recallable players -- {_top}. Recall them "
+                        f"instead of icing emergency fill-ins."),
+                    'action': ('Review AHL recalls',
+                               lambda: app.open_recall_picker()),
+                })
+            else:
+                # Eastside-style auto: summon the fill-ins and keep the day
+                # moving (FYI note, never a hard blocker). The old blocker
+                # survives only as a last resort if summoning somehow failed.
+                ensure_dressed_lineup_auto(
+                    team,
+                    notify=lambda summoned: _notify_filler_summon(app, team,
+                                                                  summoned),
+                )
+        if not can_dress_lineup(team) and not _recall_blocker_added:
             sk, go = lineup_shortfall(team)
             need = []
             if sk:
@@ -425,6 +457,160 @@ def summon_emergency_fillers(team, rng=None):
     except Exception:
         pass
     return summoned
+
+
+# --- AHL recalls ---------------------------------------------------------------
+# Real-NHL behavior: when a club is short-handed (usually injuries), it
+# recalls players from its own farm team BEFORE the league mints emergency
+# exception players. Previously the compliance paths went straight to
+# fillers, so every routine injury produced a fake player instead of a real
+# recall -- and AHL prospects never got their NHL auditions. Recalls are
+# real transactions: the player moves to the NHL roster, his salary counts
+# against the cap, and the dressing-room/audition machinery fires exactly
+# as it does for a user-initiated call-up (user/AI symmetric).
+
+
+def _recall_block_reason(p):
+    """None if this AHL player can be recalled, else a human reason."""
+    try:
+        import ahl_system as _ahl
+        return _ahl.ahl_recall_block_reason(p)
+    except Exception:
+        return None
+
+
+def _player_nhl_salary(p) -> int:
+    try:
+        c = getattr(p, "contract", None)
+        return int(getattr(c, "salary", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _recall_fits_cap(team, player) -> bool:
+    """Best-effort: would recalling this player keep the club cap-compliant?
+    Fillers are cap-exempt, so a recall that breaks the cap is skipped and
+    the shortfall falls through to fillers. If the cap infrastructure is
+    unavailable, allow the recall -- the day-gate cap check is the backstop."""
+    try:
+        from salary_cap_system import cap_breakdown, compliance_charge
+        bd = cap_breakdown(team)
+        cap = int((bd or {}).get("cap", 0) or 0)
+        if cap <= 0:
+            return True
+        current = int(compliance_charge(team) or 0)
+        return current + _player_nhl_salary(player) <= cap
+    except Exception:
+        return True
+
+
+def _overall(p) -> int:
+    try:
+        return int(p.overall_rating() or 0)
+    except Exception:
+        return 0
+
+
+def recall_candidates(team, need_skaters=0, need_goalies=0):
+    """Best-first list of AHL players legally recallable right now to cover
+    a dressed-lineup shortfall. Sorted: goalies first when goalies are
+    needed, then by overall (best available), preferring two-way deals
+    (no waiver exposure on re-demotion -- the real NHL recall order).
+    Never raises; returns [] when no one is eligible."""
+    try:
+        ahl = list(getattr(team, "ahl_roster", None) or [])
+    except Exception:
+        return []
+    cands = []
+    for p in ahl:
+        try:
+            if not is_available(p):
+                continue
+            if is_emergency_filler(p):
+                continue
+            if _recall_block_reason(p):
+                continue
+            cands.append(p)
+        except Exception:
+            continue
+    def _two_way(p):
+        try:
+            return 1 if bool(getattr(getattr(p, "contract", None),
+                                     "two_way", False)) else 0
+        except Exception:
+            return 0
+    def _sort_key(p):
+        goalie_first = 0 if (_is_goalie(p) and need_goalies > 0) else 1
+        skater_first = 0 if (not _is_goalie(p) and need_skaters > 0) else 1
+        # Best available for the need first; two-way deals break ties
+        # (no waiver exposure on re-demotion -- the real NHL recall order).
+        return (goalie_first, skater_first, -_overall(p), -_two_way(p))
+    try:
+        cands.sort(key=_sort_key)
+    except Exception:
+        pass
+    return cands
+
+
+def _stamp_recall_effects(team, player):
+    """Ecosystem effects of a recall, mirroring app.call_up_to_nhl:
+    audition baseline + dressing-room arrival cascade. Guarded; never raises."""
+    try:
+        player.nhl_audition = {
+            "goals": getattr(player, "goals", 0) or 0,
+            "assists": getattr(player, "assists", 0) or 0,
+            "games_played": getattr(player, "games_played", 0) or 0,
+        }
+    except Exception:
+        try:
+            player.nhl_audition = None
+        except Exception:
+            pass
+    try:
+        import dressing_room as _dr
+        _dr.cascade_on_arrival(team, player, how="callup", date_str="")
+    except Exception:
+        pass
+
+
+def recall_best_available(team, need_skaters=0, need_goalies=0, rng=None):
+    """Recall real AHL players to cover a dressed-lineup shortfall.
+    Fills goalies first, then skaters, skipping anyone who fails the cap
+    check (fillers are the cap-exempt fallback). Returns the recalled
+    players. Never raises."""
+    recalled = []
+    try:
+        if need_skaters <= 0 and need_goalies <= 0:
+            return recalled
+        roster = getattr(team, "roster", None)
+        ahl = getattr(team, "ahl_roster", None)
+        if roster is None or ahl is None:
+            return recalled
+        go_need, sk_need = int(need_goalies or 0), int(need_skaters or 0)
+        for p in recall_candidates(team, sk_need, go_need):
+            if go_need <= 0 and sk_need <= 0:
+                break
+            try:
+                want_goalie = _is_goalie(p)
+                if want_goalie and go_need <= 0:
+                    continue
+                if not want_goalie and sk_need <= 0:
+                    continue
+                if not _recall_fits_cap(team, p):
+                    continue
+                ahl.remove(p)
+                roster.append(p)
+                _stamp_recall_effects(team, p)
+                recalled.append(p)
+                if want_goalie:
+                    go_need -= 1
+                else:
+                    sk_need -= 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return recalled
 
 
 def ensure_dressed_lineup_auto(team, notify=None):
@@ -758,7 +944,14 @@ def ai_roster_compliance(team, league=None, rng=None):
                 break
         done["released"] = release_unneeded_fillers(team)
         if not can_dress_lineup(team):
-            done["summoned"] = len(summon_emergency_fillers(team, rng))
+            # Real clubs recall from the farm before the league mints
+            # exception players: try real AHL recalls first, fillers only
+            # for whatever shortfall remains (cap-strapped or empty farm).
+            sk_need, go_need = lineup_shortfall(team)
+            done["recalled"] = len(recall_best_available(
+                team, sk_need, go_need, rng=rng))
+            if not can_dress_lineup(team):
+                done["summoned"] = len(summon_emergency_fillers(team, rng))
     except Exception:
         pass
     return done
@@ -766,14 +959,19 @@ def ai_roster_compliance(team, league=None, rng=None):
 
 def user_roster_compliance(team):
     """Daily user backstop, same rules as the AI: release fillers no longer
-    needed to dress a lineup, then auto-summon any shortfall. NO
+    needed to dress a lineup, then cover any shortfall. Recalls stay a human
+    decision -- when recallable AHL players exist the shortfall is left for
+    the user to fill via the recall picker (surfaced by the dress_minimum
+    blocker); fillers auto-summon only when the farm can't help. NO
     paper-down step -- demotions stay a human decision (the 23/SPC day
     gates surface an overage to the user instead). Never raises."""
     done = {"summoned": 0, "released": 0}
     try:
         done["released"] = release_unneeded_fillers(team)
         if not can_dress_lineup(team):
-            done["summoned"] = len(ensure_dressed_lineup_auto(team))
+            sk_need, go_need = lineup_shortfall(team)
+            if not recall_candidates(team, sk_need, go_need):
+                done["summoned"] = len(ensure_dressed_lineup_auto(team))
     except Exception:
         pass
     return done

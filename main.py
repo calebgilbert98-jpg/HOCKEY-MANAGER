@@ -20276,7 +20276,146 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             player.nhl_audition = None
         self.update_all_views()
-        
+
+    def open_recall_picker(self):
+        """Tier-2 recall picker: when the club can't dress 18+2 and the
+        farm has recallable players, show them best-first with one-click
+        Recall buttons (reuses call_up_to_nhl, so the paper-transaction
+        rule, dressing-room cascade and audition stamping all fire).
+        Non-modal -- the user can navigate away and come back. A
+        'summon fillers instead' escape hatch covers the cap-strapped
+        case. Never raises."""
+        try:
+            import roster_limits as _rl
+            team = getattr(self, "user_team", None)
+            if team is None:
+                return
+            sk_need, go_need = _rl.lineup_shortfall(team)
+            if sk_need <= 0 and go_need <= 0:
+                return
+            cands = _rl.recall_candidates(team, sk_need, go_need)
+            if not cands:
+                return
+
+            win = tk.Toplevel(self)
+            win.title("AHL recalls -- cover the shortfall")
+            win.geometry("560x520")
+            _need_bits = []
+            if sk_need:
+                _need_bits.append(
+                    f"{sk_need} skater{'s' if sk_need != 1 else ''}")
+            if go_need:
+                _need_bits.append(
+                    f"{go_need} goalie{'s' if go_need != 1 else ''}")
+            tk.Label(
+                win,
+                text=f"Short-handed: {', '.join(_need_bits)} needed "
+                     f"to dress a lineup.",
+                font=("Segoe UI", 12, "bold")).pack(pady=(12, 2))
+            tk.Label(
+                win,
+                text="Recall from your farm team -- same as real NHL "
+                     "clubs do. Emergency fill-ins stay the last resort.",
+                font=("Segoe UI", 10)).pack(pady=(0, 8))
+
+            body = tk.Frame(win)
+            body.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+            canvas = tk.Canvas(body, highlightthickness=0)
+            scrollbar = tk.Scrollbar(body, orient="vertical",
+                                     command=canvas.yview)
+            scroll = tk.Frame(canvas)
+            scroll.bind("<Configure>",
+                        lambda _e: canvas.configure(
+                            scrollregion=canvas.bbox("all")))
+            canvas.create_window((0, 0), window=scroll, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+
+            def _pos_str(p):
+                try:
+                    pos = getattr(p, "primary_position", None)
+                    return str(getattr(pos, "value", pos) or "?")
+                except Exception:
+                    return "?"
+
+            def _refresh():
+                try:
+                    if not win.winfo_exists():
+                        return
+                    _sk, _go = _rl.lineup_shortfall(team)
+                    if _sk <= 0 and _go <= 0:
+                        win.destroy()
+                        try:
+                            self.update_all_views()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            for p in cands[:12]:
+                try:
+                    row = tk.Frame(scroll, relief="groove", bd=1)
+                    row.pack(fill="x", pady=3, padx=2)
+                    _name = (f"{getattr(p, 'first_name', '?')} "
+                             f"{getattr(p, 'last_name', '')}").strip()
+                    _ovr = _rl._overall(p)
+                    _sal = _rl._player_nhl_salary(p)
+                    _tw = ""
+                    try:
+                        if bool(getattr(getattr(p, "contract", None),
+                                        "two_way", False)):
+                            _tw = " (2-way)"
+                    except Exception:
+                        pass
+                    _fits = _rl._recall_fits_cap(team, p)
+                    _cap_note = "" if _fits else " -- over cap"
+                    tk.Label(
+                        row,
+                        text=f"{_name}  [{_pos_str(p)}]  "
+                             f"{_ovr} OVR  "
+                             f"${_sal / 1e6:.2f}M{_tw}{_cap_note}",
+                        font=("Segoe UI", 11),
+                        anchor="w").pack(side="left", padx=8, pady=6,
+                                         fill="x", expand=True)
+
+                    def _do_recall(_p=p):
+                        try:
+                            self.call_up_to_nhl(_p)
+                        except Exception:
+                            pass
+                        _refresh()
+
+                    tk.Button(row, text="Recall",
+                              font=("Segoe UI", 10, "bold"),
+                              command=_do_recall).pack(side="right",
+                                                       padx=8, pady=4)
+                except Exception:
+                    continue
+
+            bottom = tk.Frame(win)
+            bottom.pack(fill="x", padx=12, pady=(0, 12))
+
+            def _summon_instead():
+                try:
+                    _rl.ensure_dressed_lineup_auto(team)
+                    self.update_all_views()
+                except Exception:
+                    pass
+                try:
+                    win.destroy()
+                except Exception:
+                    pass
+
+            tk.Button(bottom, text="Summon emergency fillers instead",
+                      font=("Segoe UI", 10),
+                      command=_summon_instead).pack(side="left")
+            tk.Button(bottom, text="Close",
+                      font=("Segoe UI", 10),
+                      command=win.destroy).pack(side="right")
+        except Exception:
+            pass
+
     def open_contract_negotiation_window(self, player, is_extension=False,
                                          is_elc=False):
         # Extension window (real NHL: extensions only in the final year of

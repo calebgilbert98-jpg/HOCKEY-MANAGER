@@ -371,23 +371,32 @@ def _resolve_salary_floor(app, gm, blocker, log):
 
 
 def _resolve_dress_minimum(app, gm, blocker, log):
-    """BUG-002: summon emergency fillers -- the blocker's own remedy.
+    """BUG-002: cover the dressed-lineup shortfall -- the blocker's own remedy.
 
     The roster-limits gate fires correctly; headless just had no policy to
-    answer it. Mirrors what the UI's Summon button does.
+    answer it. Mirrors the production logic: real AHL recalls first, then
+    emergency fillers for whatever shortfall remains (what the UI's
+    Summon button does as the last resort).
     """
-    from roster_limits import summon_emergency_fillers, lineup_shortfall
+    from roster_limits import (summon_emergency_fillers, lineup_shortfall,
+                               recall_best_available)
     team = gm.user_team
     sk_need, go_need = lineup_shortfall(team)
+    recalled = recall_best_available(team, sk_need, go_need)
     summoned = summon_emergency_fillers(team)
     sk_left, go_left = lineup_shortfall(team)
     if sk_left > 0 or go_left > 0:
         raise DayLoopAbort(
-            f"dress_minimum: summon covered {len(summoned)} but shortfall "
-            f"remains ({sk_left} skaters, {go_left} goalies)")
-    names = ", ".join(getattr(p, "full_name", "?") for p in summoned)
-    return (f"summoned {len(summoned)} emergency filler(s) "
-            f"(needed {sk_need} skaters, {go_need} goalies): {names}")
+            f"dress_minimum: recall+summon covered {len(recalled)}+"
+            f"{len(summoned)} but shortfall remains ({sk_left} skaters, "
+            f"{go_left} goalies)")
+    names = ", ".join(getattr(p, "full_name", "?") for p in recalled)
+    if summoned:
+        names += ("; " if names else "") + ", ".join(
+            getattr(p, "full_name", "?") for p in summoned)
+    return (f"recalled {len(recalled)}, summoned {len(summoned)} emergency "
+            f"filler(s) (needed {sk_need} skaters, {go_need} goalies): "
+            f"{names}")
 
 
 _RESOLVERS = {
