@@ -2043,7 +2043,17 @@ def personal_grade_ceiling(player, grade, shot_tool=None, scenario_mult=1.0):
         _sm = max(1.0, float(scenario_mult or 1.0))
         _lift = _sm - 1.0  # 0.0 to 0.5 (cap 1.5)
         _frac = min(1.0, _frac + _lift * (1.0 - _frac) * 0.5)
-        return (_lo, _lo + (_hi - _lo) * _frac)
+        # E4 fix (Muck 2026-10-02): the personal LOWER bound also scales
+        # with finishing. Previously lo was fixed at the league floor
+        # (0.10 for Grade A), so a 60-finisher [0.10, 0.14] and a
+        # 75-finisher [0.10, 0.164] differed by only ~2 points of
+        # conversion — the floor dominated. Now _plo = _lo*(0.6+0.4*_frac):
+        # poor finishers get a lower floor (0.06 at frac=0), elite keep
+        # the full floor. The protected CHANCE_GRADE_CLAMP is untouched;
+        # this changes how personal_grade_ceiling maps within it.
+        _plo = _lo * (0.6 + 0.4 * _frac)
+        _phi = _lo + (_hi - _lo) * _frac
+        return (_plo, _phi)
     except Exception:
         return chance_grade_clamp(grade)
 

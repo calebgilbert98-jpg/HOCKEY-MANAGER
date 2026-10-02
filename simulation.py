@@ -10145,12 +10145,32 @@ class GameSim:
         """
         Stage 5: Calculate the probability of a save based on goaltender skills and shot characteristics.
         """
-        # Goaltender skill factors -- the ONE shared goalie_skill_composite
-        # (divergence #5): goaltending .40 / reflexes .25 / positioning .20 /
-        # rebound_control .10 / composure .05, the same weights quick-sim
-        # uses. (The old equal-split of three pair-averages is retired.)
-        from mesh_system import goalie_skill_composite as _gsc2
-        goalie_skill = _gsc2(goaltender)
+        # Goaltender skill factors -- E5 fix (Muck 2026-10-02): use the SAME
+        # situational re-weighting + parity compression as quick-sim.
+        # Previously GameSim used fixed-weight goalie_skill_composite while
+        # AdvGS used situational_goalie_skill + effective_goalie_skill,
+        # straining "one decision, two fidelities". Now both engines:
+        # 1) re-weight by situation (screened/tip/breakaway/point/clean),
+        # 2) compress toward the parity mean via effective_goalie_skill.
+        try:
+            from mesh_system import situational_goalie_skill as _sgs2
+            from mesh_system import effective_goalie_skill as _egs2
+            # Derive situation from shot_type.
+            _st = str(shot_type or "").lower()
+            if "screen" in _st:
+                _sit = "screened"
+            elif "tip" in _st or "deflect" in _st:
+                _sit = "tip"
+            elif "breakaway" in _st or "penalty" in _st:
+                _sit = "breakaway"
+            elif "point" in _st or "slap" in _st:
+                _sit = "point"
+            else:
+                _sit = "clean"
+            goalie_skill = _egs2(_sgs2(goaltender, _sit))
+        except Exception:
+            from mesh_system import goalie_skill_composite as _gsc2
+            goalie_skill = _gsc2(goaltender)
 
         # Skill edge: good goalies reduce xG, bad goalies increase it.
         # Recalibrated 2026-09-28 on live rosters: the weighted composite

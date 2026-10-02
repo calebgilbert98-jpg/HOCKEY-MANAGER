@@ -2229,14 +2229,28 @@ class AdvancedGameSim:
 
 
     def _calculate_fatigue_factor(self, player, team_name):
-        """Calculate comprehensive fatigue factor"""
-        player_fatigue = self.stats[team_name][player.id].get('fatigue', 0)
-        endurance = getattr(player, 'endurance', 10)
-        stamina = getattr(player, 'stamina', 10)
-        durability = getattr(player, 'durability', 10)
-        
+        """Calculate comprehensive fatigue factor.
+
+        E7 fix (Muck 2026-10-02): reads the canonical per-game energy pool
+        from condition_system (what GameSim drains each tick), not the old
+        local fatigue counter. One decision, two fidelities.
+        """
+        try:
+            from condition_system import get_game_energy as _gge
+            from condition_system import fatigue_resistance as _fr
+            # Energy 0-100; convert to fatigue 0-100 (100-energy).
+            _energy = _gge(player)
+            player_fatigue = 100.0 - _energy
+            fatigue_resistance = _fr(player)
+        except Exception:
+            # Fallback to legacy local read if condition_system unavailable.
+            player_fatigue = self.stats[team_name][player.id].get('fatigue', 0)
+            endurance = getattr(player, 'endurance', 10)
+            stamina = getattr(player, 'stamina', 10)
+            durability = getattr(player, 'durability', 10)
+            fatigue_resistance = (endurance + stamina + durability) / 3
+
         # Better players with high endurance/stamina maintain performance longer
-        fatigue_resistance = (endurance + stamina + durability) / 3
         fatigue_factor = 1.0 - min(0.6, player_fatigue / max(1, fatigue_resistance))
         return max(0.4, fatigue_factor)  # Never go below 40% performance
     
@@ -3242,7 +3256,14 @@ class AdvancedGameSim:
                 _mates = None
                 try:
                     _oi = self.on_ice.get(puck_team_name, {})
-                    _mates = _oi.get('Forwards', None)
+                    # E6 fix (Muck 2026-10-02): pass ALL on-ice skaters
+                    # (forwards + defense), not just forwards. GameSim
+                    # passes all skaters; D linemates feed the fit/
+                    # elite-linemate/scheme-relief lifts. One decision,
+                    # two fidelities.
+                    _mates = list(_oi.get('Forwards', None) or [])
+                    _mates.extend(_oi.get('Defense', None) or [])
+                    _mates = [m for m in _mates if m is not None] or None
                 except Exception:
                     pass
                 _sm = _csm(shooter, linemates=_mates)
