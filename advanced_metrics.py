@@ -135,6 +135,15 @@ class SkaterAdvanced:
     sh_pct: float = 0.0        # shooting % (actual)
     ixg: float = 0.0           # individual expected goals (model)
     ixg_per60: float = 0.0
+    ixg_grade: float = 0.0     # individual expected goals from chance
+                               # grades (ground truth: grade_a/b/c_shots
+                               # x canonical per-grade xG). Analytics
+                               # integration 2026-10-01.
+    ixg_grade_per60: float = 0.0
+    grade_a_shots: int = 0     # chance-grade shot counts (ground truth)
+    grade_b_shots: int = 0
+    grade_c_shots: int = 0
+    grade_a_share: float = 0.0  # share of shots graded A (shot quality)
     cf_pct: float = 50.0       # Corsi For % estimate (model)
     ff_pct: float = 50.0       # Fenwick For % estimate (model)
     xgf_pct: float = 50.0      # expected-goal share estimate (model)
@@ -182,6 +191,32 @@ def skater_advanced(player: Any, team_avg_sh_pct: float = 9.5,
     m.ixg = shots * exp_sh_pct / 100.0
     if toi_hours > 0:
         m.ixg_per60 = m.ixg / toi_hours
+
+    # Individual expected goals from chance grades (ground truth).
+    # Analytics integration (2026-10-01): the engines record grade_a/b/c
+    # shots on every attempt -- sum(shots_g * canonical_xg_g) is the
+    # observed shot-quality ixG, no modeling. Additive; the modeled ixg
+    # above is untouched.
+    try:
+        from mesh_system import grade_xg_value as _gxv_am
+        _ga = int(_stat_val(st, "grade_a_shots") or 0)
+        _gb = int(_stat_val(st, "grade_b_shots") or 0)
+        _gc = int(_stat_val(st, "grade_c_shots") or 0)
+    except Exception:
+        _ga = _gb = _gc = 0
+        _gxv_am = lambda g: 0.0
+    m.grade_a_shots = _ga
+    m.grade_b_shots = _gb
+    m.grade_c_shots = _gc
+    _gshots = _ga + _gb + _gc
+    m.grade_a_share = round(_ga / _gshots, 3) if _gshots else 0.0
+    try:
+        m.ixg_grade = round(_ga * _gxv_am("A") + _gb * _gxv_am("B")
+                            + _gc * _gxv_am("C"), 2)
+    except Exception:
+        m.ixg_grade = 0.0
+    if toi_hours > 0:
+        m.ixg_grade_per60 = round(m.ixg_grade / toi_hours, 3)
 
     # --- Possession proxies (model) ---
     # Skaters who move the puck (passing, puck handling, skating) drive

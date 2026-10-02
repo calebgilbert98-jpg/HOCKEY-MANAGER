@@ -138,6 +138,70 @@ def player_xg_rows(shots):
     return rows
 
 
+def grade_xg_rows(shots):
+    """Per chance-grade (A/B/C): shots, xG, goals, conversion.
+
+    Analytics integration (2026-10-01): the grade-A/B/C chance records
+    the engines write now surface in the hub -- the xG backbone broken
+    down by chance quality. Pure aggregation; never touches engine state.
+    """
+    agg = defaultdict(lambda: {"shots": 0, "xg": 0.0, "goals": 0})
+    for s in shots:
+        try:
+            _g = str(s.get("grade") or "").upper()
+        except Exception:
+            _g = ""
+        if _g not in ("A", "B", "C"):
+            _g = "?"
+        a = agg[_g]
+        a["shots"] += 1
+        a["xg"] += float(s.get("xg", 0) or 0)
+        if s.get("outcome") == "goal":
+            a["goals"] += 1
+    rows = [{"grade": k, "shots": v["shots"],
+             "xg": round(v["xg"], 2), "goals": v["goals"],
+             "conv": round(v["goals"] / v["shots"], 3) if v["shots"] else 0.0,
+             "diff": round(v["goals"] - v["xg"], 2)}
+            for k, v in agg.items()]
+    order = {"A": 0, "B": 1, "C": 2, "?": 3}
+    rows.sort(key=lambda r: order.get(r["grade"], 9))
+    return rows
+
+
+def player_grade_xg_rows(shots):
+    """Per-shooter per-grade: shots and xG split by chance grade.
+
+    Analytics integration (2026-10-01): who earns the high-danger looks
+    vs who lives on the perimeter -- the shot-quality profile per
+    player. Pure aggregation.
+    """
+    agg = defaultdict(lambda: {"A": 0, "B": 0, "C": 0,
+                               "xg_a": 0.0, "xg_b": 0.0, "xg_c": 0.0,
+                               "shots": 0, "xg": 0.0, "goals": 0})
+    for s in shots:
+        try:
+            _g = str(s.get("grade") or "").upper()
+        except Exception:
+            _g = ""
+        a = agg[s.get("shooter", "?")]
+        a["shots"] += 1
+        _xg = float(s.get("xg", 0) or 0)
+        a["xg"] += _xg
+        if _g in ("A", "B", "C"):
+            a[_g] += 1
+            a[f"xg_{_g.lower()}"] += _xg
+        if s.get("outcome") == "goal":
+            a["goals"] += 1
+    rows = [{"shooter": k, "shots": v["shots"],
+             "a_shots": v["A"], "b_shots": v["B"], "c_shots": v["C"],
+             "a_share": round(v["A"] / v["shots"], 3) if v["shots"] else 0.0,
+             "xg": round(v["xg"], 2), "goals": v["goals"],
+             "diff": round(v["goals"] - v["xg"], 2)}
+            for k, v in agg.items()]
+    rows.sort(key=lambda r: (-r["xg"], -r["shots"]))
+    return rows
+
+
 def line_xg_rows(shots, line_chem=None):
     """Per forward line: shots, xG, goals, latest chemistry."""
     agg = defaultdict(lambda: {"shots": 0, "xg": 0.0, "goals": 0})

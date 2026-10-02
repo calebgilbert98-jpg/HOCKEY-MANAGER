@@ -1350,6 +1350,29 @@ CHANCE_GRADE_CLAMP = {
     CHANCE_GRADE_C: (0.015, 0.09),
 }
 
+# Expected goals per shot by grade (analytics integration 2026-10-01):
+# the midpoint of each grade's conversion clamp -- the "ground truth"
+# ixG for a player's grade_a/b/c_shots. Canonical here so the engines,
+# advanced_metrics, and the analytics hub all agree on the values.
+# Additive: no engine decision reads this.
+CHANCE_GRADE_XG_VALUE = {
+    CHANCE_GRADE_A: 0.14,
+    CHANCE_GRADE_B: 0.08,
+    CHANCE_GRADE_C: 0.05,
+}
+
+
+def grade_xg_value(grade) -> float:
+    """Expected goals for one shot of the given chance grade (A/B/C).
+
+    Falls back to the B value for unknown grades. Never raises.
+    """
+    try:
+        _g = str(grade or "B").upper()
+    except Exception:
+        _g = "B"
+    return float(CHANCE_GRADE_XG_VALUE.get(_g, CHANCE_GRADE_XG_VALUE["B"]))
+
 
 def _chance_attr(p, name: str, default: float = 50.0) -> float:
     try:
@@ -1572,7 +1595,8 @@ def _chance_gametime_tilt(rivalry_heat: float = 0.0, morale: float = 70.0,
 def roll_chance_grade(location: str = "slot", contest: float = 0.5,
                       shooter=None, defenders=None, goalie=None,
                       situation: dict = None,
-                      game_ctx: dict = None) -> str:
+                      game_ctx: dict = None,
+                      context_out: dict = None) -> str:
     """Grade one scoring chance A/B/C at creation time. THE shared
     decision -- both engines roll through here.
 
@@ -1586,12 +1610,25 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         is_playoff (bool), d_fatigue (0-100), team_d_weakness (mult),
         six_on_five_tilt (mult, workstream B), ot_3v3_tilt (mult,
         workstream B).
+    context_out: optional dict -- when provided, populated with a summary
+        of the scenario/composite context that drove the grade (analytics
+        integration 2026-10-01): which hard gate fired (if any), the
+        active situation flags, and the game_ctx inputs. Pure recording;
+        never affects the grade. None = old behavior exactly.
 
     Hard gates (chance quality is honest): breakaways, rebounds and won
     net-front spots are grade A; smothered perimeter/point shots are
     grade C. Everything else rolls the simulated distribution. Never
     raises -- falls back to "B".
     """
+    # -- context capture (analytics integration; additive) ----------------
+    _ctx = context_out if isinstance(context_out, dict) else None
+    def _note(**kw):
+        if _ctx is not None:
+            try:
+                _ctx.update(kw)
+            except Exception:
+                pass
     try:
         _loc = str(location or "slot").lower()
         if _loc not in CHANCE_LOCATION_PRIORS:
@@ -1603,21 +1640,40 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         _ws = bool(_sit.get("won_spot", False))
         _rb = bool(_sit.get("rebound", False))
         _tip = bool(_sit.get("tip", False))
+        _note(location=_loc, contest=round(_con, 3),
+              situation={k: bool(_sit.get(k, False)) for k in
+                         ("quick_release", "screened_goalie", "won_spot",
+                          "rebound", "tip") if _sit.get(k, False)},
+              game_ctx={k: (game_ctx or {}).get(k) for k in
+                        ("rivalry_heat", "clutch", "is_playoff",
+                         "six_on_five_tilt", "ot_3v3_tilt")
+                        if (lambda _v: _v is not None and _v is not False
+                            and not (isinstance(_v, (int, float))
+                                      and not isinstance(_v, bool)
+                                      and _v in (0, 0.0, 1.0)))(
+                            (game_ctx or {}).get(k))})
 
         # -- Hard gates ------------------------------------------------
         if _loc == "breakaway" or _rb:
+            _note(hard_gate="breakaway_or_rebound")
             return CHANCE_GRADE_A
         if _ws and _loc in ("crease", "netfront"):
+            _note(hard_gate="won_netfront_spot")
             return CHANCE_GRADE_A
         if _tip and _ws:
+            _note(hard_gate="tip_won_spot")
             return CHANCE_GRADE_A
         if _loc == "perimeter" and _con >= 0.70:
+            _note(hard_gate="smothered_perimeter")
             return CHANCE_GRADE_C
         if _loc == "point" and _con >= 0.80:
+            _note(hard_gate="smothered_point")
             return CHANCE_GRADE_C
         # Slot + clean + (quick release or won spot): the grade-A look.
         if _loc == "slot" and _con <= 0.30 and (_qr or _ws):
+            _note(hard_gate="slot_clean_look")
             return CHANCE_GRADE_A
+        _note(hard_gate=None)
 
         # -- Simulated distribution ------------------------------------
         _pA, _pB, _pC = CHANCE_LOCATION_PRIORS[_loc]
@@ -1693,6 +1749,9 @@ def roll_chance_grade(location: str = "slot", contest: float = 0.5,
         if _tot <= 0:
             return CHANCE_GRADE_B
         _pA, _pB, _pC = _pA / _tot, _pB / _tot, _pC / _tot
+        _note(tilt=round(_tilt, 3),
+              probs={k: round(v, 3) for k, v in
+                     (("A", _pA), ("B", _pB), ("C", _pC))})
 
         _r = random.random()
         if _r < _pA:

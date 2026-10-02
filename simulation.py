@@ -4826,6 +4826,41 @@ class GameSim:
                 _crowd_edge = max(-1.0, min(1.0, (float(_cm) - 1.0) * 15.0))
             except Exception:
                 _crowd_edge = 0.0
+            # -- schemed-against superstars (2026-09-30, Muck) ----------
+            # (moved to _resolve_shot_on_goal: the factor applies to the
+            # goal probability there, alongside the other shared tilts.)
+            # -- 6v5 scramble tilt (workstream B, 2026-09-30) ---------------
+            # Generation side only: the six-man unit's net-front chaos
+            # (attribute-vs-attribute vs the defense's box-out) tilts WHO
+            # earns grade A. Finishing constants/clamps untouched.
+            _tilt65 = 1.0
+            try:
+                if attacking_team.team_name in getattr(self, "goalie_pulled", set()):
+                    from six_on_five import grade_tilt_ctx as _gtc65
+                    _opp65g = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt65 = _gtc65(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp65g)
+                                     ).get("six_on_five_tilt", 1.0)
+            except Exception:
+                pass
+            # -- 3v3 open-ice tilt (workstream B(e), 2026-09-30) -----------
+            # Generation side only: 3v3 OT's open ice tilts grade-A earning
+            # by the on-ice units' skating/chance-creation. The live lever
+            # for (e), alongside the volume bump in
+            # _apply_situation_modifiers.
+            _tilt3v3 = 1.0
+            try:
+                if getattr(self, "_ot_sudden_death", False) and not getattr(
+                        self, "is_playoff", False):
+                    from six_on_five import ot_open_ice_tilt as _ot33
+                    _opp3v3 = (self.away_team if attacking_team is self.home_team
+                               else self.home_team)
+                    _tilt3v3 = _ot33(self._get_on_ice(attacking_team),
+                                     self._get_on_ice(_opp3v3))
+            except Exception:
+                pass
+            _ctx65 = {}
             _grade = _rcg(
                 _loc, _contest, shooter,
                 defenders=_defenders, goalie=_goalie,
@@ -4845,7 +4880,18 @@ class GameSim:
                     "is_playoff": bool(getattr(self, "is_playoff", False)),
                     "d_fatigue": _d_fatigue,
                     "team_d_weakness": _team_d_weak,
-                })
+                    "six_on_five_tilt": _tilt65,
+                    "ot_3v3_tilt": _tilt3v3,
+                },
+                context_out=_ctx65)
+            # Analytics integration (2026-10-01): stash the scenario/
+            # composite context that drove this grade -- recorded on the
+            # shot log by _analytics_record_shot. Additive; never affects
+            # the grade.
+            try:
+                self._last_chance_context = dict(_ctx65)
+            except Exception:
+                pass
         except Exception:
             pass
         return _grade
@@ -5447,13 +5493,121 @@ class GameSim:
         # Superstar tune 2026-09-28 (shared decisions, one decision two
         # fidelities): D point-shot conversion discount + sniper archetype
         # finishing tilt -- the same multipliers quick-sim applies.
+        # STACKING (2026-09-30, workstream C, Muck): the opportunity
+        # amplifiers on one chance (finishing tilt, schemed relief,
+        # chemistry) combine sub-multiplicatively below -- collected
+        # here, applied once. The D point-shot discount is a suppressor
+        # and keeps full multiplicative power (honest brake).
+        _gs_boosters = []
         try:
             from mesh_system import (defense_point_shot_discount as _dpsd,
                                      archetype_finish_tilt as _aft)
-            _tilt = _dpsd(shooter) * _aft(shooter)
-            if _tilt != 1.0:
-                goal_prob = (1.0 - adjusted_save_prob) * _tilt
+            _dpsd_f = _dpsd(shooter)
+            _aft_f = _aft(shooter)
+            if _dpsd_f != 1.0:
+                goal_prob = (1.0 - adjusted_save_prob) * _dpsd_f
                 adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+            if _aft_f != 1.0:
+                _gs_boosters.append(_aft_f)
+        except Exception:
+            pass
+
+        # Schemed-against superstars (2026-09-30, Muck): the scenario
+        # battle (scenario_composites.schemed_factor_for_shooter) — the
+        # defending TEAM shades an elite/generational threat. One factor
+        # per chance, never stacked. Same shared decision quick-sim calls.
+        try:
+            from scenario_composites import (schemed_factor_for_shooter
+                                             as _sffs2)
+            try:
+                _onice_a = self._on_ice_skaters(attacking_team)
+            except Exception:
+                try:
+                    _onice_a = self._get_on_ice(attacking_team)
+                except Exception:
+                    _onice_a = []
+            try:
+                _onice_d = self._on_ice_skaters(defending_team)
+            except Exception:
+                try:
+                    _onice_d = self._get_on_ice(defending_team)
+                except Exception:
+                    _onice_d = []
+            _a_unit = [p for p in (_onice_a or []) if p is not None]
+            _d_unit = [p for p in (_onice_d or []) if p is not None]
+            _loc_s = getattr(location, "name", str(location)).lower()
+            _schemed_f2 = _sffs2(shooter, _a_unit, _d_unit, _loc_s,
+                                 sim=self, off_team=attacking_team,
+                                 def_team=defending_team)
+            if _schemed_f2 != 1.0:
+                _gs_boosters.append(_schemed_f2)
+        except Exception:
+            pass
+
+        # Line chemistry (2026-09-30, Muck): the shared unit-efficiency
+        # multiplier — same helper, same point as quick-sim (one decision,
+        # two fidelities). Situation-aware, bounded per-line, truthful.
+        # Never touches finishing or grade ceilings.
+        try:
+            from line_chemistry import (unit_efficiency as _lcef2,
+                                        pk_denial_factor as _lkdf2,
+                                        detect_situation as _lcdet2)
+            _sit_lc2 = _lcdet2(sim=self, team=attacking_team)
+            _lc_eff2 = _lcef2(_a_unit, situation=_sit_lc2, sim=self,
+                              team=attacking_team)
+            if _lc_eff2 != 1.0:
+                _gs_boosters.append(_lc_eff2)
+            # detect_situation returns the ATTACKING team's view: the
+            # defending PK unit's denial applies when the attack is on
+            # the PP ("pp"), not when the attack is shorthanded.
+            if _sit_lc2 == "pp":
+                _deny2 = _lkdf2(_d_unit, sim=self, team=defending_team)
+                if _deny2 != 1.0:
+                    goal_prob = (1.0 - adjusted_save_prob) * _deny2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # STACKING (2026-09-30, workstream C, Muck): the collected
+        # opportunity amplifiers combine sub-multiplicatively
+        # (strongest boost keeps full value, further boosts keep 30%
+        # of their excess). Denials collected here pass through at
+        # full multiplicative power -- honest brakes, never muted.
+        try:
+            from scenario_composites import (
+                combine_stacked_amplifiers as _csa2)
+        except Exception:
+            _csa2 = None
+        try:
+            _free2 = 1.0
+            for _b in _gs_boosters:
+                _free2 *= _b
+            if _gs_boosters and _free2 > 0.0:
+                _combined2 = _csa2(*_gs_boosters) if _csa2 else _free2
+                if _combined2 != _free2:
+                    goal_prob = ((1.0 - adjusted_save_prob)
+                                 * (_combined2 / _free2))
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
+        except Exception:
+            pass
+
+        # OT drama, live lever (2026-09-30 rebuild): 3v3 matchup choices.
+        # Regular-season OT only -- the coach's personnel acumen plus the
+        # room/crowd edge tilt OT finishing a touch, bounded small.
+        try:
+            if (getattr(self, "_ot_sudden_death", False)
+                    and not getattr(self, "is_playoff", False)
+                    and getattr(self, "period", 0) == 4):
+                from ot_drama import ot_matchup_tilt as _omt2
+                _tilt2 = _omt2(
+                    self._drama_ctx_lazy(),
+                    home_coach=getattr(self, "_home_coach", None),
+                    away_coach=getattr(self, "_away_coach", None))
+                if _tilt2:
+                    _m2 = (1.0 + _tilt2 if attacking_team is self.home_team
+                           else 1.0 - _tilt2)
+                    goal_prob = (1.0 - adjusted_save_prob) * _m2
+                    adjusted_save_prob = 1.0 - min(0.98, max(0.0, goal_prob))
         except Exception:
             pass
 
@@ -7287,7 +7441,8 @@ class GameSim:
             return "-"
 
     def _analytics_record_shot(self, shooter, attacking_team, defending_team,
-                               location, distance, shot_type, xg, grade=None):
+                               location, distance, shot_type, xg, grade=None,
+                               chance_context=None):
         """Log one shot attempt for the Analytics Hub (module 04)."""
         try:
             shots, _ = self._analytics_logs()
@@ -7301,6 +7456,22 @@ class GameSim:
                     _gr = None
             except Exception:
                 _gr = None
+            # Analytics integration (2026-10-01): scenario/composite
+            # context -- which hard gate fired, the active situation flags,
+            # and the game_ctx inputs that drove the grade. Falls back to
+            # the stashed context from _roll_chance_grade when not passed
+            # explicitly. Pure recording; never affects engine decisions.
+            _cctx = chance_context
+            if _cctx is None:
+                try:
+                    _cctx = dict(getattr(self, "_last_chance_context", None)
+                                 or {})
+                except Exception:
+                    _cctx = {}
+            try:
+                _cctx = {str(k): v for k, v in dict(_cctx or {}).items()}
+            except Exception:
+                _cctx = {}
             shots.append({
                 "shooter_id": getattr(shooter, "id", None),
                 "shooter": getattr(shooter, "full_name",
@@ -7315,6 +7486,7 @@ class GameSim:
                 "shot_type": getattr(shot_type, "name", str(shot_type)),
                 "xg": round(float(xg or 0), 3),
                 "grade": _gr,
+                "chance_context": _cctx,
                 "outcome": "pending",
                 "line": self._analytics_line_of(shooter, attacking_team),
             })
