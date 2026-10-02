@@ -2,7 +2,7 @@
 """QA: NHL preseason -- 96 exhibitions, zero regular-season footprint.
 
 Part 1: schedule structure (seeds 2026/2027/2028/2031)
-  - exactly 96 preseason entries, 6 per club, Sep 22 - Oct 7 window
+  - exactly 64 preseason entries, 4 per club (2026-27 CBA cap), Sep 22 - Oct 7 window
   - no club twice on one day, 3H/3A-ish band (2-4)
   - regular season untouched: 1312 games, 82 per club, no date overlap
 Part 2: template cache round-trip preserves the preseason flag
@@ -79,17 +79,17 @@ for seed in (2026, 2027, 2028, 2031):
     lg = make_league()
     lg.generate_schedule(season_year=seed, rotation_seed=seed)
     pre, reg = entries(lg)
-    check("96 preseason entries", len(pre) == 96, f"got {len(pre)}")
+    check("64 preseason entries", len(pre) == 64, f"got {len(pre)}")
     per = Counter()
     home_c = Counter()
     for e in pre:
         per[e["home_team"].team_name] += 1
         per[e["away_team"].team_name] += 1
         home_c[e["home_team"].team_name] += 1
-    check("6 per club", all(v == 6 for v in per.values()) and len(per) == 32,
+    check("4 per club", all(v == 4 for v in per.values()) and len(per) == 32,
           f"{dict(per)}")
-    check("home games 2-4 per club",
-          all(2 <= v <= 4 for v in home_c.values()),
+    check("home games 1-3 per club",
+          all(1 <= v <= 3 for v in home_c.values()),
           f"{dict(home_c)}")
     lo, hi = date(seed, 9, 22), date(seed, 10, 7)
     check("dates within Sep 22 - Oct 7",

@@ -2,7 +2,7 @@
 """QA: EHM-style per-season NHL schedule generation.
 
 Verifies:
-1. All 32 teams get exactly 82 regular-season games.
+1. All 32 teams get exactly 84 regular-season games (2026-27 CBA).
 2. Back-to-backs per team in realistic NHL range (8-20, target 11-16).
 3. ZERO teams with 3+ consecutive game days (hard immersion invariant).
 4. Fresh schedule per season_year (not a repeated template).
@@ -63,8 +63,8 @@ for yr in (2029, 2030):
 
 for yr, (team_dates, b2b, streaks) in results.items():
     check(f"{yr}: 32 NHL teams", len(team_dates) == 32, f"got {len(team_dates)}")
-    bad_counts = {t: len(d) for t, d in team_dates.items() if len(d) != 82}
-    check(f"{yr}: all teams 82 games", not bad_counts, str(bad_counts)[:120])
+    bad_counts = {t: len(d) for t, d in team_dates.items() if len(d) != 84}
+    check(f"{yr}: all teams 84 games", not bad_counts, str(bad_counts)[:120])
     vals = list(b2b.values())
     check(f"{yr}: back-to-backs 8-20 per team",
           min(vals) >= 8 and max(vals) <= 20,
