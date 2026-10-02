@@ -482,7 +482,7 @@ def apply_schemed_threat(shooter, attacking_onice, defending_onice,
         # for 90-91 players and hard-cliffing at 91.9->92.0.
         try:
             _ovr = float(shooter.overall_rating())
-            except Exception:
+        except Exception:
                 return 1.0, 1.0
         if _ovr < _SCHEME_THREAT_FLOOR:
             return 1.0, 1.0
