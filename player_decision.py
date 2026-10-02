@@ -439,6 +439,24 @@ def contract_appeal(player, team, aav: int, years: int, *,
         appeal *= 0.35
         reasons.append(f"an insult offer ({ratio:.0%} of market)")
 
+    # L4 wire (Muck 2026-10-02): fanbase buzz. Players want to play
+    # where the building is alive -- a buzzing fanbase is a real pull,
+    # a toxic one a real repellent. Subtle (0.95-1.05), memory-aware: a
+    # franchise with sustained buzz attracts; one the fans have turned
+    # on repels. The reason strings ARE the story the player sees.
+    try:
+        from fan_narratives import fa_appeal_mult as _fam
+        _buzz = float(_fam(team) or 1.0)
+        if _buzz >= 1.03:
+            appeal = min(1.0, appeal * _buzz)
+            reasons.append("the building is electric -- he wants to play "
+                           "in front of these fans")
+        elif _buzz <= 0.97:
+            appeal = max(0.0, appeal * _buzz)
+            reasons.append("the fanbase has turned -- he'd rather play elsewhere")
+    except Exception:
+        pass
+
     # situation sanity: a cup-chaser won't sign with a rebuilder at any price
     # short of a ransom; a mercenary always has a price.
     if ambition == AMBITION_CUP and strength <= 0.3 and current_team is not team:

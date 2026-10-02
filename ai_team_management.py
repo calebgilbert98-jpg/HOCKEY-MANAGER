@@ -1151,6 +1151,19 @@ class AITeamManager:
             # machinery the user faces, so the AI and the user negotiate
             # against the same player.
             _ask = self._player_ask(p, league=league)
+            # L4 wire (Muck 2026-10-02): fanbase buzz moves the handshake.
+            # A player who wants to play in front of a buzzing building
+            # signs a little cheaper; one being asked to brave a toxic
+            # market needs overpaying. Subtle (0.95-1.05), memory-aware.
+            # Mirrors the user path (contract_appeal's buzz reasons).
+            try:
+                from fan_narratives import fa_appeal_mult as _fam
+                _buzz = float(_fam(team) or 1.0)
+                _buzz = max(0.90, min(1.10, _buzz))
+                if _buzz != 1.0:
+                    _ask = _ask / _buzz
+            except Exception:
+                pass
             # The user's rulebook, without a counter loop: 90%+ of ask
             # signs on the spot; 70-90% is the counter zone, where the AI
             # meets the ask when the budget allows and walks otherwise;

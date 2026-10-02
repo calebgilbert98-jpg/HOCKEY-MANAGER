@@ -166,14 +166,32 @@ def media_tone_for_sentiment(team: Any, current_date: Any = None) -> str:
 # Subtle gameplay effects
 # ---------------------------------------------------------------------------
 
+def _memory_sentiment(team: Any, current_date: Any = None) -> float:
+    """Fan sentiment with cross-season memory applied.
+
+    A Cup winner's goodwill keeps the building loud longer; a decade of
+    losing keeps it quiet. Falls back to the base reading when the
+    memory module is unavailable. Never raises.
+    """
+    try:
+        from fan_sentiment import get_fan_sentiment_with_memory as _mem
+        return float(_mem(team, current_date))
+    except Exception:
+        try:
+            return float(get_fan_sentiment(team, current_date))
+        except Exception:
+            return 60.0
+
+
 def crowd_energy_mult(team: Any, current_date: Any = None) -> float:
     """Home crowd energy multiplier from fan sentiment.
 
     Subtle: 0.92 (furious) to 1.08 (ecstatic). Never dictates outcomes.
-    Never raises.
+    Memory-aware: a defending champion's crowd stays loud; a long
+    suffering fanbase stays quiet. Never raises.
     """
     try:
-        sentiment = get_fan_sentiment(team, current_date)
+        sentiment = _memory_sentiment(team, current_date)
         # Map 0-100 to 0.92-1.08
         return 0.92 + (sentiment / 100.0) * 0.16
     except Exception:
@@ -184,10 +202,11 @@ def board_pressure(team: Any, current_date: Any = None) -> float:
     """Board pressure on GM/coach from fan sentiment.
 
     0.0 (ecstatic fans, no pressure) to 1.0 (furious fans, hot seat).
-    Feeds GM job security calculations. Never raises.
+    Feeds GM job security calculations. Memory-aware: goodwill buys
+    patience, sustained losing erodes it faster. Never raises.
     """
     try:
-        sentiment = get_fan_sentiment(team, current_date)
+        sentiment = _memory_sentiment(team, current_date)
         # Invert: low sentiment = high pressure
         return max(0.0, min(1.0, (70.0 - sentiment) / 70.0))
     except Exception:
@@ -198,13 +217,35 @@ def fa_appeal_mult(team: Any, current_date: Any = None) -> float:
     """Free agent appeal modifier from fan sentiment.
 
     Players want to play for happy fanbases. Subtle: 0.95 to 1.05.
-    Never raises.
+    Memory-aware: a franchise with buzz attracts; a toxic market
+    repels. Never raises.
     """
     try:
-        sentiment = get_fan_sentiment(team, current_date)
+        sentiment = _memory_sentiment(team, current_date)
         return 0.95 + (sentiment / 100.0) * 0.10
     except Exception:
         return 1.0
+
+
+def fanbase_crowd_layer(home_mult: float, home_team: Any,
+                        current_date: Any = None) -> float:
+    """Persistent fanbase engagement layer for the home crowd multiplier.
+
+    One decision, two fidelities: both sims call this on the home
+    crowd mult from crowd_effects(). Tonight's crowd (energy/mood from
+    pregame_crowd) is the weather; this is the climate -- the slow
+    stock of how the fanbase feels about its team, with cross-season
+    memory. Bounded [0.90, 1.10] on the combined value; never dictates.
+    Never raises.
+    """
+    try:
+        _m = crowd_energy_mult(home_team, current_date)
+        return max(0.90, min(1.10, float(home_mult) * _m))
+    except Exception:
+        try:
+            return float(home_mult)
+        except Exception:
+            return 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +413,155 @@ def maybe_fire_fan_narrative(team: Any, game_manager: Any = None,
         team._fan_narrative_last_tier = tier
         try:
             team._fan_narrative_last_date = current_date
+        except Exception:
+            pass
+
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Boardroom narratives (L4 wire, Muck 2026-10-02)
+# ---------------------------------------------------------------------------
+# Board pressure isn't just a number in the job-security math -- it's a
+# story the world tells: ownership losing patience, the hot seat warming,
+# the vote of confidence that means the opposite. These fire on the same
+# weekly cadence as fan narratives, with their own cooldown, so the
+# pressure the GM feels has a visible reason in the world.
+
+_BOARD_NARRATIVE_COOLDOWN_DAYS = 21
+
+
+def _gm_name(team: Any) -> str:
+    try:
+        for _s in (getattr(team, "staff", None) or []):
+            try:
+                _role = str(getattr(_s, "role", ""))
+            except Exception:
+                _role = ""
+            if "General Manager" in _role and "Assistant" not in _role:
+                _fn = str(getattr(_s, "first_name", "") or "")
+                _ln = str(getattr(_s, "last_name", "") or "")
+                _full = f"{_fn} {_ln}".strip()
+                if _full:
+                    return _full
+    except Exception:
+        pass
+    return "the GM"
+
+
+def generate_board_narrative(team: Any,
+                             current_date: Any = None) -> Optional[Dict[str, Any]]:
+    """Generate a boardroom narrative from current board pressure.
+
+    Returns a narrative dict (or None). Fires when pressure is high
+    (ownership losing patience) or when it breaks (relief / vote of
+    confidence). Never raises.
+    """
+    try:
+        pressure = board_pressure(team, current_date)
+        tname = _team_name(team)
+        gm = _gm_name(team)
+        was_hot = bool(getattr(team, "_board_narrative_hot", False))
+
+        if pressure >= 0.70 and not was_hot:
+            # The seat is warming -- first time crossing the line.
+            return {
+                "kind": "board_pressure",
+                "headline": f"Ownership losing patience in {tname}",
+                "body": (f"Whispers out of the {tname} boardroom suggest ownership "
+                        f"is losing patience. {gm} is feeling the heat as the "
+                        f"fanbase turns -- another bad stretch could make the "
+                        f"seat genuinely hot."),
+                "weight": 60,
+                "audience": "board",
+                "hot": True,
+            }
+        elif pressure >= 0.85 and was_hot:
+            # Escalation: it got worse.
+            return {
+                "kind": "board_pressure",
+                "headline": f"Hot seat watch: {gm} under fire in {tname}",
+                "body": (f"The {tname} boardroom is no longer whispering. Ownership "
+                        f"is openly questioning the direction, and {gm}'s job "
+                        f"security is the talk of the league's insider circuit."),
+                "weight": 80,
+                "audience": "board",
+                "hot": True,
+            }
+        elif pressure < 0.35 and was_hot:
+            # Relief: the storm passed.
+            return {
+                "kind": "board_relief",
+                "headline": f"{tname} ownership backs {gm} -- for now",
+                "body": (f"After a calming stretch, {tname} ownership has publicly "
+                        f"backed {gm}. The dreaded vote of confidence -- which "
+                        f"everyone knows means the opposite -- was notably absent."),
+                "weight": 40,
+                "audience": "board",
+                "hot": False,
+            }
+        return None
+    except Exception:
+        return None
+
+
+def maybe_fire_board_narrative(team: Any, game_manager: Any = None,
+                               current_date: Any = None) -> bool:
+    """Check if a boardroom narrative should fire for this team.
+
+    Fires when board pressure crosses into hot-seat territory, escalates,
+    or breaks -- with a cooldown so the boardroom doesn't spam the inbox.
+    Never raises.
+    """
+    try:
+        narrative = generate_board_narrative(team, current_date)
+        if not narrative:
+            return False
+
+        # Cooldown
+        try:
+            from datetime import date
+            last_fired = getattr(team, "_board_narrative_last_date", None)
+            if last_fired and current_date:
+                if isinstance(current_date, date) and isinstance(last_fired, date):
+                    days = (current_date - last_fired).days
+                    if days < _BOARD_NARRATIVE_COOLDOWN_DAYS:
+                        return False
+                elif isinstance(current_date, str) and isinstance(last_fired, str):
+                    d_now = date.fromisoformat(current_date[:10])
+                    d_then = date.fromisoformat(last_fired[:10])
+                    if (d_now - d_then).days < _BOARD_NARRATIVE_COOLDOWN_DAYS:
+                        return False
+        except Exception:
+            pass
+
+        # Deliver via headlines system
+        try:
+            from headlines import make_headline
+            msg = make_headline(
+                "board_narrative",
+                game_date=current_date,
+                headline=narrative["headline"],
+                body=narrative["body"],
+                team_name=_team_name(team),
+                gm_name=_gm_name(team),
+            )
+            if msg and game_manager:
+                inbox = getattr(game_manager, "inbox", None)
+                if inbox is not None:
+                    if hasattr(inbox, "add_message"):
+                        inbox.add_message(msg)
+                    elif hasattr(inbox, "append"):
+                        inbox.append(msg)
+        except Exception:
+            pass
+
+        # Update tracking
+        try:
+            team._board_narrative_hot = bool(narrative.get("hot", False))
+            team._board_narrative_last_date = current_date
         except Exception:
             pass
 

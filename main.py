@@ -18675,6 +18675,15 @@ class HockeyManagerGUI(tk.Tk):
                                      current_date=self.current_date)
         except Exception:
             pass
+        # L4 wire (Muck 2026-10-02): boardroom narratives -- the board
+        # pressure nudge made visible ("Ownership losing patience...").
+        # Same weekly cadence, own cooldown.
+        try:
+            from fan_narratives import maybe_fire_board_narrative
+            maybe_fire_board_narrative(team, game_manager=self,
+                                       current_date=self.current_date)
+        except Exception:
+            pass
         # Training effects: morale + injury risk
         fx = self.career.training.weekly_effects()
         if fx["morale_delta"]:

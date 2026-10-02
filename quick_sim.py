@@ -1229,6 +1229,14 @@ class AdvancedGameSim:
                                    away_avg_age=away_age)
             self._crowd_home_mult = hm
             self._crowd_away_mult = am
+            # L4 wire (Muck 2026-10-02): same fanbase engagement layer as
+            # GameSim -- one decision, two fidelities.
+            try:
+                from fan_narratives import fanbase_crowd_layer as _fcl
+                self._crowd_home_mult = _fcl(
+                    self._crowd_home_mult, self.home_team)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1295,6 +1303,13 @@ class AdvancedGameSim:
                                    away_avg_age=away_age)
             self._crowd_home_mult = hm
             self._crowd_away_mult = am
+            # L4 wire: keep the persistent fanbase layer across live swings.
+            try:
+                from fan_narratives import fanbase_crowd_layer as _fcl
+                self._crowd_home_mult = _fcl(
+                    self._crowd_home_mult, self.home_team)
+            except Exception:
+                pass
         except Exception:
             pass
 

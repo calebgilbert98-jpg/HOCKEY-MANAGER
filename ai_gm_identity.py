@@ -297,6 +297,21 @@ def update_job_security(sec: GMJobSecurity, identity: GMIdentity,
     # Drift toward deserved confidence: each week moves ~15% of the gap.
     deserved = 50.0 + 90.0 * (pace - expected)
     deserved = max(0.0, min(100.0, deserved))
+    # L4 wire (Muck 2026-10-02): board pressure from fan sentiment.
+    # The fans don't fire the GM -- but a furious fanbase erodes the
+    # board's patience, and an ecstatic one buys slack. Bounded: at most
+    # -12 deserved confidence at full pressure. The story is told by
+    # maybe_fire_board_narrative ("Ownership losing patience...").
+    # Memory-aware: Cup goodwill buys patience, sustained losing erodes
+    # it faster -- the same memory the fans themselves carry.
+    try:
+        from fan_narratives import board_pressure as _bp
+        _pressure = float(_bp(team) or 0.0)
+        if _pressure > 0.0:
+            deserved -= _pressure * 12.0
+            deserved = max(0.0, min(100.0, deserved))
+    except Exception:
+        pass
     sec.confidence += 0.15 * (deserved - sec.confidence)
     sec.confidence = max(0.0, min(100.0, sec.confidence))
 

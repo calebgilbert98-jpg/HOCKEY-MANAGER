@@ -864,6 +864,19 @@ class GameSim:
                            away_avg_age=_raa(self.away_team))
             self._crowd_home_mult = _hm
             self._crowd_away_mult = _am
+            # L4 wire (Muck 2026-10-02): persistent fanbase engagement
+            # layer. Tonight's crowd (energy/mood above) is the weather;
+            # this is the climate -- the slow stock of how the fanbase
+            # feels, with cross-season memory (a champion's crowd stays
+            # loud; a long-suffering one stays quiet). The story is told
+            # by pregame_crowd's drivers ("The faithful are buzzing" /
+            # "A restless, edgy building"); this is its mechanical echo.
+            try:
+                from fan_narratives import fanbase_crowd_layer as _fcl
+                self._crowd_home_mult = _fcl(
+                    self._crowd_home_mult, self.home_team)
+            except Exception:
+                pass
         except Exception:
             pass
         # --- Tension / punishment / brawl state (additive; inert when unused) ---
