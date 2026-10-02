@@ -7714,7 +7714,7 @@ class HockeyManagerGUI(tk.Tk):
             # Use async update to prevent blocking
             self.after_idle(self.update_all_views)
 
-            # Bound the ever-growing history logs (game_results ~1312/season,
+            # Bound the ever-growing history logs (game_results ~1344/season,
             # news_log unbounded) so daily scans and save pickles stay O(season).
             self._trim_history_logs()
 
