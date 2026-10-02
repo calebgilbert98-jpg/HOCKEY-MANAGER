@@ -131,6 +131,189 @@ def grade_color(grade: str) -> str:
 # Shared draft conductor (war room AI + headless auto-draft use ONE path)
 # ---------------------------------------------------------------------------
 
+def get_head_scout(team):
+    """Return the team's Head Scout staff member, or None. Never raises."""
+    try:
+        for s in (getattr(team, 'staff', None) or []):
+            try:
+                role = getattr(s, 'role', None)
+                if getattr(role, 'name', '') == 'HEAD_SCOUT':
+                    return s
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def team_delegates_to_scout(team) -> bool:
+    """True when the club lets its head scout make draft picks.
+
+    Explicit opt-in via team.draft_scout_delegate, OR an elite head scout
+    (judging ability + potential both 80+) the GM trusts with the board.
+    Never raises.
+    """
+    try:
+        if bool(getattr(team, 'draft_scout_delegate', False)):
+            return True
+    except Exception:
+        pass
+    try:
+        scout = get_head_scout(team)
+        if scout is None:
+            return False
+        jpa = int(getattr(scout, 'judging_player_ability', 0) or 0)
+        jpp = int(getattr(scout, 'judging_player_potential', 0) or 0)
+        return jpa >= 80 and jpp >= 80
+    except Exception:
+        return False
+
+
+def head_scout_pick(team, available, team_board, needs, round_num,
+                    priority, rng, overall=1, drafted=None):
+    """The head scout makes the pick. Scout quality matters.
+
+    - judging_player_potential: high -> favors ceiling (potential grade),
+      more willing to reach for high-upside players.
+    - judging_player_ability: high -> favors NHL-readiness (current
+      overall), safer picks, less noise.
+    - Low ratings -> more randomness, worse picks.
+
+    Returns (selected, rationale). rationale is a "Scout's take: ..."
+    string for the ticker/UI. selected is None when available is empty.
+    Never raises.
+    """
+    try:
+        if not available:
+            return None, ""
+        scout = get_head_scout(team)
+        try:
+            scout_name = (getattr(scout, 'first_name', '') + ' ' +
+                          getattr(scout, 'last_name', '')).strip() or "Head Scout"
+        except Exception:
+            scout_name = "Head Scout"
+        try:
+            jpa = int(getattr(scout, 'judging_player_ability', 50) or 50)
+            jpp = int(getattr(scout, 'judging_player_potential', 50) or 50)
+        except Exception:
+            jpa, jpp = 50, 50
+        jpa = max(1, min(100, jpa))
+        jpp = max(1, min(100, jpp))
+
+        candidates = available[:12]
+        try:
+            if team_board:
+                _bidx = {getattr(_p, 'id', None): _i
+                         for _i, _p in enumerate(team_board)}
+                _n = len(team_board)
+                candidates = sorted(
+                    available,
+                    key=lambda _p: (_bidx.get(getattr(_p, 'id', None), _n),
+                                    -getattr(_p, 'draft_ranking', 0)))[:12]
+        except Exception:
+            candidates = available[:12]
+
+        _POT_VAL = {"A+": 99, "A": 96, "A-": 92, "B+": 88, "B": 84,
+                    "B-": 80, "C+": 76, "C": 72, "C-": 68, "D": 60, "F": 50}
+        jpp01 = jpp / 100.0
+        ceiling_w = 0.30 + 0.35 * jpp01
+        ready_w = 1.0 - ceiling_w
+        noise_amp = 2.0 + 8.0 * (1.0 - (jpa + jpp) / 200.0)
+
+        scored = []
+        for p in candidates:
+            try:
+                pot = _POT_VAL.get(str(getattr(p, 'potential_grade', 'C') or 'C'), 65)
+            except Exception:
+                pot = 65
+            try:
+                cur = float(getattr(p, 'draft_ranking', 0) or 0)
+            except Exception:
+                cur = 0.0
+            base = cur * ready_w + pot * ceiling_w
+            try:
+                pos = p.primary_position.value
+            except Exception:
+                pos = "?"
+            if pos in (needs or [])[:2] and round_num <= 3:
+                base *= 1.05
+            if pos == 'G' and round_num <= 1:
+                base *= 0.85
+            try:
+                base += rng.uniform(-noise_amp, noise_amp)
+            except Exception:
+                import random as _r
+                base += _r.uniform(-noise_amp, noise_amp)
+            scored.append((base, p))
+        scored.sort(key=lambda s: s[0], reverse=True)
+        selected = scored[0][1]
+
+        rationale = ""
+        try:
+            pname = getattr(selected, 'full_name', '?')
+            ppos = "?"
+            try:
+                ppos = selected.primary_position.value
+            except Exception:
+                pass
+            pgrade = str(getattr(selected, 'potential_grade', '') or '')
+            _attrs = []
+            for _an in ('skating', 'shooting', 'shooting_accuracy',
+                        'hockey_iq', 'offensive_awareness',
+                        'defensive_awareness', 'strength'):
+                try:
+                    _v = int(getattr(selected, _an, 0) or 0)
+                except Exception:
+                    _v = 0
+                if _v >= 70:
+                    _attrs.append((_v, _an.replace('_', ' ')))
+            _attrs.sort(reverse=True)
+            _top = ", ".join(_a for _v, _a in _attrs[:2]) or "two-way game"
+            if jpp >= 75 and pgrade in ('A+', 'A', 'A-'):
+                rationale = (f"{scout_name}'s take: {pname} ({ppos}) has "
+                             f"star upside ({pgrade} potential) -- {_top} "
+                             f"projects at the next level.")
+            elif jpa >= 75:
+                rationale = (f"{scout_name}'s take: {pname} ({ppos}) is "
+                             f"the safest pick on the board -- {_top} is "
+                             f"already pro-grade.")
+            else:
+                rationale = (f"{scout_name}'s take: {pname} ({ppos}, "
+                             f"{pgrade} potential) -- {_top} stood out "
+                             f"in our viewings.")
+        except Exception:
+            rationale = ""
+        return selected, rationale
+    except Exception:
+        try:
+            return (available[0] if available else None), ""
+        except Exception:
+            return None, ""
+
+
+def user_pick_slots(league, user_team_name, year):
+    """Sorted overall pick numbers owned by the user team in this draft.
+    Never raises; returns [] on any failure."""
+    try:
+        if not user_team_name:
+            return []
+        try:
+            order = list(league.get_draft_order(int(year)) or [])
+        except Exception:
+            return []
+        out = []
+        for entry in order:
+            try:
+                ov, tm, _dp = entry
+                if getattr(tm, 'team_name', '') == user_team_name:
+                    out.append(int(ov))
+            except Exception:
+                continue
+        return sorted(out)
+    except Exception:
+        return []
+
+
 def stable_draft_seed(draft_year, salt="") -> int:
     """Deterministic per-draft seed, stable across processes (unlike
     hash() of str, which is salted per run). One seed per draft; every
@@ -641,6 +824,79 @@ class EntryDraftSession:
         return s
 
 
+def park_draft_for_user(league, year, app=None):
+    """Park the entry draft as a pending war-room session.
+
+    DRAFT AGENCY (Muck 2026-10-02): the user's picks are NEVER auto-drafted
+    by the headless conductor. When the user holds picks in this draft,
+    build the session journal and defer -- the user makes their picks in
+    the war room. Returns True when parked, False on any failure.
+    Never raises.
+    """
+    try:
+        year = int(year)
+    except (TypeError, ValueError):
+        return False
+    try:
+        try:
+            league.initialize_all_draft_picks()
+        except Exception:
+            pass
+        try:
+            order = list(league.get_draft_order(year) or [])
+        except Exception:
+            order = []
+        if not order:
+            return False
+        draft_order = []
+        for entry in order:
+            try:
+                ov, tm, dp = entry
+                rnd = int(getattr(dp, 'round', 0) or 0)
+            except Exception:
+                continue
+            draft_order.append([rnd, tm, dp])
+        if not draft_order:
+            return False
+        import random as _random
+        rng = _random.Random(stable_draft_seed(year))
+        sess = EntryDraftSession.begin(league, year, draft_order, None, rng)
+        try:
+            league.entry_draft_session = sess
+        except Exception:
+            return False
+        try:
+            _user_name = getattr(getattr(app, 'user_team', None),
+                                 'team_name', '') if app is not None else ''
+        except Exception:
+            _user_name = ''
+        try:
+            _picks = user_pick_slots(league, _user_name, year)
+        except Exception:
+            _picks = []
+        try:
+            _n = len(_picks)
+            _first = _picks[0] if _picks else '?'
+            _msg = (f"The {year} NHL Entry Draft is ready -- and your "
+                    f"{_n} pick{'s' if _n != 1 else ''} "
+                    f"(first: #{_first} overall) will NOT be auto-drafted. "
+                    f"Open the draft war room to make your selections.")
+            _add_news = getattr(app, 'add_news', None) if app is not None else None
+            if callable(_add_news):
+                _add_news(_msg)
+        except Exception:
+            pass
+        try:
+            print(f"Entry draft {year}: parked for user "
+                  f"({len(_picks)} user picks) -- war room owns it now.",
+                  flush=True)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def resume_entry_draft_session(league, session, app=None):
     """Finalize a complete-but-unfinalized war-room session, headlessly.
 
@@ -834,13 +1090,20 @@ def resume_entry_draft_session(league, session, app=None):
     return full_log
 
 
-def conduct_entry_draft(league, draft_year, app=None, seed=None):
+def conduct_entry_draft(league, draft_year, app=None, seed=None,
+                        allow_user_autodraft=False):
     """Conduct the entry draft with no UI -- the ONE headless conductor.
 
     Used by main's offseason tentpole (pure sim seasons) and the
     automated season flow (auto-advance). The war room (DraftView) is the
     interactive path; both pick through ai_select_prospect, so the sim
     and the war room can't diverge.
+
+    DRAFT AGENCY (Muck 2026-10-02): the user's picks are NEVER auto-drafted
+    unless allow_user_autodraft=True (bulk-sim harnesses only -- a real
+    user session must park the draft and let the user pick). When the user
+    holds picks and auto-draft is not allowed, the draft is parked as a
+    pending war-room session and this returns [] without making any picks.
 
     Idempotent per draft year via league.draft_conducted_years: a draft
     the war room already completed (or an earlier tick) is a no-op.
@@ -888,6 +1151,27 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
         except Exception:
             pass
         return []
+    # DRAFT AGENCY (Muck 2026-10-02): user picks are NEVER auto-drafted
+    # unless the caller explicitly allows it (bulk-sim harnesses). A
+    # real user session parks the draft -- the war room owns it.
+    if not allow_user_autodraft:
+        try:
+            _uname = getattr(getattr(app, 'user_team', None),
+                             'team_name', '') if app is not None else ''
+        except Exception:
+            _uname = ''
+        _upicks = []
+        if _uname:
+            try:
+                _upicks = user_pick_slots(league, _uname, year)
+            except Exception:
+                _upicks = []
+        if _upicks:
+            try:
+                park_draft_for_user(league, year, app=app)
+            except Exception:
+                pass
+            return []
     prospects = list(getattr(league, 'draft_prospects', None) or [])
     if not prospects:
         return []
@@ -992,10 +1276,38 @@ def conduct_entry_draft(league, draft_year, app=None, seed=None):
                 needs = _te.team_needs(team) or []
             except Exception:
                 needs = []
-        selected, _reach, _steal = ai_select_prospect(
-            team, avail, boards.get(tname), needs, round_num,
-            _priority_of(team), rng, overall=overall,
-            drafted=_drafted_by_team.get(tname))
+        # Scout delegation (Muck 2026-10-02): clubs that trust their head
+        # scout let the scout make the call.
+        _delegate = False
+        try:
+            _delegate = team_delegates_to_scout(team)
+        except Exception:
+            _delegate = False
+        if _delegate:
+            try:
+                selected, _rationale = head_scout_pick(
+                    team, avail, boards.get(tname), needs, round_num,
+                    _priority_of(team), rng, overall=overall,
+                    drafted=_drafted_by_team.get(tname))
+            except Exception:
+                selected, _rationale = None, ""
+            if selected is None:
+                selected, _reach, _steal = ai_select_prospect(
+                    team, avail, boards.get(tname), needs, round_num,
+                    _priority_of(team), rng, overall=overall,
+                    drafted=_drafted_by_team.get(tname))
+            else:
+                try:
+                    _idx = avail.index(selected)
+                except ValueError:
+                    _idx = 0
+                _reach = _idx >= 8
+                _steal = _idx == 0 and overall >= 5
+        else:
+            selected, _reach, _steal = ai_select_prospect(
+                team, avail, boards.get(tname), needs, round_num,
+                _priority_of(team), rng, overall=overall,
+                drafted=_drafted_by_team.get(tname))
         if selected is None:
             continue
         # --- state mutation (mirrors DraftView.execute_pick, minus UI) ---
