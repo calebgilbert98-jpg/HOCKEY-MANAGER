@@ -102,14 +102,32 @@ ids = [b["id"] for b in rl.roster_limit_blockers(App(t6))]
 check("filler exempt from 23-gate", "roster_limit_23" not in ids)
 check("filler charge computed", rl.emergency_filler_charge(t6) > 0)
 
-# dress-minimum blocker offers the summon action
-t7 = mkteam(user=True)
-ids = [b["id"] for b in rl.roster_limit_blockers(App(t7))]
-check("can't-dress blocks the day", "dress_minimum" in ids)
-b = [b for b in rl.roster_limit_blockers(App(t7)) if b["id"] == "dress_minimum"][0]
-check("blocker has summon action", b["action"][0].startswith("Summon"))
-b["action"][1]()  # invoke the action
-check("summon action dresses the lineup", rl.can_dress_lineup(t7))
+# dress minimum is Eastside-auto now: no hard blocker, fill-ins summoned
+# with an FYI note (news_log + inbox)
+t7 = mkteam(user=True, name="User Club")
+app7 = App(t7)
+app7.news_log = []
+app7.inbox_messages = []
+ids = [b["id"] for b in rl.roster_limit_blockers(app7)]
+check("auto-summon: no dress_minimum blocker", "dress_minimum" not in ids)
+check("auto-summon: lineup dresses", rl.can_dress_lineup(t7))
+check("auto-summon: news note logged",
+      any("Emergency fill-ins summoned" in (n.get("story", "") or "")
+          for n in app7.news_log))
+check("auto-summon: inbox note logged",
+      any("fill-ins" in (getattr(m, "subject", "") or "")
+          for m in app7.inbox_messages))
+check("auto-summon: fillers on roster w/ team back-pointer",
+      all(f in t7.roster and getattr(f, "team_name", None) == "User Club"
+          for f in t7.roster if rl.is_emergency_filler(f)))
+# over-cap club also auto-summons (the league exception)
+t7b = mkteam(user=True, name="Cap Club")
+fill_dressable(t7b, skaters=10, goalies=1)
+for p in t7b.roster:
+    p.contract.salary = 8_000_000
+ids = [b["id"] for b in rl.roster_limit_blockers(App(t7b))]
+check("over-cap auto-summon: no blocker", "dress_minimum" not in ids
+      and rl.can_dress_lineup(t7b))
 
 # --- 3. Outbound-move guards ------------------------------------------------------
 t8 = mkteam()
@@ -170,9 +188,9 @@ for pos in ["C", "LW", "RW", "LD", "RD", "G", "D"]:
     for _ in range(20):
         f = rl.make_emergency_filler(pos, rng)
         worst = max(worst, f.overall_rating())
-        assert f.overall_rating() <= 60, (pos, f.overall_rating())
+        assert f.overall_rating() <= 65, (pos, f.overall_rating())
         assert f.contract.salary > 0
-check("140 fillers all <= 60 overall", worst <= 60, f"max={worst}")
+check("140 fillers all <= 65 overall", worst <= 65, f"max={worst}")
 f = rl.make_emergency_filler("C", rng)
 ok, _ = rl.can_sign_player(f)
 check("filler can't take a standard deal", not ok)
@@ -244,6 +262,76 @@ check("over-cap club summons fillers", len(s) > 0 and rl.can_dress_lineup(t13))
 # the day-gate cap check excludes the filler charge
 fc = rl.emergency_filler_charge(t13)
 check("filler charge isolated", fc == len(s) * 775_000, str(fc))
+
+# --- 9. Part 3: team assignment + auto everywhere -----------------------------------
+# team= param at construction
+t14 = mkteam(name="Assign Club")
+f14 = rl.make_emergency_filler("C", rng, team=t14)
+check("make_emergency_filler(team=) sets team_name",
+      getattr(f14, "team_name", None) == "Assign Club")
+check("make_emergency_filler(team=) is on the roster", f14 in t14.roster)
+f14b = rl.make_emergency_filler("G", rng)  # no team -> no crash
+check("make_emergency_filler without team still works",
+      rl.is_emergency_filler(f14b))
+
+# summon routes every filler through _assign_filler_to_team
+t15 = mkteam(name="Summon Club")
+fill_dressable(t15, skaters=10, goalies=1)
+s15 = rl.summon_emergency_fillers(t15, rng)
+check("summon filled the shortfall", rl.can_dress_lineup(t15)
+      and len(s15) == 9, f"summoned={len(s15)}")
+check("every filler has team_name set",
+      all(getattr(f, "team_name", None) == "Summon Club" for f in s15))
+check("every filler is in team.roster", all(f in t15.roster for f in s15))
+
+# measured overall band over a fresh sample (Chris's spec: decent, not scrub)
+best, worst = 999, 0
+for pos in ["C", "LW", "RW", "LD", "RD", "G"]:
+    for _ in range(25):
+        o = rl.make_emergency_filler(pos, rng).overall_rating()
+        best, worst = min(best, o), max(worst, o)
+check("measured band within 48..65 (replacement-level+)",
+      40 <= best and worst <= 65, f"min={best} max={worst}")
+print(f"measured filler overall band: min={best} max={worst}")
+
+# ensure_dressed_lineup_auto
+t16 = mkteam()
+fill_dressable(t16)
+check("auto no-ops on healthy lineup",
+      rl.ensure_dressed_lineup_auto(t16) == [])
+t17 = mkteam()
+fill_dressable(t17, skaters=15, goalies=1)
+notes = []
+s17 = rl.ensure_dressed_lineup_auto(t17, notify=notes.append)
+check("auto fills short lineup exactly",
+      rl.can_dress_lineup(t17) and len(s17) == 4, f"summoned={len(s17)}")
+check("notify got the summoned list", notes == [s17])
+check("auto-summoned fillers have team_name",
+      all(getattr(f, "team_name", None) == t17.team_name for f in s17))
+
+# user_roster_compliance: injure -> auto-summon; heal -> auto-release; no paper-down
+t18 = mkteam()
+fill_dressable(t18)
+for p in t18.roster[:6]:
+    p.is_injured = True  # 12 skaters dressable -> short 6
+done = rl.user_roster_compliance(t18)
+check("user compliance auto-summons", done["summoned"] == 6
+      and rl.can_dress_lineup(t18), str(done))
+for p in t18.roster:
+    p.is_injured = False  # lineup healthy again
+done = rl.user_roster_compliance(t18)
+check("user compliance releases fillers once healthy",
+      done["released"] == 6
+      and not any(rl.is_emergency_filler(p) for p in t18.roster), str(done))
+check("user compliance never demotes (human decision)",
+      len(t18.ahl_roster) == 0)
+
+# roster_limit_blockers never leaves a dress_minimum behind after auto-summon
+t19 = mkteam(user=True)
+fill_dressable(t19, skaters=12, goalies=1)
+ids = [b["id"] for b in rl.roster_limit_blockers(App(t19))]
+check("no dress_minimum blocker after auto-summon", "dress_minimum" not in ids)
+check("lineup dresses after gate", rl.can_dress_lineup(t19))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

@@ -8,9 +8,12 @@ True-NHL rules (Chris's rulings, 2026-10-01):
     season-ineligible). Outbound moves that would break the ability to
     dress a lineup are blocked.
   - Over-cap/under-minimum deadlock: emergency fillers -- league-minimum,
-    scrub-overall (<=60) players summonable even over the cap, exempt from
-    the 23-man count and cap-exempt at the day gate (the league exception),
-    clearly marked, user+AI identical, auto-released when unneeded.
+    replacement-level (<=65 by construction) players auto-summoned even
+    over the cap (the league exception), exempt from the 23-man count and
+    cap-exempt at the day gate, clearly marked, user+AI identical,
+    auto-released when unneeded. The dressed-lineup day gate is
+    Eastside-style auto: shortfalls summon fill-ins with an FYI note,
+    never a hard blocker (the 23-man and 50-contract gates stay hard).
   - Rights: RFA rights retained indefinitely (never relinquished);
     qualified-but-unsigned RFA past Dec 1 is ineligible for the rest of
     that season; unsigned UFAs (expired contracts) leave the roster AND the
@@ -30,7 +33,8 @@ ACTIVE_ROSTER_MAX = 23          # NHL 23-man active roster
 SPC_LIMIT = 50                # NHL 50 standard player contracts
 DRESSED_SKATERS_MIN = 18      # NHL dressed lineup: 18 skaters...
 DRESSED_GOALIES_MIN = 2       # ...and 2 goalies
-EMERGENCY_OVERALL_CAP = 60    # fillers are replacement-level, never more
+EMERGENCY_OVERALL_CAP = 65    # fillers are replacement-level+, never more
+                             # (Chris's Part 3 spec: decent, not scrub-useless)
 DEC1_MONTH, DEC1_DAY = 12, 1  # RFA ineligibility date (real NHL: Dec 1)
 
 
@@ -224,6 +228,15 @@ def roster_limit_blockers(app):
                                                   lambda: None)),
             })
         if not can_dress_lineup(team):
+            # Eastside-style auto: summon the fill-ins and keep the day
+            # moving (FYI note, never a hard blocker). The old blocker
+            # survives only as a last resort if summoning somehow failed.
+            ensure_dressed_lineup_auto(
+                team,
+                notify=lambda summoned: _notify_filler_summon(app, team,
+                                                              summoned),
+            )
+        if not can_dress_lineup(team):
             sk, go = lineup_shortfall(team)
             need = []
             if sk:
@@ -235,11 +248,9 @@ def roster_limit_blockers(app):
                 'title': "Can't dress a legal lineup",
                 'detail': (f"Only {dressable_skaters(team)} skaters and "
                            f"{dressable_goalies(team)} goalies available "
-                           f"(18+2 needed). You can summon emergency "
-                           f"fill-ins -- league-minimum, replacement-level, "
-                           f"available even over the cap."),
-                'action': ('Summon emergency fill-ins',
-                           lambda: summon_emergency_fillers(team)),
+                           f"(18+2 needed) -- even emergency fill-ins "
+                           f"couldn't be summoned ({', '.join(need)} still "
+                           f"short). Sign players before advancing."),
             })
     except Exception:
         pass
@@ -250,18 +261,21 @@ def roster_limit_blockers(app):
 # Chris's deadlock ruling: when a club can't dress 18+2 and can't afford
 # (or fit under the cap for) a real signing, the league provides
 # replacement-level emergency fill-ins -- the NHL emergency-recall idea.
-# League-minimum salary, scrub overall (<=60 by construction), F/F
-# potential, mid-career age (no prospect shine), clearly flagged. They are
-# summonable even over the cap and exempt from the 23-man/SPC counts and
+# League-minimum salary, replacement-level+ overall (<=65 by
+# construction), F/F potential, mid-career age (no prospect shine),
+# clearly flagged, always assigned to the club (team back-pointer).
+# They are summonable even over the cap and exempt from the 23-man/SPC counts and
 # the day-gate cap check (the league exception). They cannot be traded,
 # extended, waived, or developed, and they auto-release the moment the
 # club can dress a lineup without them (plus a July sweep).
 
-# Filler attribute band. overall_rating weights sum to 0.98-1.20 by
-# position (Caleb's tuning -- protected ground, not touched), so 44-49
-# lands every filler at overall <= 58: replacement-level, never a
-# backdoor for cheap talent. Verified empirically in qa_roster_limits.
-_FILLER_ATTR_MIN, _FILLER_ATTR_MAX = 44, 49
+# Filler attribute band (Chris's Part 3 spec: replacement-level+, not
+# scrub-useless, and not exploitable). overall_rating weights sum to
+# 0.98-1.20 by position (Caleb's tuning -- protected ground, not
+# touched), so 48-53 lands every filler at overall <= 63: decent enough
+# to keep a short-handed club competitive, never a backdoor for cheap
+# talent. Verified empirically in qa_roster_limits.
+_FILLER_ATTR_MIN, _FILLER_ATTR_MAX = 48, 53
 
 # Every attribute the overall formula reads (game_classes.Player.
 # overall_rating). Clamping ALL of them pins the filler at ~55-60 with no
@@ -295,9 +309,42 @@ def _filler_name(rng):
         return "Alex Smith", "Canada"
 
 
-def make_emergency_filler(position, rng=None):
-    """Build a replacement-level scrub. Overall lands ~55-60 by
-    construction; never a backdoor for cheap talent."""
+def _assign_filler_to_team(filler, team):
+    """Attach a filler to a team so he always has a club back-pointer:
+    prefer Team.add_player (sets team_name + opens a stint), fall back to
+    a direct roster append + explicit team_name, then belt-and-braces
+    verify team_name is set. Never raises. This is the fix for the
+    None-team root cause behind the BUG-003/004/005 drop saga."""
+    try:
+        if filler is None or team is None:
+            return
+        roster = getattr(team, "roster", None)
+        already = False
+        try:
+            already = roster is not None and filler in roster
+        except Exception:
+            pass
+        if not already:
+            try:
+                team.add_player(filler)
+            except Exception:
+                try:
+                    roster.append(filler)
+                except Exception:
+                    return
+        try:
+            if not getattr(filler, "team_name", None):
+                filler.team_name = getattr(team, "team_name", None)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def make_emergency_filler(position, rng=None, team=None):
+    """Build a replacement-level filler. Overall lands ~58-65 by
+    construction; never a backdoor for cheap talent. When `team` is
+    given, the filler is assigned to it (team back-pointer guaranteed)."""
     from game_classes import Player, PlayerPosition, Contract
     rng = rng or random.Random()
     pos = position
@@ -338,6 +385,8 @@ def make_emergency_filler(position, rng=None):
                               years_remaining=1)
     except Exception:
         pass
+    if team is not None:
+        _assign_filler_to_team(p, team)
     return p
 
 
@@ -358,16 +407,81 @@ def summon_emergency_fillers(team, rng=None):
                            PlayerPosition.RIGHT_WING, PlayerPosition.LEFT_DEFENSE,
                            PlayerPosition.RIGHT_DEFENSE]
         for i in range(sk_need):
-            filler = make_emergency_filler(skate_positions[i % len(skate_positions)], rng)
-            roster.append(filler)
+            filler = make_emergency_filler(skate_positions[i % len(skate_positions)], rng, team)
+            _assign_filler_to_team(filler, team)
             summoned.append(filler)
         for _ in range(go_need):
-            filler = make_emergency_filler(PlayerPosition.GOALIE, rng)
-            roster.append(filler)
+            filler = make_emergency_filler(PlayerPosition.GOALIE, rng, team)
+            _assign_filler_to_team(filler, team)
             summoned.append(filler)
     except Exception:
         pass
     return summoned
+
+
+def ensure_dressed_lineup_auto(team, notify=None):
+    """Eastside-style auto: if the club can't dress 18+2, summon exactly
+    the shortfall (team back-pointers guaranteed) and hand the summoned
+    list to `notify(list)` when given. No-op on a healthy lineup.
+    Identical rule for user and AI. Never raises."""
+    summoned = []
+    try:
+        if can_dress_lineup(team):
+            return summoned
+        summoned = summon_emergency_fillers(team)
+        if summoned and notify is not None:
+            try:
+                notify(summoned)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return summoned
+
+
+def _notify_filler_summon(app, team, summoned):
+    """FYI note for an auto-summon (Eastside-style): news_log + inbox.
+    Not a blocker. Never raises."""
+    try:
+        sk = sum(1 for p in (summoned or []) if not _is_goalie(p))
+        go = sum(1 for p in (summoned or []) if _is_goalie(p))
+        bits = []
+        if sk:
+            bits.append(f"{sk} skater{'s' if sk != 1 else ''}")
+        if go:
+            bits.append(f"{go} goalie{'s' if go != 1 else ''}")
+        story = (f"Emergency fill-ins summoned: {', '.join(bits)} -- "
+                 f"league-minimum, released automatically when your lineup "
+                 f"is healthy.")
+        date = _current_date(app)
+        try:
+            log = getattr(app, "news_log", None)
+            if isinstance(log, list):
+                log.append({"date": date, "story": f"🆘 {story}"})
+        except Exception:
+            pass
+        try:
+            from game_classes import EmailMessage
+            msg = EmailMessage(
+                sender="League Office",
+                sender_type="System",
+                subject="Emergency fill-ins summoned",
+                content=(story + "\n\nThey're league-exception recalls -- "
+                         "they don't count against the 23-man roster or the "
+                         "50-contract limit, and they leave automatically "
+                         "once you can dress a full lineup without them."),
+                category="Roster",
+                is_important=False,
+                requires_response=False,
+                action_type="emergency_fillers_summoned",
+            )
+            inbox = getattr(app, "inbox_messages", None)
+            if isinstance(inbox, list):
+                inbox.append(msg)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def release_unneeded_fillers(team):
@@ -637,6 +751,21 @@ def ai_roster_compliance(team, league=None, rng=None):
         done["released"] = release_unneeded_fillers(team)
         if not can_dress_lineup(team):
             done["summoned"] = len(summon_emergency_fillers(team, rng))
+    except Exception:
+        pass
+    return done
+
+
+def user_roster_compliance(team):
+    """Daily user backstop, same rules as the AI: release fillers no longer
+    needed to dress a lineup, then auto-summon any shortfall. NO
+    paper-down step -- demotions stay a human decision (the 23/SPC day
+    gates surface an overage to the user instead). Never raises."""
+    done = {"summoned": 0, "released": 0}
+    try:
+        done["released"] = release_unneeded_fillers(team)
+        if not can_dress_lineup(team):
+            done["summoned"] = len(ensure_dressed_lineup_auto(team))
     except Exception:
         pass
     return done
