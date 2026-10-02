@@ -712,6 +712,216 @@ def _append_game_grade(player, grade: float) -> None:
         pass
 
 
+def _is_defenseman(player) -> bool:
+    """True for LD/RD/D. Never raises."""
+    try:
+        pos = getattr(player, 'primary_position', None)
+        name = str(getattr(pos, 'value', None)
+                   or getattr(pos, 'name', '') or '').upper()
+        return name in ('LD', 'RD', 'D', 'LEFT_DEFENSE', 'RIGHT_DEFENSE',
+                        'DEFENSE', 'DEFENSEMAN')
+    except Exception:
+        return False
+
+
+def _is_goalie(player) -> bool:
+    """True for goalies. Never raises."""
+    try:
+        pos = getattr(player, 'primary_position', None)
+        name = str(getattr(pos, 'value', None)
+                   or getattr(pos, 'name', '') or '').upper()
+        return 'GOALIE' in name or name == 'G'
+    except Exception:
+        return False
+
+
+def compute_skater_game_grade_v2(player, game_stats):
+    """Comprehensive 0-10 game grade for a skater or goalie.
+
+    Muck 2026-10-02: the old points-only grade made shutdown lines look
+    terrible (2.5/10 in a win). This grades ACTUAL performance:
+
+    Scale (intuitive for scouts/GMs/coaches):
+      5.0 = average, quiet, did-your-job game
+      7.0+ = great game | 3.0 or below = poor game
+
+    Skater components (position-aware):
+      base 5.0
+      + offense: points vs talent expectation (asymmetric -- not scoring
+        when you're not expected to barely dings you; stars held
+        scoreless feel it more)
+      + shot generation (always good, no penalty for 0)
+      + physical/defensive: hits, takeaways, blocks (D-men weight
+        blocks heavier; forwards weight hits/takeaways)
+      - giveaways
+      + faceoff differential (when they took draws)
+      + plus/minus (when recorded -- GameSim path)
+
+    Goalies: 5.0 baseline on save% vs the .905 league line, shutout bonus.
+
+    Works with the stat union recorded on BOTH sim paths (GameSim's rich
+    dict and AdvGS's lean dict). Handles the blocked_shots ambiguity:
+    GameSim's 'blocked_shots' counts the shooter's shots that got blocked,
+    while AdvGS's counts shots blocked BY the player -- so we prefer
+    'blocked_shots_by' when present.
+
+    Returns (grade_0_10, why_string). why_string is a short note like
+    "2G 1A · 5 shots" or "4 blk 3 hits" -- empty when nothing notable.
+    Never raises.
+    """
+    try:
+        gs = game_stats if isinstance(game_stats, dict) else {}
+        if _is_goalie(player):
+            return _goalie_game_grade_v2(gs)
+
+        def _num(key, default=0):
+            try:
+                v = gs.get(key, default)
+                return float(v) if v is not None else float(default)
+            except Exception:
+                return float(default)
+
+        g = _num('g')
+        a = _num('a')
+        points = g + a
+        shots = _num('shots_on_goal')
+        hits = _num('hits')
+        takeaways = _num('takeaways')
+        giveaways = _num('giveaways')
+        fo_won = _num('faceoffs_won')
+        fo_lost = _num('faceoffs_lost')
+        # Blocked-shot ambiguity: GameSim records shots blocked BY the
+        # player under 'blocked_shots_by'; AdvGS records its defensive
+        # roll under 'blocked_shots'. Prefer the unambiguous key.
+        if 'blocked_shots_by' in gs:
+            blocks = _num('blocked_shots_by')
+        else:
+            blocks = _num('blocked_shots')
+        pm = gs.get('plus_minus', None)
+
+        is_d = _is_defenseman(player)
+        grade = 5.0
+
+        # --- offense: points vs expectation (asymmetric) ---
+        try:
+            expected = float(_expected_points(player))
+        except Exception:
+            expected = 0.5
+        try:
+            surprise = (points - expected) / max(0.5, expected)
+            if surprise > 0:
+                grade += 1.2 * min(surprise, 2.0)
+            else:
+                # Missing your expected points stings stars more than
+                # grinders -- a scoreless night is normal for a shutdown D.
+                grade -= 0.6 * min(-surprise, 1.5) * min(1.0, expected)
+        except Exception:
+            pass
+
+        # --- shot generation ---
+        try:
+            grade += min(0.8, 0.12 * shots)
+        except Exception:
+            pass
+
+        # --- physical / defensive (position-aware) ---
+        try:
+            if is_d:
+                d_pts = 0.25 * blocks + 0.10 * hits + 0.25 * takeaways
+                grade += min(1.2, d_pts)
+            else:
+                d_pts = 0.12 * hits + 0.25 * takeaways + 0.15 * blocks
+                grade += min(1.0, d_pts)
+            grade -= min(0.8, 0.2 * giveaways)
+        except Exception:
+            pass
+
+        # --- faceoffs ---
+        try:
+            fo_taken = fo_won + fo_lost
+            if fo_taken > 0:
+                grade += max(-0.6, min(0.6, 0.06 * (fo_won - fo_lost)))
+        except Exception:
+            pass
+
+        # --- plus/minus (GameSim path only) ---
+        try:
+            if pm is not None:
+                pmf = float(pm)
+                grade += max(-1.0, min(1.0, 0.3 * pmf))
+        except Exception:
+            pass
+
+        grade = round(max(0.0, min(10.0, grade)), 1)
+
+        # --- why: short note of what drove the grade ---
+        notes = []
+        try:
+            if g > 0 or a > 0:
+                parts = []
+                if g > 0:
+                    parts.append(f"{int(g)}G")
+                if a > 0:
+                    parts.append(f"{int(a)}A")
+                notes.append(("pts", 0, " ".join(parts)))
+            if shots >= 4:
+                notes.append(("shots", 1, f"{int(shots)} shots"))
+            if blocks >= 2:
+                notes.append(("blk", 2, f"{int(blocks)} blk"))
+            if hits >= 3:
+                notes.append(("hits", 3, f"{int(hits)} hits"))
+            if takeaways >= 2:
+                notes.append(("tk", 4, f"{int(takeaways)} tk"))
+            if (fo_won + fo_lost) >= 5:
+                pct = int(round(100.0 * fo_won / (fo_won + fo_lost)))
+                notes.append(("fo", 5, f"{pct}% FO"))
+            if pm is not None:
+                try:
+                    pmi = int(pm)
+                    if pmi >= 2:
+                        notes.append(("pm", 6, f"+{pmi}"))
+                    elif pmi <= -2:
+                        notes.append(("pm", 6, f"{pmi}"))
+                except Exception:
+                    pass
+            if giveaways >= 3:
+                notes.append(("gv", 7, f"{int(giveaways)} gv"))
+            notes.sort(key=lambda t: t[1])
+            why = " · ".join(t[2] for t in notes[:3])
+        except Exception:
+            why = ""
+        return grade, why
+    except Exception:
+        return 5.0, ""
+
+
+def _goalie_game_grade_v2(gs) -> tuple:
+    """0-10 goalie grade: 5.0 baseline on save% vs the .905 league line.
+    Returns (grade, why). Never raises."""
+    try:
+        def _num(key, default=0):
+            try:
+                v = gs.get(key, default)
+                return float(v) if v is not None else float(default)
+            except Exception:
+                return float(default)
+        sa = _num('shots_against')
+        sv = _num('saves')
+        ga = _num('goals_against')
+        if sa <= 0:
+            return None, ""
+        svpct = sv / sa
+        grade = 5.0 + (svpct - 0.905) * 60.0
+        why = f"{int(sv)}/{int(sa)}"
+        if ga == 0 and sa >= 20:
+            grade += 0.5
+            why += " · shutout"
+        grade = round(max(0.0, min(10.0, grade)), 1)
+        return grade, why
+    except Exception:
+        return 5.0, ""
+
+
 def compute_skater_game_grade(player, goals: int, assists: int) -> float:
     """Pure 0-100 game grade for a skater -- byte-identical to what
     record_performance() appends to recent_game_grades (points vs talent

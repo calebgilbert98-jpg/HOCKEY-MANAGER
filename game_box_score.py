@@ -30,38 +30,38 @@ def compute_line_ratings(lines_snapshot, game_stats, by_id):
 
     Returns a list of
       {'label': 'Line 1', 'players': [{'player', 'pos', 'g', 'a', 'p',
-                                       'grade'}], 'rating': float|None}
-    'grade' is the player's 0-10 game grade for THIS game (the exact
-    formula record_performance appends to recent_game_grades, /10) or None
-    when the player has no stats for the game. 'rating' is the mean of the
-    available grades, or None when nobody on the unit has a grade.
+                                       'grade', 'why'}], 'rating': float|None}
+    'grade' is the player's 0-10 comprehensive game grade for THIS game
+    (compute_skater_game_grade_v2: 5.0 = average, 7.0+ = great) or None
+    when the player has no stats for the game. 'why' is a short note of
+    what drove the grade ("2G 1A", "4 blk 3 hits"). 'rating' is the mean
+    of the available grades, or None when nobody on the unit has a grade.
     Never raises. (Muck 2026-10-02: "that way we know if lines are working".)
     """
     out = []
     try:
-        from mesh_system import compute_skater_game_grade
+        from mesh_system import compute_skater_game_grade_v2
     except Exception:
-        compute_skater_game_grade = None
+        compute_skater_game_grade_v2 = None
     try:
         from game_classes import position_label as _pos_label
     except Exception:
         _pos_label = None
 
     def _grade(player, pid):
-        if compute_skater_game_grade is None:
-            return None
+        if compute_skater_game_grade_v2 is None:
+            return None, ""
         try:
             if pid not in (game_stats or {}):
                 # No stats recorded for this player in this game: honest
                 # "no data", never a neutral-looking 5.0.
-                return None
+                return None, ""
             gs = game_stats.get(pid) or {}
             if not isinstance(gs, dict):
-                return None
-            return round(compute_skater_game_grade(
-                player, gs.get('g', 0), gs.get('a', 0)) / 10.0, 1)
+                return None, ""
+            return compute_skater_game_grade_v2(player, gs)
         except Exception:
-            return None
+            return None, ""
 
     def _pos(player):
         try:
@@ -94,12 +94,12 @@ def compute_line_ratings(lines_snapshot, game_stats, by_id):
                     gs = (game_stats or {}).get(pid) or {}
                     g = int(gs.get('g', 0) or 0)
                     a = int(gs.get('a', 0) or 0)
-                    grade = _grade(p, pid)
+                    grade, why = _grade(p, pid)
                     if grade is not None:
                         grades.append(grade)
                     players.append({'player': p, 'pos': _pos(p),
                                     'g': g, 'a': a, 'p': g + a,
-                                    'grade': grade})
+                                    'grade': grade, 'why': why})
                 except Exception:
                     continue
             rating = round(sum(grades) / len(grades), 1) if grades else None
@@ -483,7 +483,7 @@ class GameBoxScoreView(ctk.CTkFrame):
                                 button_color=c['TEAL'],
                                 command=lambda _v: self._refresh_lines())
         combo.pack(side='left', padx=8)
-        ctk.CTkLabel(top, text="Even-strength lines with combined ratings (0-10).",
+        ctk.CTkLabel(top, text="5.0 = average game · 7.0+ = great · Key Stats shows what drove each grade.",
                      font=('Segoe UI', 10), text_color=c['TEXT_FAINT']
                      ).pack(side='left', padx=12)
 
@@ -580,11 +580,13 @@ class GameBoxScoreView(ctk.CTkFrame):
                 grade = pl['grade']
                 rows.append([getattr(p, 'full_name', '?'), pl['pos'],
                              pl['g'], pl['a'], pl['p'],
-                             f"{grade:.1f}" if grade is not None else "--"])
+                             f"{grade:.1f}" if grade is not None else "--",
+                             pl.get('why') or ""])
                 players.append(p)
             self._grid_table(body,
-                             headers=["Player", "Pos", "G", "A", "P", "Grade"],
-                             widths=[220, 52, 40, 40, 40, 64],
+                             headers=["Player", "Pos", "G", "A", "P", "Grade",
+                                      "Key Stats"],
+                             widths=[200, 52, 40, 40, 40, 64, 200],
                              rows=rows, players=players)
 
     @staticmethod
