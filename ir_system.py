@@ -41,6 +41,9 @@ IR_MIN_DAYS = 7
 # Minimum games remaining for LTIR eligibility (NHL: 10 games + 24 days;
 # the engine tracks games, so games is the gate).
 LTIR_MIN_GAMES = 10
+# Days on LTIR before the player must decide: attempt comeback or retire.
+# (Muck 2026-10-02: the Shea Weber / Carey Price moment.)
+LTIR_DECISION_DAYS = 1095  # 3 years
 
 
 def ir_status_of(player: Any) -> str:
@@ -291,7 +294,7 @@ def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, int]:
     - Healed players on LTIR -> activate when cap-compliant.
     Returns counts of actions taken.
     """
-    done = {"ltir_placed": 0, "ir_placed": 0, "activated": 0}
+    done = {"ltir_placed": 0, "ir_placed": 0, "activated": 0, "ltir_decisions": 0}
     try:
         roster = list(getattr(team, "roster", None) or [])
     except Exception:
@@ -299,6 +302,18 @@ def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, int]:
     for p in roster:
         try:
             status = ir_status_of(p)
+            # 3-year LTIR decision: comeback or retire (AI decides by age)
+            if status == "LTIR" and needs_ltir_decision(p, current_date):
+                try:
+                    _age = int(getattr(p, "age", 35) or 35)
+                    # Young players try to come back; veterans retire with dignity
+                    _comeback = _age < 34
+                    ok, _ = resolve_ltir_decision(team, p, _comeback, current_date)
+                    if ok:
+                        done["ltir_decisions"] += 1
+                except Exception:
+                    pass
+                continue
             if status == "None" and bool(getattr(p, "is_injured", False)):
                 remaining = int(getattr(p, "games_remaining_injured", 0) or 0)
                 if remaining >= LTIR_MIN_GAMES:
@@ -316,6 +331,98 @@ def ai_manage_ir(team: Any, current_date: Any = None) -> Dict[str, int]:
         except Exception:
             continue
     return done
+
+
+def needs_ltir_decision(player: Any, current_date: Any = None) -> bool:
+    """Has this player been on LTIR long enough to face the decision?
+
+    3+ years on LTIR: attempt a comeback or retire. The Shea Weber moment.
+    Never raises.
+    """
+    try:
+        if ir_status_of(player) != "LTIR":
+            return False
+        # Don't re-trigger if already decided
+        if bool(getattr(player, "_ltir_decision_made", False)):
+            return False
+        return days_on_ir(player, current_date) >= LTIR_DECISION_DAYS
+    except Exception:
+        return False
+
+
+def resolve_ltir_decision(team: Any, player: Any, attempt_comeback: bool,
+                          current_date: Any = None) -> Tuple[bool, str]:
+    """Resolve the 3-year LTIR decision. Never raises.
+
+    attempt_comeback=True: player tries to return. Attributes decline from
+    the long layoff (age + rust), injury risk elevated. May still fail
+    physically and be forced to retire.
+    attempt_comeback=False: player retires with dignity. Media story,
+    fan farewell, Hall of Fame consideration begins.
+    """
+    try:
+        pname = getattr(player, "full_name", getattr(player, "last_name", "The player"))
+        player._ltir_decision_made = True
+
+        if not attempt_comeback:
+            # Retire with dignity
+            try:
+                player.is_retired = True
+                player.ir_status = "None"
+                player.ir_placed_date = ""
+            except Exception:
+                pass
+            # Media story: the farewell
+            try:
+                from headlines import deliver_spec as _deliver
+                # Find app via team -> league -> game_manager -> app chain
+                _app = None
+                try:
+                    _lg = getattr(team, "league", None)
+                    _gm = getattr(_lg, "game_manager", None) if _lg else None
+                    _app = getattr(_gm, "app", None) if _gm else None
+                except Exception:
+                    pass
+                if _app is not None:
+                    _deliver(_app, {
+                        "kind": "retirement",
+                        "player": pname,
+                        "team": getattr(team, "team_name", ""),
+                        "text": f"After three years on long-term injured reserve, {pname} has announced his retirement.",
+                    })
+            except Exception:
+                pass
+            return True, f"{pname} retires after 3 years on LTIR."
+
+        # Attempt comeback: the hard road
+        try:
+            # Rust: attributes decline from the layoff
+            import random
+            _rust = random.uniform(0.85, 0.95)  # 5-15% decline
+            for attr in ("overall", "skating", "shooting", "passing",
+                         "defense", "physical"):
+                try:
+                    _v = getattr(player, attr, None)
+                    if isinstance(_v, (int, float)) and _v > 0:
+                        setattr(player, attr, max(1, int(_v * _rust)))
+                except Exception:
+                    continue
+            # Elevated re-injury risk
+            try:
+                player.injury_prone = min(99, int(getattr(player, "injury_prone", 50) or 50) + 20)
+            except Exception:
+                pass
+            # Back to IR (not LTIR) for the comeback attempt — shorter leash
+            player.ir_status = "IR"
+            player.ir_placed_date = _today_iso(current_date)
+            # Clear the injury so they can attempt to play
+            player.is_injured = False
+            player.games_remaining_injured = 0
+        except Exception:
+            pass
+        return True, f"{pname} attempts a comeback after 3 years on LTIR."
+    except Exception:
+        return False, "Decision failed."
 
 
 def ir_summary_line(team: Any) -> str:
