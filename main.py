@@ -15406,6 +15406,11 @@ class HockeyManagerGUI(tk.Tk):
         notebook.add(team_frame, text="Your Team")
         self._create_team_summary_section(team_frame)
         
+        # Awards ceremony button -- the full reveal experience
+        ttk.Button(main_frame, text="Watch Awards Ceremony",
+                  command=self.open_awards_ceremony,
+                  style='Accent.TButton').pack(pady=(10, 0))
+
         # Close button
         ttk.Button(main_frame, text="Continue", 
                   command=summary_window.destroy, style='TButton').pack(pady=20)
@@ -20312,6 +20317,208 @@ class HockeyManagerGUI(tk.Tk):
         btn = ttk.Button(win, text="Reassign Selected",
                          command=_reassign)
         btn.pack(pady=(4, 10))
+
+    def open_offseason_programs_window(self):
+        """GM assigns summer training focuses (June-Aug window).
+
+        Each player gets one focus + intensity; weekly ticks run Jul-Aug.
+        """
+        try:
+            from popup_system import InGamePopup
+            import offseason_programs as _osp
+        except Exception:
+            return
+        team = getattr(self, "user_team", None)
+        if team is None:
+            return
+        roster = sorted(list(getattr(team, "roster", None) or []),
+                        key=lambda p: getattr(p, "full_name", ""))
+
+        win = InGamePopup(self, modal=False)
+        win.title(f"Offseason Programs -- {getattr(team, 'team_name', '')}")
+        try:
+            win.geometry("520x600")
+        except Exception:
+            pass
+
+        import tkinter as tk
+        from tkinter import ttk
+
+        ttk.Label(win, text="Assign a summer focus per player. Weekly development runs Jul-Aug.",
+                  font=("Segoe UI", 10)).pack(pady=(10, 4))
+
+        frame = ttk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=4)
+        lb = tk.Listbox(frame, font=("Segoe UI", 10), height=22)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        players = []
+        def _refresh():
+            lb.delete(0, "end")
+            players.clear()
+            for p in roster:
+                prog = _osp.get_offseason_program(p)
+                if prog:
+                    tag = f"{prog.get('focus')} ({prog.get('intensity')})"
+                else:
+                    tag = "--"
+                lb.insert("end", f"{getattr(p, 'full_name', '?')}  [{tag}]")
+                players.append(p)
+        _refresh()
+
+        ctrl = ttk.Frame(win)
+        ctrl.pack(pady=6)
+        focus_var = tk.StringVar(value=_osp.OFFSEASON_FOCUSES[0])
+        int_var = tk.StringVar(value="Standard")
+        ttk.Label(ctrl, text="Focus:").grid(row=0, column=0, padx=4)
+        ttk.Combobox(ctrl, textvariable=focus_var,
+                     values=_osp.OFFSEASON_FOCUSES,
+                     state="readonly", width=24).grid(row=0, column=1, padx=4)
+        ttk.Label(ctrl, text="Intensity:").grid(row=0, column=2, padx=4)
+        ttk.Combobox(ctrl, textvariable=int_var,
+                     values=_osp.OFFSEASON_INTENSITIES,
+                     state="readonly", width=10).grid(row=0, column=3, padx=4)
+
+        def _assign():
+            sel = lb.curselection()
+            if not sel:
+                return
+            p = players[sel[0]]
+            ok, msg = _osp.assign_offseason_program(
+                p, focus_var.get(), int_var.get())
+            if ok:
+                _refresh()
+                lb.selection_set(sel[0])
+
+        def _clear():
+            sel = lb.curselection()
+            if not sel:
+                return
+            _osp.clear_offseason_program(players[sel[0]])
+            _refresh()
+            lb.selection_set(sel[0])
+
+        btnf = ttk.Frame(win)
+        btnf.pack(pady=(0, 10))
+        ttk.Button(btnf, text="Assign to Selected", command=_assign).pack(side="left", padx=4)
+        ttk.Button(btnf, text="Clear", command=_clear).pack(side="left", padx=4)
+
+    def open_season_goals_window(self):
+        """GM sets per-player season goals (preseason)."""
+        try:
+            from popup_system import InGamePopup
+            import season_goals as _sg
+        except Exception:
+            return
+        team = getattr(self, "user_team", None)
+        if team is None:
+            return
+        roster = sorted(list(getattr(team, "roster", None) or []),
+                        key=lambda p: getattr(p, "full_name", ""))
+
+        win = InGamePopup(self, modal=False)
+        win.title(f"Season Goals -- {getattr(team, 'team_name', '')}")
+        try:
+            win.geometry("520x600")
+        except Exception:
+            pass
+
+        import tkinter as tk
+        from tkinter import ttk, simpledialog
+
+        ttk.Label(win, text="Set a target per player. Hit it: +4 to 2 skills, +5 potential.",
+                  font=("Segoe UI", 10)).pack(pady=(10, 4))
+
+        frame = ttk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=4)
+        lb = tk.Listbox(frame, font=("Segoe UI", 10), height=22)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        players = []
+        def _refresh():
+            lb.delete(0, "end")
+            players.clear()
+            for p in roster:
+                prog = _sg.goal_progress(p)
+                goal = _sg.get_season_goal(p)
+                if goal and prog:
+                    tag = (f"{prog['label']}: {prog['current']}/"
+                           f"{prog['target']} ({prog['pct']}%)")
+                elif goal:
+                    tag = f"{goal.get('type')}: target {goal.get('target')}"
+                else:
+                    tag = "--"
+                lb.insert("end", f"{getattr(p, 'full_name', '?')}  [{tag}]")
+                players.append(p)
+        _refresh()
+
+        def _set_goal():
+            sel = lb.curselection()
+            if not sel:
+                return
+            p = players[sel[0]]
+            types = _sg.available_goal_types(p)
+            # Simple dialog: pick type via combobox in a popup.
+            dlg = tk.Toplevel(win)
+            dlg.title("Set Goal")
+            dlg.geometry("300x180")
+            ttk.Label(dlg, text=f"{getattr(p, 'full_name', '?')}").pack(pady=6)
+            tvar = tk.StringVar(value=list(types.keys())[0])
+            ttk.Combobox(dlg, textvariable=tvar,
+                         values=[f"{k} ({v[1]})" for k, v in types.items()],
+                         state="readonly", width=28).pack(pady=4)
+            ttk.Label(dlg, text="Target:").pack()
+            target_var = tk.StringVar(value="20")
+            ttk.Entry(dlg, textvariable=target_var, width=10).pack(pady=4)
+            def _ok():
+                try:
+                    gtype = tvar.get().split(" ")[0]
+                    tgt = int(target_var.get())
+                except Exception:
+                    return
+                ok, _msg = _sg.set_season_goal(p, gtype, tgt, team=team)
+                if not ok:
+                    # Show the one-per-type rejection instead of silently
+                    # closing.
+                    try:
+                        from tkinter import messagebox as _mb
+                        _mb.showwarning("Goal Taken", _msg)
+                    except Exception:
+                        pass
+                    return
+                dlg.destroy()
+                _refresh()
+            ttk.Button(dlg, text="Set", command=_ok).pack(pady=8)
+
+        def _clear():
+            sel = lb.curselection()
+            if not sel:
+                return
+            _sg.clear_season_goal(players[sel[0]])
+            _refresh()
+
+        btnf = ttk.Frame(win)
+        btnf.pack(pady=(0, 10))
+        ttk.Button(btnf, text="Set Goal", command=_set_goal).pack(side="left", padx=4)
+        ttk.Button(btnf, text="Clear", command=_clear).pack(side="left", padx=4)
+
+    def open_awards_ceremony(self):
+        """Open the end-of-season NHL Awards ceremony hub.
+
+        Each trophy is presented in ceremony order with its finalists,
+        a dramatic winner reveal, and the voting story behind it.
+        """
+        try:
+            import awards_ceremony as ac
+            ac.open_awards_ceremony(self)
+        except Exception:
+            pass
 
     def assign_jersey_number(self, player):
         new_number = simpledialog.askinteger("Assign Jersey Number", f"Enter a new jersey number for {player.full_name}:", initialvalue=player.jersey_number)

@@ -631,3 +631,134 @@ AWARD_DEFINITIONS = [
      "Fewest team goals against — qualifying goaltenders (25+ GP).",
      "jennings"),
 ]
+
+
+# ---------------------------------------------------------------------------
+# Awards voting simulation (for the Awards Ceremony hub)
+# ---------------------------------------------------------------------------
+# The race models decide the winners. These functions generate the *voting
+# story* behind each result: who voted, how many ballots, and plausible
+# vote totals conditioned on the official winner. Deterministic per
+# (season_year, award) so re-opening the ceremony shows the same numbers.
+
+# award key -> (voting body label, number of voters, ballot slots)
+# None means the award is decided by pure statistics, not a vote.
+VOTER_POOLS = {
+    "hart":        ("PHWA writers", 178, 5),
+    "ted_lindsay": ("NHLPA players", 712, 3),
+    "norris":      ("PHWA writers", 178, 5),
+    "vezina":      ("NHL general managers", 32, 3),
+    "calder":      ("PHWA writers", 178, 5),
+    "selke":       ("PHWA writers", 178, 5),
+    "byng":        ("PHWA writers", 178, 5),
+    "adams":       ("NHL broadcasters", 112, 3),
+    "conn_smythe": ("PHWA writers", 18, 3),
+    "rocket":      None,   # most goals -- pure stat
+    "art_ross":    None,   # most points -- pure stat
+    "jennings":    None,   # fewest team GA -- pure stat
+}
+
+# Classic NHL ballot points: 10-7-5-3-1 for a 5-slot ballot,
+# 5-3-1 for a 3-slot ballot.
+_BALLOT_POINTS = {5: (10, 7, 5, 3, 1), 3: (5, 3, 1)}
+
+
+def simulate_voting(race, winner, award_key, season_year=0):
+    """Generate a plausible voting story for an award result.
+
+    ``race``: ranked list of {"player", "score", ...} entries.
+    ``winner``: the official winner's player object (from the race).
+    Returns a dict with:
+      - voting_body: label or None for stat-decided awards
+      - voters: number of ballots cast
+      - results: list of {player, points, first_place, share} in order
+      - winner_points / winner_first / winner_share for the headline
+    Deterministic for a given (season_year, award_key).
+    """
+    pool = VOTER_POOLS.get(award_key)
+    if pool is None:
+        return {"voting_body": None, "voters": 0, "results": [],
+                "winner_points": 0, "winner_first": 0, "winner_share": 0.0}
+    body, n_voters, slots = pool
+    import random
+    rng = random.Random(hash(("awards_vote", int(season_year or 0),
+                              award_key)) & 0xFFFFFFFF)
+
+    # Candidate pool: top 8 by race score (writers/players/GMs only
+    # seriously consider a handful of names).
+    cands = [r for r in race if r.get("player") is not None][:8]
+    if not cands:
+        return {"voting_body": body, "voters": n_voters, "results": [],
+                "winner_points": 0, "winner_first": 0, "winner_share": 0.0}
+    # Ensure the official winner is in the candidate pool.
+    wids = set()
+    for r in cands:
+        try:
+            wids.add(int(getattr(r["player"], "id", -1) or -1))
+        except Exception:
+            pass
+    try:
+        wid = int(getattr(winner, "id", -1) or -1)
+    except Exception:
+        wid = -1
+    if wid not in wids:
+        cands = [{"player": winner, "score": max(
+            (r.get("score", 0) for r in cands), default=1) * 1.1}] + cands[:7]
+
+    # Base appeal from race score; the official winner gets a narrative
+    # push so the simulated vote agrees with the official result.
+    appeals = []
+    top_score = max((float(r.get("score", 0) or 0) for r in cands), default=1.0)
+    for r in cands:
+        try:
+            is_w = int(getattr(r["player"], "id", -1) or -1) == wid
+        except Exception:
+            is_w = False
+        s = float(r.get("score", 0) or 0)
+        appeal = 0.15 + 0.85 * (s / top_score if top_score else 0)
+        if is_w:
+            appeal *= 1.6  # the story the season told
+        appeals.append(max(appeal, 0.05))
+
+    points_for = [0] * len(cands)
+    firsts_for = [0] * len(cands)
+    pts_table = _BALLOT_POINTS[slots]
+    for _ in range(n_voters):
+        # Each voter ranks `slots` distinct candidates, weighted by
+        # appeal with a dash of voter idiosyncrasy.
+        weights = [a * rng.uniform(0.6, 1.4) for a in appeals]
+        order = sorted(range(len(cands)),
+                       key=lambda i: weights[i], reverse=True)[:slots]
+        for rank, ci in enumerate(order):
+            points_for[ci] += pts_table[rank]
+            if rank == 0:
+                firsts_for[ci] += 1
+
+    # If noise produced an upset, rescale so the official winner still
+    # tops the table (the race is authoritative; this is presentation).
+    try:
+        widx = next(i for i, r in enumerate(cands)
+                    if int(getattr(r["player"], "id", -1) or -1) == wid)
+    except StopIteration:
+        widx = 0
+    best = max(points_for)
+    if points_for[widx] < best:
+        points_for[widx] = best + rng.randint(1, max(1, n_voters // 20))
+        firsts_for[widx] = max(firsts_for[widx],
+                               max(firsts_for) + rng.randint(0, 3))
+
+    total_pts = sum(points_for) or 1
+    order = sorted(range(len(cands)),
+                   key=lambda i: points_for[i], reverse=True)
+    results = []
+    for i in order:
+        results.append({
+            "player": cands[i]["player"],
+            "points": points_for[i],
+            "first_place": firsts_for[i],
+            "share": points_for[i] / total_pts,
+        })
+    w = results[0]
+    return {"voting_body": body, "voters": n_voters, "results": results,
+            "winner_points": w["points"], "winner_first": w["first_place"],
+            "winner_share": w["share"]}
