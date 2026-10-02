@@ -467,6 +467,19 @@ class DatabaseGenerator:
         free_agents = self._generate_free_agents(free_agents_count)
         main_league.free_agents.extend(free_agents)
         players_created += len(free_agents)
+
+        # D41 Phase 1: scout-speculation tiering. At generation there's no
+        # user team yet, so tier with a neutral default eye; set_user_team
+        # re-tiers through the user's actual head scout.
+        try:
+            from scout_tiering import tier_player as _tier_p
+            for _fa in free_agents:
+                try:
+                    _tier_p(_fa, None)
+                except Exception:
+                    continue
+        except Exception:
+            pass
         
         # Generate free agent staff (staff pool expansion, Muck 2026-10-02:
         # dense + diverse so every position has real options).

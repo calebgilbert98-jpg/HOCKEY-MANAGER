@@ -608,6 +608,9 @@ class GameSaveManager:
                 'stats': self._serialize_team_stats(getattr(team, 'stats', None)),
                 'salary_cap_info': getattr(team, 'salary_cap_info', {}),
                 'draft_picks': getattr(team, 'draft_picks', {}),
+                # D41 Phase 1: lightweight AHL standings record.
+                # Absent in old saves -> ensure_ahl_record backfills.
+                'ahl_record': dict(getattr(team, 'ahl_record', None) or {}),
                 'trade_block': getattr(team, 'trade_block', []),
                 # Scouting shortlist (trade_market.py): plain dicts.
                 # Missing = old save -> empty list.
@@ -1621,6 +1624,16 @@ class GameSaveManager:
             if 'free_agents' in save_data:
                 self._restore_free_agents(save_data['free_agents'])
 
+            # D41 Phase 1: backfill scout tiers on old-save FAs that lack them.
+            try:
+                from scout_tiering import backfill_tiers as _bt
+                _ut = getattr(self.game_manager, 'user_team', None)
+                _lg = getattr(self.game_manager, 'league', None)
+                if _lg is not None:
+                    _bt(_lg, _ut)
+            except Exception:
+                pass
+
             # Fantasy-draft FA identity (BUG-2 fix): the draft pool
             # includes free agents, and the mid-draft journal restores
             # them as its own live objects (see from_state_dict). The
@@ -2472,6 +2485,14 @@ class GameSaveManager:
             team.roster = [p for p in team.roster if p is not None]
             team.ahl_roster = [p for p in team.ahl_roster if p is not None]
             team.prospects = [p for p in team.prospects if p is not None]
+
+            # D41 Phase 1: restore lightweight AHL standings record.
+            # Absent in old saves -> ensure_ahl_record backfills on use.
+            try:
+                _ar = team_data.get('ahl_record', None)
+                team.ahl_record = dict(_ar) if isinstance(_ar, dict) else None
+            except Exception:
+                pass
 
             # Restore inbox. Absent in old saves -> fresh empty inbox.
             try:

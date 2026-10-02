@@ -1497,6 +1497,13 @@ def process_undrafted_pool(league, year):
                         # Add to AHL roster (existing mechanics)
                         team.add_player(p, "ahl")
                         ahl_signed += 1
+                        # D41 Phase 1: tier the undrafted signee through the
+                        # signing club's head scout's eyes.
+                        try:
+                            from scout_tiering import tier_player as _tp2, get_head_scout as _ghs
+                            _tp2(p, _ghs(team))
+                        except Exception:
+                            pass
                     except Exception:
                         continue
     except Exception:

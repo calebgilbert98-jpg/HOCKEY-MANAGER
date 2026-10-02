@@ -1404,6 +1404,15 @@ NHL League Office""",
                     on_coach_hired(team, game_manager=self)
             except Exception:
                 pass
+            # D41 Phase 1: a new head scout means new eyes on the FA pool --
+            # re-tier through the new scout's judgment.
+            try:
+                from game_classes import StaffRole as _SR2
+                from scout_tiering import retier_on_scout_change as _retier
+                if getattr(staff, "role", None) == _SR2.HEAD_SCOUT:
+                    _retier(team, league)
+            except Exception:
+                pass
             return True
         except Exception:
             return False
@@ -1862,6 +1871,13 @@ NHL League Office""",
             # Update team colors in UI if the UI is already set up
             if hasattr(self, 'modern_theme') and hasattr(self, 'style'):
                 self._update_team_colors()
+            # D41 Phase 1: tier the FA pool through the user's head scout's
+            # eyes -- new eyes, new reads on who's NHL/AHL/Euro material.
+            try:
+                from scout_tiering import tier_free_agents as _tier_fa
+                _tier_fa(self.league, user_team)
+            except Exception:
+                pass
         else:
             print(f"Warning: Could not find team '{team_name}'. Available teams:")
             for team in self.league.teams:
@@ -11302,6 +11318,11 @@ class HockeyManagerGUI(tk.Tk):
                 and getattr(_bracket, "playoff_series", None))
             if _in_window and not _playoffs_live:
                 _ahl.simulate_ahl_day(self.league)
+                # D41 Phase 1: lightweight AHL standings from abstract matchups.
+                try:
+                    _ahl.simulate_ahl_standings_day(self.league)
+                except Exception:
+                    pass
         except Exception:
             pass
     

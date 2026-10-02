@@ -574,3 +574,170 @@ def weekly_farm_confidence(league, user_team=None):
             except Exception:
                 continue
     return notes
+
+
+# ---------------------------------------------------------------------------
+# Lightweight AHL standings (D41 Phase 1)
+#
+# The AHL still has no real game sim -- but each farm roster now carries a
+# lightweight W/L/OTL record derived from abstract daily matchups weighted
+# by roster strength. This is 80% of the feel (a standings table with
+# movement) for 20% of the risk (no schedule gen, no game sim, no roster
+# migration). Cheap: one abstract "game" per team per simmed day.
+# ---------------------------------------------------------------------------
+
+def ensure_ahl_record(team):
+    """Backfill a lightweight standings record on a team. Idempotent."""
+    try:
+        rec = getattr(team, "ahl_record", None)
+        if not isinstance(rec, dict):
+            rec = {"w": 0, "l": 0, "otl": 0, "pts": 0,
+                   "gf": 0, "ga": 0, "gp": 0}
+            team.ahl_record = rec
+        else:
+            for k in ("w", "l", "otl", "pts", "gf", "ga", "gp"):
+                rec.setdefault(k, 0)
+        return rec
+    except Exception:
+        return {"w": 0, "l": 0, "otl": 0, "pts": 0, "gf": 0, "ga": 0, "gp": 0}
+
+
+def reset_ahl_record(team):
+    """Zero the standings record at season rollover."""
+    try:
+        team.ahl_record = {"w": 0, "l": 0, "otl": 0, "pts": 0,
+                           "gf": 0, "ga": 0, "gp": 0}
+    except Exception:
+        pass
+
+
+def _farm_strength(team) -> float:
+    """Abstract team strength from ahl_roster quality. Never raises."""
+    try:
+        farm = getattr(team, "ahl_roster", None) or []
+        if not farm:
+            return 65.0
+        total, n = 0.0, 0
+        for p in farm:
+            try:
+                total += float(p.overall_rating())
+                n += 1
+            except Exception:
+                continue
+        return (total / n) if n else 65.0
+    except Exception:
+        return 65.0
+
+
+def simulate_ahl_standings_day(league):
+    """Roll one abstract AHL 'game day' for standings.
+
+    Each farm team plays one abstract game vs a random opponent, weighted
+    by roster strength. Scores are plausible AHL-style (2-5 goals). The
+    per-player stat ledger (simulate_ahl_day) is untouched -- this only
+    moves the W/L needle.
+
+    Skipped outside the AHL season window (Oct 1 - Apr 20), mirroring
+    the stat ledger's gating. Never raises.
+    """
+    try:
+        teams = [t for t in (getattr(league, "teams", None) or [])
+                 if getattr(t, "ahl_roster", None)]
+        if len(teams) < 2:
+            return
+        # Season window gate (best-effort; sim even if date unknown)
+        try:
+            from datetime import date as _date
+            today = getattr(league, "current_date", None)
+            if today is not None:
+                if hasattr(today, "month"):
+                    m, d = today.month, today.day
+                    in_window = (m == 10) or (m in (11, 12, 1, 2, 3)) or (m == 4 and d <= 20)
+                    if not in_window:
+                        return
+        except Exception:
+            pass
+
+        strengths = {id(t): _farm_strength(t) for t in teams}
+        order = list(teams)
+        random.shuffle(order)
+        # Pair up; odd team out sits (bye).
+        for i in range(0, len(order) - 1, 2):
+            a, b = order[i], order[i + 1]
+            try:
+                sa, sb = strengths[id(a)], strengths[id(b)]
+                # Win probability from strength gap (Elo-lite).
+                diff = sa - sb
+                p_a = 1.0 / (1.0 + 10 ** (-diff / 8.0))
+                r = random.random()
+                # Plausible AHL scores.
+                gf_a = max(1, min(7, int(random.gauss(3.1 + diff * 0.08, 1.4))))
+                gf_b = max(1, min(7, int(random.gauss(3.1 - diff * 0.08, 1.4))))
+                if gf_a == gf_b:
+                    # Tie broken in "OT": winner gets 2 pts, loser 1.
+                    if r < p_a:
+                        gf_a += 1
+                        _apply_ahl_result(a, b, gf_a, gf_b, ot=True)
+                    else:
+                        gf_b += 1
+                        _apply_ahl_result(b, a, gf_b, gf_a, ot=True)
+                elif (gf_a > gf_b and r < p_a) or (gf_b > gf_a and r >= p_a):
+                    # Favorite won in regulation.
+                    winner, loser = (a, b) if gf_a > gf_b else (b, a)
+                    _apply_ahl_result(winner, loser,
+                                      max(gf_a, gf_b), min(gf_a, gf_b), ot=False)
+                else:
+                    # Upset: underdog won in regulation (keep the rolled score).
+                    winner, loser = (a, b) if gf_a > gf_b else (b, a)
+                    _apply_ahl_result(winner, loser,
+                                      max(gf_a, gf_b), min(gf_a, gf_b), ot=False)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def _apply_ahl_result(winner, loser, gf_w, gf_l, ot=False):
+    """Apply an abstract result to both teams' records. Never raises."""
+    try:
+        wr = ensure_ahl_record(winner)
+        lr = ensure_ahl_record(loser)
+        wr["gp"] += 1
+        lr["gp"] += 1
+        wr["w"] += 1
+        wr["pts"] += 2
+        wr["gf"] += gf_w
+        wr["ga"] += gf_l
+        lr["gf"] += gf_l
+        lr["ga"] += gf_w
+        if ot:
+            lr["otl"] += 1
+            lr["pts"] += 1
+        else:
+            lr["l"] += 1
+    except Exception:
+        pass
+
+
+def ahl_standings(league):
+    """Sorted AHL standings: list of (team, record) by pts, then wins, then GD.
+
+    Never raises.
+    """
+    try:
+        rows = []
+        for t in (getattr(league, "teams", None) or []):
+            try:
+                if not getattr(t, "ahl_roster", None):
+                    continue
+                rec = ensure_ahl_record(t)
+                rows.append((t, rec))
+            except Exception:
+                continue
+        rows.sort(key=lambda r: (r[1].get("pts", 0),
+                                 r[1].get("w", 0),
+                                 r[1].get("gf", 0) - r[1].get("ga", 0)),
+                  reverse=True)
+        return rows
+    except Exception:
+        return []
