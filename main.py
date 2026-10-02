@@ -3876,52 +3876,92 @@ class HockeyManagerGUI(tk.Tk):
         border = tk.Frame(nav_container, bg=border_color, height=1)
         border.pack(fill="x")
         
-        # Far left: back/forward screen navigation
-        nav_hist_frame = tk.Frame(menu_bar, bg=menu_bg)
-        nav_hist_frame.pack(side="left", padx=(2, 6))
-        self._back_btn = self._create_nav_pill(nav_hist_frame, "\u25c0",
+        # Far left: back/forward screen navigation + section dropdowns.
+        # Column 0 (weight 1) and column 2 (weight 1) are equal so the
+        # center column -- and the Advance button in it -- stays centered.
+        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
+        left_menu_frame.grid(row=0, column=0, sticky="w")
+        # Both side columns share a uniform group: they always get IDENTICAL
+        # widths, so the center column -- and the Advance button -- is
+        # pixel-centered on the bar no matter how asymmetric the content.
+        menu_bar.grid_columnconfigure(0, weight=1, uniform="sides")
+        menu_bar.grid_columnconfigure(1, weight=0)
+        menu_bar.grid_columnconfigure(2, weight=1, uniform="sides")
+        self._back_btn = self._create_nav_pill(left_menu_frame, "\u25c0",
                                                self._nav_back,
                                                tooltip="Back to previous screen")
-        self._fwd_btn = self._create_nav_pill(nav_hist_frame, "\u25b6",
+        self._fwd_btn = self._create_nav_pill(left_menu_frame, "\u25b6",
                                               self._nav_forward,
                                               tooltip="Forward to next screen")
 
-        # Left side - ALL menu tabs (never split across sides)
-        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        left_menu_frame.pack(side="left", fill="x", expand=True)
-        
-        # Primary action buttons (always visible) - temporarily disable icons
+        # --- Reorganized top menu (Muck 2026-10-02) ---
+        # Sections group ~20 loose pills into 6 dropdowns; the Advance
+        # button sits big and centered, Eastside-style, in our round look.
+
+        # Inbox stays a standalone pill -- highest-traffic destination.
         self.inbox_btn = self._create_nav_pill(left_menu_frame, self._get_inbox_button_text(),
                                                self.open_inbox_window,
                                                tooltip="Inbox: messages from your staff, players, and the league office")
 
-        self._create_nav_pill(left_menu_frame, "Roster", self.open_roster_window,
-                                       tooltip="Roster: manage your NHL, AHL, and prospect rosters")
-        # Schedule & Calendar dropdown
-        self._create_dropdown_menu(left_menu_frame, "Schedule",
-            tooltip="Schedule: league schedule, scores, and the season calendar", menu_items={
-            "Schedule": self.open_schedule_window,
-            "Calendar": self.open_calendar_window
-        })
-        
-        # Separator
-        separator1 = ttk.Separator(left_menu_frame, orient='vertical')
-        separator1.pack(side="left", fill="y", padx=8)
-        
-        # Team Management dropdown
-        self._create_dropdown_menu(left_menu_frame, "Team", tooltip="Team: lines, tactics, staff, development, and scouting", menu_items={
+        # Club: your team, day to day
+        self._create_dropdown_menu(left_menu_frame, "Club",
+            tooltip="Club: roster, lines, tactics, dressing room, and development", menu_items={
+            "Roster": self.open_roster_window,
             "Edit Lines": self.open_edit_lines_window,
             "Tactics": self.open_tactics_window,
-            "Staff Management": self.open_staff_management_window,
-            "Player Development": self.open_development_window,
-            "Scouting": self.open_scouting_management_window,
-            "Performance": self.open_performance_monitor,
+            "Dressing Room": self.open_dressing_room,
+            "Morale": self.open_morale_window,
+            "Analytics": self.open_analytics_hub,
             "Practice Center": self.open_practice_center,
             "Training Camp": self.open_training_camp_window,
-            "Manager Hub": self.open_manager_hub
         })
-        
-        # Systems dropdown (TRACK C): engine-state surfaces the sim already
+
+        # Personnel: the people who work for you
+        self._create_dropdown_menu(left_menu_frame, "Personnel",
+            tooltip="Personnel: staff, scouts, prospects, and relationships", menu_items={
+            "Staff Management": self.open_staff_management_window,
+            "Scouting": self.open_scouting_management_window,
+            "Player Development": self.open_development_window,
+            "Assistant Coaches": self.open_trackc_assistants,
+            "GM Relationships": self.open_gm_relationships_window,
+            "Manager Hub": self.open_manager_hub,
+            "Performance": self.open_performance_monitor,
+        })
+
+        # League: the world around you
+        self._create_dropdown_menu(left_menu_frame, "League",
+            tooltip="League: schedule, news, standings, and history", menu_items={
+            "Schedule": self.open_schedule_window,
+            "Calendar": self.open_calendar_window,
+            "News": self.open_news_window,
+            "Media Center": self.open_media_center,
+            "Stats & Standings": self.open_stats_standings_window,
+            "AHL": self.open_ahl_stats_window,
+            "Playoffs": self.open_playoffs_window,
+            "League History": self.open_league_history_window,
+        })
+
+        # Transactions (trades, free agents, waivers, draft, GM options)
+        self._create_dropdown_menu(left_menu_frame, "Transactions",
+            tooltip="Transactions: trades, free agents, waivers, and the draft", menu_items={
+            "Free Agents": self.open_free_agency_window,
+            "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
+            "Trade Center": self.open_trade_window,
+            "Trade Deadline": self.open_trade_deadline_center,  # Only visible on deadline day
+            "Draft Day Central": self.open_draft_day_central,  # Only visible on draft days
+            "Trade Block": self.open_trade_block_window,
+            "Waivers": self.open_waivers_window,
+            "GM Options": self.open_gm_options_window,
+        })
+
+        # Finances (budgets, payroll, extensions)
+        self._create_dropdown_menu(left_menu_frame, "Finances",
+            tooltip="Finances: budgets, payroll, and contract extensions", menu_items={
+            "Team Finances": self.open_finances_window,
+            "Negotiate Extensions": self.open_contract_extensions_window
+        })
+
+        # Systems (TRACK C): engine-state surfaces the sim already
         # computes but never showed -- deployment, condition, discipline,
         # rivalries, clutch, assistants, circumstance shifts, fan buzz.
         self._create_dropdown_menu(left_menu_frame, "Systems",
@@ -3931,110 +3971,49 @@ class HockeyManagerGUI(tk.Tk):
             "Discipline List": self.open_trackc_discipline,
             "Rivalry Dashboard": self.open_trackc_rivalry,
             "Clutch Factors": self.open_trackc_clutch,
-            "Assistant Coaches": self.open_trackc_assistants,
             "Circumstance Shifts": self.open_trackc_circumstance,
             "Fan Buzz": self.open_trackc_fanbuzz
         })
-        
-        # Finances dropdown
-        self._create_dropdown_menu(left_menu_frame, "Finances",
-            tooltip="Finances: budgets, payroll, and contract extensions", menu_items={
-            "Team Finances": self.open_finances_window,
-            "Negotiate Extensions": self.open_contract_extensions_window
-        })
-        
-        # Transactions dropdown  
-        self._create_dropdown_menu(left_menu_frame, "Transactions",
-            tooltip="Transactions: trades, free agents, waivers, and the draft", menu_items={
-            "Free Agents": self.open_free_agency_window,
-            "Free Agent Frenzy": self.open_free_agency_frenzy,  # Only visible on July 1
-            "Trade Center": self.open_trade_window,
-            "Trade Deadline": self.open_trade_deadline_center,  # Only visible on deadline day
-            "Draft Day Central": self.open_draft_day_central,  # Only visible on draft days
-            "Trade Block": self.open_trade_block_window,
-            "Waivers": self.open_waivers_window
-        })
-        
-        # All remaining tabs continue on the left (single unified menu)
-        left_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
-        left_menu_frame.pack(side="right")
 
-        # Save/Load dropdown
-        self._create_dropdown_menu(left_menu_frame, "Save/Load",
+        # --- Center: the big Advance button ---
+        # Eastside-style primary action, our round look, impossible to miss.
+        # self._next_day_btn keeps its name so refresh_next_day_button()
+        # and the MP continue UI keep working untouched.
+        center_frame = tk.Frame(menu_bar, bg=menu_bg)
+        center_frame.grid(row=0, column=1)
+        try:
+            from modern_widgets import RoundedButton as _RB
+            _advance_btn = _RB(
+                center_frame, text="Next Day",
+                command=self._on_continue_pressed,
+                bg=self.ACCENT_COLOR, radius=10,
+                font=(self.FONT_FAMILY, 14, "bold"),
+                width=230, height=56)
+            _advance_btn.pack(anchor="center", expand=True)
+            _qol_add_tooltip(_advance_btn,
+                             "Advance: move to the next day (shortcut: Space)")
+            self._next_day_btn = _advance_btn
+        except Exception:
+            # Fallback: oversized nav pill if RoundedButton is unavailable.
+            self._next_day_btn = self._create_nav_pill(center_frame, "Next Day",
+                                                       self._on_continue_pressed,
+                                                       tooltip="Advance to the next day")
+        self.refresh_next_day_button()
+
+        # --- Right: save + settings ---
+        right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
+        right_menu_frame.grid(row=0, column=2, sticky="e")
+
+        self._create_dropdown_menu(right_menu_frame, "Save/Load",
             tooltip="Save/Load: save your game or load a previous save", menu_items={
             "Save Game": self.open_save_window,
             "Load Game": self.open_load_window,
-            "Playoffs": self.open_playoffs_window
         })
 
-        # Right menu buttons - temporarily back to text
-        self._create_nav_pill(left_menu_frame, "News",
-                              self.open_news_window,
-                              tooltip="News: the latest stories from around the league")
-
-        # Media Center button (optional system)
-        self._create_nav_pill(left_menu_frame, "Media",
-                              self.open_media_center,
-                              tooltip="Media Center: press conferences and media relations")
-
-        # Morale button (dressing-room health: chemistry, hierarchy, attitudes)
-        self._create_nav_pill(left_menu_frame, "Morale",
-                              self.open_morale_window,
-                              tooltip="Morale: team chemistry, hierarchy, and player attitudes")
-
-        # GM Relationships button (Wave B D48: stature, respect, heat, trends)
-        self._create_nav_pill(left_menu_frame, "GM Relations",
-                              self.open_gm_relationships_window,
-                              tooltip="GM Relationships: what every rival GM thinks of you")
-
-        # Dressing Room button (module 03: social groups, talks, cascades)
-        self._create_nav_pill(left_menu_frame, "Dressing Room",
-                              self.open_dressing_room,
-                              tooltip="Dressing Room: hierarchy, social groups, team talks")
-
-        # Analytics Hub button (module 04: xG maps, momentum, entries, lines)
-        self._create_nav_pill(left_menu_frame, "Analytics",
-                              self.open_analytics_hub,
-                              tooltip="Analytics Hub: shot/xG maps, momentum graphs, zone entries, line trends")
-
-        # Tactics button (systems, familiarity, fit -- the whiteboard)
-        self._create_nav_pill(left_menu_frame, "Tactics",
-                              self.open_tactics_window,
-                              tooltip="Tactics: systems, familiarity, roster/coach fit")
-
-        # Stats & Standings button
-        self._create_nav_pill(left_menu_frame, "Stats",
-                              self.open_stats_standings_window,
-                              tooltip="Stats: standings, scoring leaders, and team analytics")
-
-        # AHL button (the full AHL league hub: standings, scores, Calder Cup)
-        self._create_nav_pill(left_menu_frame, "AHL",
-                              self.open_ahl_stats_window,
-                              tooltip="AHL: standings, scores, Calder Cup, farm teams & prospects")
-
-        # League History button
-        self._create_nav_pill(left_menu_frame, "History",
-                              self.open_league_history_window,
-                              tooltip="League History: champions, awards, career leaders, Hall of Fame")
-
-        # GM Options as standalone button
-        self._create_nav_pill(left_menu_frame, "GM Options",
-                              self.open_gm_options_window,
-                              tooltip="GM Options: trade block, waivers, captains, and extensions")
-        
-        # Settings as its own button
-        self._create_nav_pill(left_menu_frame, "Settings",
+        self._create_nav_pill(right_menu_frame, "Settings",
                               self.open_settings_window,
                               tooltip="Settings: game settings and preferences (? shows keyboard shortcuts)")
-    
-        # Far right: Next Day button -- always fixed, always visible
-        # (except the visualizer takes over the whole window).
-        next_frame = tk.Frame(menu_bar, bg=menu_bg)
-        next_frame.pack(side="right", padx=(6, 2))
-        self._next_day_btn = self._create_nav_pill(next_frame, "Next Day",
-                                                   self._on_continue_pressed,
-                                                   tooltip="Advance to the next day")
-        self.refresh_next_day_button()
+
         # Apply the inbox priority styling for the current unread state.
         try:
             self.update_inbox_notification()
