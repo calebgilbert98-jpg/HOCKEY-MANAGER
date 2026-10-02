@@ -16468,7 +16468,30 @@ class HockeyManagerGUI(tk.Tk):
         """
         try:
             league = self.league
-            draft_year = self.current_date.year  # e.g. 2027 for the 2026-27 season
+            # Season continuity (Muck 2026-10-02): draft_year derives from
+            # GAME STATE, not date arithmetic. This method runs pre-rollover
+            # (called from _start_offseason before league.end_of_season()),
+            # so league.season_year is the just-completed season and its
+            # entry draft is held in calendar year season_year + 1.
+            # Manual date manipulation around the playoff gap can no longer
+            # skip a season or mis-year the lottery/draft.
+            draft_year = int(getattr(league, "season_year", 0) or 0) + 1
+            # Sanity backstop: if the wall date disagrees with game state
+            # by more than a year, the date was manipulated -- trust game
+            # state and log the discrepancy loudly.
+            try:
+                _date_year = int(getattr(self.current_date, "year", 0) or 0)
+                if _date_year and abs(_date_year - draft_year) > 1:
+                    try:
+                        self.add_news(
+                            f"⚠️ Season continuity: wall date "
+                            f"({self.current_date}) disagrees with league "
+                            f"season {getattr(league, 'season_year', '?')} -- "
+                            f"using game state for the {draft_year} draft.")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # 1. Lottery -- fully automatic, no user input needed.
             lotto_done = set(getattr(league, 'lottery_held_years', None) or [])
             if draft_year not in lotto_done:
@@ -16537,8 +16560,78 @@ class HockeyManagerGUI(tk.Tk):
             import traceback
             traceback.print_exc()
 
+    def _validate_season_continuity(self) -> bool:
+        """Guard: season year must follow recorded history without gaps.
+
+        Season transition (Muck 2026-10-02): the season year derives from
+        actual game state, not date arithmetic. This validates that
+        league.season_year is continuous with the seasons recorded in
+        league_history -- no skipped seasons, no double-counting.
+
+        Called from _start_offseason before the rollover. Returns True
+        when continuous (or when there's no history yet to check against);
+        returns False and logs loudly when a break is detected. Never
+        raises, never mutates -- detection only, so a false positive can
+        never corrupt numbering.
+        """
+        try:
+            league = getattr(self, "league", None)
+            if league is None:
+                return True
+            season_year = int(getattr(league, "season_year", 0) or 0)
+            hist = getattr(self, "league_history", None)
+            seasons = list(getattr(hist, "seasons", None) or [])
+            if not seasons or not season_year:
+                return True  # new career or no history -- nothing to check
+            years = sorted(int(s.get("year", 0) or 0) for s in seasons
+                           if isinstance(s, dict))
+            years = [y for y in years if y]
+            if not years:
+                return True
+            last_recorded = years[-1]
+            # Normal mid-season state: the current season (season_year) is
+            # in progress and not yet recorded, so it should be exactly
+            # one past the last recorded season.
+            # At _start_offseason post-record: _record_season_to_history
+            # runs before the rollover, so season_year may EQUAL the
+            # last recorded year (the just-finished season).
+            # Either way, a gap of 2+ means a season was skipped.
+            ok_continuous = (season_year == last_recorded or       # just recorded
+                            season_year == last_recorded + 1)   # mid-season
+            if not ok_continuous:
+                try:
+                    self.add_news(
+                        f"⚠️ Season continuity break: league season_year is "
+                        f"{season_year} but league history's last recorded "
+                        f"season is {last_recorded}. A season may have been "
+                        f"skipped by date manipulation -- numbering will "
+                        f"not auto-correct; check the save.")
+                except Exception:
+                    pass
+                return False
+            # Internal gap check: recorded history itself must be gapless.
+            for prev, cur in zip(years, years[1:]):
+                if cur != prev + 1:
+                    try:
+                        self.add_news(
+                            f"⚠️ Season history gap: recorded seasons jump "
+                            f"from {prev} to {cur}.")
+                    except Exception:
+                        pass
+                    return False
+            return True
+        except Exception:
+            return True  # never block the transition on a guard failure
+
     def _start_offseason(self):
         """Start the offseason phase."""
+        # Season continuity guard (Muck 2026-10-02): validate that the
+        # season year follows recorded history without gaps before any
+        # rollover logic runs. Detection only -- never blocks or mutates.
+        try:
+            self._validate_season_continuity()
+        except Exception:
+            pass
         # Cup recap backstop: if the champion was decided outside the daily
         # loop (bulk sims), the inbox still gets the awarding story. Once.
         try:
