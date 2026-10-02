@@ -15961,6 +15961,17 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
+        win_ref['win'] = None
+
+        # Muck 2026-10-02: hide the day-sim loading toast before the
+        # visualizer opens -- the visualizer IS the feedback while
+        # watching; the loading bar should only show for quick-sim.
+        # Never raises; overlay is re-shown by the day loop if needed.
+        try:
+            self._update_day_sim_overlay(False)
+        except Exception:
+            pass
+
         win = open_pbp_window(self, home_team, away_team, on_complete=_on_done,
                               rivalries=getattr(getattr(self, "league", None),
                                                 "rivalries", []),
