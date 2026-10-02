@@ -1316,6 +1316,16 @@ class DatabaseGenerator:
         injury_types = ["None", "Upper body", "Lower body", "Concussion", "Broken bone", "Muscle strain"]
         weights = [70, 10, 10, 3, 4, 3]
         player.last_injury = random.choices(injury_types, weights=weights)[0]
+        if player.is_injured:
+            # BUG-026: a seeded injury needs a real countdown + type --
+            # is_injured=True with games_remaining_injured=0 used to strand
+            # the player sidelined forever (recovery only healed positive
+            # counters). _process_injury_recovery now also heals zero
+            # counters, so old saves recover too.
+            player.games_remaining_injured = random.randint(2, 18)
+            _t = random.choices(injury_types[1:], weights=weights[1:])[0]
+            player.injury_type = _t
+            player.last_injury = _t
         
         # Performance statistics based on position and age
         if age >= 18:

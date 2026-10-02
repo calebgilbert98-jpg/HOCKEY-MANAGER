@@ -830,7 +830,21 @@ def update_player_happiness(player, team_games_played: int,
                             team=None) -> List[str]:
     """Weekly happiness update. Returns noteworthy event strings."""
     events = []
-    gp = getattr(player, "games_played", 0) or 0
+    # BUG-030: the base player.games_played attribute is a stale legacy
+    # field (always 0) -- live games live on player.stats.games_played.
+    # Reading the stale field made actual_share 0 for everyone, so the
+    # whole roster accumulated max playing-time concern and hit happiness
+    # 0 -> mass transfer requests on a 1st-place team.
+    try:
+        _st = getattr(player, 'stats', None)
+        gp = int(getattr(_st, 'games_played', 0) or 0)
+    except Exception:
+        gp = 0
+    if not gp:
+        try:
+            gp = int(getattr(player, "games_played", 0) or 0)
+        except Exception:
+            gp = 0
     status = getattr(player, "squad_status", "Rotation") or "Rotation"
     expected = STATUS_EXPECTED_SHARE.get(status, 0.4)
     happiness = getattr(player, "happiness", 70) or 70

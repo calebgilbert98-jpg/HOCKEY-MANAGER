@@ -1867,6 +1867,42 @@ NHL League Office""",
             for team in self.league.teams:
                 print(f"  - {team.team_name}")
 
+    def _heal_injured_player(self, team, player, _inj):
+        """Clear every injury flag on a recovered player. (Extracted so the
+        BUG-026 zero-counter path and the normal countdown path share one
+        heal sequence.) Never raises."""
+        try:
+            # Player is healed!
+            player.is_injured = False
+            player.injury_type = "None"
+            player.games_remaining_injured = 0
+            # B18 (fixed 2026-09-30): keep the legacy string consistent --
+            # stale injury_status values from the old hit path must not
+            # linger after recovery.
+            try:
+                player.injury_status = "Healthy"
+            except Exception:
+                pass
+            try:
+                player.in_concussion_protocol = False
+                # Re-aggravation window opens on return.
+                player.games_since_return = 0
+            except Exception:
+                pass
+            if _inj is not None:
+                try:
+                    _inj.clear_injury_flag(team, player)
+                except Exception:
+                    pass
+            print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
+
+            # Notify if it's the user's team
+            if hasattr(self, 'user_team') and team == self.user_team:
+                if hasattr(self, 'news_log'):
+                    self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
+        except Exception:
+            pass
+
     def _process_injury_recovery(self, teams_played=None):
         """Process injury recovery for all players.
 
@@ -1931,7 +1967,16 @@ NHL League Office""",
                                         f"{_added} more games.")})
                         except Exception:
                             pass
-                remaining = getattr(player, 'games_remaining_injured', 0)
+                remaining = getattr(player, 'games_remaining_injured', 0) or 0
+                if remaining <= 0:
+                    # BUG-026: seeded injuries (database_generator flags
+                    # is_injured=True with no countdown left) arrive here
+                    # with a zero counter. An injury with no games remaining
+                    # is over -- heal instead of stranding the player
+                    # sidelined forever (the decrement branch below only
+                    # fires on positive counters).
+                    self._heal_injured_player(team, player, _inj)
+                    continue
                 if remaining > 0:
                     player.games_remaining_injured = remaining - 1
                     # In-season stat honesty: every countdown tick is a game
@@ -1945,34 +1990,7 @@ NHL League Office""",
                         pass
 
                     if player.games_remaining_injured <= 0:
-                        # Player is healed!
-                        player.is_injured = False
-                        player.injury_type = "None"
-                        player.games_remaining_injured = 0
-                        # B18 (fixed 2026-09-30): keep the legacy string
-                        # consistent -- stale injury_status values from the
-                        # old hit path must not linger after recovery.
-                        try:
-                            player.injury_status = "Healthy"
-                        except Exception:
-                            pass
-                        try:
-                            player.in_concussion_protocol = False
-                            # Re-aggravation window opens on return.
-                            player.games_since_return = 0
-                        except Exception:
-                            pass
-                        if _inj is not None:
-                            try:
-                                _inj.clear_injury_flag(team, player)
-                            except Exception:
-                                pass
-                        print(f"✅ {player.first_name} {player.last_name} has recovered from injury!")
-
-                        # Notify if it's the user's team
-                        if hasattr(self, 'user_team') and team == self.user_team:
-                            if hasattr(self, 'news_log'):
-                                self.news_log.append({'date': self.current_date, 'story': f"🏥 {player.first_name} {player.last_name} has recovered from injury and is available."})
+                        self._heal_injured_player(team, player, _inj)
 
     def _process_suspension_service(self, teams_played=None):
         """Tick down DoPS suspensions once per GAME PLAYED (not per day).
@@ -2570,6 +2588,24 @@ class HockeyManagerGUI(tk.Tk):
         self._results_index_src = self.game_results
         self.waiver_list = []
         self.trade_block = []
+        # BUG-027: the wire is app state and never reached the save file --
+        # a save/load mid-waiver silently dropped the player from the wire
+        # (on_waivers stayed True on the pickled player, but the daily tick
+        # and process_waivers iterate waiver_list, so he was never claimed,
+        # never cleared, never demoted). Rehydrate from the player flags:
+        # any rostered player still flagged on_waivers belongs back on the
+        # wire with his remaining waiver_days intact. Harmless on fresh
+        # careers (no flags set). The in-session UI load path rehydrates
+        # separately in save_load_system.load_game (league objects are
+        # swapped there after __init__).
+        try:
+            _lg = getattr(self, 'league', None)
+            for _t in (getattr(_lg, 'teams', None) or []):
+                for _p in (getattr(_t, 'roster', None) or []):
+                    if getattr(_p, 'on_waivers', False) and _p not in self.waiver_list:
+                        self.waiver_list.append(_p)
+        except Exception:
+            pass
         
         # Initialize Season Flow system
         self.season_flow_panel = None
@@ -7310,6 +7346,14 @@ class HockeyManagerGUI(tk.Tk):
                             # Skip if date is past today
                             if item_date and item_date > self.current_date:
                                 break
+                            # AHL (and any non-NHL league) games live on the
+                            # same schedule list but are NEVER day-simmed --
+                            # the minors get a lightweight generated ledger
+                            # (ahl_system), not game sims. Letting them into
+                            # todays_games burned the 16-game daily budget and
+                            # silently dropped real NHL games from the sim.
+                            if item.get('league', 'NHL') != 'NHL':
+                                continue
                             # Playoff games live on the schedule for display
                             # but are simmed through the playoff bracket --
                             # never double-sim them here.
@@ -12284,6 +12328,37 @@ class HockeyManagerGUI(tk.Tk):
                         'faceoffs_won': _st.get('faceoffs_won', 0),
                         'faceoffs_lost': _st.get('faceoffs_lost', 0),
                     }
+            # GAP-001 (parity): the AdvGS records chance grades per game in
+            # sim.stats but never flushed them to season stats. Mirror the
+            # GameSim finalization flush so both engines feed the analytics
+            # integration's per-player aggregates. This block only runs for
+            # the AdvGS shape (GameSim has game_stats and skips it); the
+            # stats_from_events guard keeps preseason exhibitions and the
+            # GameSim path (already flushed in its finalization) from
+            # double-counting.
+            if stats_from_events:
+                try:
+                    for _tn, _pmap in (getattr(sim_engine, 'stats', {}) or {}).items():
+                        if not isinstance(_pmap, dict):
+                            continue
+                        for _pid, _st in _pmap.items():
+                            if not isinstance(_st, dict) or _pid not in by_id:
+                                continue
+                            _pl = by_id[_pid]
+                            try:
+                                if getattr(getattr(_pl, 'primary_position', None), 'name', '') == 'GOALIE':
+                                    continue
+                                for _g in ('a', 'b', 'c'):
+                                    _sk = f'grade_{_g}_shots'
+                                    _gk = f'grade_{_g}_goals'
+                                    setattr(_pl.stats, _sk,
+                                            (getattr(_pl.stats, _sk, 0) or 0) + (_st.get(_sk, 0) or 0))
+                                    setattr(_pl.stats, _gk,
+                                            (getattr(_pl.stats, _gk, 0) or 0) + (_st.get(_gk, 0) or 0))
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
         game_result = {
             'date': game_date,
             'home_team': home_team,

@@ -626,6 +626,179 @@ class GameSim:
     Stage 4: Physical play mechanics, defensive systems, and turnover tracking.
     Stage 5: Advanced goaltending mechanics, save types, and positioning systems.
     """
+    def _new_game_stats_entry(self, p):
+        """Fresh per-game stats dict for one player (BUG-031: extracted so
+        late-joining shooters can be initialized on demand instead of
+        crashing the game)."""
+        return {
+            'g': 0, 'a': 0, 'player': p,
+            # Shot tracking (Stage 1)
+            'shots_on_goal': 0,
+            'shot_attempts': 0,
+            'blocked_shots': 0,
+            'missed_shots': 0,
+            'shots_blocked': 0,
+            # Shot quality (Stage 1)
+            'high_danger_shots': 0,
+            'medium_danger_shots': 0,
+            'low_danger_shots': 0,
+            'shot_distance_total': 0,
+            'rebounds_created': 0,
+            'rebounds_scored': 0,
+            # Corsi events (Stage 1)
+            'corsi_for': 0,
+            'corsi_against': 0,
+            # Zone play (Stage 2)
+            'zone_entries': 0,
+            'zone_exits': 0,
+            'controlled_zone_entries': 0,
+            'dump_ins': 0,
+            'zone_time_offensive': 0,
+            'zone_time_defensive': 0,
+            'zone_starts_offensive': 0,
+            'zone_starts_defensive': 0,
+            # Possession (Stage 2)
+            'possession_time': 0,
+            'possession_gains': 0,
+            'possession_losses': 0,
+            'puck_battles_won': 0,
+            'puck_battles_lost': 0,
+            # Faceoffs (Stage 3)
+            'faceoffs_taken': 0,
+            'faceoffs_won': 0,
+            'faceoffs_lost': 0,
+            'faceoffs_neutral_zone': 0,
+            'faceoffs_offensive_zone': 0,
+            'faceoffs_defensive_zone': 0,
+            # Special teams (Stage 3)
+            'power_play_goals': 0,
+            'power_play_assists': 0,
+            'power_play_shots': 0,
+            'penalty_kill_goals': 0,
+            'penalty_kill_assists': 0,
+            'short_handed_goals': 0,
+            'power_play_time': 0,
+            'penalty_kill_time': 0,
+            # Physical play (Stage 4)
+            'hits': 0,
+            'hits_taken': 0,
+            # Chance grades (2026-09-28, per Muck): xG backbone
+            'grade_a_shots': 0, 'grade_b_shots': 0, 'grade_c_shots': 0,
+            'grade_a_goals': 0, 'grade_b_goals': 0, 'grade_c_goals': 0,
+            'takeaways': 0,
+            'giveaways': 0,
+            'blocked_shots_by': 0,  # Shots blocked by this player
+            'shots_blocked_against': 0,  # This player's shots blocked
+            'checks': 0,
+            'defensive_plays': 0,
+            'turnovers_forced': 0,
+            'turnovers_committed': 0,
+            'physical_penalties': 0,
+            # Goaltending (Stage 5)
+            'saves': 0,
+            'goals_against': 0,
+            'shots_against': 0,
+            'save_percentage': 0.0,
+            'goals_saved_above_expected': 0.0,
+            'high_danger_saves': 0,
+            'medium_danger_saves': 0,
+            'low_danger_saves': 0,
+            'glove_saves': 0,
+            'blocker_saves': 0,
+            'pad_saves': 0,
+            'stick_saves': 0,
+            'desperation_saves': 0,
+            'rebounds_allowed': 0,
+            'rebounds_controlled': 0,
+            'shutouts': 0,
+            'quality_starts': 0,
+            # Chemistry and line combinations (Stage 6)
+            'chemistry_bonus': 0.0,
+            'chemistry_goals': 0,
+            'chemistry_assists': 0,
+            'chemistry_rating': 50.0,  # Start neutral
+            'role_effectiveness': 0.0,
+            'line_matching_advantage': 0,
+            'coaching_bonus': 0.0,
+            'tactical_plays_successful': 0,
+            'tactical_plays_attempted': 0,
+            'linemate_synergy': {},  # Track chemistry with specific players
+            'system_fitness': 0.0,  # How well player fits current tactical system
+            
+            # Micro-events and game flow (Stage 7)
+            'momentum_events': 0,
+            'pressure_applied': 0.0,
+            'pressure_withstood': 0.0,
+            'micro_battles_won': 0,
+            'micro_battles_lost': 0,
+            'transition_success': 0,
+            'transition_failures': 0,
+            'situational_awareness': 0.0,
+            'clutch_performance': 0.0,
+            'flow_adaptation': 0.0,  # How well player adapts to game flow
+            'communication_events': 0,
+            'leadership_moments': 0,
+            
+            # Advanced analytics (Stage 8)
+            'expected_goals': 0.0,
+            'goals_above_expected': 0.0,
+            'war': 0.0,  # Wins Above Replacement
+            'par': 0.0,  # Points Above Replacement
+            'clutch_factor': 0.0,
+            'situational_impact': {},  # Impact in different situations
+            'predictive_performance': 0.0,  # How well performance matches predictions
+            'analytics_rating': 0.0,  # Overall analytics-based rating
+            'trend_direction': TrendDirection.STABLE,
+            'breakout_probability': 0.0,
+            'regression_risk': 0.0,
+            'optimal_usage': {},  # Analytics-suggested usage patterns
+            'real_time_adjustments': 0,
+            
+            # Stage 9 stats - Situational Awareness & AI
+            'ai_decisions_influenced': 0,
+            'situational_context_success': 0.0,
+            'adaptive_performance': 0.0,
+            'context_aware_rating': 0.0,
+            'ai_coaching_impact': 0.0,
+            'decision_confidence_affected': 0.0,
+            'intelligent_usage_optimization': 0.0,
+            'situational_adaptation_speed': 0.0,
+            'ai_learning_contribution': 0.0,
+            'context_recognition_accuracy': 0.0,
+            'strategic_awareness_impact': 0.0,
+            'momentum_ai_response': 0.0,
+            'game_state_awareness': 0.0,
+            
+            # Stage 10 stats - Machine Learning & Performance Prediction
+            'development_prediction': DevelopmentPhase.DEVELOPING,
+            'performance_trajectory': 0.0,
+            'injury_risk_score': 0.0,
+            'career_projection_confidence': 0.0,
+            'ml_learning_rate': 0.0,
+            'regression_prediction': 0.0,
+            'breakout_probability_ml': 0.0,
+            'optimal_deployment_score': 0.0,
+            'performance_variance': 0.0,
+            'prediction_accuracy': PredictionAccuracy.MODERATE,
+            'development_tracking_points': 0,
+            'ml_model_updates': 0,
+            'prediction_error_rate': 0.0
+        }
+
+    def _ensure_game_stats(self, player):
+        """BUG-031: a shooter/goalie not in game_stats (roster changed
+        between init and the event) must not crash the game -- the batch
+        catches the crash and SKIPS the entire game, corrupting standings."""
+        try:
+            _pid = player.id
+        except Exception:
+            return None
+        _gs = self.game_stats.get(_pid)
+        if _gs is None:
+            _gs = self._new_game_stats_entry(player)
+            self.game_stats[_pid] = _gs
+        return _gs
+
     def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
                  rivalries=None, series_game: int = 1, crowd_hype: float = 0.0,
                  atmosphere=None):
@@ -928,6 +1101,7 @@ class GameSim:
         # Enhanced stats tracking for Stages 1, 2 & 3
         # BUG-003: defaultdict so untracked on-ice players degrade,
         # never crash the batch sim. `in` checks are unaffected.
+        # BUG-031 (playthrough): _ensure_game_stats guards the write path.
         self.game_stats = defaultdict(_new_player_game_stats)
         for p in home_team.roster + away_team.roster:
             self.game_stats[p.id] = _new_player_game_stats(p)
@@ -2290,6 +2464,13 @@ class GameSim:
 
         # Flush per-game skater shots into season stats (goals/assists/PIM
         # are written live; shots were only in game_stats and never flushed).
+        # GAP-001: the chance-grade counters (grade_a/b/c_shots/goals) were
+        # recorded per game but never flushed -- the analytics integration's
+        # per-player season aggregates (advanced_metrics.ixg_grade,
+        # grade_a_share; awards_race; analytics_scouting) read exactly these
+        # fields off player.stats and always saw zero. Flush them here,
+        # same shape as the shots flush. Additive; getattr defaults keep
+        # old saves and goalies safe.
         for stats in self.game_stats.values():
             player = stats.get('player')
             if player is None:
@@ -2298,6 +2479,16 @@ class GameSim:
                 if getattr(getattr(player, 'primary_position', None), 'value', '') == 'G':
                     continue
                 player.stats.shots += stats.get('shots_on_goal', 0)
+                for _g in ('a', 'b', 'c'):
+                    _sk = f'grade_{_g}_shots'
+                    _gk = f'grade_{_g}_goals'
+                    try:
+                        setattr(player.stats, _sk,
+                                (getattr(player.stats, _sk, 0) or 0) + (stats.get(_sk, 0) or 0))
+                        setattr(player.stats, _gk,
+                                (getattr(player.stats, _gk, 0) or 0) + (stats.get(_gk, 0) or 0))
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -7680,6 +7871,8 @@ class GameSim:
         """
         Stage 3 Enhancement: Enhanced shot stats with special teams tracking.
         """
+        # BUG-031: ensure the shooter has a stats entry (see _ensure_game_stats).
+        self._ensure_game_stats(shooter)
         # Basic shot stats (Stage 1)
         # BUG-001: shooter can be a non-roster on-ice player (no game_stats
         # entry) -- skip stat recording rather than crashing the game.

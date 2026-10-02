@@ -13005,6 +13005,10 @@ class WaiversView(ctk.CTkFrame):
         self.app = app if app is not None else parent
         self._close_screen = None  # set by show_screen() or the WaiversWindow wrapper
         parent = self.app  # this __init__ addressed the app as `parent`; keep that
+        # BUG-028: populate_* methods read self.parent.tree_maps, but
+        # self.parent was never assigned (only the local `parent` was
+        # re-pointed at the app above) -> AttributeError on open.
+        self.parent = self.app
         self.configure(bg_color=self.app.BG_COLOR)
         
         # Main frame

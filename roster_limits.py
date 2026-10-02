@@ -90,10 +90,14 @@ def _all_players(team):
 
 def active_roster_count(team) -> int:
     """NHL 23-man count: active contracts on the NHL roster, emergency
-    fillers exempt (NHL emergency-recall exemption)."""
+    fillers exempt (NHL emergency-recall exemption). Players currently on
+    the waiver wire are excluded -- they're in transit off the roster and
+    the 2-day clock ticks in daily maintenance; counting them softlocked
+    the day advance (blocker armed, clock never ticked)."""
     try:
         return sum(1 for p in (getattr(team, "roster", None) or [])
-                   if has_active_contract(p) and not is_emergency_filler(p))
+                   if has_active_contract(p) and not is_emergency_filler(p)
+                   and not getattr(p, "on_waivers", False))
     except Exception:
         return 0
 

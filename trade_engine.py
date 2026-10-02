@@ -1763,17 +1763,26 @@ def _effective_outgoing_hit(p) -> int:
 def _retention_adjustment(assets, retention) -> int:
     """New dead-cap dollars a side keeps by retaining on outgoing assets.
 
-    ``retention`` maps player id -> pct (1-50). Pure helper so the cap
+    ``retention`` maps player id -> pct (1-50). Key format is normalized
+    (int and str ids both match) -- callers disagree on key type and a
+    missed lookup silently prices the deal WITHOUT the retention,
+    flipping AI accept/reject on cap grounds. Pure helper so the cap
     check and the UI meter agree.
     """
     total = 0
     if not retention:
         return 0
+    _norm = {}
+    for _k, _v in (retention or {}).items():
+        try:
+            _norm[str(_k)] = _v
+        except Exception:
+            continue
     for p in assets or []:
         if _is_pick(p):
             continue
         try:
-            pct = float(retention.get(getattr(p, "id", None), 0) or 0)
+            pct = float(_norm.get(str(getattr(p, "id", None)), 0) or 0)
         except Exception:
             pct = 0
         if pct > 0:
@@ -2924,11 +2933,16 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
     except Exception:
         pass
 
-    # -- Asset ownership: you can't trade what you don't own.
+    # -- Asset ownership: you can't trade what you don't own. Tradeable
+    # players live on three lists (roster, ahl_roster, prospects) -- the
+    # trade UIs resolve assets across all three, so the gate must too.
+    _tradeable_lists = ("roster", "ahl_roster", "prospects")
     for _src_team, _assets in ((user_team, user_assets),
                                (partner_team, partner_assets)):
         _sname = getattr(_src_team, "team_name", "?")
-        _roster = getattr(_src_team, "roster", None)
+        _all_owned = []
+        for _attr in _tradeable_lists:
+            _all_owned.extend(getattr(_src_team, _attr, None) or [])
         for a in _assets or []:
             if isinstance(a, DraftPick):
                 if str(getattr(a, "current_team", "") or "") != str(_sname):
@@ -2947,11 +2961,12 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     return _blocked(
                         f"The {getattr(a, 'year', '?')} "
                         f"{getattr(a, 'round', '?')} round pick is expired "
-                        f"-- that draft already happened.")
-            elif _roster is not None and a not in _roster:
+                        f"-- that draft already happened. No assets moved.")
+            elif a not in _all_owned:
                 _pname = getattr(a, "full_name", str(a))
                 return _blocked(
-                    f"{_pname} isn't on {_sname}'s roster.")
+                    f"{_pname} isn't on {_sname}'s roster, AHL roster, "
+                    f"or prospect list.")
 
     # R1 (roster limits): emergency fill-ins are league-exception recalls,
     # not trade assets -- they can never be moved. And neither club may be
@@ -3096,9 +3111,44 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
             return _blocked(
                 f"the deal leaves {getattr(_team, 'team_name', 'a club')} "
                 f"over the salary cap.")
+    def _source_roster_type(team, player):
+        # A traded player should land on the receiving club's matching
+        # list: prospects stay prospects, AHLers stay AHLers -- only NHL
+        # roster players join the NHL roster. remove_player() strips him
+        # from whichever list he was on; add_player(player, roster_type)
+        # puts him on the matching one.
+        for _attr, _rtype in (("prospects", "prospects"),
+                              ("ahl_roster", "ahl"),
+                              ("roster", "roster")):
+            try:
+                if player in (getattr(team, _attr, None) or []):
+                    return _rtype
+            except Exception:
+                continue
+        return "roster"
+
+    def _move_pick(pick, src_team, dst_team):
+        # Route picks through the Team methods so they leave the seller's
+        # draft_picks dict and land in the buyer's (a bare current_team
+        # flip orphaned the pick object -- invisible to the buyer, dead
+        # paper in the seller's list).
+        try:
+            src_team.trade_pick(pick, dst_team.team_name, trade_details="trade")
+        except Exception:
+            pick.current_team = dst_team.team_name
+            pick.traded_from = src_team.team_name
+        try:
+            dst_team.receive_pick(pick)
+        except Exception:
+            if pick.year not in dst_team.draft_picks:
+                dst_team.draft_picks[pick.year] = []
+            if pick not in dst_team.draft_picks[pick.year]:
+                dst_team.draft_picks[pick.year].append(pick)
+            pick.current_team = dst_team.team_name
+
     for a in user_assets:
         if isinstance(a, DraftPick):
-            a.current_team = partner_team.team_name
+            _move_pick(a, user_team, partner_team)
         else:
             # A traded player leaves the wire: the acquiring club pays his
             # full hit from today, not the $0 waiver shed of his old club.
@@ -3107,19 +3157,21 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                 a.waiver_days = 0
             except Exception:
                 pass
+            _rtype = _source_roster_type(user_team, a)
             user_team.remove_player(a)
-            partner_team.add_player(a)
+            partner_team.add_player(a, roster_type=_rtype)
     for a in partner_assets:
         if isinstance(a, DraftPick):
-            a.current_team = user_team.team_name
+            _move_pick(a, partner_team, user_team)
         else:
             try:
                 a.on_waivers = False
                 a.waiver_days = 0
             except Exception:
                 pass
+            _rtype = _source_roster_type(partner_team, a)
             partner_team.remove_player(a)
-            user_team.add_player(a)
+            user_team.add_player(a, roster_type=_rtype)
 
     # Retained salary: record each term against the club that traded the
     # player away. Terms come from the PREFLIGHTED set (_all_terms, with

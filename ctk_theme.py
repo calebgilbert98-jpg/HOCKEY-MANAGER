@@ -119,11 +119,13 @@ def heading(parent, text, size=18, **kw):
     return ctk.CTkLabel(parent, text=text, **kw)
 
 
-def body(parent, text, size=12, dim=False, **kw):
+def body(parent, text, size=12, dim=False, bold=False, **kw):
     if "font" not in kw:
         from ui_scale import scaled
         size = scaled(size)
-    kw.setdefault("font", ("Segoe UI", size))
+    # BUG-029: callers pass bold=True (media center fines total); CTkLabel
+    # rejects a bare `bold` kwarg, so honor it here via the font instead.
+    kw.setdefault("font", ("Segoe UI", size, "bold") if bold else ("Segoe UI", size))
     kw.setdefault("text_color", TEXT_DIM if dim else TEXT)
     return ctk.CTkLabel(parent, text=text, **kw)
 

@@ -1385,6 +1385,26 @@ class GameSaveManager:
                 except Exception as _se:
                     print(f"Mirror re-sync skipped (non-fatal): {_se}")
 
+                # BUG-027: the waiver wire is app state, but a load swaps the
+                # league objects -- rebuild the wire from the restored
+                # players' on_waivers flags so a mid-waiver save/load can't
+                # strand a player on the wire forever (never claimed,
+                # never cleared). Mirrors the rehydration in the GUI
+                # __init__ (headless load-then-build path).
+                try:
+                    _app2 = getattr(self.game_manager, 'app', None)
+                    _lg2 = getattr(self.game_manager, 'league', None)
+                    if _app2 is not None and _lg2 is not None:
+                        _wl = getattr(_app2, 'waiver_list', None)
+                        if isinstance(_wl, list):
+                            del _wl[:]
+                            for _t in (getattr(_lg2, 'teams', None) or []):
+                                for _p in (getattr(_t, 'roster', None) or []):
+                                    if getattr(_p, 'on_waivers', False) and _p not in _wl:
+                                        _wl.append(_p)
+                except Exception as _wle:
+                    print(f"waiver wire rehydration skipped (non-fatal): {_wle}")
+
                 # Update UI if available
                 if hasattr(self.game_manager, 'update_all_views'):
                     self.game_manager.update_all_views()
