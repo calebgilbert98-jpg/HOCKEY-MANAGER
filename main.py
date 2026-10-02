@@ -4016,6 +4016,26 @@ class HockeyManagerGUI(tk.Tk):
         right_menu_frame = tk.Frame(menu_bar, bg=menu_bg)
         right_menu_frame.grid(row=0, column=2, sticky="e")
 
+        # --- Date + next-game countdown (Muck 2026-10-02) ---
+        # Fills the blank space on the right side of the menu bar so the
+        # user always knows what date they're at and how far the next game is.
+        try:
+            date_frame = tk.Frame(right_menu_frame, bg=menu_bg)
+            date_frame.pack(side="left", padx=(0, 16))
+            self._menu_date_label = tk.Label(
+                date_frame, text="", bg=menu_bg,
+                fg=AppColors.TEXT_PRIMARY,
+                font=(self.FONT_FAMILY, 11, "bold"))
+            self._menu_date_label.pack(side="left")
+            self._menu_countdown_label = tk.Label(
+                date_frame, text="", bg=menu_bg,
+                fg=AppColors.TEXT_SECONDARY,
+                font=(self.FONT_FAMILY, 10))
+            self._menu_countdown_label.pack(side="left", padx=(8, 0))
+        except Exception:
+            self._menu_date_label = None
+            self._menu_countdown_label = None
+
         self._create_dropdown_menu(right_menu_frame, "Save/Load",
             tooltip="Save/Load: save your game or load a previous save", menu_items={
             "Save Game": self.open_save_window,
@@ -4029,6 +4049,12 @@ class HockeyManagerGUI(tk.Tk):
         # Apply the inbox priority styling for the current unread state.
         try:
             self.update_inbox_notification()
+        except Exception:
+            pass
+
+        # Populate the menu-bar date + countdown now that the labels exist.
+        try:
+            self.refresh_menu_date()
         except Exception:
             pass
 
@@ -4126,6 +4152,11 @@ class HockeyManagerGUI(tk.Tk):
     def refresh_next_day_button(self):
         """Update the fixed Next Day button label/state from continue state."""
         try:
+            # Keep the menu-bar date + next-game countdown in sync.
+            self.refresh_menu_date()
+        except Exception:
+            pass
+        try:
             if self._mp_host_mode() or self._mp_client_mode():
                 # MP ready-state labels are painted by
                 # _mp_refresh_continue_ui (which covers _next_day_btn too).
@@ -4139,6 +4170,87 @@ class HockeyManagerGUI(tk.Tk):
             btn.configure(text=text)
         except Exception:
             pass
+
+    def refresh_menu_date(self):
+        """Update the date + next-game countdown shown in the top menu bar."""
+        try:
+            date_label = getattr(self, '_menu_date_label', None)
+            countdown_label = getattr(self, '_menu_countdown_label', None)
+            if date_label is None or not date_label.winfo_exists():
+                return
+            # Date matches the dashboard format: "Sun, Sep 27, 2026"
+            current = getattr(self, 'current_date', None)
+            date_label.configure(
+                text=current.strftime("%a, %b %d, %Y") if current else "")
+            if countdown_label is not None and countdown_label.winfo_exists():
+                days = self._get_next_game_days_away()
+                if days is None:
+                    countdown_label.configure(text="")
+                elif days <= 0:
+                    countdown_label.configure(text="\u2022 Game today!")
+                    try:
+                        from modern_ui import AppColors as _AC
+                        countdown_label.configure(fg=_AC.ACCENT)
+                    except Exception:
+                        pass
+                elif days == 1:
+                    countdown_label.configure(text="\u2022 Game tomorrow")
+                else:
+                    countdown_label.configure(text=f"\u2022 Game in {days} days")
+        except Exception:
+            pass
+
+    def _get_next_game_days_away(self):
+        """Days until the user's team's next scheduled game (None if unknown)."""
+        try:
+            user_team = getattr(self, 'user_team', None)
+            league = getattr(self, 'league', None)
+            current = getattr(self, 'current_date', None)
+            if user_team is None or league is None or current is None:
+                return None
+            schedule = getattr(league, 'schedule', None)
+            if not schedule:
+                return None
+            best = None
+            user_name = getattr(user_team, 'team_name', None)
+            def _is_user(t):
+                try:
+                    if t is user_team:
+                        return True
+                    return bool(user_name) and getattr(t, 'team_name', None) == user_name
+                except Exception:
+                    return False
+            for entry in schedule:
+                try:
+                    if isinstance(entry, dict):
+                        # Dict format: {'date':..., 'home_team':..., 'away_team':...}
+                        if _is_user(entry.get('home_team')) or \
+                           _is_user(entry.get('away_team')):
+                            gd = entry.get('date')
+                        else:
+                            continue
+                    elif isinstance(entry, (tuple, list)) and len(entry) >= 3:
+                        # Tuple format: (game_date, home, away) — skip NHL_EVENTs
+                        gd, home, away = entry[0], entry[1], entry[2]
+                        if home == 'NHL_EVENT' or away == 'NHL_EVENT':
+                            continue
+                        if not (_is_user(home) or _is_user(away)):
+                            continue
+                    else:
+                        continue
+                    if gd is None or gd < current:
+                        continue
+                    delta = (gd - current).days
+                    if best is None or delta < best:
+                        best = delta
+                        if best == 0:
+                            break
+                except Exception:
+                    continue
+            return best
+        except Exception:
+            return None
+
     def _create_nav_pill(self, parent, text, command, side="left", tooltip=None):
         """Create a pill-style navigation button for the top menu bar.
 
