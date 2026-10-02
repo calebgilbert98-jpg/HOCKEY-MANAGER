@@ -10757,6 +10757,18 @@ class HockeyManagerGUI(tk.Tk):
         """Process daily maintenance tasks with performance optimizations"""
         # Only run heavy tasks on specific days to reduce CPU load
 
+        # Eastside-style auto fillers (user side): release fill-ins no
+        # longer needed and auto-summon any dressed-lineup shortfall, so
+        # the user can always ice a team exactly like AI clubs. Guarded:
+        # a roster_limits bug can never break day advancement.
+        try:
+            import roster_limits as _rl
+            _utm = getattr(self, "user_team", None)
+            if _utm is not None:
+                _rl.user_roster_compliance(_utm)
+        except Exception:
+            pass
+
         # Narrative ledger clock: one cheap setup per day. Drives callback
         # cooldowns; season rollover prunes old low-weight events once.
         try:
