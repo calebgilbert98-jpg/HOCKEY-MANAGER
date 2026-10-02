@@ -6665,6 +6665,56 @@ class HockeyManagerGUI(tk.Tk):
                            'advancing the day.'),
                 'action': ('Open Fantasy Draft', self.open_fantasy_draft_window),
             })
+        # DRAFT AGENCY (Muck 2026-10-02): a parked entry draft with unmade
+        # user picks blocks the day -- the rebuild's keystone moment never
+        # auto-resolves. The action opens the war room directly.
+        try:
+            _lg = getattr(self, 'league', None)
+            _sess = getattr(_lg, 'entry_draft_session', None) if _lg else None
+            if _sess is not None:
+                try:
+                    from draft_night import EntryDraftSession as _EDS
+                    _is_sess = isinstance(_sess, _EDS)
+                except Exception:
+                    _is_sess = False
+                if _is_sess and not _sess.is_complete():
+                    try:
+                        _ut = getattr(self, 'user_team', None)
+                        _uname = getattr(_ut, 'team_name', '') if _ut else ''
+                    except Exception:
+                        _uname = ''
+                    _upicks = []
+                    if _uname:
+                        try:
+                            _made = {int(p.get('overall', -1))
+                                     for p in (_sess.picks or [])}
+                        except Exception:
+                            _made = set()
+                        for _slot in (_sess.slots or []):
+                            try:
+                                if (str(_slot.get('owner', '')) == _uname
+                                        and int(_slot.get('overall', -1))
+                                        not in _made):
+                                    _upicks.append(int(_slot.get('overall')))
+                            except Exception:
+                                continue
+                    if _upicks:
+                        _upicks.sort()
+                        blockers.append({
+                            'id': 'entry_draft',
+                            'title': 'Entry draft awaiting your picks',
+                            'detail': (
+                                f"You hold {len(_upicks)} pick"
+                                f"{'s' if len(_upicks) != 1 else ''} in the "
+                                f"{getattr(_sess, 'year', '')} NHL Entry Draft "
+                                f"(first: #{_upicks[0]} overall). Your picks "
+                                f"are never auto-drafted -- make them in the "
+                                f"war room or Sim Pick via your head scout."),
+                            'action': ('Open Draft War Room',
+                                       self.open_draft_window),
+                        })
+        except Exception:
+            pass
         # Salary cap compliance: an over-cap roster must shed salary before
         # the day can advance (real NHL rule -- rosters must be cap-compliant).
         try:
@@ -16548,10 +16598,17 @@ class HockeyManagerGUI(tk.Tk):
         conductor, shared with the automated season flow. The war room's
         _do_ai_pick uses the same ai_select_prospect, so all three paths
         pick identically.
+
+        DRAFT AGENCY (Muck 2026-10-02): user picks are only auto-drafted
+        in bulk-sim harness mode. A real user session parks the draft --
+        the conductor defers and the continue-blocker routes the user to
+        the war room.
         """
         try:
             from draft_night import conduct_entry_draft
-            picks = conduct_entry_draft(self.league, draft_year, app=self)
+            picks = conduct_entry_draft(
+                self.league, draft_year, app=self,
+                allow_user_autodraft=getattr(self, '_bulk_simming', False))
             if picks:
                 print(f"Auto-draft complete: {len(picks)} picks made.",
                       flush=True)
