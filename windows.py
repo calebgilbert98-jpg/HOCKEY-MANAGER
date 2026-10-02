@@ -323,6 +323,15 @@ class RosterView(ctk.CTkFrame):
         # Player maps for treeviews
         self.player_maps = {'nhl': {}, 'ahl': {}, 'prospects': {}}
 
+        # FM/Eastside-style player views (player_views.py): per-tab selected
+        # view name; 'Club View' is the screen's native column set.
+        self._roster_view_name = {'nhl': 'Club View', 'ahl': 'Club View',
+                                  'prospects': 'Club View'}
+        self._club_view_columns = {}
+        self._roster_view_ctx_obj = None  # lazy ViewContext(mode='full')
+        self._roster_filterbars = {}
+        self._roster_view_selectors = {}
+
         # Current tab names (counts change -> tabview.rename)
         self._tab_names = {}
 
@@ -535,6 +544,7 @@ class RosterView(ctk.CTkFrame):
         }
 
         self.nhl_tree = self.create_enhanced_treeview(nhl_frame, nhl_columns, 'nhl')
+        self._club_view_columns['nhl'] = nhl_columns
 
         # NHL roster summary
         self.create_roster_summary(nhl_frame, 'nhl')
@@ -563,6 +573,7 @@ class RosterView(ctk.CTkFrame):
         }
 
         self.ahl_tree = self.create_enhanced_treeview(ahl_frame, ahl_columns, 'ahl')
+        self._club_view_columns['ahl'] = ahl_columns
 
         # AHL roster summary
         self.create_roster_summary(ahl_frame, 'ahl')
@@ -591,6 +602,7 @@ class RosterView(ctk.CTkFrame):
         }
 
         self.prospects_tree = self.create_enhanced_treeview(prospects_frame, prospects_columns, 'prospects')
+        self._club_view_columns['prospects'] = prospects_columns
 
         # Prospects summary
         self.create_roster_summary(prospects_frame, 'prospects')
@@ -1129,6 +1141,69 @@ class RosterView(ctk.CTkFrame):
             self._secondary_button(actions, text="Rights Watch",
                                    command=self.open_rights_watch).pack(side="left", padx=3)
 
+        # ---- FM/Eastside-style view selector (additive) ----
+        from player_view_ui import ViewSelector
+        selector = ViewSelector(
+            actions, default_label="Club View",
+            initial=self._roster_view_name.get(roster_type, "Club View"),
+            on_change=lambda name, rt=roster_type: self._set_roster_view(rt, name))
+        selector.pack(side="left", padx=(12, 3))
+        self._roster_view_selectors[roster_type] = selector
+
+        # ---- Elite filter bar (additive): text search + attribute thresholds
+        from player_filters import FilterBar
+        filterbar = FilterBar(parent,
+                              on_change=self._refresh_all_roster_tabs)
+        filterbar.pack(fill="x", padx=10, pady=(6, 0))
+        self._roster_filterbars[roster_type] = filterbar
+
+    # ------------------------------------------------------------------
+    # Player views (FM/Eastside-style column presets)
+    # ------------------------------------------------------------------
+    def _roster_view_ctx(self):
+        if self._roster_view_ctx_obj is None:
+            from player_views import ViewContext
+            self._roster_view_ctx_obj = ViewContext(app=self.app, mode="full")
+        return self._roster_view_ctx_obj
+
+    def _set_roster_view(self, roster_type, view_name):
+        self._roster_view_name[roster_type] = view_name
+        self._apply_roster_view(roster_type)
+
+    def _roster_view_columns(self, roster_type):
+        """Ordered {col_key: (header, width)} for the tab's current view."""
+        view_name = self._roster_view_name.get(roster_type, "Club View")
+        if view_name == "Club View":
+            return dict(self._club_view_columns.get(roster_type, {}))
+        from player_views import get_view_columns, COLUMN_DEFS
+        cols = {"select": ("\u2610", 30)}
+        for key in get_view_columns(view_name) or []:
+            d = COLUMN_DEFS.get(key)
+            if d is not None:
+                cols[key] = (d.header, d.width)
+        return cols
+
+    def _apply_roster_view(self, roster_type):
+        """Reconfigure the tab's tree columns for the selected view."""
+        tree = {"nhl": getattr(self, "nhl_tree", None),
+                "ahl": getattr(self, "ahl_tree", None),
+                "prospects": getattr(self, "prospects_tree", None)
+                }.get(roster_type)
+        if tree is None:
+            return
+        cols = self._roster_view_columns(roster_type)
+        if not cols:
+            return
+        tree.configure(columns=list(cols.keys()))
+        for col, (text, width) in cols.items():
+            tree.heading(col, text=text,
+                         command=lambda c=col: self.sort_treeview(tree, c, roster_type))
+            tree.column(col, width=width,
+                        anchor="w" if col in ("name",) else "center")
+        self.sort_column = None
+        self.sort_reverse = False
+        self.update_roster_tab(roster_type)
+
     # ------------------------------------------------------------------
     # Tables
     # ------------------------------------------------------------------
@@ -1205,7 +1280,7 @@ class RosterView(ctk.CTkFrame):
         self._secondary_button(selection, text="Clear Selection",
                                command=lambda: self.clear_selection(roster_type)).pack(side="left", padx=3)
 
-    def _player_passes_filters(self, player):
+    def _player_passes_filters(self, player, roster_type=None):
         """True when the player matches the roster toolbar filters."""
         f = self.roster_filters
         pos_filter = f['position'].get()
@@ -1229,6 +1304,13 @@ class RosterView(ctk.CTkFrame):
                     return False
         except (ValueError, TypeError):
             pass
+        # Elite filter bar (text search + attribute thresholds), if present.
+        if roster_type is not None:
+            fb = self._roster_filterbars.get(roster_type)
+            if fb is not None:
+                pf = fb.get_filter()
+                if not pf.is_empty() and not pf.matches(player, self._roster_view_ctx()):
+                    return False
         return True
 
     def _roster_filters_active(self):
@@ -1241,6 +1323,12 @@ class RosterView(ctk.CTkFrame):
             for key in ('age_min', 'age_max', 'overall_min'):
                 entry = f.get(key)
                 if entry is not None and str(entry.get()).strip():
+                    return True
+        except Exception:
+            pass
+        try:
+            for fb in (getattr(self, '_roster_filterbars', None) or {}).values():
+                if fb is not None and not fb.get_filter().is_empty():
                     return True
         except Exception:
             pass
@@ -1380,14 +1468,64 @@ class RosterView(ctk.CTkFrame):
         self._secondary_button(_btn_row, text="Close",
                                command=dlg.destroy).pack(side="left", padx=6)
 
+    def _populate_roster_tree_view(self, tree, players, roster_type, view_name):
+        """Populate the tree from a player_views column preset.
+
+        First column stays the selection checkbox so bulk actions keep
+        working; the rest come from the shared view definition.
+        """
+        from player_views import get_view_columns, column_text
+        cols = [c for c in (get_view_columns(view_name) or []) if c]
+        ctx = self._roster_view_ctx()
+        for player in sorted(players, key=lambda p: p.overall_rating(),
+                             reverse=True):
+            if not self._player_passes_filters(player, roster_type):
+                continue
+            is_selected = player.id in self.selected_players[roster_type]
+            checkbox = "\u2611" if is_selected else "\u2610"
+            values = [checkbox] + [column_text(c, player, ctx) for c in cols]
+            item_id = tree.insert('', 'end', values=values)
+            self.player_maps[roster_type][item_id] = player
+            tags = []
+            if is_selected:
+                tags.append('selected')
+            try:
+                import condition_ui as _cui
+                if (_cui.injury_status(player) or 'Healthy') != 'Healthy':
+                    tags.append('injured')
+            except Exception:
+                pass
+            if tags:
+                tree.item(item_id, tags=tags)
+        self._update_filterbar_count(tree, players, roster_type)
+        if self._roster_filters_active():
+            set_tree_empty_state(tree, "No players match your filters")
+        else:
+            set_tree_empty_state(tree, "No players on this roster")
+
+    def _update_filterbar_count(self, tree, players, roster_type):
+        fb = self._roster_filterbars.get(roster_type)
+        if fb is not None:
+            try:
+                fb.set_count(len(tree.get_children()), len(players))
+            except Exception:
+                pass
+
     def populate_roster_tree(self, tree, players, roster_type):
         """Populate table with player data."""
         # Clear existing items
         tree.delete(*tree.get_children())
         self.player_maps[roster_type] = {}
 
+        # FM-style alternate view: column set comes from player_views.
+        view_name = self._roster_view_name.get(roster_type, "Club View")
+        if view_name != "Club View":
+            self._populate_roster_tree_view(tree, players, roster_type,
+                                            view_name)
+            return
+
         for player in sorted(players, key=lambda p: p.overall_rating(), reverse=True):
-            if not self._player_passes_filters(player):
+            if not self._player_passes_filters(player, roster_type):
                 continue
             # Selection checkbox
             is_selected = player.id in self.selected_players[roster_type]
@@ -1501,6 +1639,7 @@ class RosterView(ctk.CTkFrame):
                 tree.item(item_id, tags=tags)
 
         # Friendly empty state instead of a blank table.
+        self._update_filterbar_count(tree, players, roster_type)
         if self._roster_filters_active():
             set_tree_empty_state(tree, "No players match your filters")
         else:
@@ -1739,6 +1878,13 @@ class RosterView(ctk.CTkFrame):
             self.sort_column = col
             self.sort_reverse = False
 
+        # FM-style views sort on real values (ranges collapse to midpoints),
+        # not on display text.
+        view_name = self._roster_view_name.get(roster_type, "Club View")
+        if view_name != "Club View" and col != "select":
+            self._sort_treeview_by_view(tree, col, roster_type)
+            return
+
         # Get all items
         items = list(tree.get_children())
 
@@ -1780,6 +1926,39 @@ class RosterView(ctk.CTkFrame):
 
         # Reorder items in tree
         for i, item_id in enumerate(items):
+            tree.move(item_id, '', i)
+
+    def _sort_treeview_by_view(self, tree, col, roster_type):
+        """Sort a view-driven tree by the column's true sort key.
+
+        Numerics sort best-first on first click (FM-style); text A-Z.
+        Rows with no value always sink to the bottom.
+        """
+        from player_views import column_sort
+        ctx = self._roster_view_ctx()
+        pmap = self.player_maps.get(roster_type, {})
+
+        numeric, textual, missing = [], [], []
+        for item_id in tree.get_children():
+            player = pmap.get(item_id)
+            try:
+                v = column_sort(col, player, ctx) if player is not None else None
+            except Exception:
+                v = None
+            name = getattr(player, "full_name", "") or ""
+            if v is None:
+                missing.append(item_id)
+            elif isinstance(v, (int, float)):
+                numeric.append((v, name.lower(), item_id))
+            else:
+                textual.append((str(v).lower(), item_id))
+
+        numeric.sort(key=lambda r: (r[0], r[1]),
+                     reverse=not self.sort_reverse)
+        textual.sort(key=lambda r: r[0], reverse=self.sort_reverse)
+        ordered = ([iid for _, _, iid in numeric] +
+                   [iid for _, iid in textual] + missing)
+        for i, item_id in enumerate(ordered):
             tree.move(item_id, '', i)
 
     # ------------------------------------------------------------------
@@ -6473,9 +6652,22 @@ class ScoutingView(ctk.CTkFrame):
                               "Goalies", "Top 50", "Not Scouted")],
             self._set_prospect_filter, self.app.FONT_FAMILY)
         self._paint_prospect_pills()
-        ttk.Entry(top_row, textvariable=self.search_var, width=14).pack(side='left', padx=4)
-        ttk.Button(top_row, text="Search", command=self._refresh_prospects,
-                   style='Secondary.TButton').pack(side='left')
+        # FM/Eastside-style view selector (column presets) -- additive.
+        from player_view_ui import ViewSelector
+        self._scout_view_name = "Scouting Board"
+        self._scout_view_ctx = None
+        self._scout_sort_col = None
+        self._scout_sort_rev = False
+        self._scout_selector = ViewSelector(
+            top_row, default_label="Scouting Board",
+            on_change=self._set_scout_view)
+        self._scout_selector.pack(side='left', padx=4)
+        # Elite filter bar (text search + attribute thresholds) -- additive.
+        # It replaces the old single search box (kept as fallback below).
+        from player_filters import FilterBar
+        self._scout_filterbar = FilterBar(center,
+                                          on_change=self._refresh_prospects)
+        self._scout_filterbar.pack(fill='x', pady=(0, 4))
 
         self.prospects_tree = self.app._create_treeview(
             center, {'rank': ('#', 36), 'name': ('Name', 140), 'pos': ('Pos', 40),
@@ -6483,6 +6675,9 @@ class ScoutingView(ctk.CTkFrame):
                      'status': ('Status', 90)}, height=11)
         self.prospects_tree.pack(fill='both', expand=True, pady=(0, 6))
         self.prospects_tree.bind('<<TreeviewSelect>>', self._on_prospect_selected)
+        # Right-click -> player card + scouting actions (same grammar as
+        # the roster and pro-scouting lists).
+        self.prospects_tree.bind('<Button-3>', self._on_prospect_right_click)
         for g in self.scmod.GRADE_ORDER:
             self.prospects_tree.tag_configure(f"pot_{g}",
                                               foreground=self.scmod.grade_color(g))
@@ -6679,9 +6874,18 @@ class ScoutingView(ctk.CTkFrame):
         elif ft == "Not Scouted":
             reports = self.app.user_team.scouting_reports
             all_p = [p for p in all_p if p.id not in reports]
-        q = self.search_var.get().lower().strip()
-        if q:
-            all_p = [p for p in all_p if q in p.full_name.lower()]
+        # Elite filter bar: text search + attribute thresholds.
+        # Thresholds evaluate through the scout-perception lens, so a
+        # barely-scouted prospect filters on what you actually know.
+        fb = getattr(self, '_scout_filterbar', None)
+        if fb is not None:
+            pf = fb.get_filter()
+            fq = (pf.text or "").lower().strip()
+            if fq:
+                all_p = [p for p in all_p if fq in p.full_name.lower()]
+            if pf.thresholds:
+                ctx = self._scout_view_ctx_fn()
+                all_p = [p for p in all_p if pf.matches(p, ctx)]
         return all_p
 
     def _set_prospect_filter(self, value):
@@ -6694,10 +6898,109 @@ class ScoutingView(ctk.CTkFrame):
         for value, btn in getattr(self, '_prospect_pills', {}).items():
             btn.set_selected(value == current)
 
+    # ------------------------------------------------------------------
+    # FM/Eastside-style player views for the prospect pool
+    # ------------------------------------------------------------------
+    def _scout_view_ctx_fn(self):
+        if self._scout_view_ctx is None:
+            from player_views import ViewContext
+            self._scout_view_ctx = ViewContext(app=self.app, mode="scouted")
+        return self._scout_view_ctx
+
+    def _set_scout_view(self, name):
+        self._scout_view_name = name
+        self._scout_sort_col = None
+        self._scout_sort_rev = False
+        self._apply_scout_view()
+
+    def _apply_scout_view(self):
+        from player_views import get_view_columns, COLUMN_DEFS
+        tree = self.prospects_tree
+        name = self._scout_view_name
+        if name == "Scouting Board":
+            cols = {'rank': ('#', 36), 'name': ('Name', 140),
+                    'pos': ('Pos', 40), 'age': ('Age', 36),
+                    'nat': ('Nat', 70), 'pot': ('Pot', 80),
+                    'status': ('Status', 90)}
+        else:
+            cols = {}
+            for key in get_view_columns(name) or []:
+                d = COLUMN_DEFS.get(key)
+                if d is not None:
+                    cols[key] = (d.header, d.width)
+        tree.configure(columns=list(cols.keys()))
+        for col, (text, width) in cols.items():
+            if name == "Scouting Board":
+                tree.heading(col, text=text,
+                             command=lambda c=col, t=tree:
+                             self.app._sort_treeview_generic(t, c))
+            else:
+                tree.heading(col, text=text,
+                             command=lambda c=col: self._sort_prospects(c))
+            tree.column(col, width=width,
+                        anchor='w' if col == 'name' else 'center')
+        self._refresh_prospects()
+
+    def _sort_prospects(self, col):
+        """Value-based sort for view-driven prospect columns."""
+        from player_views import column_sort
+        tree = self.prospects_tree
+        if self._scout_sort_col == col:
+            self._scout_sort_rev = not self._scout_sort_rev
+        else:
+            self._scout_sort_col = col
+            self._scout_sort_rev = False
+        rev = self._scout_sort_rev
+        ctx = self._scout_view_ctx_fn()
+        tm = self.app.tree_maps.get(tree, {})
+        numeric, textual, missing = [], [], []
+        for item_id in tree.get_children():
+            p = tm.get(item_id)
+            try:
+                v = column_sort(col, p, ctx) if p is not None else None
+            except Exception:
+                v = None
+            nm = getattr(p, "full_name", "") or ""
+            if v is None:
+                missing.append(item_id)
+            elif isinstance(v, (int, float)):
+                numeric.append((v, nm.lower(), item_id))
+            else:
+                textual.append((str(v).lower(), item_id))
+        numeric.sort(key=lambda r: (r[0], r[1]), reverse=not rev)
+        textual.sort(key=lambda r: r[0], reverse=rev)
+        ordered = ([iid for _, _, iid in numeric] +
+                   [iid for _, iid in textual] + missing)
+        for i, item_id in enumerate(ordered):
+            tree.move(item_id, '', i)
+
+    def _refresh_prospects_view(self, tree, tm):
+        """Populate the prospect tree from a shared view definition."""
+        from player_views import get_view_columns, column_text
+        cols = [c for c in (get_view_columns(self._scout_view_name) or [])
+                if c]
+        ctx = self._scout_view_ctx_fn()
+        for p in self._filtered_prospects()[:400]:
+            values = [column_text(c, p, ctx) for c in cols]
+            item = tree.insert('', 'end', values=values)
+            tm[item] = p
+        fb = getattr(self, '_scout_filterbar', None)
+        if fb is not None:
+            try:
+                total = len(getattr(self.app.league, 'draft_prospects', [])
+                            or [])
+                fb.set_count(len(tree.get_children()), total)
+            except Exception:
+                pass
+
     def _refresh_prospects(self):
         tree = self.prospects_tree
         tree.delete(*tree.get_children())
         tm = self.app.tree_maps.setdefault(tree, {})
+        tm.clear()
+        if self._scout_view_name != "Scouting Board":
+            self._refresh_prospects_view(tree, tm)
+            return
         reports = self.app.user_team.scouting_reports
         assigns = getattr(self.app, 'scouting_assignments', {})
         for i, p in enumerate(self._filtered_prospects()[:400]):
@@ -6730,6 +7033,25 @@ class ScoutingView(ctk.CTkFrame):
         tm = self.app.tree_maps.get(self.prospects_tree, {})
         self.selected_prospect = tm.get(sel[0]) if sel else None
         self._show_report()
+
+    def _on_prospect_right_click(self, event):
+        """Right-click a prospect: player card + scouting actions."""
+        item = self.prospects_tree.identify_row(event.y)
+        if not item:
+            return
+        self.prospects_tree.selection_set(item)
+        tm = self.app.tree_maps.get(self.prospects_tree, {})
+        player = tm.get(item)
+        if player is None:
+            return
+        self.selected_prospect = player
+        from player_context_menu import PlayerContextMenu
+        PlayerContextMenu(self.app).show_context_menu(
+            event, player,
+            additional_options=[
+                ("Assign Selected Scout", self._assign_scout_to_prospect),
+                ("Add to Draft Board", self._add_prospect_to_board),
+            ])
 
     def _show_report(self):
         p = self.selected_prospect

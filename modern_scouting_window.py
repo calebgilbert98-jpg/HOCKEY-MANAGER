@@ -233,13 +233,9 @@ class ModernScoutingView(ctk.CTkFrame):
         self.team_combo.bind('<<ComboboxSelected>>', self._filter_players)
         
         # Name search
-        tk.Label(filter_row, text="Search:", bg=self.app.CONTENT_BG, 
-                fg=self.app.TEXT_COLOR).pack(side='left')
-        
+        # Name search lives in the elite filter bar now (StringVar kept for
+        # _clear_player_filters compatibility).
         self.name_search = tk.StringVar()
-        search_entry = tk.Entry(filter_row, textvariable=self.name_search, width=20)
-        search_entry.pack(side='left', padx=(5, 15))
-        search_entry.bind('<KeyRelease>', self._filter_players)
         
         # Clear button
         from modern_widgets import RoundedButton
@@ -269,7 +265,24 @@ class ModernScoutingView(ctk.CTkFrame):
                                      command=self._open_profile_manager)
         profiles_btn.pack(side='left', padx=5)
         self._refresh_profile_combo()
-        
+
+        # FM/Eastside-style view selector (column presets) -- additive.
+        from player_view_ui import ViewSelector
+        self._pro_view_name = "Scouting Board"
+        self._pro_view_ctx = None
+        self._pro_sort_col = None
+        self._pro_sort_rev = False
+        self._pro_selector = ViewSelector(
+            filter_row, default_label="Scouting Board",
+            on_change=self._set_pro_view)
+        self._pro_selector.pack(side='left', padx=(15, 0))
+
+        # Elite filter bar (text search + attribute thresholds) -- additive.
+        from player_filters import FilterBar
+        self._pro_filterbar = FilterBar(tab_frame,
+                                        on_change=self._filter_players)
+        self._pro_filterbar.pack(fill='x', padx=10, pady=(0, 2))
+
         # Players list
         list_frame = tk.LabelFrame(tab_frame, text="Available Players", 
                                  bg=self.app.CONTENT_BG, fg=self.app.TEXT_COLOR,
@@ -928,6 +941,10 @@ class ModernScoutingView(ctk.CTkFrame):
 
     def _configure_player_columns(self, with_match):
         """Rebuild treeview columns; adds a Match column when profiling."""
+        view_name = getattr(self, '_pro_view_name', 'Scouting Board')
+        if view_name != "Scouting Board":
+            self._configure_pro_view_columns()
+            return
         cols = ['Name', 'Position', 'Age', 'Team', 'Tier', 'Scouted']
         widths = [200, 80, 60, 150, 80, 80]
         if with_match:
@@ -939,6 +956,67 @@ class ModernScoutingView(ctk.CTkFrame):
             self.players_tree.heading(col, text=col)
             self.players_tree.column(col, width=width, minwidth=50,
                                      anchor='center' if col == 'Match' else 'w')
+
+    # -- FM/Eastside-style views for the pro player list ---------------------
+    def _pro_view_ctx_fn(self):
+        if self._pro_view_ctx is None:
+            from player_views import ViewContext
+            self._pro_view_ctx = ViewContext(app=self.app, mode="scouted")
+        return self._pro_view_ctx
+
+    def _set_pro_view(self, name):
+        self._pro_view_name = name
+        self._pro_sort_col = None
+        self._pro_sort_rev = False
+        self._populate_players()
+
+    def _configure_pro_view_columns(self):
+        from player_views import get_view_columns, COLUMN_DEFS
+        cols = []
+        for key in get_view_columns(self._pro_view_name) or []:
+            d = COLUMN_DEFS.get(key)
+            if d is not None:
+                cols.append((key, d.header, d.width))
+        tree = self.players_tree
+        tree['columns'] = [k for k, _, _ in cols]
+        tree['show'] = 'headings'
+        for key, header, width in cols:
+            tree.heading(key, text=header,
+                         command=lambda c=key: self._sort_pro_players(c))
+            tree.column(key, width=width, minwidth=40,
+                        anchor='w' if key == 'name' else 'center')
+
+    def _sort_pro_players(self, col):
+        from player_views import column_sort
+        tree = self.players_tree
+        if self._pro_sort_col == col:
+            self._pro_sort_rev = not self._pro_sort_rev
+        else:
+            self._pro_sort_col = col
+            self._pro_sort_rev = False
+        rev = self._pro_sort_rev
+        ctx = self._pro_view_ctx_fn()
+        tm = self.app.tree_maps.get('players_tree', {})
+        numeric, textual, missing = [], [], []
+        for item_id in tree.get_children():
+            p = tm.get(item_id)
+            try:
+                v = column_sort(col, p, ctx) if p is not None else None
+            except Exception:
+                v = None
+            nm = getattr(p, "full_name", "") or ""
+            if v is None:
+                missing.append(item_id)
+            elif isinstance(v, (int, float)):
+                numeric.append((v, nm.lower(), item_id))
+            else:
+                textual.append((str(v).lower(), item_id))
+        numeric.sort(key=lambda r: (r[0], r[1]), reverse=not rev)
+        textual.sort(key=lambda r: r[0], reverse=rev)
+        ordered = ([iid for _, _, iid in numeric] +
+                   [iid for _, iid in textual] + missing)
+        for i, item_id in enumerate(ordered):
+            tree.move(item_id, '', i)
 
     def _populate_players(self):
         """Populate the players tree"""
@@ -971,6 +1049,11 @@ class ModernScoutingView(ctk.CTkFrame):
         # Add players to tree
         for player in filtered_players:
             try:
+                # FM-style alternate view: shared column preset.
+                if getattr(self, '_pro_view_name',
+                           'Scouting Board') != "Scouting Board":
+                    self._add_pro_view_row(player)
+                    continue
                 # Check if player has been scouted
                 scouted = "Yes" if self._is_player_scouted(player) else "No"
 
@@ -998,7 +1081,25 @@ class ModernScoutingView(ctk.CTkFrame):
             except Exception as e:
                 print(f"Error adding player {getattr(player, 'full_name', 'Unknown')}: {e}")
                 continue
-    
+
+        fb = getattr(self, '_pro_filterbar', None)
+        if fb is not None:
+            try:
+                fb.set_count(len(self.players_tree.get_children()),
+                             len(self.all_players))
+            except Exception:
+                pass
+
+    def _add_pro_view_row(self, player):
+        """One row from the shared view definition (scout-perceived)."""
+        from player_views import get_view_columns, column_text
+        cols = [c for c in (get_view_columns(self._pro_view_name) or [])
+                if c]
+        ctx = self._pro_view_ctx_fn()
+        values = [column_text(c, player, ctx) for c in cols]
+        item = self.players_tree.insert('', 'end', values=values)
+        self.app.tree_maps['players_tree'][item] = player
+
     def _populate_scouts(self):
         """Populate the scouts tree"""
         # Clear existing items
@@ -1158,8 +1259,9 @@ class ModernScoutingView(ctk.CTkFrame):
             if team != "All":
                 filtered = [p for p in filtered if getattr(p, 'team_name', 'Free Agent') == team]
         
-        # Name search
-        if hasattr(self, 'name_search'):
+        # Name search (legacy box removed; the elite filter bar owns search
+        # now -- skip the dead StringVar when the bar exists)
+        if hasattr(self, 'name_search') and not hasattr(self, '_pro_filterbar'):
             search = self.name_search.get().lower()
             if search:
                 filtered = [p for p in filtered if search in p.full_name.lower()]
@@ -1177,6 +1279,16 @@ class ModernScoutingView(ctk.CTkFrame):
                 filtered = [p for p, _ in matches]
             except Exception as e:
                 print(f"Error applying scouting profile: {e}")
+
+        # Elite filter bar (text search + attribute thresholds), additive.
+        # Thresholds use the scout-perception lens: barely-scouted players
+        # filter on what your scouts actually know.
+        fb = getattr(self, '_pro_filterbar', None)
+        if fb is not None:
+            pf = fb.get_filter()
+            if not pf.is_empty():
+                ctx = self._pro_view_ctx_fn()
+                filtered = [p for p in filtered if pf.matches(p, ctx)]
 
         return filtered
 
