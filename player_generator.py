@@ -610,6 +610,38 @@ class PlayerGenerator:
         except Exception:
             pass
 
+        # Base reputation by tier (Muck 2026-10-02): stars arrive famous,
+        # depth guys arrive known, prospects arrive unknown. The existing
+        # reputation dynamics build/drift from here -- never from 0.
+        try:
+            _tier_rep = {
+                "NHL_ELITE": (75, 92),
+                "NHL_STARTER": (50, 70),
+                "NHL_DEPTH": (25, 45),
+                "AHL_VETERAN": (15, 30),
+                "AHL_PROSPECT": (5, 15),
+                "JUNIOR_ELITE": (5, 15),
+                "JUNIOR_PROSPECT": (0, 8),
+                "INTERNATIONAL": (20, 50),
+                "COLLEGE": (0, 10),
+            }
+            _lo, _hi = _tier_rep.get(skill_tier, (10, 25))
+            _rep = random.randint(_lo, _hi)
+            # Generational potential arrives with hype.
+            _pot = str(getattr(player, "potential_grade", "") or "")
+            _ptier = _pot[:2].strip() if len(_pot) >= 2 else _pot[:1]
+            if _ptier in ("A+", "A"):
+                _rep = min(95, _rep + 15)
+            elif _ptier == "A-":
+                _rep = min(90, _rep + 8)
+            # Veterans have had time to build a name.
+            if age >= 32:
+                _rep = min(95, _rep + 5)
+            player.reputation = max(0, min(100, int(_rep)))
+            player.reputation_history = [int(player.reputation)]
+        except Exception:
+            pass
+
         return player
     
     def generate_rookie_class(self, size: int = 224) -> List[Player]:

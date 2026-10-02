@@ -733,6 +733,17 @@ NHL League Office""",
             _og.schedule_outdoor_games(self.league)
         except Exception as e:
             print(f"⚠️ Outdoor-game scheduling skipped: {e}")
+
+        # New-save realism (Muck 2026-10-02): simulate training camp
+        # (Sep 12-30) + preseason exhibitions during setup, so opening
+        # night arrives with a lived-in world -- camp ratings, preseason
+        # results, storylines -- instead of a blank slate. Fast
+        # (lightweight sim); never blocks setup on failure.
+        try:
+            import save_realism as _sr
+            _sr.simulate_camp_and_preseason(self)
+        except Exception as e:
+            print(f"⚠️ Camp/preseason sim skipped: {e}")
         
         # Initialize all teams with 0 season records for new season start
         print("Initializing clean season records...")
@@ -2648,6 +2659,20 @@ class HockeyManagerGUI(tk.Tk):
         else:
             self.current_date = _gm_date
         self.news_log = [{'date': self.current_date, 'story': "Welcome to the new season!"}]
+        # New-save realism (Muck 2026-10-02): camp + preseason storylines
+        # simulated during setup -- the world is alive at opening night.
+        try:
+            _pre = list(getattr(getattr(self.game_manager, "league", None),
+                                "preseason_stories", None) or [])
+            if _pre:
+                # Newest first, just under the welcome banner.
+                _pre_sorted = sorted(
+                    _pre,
+                    key=lambda s: s.get("date") or self.current_date,
+                    reverse=True)
+                self.news_log = [self.news_log[0]] + _pre_sorted + self.news_log[1:]
+        except Exception:
+            pass
         self.game_results = []  # Store completed game results for viewing
         # Derived lookup indexes over game_results (rebuilt lazily; never
         # pickled -- create_save_data only stores the list itself).
