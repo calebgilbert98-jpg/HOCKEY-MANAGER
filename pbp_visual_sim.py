@@ -565,6 +565,8 @@ class PBPVisualSim(tk.Toplevel):
         self.away_line = away_line or _best_line(away_team)
         self.on_complete = on_complete  # called once (on UI thread) when game_end plays
         self._complete_fired = False
+        self._complete_done = False  # True once on_complete has actually run
+        self._end_game_btn = None  # "End Game" pill, shown only at game end
 
         # -- game intensity (tension) meter: pre-game drivers from the
         #    rivalry/personality engine, plus live in-game moments --
@@ -1118,6 +1120,16 @@ class PBPVisualSim(tk.Toplevel):
             self.speed_btns[val] = b
         self.auto_btn = self._pill(prow, "Auto", self._toggle_auto, w=56)
         self._pill(prow, "End", self._sim_to_end, w=56)
+        # Muck 2026-10-02: "End Game" auto-close -- appears only when the
+        # final whistle has played. One tap closes the visualizer and
+        # returns to the main screen (host processes the result via
+        # on_complete, which is guaranteed to have fired by then).
+        self._end_game_btn = self._pill(prow, "End Game", self._on_end_game,
+                                        w=96)
+        try:
+            self._end_game_btn.pack_forget()  # hidden until game_end
+        except Exception:
+            pass
         vrow = tk.Frame(ctl, bg=CONTENT_BG)
         vrow.pack(fill="x")
         self.shotmap_btn = self._pill(vrow, "Shot Map", self._toggle_shotmap, w=84)
@@ -2784,12 +2796,29 @@ class PBPVisualSim(tk.Toplevel):
             self.playing = False
             self._refresh_play_btn()
             self._show_stars()
+            # Muck 2026-10-02: reveal the "End Game" auto-close button now
+            # that the final whistle has played.
+            try:
+                _egb = getattr(self, "_end_game_btn", None)
+                if _egb is not None:
+                    _egb.pack(side="left", padx=3)
+            except Exception:
+                pass
             if not self._complete_fired:
                 self._complete_fired = True
                 cb = self.on_complete
                 sim = self.sim
                 if cb is not None:
-                    self.after(500, lambda: cb(sim))
+                    def _fire_complete(_cb=cb, _sim=sim):
+                        try:
+                            _cb(_sim)
+                        except Exception:
+                            pass
+                        try:
+                            self._complete_done = True
+                        except Exception:
+                            pass
+                    self.after(500, _fire_complete)
         elif et == "line_chemistry":
             # Narrative-only unit-chemistry note (line_chemistry module).
             # The story text is hockey language; no numbers are rendered.
@@ -5178,6 +5207,32 @@ class PBPVisualSim(tk.Toplevel):
         self._update_targets()
         self.playing = False
         self._refresh_play_btn()
+
+    def _on_end_game(self):
+        """Muck 2026-10-02: "End Game" auto-close -- only visible after the
+        final whistle. Guarantees on_complete has actually run (fires it
+        synchronously if the user beats the 500ms deferred call), then
+        closes the visualizer so the host returns to the main screen.
+        Never raises."""
+        try:
+            if not getattr(self, "_complete_done", False):
+                cb = getattr(self, "on_complete", None)
+                sim = getattr(self, "sim", None)
+                if callable(cb):
+                    try:
+                        cb(sim)
+                    except Exception:
+                        pass
+                try:
+                    self._complete_done = True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            self._on_close()
+        except Exception:
+            pass
 
     def _on_close(self):
         self.closed = True
