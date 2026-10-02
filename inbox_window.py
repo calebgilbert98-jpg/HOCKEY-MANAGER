@@ -1217,6 +1217,17 @@ class InboxView(ctk.CTkFrame):
         self._iwrap(f"{name} rejected your offer but will sign for "
                     f"${asking:,} per year over {years} year(s).",
                     size=11, padx=10, pady=(4, 2))
+        # Market-demand context (qualitative): same signal the negotiation
+        # context box shows, read from action_data so the inbox path matches
+        # the legacy popup path (UI-BUG-01).
+        try:
+            _ssig = str(data.get("scarcity_signal", "balanced"))
+            if _ssig and _ssig != "balanced":
+                from salary_cap_system import scarcity_signal_text as _sst
+                self._iwrap("Market: " + _sst(_ssig, data.get("scarcity_pos")),
+                            size=10, dim=True, padx=10, pady=(0, 2))
+        except Exception:
+            pass
         self._action_section("YOUR MOVE")
         btn_row = ctk.CTkFrame(self.interactive_frame, fg_color="transparent")
         btn_row.pack(fill="x", padx=10, pady=6)

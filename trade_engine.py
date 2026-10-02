@@ -2947,7 +2947,7 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     return _blocked(
                         f"The {getattr(a, 'year', '?')} "
                         f"{getattr(a, 'round', '?')} round pick is expired "
-                        f"-- that draft already happened. No assets moved.")
+                        f"-- that draft already happened.")
             elif _roster is not None and a not in _roster:
                 _pname = getattr(a, "full_name", str(a))
                 return _blocked(
@@ -2967,16 +2967,19 @@ def execute_trade(user_team, partner_team, user_assets, partner_assets,
                     _pname = getattr(a, "full_name", "The emergency fill-in")
                     return _blocked(
                         f"{_pname} is an emergency fill-in -- league-exception "
-                        f"recalls can't be traded. No assets moved.")
-        for _src_team, _assets in ((user_team, user_assets),
-                                   (partner_team, partner_assets)):
+                        f"recalls can't be traded.")
+        for (_src_team, _assets, _incoming) in (
+                (user_team, user_assets, partner_assets),
+                (partner_team, partner_assets, user_assets)):
             _out = [a for a in (_assets or [])
                     if not isinstance(a, DraftPick)]
-            if _out and _rl.would_break_dress_minimum(_src_team, _out):
+            _in = [a for a in (_incoming or [])
+                   if not isinstance(a, DraftPick)]
+            if _out and _rl.would_break_dress_minimum(_src_team, _out, _in):
                 _sname = getattr(_src_team, "team_name", "?")
                 return _blocked(
                     f"{_sname} would be unable to dress a legal lineup (18 "
-                    f"skaters + 2 goalies) after this deal. No assets moved.")
+                    f"skaters + 2 goalies) after this deal.")
     except Exception:
         pass
 

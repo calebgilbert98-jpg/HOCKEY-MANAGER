@@ -134,15 +134,25 @@ def lineup_shortfall(team):
         return (0, 0)
 
 
-def would_break_dress_minimum(team, outgoing) -> bool:
+def would_break_dress_minimum(team, outgoing, incoming=None) -> bool:
     """True if removing `outgoing` players leaves the club unable to dress
-    18+2. Used to guard demotions, waiver placements, and trades."""
+    18+2. `incoming` (trade acquisitions) counts toward the post-deal
+    lineup, so a 1-for-1 swap at exactly 18+2 stays legal (UI-BUG-04).
+    Used to guard demotions, waiver placements, and trades."""
     try:
         out_ids = {id(p) for p in (outgoing or [])}
         sk = sum(1 for p in (getattr(team, "roster", None) or [])
                  if is_available(p) and not _is_goalie(p) and id(p) not in out_ids)
         go = sum(1 for p in (getattr(team, "roster", None) or [])
                  if is_available(p) and _is_goalie(p) and id(p) not in out_ids)
+        # Incoming trade acquisitions dress for their new club (UI-BUG-04).
+        for p in (incoming or []):
+            if not is_available(p):
+                continue
+            if _is_goalie(p):
+                go += 1
+            else:
+                sk += 1
         return sk < DRESSED_SKATERS_MIN or go < DRESSED_GOALIES_MIN
     except Exception:
         return False

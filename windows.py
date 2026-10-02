@@ -528,7 +528,7 @@ class RosterView(ctk.CTkFrame):
             'salary': ('Salary', 100),
             'contract': ('Contract', 80),
             'morale': ('Morale', 115),
-            'injury': ('Health', 80),
+            'injury': ('Health', 120),
             'toi': ('TOI/GP', 60),
             'performance': ('Performance', 80)
         }
@@ -2529,7 +2529,12 @@ class FreeAgencyView(ctk.CTkFrame):
         # Subtitle row
         sub = ctk.CTkFrame(header, fg_color="transparent")
         sub.pack(fill="x", padx=20, pady=(4, 14))
-        self._body(sub, text="Season 2024-25 \u2022 Free Agency Period",
+        try:
+            _sy = self.app.league.season_year
+            _season_str = f"{_sy}-{str(_sy + 1)[-2:]}"
+        except Exception:
+            _season_str = "2026-27"
+        self._body(sub, text=f"Season {_season_str} \u2022 Free Agency Period",
                    dim=True, size=11).pack(side="left")
 
         # Team cap space on the right
@@ -12374,12 +12379,12 @@ class ContractNegotiationView(ctk.CTkFrame):
             ovr = "?"
         ttk.Label(header, text=f"{title_text}: {p.full_name}",
                   style="TLabel",
-                  font=(app.FONT_FAMILY, 16, "bold")).pack(anchor="w")
+                  font=_sfont(app.FONT_FAMILY, 16, "bold")).pack(anchor="w")
         ttk.Label(header,
                   text=f"{pos}  •  Age {getattr(p, 'age', '?')}  •  "
                        f"{_tier_label(p)}  •  POT {getattr(p, 'potential_grade', '?')}",
                   style="Secondary.TLabel",
-                  font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+                  font=_sfont(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
         if self.is_extension:
             try:
                 cur_sal = p.contract.salary
@@ -12387,7 +12392,7 @@ class ContractNegotiationView(ctk.CTkFrame):
                 ttk.Label(header,
                           text=f"Current deal: ${cur_sal:,} × {cur_yrs} yr(s) remaining",
                           style="Secondary.TLabel",
-                          font=(app.FONT_FAMILY, 11)).pack(anchor="w")
+                          font=_sfont(app.FONT_FAMILY, 11)).pack(anchor="w")
             except Exception:
                 pass
         if self.is_elc and int(getattr(self, "_elc_years", 0) or 0) <= 0:
@@ -12398,7 +12403,7 @@ class ContractNegotiationView(ctk.CTkFrame):
                       text="Not ELC-eligible: 25+ is outside the Entry "
                            "Level System (CBA 9.1(b)).",
                       style="Secondary.TLabel",
-                      font=(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
+                      font=_sfont(app.FONT_FAMILY, 11)).pack(anchor="w", pady=(2, 0))
 
         # Two columns in a scrollable area (fits full-screen and popup wrapper)
         scroll = ctk.CTkScrollableFrame(self, fg_color=self.app.BG_COLOR)
@@ -12415,7 +12420,7 @@ class ContractNegotiationView(ctk.CTkFrame):
 
         # ---- Left: offer builder ----
         ttk.Label(left, text="Your Offer", style="TLabel",
-                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(0, 8))
+                  font=_sfont(app.FONT_FAMILY, 13, "bold")).pack(anchor="w", pady=(0, 8))
 
         salary_row = ttk.Frame(left, style="Card.TFrame")
         salary_row.pack(fill=tk.X, pady=4)
@@ -12556,7 +12561,7 @@ class ContractNegotiationView(ctk.CTkFrame):
             self.clause_hint_var = tk.StringVar(master=self, value="")
 
         self.total_label = ttk.Label(left, text="Total: $0", style="TLabel",
-                                     font=(app.FONT_FAMILY, 12, "bold"))
+                                     font=_sfont(app.FONT_FAMILY, 12, "bold"))
         self.total_label.pack(anchor="w", pady=(8, 4))
         self.salary_var.trace_add("write", self._update_total)
         self.years_var.trace_add("write", self._update_total)
@@ -12591,7 +12596,8 @@ class ContractNegotiationView(ctk.CTkFrame):
         ttk.Button(btn_row, text="Walk Away",
                    command=self.walk_away).pack(side=tk.LEFT)
 
-        # Jump links
+        # Jump links -- two compact rows: a single row overflows the left
+        # panel at 1366px window width and clips the Inbox button (UI-BUG-07).
         jump_row = ttk.Frame(left, style="Card.TFrame")
         jump_row.pack(fill=tk.X, pady=(10, 0))
         ttk.Label(jump_row, text="Jump to:", style="Secondary.TLabel").pack(
@@ -12602,30 +12608,33 @@ class ContractNegotiationView(ctk.CTkFrame):
         ttk.Button(jump_row, text="Extensions",
                    command=lambda: self._jump("extensions")).pack(side=tk.LEFT,
                                                                    padx=4)
-        ttk.Button(jump_row, text="Cap Analytics",
-                   command=lambda: self._jump("cap")).pack(side=tk.LEFT, padx=4)
-        ttk.Button(jump_row, text="Inbox",
+        jump_row2 = ttk.Frame(left, style="Card.TFrame")
+        jump_row2.pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(jump_row2, text="Cap Analytics",
+                   command=lambda: self._jump("cap")).pack(side=tk.LEFT,
+                                                           padx=4)
+        ttk.Button(jump_row2, text="Inbox",
                    command=lambda: self._jump("inbox")).pack(side=tk.LEFT,
                                                              padx=4)
 
         # ---- Right: context ----
         ttk.Label(right, text="Negotiation Context", style="TLabel",
-                  font=(app.FONT_FAMILY, 13, "bold")).pack(anchor="w",
+                  font=_sfont(app.FONT_FAMILY, 13, "bold")).pack(anchor="w",
                                                            pady=(0, 8))
         self.context_box = tk.Text(right, height=14, wrap="word",
                                    bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
                                    relief="flat", padx=8, pady=8,
-                                   font=(app.FONT_FAMILY, 10))
+                                   font=_sfont(app.FONT_FAMILY, 10))
         self.context_box.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
         self.context_box.configure(state="disabled")
 
         ttk.Label(right, text="Offer History", style="TLabel",
-                  font=(app.FONT_FAMILY, 12, "bold")).pack(anchor="w",
+                  font=_sfont(app.FONT_FAMILY, 12, "bold")).pack(anchor="w",
                                                            pady=(4, 4))
         self.history_box = tk.Text(right, height=8, wrap="word",
                                    bg=app.CONTENT_BG, fg=app.TEXT_COLOR,
                                    relief="flat", padx=8, pady=8,
-                                   font=(app.FONT_FAMILY, 10))
+                                   font=_sfont(app.FONT_FAMILY, 10))
         self.history_box.pack(fill=tk.BOTH, expand=True)
         self.history_box.configure(state="disabled")
 
@@ -13314,9 +13323,24 @@ class WaiversView(ctk.CTkFrame):
             pass
 
     def _place_on_waivers_after_consent(self, player):
+        # R1: warn up front if losing this player (via claim) would break the
+        # dressed minimum. Placement itself isn't removal -- he stays rostered
+        # for the 2-day waiver period -- so this warns rather than refusing
+        # like the demote path does (UI-BUG-08).
+        _waive_warn = ""
+        try:
+            import roster_limits as _rl
+            if _rl.would_break_dress_minimum(self.app.user_team, [player]):
+                _waive_warn = (f" Warning: if {player.full_name} is claimed, "
+                               "the club would be unable to dress a legal "
+                               "lineup (18 skaters + 2 goalies) -- plan a "
+                               "call-up or summon emergency fill-ins.")
+        except Exception:
+            pass
         confirm = qol_confirm(self, "Confirm Waiver",
                               f"Place {player.full_name} on waivers? "
-                              "Other teams will have a chance to claim them.",
+                              "Other teams will have a chance to claim them."
+                              f"{_waive_warn}",
                               confirm_text="Place on Waivers")
         if confirm:
             # Add to waiver list

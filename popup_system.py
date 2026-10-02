@@ -1232,12 +1232,15 @@ def _card_shell(manager, title, message, kind="question", width=470,
                    font=("Segoe UI", 11), wraplength=360, justify="left",
                    anchor="nw")
     msg.pack(side="left", fill="both", expand=True)
-    lines = max(1, len(message or "") // 48)
+    # Growth estimate must match the real wrap width: wraplength=360 at 11pt
+    # wraps at ~40 chars/line (48 under-budgets and the OK button row gets
+    # squeezed to ~2px on long FYI cards -- UI-BUG-02).
+    lines = max(1, len(message or "") // 40)
     if lines > 3:
         try:
             entry = manager._entry_for(host)
             if entry is not None:
-                entry["height"] = min(420, 200 + (lines - 3) * 20)
+                entry["height"] = min(420, 200 + (lines - 3) * 22)
                 manager._place_entry(entry)
         except Exception:
             pass
