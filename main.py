@@ -14646,6 +14646,21 @@ class HockeyManagerGUI(tk.Tk):
                             str(getattr(self.league, "season_year", 0) + 1))
                     except Exception:
                         pass
+                # Calder bump: winning rookie of the year jumps potential
+                # one full letter grade (C+ -> B+). The award proves the
+                # ceiling was wrong.
+                if 'calder' in name_to_awards.get(p.full_name, []):
+                    try:
+                        _bumped, _old, _new = p.bump_potential_full_grade()
+                        if _bumped:
+                            try:
+                                self.add_news(
+                                    f"🏆 {p.full_name} wins the Calder Trophy! "
+                                    f"Potential rises from {_old} to {_new}.")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
         self._reputation_updated_for_season = self.league.season_year
 
     def _update_offseason_reputations(self):

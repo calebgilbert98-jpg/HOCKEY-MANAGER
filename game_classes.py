@@ -970,6 +970,46 @@ class Player:
     # Ordered grade ladder for dynamic potential movement
     POTENTIAL_LADDER = ["F", "D", "D+", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
 
+    def bump_potential_full_grade(self) -> Tuple[bool, str, str]:
+        """Jump potential one full letter grade (C+ -> B+, B -> A, etc).
+
+        The +/- modifier is preserved; the base letter rises one step.
+        At the top of the ladder (A-, A, A+) there is nowhere to go.
+        Also nudges the numeric potential +8 to match the new grade.
+        Returns (bumped, old_grade, new_grade).
+        """
+        try:
+            cur = (getattr(self, "potential_grade", "") or "").strip().upper()
+            if not cur:
+                return False, "", ""
+            # Split base letter and modifier.
+            if len(cur) >= 2 and cur[-1] in ("+", "-"):
+                base, mod = cur[:-1], cur[-1]
+            else:
+                base, mod = cur, ""
+            # One full letter up the alphabet.
+            _up = {"F": "D", "D": "C", "C": "B", "B": "A", "A": "A"}
+            new_base = _up.get(base)
+            if new_base is None:
+                return False, cur, cur
+            if new_base == "A" and base == "A":
+                return False, cur, cur  # already at the top
+            new_grade = new_base + mod
+            # Validate against the ladder; fall back to base if the
+            # modifier combo isn't on it (e.g. F+ which doesn't exist).
+            if new_grade not in self.POTENTIAL_LADDER:
+                new_grade = new_base
+            if new_grade not in self.POTENTIAL_LADDER:
+                return False, cur, cur
+            self.potential_grade = new_grade
+            try:
+                self.potential = min(100, int(getattr(self, "potential", 50) or 50) + 8)
+            except Exception:
+                pass
+            return True, cur, new_grade
+        except Exception:
+            return False, "", ""
+
     # Development curves per potential grade. Higher-touted prospects
     # develop faster but peak earlier; lower-touted types develop slower and
     # peak later -- the late-bloomer shape (Zetterberg/Datsyuk). Values mirror
