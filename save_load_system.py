@@ -192,6 +192,10 @@ class GameSaveManager:
                 # on save. Stored as pickle-free dicts; player/scout re-linked by id
                 # on load because the league rebuilds Player/Staff objects.
                 'scouting_reports': self._serialize_scouting_reports(),
+                # Media storylines (Bucket 1): were never persisted — every
+                # save/load wiped narrative state. Now serialized; old saves
+                # default to empty list.
+                'media_storylines': self._serialize_media_storylines(),
                 # Scout region assignments (set_scout_region). Were never
                 # serialized: every load unassigned all scouts.
                 'scout_region_assignments': dict(
@@ -867,6 +871,46 @@ class GameSaveManager:
             print(f"Error serializing scouting reports: {e}")
             return {}
 
+    def _serialize_media_storylines(self) -> List[Dict[str, Any]]:
+        """Serialize active media storylines (Bucket 1: cross-season bleed).
+
+        Storylines were never persisted — every save/load wiped the narrative
+        state. Now serialized as plain dicts; restored on load with old-save
+        default of empty list."""
+        try:
+            media = getattr(self.game_manager, 'media_system', None)
+            if media is None:
+                # Try app-level media system
+                app = getattr(self.game_manager, 'app', None)
+                media = getattr(app, 'media_system', None) if app else None
+            if media is None:
+                return []
+            storylines = getattr(media, 'storylines', []) or []
+            out = []
+            for s in storylines:
+                try:
+                    # Only persist active storylines (resolved ones are done)
+                    if hasattr(s, 'is_active'):
+                        # We persist all — the load restores and is_active filters
+                        pass
+                    out.append({
+                        'id': getattr(s, 'id', ''),
+                        'type': getattr(s, 'type', None).name if hasattr(getattr(s, 'type', None), 'name') else str(getattr(s, 'type', '')),
+                        'title': getattr(s, 'title', ''),
+                        'description': getattr(s, 'description', ''),
+                        'players_involved': list(getattr(s, 'players_involved', []) or []),
+                        'intensity': int(getattr(s, 'intensity', 5)),
+                        'duration_days': int(getattr(s, 'duration_days', 30)),
+                        'created_date': getattr(s, 'created_date', None).isoformat() if hasattr(getattr(s, 'created_date', None), 'isoformat') else str(getattr(s, 'created_date', '')),
+                        'last_mentioned': getattr(s, 'last_mentioned', None).isoformat() if hasattr(getattr(s, 'last_mentioned', None), 'isoformat') else str(getattr(s, 'last_mentioned', '')),
+                        'resolution': getattr(s, 'resolution', None),
+                    })
+                except Exception:
+                    continue
+            return out
+        except Exception:
+            return []
+
     def _restore_scouting_reports(self, data: Any) -> None:
         """Rebuild user_team.scouting_reports from plain dicts.
 
@@ -908,6 +952,60 @@ class GameSaveManager:
             user_team.scouting_reports = restored
         except Exception as e:
             print(f"Error restoring scouting reports: {e}")
+
+    def _restore_media_storylines(self, data: Any) -> None:
+        """Rebuild media_system.storylines from plain dicts.
+
+        Restores MediaStoryline objects; old saves lack the key and start
+        with an empty list. Never raises."""
+        try:
+            if not isinstance(data, list):
+                return
+            from media_system import MediaStoryline, StorylineType
+            from datetime import date
+            media = getattr(self.game_manager, 'media_system', None)
+            if media is None:
+                app = getattr(self.game_manager, 'app', None)
+                media = getattr(app, 'media_system', None) if app else None
+            if media is None:
+                return
+            restored = []
+            for d in data:
+                try:
+                    if not isinstance(d, dict):
+                        continue
+                    # Parse type enum
+                    type_name = d.get('type', '')
+                    try:
+                        stype = StorylineType[type_name] if type_name else StorylineType.BREAKOUT
+                    except (KeyError, AttributeError):
+                        stype = StorylineType.BREAKOUT
+                    # Parse dates
+                    def _parse_date(v):
+                        try:
+                            if hasattr(v, 'year'):
+                                return v
+                            return date.fromisoformat(str(v)[:10])
+                        except Exception:
+                            return date.today()
+                    sl = MediaStoryline(
+                        id=str(d.get('id', '')),
+                        type=stype,
+                        title=str(d.get('title', '')),
+                        description=str(d.get('description', '')),
+                        players_involved=list(d.get('players_involved', []) or []),
+                        intensity=int(d.get('intensity', 5)),
+                        duration_days=int(d.get('duration_days', 30)),
+                        created_date=_parse_date(d.get('created_date')),
+                        last_mentioned=_parse_date(d.get('last_mentioned')),
+                        resolution=d.get('resolution'),
+                    )
+                    restored.append(sl)
+                except Exception:
+                    continue
+            media.storylines = restored
+        except Exception:
+            pass
 
     def _serialize_schedule(self) -> list:
         """Serialize the game schedule"""
@@ -1427,7 +1525,7 @@ class GameSaveManager:
                        'scouting_reports', 'scout_region_assignments', 'waiver_claims', 'trade_history',
                        'contract_negotiations', 'inbox_messages', 'news_stories',
                        'training_programs', '_fantasy_draft_captaincy_deferred',
-                       'recently_viewed_players']:
+                       'recently_viewed_players', 'media_storylines']:
                 if key not in save_data:
                     continue
                 if key == 'scouting_reports':
@@ -1435,6 +1533,10 @@ class GameSaveManager:
                     # serialized form stores ids, re-linked against the restored
                     # league. Never restore onto game_manager (dead dict).
                     self._restore_scouting_reports(save_data[key])
+                elif key == 'media_storylines':
+                    # Storylines live on media_system; restored as MediaStoryline
+                    # objects. Old saves lack the key -> empty list.
+                    self._restore_media_storylines(save_data[key])
                 else:
                     setattr(self.game_manager, key, save_data[key])
 
