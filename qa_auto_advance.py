@@ -354,12 +354,24 @@ try:
         ok2 = False
     check("set_auto_mode(False) headless never raises", ok2)
     check("overlay is_showing False headless", ov.is_showing is False)
+    # Esc handling moved off the overlay (non-modal toast never takes
+    # focus) into the app-wide _qol_on_escape in main.py (Muck
+    # 2026-10-02): it swallows Esc while the toast is up and stops
+    # auto-advance instead. Verify the new wiring by source.
     try:
-        r = ov._on_escape()
-        ok3 = (r == 'break')
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               'main.py')) as f:
+            _mainsrc = f.read()
+        _qi = _mainsrc.find("def _qol_on_escape")
+        _qbody = _mainsrc[_qi:_qi + 1200] if _qi != -1 else ""
+        ok3 = ("_day_sim_overlay" in _qbody
+               and "is_showing" in _qbody
+               and '_auto_advance_stop("esc")' in _qbody
+               and "return 'break'" in _qbody)
     except Exception:
         ok3 = False
-    check("_on_escape returns 'break' (blocks app-wide Esc)", ok3)
+    check("_qol_on_escape guards toast + stops auto-advance (new design)",
+          ok3)
 except Exception as ex:
     check("overlay import", False)
     print("   import error:", ex)

@@ -4316,6 +4316,21 @@ class HockeyManagerGUI(tk.Tk):
 
     def _qol_on_escape(self, event=None):
         """Esc: close the focused dialog (never the main window)."""
+        # Day-sim toast: never tear it down mid-sim. During auto-advance
+        # Esc stops the loop instead (Muck 2026-10-02). The toast is
+        # non-modal and never takes focus, so without this guard the
+        # walk-up below could find and destroy it.
+        try:
+            overlay = getattr(self, '_day_sim_overlay', None)
+            if overlay is not None and bool(overlay.is_showing):
+                if getattr(self, '_auto_advance', False):
+                    try:
+                        self._auto_advance_stop("esc")
+                    except Exception:
+                        pass
+                return 'break'
+        except Exception:
+            pass
         if self._qol_typing_focus():
             return None  # don't yank a dialog away mid-typing
         try:
@@ -7022,9 +7037,10 @@ class HockeyManagerGUI(tk.Tk):
         Falls back to the legacy button lookup when the modern dashboard
         helper is unavailable.
 
-        Also manages the day-sim loading overlay (Muck 2026-10-02): a
-        modal spinner + status dialog shown while the day sim blocks the
-        main thread, so the app doesn't look crashed.
+        Also manages the day-sim loading toast (Muck 2026-10-02): a
+        small non-modal spinner + status in the bottom-right corner,
+        shown while the day sim blocks the main thread, so the app
+        doesn't look crashed.
         """
         # Loading overlay: show on busy, hide when done. Runs regardless
         # of which button-feedback path is taken below.
@@ -7064,11 +7080,13 @@ class HockeyManagerGUI(tk.Tk):
                 pass
 
     def _update_day_sim_overlay(self, busy, status=""):
-        """Show/hide the day-sim loading overlay (Muck 2026-10-02).
+        """Show/hide the day-sim loading toast (Muck 2026-10-02).
 
         The day sim blocks the main thread; without a visible loading
-        prompt the app looks crashed. The overlay is a modal spinner +
-        status dialog. Never raises.
+        prompt the app looks crashed. The toast is a small non-modal
+        spinner + status in the bottom-right corner -- deliberately not
+        modal and not centered, so it never covers crucial info and can
+        never block the Game Day Watch/Quick choice. Never raises.
         """
         try:
             overlay = getattr(self, '_day_sim_overlay', None)
@@ -12477,7 +12495,24 @@ class HockeyManagerGUI(tk.Tk):
             elif mode == 'watch':
                 use_game_viewer = True
             elif mode == 'ask':
+                # Hide the loading toast before the Watch/Quick choice:
+                # the sim is paused on the user now, and the toast must
+                # never cover or block the Game Day dialog (Muck
+                # 2026-10-02). Overlay-only -- the Continue button stays
+                # disabled until the day finishes.
+                try:
+                    self._update_day_sim_overlay(False)
+                except Exception:
+                    pass
                 use_game_viewer = self._ask_game_mode_dialog(home_team, away_team) == 'watch'
+                if not use_game_viewer:
+                    # Quick Sim picked: re-show the toast for the rest of
+                    # the day. (Watch Live opens the visualizer, which
+                    # owns the UI from here.)
+                    try:
+                        self._update_day_sim_overlay(True, "Simulating games...")
+                    except Exception:
+                        pass
             else:
                 use_game_viewer = False
             if is_preseason:
