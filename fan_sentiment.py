@@ -165,3 +165,128 @@ def sentiment_label(value: float) -> str:
     if v >= 25:
         return "Disgruntled"
     return "Toxic"
+
+
+# ---------------------------------------------------------------------------
+# Bucket 5 extensions (Muck 2026-10-02): expectations, events, cross-season
+# ---------------------------------------------------------------------------
+
+# Board expectation -> expected win% mapping
+_EXPECTATION_WIN_PCT = {
+    "cup_contender": 0.65,
+    "playoff_team": 0.58,
+    "bubble_team": 0.50,
+    "rebuilding": 0.38,
+    "lottery_team": 0.32,
+}
+
+
+def expectation_adjusted_baseline(team: Any) -> float:
+    """Baseline adjusted for performance vs preseason expectations.
+
+    Overachieving (winning more than expected) boosts sentiment beyond
+    raw win%. Underachieving drags it down even with a decent record.
+    Never raises.
+    """
+    try:
+        base = sentiment_baseline(team)
+        expectation = str(getattr(team, "board_expectation", "bubble_team") or "bubble_team")
+        expected_pct = _EXPECTATION_WIN_PCT.get(expectation, 0.50)
+
+        pct = _recent_win_pct(team)
+        if pct is None:
+            return base
+
+        # Over/underachievement shifts baseline by up to +/- 10 points
+        diff = pct - expected_pct
+        adjustment = max(-10.0, min(10.0, diff * 50.0))
+        return max(15.0, min(95.0, base + adjustment))
+    except Exception:
+        try:
+            return sentiment_baseline(team)
+        except Exception:
+            return 60.0
+
+
+def nudge_for_trade(team: Any, trade_grade: str = "neutral",
+                    current_date: Any = None) -> float:
+    """Fan reaction to a trade. Never raises."""
+    try:
+        deltas = {
+            "fleeced": -8.0,      # Fans think we got robbed
+            "lost": -4.0,         # Questionable deal
+            "neutral": 0.0,
+            "won": 4.0,           # Good value
+            "blockbuster_won": 8.0,  # Landed a star
+        }
+        delta = deltas.get(str(trade_grade).lower(), 0.0)
+        return nudge_fan_sentiment(team, delta, f"trade ({trade_grade})", current_date)
+    except Exception:
+        return DEFAULT_SENTIMENT
+
+
+def nudge_for_signing(team: Any, player_tier: str = "depth",
+                      current_date: Any = None) -> float:
+    """Fan reaction to a free agent signing. Never raises."""
+    try:
+        deltas = {
+            "superstar": 10.0,
+            "star": 6.0,
+            "top_six": 3.0,
+            "depth": 1.0,
+            "overpay": -3.0,      # Fans hate overpays
+        }
+        delta = deltas.get(str(player_tier).lower(), 0.0)
+        return nudge_fan_sentiment(team, delta, f"signing ({player_tier})", current_date)
+    except Exception:
+        return DEFAULT_SENTIMENT
+
+
+def nudge_for_coaching_change(team: Any, was_fired: bool = True,
+                               current_date: Any = None) -> float:
+    """Fan reaction to a coaching change. Never raises.
+
+    Firing a coach when fans are furious = relief (+). Firing when fans
+    are happy = outrage (-). Hiring is generally positive.
+    """
+    try:
+        sentiment = get_fan_sentiment(team, current_date)
+        if was_fired:
+            # If fans were furious, firing is relief. If happy, it's anger.
+            if sentiment < 30:
+                delta = 6.0
+            elif sentiment < 50:
+                delta = 2.0
+            elif sentiment > 70:
+                delta = -8.0  # "Why did you fire a winning coach?!"
+            else:
+                delta = -2.0
+            return nudge_fan_sentiment(team, delta, "coach fired", current_date)
+        else:
+            return nudge_fan_sentiment(team, 3.0, "new coach hired", current_date)
+    except Exception:
+        return DEFAULT_SENTIMENT
+
+
+def get_fan_sentiment_with_memory(team: Any,
+                                  current_date: Any = None) -> float:
+    """Fan sentiment with cross-season memory applied.
+
+    Applies goodwill floor (recent Cup) and cynicism ceiling (sustained
+    losing) on top of the base sentiment. Never raises.
+    """
+    try:
+        value = get_fan_sentiment(team, current_date)
+
+        # Goodwill floor: recent Cup wins prevent full collapse
+        try:
+            from fan_narratives import goodwill_sentiment_floor, cynicism_sentiment_ceiling
+            floor = goodwill_sentiment_floor(team)
+            ceiling = cynicism_sentiment_ceiling(team)
+            value = max(floor, min(ceiling, value))
+        except Exception:
+            pass
+
+        return max(0.0, min(100.0, value))
+    except Exception:
+        return DEFAULT_SENTIMENT

@@ -524,6 +524,31 @@ def _rivalry_pregame_headline(game_date, text="", home="", away="", **kw):
     )
 
 
+def _fan_narrative_headline(game_date, headline="", body="", tier="",
+                                   team_name="", **kw):
+    """Fan-driven narrative headline (Bucket 5).
+
+    Furious fans → "fire the coach" stories. Ecstatic fans → Cup parade buzz.
+    """
+    from game_classes import EmailMessage
+    # Emoji by tier
+    emoji = {
+        "furious": "😡",
+        "angry": "😠",
+        "restless": "😟",
+        "happy": "😊",
+        "ecstatic": "🎉",
+    }.get(str(tier).lower(), "📰")
+    return EmailMessage(
+        sender="Fan Pulse",
+        sender_type="Media",
+        subject=f"{emoji} {headline}",
+        content=f"{body}\n\n— Fan Pulse, {team_name} beat",
+        category="Fan Narrative",
+        priority=2,
+    )
+
+
 def _grudge_callback_headline(game_date, home="", away="", short="",
                               room_line="", fans_line="", media_line="",
                               league_line="", first_meeting=True, **kw):
