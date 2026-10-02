@@ -994,11 +994,122 @@ def _emitted_on(sim: Any) -> Optional[set]:
         return None
 
 
+def _display_name(p: Any) -> str:
+    """Best-effort display name for a player. Never raises."""
+    try:
+        full = getattr(p, "full_name", "") or ""
+        if str(full).strip():
+            return str(full).strip()
+        first = str(getattr(p, "first_name", "") or "").strip()
+        last = str(getattr(p, "last_name", "") or "").strip()
+        name = f"{first} {last}".strip()
+        return name or "Unknown"
+    except Exception:
+        return "Unknown"
+
+
+def _is_defenseman(p: Any) -> bool:
+    """True if the player's position is a defense slot. Never raises."""
+    try:
+        pos = getattr(p, "position", None)
+        if pos is None:
+            return False
+        try:
+            val = pos.value
+        except Exception:
+            val = pos
+        return str(val).upper() in ("D", "LD", "RD", "DEFENSE",
+                                   "LEFT_DEFENSE", "RIGHT_DEFENSE")
+    except Exception:
+        return False
+
+
+def _unit_line_label(skaters: List[Any], team: Any,
+                     situation: str) -> Optional[str]:
+    """Identify which line slot a unit corresponds to, e.g. 'Line 2',
+    'PP1', 'PK2'. Matches skater ids against the team's lineup; returns
+    None when the lineup is unavailable or no line matches cleanly.
+    Never raises. (Muck 2026-10-02: chemistry headlines must name the line.)
+    """
+    try:
+        if not skaters or team is None:
+            return None
+        lineup = getattr(team, "lineup", None)
+        if not isinstance(lineup, dict) or not lineup:
+            return None
+        sit = str(situation or "ev").lower()
+
+        def _ids(players):
+            out = set()
+            for pl in (players or []):
+                try:
+                    pid = _pid(pl)
+                    if pid is not None:
+                        out.add(pid)
+                except Exception:
+                    continue
+            return out
+
+        if sit == "pp":
+            unit_ids = _ids(skaters)
+            for key in ("PP1", "PP2"):
+                try:
+                    grp = lineup.get(key) or {}
+                    pool = _ids(grp.get("Forwards") or []) | \
+                        _ids(grp.get("Defense") or [])
+                    if pool and len(unit_ids & pool) >= 3:
+                        return key
+                except Exception:
+                    continue
+            return None
+        if sit == "pk":
+            unit_ids = _ids(skaters)
+            for key in ("PK1", "PK2"):
+                try:
+                    grp = lineup.get(key) or {}
+                    pool = _ids(grp.get("Forwards") or []) | \
+                        _ids(grp.get("Defense") or [])
+                    if pool and len(unit_ids & pool) >= 2:
+                        return key
+                except Exception:
+                    continue
+            return None
+        # Even strength: match the unit's forwards against the 4 lines.
+        fwd_ids = _ids([p for p in skaters if not _is_defenseman(p)])
+        if not fwd_ids:
+            return None
+        try:
+            lines = lineup.get("Forwards") or []
+        except Exception:
+            return None
+        best_n, best_overlap = 0, 0
+        for i, line in enumerate(lines[:4]):
+            try:
+                overlap = len(fwd_ids & _ids(line or []))
+            except Exception:
+                continue
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best_n = i + 1
+        # Majority of a 3-man line must match to claim the label.
+        if best_n and best_overlap >= 2:
+            return f"Line {best_n}"
+        return None
+    except Exception:
+        return None
+
+
 def _try_emit_story(sim: Any, unit_key: Tuple, hook: str, why: str,
-                    situation: str, efficiency: float) -> None:
+                    situation: str, efficiency: float,
+                    skaters: Optional[List[Any]] = None,
+                    team: Any = None) -> None:
     """Once per unit per game, notable units earn a headline/pbp note.
     Only engines with a headline channel hear it (GameSim); the story data
-    itself lives in the shared module either way."""
+    itself lives in the shared module either way.
+
+    skaters/team are threaded through so the headline can name the line
+    and the players (Muck 2026-10-02). All optional, never raises.
+    """
     try:
         emitted = _emitted_on(sim)
         if emitted is None or unit_key in emitted:
@@ -1006,9 +1117,36 @@ def _try_emit_story(sim: Any, unit_key: Tuple, hook: str, why: str,
         emitted.add(unit_key)
         if abs(efficiency - 1.0) < 0.045:
             return  # only notable units get ink
+        names: List[str] = []
+        try:
+            for p in (skaters or []):
+                if p is None:
+                    continue
+                nm = _display_name(p)
+                if nm and nm != "Unknown":
+                    names.append(nm)
+        except Exception:
+            pass
+        team_name = ""
+        try:
+            if isinstance(team, str):
+                team_name = team
+            else:
+                team_name = str(getattr(team, "team_name",
+                                       getattr(team, "name", "")) or "")
+        except Exception:
+            pass
+        line_label = ""
+        try:
+            line_label = _unit_line_label(skaters or [], team,
+                                          situation) or ""
+        except Exception:
+            pass
         payload = {"kind": "line_chemistry", "hook": hook,
                    "text": why, "situation": situation,
-                   "efficiency": round(efficiency, 3)}
+                   "efficiency": round(efficiency, 3),
+                   "players": names, "team_name": team_name,
+                   "line_label": line_label}
         headlines = getattr(sim, "pending_headlines", None)
         if isinstance(headlines, list):
             headlines.append(payload)
@@ -1085,7 +1223,8 @@ def unit_efficiency(unit: List[Any], situation: str = EV,
 
         if cache is not None and not detail:
             cache[key] = eff
-            _try_emit_story(sim, key, hook, why, situation, eff)
+            _try_emit_story(sim, key, hook, why, situation, eff,
+                            skaters=skaters, team=team)
             return eff
         if cache is not None and detail:
             # Still warm the fast path for the engine.

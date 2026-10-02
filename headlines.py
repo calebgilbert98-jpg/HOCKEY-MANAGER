@@ -884,6 +884,7 @@ def _scenario_moment_headline(game_date, off="", defense="", story="",
 
 
 def _line_chemistry_headline(game_date, hook="", text="", situation="ev",
+                             players=None, team_name="", line_label="",
                              **kw):
     """Line-chemistry notebook item (UI surface for line_chemistry).
 
@@ -891,6 +892,11 @@ def _line_chemistry_headline(game_date, hook="", text="", situation="ev",
     deliberately dropped here and never reaches the EmailMessage, so the
     story stays narrative-only (analytics stay a puzzle, never a cheat
     sheet). Only the hockey-language story text is rendered.
+
+    The payload also carries "players" (display names), "team_name" and
+    "line_label" (e.g. "Line 2", "PP1") so the reader knows WHO the unit
+    is (Muck 2026-10-02). All three are optional; the headline degrades
+    gracefully to the generic form when absent.
     """
     from game_classes import EmailMessage
     kw.pop("efficiency", None)  # numeric leak: never rendered, ever
@@ -900,15 +906,44 @@ def _line_chemistry_headline(game_date, hook="", text="", situation="ev",
         return None
     sit = _SITUATION_LABELS.get(str(situation or "ev").lower(),
                                 "even strength")
+    try:
+        names = [str(n).strip() for n in (players or [])
+                 if str(n or "").strip()]
+    except Exception:
+        names = []
+    team_name = str(team_name or "").strip()
+    line_label = str(line_label or "").strip()
+
+    # Subject: specific when we know the club + line, generic otherwise.
+    if team_name and line_label:
+        subject = (f"📓 CHEMISTRY WATCH: {team_name} {line_label} "
+                   f"{hook} at {sit}")
+    elif team_name:
+        subject = (f"📓 CHEMISTRY WATCH: {team_name} {hook} "
+                   f"at {sit}")
+    else:
+        subject = f"📓 CHEMISTRY WATCH: a {hook} unit at {sit}"
+
+    # Content: lead with the who, then the story, then the flavor kicker.
+    parts = []
+    if names:
+        parts.append(" — ".join(names))
+        parts.append("")
+    parts.append(story)
+    parts.append("")
+    if team_name and line_label:
+        parts.append(f"The {team_name} {line_label.lower()} is turning heads "
+                     f"around the league -- the kind of thing coaches notice "
+                     f"long before the scoresheet does.")
+    else:
+        parts.append(f"One {sit} unit is turning heads around the league -- "
+                     f"the kind of thing coaches notice long before the "
+                     f"scoresheet does.")
     return EmailMessage(
         sender="League News Desk",
         sender_type="Media",
-        subject=f"📓 CHEMISTRY WATCH: a {hook} unit at {sit}",
-        content=(
-            f"{story}\n\n"
-            f"One {sit} unit is turning heads around the league -- the "
-            f"kind of thing coaches notice long before the scoresheet does."
-        ),
+        subject=subject,
+        content="\n".join(parts),
         category="League",
         priority=2,
     )
@@ -1059,6 +1094,47 @@ def deliver(app, msg, involved=()) -> bool:
     return True
 
 
+def deliver_chemistry(app, msg, spec) -> bool:
+    """Chemistry Watch routing (Muck 2026-10-02): the user's own team gets
+    an inbox copy; every other team's chemistry lives on the news feed
+    only, never the inbox. Never raises."""
+    try:
+        import copy
+        import uuid
+        from game_classes import EmailMessage
+        if not isinstance(msg, EmailMessage):
+            return False
+        game_date = getattr(app, "current_date", None) or date.today()
+        tracker, used = _daily_count(app, game_date)
+        if used >= DAILY_HEADLINE_CAP:
+            return False
+        team_name = str(spec.get("team_name") or "").strip()
+
+        # News feed: the league-wide lore, always.
+        try:
+            app.add_news(f"{msg.subject}")
+        except Exception:
+            pass
+
+        # Inbox: only human teams whose club this chemistry belongs to.
+        for team in human_teams(app):
+            try:
+                if _team_name(team) != team_name:
+                    continue
+                inbox = team.inbox
+                team_copy = copy.deepcopy(msg)
+                team_copy.id = str(uuid.uuid4())
+                team_copy.is_milestone = True
+                team_copy.is_important = True
+                inbox.add_message(team_copy)
+            except Exception:
+                continue
+        tracker["count"] = used + 1
+        return True
+    except Exception:
+        return False
+
+
 def deliver_spec(app, spec: Dict[str, Any]) -> bool:
     """Build + deliver from a pending spec dict (kind + kwargs)."""
     game_date = getattr(app, "current_date", None) or date.today()
@@ -1067,6 +1143,8 @@ def deliver_spec(app, spec: Dict[str, Any]) -> bool:
                                             if k != "kind"})
     if msg is None:
         return False
+    if kind == "line_chemistry":
+        return deliver_chemistry(app, msg, spec)
     return deliver(app, msg, involved=spec.get("involved", ()))
 
 
