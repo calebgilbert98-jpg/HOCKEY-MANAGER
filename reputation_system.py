@@ -2785,16 +2785,161 @@ def hand_back_tactics(team: Any) -> Dict[str, Any]:
     return {"changed": True, "text": text, "approach": "seize", "strong_affected": 0}
 
 
+def _coach_appeal_parse_date(date_str: str):
+    """Local ISO date parser for the unemployment clock (no cross-module
+    coupling: dressing_room has its own copy). Never raises."""
+    try:
+        return date.fromisoformat(str(date_str)[:10])
+    except Exception:
+        return date.today()
+
+
+def _coach_days_unemployed(carousel_entry: Optional[Dict[str, Any]],
+                           date_str: str = "") -> int:
+    """Days since the coach hit the carousel. 0 when unknown. Never raises."""
+    try:
+        if not carousel_entry:
+            return 0
+        fired = carousel_entry.get("date") or ""
+        if not fired:
+            return 0
+        delta = (_coach_appeal_parse_date(date_str)
+                 - _coach_appeal_parse_date(fired)).days
+        return max(0, int(delta))
+    except Exception:
+        return 0
+
+
+def _coach_has_cup_accolade(coach: Any) -> bool:
+    """True when the coach's trophy case holds a Stanley Cup. Never raises."""
+    try:
+        for a in getattr(coach, "career_accolades", None) or []:
+            if isinstance(a, dict) and a.get("award") == "stanley_cup":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _coach_firing_club(carousel_entry: Optional[Dict[str, Any]]) -> str:
+    """Most recent club in the entry's past_clubs = the team that just let
+    him go. past_clubs appends chronologically in remember_coach. Never
+    raises."""
+    try:
+        past = carousel_entry.get("past_clubs", None) if carousel_entry else None
+        if past:
+            return str(past[-1] or "")
+    except Exception:
+        pass
+    return ""
+
+
+def coach_rivalry_check(coach: Any, team: Any,
+                        carousel_entry: Optional[Dict[str, Any]] = None,
+                        rivalries: Optional[list] = None,
+                        league: Any = None) -> Dict[str, Any]:
+    """Rivalry gate for a coaching hire. A fired coach won't bench-boss his
+    old club's bitter rival -- the defection story writes itself, and he
+    knows it. Mirrors the player-defection logic in on_player_transfer
+    (team_team intensity >= 50 = hated rival).
+
+    Returns {refused, penalty, club, intensity, reason}. Never raises.
+    """
+    out = {"refused": False, "penalty": 0, "club": "", "intensity": 0,
+           "reason": ""}
+    try:
+        if not carousel_entry or not rivalries:
+            return out
+        past = carousel_entry.get("past_clubs", None) or []
+        if not past:
+            return out
+        tname = getattr(team, "team_name", "") or ""
+        if not tname:
+            return out
+        # Resolve past-club names to team entities for the rivalry lookup.
+        teams_by_name: Dict[str, Any] = {}
+        try:
+            for t in getattr(league, "teams", None) or []:
+                _tn = getattr(t, "team_name", "") or ""
+                if _tn:
+                    teams_by_name[_tn] = t
+        except Exception:
+            pass
+        worst = 0
+        worst_club = ""
+        for club in past:
+            try:
+                club = str(club or "")
+                if not club or club == tname:
+                    continue
+                other = teams_by_name.get(club)
+                if other is None:
+                    # Key-compatible stub: _ekey reads ("team", team_name)
+                    # off any object with .roster and .team_name.
+                    from types import SimpleNamespace as _SN
+                    other = _SN(team_name=club, roster=[])
+                r = rivalry_between(rivalries, other, team, "team_team")
+                inten = int(r.get("intensity", 0) or 0) if r else 0
+                if inten > worst:
+                    worst = inten
+                    worst_club = club
+            except Exception:
+                continue
+        out["intensity"] = worst
+        out["club"] = worst_club
+        if worst >= 70:
+            out["refused"] = True
+            out["reason"] = (f"Bitter rival of {worst_club} -- he'd never "
+                             f"coach there.")
+        elif worst >= 50:
+            out["penalty"] = 25
+            out["reason"] = (f"Hated rival of his old club ({worst_club}) -- "
+                             f"the fanbase would never trust him.")
+        elif worst >= 35:
+            out["penalty"] = 10
+            out["reason"] = f"Bad blood with {worst_club} still lingers."
+    except Exception:
+        pass
+    return out
+
+
 def coach_job_appeal(coach: Any, team: Any,
                      team_context: Optional[Dict[str, Any]] = None,
-                     is_promotion: bool = False) -> Dict[str, Any]:
-    """0-100: how badly does this coach want THIS job? Drives hiring logic."""
-    ensure_reputation_fields(coach)
+                     is_promotion: bool = False,
+                     job_role: str = "head_coach",
+                     carousel_entry: Optional[Dict[str, Any]] = None,
+                     rivalries: Optional[list] = None,
+                     date_str: str = "",
+                     league: Any = None) -> Dict[str, Any]:
+    """0-100: how badly does this coach want THIS job? Drives hiring logic.
+
+    job_role: "head_coach" | "assistant" (NHL assistant) | "ahl_head".
+    carousel_entry: the coach's COACH_CAROUSEL entry when he's an unemployed
+      ex-head coach (None for career assistants / outside candidates).
+    rivalries / league: for the rivalry gate (bitter-rival refusal).
+    date_str: today, for the unemployment clock.
+
+    New params are all optional -- existing behavior is unchanged when they
+    are omitted. Returns {score, reasons, ambition, ambition_label, refused,
+    days_unemployed}. refused=True means a hard no (score forced to 0):
+    the same-team demotion insult or a bitter-rival hire.
+    """
+    try:
+        ensure_reputation_fields(coach)
+    except Exception:
+        pass
     ctx = team_context or {}
     score = 50
+    refused = False
     reasons: List[str] = []
-    tname = getattr(team, "team_name", "")
-    ambition = getattr(coach, "ambition", "climb") or "climb"
+    try:
+        tname = getattr(team, "team_name", "") or ""
+    except Exception:
+        tname = ""
+    try:
+        ambition = getattr(coach, "ambition", "climb") or "climb"
+    except Exception:
+        ambition = "climb"
 
     if (getattr(coach, "favorite_team", "") or "") == tname:
         score += 30
@@ -2819,10 +2964,239 @@ def coach_job_appeal(coach: Any, team: Any,
     elif ambition == "lifer":
         score -= 8
         reasons.append("Content where he is.")
-    score = max(0, min(100, score))
-    return {"score": score, "reasons": reasons, "ambition": ambition,
-            "ambition_label": COACH_AMBITIONS.get(ambition, ambition)}
 
+    # ---- Unemployment clock (Muck 2026-10-02) ----
+    days_out = _coach_days_unemployed(carousel_entry, date_str)
+    is_stepdown = job_role in ("assistant", "ahl_head")
+    try:
+        age = int(getattr(coach, "age", 45) or 45)
+    except Exception:
+        age = 45
+    try:
+        rep = int(getattr(coach, "reputation", 50) or 50)
+    except Exception:
+        rep = 50
+    try:
+        stock = int(getattr(coach, "stock", 0) or 0)
+    except Exception:
+        stock = 0
+    firing_club = _coach_firing_club(carousel_entry)
+    try:
+        firing_reason = str((carousel_entry or {}).get("reason", "") or "")
+    except Exception:
+        firing_reason = ""
+    contender = ctx.get("win_pct", 0.5) >= 0.58
+
+    # ---- Same-team demotion insult (Muck 2026-10-02) ----
+    # Fired as head coach, offered an assistant chair by the SAME club that
+    # just let him go: pride says no. The insult fades with time -- after
+    # six months out, need starts beating pride (heavy penalty, not a ban).
+    # A demotion anywhere else is a fair path back and stays on the table.
+    if carousel_entry is not None and job_role == "assistant" \
+            and firing_club and tname and firing_club == tname:
+        if days_out < 180:
+            refused = True
+            score = 0
+            reasons.append(
+                f"They fired him as head coach {days_out} days ago -- he's "
+                f"not walking back in as an assistant.")
+        else:
+            score -= 30
+            reasons.append(
+                "Swallowing his pride to return to the club that fired him.")
+
+    # ---- Step-down willingness: AHL head coach ----
+    if carousel_entry is not None and job_role == "ahl_head" and not refused:
+        if age < 45:
+            score += 15
+            reasons.append(
+                "Young enough to rebuild his stock running a farm team.")
+        elif age >= 55:
+            if days_out < 365:
+                score -= 20
+                reasons.append(
+                    "A veteran won't ride AHL buses unless he's desperate.")
+            else:
+                score += 5
+                reasons.append(
+                    "Swallowing pride -- the AHL keeps him coaching.")
+        else:
+            reasons.append("A lateral move to stay employed.")
+        if rep >= 85:
+            score -= 25
+            reasons.append("Too accomplished for the minors.")
+        elif rep < 60:
+            score += 10
+            reasons.append("Needs the reps -- the AHL is a good lab.")
+        if ambition == "developer":
+            score += 12
+            reasons.append(
+                "Loves molding young players -- the AHL is his workshop.")
+        elif ambition == "stanley_cup":
+            score -= 10
+            reasons.append("Wants the Cup, not the Calder.")
+
+    # ---- Step-down willingness: NHL assistant ----
+    if carousel_entry is not None and job_role == "assistant" and not refused:
+        if age < 40:
+            score += 8
+            reasons.append(
+                "Young -- learning under a head coach gets him back faster.")
+        elif age >= 50:
+            score += 10
+            reasons.append("Veteran happy to stay in the NHL.")
+        if rep >= 85:
+            if contender:
+                score += 5
+                reasons.append(
+                    "Even an elite coach will join a contender's staff.")
+            else:
+                score -= 25
+                reasons.append(
+                    "An elite coach won't carry bags for a rebuild.")
+        if _coach_has_cup_accolade(coach) and days_out < 365:
+            score -= 15
+            reasons.append(
+                "Just lifted the Cup -- he's not taking a demotion yet.")
+        if days_out > 730:
+            score += 25
+            reasons.append("Two years out -- pride is negotiable.")
+        elif days_out > 365:
+            score += 15
+            reasons.append("Over a year out -- he'll take the NHL job.")
+        elif days_out < 90:
+            score -= 10
+            reasons.append(
+                "Fresh off the firing -- still weighing his options.")
+        if ambition == "stanley_cup" and contender:
+            score += 10
+            reasons.append("A ring is a ring -- even from the second chair.")
+        if firing_reason == "fired":
+            score += 5
+            reasons.append("Fired -- he's got something to prove.")
+
+    # ---- Stock: hot coaches can wait, cold ones can't ----
+    if carousel_entry is not None and is_stepdown and not refused:
+        if stock <= -30:
+            score += 10
+            reasons.append("His stock has cratered -- he'll take work.")
+        elif stock >= 50:
+            score -= 10
+            reasons.append("His stock is high -- he can afford to wait.")
+
+    # ---- Rivalry gate (Muck 2026-10-02) ----
+    # A fired coach won't bench-boss his old club's bitter rival. Heavy
+    # penalty for hated rivals, hard refusal for true bad blood -- same
+    # 50/70 bands the player-defection logic uses.
+    if not refused:
+        try:
+            rg = coach_rivalry_check(coach, team, carousel_entry,
+                                     rivalries, league)
+            if rg.get("refused"):
+                refused = True
+                score = 0
+                if rg.get("reason"):
+                    reasons.append(rg["reason"])
+            elif rg.get("penalty"):
+                score -= int(rg["penalty"])
+                if rg.get("reason"):
+                    reasons.append(rg["reason"])
+        except Exception:
+            pass
+
+    score = max(0, min(100, score))
+    if refused:
+        score = 0
+    try:
+        _amb_label = COACH_AMBITIONS.get(ambition, ambition)
+    except Exception:
+        _amb_label = ambition
+    return {"score": score, "reasons": reasons, "ambition": ambition,
+            "ambition_label": _amb_label, "refused": refused,
+            "days_unemployed": days_out}
+
+
+def carousel_entry_for(coach: Any) -> Optional[Dict[str, Any]]:
+    """Find a coach's COACH_CAROUSEL entry by id. None when he's not on the
+    carousel. Never raises."""
+    try:
+        import dressing_room as _dr
+        carousel = getattr(_dr, "COACH_CAROUSEL", None) or []
+        cid = getattr(coach, "id", None)
+        for e in carousel:
+            try:
+                c = (e or {}).get("coach")
+                if c is None:
+                    continue
+                if cid is not None and getattr(c, "id", None) == cid:
+                    return e
+                if c is coach:
+                    return e
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def carousel_candidates_for_role(team: Any, job_role: str,
+                                 team_context: Optional[Dict[str, Any]] = None,
+                                 rivalries: Optional[list] = None,
+                                 date_str: str = "",
+                                 league: Any = None,
+                                 min_score: int = 40) -> List[Dict[str, Any]]:
+    """Unemployed ex-head coaches willing to take a step-down job.
+
+    Scans the coaching carousel through coach_job_appeal for the given
+    job_role ("assistant" | "ahl_head") and returns the willing, ordered by
+    appeal score desc: [{coach, entry, appeal}]. Hard refusals (same-team
+    demotion insult, bitter rival) are excluded. Never raises.
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        import dressing_room as _dr
+        carousel = list(getattr(_dr, "COACH_CAROUSEL", None) or [])
+    except Exception:
+        return out
+    for entry in carousel:
+        try:
+            coach = (entry or {}).get("coach")
+            if coach is None:
+                continue
+            ap = coach_job_appeal(
+                coach, team, team_context=team_context,
+                job_role=job_role, carousel_entry=entry,
+                rivalries=rivalries, date_str=date_str, league=league)
+            if ap.get("refused"):
+                continue
+            if int(ap.get("score", 0) or 0) >= min_score:
+                out.append({"coach": coach, "entry": entry, "appeal": ap})
+        except Exception:
+            continue
+    try:
+        out.sort(key=lambda d: int(d["appeal"].get("score", 0) or 0),
+                 reverse=True)
+    except Exception:
+        pass
+    return out
+
+
+def drop_from_carousel(coach: Any) -> bool:
+    """Remove a coach from the carousel once hired. Never raises."""
+    try:
+        import dressing_room as _dr
+        carousel = getattr(_dr, "COACH_CAROUSEL", None)
+        if not isinstance(carousel, list):
+            return False
+        cid = getattr(coach, "id", None)
+        before = len(carousel)
+        carousel[:] = [e for e in carousel
+                       if (e or {}).get("coach") is not coach
+                       and (cid is None or getattr((e or {}).get("coach"),
+                                                   "id", None) != cid)]
+        return len(carousel) < before
+    except Exception:
+        return False
 
 def staffer_from_retired_player(player: Any, teams: List[Any]) -> Dict[str, Any]:
     """A player hangs them up and wants to coach. Carry what matters: his
@@ -3132,11 +3506,18 @@ def _ahl_gm_of(team: Any) -> Optional[Any]:
     return None
 
 
-def ensure_ahl_front_office(team: Any) -> bool:
+def ensure_ahl_front_office(team: Any, league: Any = None,
+                            date_str: str = "") -> bool:
     """Old-save backfill: every club needs an AHL head coach and an AHL GM.
 
     New games generate both; saves from before the AHL GM existed get one
     here. Returns True when something was created.
+
+    Muck 2026-10-02: the AHL chair checks the coaching carousel first -- an
+    unemployed NHL head coach may take the farm job to rebuild his stock
+    (young/hungry coaches especially). Only when nobody on the carousel
+    wants it is a fresh face generated. league/date_str are optional; when
+    absent the rivalry gate and unemployment clock are skipped gracefully.
     """
     try:
         staff = getattr(team, "staff", None)
@@ -3150,11 +3531,45 @@ def ensure_ahl_front_office(team: Any) -> bool:
         _last = ["Anderson", "Brown", "Clark", "Davis", "Harris", "Johnson",
                  "Lewis", "Miller", "Smith", "Taylor", "Wilson", "Young"]
         if _ahl_coach_of(team) is None:
-            staff.append(Staff(
-                first_name=_r.choice(_first), last_name=_r.choice(_last),
-                role=StaffRole.HEAD_COACH, age=_r.randint(30, 60),
-                experience=_r.randint(1, 15), assignment="ahl",
-                salary=_r.randint(150000, 400000)))
+            hired = None
+            # Carousel first: a fired NHL head coach rebuilding via the AHL.
+            try:
+                _rivs = getattr(league, "rivalries", None) \
+                    if league is not None else None
+                _cands = carousel_candidates_for_role(
+                    team, "ahl_head",
+                    team_context={"win_pct": 0.5, "avg_age": 23},
+                    rivalries=_rivs, date_str=date_str or "",
+                    league=league, min_score=40)
+                if _cands:
+                    hired = _cands[0]["coach"]
+                    try:
+                        drop_from_carousel(hired)
+                    except Exception:
+                        pass
+                    try:
+                        hired.role = StaffRole.HEAD_COACH
+                    except Exception:
+                        pass
+                    try:
+                        hired.assignment = "ahl"
+                        hired.current_club = ""
+                        hired.years_with_team = 0
+                    except Exception:
+                        pass
+            except Exception:
+                hired = None
+            if hired is not None:
+                try:
+                    staff.append(hired)
+                except Exception:
+                    hired = None
+            if hired is None:
+                staff.append(Staff(
+                    first_name=_r.choice(_first), last_name=_r.choice(_last),
+                    role=StaffRole.HEAD_COACH, age=_r.randint(30, 60),
+                    experience=_r.randint(1, 15), assignment="ahl",
+                    salary=_r.randint(150000, 400000)))
             created = True
         if _ahl_gm_of(team) is None:
             staff.append(Staff(

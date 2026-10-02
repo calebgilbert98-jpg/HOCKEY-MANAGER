@@ -4166,6 +4166,32 @@ def _ai_hire_from_interviews(team, date_str, league, app=None, rng=None,
                                   exclude_ids=exclude_ids)
     if not ranked:
         return None
+    # Muck 2026-10-02: the coach gets a say. A candidate who'd hard-refuse
+    # the job (bitter-rival hire, same-team demotion insult) withdraws from
+    # consideration -- the club moves to the next interview. If every
+    # candidate refuses, the chair must still be filled, so fall back to the
+    # unfiltered ranking rather than leaving it empty. Never raises.
+    try:
+        import reputation_system as _rs
+        _rivs = getattr(league, "rivalries", None) if league is not None else None
+        _kept = []
+        for _r in ranked:
+            try:
+                _c = (_r.get("candidate") or {}).get("coach")
+                _entry = _rs.carousel_entry_for(_c) if _c is not None else None
+                _ap = _rs.coach_job_appeal(
+                    _c, team, job_role="head_coach",
+                    carousel_entry=_entry, rivalries=_rivs,
+                    date_str=date_str or "", league=league)
+                if not _ap.get("refused"):
+                    _r["appeal"] = _ap
+                    _kept.append(_r)
+            except Exception:
+                _kept.append(_r)
+        if _kept:
+            ranked = _kept
+    except Exception:
+        pass
     top = ranked[0]
     coach = top["candidate"].get("coach")
     if coach is not None:
