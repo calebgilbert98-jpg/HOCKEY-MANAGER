@@ -1131,6 +1131,30 @@ def _maybe_spawn_context_narrative(league, team, game_date, rng, events) -> None
                 title = f"Trust the process? {team_name} is betting on patience"
         elif is_contender and rng.random() < 0.5:
             # Cup window / legacy chase: the pressure is the story.
+            # History-aware (Muck 2026-10-02): the narrative remembers --
+            # defending champs, droughts, and past glory shape the story.
+            _last_cup_year = None
+            _cup_drought = None
+            try:
+                _lh = getattr(league, "league_history", None)
+                if _lh is None:
+                    # Try game_manager -> app chain
+                    _gm = getattr(league, "game_manager", None)
+                    _lh = getattr(_gm, "league_history", None) if _gm else None
+                if _lh is not None:
+                    _seasons = getattr(_lh, "seasons", []) or []
+                    for _s in reversed(_seasons):
+                        if _s.get("champion") == team_name:
+                            _last_cup_year = _s.get("year")
+                            break
+                    if _last_cup_year is not None:
+                        try:
+                            _cy = int(getattr(game_date, "year", 0) or 0)
+                            _cup_drought = _cy - int(_last_cup_year)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             try:
                 vets = [p for p in roster
                         if int(getattr(p, "age", 0) or 0) >= 33
@@ -1144,7 +1168,14 @@ def _maybe_spawn_context_narrative(league, team, game_date, rng, events) -> None
                     subjects = [getattr(vet, "id", "")]
                 else:
                     kind = "cup_window"
-                    title = f"The window is open in {team_name} -- is this the year?"
+                    if _last_cup_year is not None and _cup_drought == 1:
+                        title = f"Defending the crown: {team_name} goes back-to-back?"
+                    elif _last_cup_year is not None and _cup_drought is not None and _cup_drought <= 3:
+                        title = f"{team_name} won it in {_last_cup_year} -- can they do it again?"
+                    elif _last_cup_year is not None:
+                        title = f"{_cup_drought} years since {team_name}'s last Cup -- is this the year?"
+                    else:
+                        title = f"The window is open in {team_name} -- is this the year?"
             except Exception:
                 kind = "cup_window"
                 title = f"The window is open in {team_name} -- is this the year?"
