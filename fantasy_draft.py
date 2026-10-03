@@ -657,6 +657,52 @@ class FantasyDraftManager:
                         fa_pools["W"].remove(signed)
                     ros.append(signed)
 
+        # Fantasy draft leaves players contract-less (they were stripped
+        # from their old clubs). Assign cap-sensible deals by overall so
+        # the cap system, trade engine, and UFA logic work post-draft.
+        # (Muck 2026-10-03: fantasy draft must assign contracts.)
+        try:
+            self._assign_post_draft_contracts()
+        except Exception:
+            pass
+
+    def _assign_post_draft_contracts(self) -> None:
+        """Assign contracts to all drafted players lacking one. Never raises."""
+        try:
+            import random as _rand
+            from game_classes import Contract
+            def _for_ovr(o):
+                c = Contract()
+                try: o = float(o)
+                except: o = 70.0
+                if o >= 90: ch = _rand.uniform(9, 11)
+                elif o >= 87: ch = _rand.uniform(7, 8.5)
+                elif o >= 84: ch = _rand.uniform(5.5, 7)
+                elif o >= 80: ch = _rand.uniform(4, 5.5)
+                elif o >= 76: ch = _rand.uniform(2.8, 4)
+                elif o >= 72: ch = _rand.uniform(1.8, 2.8)
+                elif o >= 68: ch = _rand.uniform(1.2, 1.8)
+                else: ch = _rand.uniform(0.775, 1.2)
+                c.cap_hit = int(ch * 1e6); c.salary = int(ch * 1e6)
+                c.years = _rand.randint(1, 5); c.years_remaining = c.years
+                return c
+            for t in (self.teams or []):
+                if getattr(t, "league_name", "") != "National Hockey League":
+                    continue
+                for attr in ("roster", "ahl_roster"):
+                    for p in (getattr(t, attr, None) or []):
+                        try:
+                            con = getattr(p, "contract", None)
+                            if con is not None and getattr(con, "cap_hit", 0):
+                                continue
+                            try: o = p.overall_rating()
+                            except: o = 70.0
+                            p.contract = _for_ovr(o)
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------
     # League-owned session persistence (BUG-2 fix, 2026-09-30)
     # ------------------------------------------------------------------
