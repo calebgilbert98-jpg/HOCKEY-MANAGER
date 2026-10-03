@@ -956,6 +956,18 @@ class Player:
     # None = grandfathered (old save / never assigned) -> recall OK.
     ahl_games_since_assignment: Optional[int] = None
 
+    def __setstate__(self, state):
+        """Backfill fields added after old saves were pickled (never raises)."""
+        try:
+            if "secondary_positions" not in state:
+                state["secondary_positions"] = []
+        except Exception:
+            pass
+        try:
+            self.__dict__.update(state)
+        except Exception:
+            pass
+
     def __post_init__(self):
         """Adjusts attributes based on position after initialization."""
         if self.primary_position == PlayerPosition.CENTER:
