@@ -441,6 +441,10 @@ class GameSaveManager:
             'teams': [],  # teams is a list, not dict
             'standings': getattr(league, 'standings', {}),
             'schedule_generated': getattr(league, 'schedule_generated', False),
+            # BUG-001 fix (2026-10-03): season_games_count must survive
+            # save/load, or _check_season_complete falls back to 82 and the
+            # season ends early with games unplayed. Old saves default 82.
+            'season_games_count': getattr(league, 'season_games_count', 84),
             # Playoff seeding format (setup-only choice). Old saves default
             # to 'divisional'.
             'playoff_format': getattr(league, 'playoff_format',
@@ -1052,6 +1056,19 @@ class GameSaveManager:
                         # Legacy events: the outdoor-game stamp rides along
                         # (plain dicts -- JSON/pickle safe).
                         'outdoor': game.get('outdoor') if isinstance(game, dict) else None,
+                        # BUG-002 fix (2026-10-03): playoff stamps must survive
+                        # the round-trip, or reloaded playoff games lose
+                        # their flag -> _simulate_playoff_day skips them
+                        # (stall) and the slate audit counts them as
+                        # regular-season games (false shortfall).
+                        'playoff': bool(game.get('playoff')) if isinstance(game, dict) else False,
+                        'event_type': game.get('event_type') if isinstance(game, dict) else None,
+                        'series_id': game.get('series_id') if isinstance(game, dict) else None,
+                        'series_game': game.get('series_game') if isinstance(game, dict) else None,
+                        'round_name': game.get('round_name') if isinstance(game, dict) else None,
+                        'round_key': game.get('round_key') if isinstance(game, dict) else None,
+                        'marquee': bool(game.get('marquee')) if isinstance(game, dict) else False,
+                        'hype_tags': list(game.get('hype_tags') or []) if isinstance(game, dict) else [],
                     })
                 except (AttributeError, TypeError, IndexError):
                     continue
@@ -1705,6 +1722,9 @@ class GameSaveManager:
                 pass
             league.standings = league_data.get('standings', {})
             league.schedule_generated = league_data.get('schedule_generated', False)
+            # BUG-001 fix (2026-10-03): restore season_games_count; old saves
+            # without it fall back to 82 (their original season length).
+            league.season_games_count = league_data.get('season_games_count', 82)
             league.playoff_format = league_data.get('playoff_format', 'divisional')
             league.outdoor_history = list(league_data.get('outdoor_history', []) or [])
             league.all_star_rosters = {str(k): dict(v) for k, v in
@@ -2691,6 +2711,21 @@ class GameSaveManager:
                         # no stats), not treat them as real games.
                         if game_data.get('preseason'):
                             _restored['preseason'] = True
+                        # BUG-002 fix (2026-10-03): playoff stamps round-trip.
+                        if game_data.get('playoff'):
+                            _restored['playoff'] = True
+                            _restored['event_type'] = game_data.get('event_type') or 'PLAYOFF'
+                            if game_data.get('series_id'):
+                                _restored['series_id'] = game_data['series_id']
+                            if game_data.get('series_game'):
+                                _restored['series_game'] = game_data['series_game']
+                            if game_data.get('round_name'):
+                                _restored['round_name'] = game_data['round_name']
+                            if game_data.get('round_key'):
+                                _restored['round_key'] = game_data['round_key']
+                            if game_data.get('marquee'):
+                                _restored['marquee'] = True
+                            _restored['hype_tags'] = list(game_data.get('hype_tags') or [])
                         schedule.append(_restored)
                 except:
                     continue

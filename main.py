@@ -11582,6 +11582,11 @@ class HockeyManagerGUI(tk.Tk):
                         continue
                     if _e.get('preseason'):
                         continue
+                    # BUG-002 fix (2026-10-03): playoff games are not
+                    # regular-season games; they must not count toward
+                    # the 84-game slate target.
+                    if _e.get('playoff'):
+                        continue
                     _h = _e.get('home_team')
                     _a = _e.get('away_team')
                     _hn = (getattr(_h, 'team_name', None)
