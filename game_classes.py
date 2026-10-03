@@ -3401,7 +3401,37 @@ class EmailInbox:
         if not message.is_read:
             self.unread_count += 1
         self.total_messages += 1
+        self._enforce_inbox_cap()
         self._cleanup_old_messages()
+
+    def _enforce_inbox_cap(self, cap: int = 50):
+        """Auto-cap the inbox at `cap` messages, ignoring pinned/saved.
+
+        Saved (is_saved) and milestone (is_milestone) messages are exempt:
+        they neither count toward the cap nor get removed by it. When the
+        number of regular messages exceeds the cap, the oldest regular
+        messages (end of the list, newest-first ordering) are dropped.
+        """
+        def _is_protected(msg):
+            return (getattr(msg, "is_saved", False)
+                    or getattr(msg, "is_milestone", False))
+
+        regular = [m for m in self.messages if not _is_protected(m)]
+        overflow = len(regular) - cap
+        if overflow <= 0:
+            return
+        # Oldest regular messages live at the end of the newest-first list.
+        to_drop = set(id(m) for m in regular[-overflow:])
+        kept = []
+        dropped_unread = 0
+        for msg in self.messages:
+            if id(msg) in to_drop:
+                if not msg.is_read:
+                    dropped_unread += 1
+                continue
+            kept.append(msg)
+        self.messages = kept
+        self.unread_count = max(0, self.unread_count - dropped_unread)
     
     def mark_message_read(self, message_id: str):
         """Mark a specific message as read."""
