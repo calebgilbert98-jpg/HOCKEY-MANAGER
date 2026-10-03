@@ -460,6 +460,15 @@ class AITeamManager:
             except Exception:
                 pass
 
+            # ROSTER DEPTH INTELLIGENCE: A GM fills out his roster to have
+            # options -- injuries, slumps, matchups. Running with a skeleton
+            # crew is not a strategy. If the roster is short (under 21),
+            # sign depth players from the FA pool.
+            try:
+                self._ensure_roster_depth(team, free_agents, current_date)
+            except Exception:
+                pass
+
             decisions.extend(team_decisions)
 
         self.last_decision_date = current_date
@@ -1614,8 +1623,12 @@ class AITeamManager:
             _min = int(league_minimum_salary(season_year) or 0)
         except Exception:
             _min = 850_000
-        if budget is not None and budget < int(SALARY_CAP_FLOOR):
-            return 0  # budget can't reach the floor; nothing legal to do
+        # The salary floor is a HARD LEAGUE RULE -- it overrides the team's
+        # internal budget. A GM cannot choose to violate the floor because
+        # his budget is low; he must sign to comply. (The old code returned
+        # 0 here, which is why teams got stuck under the floor.)
+        # Budget is still respected for the AMOUNT spent above the floor,
+        # but reaching the floor itself is mandatory.
 
         def _ask(p):
             try:
@@ -1676,15 +1689,11 @@ class AITeamManager:
             if p not in fa_pool:
                 continue
             salary = _ask(p)
-            if budget is not None:
-                try:
-                    current = sum(int(getattr(getattr(x, "contract", None),
-                                              "salary", 0) or 0)
-                                  for x in roster)
-                except Exception:
-                    current = 0
-                if current + salary > budget:
-                    continue
+            # Budget does NOT block floor-compliance signings: the floor is
+            # a hard league rule. (The old code skipped players that would
+            # exceed the internal budget, which is why teams got stuck.)
+            # Budget only matters for signings ABOVE the floor, which this
+            # method never does (it stops when shortfall <= 0).
             try:
                 p.salary = salary
                 p.contract_years = 1
@@ -1724,6 +1733,97 @@ class AITeamManager:
                 except Exception:
                     pass
                 shortfall -= salary
+                made += 1
+            except Exception:
+                continue
+        return made
+
+    def _ensure_roster_depth(self, team: Team, free_agents,
+                             current_date) -> int:
+        """Fill out the roster to have options (not a skeleton crew).
+
+        A GM maintains roster depth for injuries, slumps, and matchups.
+        If the NHL roster is under 21 players, sign the best available
+        free agents to 1-year deals. This is separate from floor compliance
+        -- it's about having options, not just meeting the minimum.
+        Returns the number of signings made.
+        """
+        try:
+            from salary_cap_system import total_cap_charge
+        except Exception:
+            return 0
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return 0
+        fa_pool = getattr(league, "free_agents", None)
+        if not isinstance(fa_pool, list) or not fa_pool:
+            return 0
+        roster = getattr(team, "roster", None) or []
+        # Target 22 (leave one spot for flexibility); don't exceed 23.
+        target = 22
+        if len(roster) >= target:
+            return 0
+        try:
+            import roster_limits as _rl
+            if not _rl.ai_can_sign_spc(team):
+                return 0
+        except Exception:
+            pass
+        # Check cap space (can't exceed the cap). Use a conservative
+        # estimate: if we can't determine the ceiling, skip the check
+        # (the signing itself will fail gracefully if illegal).
+        try:
+            from salary_cap_system import total_cap_charge
+            current = int(total_cap_charge(team) or 0)
+            # NHL cap is ~$88M; use $90M as a safe upper bound for the check.
+            # The real cap check happens in the signing logic.
+            cap_max = 90_000_000
+        except Exception:
+            return 0
+        # Sort FAs by overall (best available first for depth).
+        cands = []
+        for p in list(fa_pool):
+            try:
+                if getattr(p, "retired", False):
+                    continue
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    continue
+                cands.append(p)
+            except Exception:
+                pass
+        try:
+            cands.sort(key=lambda p: p.overall_rating(), reverse=True)
+        except Exception:
+            pass
+        made = 0
+        for p in cands:
+            roster = getattr(team, "roster", None) or []
+            if len(roster) >= target:
+                break
+            if p not in fa_pool:
+                continue
+            try:
+                salary = max(int(self._player_ask(p, league=league) or 0),
+                             850_000)
+            except Exception:
+                salary = 850_000
+            # Don't exceed the cap.
+            try:
+                current = int(total_cap_charge(team) or 0)
+                if current + salary > cap_max:
+                    continue
+            except Exception:
+                pass
+            try:
+                p.salary = salary
+                p.contract_years = 1
+                _contract = getattr(p, "contract", None)
+                if _contract is not None:
+                    _contract.salary = salary
+                    _contract.years_remaining = 1
+                fa_pool.remove(p)
+                team.add_player(p, "roster")
                 made += 1
             except Exception:
                 continue
@@ -2329,6 +2429,30 @@ class AITeamManager:
         """Create a trade offer for a veteran player"""
         if strategy.trade_preference == TradePreference.CONSERVATIVE:
             return None
+        
+        # PROACTIVE FLOOR INTELLIGENCE: A GM does not trade away salary
+        # if it would drop the club below the salary floor without a plan
+        # to replace it. Check the post-trade payroll before offering.
+        try:
+            from salary_cap_system import SALARY_CAP_FLOOR, total_cap_charge
+            vet_salary = int(getattr(getattr(veteran, "contract", None),
+                                     "salary", 0) or 0)
+            current_payroll = int(total_cap_charge(team) or 0)
+            # If trading this veteran (for picks/prospects, i.e. no salary
+            # coming back) would drop us below the floor, don't do it --
+            # unless we're already planning floor-compliance signings.
+            # A rebuilding GM still respects the hard league rule.
+            if current_payroll - vet_salary < int(SALARY_CAP_FLOOR):
+                # Would violate the floor: only proceed if we can
+                # immediately sign a replacement (FA pool has options).
+                league = getattr(self, "_league_ref", None)
+                fa_pool = getattr(league, "free_agents", []) if league else []
+                # Need at least one affordable FA to backfill; otherwise
+                # the trade is blocked by floor intelligence.
+                if not fa_pool:
+                    return None
+        except Exception:
+            pass
         
         return AIDecision(
             team_name=team.team_name,
