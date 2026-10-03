@@ -460,6 +460,28 @@ class AITeamManager:
             except Exception:
                 pass
 
+            # BPA ROSTER MANAGEMENT: A GM keeps his 23 BEST players and
+            # constantly upgrades. Trim the fat (over 23 = waive worst),
+            # then check if any FA is clearly better than the worst at
+            # his position. The roster should always be the best it can be.
+            try:
+                self._trim_roster_to_best_23(team, current_date)
+            except Exception:
+                pass
+            try:
+                self._upgrade_roster_bpa(team, free_agents, current_date)
+            except Exception:
+                pass
+
+            # ROSTER DEPTH INTELLIGENCE: A GM fills out his roster to have
+            # options -- injuries, slumps, matchups. Running with a skeleton
+            # crew is not a strategy. If the roster is short (under 21),
+            # sign depth players from the FA pool.
+            try:
+                self._ensure_roster_depth(team, free_agents, current_date)
+            except Exception:
+                pass
+
             decisions.extend(team_decisions)
 
         self.last_decision_date = current_date
@@ -1585,8 +1607,58 @@ class AITeamManager:
         if shortfall <= 0:
             return 0
         roster = getattr(team, "roster", None) or []
+        # BPA FLOOR COMPLIANCE: If the roster is full, UPGRADE -- don't just
+        # add bodies. A GM under the floor with a full roster replaces his
+        # worst contracts with better players. Demoting to AHL is the
+        # Eastside-style mechanism (players stay in org as depth); waiving
+        # is for waiver-eligible veterans, terminating is last resort.
         if len(roster) >= 23:
-            return 0  # 23-man limit is a real NHL rule; can't add bodies
+            try:
+                def _ovr(p):
+                    try:
+                        return float(p.overall_rating())
+                    except Exception:
+                        return 0.0
+                # How many upgrades needed? Estimate from shortfall.
+                _fa_sample = list(fa_pool)[:20] if isinstance(fa_pool, list) else []
+                _avg_ask = 2000000
+                if _fa_sample:
+                    try:
+                        _asks = [max(int(self._player_ask(p, league=league) or 0), 1000000) for p in _fa_sample]
+                        if _asks:
+                            _avg_ask = sum(_asks) // len(_asks)
+                    except Exception:
+                        pass
+                _need = max(1, (shortfall + _avg_ask - 1) // max(_avg_ask, 1))
+                _need = min(_need, 5)  # Cap upgrades to avoid gutting
+                # Demote the worst players to AHL to make room (they stay
+                # in the organization as depth -- Eastside-style).
+                _sorted = sorted(roster, key=_ovr)
+                _demoted = 0
+                for _p in _sorted[:_need]:
+                    try:
+                        team.remove_player(_p)
+                        try:
+                            team.add_player(_p, "ahl_roster")
+                        except Exception:
+                            try:
+                                import waiver_system as _ws
+                                _ws.place_on_waivers(team, _p)
+                            except Exception:
+                                pass
+                        _demoted += 1
+                    except Exception:
+                        continue
+                roster = getattr(team, "roster", None) or []
+                # Recalculate shortfall after demotions
+                try:
+                    shortfall = int(SALARY_CAP_FLOOR) - int(total_cap_charge(team) or 0)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            if len(roster) >= 23 and shortfall > 0:
+                return 0  # Still full and still short; can't fix by adding
         try:
             import roster_limits as _rl
             if not _rl.ai_can_sign_spc(team):
@@ -1614,8 +1686,12 @@ class AITeamManager:
             _min = int(league_minimum_salary(season_year) or 0)
         except Exception:
             _min = 850_000
-        if budget is not None and budget < int(SALARY_CAP_FLOOR):
-            return 0  # budget can't reach the floor; nothing legal to do
+        # The salary floor is a HARD LEAGUE RULE -- it overrides the team's
+        # internal budget. A GM cannot choose to violate the floor because
+        # his budget is low; he must sign to comply. (The old code returned
+        # 0 here, which is why teams got stuck under the floor.)
+        # Budget is still respected for the AMOUNT spent above the floor,
+        # but reaching the floor itself is mandatory.
 
         def _ask(p):
             try:
@@ -1676,15 +1752,11 @@ class AITeamManager:
             if p not in fa_pool:
                 continue
             salary = _ask(p)
-            if budget is not None:
-                try:
-                    current = sum(int(getattr(getattr(x, "contract", None),
-                                              "salary", 0) or 0)
-                                  for x in roster)
-                except Exception:
-                    current = 0
-                if current + salary > budget:
-                    continue
+            # Budget does NOT block floor-compliance signings: the floor is
+            # a hard league rule. (The old code skipped players that would
+            # exceed the internal budget, which is why teams got stuck.)
+            # Budget only matters for signings ABOVE the floor, which this
+            # method never does (it stops when shortfall <= 0).
             try:
                 p.salary = salary
                 p.contract_years = 1
@@ -1724,6 +1796,287 @@ class AITeamManager:
                 except Exception:
                     pass
                 shortfall -= salary
+                made += 1
+            except Exception:
+                continue
+        return made
+
+    def _trim_roster_to_best_23(self, team: Team, current_date) -> int:
+        """A GM keeps his 23 BEST players on the NHL roster.
+
+        If the NHL roster exceeds 23, DEMOTE the worst players to the AHL
+        (not waive -- they stay in the organization as depth). This is
+        Eastside-style roster management: the AHL is your depth pool,
+        promotion/demotion is the normal mechanism. Waiving is for
+        waiver-eligible veterans; terminating contracts is last resort.
+        Returns the number of players demoted.
+        """
+        try:
+            roster = getattr(team, "roster", None) or []
+            if len(roster) <= 23:
+                return 0
+            # Sort by overall (worst first)
+            def _ovr(p):
+                try:
+                    return float(p.overall_rating())
+                except Exception:
+                    return 0.0
+            _sorted = sorted(roster, key=_ovr)
+            _to_cut = len(roster) - 23
+            demoted = 0
+            for _p in _sorted[:_to_cut]:
+                try:
+                    # DEMOTE to AHL: stays in organization as depth.
+                    # (Waiver logic handled by the demotion itself if
+                    # the player is waiver-eligible.)
+                    team.remove_player(_p)
+                    try:
+                        team.add_player(_p, "ahl_roster")
+                    except Exception:
+                        # If AHL add fails, try waivers as fallback
+                        try:
+                            import waiver_system as _ws
+                            _ws.place_on_waivers(team, _p)
+                        except Exception:
+                            pass
+                    demoted += 1
+                except Exception:
+                    continue
+            return demoted
+        except Exception:
+            return 0
+
+    def _upgrade_roster_bpa(self, team: Team, free_agents,
+                            current_date) -> int:
+        """BPA UPGRADE: constantly make the roster the best it can be.
+
+        A real GM doesn't just fill holes -- he upgrades. If a free agent
+        is clearly better than the worst roster player at that position,
+        sign the FA and waive the worst player. This keeps the roster
+        constantly improving, not just treading water.
+
+        Returns the number of upgrades made.
+        """
+        try:
+            from salary_cap_system import total_cap_charge
+        except Exception:
+            return 0
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return 0
+        fa_pool = getattr(league, "free_agents", None)
+        if not isinstance(fa_pool, list) or not fa_pool:
+            return 0
+        roster = getattr(team, "roster", None) or []
+        if len(roster) < 18:  # Too thin to be cutting; fill first
+            return 0
+        try:
+            import roster_limits as _rl
+            if not _rl.ai_can_sign_spc(team):
+                return 0
+        except Exception:
+            pass
+
+        def _ovr(p):
+            try:
+                return float(p.overall_rating())
+            except Exception:
+                return 0.0
+
+        def _ask(p):
+            try:
+                return max(int(self._player_ask(p, league=league) or 0), 850000)
+            except Exception:
+                return 850000
+
+        # Group roster by position, find worst in each group
+        from collections import defaultdict
+        _by_pos = defaultdict(list)
+        for p in roster:
+            try:
+                pos = getattr(p, "primary_position", None)
+                _by_pos[pos].append(p)
+            except Exception:
+                continue
+
+        made = 0
+        # Check each FA: is he better than our worst at his position?
+        # Sort FAs by overall (best first) to prioritize impact upgrades.
+        _fa_sorted = []
+        for fa in list(fa_pool):
+            try:
+                if getattr(fa, "retired", False):
+                    continue
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(fa):
+                    continue
+                _fa_sorted.append(fa)
+            except Exception:
+                continue
+        _fa_sorted.sort(key=_ovr, reverse=True)
+
+        for fa in _fa_sorted[:10]:  # Check top 10 FAs only (performance)
+            try:
+                fa_pos = getattr(fa, "primary_position", None)
+                fa_ovr = _ovr(fa)
+                # Find worst roster player at this position
+                _candidates = _by_pos.get(fa_pos, [])
+                if not _candidates:
+                    continue
+                _worst = min(_candidates, key=_ovr)
+                _worst_ovr = _ovr(_worst)
+                # BPA threshold: FA must be meaningfully better (+3 overall)
+                # A GM doesn't churn for marginal gains.
+                if fa_ovr < _worst_ovr + 3.0:
+                    continue
+                # Cap check: can we afford the upgrade?
+                # (FA salary - worst salary) must fit under cap
+                try:
+                    fa_salary = _ask(fa)
+                    worst_salary = int(getattr(_worst, "salary", 0) or 0)
+                    _delta = fa_salary - worst_salary
+                    # Check if team has cap space for the delta
+                    # (conservative: use $90M as cap max)
+                    _current = int(total_cap_charge(team) or 0)
+                    if _current + _delta > 90_000_000:
+                        continue
+                except Exception:
+                    continue
+                # Make the upgrade: demote worst to AHL (stays in org as
+                # depth), sign FA to NHL. This is Eastside-style: the AHL
+                # is your depth pool. Waiving is for waiver-eligible vets;
+                # terminating is last resort. Demotion keeps the player
+                # available for injuries, slumps, and matchups.
+                try:
+                    team.remove_player(_worst)
+                    try:
+                        team.add_player(_worst, "ahl_roster")
+                    except Exception:
+                        # Fallback to waivers if AHL add fails
+                        try:
+                            import waiver_system as _ws
+                            _ws.place_on_waivers(team, _worst)
+                        except Exception:
+                            pass
+                    # Sign the FA
+                    fa.salary = fa_salary
+                    fa.contract_years = 1
+                    _contract = getattr(fa, "contract", None)
+                    if _contract is not None:
+                        _contract.salary = fa_salary
+                        _contract.years_remaining = 1
+                    fa_pool.remove(fa)
+                    team.add_player(fa, "roster")
+                    # Update position group
+                    _by_pos[fa_pos].remove(_worst)
+                    _by_pos[fa_pos].append(fa)
+                    made += 1
+                    try:
+                        _pname = getattr(fa, "full_name", "Unknown")
+                        _wname = getattr(_worst, "full_name", "Unknown")
+                        _pend = getattr(self, "_pending_news", None)
+                        if not isinstance(_pend, list):
+                            _pend = self._pending_news = []
+                        _pend.append(
+                            f"The {team.team_name} upgraded: signed {_pname} "
+                            f"({fa_ovr:.0f} ovr) and waived {_wname} "
+                            f"({_worst_ovr:.0f} ovr).")
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
+                if made >= 3:  # Limit to 3 upgrades per cycle (don't churn)
+                    break
+            except Exception:
+                continue
+        return made
+
+    def _ensure_roster_depth(self, team: Team, free_agents,
+                             current_date) -> int:
+        """Fill out the roster to have options (not a skeleton crew).
+
+        A GM maintains roster depth for injuries, slumps, and matchups.
+        If the NHL roster is under 21 players, sign the best available
+        free agents to 1-year deals. This is separate from floor compliance
+        -- it's about having options, not just meeting the minimum.
+        Returns the number of signings made.
+        """
+        try:
+            from salary_cap_system import total_cap_charge
+        except Exception:
+            return 0
+        league = getattr(self, "_league_ref", None)
+        if league is None:
+            return 0
+        fa_pool = getattr(league, "free_agents", None)
+        if not isinstance(fa_pool, list) or not fa_pool:
+            return 0
+        roster = getattr(team, "roster", None) or []
+        # Target 22 (leave one spot for flexibility); don't exceed 23.
+        target = 22
+        if len(roster) >= target:
+            return 0
+        try:
+            import roster_limits as _rl
+            if not _rl.ai_can_sign_spc(team):
+                return 0
+        except Exception:
+            pass
+        # Check cap space (can't exceed the cap). Use a conservative
+        # estimate: if we can't determine the ceiling, skip the check
+        # (the signing itself will fail gracefully if illegal).
+        try:
+            from salary_cap_system import total_cap_charge
+            current = int(total_cap_charge(team) or 0)
+            # NHL cap is ~$88M; use $90M as a safe upper bound for the check.
+            # The real cap check happens in the signing logic.
+            cap_max = 90_000_000
+        except Exception:
+            return 0
+        # Sort FAs by overall (best available first for depth).
+        cands = []
+        for p in list(fa_pool):
+            try:
+                if getattr(p, "retired", False):
+                    continue
+                from draft_generator import player_locked_by_draft as _locked
+                if _locked(p):
+                    continue
+                cands.append(p)
+            except Exception:
+                pass
+        try:
+            cands.sort(key=lambda p: p.overall_rating(), reverse=True)
+        except Exception:
+            pass
+        made = 0
+        for p in cands:
+            roster = getattr(team, "roster", None) or []
+            if len(roster) >= target:
+                break
+            if p not in fa_pool:
+                continue
+            try:
+                salary = max(int(self._player_ask(p, league=league) or 0),
+                             850_000)
+            except Exception:
+                salary = 850_000
+            # Don't exceed the cap.
+            try:
+                current = int(total_cap_charge(team) or 0)
+                if current + salary > cap_max:
+                    continue
+            except Exception:
+                pass
+            try:
+                p.salary = salary
+                p.contract_years = 1
+                _contract = getattr(p, "contract", None)
+                if _contract is not None:
+                    _contract.salary = salary
+                    _contract.years_remaining = 1
+                fa_pool.remove(p)
+                team.add_player(p, "roster")
                 made += 1
             except Exception:
                 continue
@@ -2329,6 +2682,30 @@ class AITeamManager:
         """Create a trade offer for a veteran player"""
         if strategy.trade_preference == TradePreference.CONSERVATIVE:
             return None
+        
+        # PROACTIVE FLOOR INTELLIGENCE: A GM does not trade away salary
+        # if it would drop the club below the salary floor without a plan
+        # to replace it. Check the post-trade payroll before offering.
+        try:
+            from salary_cap_system import SALARY_CAP_FLOOR, total_cap_charge
+            vet_salary = int(getattr(getattr(veteran, "contract", None),
+                                     "salary", 0) or 0)
+            current_payroll = int(total_cap_charge(team) or 0)
+            # If trading this veteran (for picks/prospects, i.e. no salary
+            # coming back) would drop us below the floor, don't do it --
+            # unless we're already planning floor-compliance signings.
+            # A rebuilding GM still respects the hard league rule.
+            if current_payroll - vet_salary < int(SALARY_CAP_FLOOR):
+                # Would violate the floor: only proceed if we can
+                # immediately sign a replacement (FA pool has options).
+                league = getattr(self, "_league_ref", None)
+                fa_pool = getattr(league, "free_agents", []) if league else []
+                # Need at least one affordable FA to backfill; otherwise
+                # the trade is blocked by floor intelligence.
+                if not fa_pool:
+                    return None
+        except Exception:
+            pass
         
         return AIDecision(
             team_name=team.team_name,
