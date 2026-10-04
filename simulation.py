@@ -2912,6 +2912,16 @@ class GameSim:
                 self.player_fatigue[player.id] = max(0, self.player_fatigue[player.id] - fatigue_loss)
             # TOI accounting (G4)
             self.player_toi[player.id] = self.player_toi.get(player.id, 0) + time_elapsed
+            # TOI governor ledger (ported from AdvancedGameSim 2026-10-04):
+            # deployment_policy._raw_toi reads player_toi_seconds; without it
+            # the soft-cap governor sees 0.0 for everyone and never binds.
+            try:
+                _pts = getattr(self, "player_toi_seconds", None)
+                if _pts is None:
+                    _pts = self.player_toi_seconds = {}
+                _pts[player.id] = _pts.get(player.id, 0) + time_elapsed
+            except Exception:
+                pass
             if player.id in self.game_stats:
                 self.game_stats[player.id]['time_on_ice'] = \
                     self.game_stats[player.id].get('time_on_ice', 0) + time_elapsed
