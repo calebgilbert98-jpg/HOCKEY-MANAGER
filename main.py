@@ -12978,7 +12978,13 @@ class HockeyManagerGUI(tk.Tk):
                         ceremony=bool(getattr(home_team, "_pending_ceremony",
                                               None)),
                         outdoor=_outdoor_info is not None),
-                    league=getattr(self, "league", None))
+                    league=getattr(self, "league", None),
+                    # High-fidelity (2026-10-04): user's team games sim at
+                    # 1-second ticks (visualizer fidelity). Other games use
+                    # coarse ticks for speed. Same engine, same outcomes.
+                    high_fidelity=bool(
+                        getattr(home_team, "is_user_team", False) or
+                        getattr(away_team, "is_user_team", False)))
                 if talk_boost != 1.0 and self.user_team is not None:
                     sim_engine.set_team_talk_boost(self.user_team.team_name, talk_boost)
                 # D1: the user's explicit coach instruction from the

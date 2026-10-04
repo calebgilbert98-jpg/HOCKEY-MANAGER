@@ -461,13 +461,18 @@ class GameSim:
     """
     def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
                  rivalries=None, series_game: int = 1, crowd_hype: float = 0.0,
-                 atmosphere=None, league=None):
+                 atmosphere=None, league=None, high_fidelity: bool = False):
         self.home_team = home_team
         self.away_team = away_team
         # League passthrough (unification 2026-10-04): enables ot_drama,
         # team_clutch, and other league-aware systems. Same interface as
         # AdvancedGameSim for drop-in replacement.
         self.league = league
+        # High-fidelity mode (2026-10-04): 1-second ticks for the user's
+        # team games, matching visualizer fidelity. Other games use
+        # coarse 8-20s ticks for speed. Same engine, same outcomes --
+        # just finer position resolution for games the user cares about.
+        self.high_fidelity = high_fidelity
         # Team-talk boost (unification 2026-10-04): FM-style morale multiplier
         self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
         # F3 dressing-room dynamics: each team gets a people-sim.
@@ -2537,7 +2542,12 @@ class GameSim:
         self.possession_time = 0
 
         while self.clock > 0:
-            time_elapsed = random.randint(8, 20)  # Slightly faster pace
+            # High-fidelity: 1-second ticks for user-team games (visualizer
+            # fidelity). Standard: 8-20s ticks for bulk sim speed.
+            if getattr(self, "high_fidelity", False):
+                time_elapsed = 1
+            else:
+                time_elapsed = random.randint(8, 20)  # Slightly faster pace
             tick_start_clock = self.clock
             self.clock -= time_elapsed
             self._game_elapsed += time_elapsed
