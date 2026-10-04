@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <div class="team-block">
+    <div class="team-logo">B</div>
+    <div>
+      <div class="team-name" id="team-name">Boston Bruins</div>
+      <div class="team-sub"><span id="team-record">12-5-2</span> · <span id="team-standing">2nd in Atlantic</span></div>
+    </div>
+  </div>
+  <div class="date-block" id="game-date">November 18, 2026</div>
+</header>
+
+<main class="hub">
+  <section class="tile-grid" id="tile-grid">
+    <!-- tiles injected by hub.js -->
+  </section>
+
+  <aside class="side-panel">
+    <div class="panel-card next-game">
+      <div class="panel-label">Next Game</div>
+      <div class="matchup">
+        <span class="abbr" id="next-home">BOS</span>
+        <span class="vs">vs</span>
+        <span class="abbr" id="next-away">TOR</span>
+      </div>
+      <div class="next-when" id="next-when">Tonight, 7:00 PM · Home</div>
+      <button class="btn-primary" id="btn-play">Play Game</button>
+    </div>
+    <div class="panel-card inbox-peek">
+      <div class="panel-label">Inbox <span class="pill" id="inbox-pill">3</span></div>
+      <div class="inbox-row urgent"><span class="dot"></span> Roster move required <em>Action needed</em></div>
+      <div class="inbox-row"><span class="dot"></span> Head scout: draft board update</div>
+      <div class="inbox-row"><span class="dot"></span> League: trade deadline in 10 days</div>
+    </div>
+  </aside>
+</main>
+
+<footer class="hints">
+  <span><b>Click</b> a tile to open</span>
+  <span><b>Esc</b> back to hub</span>
+</footer>
+
+<script src="/static/js/hub.js"></script>
+</body>
+</html>
