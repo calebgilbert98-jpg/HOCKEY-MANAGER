@@ -33,7 +33,18 @@ function renderHub(s) {
 }
 
 function openTile(t) {
-  // POC: tiles acknowledge the click; real screens come with the bridge.
+  const routes = {inbox: '/inbox', roster: '/roster'};
+  if (routes[t.id]) { window.location.href = routes[t.id]; return; }
+  if (t.id === 'continue') {
+    if (confirm('Advance the day?')) {
+      fetch('/api/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({op: 'advance_day'}),
+      }).then(() => setTimeout(() => window.location.reload(), 600));
+    }
+    return;
+  }
   console.log('open', t.id);
 }
 

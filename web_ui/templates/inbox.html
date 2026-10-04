@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/inbox.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="inbox-count"></div>
+</header>
+
+<main class="inbox-main">
+  <h1>Inbox</h1>
+  <div class="legend">
+    <span><i class="dot red"></i> Action needed</span>
+    <span><i class="dot gold"></i> Urgent</span>
+    <span><i class="dot blue"></i> Unread</span>
+  </div>
+  <div class="filters" id="filters">
+    <button data-f="all" class="active">All</button>
+    <button data-f="unread">Unread</button>
+    <button data-f="action">Action needed</button>
+    <button data-f="urgent">Urgent</button>
+    <button data-f="saved">Saved</button>
+  </div>
+  <div class="msg-list" id="msg-list"></div>
+</main>
+
+<div class="reader" id="reader" hidden>
+  <div class="reader-card">
+    <button class="reader-close" id="reader-close">✕</button>
+    <div class="reader-meta">
+      <div><b>From:</b> <span id="r-from"></span></div>
+      <div><b>Date:</b> <span id="r-date"></span></div>
+      <div><b>Subject:</b> <span id="r-subject"></span></div>
+      <div><b>Category:</b> <span id="r-category"></span></div>
+    </div>
+    <div class="reader-body" id="r-body"></div>
+    <div class="reader-actions">
+      <button id="r-read">Mark as read</button>
+      <button id="r-delete" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/inbox.js"></script>
+</body>
+</html>

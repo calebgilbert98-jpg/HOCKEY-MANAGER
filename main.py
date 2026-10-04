@@ -2574,6 +2574,17 @@ class HockeyManagerGUI(tk.Tk):
     def __init__(self, game_manager, mp_host=None, mp_client=None):
         super().__init__()
 
+        # Web UI (2026-10-04): start the Flask tile frontend in a background
+        # thread and drain its command queue on the Tk mainloop. The web UI
+        # replaces Tkinter screens one by one; the game logic is untouched.
+        try:
+            from web_ui.bridge import start_web_server, drain_commands
+            start_web_server(self)
+            self.after(250, lambda: drain_commands(self, self))
+            print("🌐 Web UI running at http://localhost:5050/")
+        except Exception as e:
+            print(f"⚠️ Web UI failed to start: {e}")
+
         # Global mouse-wheel routing: the wheel always scrolls the canvas
         # under the cursor (scroll_manager), not the last-created screen.
         try:
