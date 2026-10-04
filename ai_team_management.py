@@ -871,42 +871,48 @@ class AITeamManager:
         # old code recomputed it up to 4x per FA (sort key, priority x2,
         # offer details).
         suitable_fas = []
-        for fa in free_agents:
-            if fa.primary_position in strategy.position_needs:
-                # Check age preference
-                if strategy.prefer_youth and fa.age > strategy.max_roster_age:
-                    continue
-                if strategy.prefer_experience and fa.age < strategy.min_roster_age:
-                    continue
-
-                # Tier-quantized (Muck 2026-10-01): the AI targets what the
-                # human sees. raw_ovr feeds the shared player-demand
-                # machinery (same ask the user faces); ovr below is the
-                # quantized gauge for AI evaluation (sort, boldness, NTC).
-                raw_ovr = fa.overall_rating()
-                try:
-                    from attribute_composites import tier_proxy_overall as _tpo
-                    ovr = _tpo(raw_ovr)
-                except Exception:
-                    ovr = raw_ovr
-                # The offer: the player's ask, scaled by how bold this
-                # GM is feeling -- his risk tolerance, the seat he's in,
-                # whether this is the missing piece, and how comfortable
-                # the cap is. No artificial ceiling on any UFA, Euro
-                # imports included: the AI may bid anything from just
-                # under the ask to a real overpay. Whether the player
-                # ACCEPTS is decided realistically at execution time.
-                ask = self._player_ask(fa, raw_ovr)
-                boldness = self._offer_boldness(team, strategy, fa, ovr,
-                                               ask, available_budget)
-                # Analytics read: a progressive room pays for process
-                # (elite xGF%, terrible PDO) and discounts passengers
-                # riding hot percentages; an old-school room pays the
-                # scoresheet. Bounded, philosophy-gated.
-                offer = int(ask * boldness
-                            * self._analytics_offer_multiplier(fa, team))
-                if offer <= available_budget:
-                    suitable_fas.append((fa, offer, ovr, boldness))
+        # PERF (Muck 2026-10-03): pre-filter by position/age (cheap),
+        # sort by overall, take top 80 BEFORE the expensive _player_ask()
+        # calls (~50ms each). Was scanning all 1000+ FAs per team (14s).
+        _prefiltered = [
+            fa for fa in free_agents
+            if fa.primary_position in strategy.position_needs
+            and not (strategy.prefer_youth and fa.age > strategy.max_roster_age)
+            and not (strategy.prefer_experience and fa.age < strategy.min_roster_age)
+        ]
+        try:
+            _prefiltered.sort(key=lambda p: p.overall_rating(), reverse=True)
+        except Exception:
+            pass
+        for fa in _prefiltered[:80]:
+            # Tier-quantized (Muck 2026-10-01): the AI targets what the
+            # human sees. raw_ovr feeds the shared player-demand
+            # machinery (same ask the user faces); ovr below is the
+            # quantized gauge for AI evaluation (sort, boldness, NTC).
+            raw_ovr = fa.overall_rating()
+            try:
+                from attribute_composites import tier_proxy_overall as _tpo
+                ovr = _tpo(raw_ovr)
+            except Exception:
+                ovr = raw_ovr
+            # The offer: the player's ask, scaled by how bold this
+            # GM is feeling -- his risk tolerance, the seat he's in,
+            # whether this is the missing piece, and how comfortable
+            # the cap is. No artificial ceiling on any UFA, Euro
+            # imports included: the AI may bid anything from just
+            # under the ask to a real overpay. Whether the player
+            # ACCEPTS is decided realistically at execution time.
+            ask = self._player_ask(fa, raw_ovr)
+            boldness = self._offer_boldness(team, strategy, fa, ovr,
+                                           ask, available_budget)
+            # Analytics read: a progressive room pays for process
+            # (elite xGF%, terrible PDO) and discounts passengers
+            # riding hot percentages; an old-school room pays the
+            # scoresheet. Bounded, philosophy-gated.
+            offer = int(ask * boldness
+                        * self._analytics_offer_multiplier(fa, team))
+            if offer <= available_budget:
+                suitable_fas.append((fa, offer, ovr, boldness))
 
         # Sort by priority (overall rating vs cost)
         suitable_fas.sort(key=lambda x: x[2] / (x[1] / 1_000_000), reverse=True)
@@ -1746,7 +1752,11 @@ class AITeamManager:
             pass
 
         made = 0
-        for p in cands:
+        # PERF (Muck 2026-10-03): cap the scan at the top 60 FAs by overall.
+        # _player_ask() costs ~50ms per call; scanning all 1000+ FAs took
+        # 60s+ per team per day. We only need 1-3 depth signings — the top
+        # 60 is plenty.
+        for p in cands[:60]:
             if shortfall <= 0 or len(roster) >= 23:
                 break
             if p not in fa_pool:
@@ -2050,7 +2060,11 @@ class AITeamManager:
         except Exception:
             pass
         made = 0
-        for p in cands:
+        # PERF (Muck 2026-10-03): cap the scan at the top 60 FAs by overall.
+        # _player_ask() costs ~50ms per call; scanning all 1000+ FAs took
+        # 60s+ per team per day. We only need 1-3 depth signings — the top
+        # 60 is plenty.
+        for p in cands[:60]:
             roster = getattr(team, "roster", None) or []
             if len(roster) >= target:
                 break
