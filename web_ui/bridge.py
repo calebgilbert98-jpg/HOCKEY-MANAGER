@@ -184,6 +184,85 @@ def get_roster(app):
     return [to_web_player(p) for p in _safe(lambda: list(team.roster), []) or []]
 
 
+def _team_name(t):
+    if isinstance(t, str):
+        return t
+    return _safe(lambda: getattr(t, "team_name", str(t)), "?") or "?"
+
+
+# Blocker ID -> web page that helps resolve it (None = desktop app only).
+BLOCKER_WEB_ROUTES = {
+    "roster_limit_23": "/roster",
+    "dress_minimum": "/roster",
+    "salary_cap": "/roster",
+    "salary_floor": "/roster",
+    "captaincy_choice": "/roster",
+    "fantasy_draft": None,
+    "entry_draft": None,
+    "season_integrity": None,
+}
+
+
+def get_continue_state(app):
+    """Continue button state + JSON-safe blockers for the web modal."""
+    label, blockers = _safe(lambda: app.get_continue_state(), ("Continue", [])) or ("Continue", [])
+    web_blockers = []
+    for b in blockers or []:
+        try:
+            bid = b.get("id", "")
+            auto = b.get("auto_action")
+            web_blockers.append({
+                "id": bid,
+                "title": b.get("title", ""),
+                "detail": b.get("detail", ""),
+                "has_auto": bool(auto),
+                "auto_label": (auto[0] if isinstance(auto, (list, tuple)) and auto else "Auto-resolve"),
+                "web_route": BLOCKER_WEB_ROUTES.get(bid),
+            })
+        except Exception:
+            continue
+    return {"label": label, "blocked": bool(web_blockers), "blockers": web_blockers}
+
+
+def get_schedule(app, limit=40):
+    """Upcoming games for the user team, chronological."""
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: app.user_team)
+    if gm is None or team is None:
+        return []
+    my_name = _safe(lambda: team.team_name, "")
+    today = _safe(lambda: gm.current_date)
+    sched = _safe(lambda: list(getattr(getattr(gm, "league", None), "schedule", None) or []), []) or []
+    out = []
+    for g in sched:
+        try:
+            if not isinstance(g, dict):
+                continue
+            gd = g.get("date")
+            home = _team_name(g.get("home_team"))
+            away = _team_name(g.get("away_team"))
+            if my_name and my_name not in (home, away):
+                continue
+            if today and isinstance(gd, (date, datetime)) and gd < today:
+                continue
+            out.append({
+                "date": gd.strftime("%a %m/%d") if isinstance(gd, (date, datetime)) else str(gd),
+                "home": home,
+                "away": away,
+                "is_home": home == my_name,
+                "opponent": away if home == my_name else home,
+                "preseason": bool(g.get("preseason", False)),
+            })
+        except Exception:
+            continue
+    # chronological
+    try:
+        out.sort(key=lambda x: x["date"])
+    except Exception:
+        pass
+    return out[:limit]
+
+
 # ------------------------------------------------------------------
 # Command queue (web -> game writes, drained on the Tk main thread)
 # ------------------------------------------------------------------
@@ -233,6 +312,23 @@ def _execute_command(app, cmd):
                     inbox.mark_message_read(mid)
                 except Exception:
                     pass
+        elif op == "resolve_blocker":
+            bid = cmd.get("blocker_id")
+            kind = cmd.get("kind", "auto")  # auto | primary | secondary
+            try:
+                _, blockers = app.get_continue_state()
+                for b in blockers or []:
+                    if b.get("id") != bid:
+                        continue
+                    key = {"auto": "auto_action", "primary": "action",
+                           "secondary": "secondary_action"}.get(kind, "auto_action")
+                    act = b.get(key)
+                    fn = act[1] if isinstance(act, (list, tuple)) and len(act) > 1 else None
+                    if callable(fn):
+                        fn()
+                    break
+            except Exception:
+                pass
         elif op == "delete_message":
             mid = cmd.get("message_id")
             team = getattr(app, "user_team", None)
@@ -306,6 +402,24 @@ def create_app(game_app=None):
         if live is None:
             return jsonify([])
         return jsonify(get_roster(live))
+
+    @app.route("/api/schedule")
+    def schedule():
+        live = _live()
+        if live is None:
+            return jsonify([])
+        return jsonify(get_schedule(live))
+
+    @app.route("/schedule")
+    def schedule_page():
+        return render_template("schedule.html")
+
+    @app.route("/api/continue_state")
+    def continue_state():
+        live = _live()
+        if live is None:
+            return jsonify({"label": "Continue", "blocked": False, "blockers": []})
+        return jsonify(get_continue_state(live))
 
     @app.route("/api/command", methods=["POST"])
     def command():

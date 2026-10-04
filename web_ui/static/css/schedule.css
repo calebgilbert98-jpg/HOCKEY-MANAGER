@@ -1,0 +1,21 @@
+/* Puck Dynasty web schedule styles */
+.sched-main { max-width: 760px; margin: 0 auto; padding: 6px 24px 40px; }
+.sched-main h1 { font-size: 26px; margin-bottom: 14px; }
+.game-list { display: flex; flex-direction: column; gap: 8px; }
+.game-row {
+  display: flex; align-items: center; gap: 16px;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
+  padding: 13px 16px; transition: transform .14s ease;
+}
+.game-row:hover { transform: translateY(-2px); }
+.g-date { font-size: 13px; color: var(--dim); font-weight: 600; width: 86px; flex: none; }
+.g-match { flex: 1; font-size: 15px; }
+.g-team { font-weight: 700; }
+.g-team.opp { color: var(--dim); font-weight: 600; }
+.g-vs { color: var(--dim); margin: 0 8px; font-size: 13px; }
+.g-tag {
+  font-size: 11px; font-weight: 700; border-radius: 8px; padding: 3px 9px;
+  background: rgba(255,255,255,.08); color: var(--dim); flex: none;
+}
+.g-tag.home { background: rgba(59,130,246,.18); color: #93c5fd; }
