@@ -15,6 +15,7 @@ from salary_cap_system import SalaryCapSystem, DEFAULT_CAP
 from ai_gm_identity import (
     GMIdentity, GMJobSecurity, gm_identity_from_staff, update_job_security,
     compute_risk_appetite, signing_urgency, expectation_from_strength,
+    league_relative_expectation,
 )
 
 
@@ -142,9 +143,11 @@ class AITeamManager:
             identity = gm_identity_from_staff(team.team_name, self._team_gm(team))
             self.gm_identities[team.team_name] = identity
             roster_analysis = self._analyze_roster(team)
+            # Dynamic expectations (Chris 2026-10-04): league-relative, age-aware.
+            # Only the top ~5 true contenders get a Cup mandate.
             sec = GMJobSecurity(
                 team_name=team.team_name,
-                expectation=expectation_from_strength(roster_analysis["avg_overall"]),
+                expectation=league_relative_expectation(team, teams),
             )
             self.gm_security[team.team_name] = sec
             self._sec_flags[team.team_name] = (sec.hot_seat, sec.tenured_winner,
@@ -533,6 +536,34 @@ class AITeamManager:
                 import reputation_system as _rs
                 _rs.reset_gm_ledger_on_hire(
                     getattr(self, "_league_ref", None), team.team_name)
+            except Exception:
+                pass
+            # CLEAN HOUSE (Chris 2026-10-04): if the team was historically
+            # bad -- win% under .300, the Pittsburgh 0-84 scenario -- the
+            # owner doesn't just fire the GM. The coach goes too. No fans
+            # and no owner would put up with that; a regime change is needed
+            # to change things up.
+            try:
+                _w = int(getattr(team, "wins", 0) or 0)
+                _l = int(getattr(team, "losses", 0) or 0)
+                _otl = int(getattr(team, "ot_losses", 0) or 0)
+                _gp = _w + _l + _otl
+                _pct = (2.0 * _w + _otl) / (2.0 * _gp) if _gp > 0 else 0.0
+                if _gp >= 20 and _pct < 0.300:
+                    from dressing_room import fire_coach as _fire_coach
+                    _league = getattr(self, "_league_ref", None)
+                    _coach_result = _fire_coach(
+                        team, reason="fired",
+                        date_str=str(current_date.date()) if hasattr(current_date, "date") else "",
+                        league=_league)
+                    if _coach_result:
+                        try:
+                            _pend.append(
+                                f"The {team.team_name} have also fired head coach "
+                                f"{_coach_result.get('name', '')} as part of a "
+                                f"full regime change.")
+                        except Exception:
+                            pass
             except Exception:
                 pass
             sec.gm_fired = False

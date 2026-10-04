@@ -306,6 +306,7 @@ class PlayerStats:
     goals: int = 0
     assists: int = 0
     penalties_in_minutes: int = 0
+    fights: int = 0  # Fighting majors (dropped the gloves)
     saves: int = 0
     penalties: int = 0
     shots: int = 0

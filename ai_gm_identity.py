@@ -272,6 +272,135 @@ def expectation_from_strength(avg_overall_100: float) -> str:
     return "rebuild"
 
 
+def league_relative_expectation(team, all_teams) -> str:
+    """Dynamic board expectation: league-relative, age-aware, prospect-aware.
+
+    Chris's design (2026-10-04): only the top ~5 teams -- the media-touted,
+    obvious contenders -- get a Cup mandate. Everyone else gets a realistic,
+    dynamic expectation based on where their roster actually sits.
+
+    The logic:
+    1. Rank all teams by roster strength (avg OVR of the 23-man roster).
+    2. Top 5 by strength are Cup-mandate ELIGIBLE, but age gates it:
+       - A veteran core (avg age 26+) with top-5 talent: "win_cup"
+       - A young core (avg age < 26) with top-5 talent: "contend" -- talented
+         but inexperienced, not true Cup favorites yet.
+    3. A very young team (avg age < 24) with elite talent: "playoffs" --
+       Chris's example: stacked but all under 23 means playoffs, not Cup.
+    4. Teams 6-12: "contend" (playoff teams with upside).
+    5. Teams 13-20: "playoffs" (bubble / wild-card chase).
+    6. Teams 21+: "rebuild" (bottom of the league).
+
+    Prospect pipeline: a young team with a strong prospect pool gets
+    "playoffs" (on the rise) rather than "rebuild" -- the board sees the
+    future coming.
+
+    Never raises; falls back to expectation_from_strength on any error.
+    """
+    try:
+        # Build (team, strength, avg_age) for every team.
+        ranked = []
+        for t in (all_teams or []):
+            try:
+                roster = getattr(t, "roster", None) or []
+                if not roster:
+                    continue
+                ovrs = []
+                ages = []
+                for p in roster:
+                    try:
+                        ovrs.append(float(p.overall_rating()))
+                    except Exception:
+                        continue
+                    try:
+                        a = getattr(p, "age", None)
+                        if a is not None:
+                            ages.append(float(a))
+                    except Exception:
+                        pass
+                if not ovrs:
+                    continue
+                strength = sum(ovrs) / len(ovrs)
+                avg_age = sum(ages) / len(ages) if ages else 27.0
+                ranked.append((t, strength, avg_age))
+            except Exception:
+                continue
+        if not ranked:
+            raise ValueError("no rankable teams")
+
+        # Sort strongest first.
+        ranked.sort(key=lambda x: x[1], reverse=True)
+
+        # Degenerate league (test doubles, single-team lists): ranking is
+        # meaningless with fewer than 10 teams -- fall back to absolute.
+        if len(ranked) < 10:
+            _fallback_strength = sum(s for _, s, _ in ranked) / len(ranked)
+            return expectation_from_strength(_fallback_strength)
+
+        # Find our team's rank (1-based) and age.
+        my_rank = None
+        my_age = 27.0
+        my_strength = 60.0
+        team_name = getattr(team, "team_name", "")
+        for i, (t, s, a) in enumerate(ranked):
+            if getattr(t, "team_name", "") == team_name:
+                my_rank = i + 1
+                my_age = a
+                my_strength = s
+                break
+        if my_rank is None:
+            # Team not in the list (e.g. user team not in AI set):
+            # fall back to absolute thresholds.
+            return expectation_from_strength(my_strength)
+
+        # Prospect pipeline check: does this team have young high-end
+        # talent coming? Look at prospects/AHL for 70+ OVR under-23 players.
+        prospect_boost = False
+        try:
+            prospects = []
+            for attr in ("prospects", "ahl_roster", "farm_system"):
+                pl = getattr(team, attr, None) or []
+                prospects.extend(pl)
+            young_talent = 0
+            for p in prospects:
+                try:
+                    if float(p.overall_rating()) >= 70 and int(getattr(p, "age", 99)) < 23:
+                        young_talent += 1
+                except Exception:
+                    continue
+            prospect_boost = young_talent >= 2
+        except Exception:
+            pass
+
+        # --- Tier assignment (Chris's top-5 rule) ---
+        if my_rank <= 5:
+            # Cup-mandate eligible -- but age gates it.
+            if my_age >= 26.0:
+                return "win_cup"
+            if my_age < 24.0:
+                # Stacked but all kids: playoffs, not Cup.
+                return "playoffs"
+            # 24-26, top-5 talent: contenders, not favorites.
+            return "contend"
+        if my_rank <= 12:
+            # Playoff teams with upside. Very young cores cap at playoffs.
+            if my_age < 24.0:
+                return "playoffs"
+            return "contend"
+        if my_rank <= 20:
+            return "playoffs"
+        # Bottom third: rebuild -- unless a prospect wave is coming.
+        if prospect_boost and my_age < 26.0:
+            return "playoffs"
+        return "rebuild"
+    except Exception:
+        # Never break the game over expectations.
+        try:
+            return expectation_from_strength(60.0)
+        except Exception:
+            return "playoffs"
+
+
 def update_job_security(sec: GMJobSecurity, identity: GMIdentity,
                         team, last_cup_champ_name: Optional[str],
                         season_year: int) -> GMJobSecurity:

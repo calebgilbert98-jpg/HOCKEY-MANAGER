@@ -623,6 +623,162 @@ def _ai_rfa_deal(player, qo_amount: int, rng, league=None) -> Tuple[int, int]:
     return max(qo_amount, aav), rng.choice([1, 2])
 
 
+def _run_ufa_resign_window(league, app=None, rng=None) -> Dict[str, Any]:
+    """UFA re-sign window: final offers before July 1.
+
+    Chris (2026-10-04): a short period after the season ends and before the
+    draft for final offers to own pending UFAs. No insta-loss: teams get
+    to keep their core before the market opens.
+
+    AI clubs: automatically re-sign key UFAs (top by OVR, positional needs)
+    if they fit under the cap. The offer is market value; players accept
+    based on a simple fairness check.
+
+    User team: queues an inbox message listing all pending UFAs with their
+    OVR and last salary, with a deadline. The user makes offers via the
+    normal contract UI before July 1.
+
+    Returns {team_name: {"resigned": [names], "pending": [names]}}.
+    Never raises.
+    """
+    from datetime import date as _date
+    r = rng or __import__("random").Random()
+    result = {}
+    try:
+        teams = list(getattr(league, "teams", None) or [])
+    except Exception:
+        return result
+
+    for team in teams:
+        team_name = getattr(team, "team_name", "?")
+        try:
+            is_user = _is_user_team(team)
+        except Exception:
+            is_user = False
+
+        # Find pending UFAs: expired contracts, UFA-eligible, still on roster.
+        pending = []
+        try:
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if is_ufa(p):
+                        pending.append(p)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        if not pending:
+            result[team_name] = {"resigned": [], "pending": []}
+            continue
+
+        # Sort by OVR descending -- best players first.
+        try:
+            pending.sort(key=lambda p: float(p.overall_rating()), reverse=True)
+        except Exception:
+            pass
+
+        resigned = []
+        if not is_user:
+            # AI: re-sign key UFAs automatically.
+            # Keep top 8 by OVR, or anyone 78+ OVR, if cap allows.
+            try:
+                from game_classes import Contract as _Contract
+            except Exception:
+                _Contract = None
+            if _Contract is not None:
+                # Current cap commitment (excluding the pending UFAs).
+                try:
+                    import salary_cap_system as _scs
+                    current_cap = float(_scs.compliance_charge(team) or 0)
+                except Exception:
+                    current_cap = 0.0
+                try:
+                    cap_ceiling = float(getattr(_scs, "SALARY_CAP_CEILING", 95_000_000))
+                except Exception:
+                    cap_ceiling = 95_000_000
+
+                for i, p in enumerate(pending):
+                    try:
+                        ovr = float(p.overall_rating())
+                    except Exception:
+                        continue
+                    # Keep if: top-8 on the team, or 78+ OVR star.
+                    is_key = (i < 8) or (ovr >= 78.0)
+                    if not is_key:
+                        continue
+                    # Market-value offer.
+                    try:
+                        aav = int(_market_value(p))
+                    except Exception:
+                        aav = 2_000_000
+                    # Cap check: can we fit this deal?
+                    if current_cap + aav > cap_ceiling:
+                        continue
+                    # Term: 2-4 years based on age (younger = longer).
+                    try:
+                        age = int(getattr(p, "age", 28) or 28)
+                    except Exception:
+                        age = 28
+                    term = 4 if age <= 27 else (3 if age <= 31 else 2)
+                    # Player acceptance: 85% if offer >= market, else 40%.
+                    # (Simplified -- the full negotiation UI is for the user.)
+                    accept_odds = 0.85
+                    if r.random() < accept_odds:
+                        try:
+                            p.contract = _Contract(
+                                salary=aav,
+                                years_remaining=term,
+                                signing_bonus=0,
+                                performance_bonus=0,
+                            )
+                            # Also set the player salary field if present.
+                            try:
+                                p.salary = aav
+                            except Exception:
+                                pass
+                            resigned.append(p)
+                            current_cap += aav
+                        except Exception:
+                            continue
+        else:
+            # User team: queue inbox message with pending UFAs.
+            # The user makes offers via the contract UI before July 1.
+            try:
+                if app is not None and hasattr(app, "add_inbox_message"):
+                    lines = []
+                    for p in pending[:12]:  # Top 12, avoid wall of text.
+                        try:
+                            nm = f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip()
+                            ovr = float(p.overall_rating())
+                            last_sal = int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
+                            lines.append(f"• {nm} ({ovr:.0f} OVR, last ${last_sal/1e6:.1f}M)")
+                        except Exception:
+                            continue
+                    if lines:
+                        msg = (
+                            f"UFA RE-SIGN WINDOW: You have {len(pending)} pending unrestricted "
+                            f"free agent(s). Make final offers before they hit the open market on July 1.\n\n"
+                            + "\n".join(lines)
+                        )
+                        if len(pending) > 12:
+                            msg += f"\n...and {len(pending) - 12} more."
+                        app.add_inbox_message(
+                            subject="UFA Re-sign Window: Final Offers Due",
+                            body=msg,
+                            action_type="ufa_resign_window",
+                        )
+            except Exception:
+                pass
+
+        result[team_name] = {
+            "resigned": [f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() for p in resigned],
+            "pending": [f"{getattr(p, 'first_name', '')} {getattr(p, 'last_name', '')}".strip() for p in pending if p not in resigned],
+        }
+
+    return result
+
+
 def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     """July entry point: qualifying offers, offer sheets, arbitration.
 
@@ -858,6 +1014,17 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     # enter the season over the cap, so no unsolvable states exist.
     for team in ai_teams:
         _ai_cap_compliance_sweep(team)
+
+    # --- 6c. UFA re-sign window (Chris 2026-10-04) ---------------------------
+    # A short period after the season ends and before the draft for final
+    # offers to own pending UFAs. No more insta-losing core players on
+    # July 1: teams get a chance to keep their guys first.
+    # AI clubs re-sign key UFAs automatically; the user gets an inbox
+    # message listing pending UFAs with a deadline to make offers.
+    try:
+        _run_ufa_resign_window(league, app, r)
+    except Exception:
+        pass
 
     # --- 6d. July 1: unsigned UFAs leave (R1, true NHL) -------------------
     # Expired UFA deals come off the roster AND off the cap -- for the user

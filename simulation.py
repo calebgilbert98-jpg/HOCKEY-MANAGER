@@ -6902,6 +6902,12 @@ class GameSim:
         team_penalties = self.home_penalties if team is self.home_team else self.away_penalties
         opp_penalties = self.away_penalties if team is self.home_team else self.home_penalties
         player.stats.penalties_in_minutes += 5
+        # Fight counter (Chris 2026-10-04): make fights visible in stats.
+        # The 10-season playthrough recorded 0 fights because no counter existed.
+        try:
+            player.stats.fights = int(getattr(player.stats, "fights", 0) or 0) + 1
+        except Exception:
+            pass
         team_penalties.append({'player': player, 'time': 5 * 60, 'minutes': 5,
                                'infraction': "Fighting", 'manpower_loss': False,
                                'terminates_on_goal': False})
@@ -6911,6 +6917,10 @@ class GameSim:
             opponent = random.choice(opp_skaters) if opp_skaters else None
         if opponent is not None:
             opponent.stats.penalties_in_minutes += 5
+            try:
+                opponent.stats.fights = int(getattr(opponent.stats, "fights", 0) or 0) + 1
+            except Exception:
+                pass
             opp_penalties.append({'player': opponent, 'time': 5 * 60, 'minutes': 5,
                                   'infraction': "Fighting", 'manpower_loss': False,
                                   'terminates_on_goal': False})
