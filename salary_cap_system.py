@@ -786,8 +786,51 @@ def _on_waiver_wire(p) -> bool:
         return False
 
 
+def charge_signing_bonus(team, amount) -> bool:
+    """Charge a signing bonus against the owner's cash budget (Eastside).
+
+    Returns True when the bonus fits and was charged; False when the
+    team can't afford it (caller should refuse the deal). Zero/negative
+    amounts are no-ops returning True.
+    """
+    try:
+        amount = int(amount or 0)
+        if amount <= 0:
+            return True
+        if team is None:
+            return False
+        spender = getattr(team, "spend_bonus", None)
+        if callable(spender):
+            return bool(spender(amount))
+        return False
+    except Exception:
+        return False
+
+
+def _contract_aav(p) -> int:
+    """Real-NHL cap hit: salary + signing bonus (both annual figures).
+
+    The CBA counts ALL compensation in the AAV -- a $5M salary with a
+    $2M signing bonus is a $7M cap hit, not $5M. Performance bonuses are
+    excluded here (bonus cushion rules, not modeled).
+    """
+    try:
+        contract = getattr(p, "contract", None)
+        if contract is None:
+            return 0
+        hit = int(getattr(contract, "salary", 0) or 0)
+        hit += int(getattr(contract, "signing_bonus", 0) or 0)
+        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        return max(0, hit)
+    except Exception:
+        return 0
+
+
 def _active_roster_hit(p) -> int:
-    """Cap hit of a player on the NHL active roster: full salary.
+    """Cap hit of a player on the NHL active roster: salary + signing bonus.
+
+    Real NHL: the AAV counts ALL compensation. A $5M salary with a $2M
+    signing bonus is a $7M cap hit.
 
     Wave B D45: the waiver wire no longer sheds cap space. A player on the
     wire counts his FULL hit until his waiver clears (real NHL). The old
@@ -799,15 +842,7 @@ def _active_roster_hit(p) -> int:
     in-flight wire at its expected post-clearing charge (compliance_charge)
     so corrective action isn't a soft-lock.
     """
-    try:
-        contract = getattr(p, "contract", None)
-        if contract is not None:
-            hit = int(getattr(contract, "salary", 0) or 0)
-            hit -= int(getattr(p, "retained_amount", 0) or 0)
-            return max(0, hit)
-    except Exception:
-        pass
-    return 0
+    return _contract_aav(p)
 
 
 def _expected_wire_charge(p) -> int:
@@ -876,9 +911,10 @@ def minor_league_cap_charge(p) -> int:
     """Cap hit of a player under NHL contract assigned to the minors.
 
     True NHL rule: two-way deals count $0 (minor-league salary is cap
-    exempt); one-way deals count salary minus the burial exemption.
-    D45: the waiver-wire shed is gone everywhere -- a player on the wire
-    counts his full hit until his waiver clears (see _active_roster_hit).
+    exempt); one-way deals count (salary + signing bonus) minus the
+    burial exemption. D45: the waiver-wire shed is gone everywhere -- a
+    player on the wire counts his full hit until his waiver clears (see
+    _active_roster_hit).
     """
     try:
         contract = getattr(p, "contract", None)
@@ -886,8 +922,7 @@ def minor_league_cap_charge(p) -> int:
             return 0
         if bool(getattr(contract, "two_way", False)):
             return 0
-        hit = int(getattr(contract, "salary", 0) or 0)
-        hit -= int(getattr(p, "retained_amount", 0) or 0)
+        hit = _contract_aav(p)
         # New CBA: the burial exemption floats with the league minimum
         # ($375k + minimum => $1.225M in 2026-27).
         try:

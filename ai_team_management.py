@@ -922,6 +922,15 @@ class AITeamManager:
             # scoresheet. Bounded, philosophy-gated.
             offer = int(ask * boldness
                         * self._analytics_offer_multiplier(fa, team))
+            # Owner cash budget (Eastside): the offer must fit BOTH
+            # the cap budget AND the owner's wallet. A GM who has
+            # already burned the bonus budget can't keep spending.
+            try:
+                _cash_left = team.player_budget_remaining()
+                if offer > _cash_left:
+                    continue
+            except Exception:
+                pass
             if offer <= available_budget:
                 suitable_fas.append((fa, offer, ovr, boldness))
 

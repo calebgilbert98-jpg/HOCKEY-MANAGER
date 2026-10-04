@@ -213,6 +213,39 @@ def _ord(n):
     return s
 
 
+def _bracket_playoff_result(app, team):
+    """(made_playoffs, rounds_won, won_cup) from the ACTUAL playoff bracket.
+
+    The single source of truth for playoff participation. board_facts can
+    go stale or contradict itself (a team both missing and making the
+    playoffs); the bracket never lies. Returns (False, 0, False) when no
+    bracket is available.
+    """
+    try:
+        tname = getattr(team, "team_name", "") or ""
+        if not tname:
+            return False, 0, False
+        league = getattr(app, "league", None)
+        bracket = getattr(league, "playoff_bracket", None)
+        if bracket is None:
+            return False, 0, False
+        made, rounds = False, 0
+        for series_list in (getattr(bracket, "playoff_series", {}) or {}).values():
+            for s in series_list or []:
+                t1 = getattr(getattr(s, "team1", None), "team_name", None)
+                t2 = getattr(getattr(s, "team2", None), "team_name", None)
+                if tname not in (t1, t2):
+                    continue
+                made = True
+                if getattr(getattr(s, "winner", None), "team_name", None) == tname:
+                    rounds += 1
+        champ = getattr(bracket, "stanley_cup_champion", None)
+        won_cup = getattr(champ, "team_name", None) == tname
+        return made, rounds, won_cup
+    except Exception:
+        return False, 0, False
+
+
 def _story_lines(app, team, year, board_facts):
     """Big moments: streaks, ledger highlights, playoff run."""
     lines = []
@@ -224,14 +257,15 @@ def _story_lines(app, team, year, board_facts):
             lines.append(f"Best run of the year: {streak} straight wins.")
     except Exception:
         pass
-    # Playoff run from the stashed board facts.
+    # Playoff run -- gated on ACTUAL bracket participation, not board_facts
+    # (which once claimed a 17th-place team both missed and made it).
     try:
-        if board_facts.get("won_cup"):
+        _made, _rounds, _cup = _bracket_playoff_result(app, team)
+        if _cup:
             lines.append("STANLEY CUP CHAMPIONS.")
-        elif board_facts.get("playoff_rounds_won"):
-            r = board_facts["playoff_rounds_won"]
-            lines.append(f"Won {r} playoff round{'' if r == 1 else 's'}.")
-        elif board_facts.get("made_playoffs"):
+        elif _rounds > 0:
+            lines.append(f"Won {_rounds} playoff round{'' if _rounds == 1 else 's'}.")
+        elif _made:
             lines.append("Made the playoffs, out in round one.")
         else:
             lines.append("Missed the playoffs.")

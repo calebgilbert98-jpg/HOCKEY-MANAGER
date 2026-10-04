@@ -9541,6 +9541,14 @@ class HockeyManagerGUI(tk.Tk):
         contract.salary = salary
         contract.years_remaining = years
         try:
+            # Owner cash budget (Eastside): the signing bonus must fit
+            # the remaining player budget, else the deal is refused.
+            if bonus > 0:
+                from salary_cap_system import charge_signing_bonus as _chgb
+                if not _chgb(team, bonus):
+                    return False, (
+                        f"Ownership won't approve the ${bonus:,} signing "
+                        f"bonus -- over the remaining player budget.")
             contract.signing_bonus = bonus
         except Exception:
             pass

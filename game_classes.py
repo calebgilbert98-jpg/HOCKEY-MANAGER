@@ -3844,6 +3844,52 @@ class Team:
     # Annual hockey-ops staff payroll budget (league-wide rule, market-tiered;
     # see default_staff_budget). Hiring is blocked when it would exceed this.
     staff_budget: int = 10_000_000
+    # Eastside-style owner cash budget for player spending (separate from
+    # the salary cap). Covers signing bonuses -- real cash out of the
+    # owner's pocket, paid upfront. Signing bonuses are capped by BOTH the
+    # salary cap (AAV) and this budget, so nobody can hand out unlimited
+    # bonuses. Resets each season; AI GMs treat it as a hard constraint.
+    player_budget: int = 120_000_000
+    # Signing-bonus cash committed this season (resets July 1).
+    bonus_spent: int = 0
+
+    def player_budget_remaining(self) -> int:
+        """Uncommitted owner cash for player spending this season."""
+        try:
+            return int(self.player_budget or 0) - int(self.bonus_spent or 0)
+        except Exception:
+            return 0
+
+    def organizational_cash(self) -> int:
+        """Total real-cash player spending: NHL payroll + AHL payroll +
+        signing bonuses committed. Eastside-style: the owner's wallet
+        cares about ALL of it, not just the cap number."""
+        try:
+            nhl = sum(int(getattr(p, "salary", 0) or 0)
+                      for p in (self.roster or []))
+            ahl = sum(int(getattr(p, "salary", 0) or 0)
+                      for p in (getattr(self, "ahl_roster", None) or []))
+            return nhl + ahl + int(self.bonus_spent or 0)
+        except Exception:
+            return 0
+
+    def can_afford_bonus(self, amount: int) -> bool:
+        """True when a signing bonus fits the remaining owner budget."""
+        try:
+            return int(amount or 0) <= self.player_budget_remaining()
+        except Exception:
+            return False
+
+    def spend_bonus(self, amount: int) -> bool:
+        """Commit signing-bonus cash. Returns False when over budget."""
+        try:
+            amount = int(amount or 0)
+            if amount < 0 or not self.can_afford_bonus(amount):
+                return False
+            self.bonus_spent = int(self.bonus_spent or 0) + amount
+            return True
+        except Exception:
+            return False
 
     def staff_payroll(self) -> int:
         """Current annual staff payroll (all employed staff).
@@ -7683,6 +7729,13 @@ class League:
             pass
 
         self.season_year += 1
+        # Owner cash budget resets each season (Eastside): signing-bonus
+        # spending starts fresh July 1.
+        try:
+            for _t in getattr(self, "teams", None) or []:
+                _t.bonus_spent = 0
+        except Exception:
+            pass
         # BUG-016: the entry draft for season_year was held in June, so
         # picks stamped with that year or earlier are dead paper. The
         # draft never consumed them and initialize_draft_picks() only ever
@@ -8058,6 +8111,15 @@ class League:
             # separately and are NOT part of this aggregate.
             if salary + signing_bonus > _max_annual:
                 return False
+            # Owner cash budget (Eastside): the ELC signing bonus must
+            # fit the remaining player budget.
+            if signing_bonus > 0:
+                try:
+                    from salary_cap_system import charge_signing_bonus as _chgb
+                    if not _chgb(team_obj, signing_bonus):
+                        return False
+                except Exception:
+                    pass
             _draft_year = getattr(player, "drafted_year", 0) or 0
             _minor_max = elc_minor_salary_max(_draft_year or season_year)
             if ahl_salary is None:
