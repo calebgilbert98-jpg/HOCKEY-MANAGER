@@ -2059,6 +2059,88 @@ class AITeamManager:
             pass
 
         made = 0
+
+        def _floor_sign(pl, sal):
+            """One floor-compliance signing: contract, pool removal,
+            roster add, rivalry transfer, room cascade, news line.
+            Mirrors the core of _execute_free_agent_signing. Returns sal
+            on success, 0 on failure (pool/roster untouched on failure --
+            the caller decides what to do)."""
+            try:
+                pl.salary = sal
+                pl.contract_years = 1
+                try:
+                    import trade_engine as _te_clr
+                    _te_clr.clear_retention_state(pl)
+                except Exception:
+                    pass
+                _contract = getattr(pl, "contract", None)
+                if _contract is not None:
+                    _contract.salary = sal
+                    _contract.years_remaining = 1
+                fa_pool.remove(pl)
+                if team.add_player(pl, "roster") is False:
+                    # Roster gate refused (full): put him back in the pool.
+                    try:
+                        fa_pool.append(pl)
+                    except Exception:
+                        pass
+                    return 0
+                try:
+                    from reputation_system import on_player_transfer as _opt
+                    _rivs = getattr(league, "rivalries", None)
+                    if isinstance(_rivs, list):
+                        _opt(_rivs, pl, from_team=None, to_team=team)
+                except Exception:
+                    pass
+                try:
+                    import dressing_room as _dr_arr
+                    _dr_arr.cascade_on_arrival(team, pl, how="signing")
+                except Exception:
+                    pass
+                try:
+                    _pname = getattr(pl, "full_name", "Unknown")
+                    _pend = getattr(self, "_pending_news", None)
+                    if not isinstance(_pend, list):
+                        _pend = self._pending_news = []
+                    _pend.append(
+                        f"The {team.team_name} have signed {_pname} to a "
+                        f"1-year, ${sal:,} contract to reach the salary "
+                        f"floor.")
+                except Exception:
+                    pass
+                return sal
+            except Exception:
+                return 0
+
+        def _fovr(pl):
+            try:
+                return float(pl.overall_rating())
+            except Exception:
+                return 0.0
+
+        def _demote_worst_to_ahl():
+            """Demote the worst NHL player to the AHL (stays in the org as
+            depth -- Eastside-style). Returns the demoted player, or None."""
+            try:
+                _nhl = [pl for pl in (getattr(team, "roster", None) or [])]
+                if not _nhl:
+                    return None
+                _nhl.sort(key=_fovr)
+                _worst = _nhl[0]
+                team.remove_player(_worst)
+                try:
+                    team.add_player(_worst, "ahl_roster")
+                except Exception:
+                    try:
+                        import waiver_system as _ws
+                        _ws.place_on_waivers(team, _worst)
+                    except Exception:
+                        pass
+                return _worst
+            except Exception:
+                return None
+
         # PERF (Muck 2026-10-03): cap the scan at the top 60 FAs by overall.
         # _player_ask() costs ~50ms per call; scanning all 1000+ FAs took
         # 60s+ per team per day. We only need 1-3 depth signings — the top
@@ -2074,48 +2156,91 @@ class AITeamManager:
             # exceed the internal budget, which is why teams got stuck.)
             # Budget only matters for signings ABOVE the floor, which this
             # method never does (it stops when shortfall <= 0).
+            _got = _floor_sign(p, salary)
+            if _got > 0:
+                roster = getattr(team, "roster", None) or []
+                shortfall -= _got
+                made += 1
+        # STILL SHORT WITH A FULL ROSTER: the signings above filled the 23
+        # slots with cheap depth before the shortfall closed (or the
+        # 5-upgrade cap in the pre-pass wasn't enough for a huge
+        # shortfall). Upgrade in place -- demote the worst NHL player to
+        # the AHL and sign the best available FA -- until the floor is
+        # reached or no gainful move remains. Bounded so a barren FA pool
+        # can't spin.
+        _guard = 0
+        while shortfall > 0 and _guard < 12:
+            _guard += 1
             try:
-                p.salary = salary
-                p.contract_years = 1
+                if not _rl.ai_can_sign_spc(team):
+                    break  # 50-contract limit is hard, even for the floor
+            except Exception:
+                pass
+            try:
+                _nhl_now = [pl for pl in (getattr(team, "roster", None)
+                                          or [])]
+                if not _nhl_now:
+                    break
+                _nhl_now.sort(key=_fovr)
+                _worst_now = _nhl_now[0]
+                _worst_sal = 0
                 try:
-                    import trade_engine as _te_clr
-                    _te_clr.clear_retention_state(p)
+                    _wc = getattr(_worst_now, "contract", None)
+                    _worst_sal = int(getattr(_wc, "salary", 0) or 0)
                 except Exception:
                     pass
-                _contract = getattr(p, "contract", None)
-                if _contract is not None:
-                    _contract.salary = salary
-                    _contract.years_remaining = 1
-                fa_pool.remove(p)
-                team.add_player(p, "roster")
+                # Best available FA: needs-matching first, then biggest ask.
+                _pool = []
+                for _pl in (list(fa_pool) if isinstance(fa_pool, list)
+                            else []):
+                    try:
+                        if getattr(_pl, "retired", False):
+                            continue
+                        from draft_generator import player_locked_by_draft \
+                            as _locked2
+                        if _locked2(_pl):
+                            continue
+                    except Exception:
+                        pass
+                    _pool.append(_pl)
+                if not _pool:
+                    break
+                try:
+                    _needs_now = needs
+                except Exception:
+                    _needs_now = ()
+                def _bhit(_pl):
+                    try:
+                        return (getattr(_pl, "primary_position", None)
+                                in _needs_now)
+                    except Exception:
+                        return False
+                _pool.sort(key=lambda _pl: (0 if _bhit(_pl) else 1,
+                                            -_ask(_pl)))
+                _best = _pool[0]
+                _best_ask = _ask(_best)
+                if _best_ask <= _worst_sal:
+                    break  # No gainful move left in the pool.
+                _demoted = _demote_worst_to_ahl()
+                if _demoted is None:
+                    break
+                _got2 = _floor_sign(_best, _best_ask)
+                if _got2 <= 0:
+                    # Signing failed after the demotion: try to restore.
+                    try:
+                        team.add_player(_demoted, "roster")
+                    except Exception:
+                        pass
+                    break
+                made += 1
                 roster = getattr(team, "roster", None) or []
                 try:
-                    from reputation_system import on_player_transfer as _opt
-                    _rivs = getattr(league, "rivalries", None)
-                    if isinstance(_rivs, list):
-                        _opt(_rivs, p, from_team=None, to_team=team)
+                    shortfall = (int(SALARY_CAP_FLOOR)
+                                 - int(total_cap_charge(team) or 0))
                 except Exception:
-                    pass
-                try:
-                    import dressing_room as _dr_arr
-                    _dr_arr.cascade_on_arrival(team, p, how="signing")
-                except Exception:
-                    pass
-                try:
-                    _pname = getattr(p, "full_name", "Unknown")
-                    _pend = getattr(self, "_pending_news", None)
-                    if not isinstance(_pend, list):
-                        _pend = self._pending_news = []
-                    _pend.append(
-                        f"The {team.team_name} have signed {_pname} to a "
-                        f"1-year, ${salary:,} contract to reach the salary "
-                        f"floor.")
-                except Exception:
-                    pass
-                shortfall -= salary
-                made += 1
+                    shortfall -= _got2
             except Exception:
-                continue
+                break
         return made
 
     def _trim_roster_to_best_23(self, team: Team, current_date) -> int:
