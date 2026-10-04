@@ -957,6 +957,56 @@ def apply_incident_consequences(app: Any, home: Any, away: Any,
                       "home": _team_name(home), "away": _team_name(away),
                       "home_score": home_score, "away_score": away_score})
 
+    # -- Plain fight -------------------------------------------------------
+    # Fights were simulated (~0.17/game) but invisible: no PIM attribution,
+    # no news, no stat. The 10-season playthrough recorded 0 fights because
+    # nothing surfaced them. This branch closes the visibility gap.
+    if "fight" in (incidents or []):
+        d = details.get("fight", {})
+        # Pick combatants: highest PIM skaters (enforcers fight).
+        def _pick_fighter(team):
+            try:
+                skaters = [p for p in (getattr(team, "roster", None) or [])
+                           if getattr(getattr(p, "primary_position", None), "value", "") != "G"]
+                if not skaters:
+                    return None
+                # Most PIM first, then highest OVR as tiebreak.
+                skaters.sort(key=lambda p: (
+                    int(getattr(getattr(p, "stats", None), "penalties_in_minutes", 0) or 0),
+                    float(p.overall_rating()) if hasattr(p, "overall_rating") else 0,
+                ), reverse=True)
+                return skaters[0]
+            except Exception:
+                return None
+        _hf = _pick_fighter(home)
+        _af = _pick_fighter(away)
+        for _fp in (_hf, _af):
+            if _fp is not None:
+                try:
+                    _st = getattr(_fp, "stats", None)
+                    if _st is not None:
+                        _st.penalties_in_minutes = int(getattr(_st, "penalties_in_minutes", 0) or 0) + 5
+                        _st.fights = int(getattr(_st, "fights", 0) or 0) + 1
+                except Exception:
+                    pass
+        # News: fights get a game-log entry so they're visible.
+        try:
+            _hfn = f"{getattr(_hf, 'first_name', '')} {getattr(_hf, 'last_name', '')}".strip() if _hf else "Unknown"
+            _afn = f"{getattr(_af, 'first_name', '')} {getattr(_af, 'last_name', '')}".strip() if _af else "Unknown"
+            if _hl is not None:
+                _hl.deliver_spec(app, {
+                    "kind": "fight_quick",
+                    "home": _team_name(home), "away": _team_name(away),
+                    "home_score": home_score, "away_score": away_score,
+                    "involved": _involved(),
+                    "fighter_home": _hfn, "fighter_away": _afn,
+                })
+        except Exception:
+            pass
+        drama.append({"kind": "fight", "live": False,
+                      "home": _team_name(home), "away": _team_name(away),
+                      "home_score": home_score, "away_score": away_score})
+
     # -- Controversial hit -----------------------------------------------
     # Rivalry heat: already logged by _roll_incidents (kind
     # "controversial_hit", original INCIDENT_WEIGHTS) -- the wound
