@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finances — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/finances.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="fin-team"></div>
+</header>
+
+<main class="fin-main">
+  <h1>Finances</h1>
+
+  <section class="fin-hero" id="fin-hero">
+    <div class="fin-status" id="fin-status">…</div>
+    <div class="fin-numbers">
+      <div class="fin-number">
+        <span class="fin-label">Payroll</span>
+        <span class="fin-value" id="fin-payroll">—</span>
+      </div>
+      <div class="fin-number">
+        <span class="fin-label">Cap Space</span>
+        <span class="fin-value big" id="fin-space">—</span>
+      </div>
+      <div class="fin-number">
+        <span class="fin-label">Salary Cap</span>
+        <span class="fin-value" id="fin-cap">—</span>
+      </div>
+    </div>
+    <div class="gauge" aria-label="cap usage">
+      <div class="gauge-fill" id="fin-gauge"></div>
+      <div class="gauge-floor" id="fin-floor-mark" title="Cap floor"></div>
+    </div>
+    <div class="gauge-meta">
+      <span id="fin-gauge-label"></span>
+      <span id="fin-floor-label"></span>
+    </div>
+  </section>
+
+  <div class="fin-grid">
+    <section class="panel-card">
+      <div class="panel-label">💰 Cap Breakdown</div>
+      <div id="fin-breakdown"></div>
+    </section>
+
+    <section class="panel-card">
+      <div class="panel-label">🏦 Owner Budget</div>
+      <div class="fin-number">
+        <span class="fin-label">Cash Remaining</span>
+        <span class="fin-value big" id="fin-budget-left">—</span>
+      </div>
+      <div class="gauge budget-gauge" aria-label="owner budget">
+        <div class="gauge-fill budget" id="fin-budget-gauge"></div>
+      </div>
+      <div class="gauge-meta">
+        <span id="fin-budget-spent"></span>
+        <span id="fin-budget-total"></span>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel-card">
+    <div class="panel-label">📋 Top Cap Hits</div>
+    <table class="fin-table">
+      <thead>
+        <tr><th>#</th><th>Player</th><th>Pos</th><th>Age</th><th>OVR</th>
+            <th class="num">Cap Hit</th><th class="num">% of Cap</th></tr>
+      </thead>
+      <tbody id="fin-hits"></tbody>
+    </table>
+  </section>
+</main>
+
+<script src="/static/js/finances.js"></script>
+</body>
+</html>

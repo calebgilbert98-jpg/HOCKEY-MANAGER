@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>League Leaders — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/stats.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="stats-sub"></div>
+</header>
+
+<main class="stats-main">
+  <h1>League Leaders</h1>
+  <div class="leaders-grid">
+    <section class="panel-card leader-card">
+      <div class="panel-label">🏆 Scoring Leaders <span class="panel-note">Top 10</span></div>
+      <table class="leader-table" id="scorers-table"></table>
+    </section>
+    <section class="panel-card leader-card">
+      <div class="panel-label">🥅 Goal Leaders <span class="panel-note">Top 5</span></div>
+      <table class="leader-table" id="goals-table"></table>
+    </section>
+    <section class="panel-card leader-card">
+      <div class="panel-label">🧤 Save % Leaders <span class="panel-note" id="goalie-min-note"></span></div>
+      <table class="leader-table" id="goalies-table"></table>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/stats.js"></script>
+</body>
+</html>

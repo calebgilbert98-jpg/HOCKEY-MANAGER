@@ -1,0 +1,77 @@
+/* Puck Dynasty web history */
+.history-main {
+  max-width: 900px; margin: 0 auto; padding: 6px 32px 40px;
+}
+.history-main h1 { font-size: 26px; margin-bottom: 20px; }
+.section-title {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--dim); font-weight: 700; margin: 26px 0 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+section:first-of-type .section-title { margin-top: 0; }
+
+.champ-list { display: flex; flex-direction: column; gap: 12px; }
+.champ-card {
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  display: flex; align-items: center; gap: 18px;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.champ-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.3);
+  border-color: rgba(59,130,246,.35);
+}
+.champ-year {
+  font-size: 15px; font-weight: 800; color: var(--dim);
+  min-width: 52px;
+}
+.champ-cup { font-size: 30px; }
+.champ-team { font-size: 19px; font-weight: 700; }
+.champ-detail { font-size: 13px; color: var(--dim); margin-top: 3px; }
+.champ-meta {
+  margin-left: auto; text-align: right; font-size: 12.5px; color: var(--dim);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.champ-meta b { color: var(--text); font-weight: 600; }
+
+.record-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.record-card {
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius); padding: 16px 18px;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.record-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5);
+  border-color: rgba(59,130,246,.35);
+}
+.record-label { font-size: 12.5px; color: var(--dim); font-weight: 600; margin-bottom: 6px; }
+.record-value { font-size: 24px; font-weight: 800; }
+.record-sub { font-size: 12px; color: var(--dim); margin-top: 4px; }
+
+.empty-wrap { display: flex; justify-content: center; padding: 60px 0; }
+.empty-card {
+  text-align: center; max-width: 420px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius); padding: 44px 36px;
+}
+.empty-icon { font-size: 46px; margin-bottom: 14px; }
+.empty-card h2 { font-size: 22px; margin-bottom: 10px; }
+.empty-card p { color: var(--dim); font-size: 14px; line-height: 1.6; }
+
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+
+@media (max-width: 900px) {
+  .history-main { padding: 6px 16px 32px; }
+  .champ-card { flex-wrap: wrap; }
+  .champ-meta { margin-left: 0; text-align: left; }
+}

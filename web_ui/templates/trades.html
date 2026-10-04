@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trades — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/trades.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="trades-status">Trade Center</div>
+</header>
+
+<main class="trades-main">
+  <h1>Trade Center</h1>
+  <p class="trades-hint">Pick a team, select the players you want, pick who you give up, then propose the deal.</p>
+
+  <div class="trades-grid">
+    <!-- Left: team selector -->
+    <section class="panel-card teams-panel">
+      <div class="panel-label">Teams</div>
+      <div class="team-tiles" id="team-tiles"></div>
+    </section>
+
+    <!-- Center: trade partner roster -->
+    <section class="panel-card partner-panel">
+      <div class="panel-label" id="partner-label">Select a team</div>
+      <div class="player-list" id="partner-list">
+        <div class="empty-note">← Choose a team to view their roster</div>
+      </div>
+    </section>
+
+    <!-- Right: proposal builder -->
+    <section class="panel-card proposal-panel">
+      <div class="panel-label">Proposal</div>
+      <div class="prop-row">
+        <div class="prop-half">
+          <div class="prop-title">You get</div>
+          <div class="prop-items" id="prop-get"></div>
+        </div>
+        <div class="prop-half">
+          <div class="prop-title">You give</div>
+          <div class="prop-items" id="prop-give"></div>
+        </div>
+      </div>
+      <div class="prop-totals" id="prop-totals"></div>
+      <button class="btn-primary" id="btn-propose" disabled>Propose trade</button>
+      <div class="prop-note" id="prop-note"></div>
+      <div class="panel-label" style="margin-top:16px">Your roster — give up</div>
+      <div class="player-list my-list" id="my-list"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/trades.js"></script>
+</body>
+</html>

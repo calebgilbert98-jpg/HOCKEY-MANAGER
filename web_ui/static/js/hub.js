@@ -33,7 +33,7 @@ function renderHub(s) {
 }
 
 function openTile(t) {
-  const routes = {inbox: '/inbox', roster: '/roster', schedule: '/schedule'};
+  const routes = {inbox: '/inbox', roster: '/roster', schedule: '/schedule', watch: '/watch'};
   if (routes[t.id]) { window.location.href = routes[t.id]; return; }
   if (t.id === 'continue') { continueFlow(); return; }
   console.log('open', t.id);

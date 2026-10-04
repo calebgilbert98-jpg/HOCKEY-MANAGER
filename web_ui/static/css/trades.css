@@ -1,0 +1,94 @@
+/* Puck Dynasty web trade center */
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+
+.trades-main { padding: 6px 32px 28px; max-width: 1400px; margin: 0 auto; }
+.trades-main h1 { font-size: 28px; letter-spacing: .3px; }
+.trades-hint { color: var(--dim); font-size: 13.5px; margin: 6px 0 18px; }
+
+.trades-grid {
+  display: grid; grid-template-columns: 280px 1fr 380px; gap: 16px;
+  align-items: start;
+}
+@media (max-width: 1100px) { .trades-grid { grid-template-columns: 1fr; } }
+
+/* left: team tiles */
+.teams-panel { max-height: 72vh; display: flex; flex-direction: column; }
+.team-tiles {
+  overflow-y: auto; display: grid; gap: 10px;
+  grid-template-columns: 1fr 1fr; padding-right: 2px;
+}
+.team-tile {
+  position: relative; border-radius: 12px; padding: 12px 10px;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  cursor: pointer; text-align: center;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.team-tile:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.35);
+  border-color: rgba(59,130,246,.4);
+}
+.team-tile.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.team-tile.user { opacity: .45; cursor: default; }
+.team-tile.user:hover { transform: none; box-shadow: none; border-color: rgba(255,255,255,.06); }
+.t-abbr { font-size: 22px; font-weight: 800; letter-spacing: 1px; color: #dbeafe; }
+.t-name { font-size: 11px; color: var(--dim); margin-top: 4px; }
+.t-record { font-size: 11px; color: var(--dim); margin-top: 2px; }
+.t-block {
+  display: inline-block; margin-top: 6px; font-size: 10px; font-weight: 700;
+  color: var(--gold); border: 1px solid var(--gold); border-radius: 8px; padding: 1px 7px;
+}
+.t-you {
+  position: absolute; top: 8px; right: 8px; font-size: 9px; font-weight: 800;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: 8px; padding: 1px 6px;
+}
+
+/* center: partner roster */
+.partner-panel { max-height: 72vh; display: flex; flex-direction: column; }
+.player-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.player-row {
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px; padding: 8px 12px; cursor: pointer;
+  transition: border-color .14s ease, background .14s ease;
+}
+.player-row:hover { border-color: rgba(59,130,246,.4); }
+.player-row.checked { border-color: var(--accent); background: rgba(59,130,246,.12); }
+.player-row.injured { opacity: .6; }
+.player-row input { accent-color: var(--accent); width: 16px; height: 16px; flex: none; }
+.pr-ov {
+  font-size: 18px; font-weight: 800; min-width: 34px; text-align: center;
+  background: rgba(59,130,246,.15); border-radius: 8px; padding: 2px 4px;
+}
+.pr-ov.sm { font-size: 13px; min-width: 26px; }
+.pr-info { display: flex; flex-direction: column; min-width: 0; }
+.pr-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pr-sub { font-size: 11.5px; color: var(--dim); }
+.pr-inj { margin-left: auto; font-size: 10px; font-weight: 800; color: var(--red); }
+.p-c { color: var(--gold); font-weight: 800; }
+.empty-note { color: var(--dim); font-size: 13px; padding: 12px 4px; }
+
+/* right: proposal panel */
+.proposal-panel { max-height: 72vh; overflow-y: auto; }
+.prop-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.prop-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 8px; }
+.prop-items { display: flex; flex-direction: column; gap: 6px; min-height: 60px; }
+.prop-chip {
+  display: flex; align-items: center; gap: 8px;
+  background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.3);
+  border-radius: 9px; padding: 6px 10px; font-size: 12.5px;
+}
+.prop-chip .dim { color: var(--dim); font-size: 11px; }
+.prop-totals {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 13px; color: var(--dim); margin: 12px 0; padding: 10px 12px;
+  background: rgba(255,255,255,.03); border-radius: 10px;
+}
+.prop-totals b { color: var(--text); }
+.prop-note { font-size: 13px; margin-top: 10px; min-height: 18px; color: var(--dim); }
+.prop-note.ok { color: #4CAF50; }
+.prop-note.err { color: var(--red); }
+.my-list { max-height: 30vh; }
+#btn-propose:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }

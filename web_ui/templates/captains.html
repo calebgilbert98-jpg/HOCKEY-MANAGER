@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captains — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/captains.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub">Team leadership</div>
+</header>
+
+<main class="capt-main">
+  <h1>Team Captains</h1>
+
+  <section class="current" id="current-block">
+    <div class="cur-slot" id="cur-c">
+      <div class="cur-letter">C</div>
+      <div class="cur-name">—</div>
+    </div>
+    <div class="cur-slot" id="cur-a1">
+      <div class="cur-letter">A</div>
+      <div class="cur-name">—</div>
+    </div>
+    <div class="cur-slot" id="cur-a2">
+      <div class="cur-letter">A</div>
+      <div class="cur-name">—</div>
+    </div>
+  </section>
+
+  <h2 class="capt-h2">Choose new captaincy</h2>
+  <div class="picker">
+    <label class="pick">Captain (C)
+      <select id="pick-c"></select>
+    </label>
+    <label class="pick">Alternate (A)
+      <select id="pick-a1"></select>
+    </label>
+    <label class="pick">Alternate (A)
+      <select id="pick-a2"></select>
+    </label>
+  </div>
+  <div class="pick-actions">
+    <button class="btn-primary capt-save" id="capt-save" type="button">Set captains</button>
+    <div class="pick-status" id="pick-status"></div>
+  </div>
+
+  <h2 class="capt-h2">Candidates</h2>
+  <p class="capt-note">Ranked by leadership, then overall.</p>
+  <div id="capt-candidates" class="cand-grid"></div>
+</main>
+
+<script src="/static/js/captains.js"></script>
+</body>
+</html>

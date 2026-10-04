@@ -1,0 +1,78 @@
+/* Puck Dynasty web playoffs */
+.playoffs-main {
+  max-width: 1280px; margin: 0 auto; padding: 6px 32px 40px;
+}
+.playoffs-main h1 { font-size: 26px; margin-bottom: 6px; }
+#playoffs-status { font-size: 14px; }
+
+.bracket {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(230px, 1fr);
+  gap: 16px;
+  overflow-x: auto;
+  padding: 18px 4px 8px;
+  align-items: start;
+}
+.round-col { min-width: 0; }
+.round-title {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--dim); font-weight: 700; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.round-title .live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent); flex: none;
+}
+.series-card {
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 12px;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.series-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.3);
+  border-color: rgba(59,130,246,.35);
+}
+.series-card.done { border-left: 4px solid var(--accent); }
+.series-card.live { border-left: 4px solid var(--gold); }
+.series-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 0; font-size: 14px;
+}
+.series-team { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.series-team .abbr-sm {
+  font-size: 15px; font-weight: 800; letter-spacing: .5px;
+}
+.series-team.loser { color: var(--dim); font-weight: 400; }
+.series-team.winner .abbr-sm { color: #fff; }
+.series-score {
+  font-size: 13px; font-weight: 800; color: var(--dim);
+  background: rgba(255,255,255,.06); border-radius: 6px; padding: 2px 8px;
+}
+.series-team.winner .series-score { color: var(--accent); background: rgba(59,130,246,.15); }
+.series-note {
+  margin-top: 8px; font-size: 11.5px; color: var(--dim);
+  display: flex; align-items: center; gap: 6px;
+}
+.series-note .cup { color: var(--gold); }
+
+.empty-wrap { display: flex; justify-content: center; padding: 60px 0; }
+.empty-card {
+  text-align: center; max-width: 420px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius); padding: 44px 36px;
+}
+.empty-icon { font-size: 46px; margin-bottom: 14px; }
+.empty-card h2 { font-size: 22px; margin-bottom: 10px; }
+.empty-card p { color: var(--dim); font-size: 14px; line-height: 1.6; }
+
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+
+@media (max-width: 900px) {
+  .playoffs-main { padding: 6px 16px 32px; }
+}

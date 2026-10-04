@@ -1,0 +1,49 @@
+/* Puck Dynasty web captains */
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+
+.capt-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
+.capt-main h1 { font-size: 26px; margin-bottom: 18px; }
+.capt-h2 { font-size: 18px; margin: 26px 0 12px; }
+.capt-note { color: var(--dim); font-size: 13px; margin-bottom: 14px; }
+
+.current { display: flex; gap: 14px; flex-wrap: wrap; }
+.cur-slot {
+  flex: 1 1 220px; background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
+  padding: 18px; display: flex; align-items: center; gap: 16px;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.cur-slot:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,.45); }
+.cur-letter {
+  width: 48px; height: 48px; border-radius: 50%; flex: none;
+  background: var(--gold); color: #14100a; font-size: 22px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+}
+#cur-c .cur-letter { background: linear-gradient(135deg, var(--accent), var(--accent-dim)); color: #fff; }
+.cur-name { font-size: 17px; font-weight: 700; }
+.cur-sub { font-size: 12.5px; color: var(--dim); margin-top: 3px; }
+
+.picker { display: flex; gap: 14px; flex-wrap: wrap; }
+.pick { flex: 1 1 240px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; font-weight: 700; }
+.pick select {
+  background: var(--card2); color: var(--text); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 10px; padding: 11px 12px; font-size: 14px; cursor: pointer;
+}
+.pick-actions { margin-top: 16px; display: flex; align-items: center; gap: 16px; }
+.capt-save { width: auto; padding: 12px 32px; }
+.pick-status { font-size: 13.5px; color: var(--dim); }
+.pick-status.ok { color: #4CAF50; }
+.pick-status.err { color: var(--red); }
+
+.cand-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.cand {
+  background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 9px; padding: 10px 12px; font-size: 13px; cursor: pointer;
+  transition: transform .14s ease, border-color .14s ease;
+}
+.cand:hover { transform: translateY(-2px); border-color: rgba(59,130,246,.5); }
+.cand .nm { font-weight: 700; }
+.cand .ld { color: var(--gold); font-weight: 700; margin-left: 8px; }
+.cand .sub { color: var(--dim); font-size: 12px; margin-top: 2px; }
+.cand .cur { font-size: 11px; font-weight: 800; color: var(--accent); margin-left: 8px; }

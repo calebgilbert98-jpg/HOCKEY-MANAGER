@@ -1,0 +1,39 @@
+/* Puck Dynasty web entry-draft board styles */
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+.draft-main { max-width: 960px; margin: 0 auto; padding: 6px 24px 40px; }
+.draft-main h1 { font-size: 26px; margin-bottom: 10px; }
+.draft-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+.sum-pill {
+  font-size: 13px; font-weight: 700; border-radius: 20px; padding: 6px 14px;
+  background: rgba(255,255,255,.06); color: var(--dim);
+}
+.sum-pill.mine { background: rgba(59,130,246,.18); color: #93c5fd; }
+
+.board { display: flex; flex-direction: column; gap: 6px; }
+.round-head {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--dim); font-weight: 700; margin: 14px 0 2px;
+}
+.pick-row {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 10px;
+  padding: 10px 16px; transition: transform .14s ease, border-color .14s ease;
+}
+.pick-row:hover { transform: translateY(-2px); }
+.pick-num { font-size: 13px; color: var(--dim); font-weight: 800; width: 46px; flex: none; }
+.pick-owner { font-weight: 700; font-size: 14px; width: 190px; flex: none; }
+.pick-player { flex: 1; font-size: 14px; }
+.pick-player small { display: block; color: var(--dim); font-size: 11.5px; }
+.pick-player .tbd { color: var(--dim); font-style: italic; }
+.pick-row.mine { border-color: rgba(59,130,246,.5); box-shadow: 0 0 0 1px rgba(59,130,246,.3); }
+.pick-row.mine .pick-owner { color: #93c5fd; }
+.pick-row.current { border-color: rgba(232,185,60,.55); }
+.pick-row.current .pick-num::after { content: " ◀ on the clock"; color: var(--gold); font-size: 11px; }
+.pick-row.done .pick-num { color: #34d399; }
+.empty {
+  color: var(--dim); font-size: 15px; padding: 44px 22px; text-align: center;
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--radius);
+  background: linear-gradient(150deg, var(--card2), var(--card));
+}

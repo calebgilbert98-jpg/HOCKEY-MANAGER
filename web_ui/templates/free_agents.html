@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Agents — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/free_agents.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="fa-count"></div>
+</header>
+
+<main class="fa-main">
+  <h1>Free Agents</h1>
+  <p class="fa-sub">Sign players to fill roster holes. UFAs sign outright; RFAs may require offer-sheet compensation.</p>
+
+  <div class="fa-filters">
+    <div class="fa-pos-group" id="pos-filter" role="group" aria-label="Position filter">
+      <button class="fa-pill active" data-pos="ALL">All</button>
+      <button class="fa-pill" data-pos="C">C</button>
+      <button class="fa-pill" data-pos="LW">LW</button>
+      <button class="fa-pill" data-pos="RW">RW</button>
+      <button class="fa-pill" data-pos="D">D</button>
+      <button class="fa-pill" data-pos="G">G</button>
+    </div>
+    <div class="fa-type-group" id="type-filter" role="group" aria-label="Contract type filter">
+      <button class="fa-pill active" data-type="ALL">UFA + RFA</button>
+      <button class="fa-pill" data-type="UFA">UFA</button>
+      <button class="fa-pill" data-type="RFA">RFA</button>
+    </div>
+    <select class="fa-sort" id="fa-sort" aria-label="Sort free agents">
+      <option value="overall">Sort: Overall ↓</option>
+      <option value="ask-asc">Sort: Asking price ↑</option>
+      <option value="ask-desc">Sort: Asking price ↓</option>
+      <option value="age">Sort: Age ↑</option>
+    </select>
+  </div>
+
+  <div class="fa-list" id="fa-list"></div>
+</main>
+
+<script src="/static/js/free_agents.js"></script>
+</body>
+</html>

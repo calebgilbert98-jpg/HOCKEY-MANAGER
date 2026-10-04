@@ -1,0 +1,100 @@
+/* Puck Dynasty — finances screen (matches hub.css visual language) */
+.back {
+  color: var(--dim); text-decoration: none; font-weight: 700; font-size: 15px;
+}
+.back:hover { color: var(--text); }
+
+.fin-main {
+  max-width: 980px; margin: 0 auto; padding: 6px 32px 32px;
+  display: flex; flex-direction: column; gap: 18px;
+}
+.fin-main h1 { font-size: 30px; letter-spacing: .3px; }
+
+/* hero cap card */
+.fin-hero {
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius); padding: 26px;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.fin-hero:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+.fin-status {
+  display: inline-block; font-size: 12px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 1.5px;
+  padding: 5px 14px; border-radius: 20px; margin-bottom: 18px;
+}
+.fin-status.comfortable { background: rgba(52,211,153,.15); color: #34d399; }
+.fin-status.tight { background: rgba(232,185,60,.15); color: var(--gold); }
+.fin-status.over { background: rgba(231,76,60,.15); color: var(--red); }
+
+.fin-numbers {
+  display: flex; gap: 40px; align-items: baseline; margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.fin-number { display: flex; flex-direction: column; gap: 4px; }
+.fin-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); font-weight: 700; }
+.fin-value { font-size: 30px; font-weight: 800; }
+.fin-value.big { font-size: 46px; }
+.fin-value.comfortable { color: #34d399; }
+.fin-value.tight { color: var(--gold); }
+.fin-value.over { color: var(--red); }
+
+/* gauge bar */
+.gauge {
+  position: relative; height: 22px; border-radius: 11px;
+  background: rgba(255,255,255,.06); overflow: hidden;
+}
+.gauge-fill {
+  height: 100%; border-radius: 11px; width: 0;
+  transition: width .6s ease;
+  background: linear-gradient(90deg, #34d399, #10b981);
+}
+.gauge-fill.tight { background: linear-gradient(90deg, var(--gold), #d97706); }
+.gauge-fill.over { background: linear-gradient(90deg, var(--red), #b91c1c); }
+.gauge-fill.budget { background: linear-gradient(90deg, var(--accent), var(--accent-dim)); }
+.gauge-floor {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: rgba(255,255,255,.45);
+}
+.gauge-meta {
+  display: flex; justify-content: space-between;
+  font-size: 12.5px; color: var(--dim); margin-top: 8px;
+}
+.budget-gauge { margin-top: 16px; }
+
+.fin-grid {
+  display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px;
+}
+
+/* breakdown rows */
+.bd-row {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 14.5px; padding: 8px 0;
+  border-top: 1px solid rgba(255,255,255,.05);
+}
+.bd-row:first-of-type { border-top: none; }
+.bd-row .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.bd-row.total { font-weight: 800; font-size: 16px; }
+.bd-row.total .num { color: var(--accent); }
+.bd-row.dead .num { color: var(--gold); }
+.bd-note { font-size: 12px; color: var(--dim); }
+
+/* cap hit table */
+.fin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.fin-table th {
+  text-align: left; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--dim); padding: 8px 10px;
+  border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.fin-table td { padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.fin-table th.num, .fin-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.fin-table tbody tr { transition: background .12s ease; }
+.fin-table tbody tr:hover { background: rgba(59,130,246,.08); }
+.fin-table .inj { color: var(--red); font-size: 11px; font-weight: 700; margin-left: 6px; }
+.fin-row-me { background: rgba(59,130,246,.05); }
+
+@media (max-width: 760px) {
+  .fin-grid { grid-template-columns: 1fr; }
+  .fin-value.big { font-size: 34px; }
+  .fin-numbers { gap: 24px; }
+}

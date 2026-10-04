@@ -1,0 +1,23 @@
+/* Puck Dynasty web save/load styles */
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+.save-main { max-width: 980px; margin: 0 auto; padding: 6px 24px 40px; }
+.save-main h1 { font-size: 26px; margin-bottom: 16px; }
+.save-panel {
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
+  padding: 18px; margin-bottom: 18px;
+}
+.save-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 14px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.05);
+}
+.save-row:first-child { border-top: none; }
+.save-row span { color: var(--dim); }
+.save-row b { font-weight: 700; text-align: right; word-break: break-all; }
+.save-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.save-tiles .tile { min-height: 150px; }
+.save-status { margin-top: 16px; font-size: 14px; color: var(--dim); min-height: 22px; }
+.save-status.ok { color: #4CAF50; }
+.save-status.err { color: var(--red); }
+@media (max-width: 700px) { .save-tiles { grid-template-columns: 1fr; } }

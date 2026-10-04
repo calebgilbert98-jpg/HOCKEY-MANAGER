@@ -152,6 +152,8 @@ def get_hub_state(app):
              "size": "small", "icon": "🔭"},
             {"id": "staff", "title": "Staff", "subtitle": "Coaches & management",
              "size": "small", "icon": "👔"},
+            {"id": "watch", "title": "Watch Game", "subtitle": "Live visualizer",
+             "size": "medium", "icon": "📺"},
         ],
     }
 

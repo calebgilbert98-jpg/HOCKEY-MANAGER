@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playoffs — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/playoffs.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="playoffs-status">Stanley Cup Playoffs</div>
+</header>
+
+<main class="playoffs-main">
+  <h1>Stanley Cup Playoffs</h1>
+  <div class="bracket" id="bracket"></div>
+  <div class="empty-wrap" id="empty" hidden>
+    <div class="empty-card">
+      <div class="empty-icon">🏆</div>
+      <h2>Playoffs begin in April</h2>
+      <p>The bracket appears here once the regular season wraps up and the
+      playoff field is set.</p>
+    </div>
+  </div>
+</main>
+
+<script src="/static/js/playoffs.js"></script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/history.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="history-sub">League history</div>
+</header>
+
+<main class="history-main">
+  <h1>League History</h1>
+
+  <section id="champions">
+    <div class="section-title"><span>🏆</span> Stanley Cup Champions</div>
+    <div class="champ-list" id="champ-list"></div>
+  </section>
+
+  <section id="records" hidden>
+    <div class="section-title"><span>📖</span> Franchise Record Book</div>
+    <div class="record-grid" id="record-grid"></div>
+  </section>
+
+  <div class="empty-wrap" id="empty" hidden>
+    <div class="empty-card">
+      <div class="empty-icon">📜</div>
+      <h2>No history yet</h2>
+      <p>This is a fresh league. Past champions and franchise records will
+      appear here once the first season is in the books.</p>
+    </div>
+  </div>
+</main>
+
+<script src="/static/js/history.js"></script>
+</body>
+</html>

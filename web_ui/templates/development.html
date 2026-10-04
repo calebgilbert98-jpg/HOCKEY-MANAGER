@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Development — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/development.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="dev-count"></div>
+</header>
+
+<main class="dev-main">
+  <h1>Player Development</h1>
+
+  <section>
+    <h2>Active Training Programs</h2>
+    <div class="prog-grid" id="prog-grid"></div>
+    <div class="empty" id="prog-empty" hidden>No active training programs. Assign players in the Development Center on desktop.</div>
+  </section>
+
+  <section>
+    <h2>Prospect Watchlist <span class="sub">age ≤ 23</span></h2>
+    <div class="prospect-list" id="prospect-list"></div>
+    <div class="empty" id="prospect-empty" hidden>No young prospects on the roster.</div>
+  </section>
+</main>
+
+<script src="/static/js/development.js"></script>
+</body>
+</html>

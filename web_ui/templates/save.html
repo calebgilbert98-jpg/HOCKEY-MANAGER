@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Save / Load — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/save.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+</header>
+
+<main class="save-main">
+  <h1>Save / Load</h1>
+
+  <div class="save-panel">
+    <div class="save-meta" id="save-meta">
+      <div class="save-row"><span>Team</span><b id="save-team">—</b></div>
+      <div class="save-row"><span>In-game date</span><b id="save-date">—</b></div>
+      <div class="save-row"><span>Last save</span><b id="save-last">—</b></div>
+    </div>
+  </div>
+
+  <div class="save-tiles">
+    <div class="tile hero accent" id="tile-save" role="button" tabindex="0">
+      <div class="icon">💾</div>
+      <h3>Save Game</h3>
+      <p>Save your current progress</p>
+    </div>
+    <div class="tile hero" id="tile-load" role="button" tabindex="0">
+      <div class="icon">📂</div>
+      <h3>Load Game</h3>
+      <p>Load a saved game (discards unsaved progress)</p>
+    </div>
+  </div>
+
+  <p class="save-status" id="save-status"></p>
+</main>
+
+<script src="/static/js/save.js"></script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scouting — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/scouting.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="scout-count"></div>
+</header>
+
+<main class="scout-main">
+  <h1>Scouting</h1>
+
+  <section>
+    <div class="sec-head">
+      <h2>Active Assignments</h2>
+      <button class="btn-new" id="new-btn">＋ New Assignment</button>
+    </div>
+    <div class="assign-grid" id="assign-grid"></div>
+  </section>
+
+  <section>
+    <h2>Scouting Reports</h2>
+    <div class="report-list" id="report-list"></div>
+  </section>
+</main>
+
+<div class="modal-ov hidden" id="modal">
+  <div class="modal-card">
+    <h2>New Scouting Assignment</h2>
+    <p class="modal-sub">Assign a scout to evaluate a draft-eligible prospect.</p>
+    <label class="fld-label">Prospect</label>
+    <select id="prospect-sel" class="fld"></select>
+    <label class="fld-label">Scout</label>
+    <select id="scout-sel" class="fld"></select>
+    <div class="modal-actions">
+      <button class="btn-auto" id="assign-btn">Assign</button>
+      <button class="modal-close" id="cancel-btn">Cancel</button>
+    </div>
+    <p class="modal-sub" id="assign-msg"></p>
+  </div>
+</div>
+
+<script src="/static/js/scouting.js"></script>
+</body>
+</html>

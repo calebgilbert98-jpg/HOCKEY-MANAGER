@@ -1,0 +1,40 @@
+/* Puck Dynasty web morale styles */
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+.morale-main { max-width: 760px; margin: 0 auto; padding: 6px 24px 40px; }
+.morale-main h1 { font-size: 26px; margin-bottom: 14px; }
+.morale-summary {
+  display: flex; gap: 14px; margin-bottom: 18px; flex-wrap: wrap;
+}
+.summary-card {
+  flex: 1; min-width: 150px;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
+  padding: 14px 16px;
+}
+.summary-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--dim); font-weight: 700; margin-bottom: 6px;
+}
+.summary-value { font-size: 26px; font-weight: 800; }
+.morale-list { display: flex; flex-direction: column; gap: 8px; }
+.morale-row {
+  display: flex; align-items: center; gap: 14px;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 10px;
+  padding: 10px 14px; transition: transform .14s ease, box-shadow .14s ease;
+}
+.morale-row:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
+.morale-row.low { border-left: 4px solid var(--red); }
+.m-name { font-size: 14px; font-weight: 700; width: 180px; flex: none; }
+.m-pos { font-size: 12px; color: var(--dim); width: 34px; flex: none; }
+.m-bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+.m-bar span { display: block; height: 100%; border-radius: 4px; transition: width .3s ease; }
+.m-val { font-size: 14px; font-weight: 800; width: 38px; text-align: right; flex: none; }
+.m-note { font-size: 12px; color: var(--dim); }
+.p-c {
+  display: inline-block; background: var(--gold); color: #111;
+  font-size: 11px; font-weight: 800; border-radius: 6px; padding: 1px 6px;
+  vertical-align: 1px;
+}
+.morale-empty { color: var(--dim); font-size: 14px; padding: 24px 0; }

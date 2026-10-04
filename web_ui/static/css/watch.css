@@ -1,0 +1,25 @@
+/* Puck Dynasty web visualizer styles */
+html, body { height: 100%; }
+.watch-wrap { display: flex; flex-direction: column; height: 100vh; background: #06090e; }
+.watch-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px; background: rgba(10,14,20,.92); z-index: 10;
+  border-bottom: 1px solid rgba(255,255,255,.07);
+}
+.scorebug { display: flex; align-items: center; gap: 14px; font-weight: 800; }
+.sb-team { font-size: 20px; letter-spacing: 1px; }
+.sb-team.home { color: #93c5fd; } .sb-team.away { color: #e8b93c; }
+.sb-score { font-size: 26px; min-width: 30px; text-align: center; }
+.sb-period, .sb-clock {
+  font-size: 13px; color: var(--dim); background: rgba(255,255,255,.06);
+  padding: 4px 10px; border-radius: 8px;
+}
+.watch-controls { display: flex; gap: 8px; }
+.watch-controls button {
+  background: rgba(255,255,255,.08); border: none; color: #fff;
+  width: 40px; height: 40px; border-radius: 10px; font-size: 17px; cursor: pointer;
+}
+.watch-controls button:hover { background: rgba(255,255,255,.15); }
+.rink-stage { flex: 1; position: relative; overflow: hidden; }
+.rink-stage canvas { position: absolute; inset: 0; }
+.watch-hint { text-align: center; padding: 8px; color: var(--dim); font-size: 12px; }

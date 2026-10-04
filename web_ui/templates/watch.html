@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch Game — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/watch.css">
+</head>
+<body>
+<div class="watch-wrap">
+  <header class="watch-bar">
+    <a class="back" href="/">← Hub</a>
+    <div class="scorebug">
+      <span class="sb-team home">BOS</span>
+      <span class="sb-score" id="sb-home">0</span>
+      <span class="sb-period" id="sb-period">P1</span>
+      <span class="sb-clock" id="sb-clock">20:00</span>
+      <span class="sb-score" id="sb-away">0</span>
+      <span class="sb-team away">TOR</span>
+    </div>
+    <div class="watch-controls">
+      <button id="btn-pause">⏸</button>
+      <button id="btn-speed">1×</button>
+    </div>
+  </header>
+  <div class="rink-stage">
+    <canvas id="rink"></canvas>
+  </div>
+  <footer class="watch-hint">Live simulation · 60fps canvas renderer</footer>
+</div>
+<script src="/static/js/watch.js"></script>
+</body>
+</html>
