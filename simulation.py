@@ -461,9 +461,15 @@ class GameSim:
     """
     def __init__(self, home_team: Team, away_team: Team, is_playoff: bool = False,
                  rivalries=None, series_game: int = 1, crowd_hype: float = 0.0,
-                 atmosphere=None):
+                 atmosphere=None, league=None):
         self.home_team = home_team
         self.away_team = away_team
+        # League passthrough (unification 2026-10-04): enables ot_drama,
+        # team_clutch, and other league-aware systems. Same interface as
+        # AdvancedGameSim for drop-in replacement.
+        self.league = league
+        # Team-talk boost (unification 2026-10-04): FM-style morale multiplier
+        self.team_boost = {home_team.team_name: 1.0, away_team.team_name: 1.0}
         # F3 dressing-room dynamics: each team gets a people-sim.
         if DressingRoom is not None:
             self.home_room = DressingRoom(home_team)
@@ -6582,6 +6588,17 @@ class GameSim:
         except Exception:
             pass
 
+    def set_team_talk_boost(self, team_name: str, multiplier: float):
+        """FM-style: apply a team-talk/morale multiplier to a team's scoring.
+        Ported from AdvancedGameSim 2026-10-04 for unified engine interface.
+        """
+        try:
+            if not hasattr(self, "team_boost"):
+                self.team_boost = {}
+            self.team_boost[team_name] = max(0.9, min(1.1, multiplier))
+        except Exception:
+            pass
+
     def _instruction_effect(self, team_name, channel, default=1.0):
         """D1: this team's instruction effect channel (ported from
         AdvancedGameSim 2026-10-04). Multipliers are efficacy-scaled on
@@ -7828,6 +7845,15 @@ class GameSim:
                     attacking_team.team_name, "shot_volume_mult", 1.0)
                 if _instr_fx != 1.0:
                     shot_chance *= _instr_fx
+            except Exception:
+                pass
+            # Team-talk boost (ported from AdvancedGameSim 2026-10-04):
+            # FM-style morale multiplier on scoring.
+            try:
+                _tb = getattr(self, "team_boost", {}).get(
+                    attacking_team.team_name, 1.0)
+                if _tb != 1.0:
+                    shot_chance *= _tb
             except Exception:
                 pass
             shot_chance = max(0.2, min(0.85, shot_chance))

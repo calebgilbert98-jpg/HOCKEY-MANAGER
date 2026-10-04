@@ -15,7 +15,7 @@ from windows import (TradeWindow, GMOptionsWindow, ContractNegotiationWindow, Co
 from ui_widgets import PillButton
 # Quick-sim engine + shared lineup helpers (extracted from main.py 2026-09-28;
 # re-exported here so `from main import best_lines` etc. keeps working)
-from quick_sim import AdvancedGameSim, best_lines, flatten_lineup, roll_game_injury
+from quick_sim import best_lines, flatten_lineup, roll_game_injury
 # Professional Calendar System (Phase 4) - replaces old calendar_window
 from calendar_window import CalendarView
 from staff_management_window import StaffManagementView
@@ -2204,8 +2204,10 @@ def launch_game_viewer_with_sim(home_team, away_team):
     
     print("Starting enhanced hockey simulation...")
     
-    # Run the advanced simulation
-    sim = AdvancedGameSim(home_team, away_team)
+    # Run the simulation (unified engine 2026-10-04: GameSim now has full
+    # AdvancedGameSim parity, single engine for watched and simmed games)
+    from simulation import GameSim
+    sim = GameSim(home_team, away_team)
     winner, loser, scores, events, notable_events = sim.run()
     
     print(f"Simulation complete! {winner.team_name} {scores[0]} - {loser.team_name} {scores[1]}")
@@ -12964,7 +12966,9 @@ class HockeyManagerGUI(tk.Tk):
                     except Exception:
                         pass
                     self._grudge_week_market(game_date, home_team, away_team)
-                sim_engine = AdvancedGameSim(
+                # Unified engine 2026-10-04: GameSim replaces AdvancedGameSim
+                from simulation import GameSim
+                sim_engine = GameSim(
                     home_team, away_team,
                     atmosphere=_pregame_atmosphere(
                         home_team, away_team,
@@ -15871,8 +15875,9 @@ class HockeyManagerGUI(tk.Tk):
         
         print(f"Starting game viewer simulation: {home_team.team_name} vs {away_team.team_name}")
         
-        # Run the advanced simulation first to get the data
-        sim_engine = AdvancedGameSim(home_team, away_team)
+        # Run the simulation (unified engine 2026-10-04)
+        from simulation import GameSim
+        sim_engine = GameSim(home_team, away_team)
         winner, loser, scores, events, notable_events = sim_engine.run()
         
         print(f"Simulation complete! {winner.team_name} {scores[0]} - {loser.team_name} {scores[1]}")
@@ -27578,8 +27583,9 @@ def test_enhanced_simulation():
         print(f"Error launching game viewer: {e}")
         print("Running simulation only...")
         
-        # Fallback: run simulation without viewer
-        sim = AdvancedGameSim(home_team, away_team)
+        # Fallback: run simulation without viewer (unified engine 2026-10-04)
+        from simulation import GameSim
+        sim = GameSim(home_team, away_team)
         winner, loser, scores, events, notable_events = sim.run()
         
         print(f"\nSimulation Results:")
