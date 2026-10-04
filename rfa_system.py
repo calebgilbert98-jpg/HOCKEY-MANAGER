@@ -623,6 +623,52 @@ def _ai_rfa_deal(player, qo_amount: int, rng, league=None) -> Tuple[int, int]:
     return max(qo_amount, aav), rng.choice([1, 2])
 
 
+def _front_office_acumen(team) -> float:
+    """Front-office acumen (0.0-1.0): how sharp the GM/scouts are.
+
+    Chris (2026-10-04): "if the gm/scouts aren't smart enough to see his
+    value" -- a weak front office lets good players walk. This is stable
+    per franchise (bad teams stay badly run until regime change).
+
+    Tries the GM staff member's attributes; falls back to a stable
+    hash of the team name (0.35-0.85 range, so no franchise is perfect
+    or hopeless). Never raises.
+    """
+    try:
+        # Look for the GM in team staff.
+        for s in (getattr(team, "staff", None) or []):
+            try:
+                role = getattr(getattr(s, "role", None), "value", "") or str(getattr(s, "role", ""))
+                if "GM" in str(role).upper() or "GENERAL" in str(role).upper():
+                    # Average the mental attributes.
+                    attrs = []
+                    for attr in ("negotiation", "evaluation", "judgment", "ability", "iq"):
+                        v = getattr(s, attr, None)
+                        if v is not None:
+                            try:
+                                attrs.append(float(v))
+                            except Exception:
+                                pass
+                    if attrs:
+                        # Normalize 1-20 scale to 0-1, or 0-100 to 0-1.
+                        avg = sum(attrs) / len(attrs)
+                        if avg > 20:  # 0-100 scale
+                            return max(0.2, min(0.95, avg / 100.0))
+                        return max(0.2, min(0.95, avg / 20.0))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    # Fallback: stable hash-based acumen per franchise.
+    try:
+        import hashlib
+        h = hashlib.md5(getattr(team, "team_name", "team").encode()).hexdigest()
+        # 0.35 - 0.85 range.
+        return 0.35 + (int(h[:4], 16) % 50) / 100.0
+    except Exception:
+        return 0.6
+
+
 def _run_ufa_resign_window(league, app=None, rng=None) -> Dict[str, Any]:
     """UFA re-sign window: final offers before July 1.
 
@@ -816,7 +862,16 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
         _sign_player(team, player, min(aav, int(budget)), years)
 
     # --- 4. AI clubs: UFAs — re-sign the core, release the rest -------------
+    # CIRCUMSTANTIAL, not automatic (Chris 2026-10-04): a UFA is re-signed
+    # only if (a) the team can actually afford him at market value, and
+    # (b) the GM is sharp enough to recognize his value. If you couldn't
+    # afford to extend a guy all year and still can't that week, he's gone.
+    # If the GM/scouts aren't smart enough to see his value, he walks.
     for team in ai_teams:
+        # Front-office acumen: stable per franchise, from the GM staff
+        # member's attributes if available, else a hash-based fallback.
+        # Bad front offices misjudge talent and let good players walk.
+        _acumen = _front_office_acumen(team)
         for player in list(getattr(team, "roster", []) or []):
             if not is_ufa(player):
                 continue
@@ -825,19 +880,41 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
             except Exception:
                 ovr = 70.0
             tenure = _service_years(player)
-            if ovr >= 82 or (ovr >= 78 and tenure >= 5):
-                market = int(_market_value(player)
-                             * _scarcity_mult(league, player))
-                budget = _spending_budget(team, core=True)
-                if market <= budget:
-                    _sign_player(team, player, market,
-                                 r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
-                elif budget >= LEAGUE_MIN_SALARY:
-                    # Cap-strapped: 1-year prove-it deal at what the plan
-                    # allows -- never at the cost of icing a roster.
-                    _sign_player(team, player, int(budget), 1)
-                # else: doesn't fit the plan -- falls through to the pool
+            # Core threshold: 82+ OVR, or 78+ with 5+ years tenure.
+            is_core = ovr >= 82 or (ovr >= 78 and tenure >= 5)
+            if not is_core:
+                _move_to_free_agents(league, player)
+                continue
+            # (b) RECOGNITION: does the GM see this player's value?
+            # Obvious stars (85+) are hard to miss; borderline core
+            # (78-81) requires a sharp front office.
+            try:
+                if ovr >= 85:
+                    _recognize_p = 0.97
+                elif ovr >= 82:
+                    _recognize_p = 0.90
+                else:  # 78-81 with tenure: needs good scouting
+                    _recognize_p = 0.75
+                # Acumen modifies: 0.9 acumen -> +4%, 0.3 acumen -> -12%.
+                _recognize_p += (_acumen - 0.6) * 0.2
+                _recognize_p = max(0.3, min(0.99, _recognize_p))
+                if r.random() > _recognize_p:
+                    # GM didn't see the value -- player walks.
+                    _move_to_free_agents(league, player)
+                    continue
+            except Exception:
+                pass
+            # (a) AFFORDABILITY: strict. Market value or nothing -- no
+            # automatic prove-it deals. If you couldn't afford him all
+            # year and still can't, he's gone.
+            market = int(_market_value(player)
+                         * _scarcity_mult(league, player))
+            budget = _spending_budget(team, core=True)
+            if market <= budget:
+                _sign_player(team, player, market,
+                             r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
             else:
+                # Can't afford at market value -- walks. No prove-it fallback.
                 _move_to_free_agents(league, player)
 
     # --- 4b. AI backfill: released UFAs leave holes; fill from within -----
