@@ -40,7 +40,7 @@ def to_web_player(p):
     return {
         "id": _safe(lambda: str(getattr(p, "id", id(p)))),
         "name": _safe(lambda: getattr(p, "full_name", "?")),
-        "position": _safe(lambda: getattr(p, "position", "?")),
+        "position": _safe(lambda: str(getattr(p, "primary_position", "") or "") or "?"),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
         "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0)),
         "salary": _safe(lambda: int(getattr(p, "salary", 0) or 0)),
@@ -329,6 +329,75 @@ def _execute_command(app, cmd):
                     if callable(fn):
                         fn()
                     break
+            except Exception:
+                pass
+        elif op == "claim_waiver":
+            pid = cmd.get("player_id")
+            try:
+                team = getattr(app, "user_team", None)
+                wire = getattr(app, "waiver_list", None) or []
+                player = next((p for p in wire
+                               if str(getattr(p, "id", "")) == str(pid)), None)
+                if player is not None and team is not None:
+                    fn = getattr(app, "_execute_waiver_claim", None)
+                    if callable(fn):
+                        fn(player, team)
+            except Exception:
+                pass
+        elif op == "set_captains":
+            try:
+                team = getattr(app, "user_team", None)
+                roster = list(getattr(team, "roster", None) or [])
+                by_id = {str(getattr(p, "id", "")): p for p in roster}
+                # clear existing letters first
+                for p in roster:
+                    if getattr(p, "captaincy", "") in ("C", "A"):
+                        p.captaincy = ""
+                cap = by_id.get(str(cmd.get("captain_id")))
+                a1 = by_id.get(str(cmd.get("alt1_id")))
+                a2 = by_id.get(str(cmd.get("alt2_id")))
+                if cap is not None:
+                    cap.captaincy = "C"
+                for a in (a1, a2):
+                    if a is not None and a is not cap:
+                        a.captaincy = "A"
+                try:
+                    gm = getattr(app, "game_manager", None)
+                    if gm is not None:
+                        gm._captaincy_choice_pending = False
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        elif op == "save_game":
+            try:
+                fn = getattr(app, "open_save_window", None)
+                if callable(fn):
+                    fn()
+            except Exception:
+                pass
+        elif op == "load_game":
+            try:
+                fn = getattr(app, "open_load_window", None)
+                if callable(fn):
+                    fn()
+            except Exception:
+                pass
+        elif op in ("sign_free_agent", "extend_contract", "propose_trade",
+                    "add_scouting_assignment"):
+            # Complex multi-step flows (negotiation dialogs, trade builder):
+            # v1 falls back to the desktop window; the web page is read-only
+            # until the web transaction flow is built.
+            try:
+                fallback = {
+                    "sign_free_agent": "open_free_agency_window",
+                    "extend_contract": "open_contract_extensions_window",
+                    "propose_trade": "open_trade_window",
+                    "add_scouting_assignment": "open_scouting_window",
+                }.get(op)
+                fn = getattr(app, fallback, None) if fallback else None
+                if callable(fn):
+                    fn()
             except Exception:
                 pass
         elif op == "delete_message":

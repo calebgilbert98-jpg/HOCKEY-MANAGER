@@ -1,0 +1,103 @@
+/* Puck Dynasty web calendar */
+.cal-main { max-width: 1100px; margin: 0 auto; padding: 6px 32px 40px; }
+
+.cal-head {
+  display: flex; align-items: center; justify-content: center; gap: 22px;
+  margin: 8px 0 10px;
+}
+.cal-head h1 { font-size: 26px; min-width: 240px; text-align: center; }
+.cal-nav {
+  width: 40px; height: 40px; border-radius: 12px; cursor: pointer;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.08);
+  color: var(--text); font-size: 22px; line-height: 1;
+  transition: transform .15s ease, border-color .15s ease;
+}
+.cal-nav:hover {
+  transform: translateY(-2px);
+  border-color: rgba(59,130,246,.5);
+}
+
+.cal-legend {
+  display: flex; gap: 18px; justify-content: center;
+  font-size: 12.5px; color: var(--dim); margin-bottom: 14px;
+}
+.leg { display: inline-flex; align-items: center; gap: 6px; }
+.leg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.leg-dot.mine { background: var(--accent); }
+.leg-dot.today { background: var(--gold); }
+.leg-tag {
+  font-size: 10px; font-weight: 800; color: var(--text);
+  background: rgba(59,130,246,.25); border: 1px solid rgba(59,130,246,.5);
+  border-radius: 6px; padding: 1px 6px;
+}
+
+.cal-weekday-row {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;
+  margin-bottom: 8px;
+}
+.cal-weekday-row div {
+  text-align: center; font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1px; color: var(--dim);
+}
+.cal-grid {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px;
+}
+.cal-day {
+  min-height: 92px; border-radius: var(--radius);
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  padding: 8px 10px;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.cal-day:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5);
+  border-color: rgba(59,130,246,.35);
+}
+.cal-day.pad { background: none; border: none; box-shadow: none; min-height: 0; }
+.cal-day.pad:hover { transform: none; box-shadow: none; border-color: transparent; }
+.cal-date { font-size: 13px; font-weight: 700; color: var(--dim); margin-bottom: 6px; }
+.cal-day.has-mine {
+  border-color: rgba(59,130,246,.45);
+  box-shadow: 0 0 0 1px rgba(59,130,246,.25), inset 0 0 24px rgba(59,130,246,.06);
+}
+.cal-day.is-today .cal-date {
+  display: inline-block; color: #0a0e14; background: var(--gold);
+  border-radius: 7px; padding: 1px 8px; font-weight: 800;
+}
+.cal-game {
+  font-size: 12.5px; font-weight: 600; margin-bottom: 4px;
+  padding: 3px 6px; border-radius: 7px;
+  background: rgba(59,130,246,.14); border: 1px solid rgba(59,130,246,.35);
+}
+.cal-game.pre { background: rgba(232,185,60,.08); border-color: rgba(232,185,60,.3); }
+.cal-ha { color: var(--accent); font-weight: 800; }
+.cal-game.pre .cal-ha { color: var(--gold); }
+.cal-tag {
+  font-size: 10px; font-weight: 800; color: var(--gold);
+  background: rgba(232,185,60,.15); border: 1px solid rgba(232,185,60,.4);
+  border-radius: 6px; padding: 1px 5px;
+}
+.cal-other { font-size: 11px; color: var(--dim); }
+
+.empty-wrap { display: flex; justify-content: center; padding: 40px 0; }
+.empty-card {
+  text-align: center; max-width: 420px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: var(--radius); padding: 44px 36px;
+}
+.empty-icon { font-size: 46px; margin-bottom: 14px; }
+.empty-card h2 { font-size: 22px; margin-bottom: 10px; }
+.empty-card p { color: var(--dim); font-size: 14px; line-height: 1.6; }
+
+.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
+.back:hover { color: var(--text); }
+
+@media (max-width: 900px) {
+  .cal-main { padding: 6px 16px 32px; }
+  .cal-day { min-height: 70px; padding: 6px 7px; }
+  .cal-game { font-size: 11px; }
+  .cal-weekday-row div { font-size: 10px; }
+}

@@ -33,8 +33,11 @@ function renderHub(s) {
 }
 
 function openTile(t) {
-  const routes = {inbox: '/inbox', roster: '/roster', schedule: '/schedule', watch: '/watch'};
-  if (routes[t.id]) { window.location.href = routes[t.id]; return; }
+  const known = ['inbox','roster','schedule','watch','lines','waivers','captains',
+    'trades','trade_block','free_agents','staff','development','camp','morale',
+    'standings','stats','playoffs','calendar','news','history','finances',
+    'contracts','scouting','draft','settings','save'];
+  if (known.includes(t.id)) { window.location.href = '/' + t.id; return; }
   if (t.id === 'continue') { continueFlow(); return; }
   console.log('open', t.id);
 }

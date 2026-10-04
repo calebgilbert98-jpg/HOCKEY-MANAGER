@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendar — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/calendar.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="cal-sub">Calendar</div>
+</header>
+
+<main class="cal-main">
+  <div class="cal-head">
+    <button class="cal-nav" id="prev-month" aria-label="Previous month">‹</button>
+    <h1 id="cal-title">—</h1>
+    <button class="cal-nav" id="next-month" aria-label="Next month">›</button>
+  </div>
+  <div class="cal-legend">
+    <span class="leg"><span class="leg-dot mine"></span> Your team</span>
+    <span class="leg"><span class="leg-dot today"></span> Today</span>
+    <span class="leg"><span class="leg-tag">PRE</span> Preseason</span>
+  </div>
+  <div class="cal-weekday-row">
+    <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+  </div>
+  <div class="cal-grid" id="cal-grid"></div>
+  <div class="empty-wrap" id="cal-empty" hidden>
+    <div class="empty-card">
+      <div class="empty-icon">📅</div>
+      <h2>No schedule yet</h2>
+      <p>Once the season schedule is generated, your games will appear here.</p>
+    </div>
+  </div>
+</main>
+
+<script src="/static/js/calendar.js"></script>
+</body>
+</html>
