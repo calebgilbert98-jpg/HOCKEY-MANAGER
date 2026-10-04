@@ -287,6 +287,33 @@ def roster_limit_blockers(app):
                     except Exception:
                         pass
                 _ir_action = ('IR injured players', _do_ir_fix)
+            def _auto_demote(_t=team, _app=app, _n=n):
+                """Auto-resolve: demote waiver-safe players to get to 23."""
+                try:
+                    from auto_resolve import auto_fix_roster_limit
+                    over_by = _n - ACTIVE_ROSTER_MAX
+                    demoted, err = auto_fix_roster_limit(_t, over_by)
+                    if err:
+                        _app.add_news(f"Auto-demote failed: {err}")
+                        return
+                    for p in demoted:
+                        try:
+                            # Move to minors (AHL affiliate)
+                            p.is_on_active_roster = False
+                            if hasattr(_t, 'farm_team') and _t.farm_team:
+                                _t.farm_team.roster.append(p)
+                        except Exception:
+                            pass
+                    _names = ", ".join(
+                        getattr(p, 'full_name', '?') for p in demoted)
+                    _app.add_news(
+                        f"Auto-demoted {len(demoted)} player(s) to AHL "
+                        f"({_names}). All were waiver-exempt or low-risk.")
+                except Exception as e:
+                    try:
+                        _app.add_news(f"Auto-demote failed: {e}")
+                    except Exception:
+                        pass
             blockers.append({
                 'id': 'roster_limit_23',
                 'title': 'Active roster over the 23-man limit',
@@ -297,6 +324,7 @@ def roster_limit_blockers(app):
                 'action': ('Open Roster', getattr(app, 'open_roster_window',
                                                   lambda: None)),
                 'secondary_action': _ir_action,
+                'auto_action': ('Auto-demote (waiver-safe)', _auto_demote),
             })
         s = spc_count(team)
         if s > SPC_LIMIT:
@@ -324,6 +352,34 @@ def roster_limit_blockers(app):
                     f"{getattr(p, 'last_name', '')} "
                     f"({_overall(p)})"
                     for p in cands[:3])
+                def _auto_recall(_cands=cands, _t=team, _app=app,
+                                _sk=sk_need, _go=go_need):
+                    """Auto-resolve: recall best available from AHL."""
+                    try:
+                        recalled = []
+                        # Recall highest-overall candidates first
+                        for p in sorted(_cands,
+                                        key=lambda x: _overall(x),
+                                        reverse=True):
+                            if len(recalled) >= _sk + _go:
+                                break
+                            try:
+                                p.is_on_active_roster = True
+                                recalled.append(p)
+                            except Exception:
+                                pass
+                        _names = ", ".join(
+                            f"{getattr(p, 'first_name', '?')} "
+                            f"{getattr(p, 'last_name', '')}"
+                            for p in recalled)
+                        _app.add_news(
+                            f"Auto-recalled {len(recalled)} player(s) from "
+                            f"AHL ({_names}) to dress a legal lineup.")
+                    except Exception as e:
+                        try:
+                            _app.add_news(f"Auto-recall failed: {e}")
+                        except Exception:
+                            pass
                 blockers.append({
                     'id': 'dress_minimum',
                     'title': "Can't dress a legal lineup",
@@ -335,6 +391,8 @@ def roster_limit_blockers(app):
                         f"instead of icing emergency fill-ins."),
                     'action': ('Review AHL recalls',
                                lambda: app.open_recall_picker()),
+                    'auto_action': ('Auto-recall best available',
+                                    _auto_recall),
                 })
             else:
                 # Eastside-style auto: summon the fill-ins and keep the day

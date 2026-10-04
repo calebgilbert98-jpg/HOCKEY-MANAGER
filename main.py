@@ -6934,7 +6934,38 @@ class HockeyManagerGUI(tk.Tk):
             'title': 'Roster exceeds salary cap',
             'detail': detail,
             'action': ('Open Trade Center', self.open_trade_window),
+            'auto_action': ('Auto-shed salary (waiver-safe)',
+                            lambda: self._auto_fix_cap(team, over)),
         }
+
+    def _auto_fix_cap(self, team, over_amount):
+        """Auto-resolve salary cap: LTIR injured, demote waiver-safe
+        high-salary players. Never risks valuable players on waivers."""
+        try:
+            from auto_resolve import auto_fix_salary_cap
+            moves, err = auto_fix_salary_cap(team, over_amount)
+            for kind, p, ch in moves:
+                try:
+                    if kind == 'ltir':
+                        p.on_ir = True
+                    else:  # demote
+                        p.is_on_active_roster = False
+                except Exception:
+                    pass
+            _names = ", ".join(
+                f"{getattr(p, 'full_name', '?')} ({kind})"
+                for kind, p, ch in moves)
+            if err:
+                self.add_news(f"Auto cap fix partial: {_names}. {err}")
+            else:
+                self.add_news(
+                    f"Auto-shed ${sum(c for _, _, c in moves)/1e6:.2f}M: "
+                    f"{_names}. All moves waiver-safe.")
+        except Exception as e:
+            try:
+                self.add_news(f"Auto cap fix failed: {e}")
+            except Exception:
+                pass
 
     def is_over_cap(self):
         """True when the user's total cap charge exceeds the cap."""
@@ -7096,6 +7127,36 @@ class HockeyManagerGUI(tk.Tk):
                             pass
                         gm._captaincy_choice_pending = False
                     else:
+                        def _auto_captains(_t=_ut, _app=self):
+                            """Auto-resolve: pick C + 2 As by leadership/tenure."""
+                            try:
+                                from auto_resolve import auto_choose_captains
+                                result, err = auto_choose_captains(_t)
+                                if err:
+                                    _app.add_news(
+                                        f"Auto-captaincy failed: {err}")
+                                    return
+                                cap, alts = result
+                                # Apply via the team's captaincy fields
+                                _t.captain = cap
+                                _t.alternate_captains = list(alts)
+                                try:
+                                    gm._captaincy_choice_pending = False
+                                except Exception:
+                                    pass
+                                _names = ", ".join(
+                                    getattr(p, 'full_name', '?')
+                                    for p in alts)
+                                _app.add_news(
+                                    f"Auto-named captains: C "
+                                    f"{getattr(cap, 'full_name', '?')}, As "
+                                    f"{_names}.")
+                            except Exception as e:
+                                try:
+                                    _app.add_news(
+                                        f"Auto-captaincy failed: {e}")
+                                except Exception:
+                                    pass
                         blockers.append({
                             'id': 'captaincy_choice',
                             'title': 'Name your captains',
@@ -7104,6 +7165,7 @@ class HockeyManagerGUI(tk.Tk):
                                        'the season can continue.'),
                             'action': ('Choose Captains',
                                        lambda: gm._require_captaincy_choice(_ut)),
+                            'auto_action': ('Auto-pick Captains', _auto_captains),
                         })
         except Exception:
             pass
