@@ -734,11 +734,12 @@ NHL League Office""",
         except Exception as e:
             print(f"⚠️ Outdoor-game scheduling skipped: {e}")
 
-        # New-save realism (Muck 2026-10-02): simulate training camp
-        # (Sep 12-30) + preseason exhibitions during setup, so opening
-        # night arrives with a lived-in world -- camp ratings, preseason
-        # results, storylines -- instead of a blank slate. Fast
-        # (lightweight sim); never blocks setup on failure.
+        # New-save realism (Muck 2026-10-02; camp-start 2026-10-04):
+        # run training camp (Sep 12-30) during setup and start the game
+        # September 15 -- camp ratings, camp storylines, and camp invites
+        # (bubble players pushing rosters over 23) are in place, while
+        # preseason exhibitions stay on the schedule for the player to
+        # play through. Never blocks setup on failure.
         try:
             import save_realism as _sr
             _sr.simulate_camp_and_preseason(self)

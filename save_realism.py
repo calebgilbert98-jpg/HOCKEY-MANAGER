@@ -1,14 +1,19 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
-"""New-save realism (Muck 2026-10-02).
+"""New-save realism (Muck 2026-10-02; camp-start rework 2026-10-04).
 
 When a new save starts, the world should already be alive -- not a blank
-slate. This module simulates training camp (Sep 12-30) and the preseason
-schedule during new-save setup, so opening night arrives with:
+slate. This module runs training camp (Sep 12-30) during new-save setup
+and starts the game in mid-September so the player gets the full
+preseason experience:
 
 - camp ratings/standouts on every club (training_camp system),
-- preseason results (scores only -- exhibitions never touch season lines),
-- camp + preseason storylines in the news feed,
-- current_date advanced past September to opening night.
+- camp storylines in the news feed,
+- camp invites: ~6 bubble players promoted to each NHL roster, pushing
+  clubs over the 23-man limit -- the user must make real cut/waiver
+  decisions before opening night,
+- preseason exhibitions stay on the schedule, PLAYABLE (no longer
+  auto-simmed),
+- current_date starts September 15, a couple weeks before opening night.
 
 Entry point: simulate_camp_and_preseason(manager), called from
 GameManager.setup_new_game() after schedule generation. Everything is
@@ -51,6 +56,92 @@ def _run_camp(league, year):
     for day in range(_CAMP_START[1], _CAMP_END[1] + 1):
         try:
             _tc.run_camp_day(league, date(year, 9, day), app=None)
+        except Exception:
+            continue
+
+
+_CAMP_INVITES = 6  # bubble players promoted per NHL club for camp
+_CAMP_START_DATE = (9, 15)  # game starts here: ~3 weeks before opening night
+
+
+def _invite_camp_bodies(league, year):
+    """Promote ~6 bubble players per NHL club to the NHL roster for camp.
+
+    Creates the preseason roster crunch: clubs open camp over the 23-man
+    limit, so the user must make real cut/waiver decisions (and the AI
+    trims via its daily compliance backstop). Mix of waiver-exempt
+    prospects (safe demotions) and veteran bubble players (real waiver
+    risk). Skips anyone whose salary would push the club over the cap --
+    the crunch is about roster spots, not a day-one cap crisis.
+    Never raises.
+    """
+    try:
+        import waiver_logic as _wl
+    except Exception:
+        _wl = None
+    try:
+        from salary_cap_system import cap_breakdown as _cap_bd
+    except Exception:
+        _cap_bd = None
+    try:
+        cap_max = None
+        import salary_cap_system as _scs
+        cap_max = getattr(_scs, "SALARY_CAP", None)
+    except Exception:
+        pass
+    for team in (getattr(league, "teams", None) or []):
+        try:
+            if not _is_nhl_team(team):
+                continue
+            farm = getattr(team, "farm_team", None)
+            farm_roster = list(getattr(farm, "roster", None) or [])
+            if not farm_roster:
+                continue
+            # Bubble candidates: best farm players first (they're the ones
+            # fighting for a roster spot). Exempt prospects sort before
+            # waiver-eligible veterans so the mix has both kinds.
+            def _ov(p):
+                try:
+                    return float(getattr(p, "overall", 0) or 0)
+                except Exception:
+                    return 0.0
+            def _exempt(p):
+                try:
+                    return not _wl.is_waiver_eligible(p) if _wl else True
+                except Exception:
+                    return True
+            farm_roster.sort(key=lambda p: (0 if _exempt(p) else 1, -_ov(p)))
+            invited = 0
+            for p in farm_roster:
+                if invited >= _CAMP_INVITES:
+                    break
+                try:
+                    sal = float(getattr(p, "salary",
+                                        getattr(getattr(p, "contract", None),
+                                                "salary", 0)) or 0)
+                except Exception:
+                    sal = 0.0
+                # Cap guard: don't create a day-one cap crisis.
+                if _cap_bd is not None and cap_max:
+                    try:
+                        bd = _cap_bd(team)
+                        cur = float(bd.get("total", 0) or 0)
+                        if cur + sal > float(cap_max):
+                            continue
+                    except Exception:
+                        pass
+                try:
+                    farm.roster.remove(p)
+                except Exception:
+                    continue
+                try:
+                    team.roster.append(p)
+                    invited += 1
+                except Exception:
+                    try:
+                        farm.roster.append(p)
+                    except Exception:
+                        pass
         except Exception:
             continue
 
@@ -210,12 +301,15 @@ def _opening_night(league, year):
 
 
 def simulate_camp_and_preseason(manager):
-    """Simulate camp + preseason during new-save setup. Never raises.
+    """Run camp + set up the preseason start during new-save setup.
 
-    Called from GameManager.setup_new_game() after the schedule exists.
-    Leaves league.preseason_stories (chronological (date, story) list)
-    for the GUI to merge into the news feed, and advances
-    manager.current_date to opening night.
+    Never raises. Called from GameManager.setup_new_game() after the
+    schedule exists. Leaves league.preseason_stories (chronological
+    (date, story) list of CAMP storylines) for the GUI to merge into the
+    news feed, invites camp bodies onto NHL rosters (the 23-man crunch),
+    and sets manager.current_date to September 15 -- a couple weeks
+    before opening night. Preseason exhibitions are NOT simmed here;
+    they stay on the schedule for the player to play through.
     """
     try:
         league = getattr(manager, "league", None)
@@ -226,22 +320,19 @@ def simulate_camp_and_preseason(manager):
         # 1. Training camp: Sep 12-30 through the existing system.
         _run_camp(league, year)
 
-        # 2. Preseason exhibitions: fast lightweight sim, no season lines.
-        _results, _records = _sim_preseason(manager, league)
+        # 2. Camp invites: bubble players join NHL rosters, pushing clubs
+        #    over the 23-man limit -- real cut/waiver decisions ahead.
+        #    (Preseason exhibitions are NOT simmed here; they stay on the
+        #    schedule for the player to play through.)
         try:
-            league.preseason_results = [
-                {"date": gd.isoformat() if hasattr(gd, "isoformat") else str(gd),
-                 "home": h, "away": a, "home_goals": hg, "away_goals": ag}
-                for gd, h, a, hg, ag in _results
-            ]
+            _invite_camp_bodies(league, year)
         except Exception:
             pass
 
-        # 3. Storylines feed the narrative system.
+        # 3. Camp storylines feed the narrative system.
         stories = []
         try:
             stories.extend(_camp_storylines(league))
-            stories.extend(_preseason_storylines(_records, _results))
         except Exception:
             pass
         try:
@@ -255,9 +346,10 @@ def simulate_camp_and_preseason(manager):
             except Exception:
                 pass
 
-        # 4. The world starts at opening night, not Sep 1.
+        # 4. The world starts September 15 -- a couple weeks before
+        #    opening night, with camp done and preseason ahead.
         try:
-            manager.current_date = _opening_night(league, year)
+            manager.current_date = date(year, *_CAMP_START_DATE)
         except Exception:
             pass
     except Exception:
