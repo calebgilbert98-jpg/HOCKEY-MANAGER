@@ -864,14 +864,28 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     # --- 4. AI clubs: UFAs — re-sign the core, release the rest -------------
     # CIRCUMSTANTIAL, not automatic (Chris 2026-10-04): a UFA is re-signed
     # only if (a) the team can actually afford him at market value, and
-    # (b) the GM is sharp enough to recognize his value. If you couldn't
-    # afford to extend a guy all year and still can't that week, he's gone.
-    # If the GM/scouts aren't smart enough to see his value, he walks.
+    # (b) the GM is sharp enough to recognize his value, and (c) the
+    # player's ambitions align with the situation. Players demand a premium
+    # to stay in a bad situation ("it could get better" tax); cup-chasers
+    # on losing teams often walk no matter the money. Negotiations can
+    # fall apart.
     for team in ai_teams:
         # Front-office acumen: stable per franchise, from the GM staff
         # member's attributes if available, else a hash-based fallback.
         # Bad front offices misjudge talent and let good players walk.
         _acumen = _front_office_acumen(team)
+        # Team situation: win% determines if this is a "bad situation"
+        # that demands a premium to stay.
+        try:
+            _w = int(getattr(team, "wins", 0) or 0)
+            _l = int(getattr(team, "losses", 0) or 0)
+            _otl = int(getattr(team, "ot_losses", 0) or 0)
+            _gp = _w + _l + _otl
+            _winpct = (2.0 * _w + _otl) / (2.0 * _gp) if _gp > 0 else 0.5
+        except Exception:
+            _winpct = 0.5
+        _is_bad_team = _winpct < 0.400
+        _is_good_team = _winpct > 0.550
         for player in list(getattr(team, "roster", []) or []):
             if not is_ufa(player):
                 continue
@@ -904,17 +918,88 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
                     continue
             except Exception:
                 pass
-            # (a) AFFORDABILITY: strict. Market value or nothing -- no
-            # automatic prove-it deals. If you couldn't afford him all
-            # year and still can't, he's gone.
+            # (c) AMBITION & SITUATION: the player's ask depends on where
+            # the team is at. Bad teams pay the "it could get better" tax.
+            try:
+                import player_decision as _pd
+                _pd.ensure_decision_fields(player)
+                _amb = str(getattr(player, "ambition", "stability") or "stability").lower()
+                _loyalty = int(getattr(player, "loyalty", 50) or 50)
+            except Exception:
+                _amb, _loyalty = "stability", 50
+            _premium = 0.0  # multiplier over market
+            _walk_away_p = 0.0  # chance player refuses regardless of money
+            if _is_bad_team:
+                # Bad situation: players want a premium to stay.
+                if _amb == "cup":
+                    # Ring-chaser on a loser: massive premium or walks.
+                    _premium = 0.50
+                    _walk_away_p = 0.45
+                elif _amb == "money":
+                    # Mercenary: will stay for cash.
+                    _premium = 0.25
+                elif _amb == "stability":
+                    _premium = 0.15
+                elif _amb == "ice_time":
+                    _premium = 0.10
+                elif _amb == "home":
+                    _premium = 0.05
+                else:
+                    _premium = 0.15
+            elif not _is_good_team:
+                # Mediocre: half the bad-team premium.
+                if _amb == "cup":
+                    _premium = 0.20
+                    _walk_away_p = 0.15
+                elif _amb == "money":
+                    _premium = 0.12
+                else:
+                    _premium = 0.07
+            # Loyalty modifies the premium: loyal players take less,
+            # disloyal players demand more.
+            try:
+                if _loyalty >= 70:
+                    _premium *= 0.7
+                elif _loyalty <= 30:
+                    _premium *= 1.2
+                    _walk_away_p += 0.10
+            except Exception:
+                pass
+            # Player walks away regardless of money?
+            try:
+                if r.random() < _walk_away_p:
+                    _move_to_free_agents(league, player)
+                    continue
+            except Exception:
+                pass
+            # (a) AFFORDABILITY: strict. Market value + situational premium
+            # or nothing -- no automatic prove-it deals. If you couldn't
+            # afford him all year and still can't, he's gone.
             market = int(_market_value(player)
-                         * _scarcity_mult(league, player))
+                         * _scarcity_mult(league, player)
+                         * (1.0 + _premium))
             budget = _spending_budget(team, core=True)
             if market <= budget:
-                _sign_player(team, player, market,
-                             r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
+                # Negotiation can still fall apart: base 85% acceptance,
+                # worse for cup-chasers on bad teams and low-loyalty players.
+                _accept_p = 0.85
+                try:
+                    if _amb == "cup" and _is_bad_team:
+                        _accept_p -= 0.20
+                    if _loyalty <= 30:
+                        _accept_p -= 0.10
+                    _accept_p = max(0.3, min(0.95, _accept_p))
+                except Exception:
+                    pass
+                if r.random() < _accept_p:
+                    _sign_player(team, player, market,
+                                 r.choice([2, 3, 4] if ovr >= 84 else [1, 2]))
+                else:
+                    # Talks broke down -- player walks.
+                    _move_to_free_agents(league, player)
             else:
-                # Can't afford at market value -- walks. No prove-it fallback.
+                # Can't afford at market value + premium -- walks.
+                # No prove-it fallback.
                 _move_to_free_agents(league, player)
 
     # --- 4b. AI backfill: released UFAs leave holes; fill from within -----
