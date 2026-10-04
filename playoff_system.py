@@ -1055,14 +1055,20 @@ class PlayoffBracket:
         The daily loop calls this for each playoff entry dated today;
         the bracket's own controls call simulate_playoff_game directly.
         Either path driving first wins -- this sims ONLY when the entry
-        is the series' next unplayed game:
+        is at-or-ahead of the series' next unplayed game:
 
           - unknown series_id -> False (stale/pruned entry)
           - series already complete -> False
           - entry already played (games_played >= game_number) -> False
-          - entry is not the next game
-            (games_played + 1 != game_number) -> False
           - series not in the bracket's current round -> False
+
+        CATCH-UP (Chris 2026-10-04, priority): if a series falls behind
+        its scheduled dates (save/load timing, missed days), the strict
+        games_played+1 == game_number check permanently orphaned it --
+        every future entry was rejected, stalling the round forever
+        (the 420-day limbo). Now: games_played+1 <= game_number plays
+        the series' TRUE next game; the entry is just the calendar
+        trigger. Never double-sims (games_played guard intact).
 
         Returns True when a game was simulated (and stamped onto its
         calendar entry by simulate_playoff_game).
@@ -1080,9 +1086,13 @@ class PlayoffBracket:
             games_played = int(getattr(series, 'games_played', 0) or 0)
         except (TypeError, ValueError):
             return False
-        if games_played + 1 != game_number:
-            # Already simmed via the bracket (games_played >= game_number)
-            # or a stale out-of-order entry -- never double-sim, never skip
+        if games_played + 1 > game_number:
+            # Already played this numbered game -- never double-sim.
+            return False
+        # games_played + 1 <= game_number: play the series' true next
+        # game. If behind schedule, this catches up; the calendar entry
+        # is just the trigger, _stamp_played_game lands the score on the
+        # correct historical entry by games_played.
             # ahead of the series' real next game.
             return False
         try:
