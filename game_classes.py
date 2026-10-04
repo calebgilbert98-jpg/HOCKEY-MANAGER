@@ -816,6 +816,10 @@ class Player:
     #   0    -> assigned, hasn't dressed yet              -> recall BLOCKED
     #   >= 1 -> has played down there                     -> recall OK
     ahl_games_since_assignment: Optional[int] = None
+    # Positional familiarity (2026-10-04): dict of position key -> familiarity
+    # 0-100. Trained via practice. Primary position is always 100.
+    # e.g. {'LW': 80.0, 'C': 65.0} for a RW learning wing/center.
+    position_familiarity: dict = field(default_factory=dict)
     # NHL games played in each PRECEDING season (most recent last).
     # Drives Calder eligibility (25-game / 6-game rules). European pro
     # leagues don't count -- only NHL GP is recorded here.

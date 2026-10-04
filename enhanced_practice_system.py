@@ -1937,9 +1937,44 @@ class PracticeCenterView(ctk.CTkFrame):
         except Exception:
             return None
 
+    def _coach_runs_practice(self):
+        """Auto-assign optimal practices for all players (2026-10-04)."""
+        try:
+            from auto_resolve import auto_run_practice
+            team = getattr(self.app, 'user_team', None)
+            if team is None:
+                # Try alternate paths
+                team = getattr(getattr(self.app, 'game_manager', None), 'user_team', None)
+            if team is None:
+                return
+            sessions, err = auto_run_practice(team, self.app)
+            if err:
+                try:
+                    self.app.add_news(f"Coach practice: {err}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.app.add_news(
+                        f"Coach ran practice: {sessions} sessions assigned "
+                        f"(weakness-targeted drills, fatigue-aware intensity).")
+                except Exception:
+                    pass
+                self.update_views()
+        except Exception:
+            pass
+
     def _create_interface(self):
         """Create the practice center interface"""
-        
+
+        # Coach Runs Practice (2026-10-04)
+        import tkinter as tk
+        _coach_btn = tk.Button(
+            self, text="Coach Runs Practice",
+            command=self._coach_runs_practice,
+            bg="#00ceb8", fg="black", font=("Arial", 10, "bold"))
+        _coach_btn.pack(pady=(0, 8))
+
         subtitle_label = ttk.Label(self, text="Schedule individual practice sessions for players on the active roster", 
                                  style='Content.TLabel')
         subtitle_label.pack(pady=(0, 10))

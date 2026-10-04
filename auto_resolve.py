@@ -155,6 +155,184 @@ def auto_fix_roster_limit(team, over_by):
     return safe[:over_by], None
 
 
+def auto_run_practice(team, app=None):
+    """Coach runs practice: for each player, pick the best drill type
+    based on position needs and weakest attributes, with intensity
+    matched to fatigue/age/injury. Uses real coaching staff via
+    execute_practice(team=...).
+
+    Smart logic:
+      - Young players: develop weakest key attributes (moderate+ intensity)
+      - Veterans: maintenance (conditioning, hockey IQ, light-moderate)
+      - Centers weak on draws: faceoffs
+      - Goalies: goalie-specific focus
+      - High fatigue or injured: light or skip
+    Returns (sessions_run, error_msg)."""
+    try:
+        from enhanced_practice_system import (
+            PracticeCenterView, PracticeType, PracticeIntensity)
+    except Exception as e:
+        return 0, f"Practice system unavailable: {e}"
+    try:
+        roster = [p for p in (getattr(team, 'roster', None) or [])
+                  if not getattr(p, 'is_injured', False)]
+    except Exception:
+        return 0, "Could not read roster"
+    if not roster:
+        return 0, "No healthy players available"
+
+    # We need a practice system instance. PracticeCenterView wraps it,
+    # but for headless auto we instantiate the underlying system directly.
+    try:
+        from enhanced_practice_system import PracticeSystem
+        ps = PracticeSystem()
+    except Exception:
+        try:
+            ps = PracticeCenterView(team=team)._system
+        except Exception as e:
+            return 0, f"Could not init practice system: {e}"
+
+    def _attr(p, name, default=50):
+        try:
+            return float(getattr(p, name, default) or default)
+        except Exception:
+            return float(default)
+
+    def _is_goalie(p):
+        try:
+            pos = str(getattr(p, 'primary_position', '')).lower()
+            return 'goalie' in pos or 'goaltender' in pos
+        except Exception:
+            return False
+
+    def _is_center(p):
+        try:
+            pos = str(getattr(p, 'primary_position', '')).lower()
+            return 'center' in pos or pos.strip() == 'c'
+        except Exception:
+            return False
+
+    def _is_defense(p):
+        try:
+            pos = str(getattr(p, 'primary_position', '')).lower()
+            return 'defens' in pos or pos.strip() == 'd'
+        except Exception:
+            return False
+
+    sessions = 0
+    for p in roster:
+        try:
+            age = int(getattr(p, 'age', 25) or 25)
+        except Exception:
+            age = 25
+        try:
+            fatigue = float(getattr(p, 'fatigue', 0) or 0)
+        except Exception:
+            fatigue = 0
+
+        # Pick drill type by biggest weakness in role-relevant attributes
+        if _is_goalie(p):
+            # Goalies: weakest of the key goalie attributes
+            cands = [
+                (PracticeType.DEFENSE, _attr(p, 'positioning', 50)),
+                (PracticeType.CONDITIONING, _attr(p, 'agility', 50)),
+                (PracticeType.HOCKEY_IQ, _attr(p, 'rebound_control', 50)),
+            ]
+        elif _is_defense(p):
+            cands = [
+                (PracticeType.DEFENSE, _attr(p, 'defensive_awareness', 50)),
+                (PracticeType.CHECKING, _attr(p, 'checking', 50)),
+                (PracticeType.PASSING, _attr(p, 'passing', 50)),
+                (PracticeType.SKATING, _attr(p, 'skating', 50)),
+            ]
+        else:  # Forwards
+            cands = [
+                (PracticeType.SHOOTING, _attr(p, 'shooting', 50)),
+                (PracticeType.SKATING, _attr(p, 'skating', 50)),
+                (PracticeType.PASSING, _attr(p, 'passing', 50)),
+            ]
+            if _is_center(p):
+                cands.append(
+                    (PracticeType.FACEOFFS, _attr(p, 'faceoffs', 50)))
+        # Veterans: maintenance focus overrides development
+        if age >= 32:
+            cands = [
+                (PracticeType.CONDITIONING, _attr(p, 'conditioning', 50)),
+                (PracticeType.HOCKEY_IQ,
+                 _attr(p, 'offensive_awareness', 50)),
+            ] + cands
+        # Pick the weakest attribute's drill
+        cands.sort(key=lambda x: x[1])
+        drill = cands[0][0]
+
+        # Pick intensity: young + fresh = harder; old/tired = lighter
+        if fatigue > 70:
+            intensity = PracticeIntensity.LIGHT
+        elif age >= 34 or fatigue > 50:
+            intensity = PracticeIntensity.MODERATE
+        elif age <= 24 and fatigue < 30:
+            intensity = PracticeIntensity.INTENSE
+        else:
+            intensity = PracticeIntensity.MODERATE
+
+        try:
+            can, _why = ps.can_practice(p, drill, intensity)
+            if not can:
+                # Fall back to light if the chosen intensity isn't allowed
+                intensity = PracticeIntensity.LIGHT
+                can, _why = ps.can_practice(p, drill, intensity)
+            if can:
+                ps.execute_practice(p, drill, intensity, team=team)
+                sessions += 1
+        except Exception:
+            continue
+
+    if sessions == 0:
+        return 0, "No practice sessions could be run"
+    return sessions, None
+    """Shed salary via safe demotions (waiver-exempt high-salary first)
+    and LTIR for injured players. Never exposes valuable players."""
+    moves = []
+    try:
+        roster = list(getattr(team, 'roster', []) or [])
+    except Exception:
+        return [], "Could not read roster"
+    # Step 1: LTIR injured players (no risk, immediate relief)
+    for p in roster:
+        if getattr(p, 'is_injured', False) and not getattr(p, 'on_ir', False):
+            try:
+                cap_hit = float(getattr(p, 'cap_hit', 0) or 0)
+            except Exception:
+                cap_hit = 0
+            if cap_hit > 0:
+                moves.append(('ltir', p, cap_hit))
+    # Step 2: Demote high-salary waiver-exempt players (safest cap relief)
+    candidates = [p for p in roster
+                  if not getattr(p, 'is_injured', False)
+                  and not getattr(p, 'on_ir', False)]
+    safe, _risky = rank_demotion_candidates(candidates)
+    # Sort safe by cap hit descending (most relief first)
+    def _cap(p):
+        try:
+            return float(getattr(p, 'cap_hit', 0) or 0)
+        except Exception:
+            return 0.0
+    safe.sort(key=_cap, reverse=True)
+    total_relief = sum(m[2] for m in moves)
+    for p in safe:
+        if total_relief >= over_amount:
+            break
+        ch = _cap(p)
+        if ch > 0:
+            moves.append(('demote', p, ch))
+            total_relief += ch
+    if total_relief < over_amount:
+        return moves, (
+            f"Safe moves free ${total_relief:,.0f}, need ${over_amount:,.0f}. "
+            f"Remaining savings would require risking valuable players on "
+            f"waivers. Resolve manually (trade or buyout)."
+        )
+    return moves, None
 def auto_fix_salary_cap(team, over_amount):
     """Shed salary via safe demotions (waiver-exempt high-salary first)
     and LTIR for injured players. Never exposes valuable players."""
