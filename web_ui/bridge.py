@@ -359,6 +359,22 @@ def create_app(game_app=None):
                 template_folder=os.path.join(here, "templates"),
                 static_folder=os.path.join(here, "static"))
 
+    # Screen blueprints: each screen is self-contained (API + page route)
+    # in web_ui/screens/<name>.py so parallel work never conflicts.
+    try:
+        import importlib, pkgutil
+        import web_ui.screens as _screens_pkg
+        for _mod in pkgutil.iter_modules(_screens_pkg.__path__):
+            try:
+                _m = importlib.import_module(f"web_ui.screens.{_mod.name}")
+                _bp = getattr(_m, "bp", None)
+                if _bp is not None:
+                    app.register_blueprint(_bp)
+            except Exception as e:
+                print(f"Web UI screen '{_mod.name}' failed to load: {e}")
+    except Exception:
+        pass
+
     def _live():
         return _web_app_ref
 
