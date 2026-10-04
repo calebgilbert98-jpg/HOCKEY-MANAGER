@@ -333,7 +333,9 @@ class SalaryCapSystem:
 # + $375k. Two-way deals are fully buried -- the minor-league salary
 # never touches the NHL cap. Prospects never count.
 LEAGUE_MINIMUM_SALARY = 775000
-BURY_EXEMPTION = 1150000 + LEAGUE_MINIMUM_SALARY  # $1,925,000
+# Fallback only (used when burial_exemption() itself throws). Real CBA
+# Art. 50.5: league minimum + $375k.
+BURY_EXEMPTION = 375000 + LEAGUE_MINIMUM_SALARY  # $1,150,000
 
 
 # ---------------------------------------------------------------------------
