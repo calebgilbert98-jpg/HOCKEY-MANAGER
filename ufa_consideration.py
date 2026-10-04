@@ -127,7 +127,8 @@ def _window_days(player):
 
 
 def submit_ufa_offer(app, league, player, team, aav, years,
-                     is_user=False, clause_kind="none", clause_size=10):
+                     is_user=False, clause_kind="none", clause_size=10,
+                     signing_bonus=0):
     """Submit a bid. Creates the consideration on first offer, updates the
     team's existing bid on re-offer (no duplicates). Fires the "fielding
     offers" headline once. Returns the consideration dict, or None on
@@ -147,6 +148,7 @@ def submit_ufa_offer(app, league, player, team, aav, years,
             "is_user": bool(is_user),
             "clause_kind": str(clause_kind or "none"),
             "clause_size": int(clause_size or 10),
+            "signing_bonus": int(signing_bonus or 0),
         }
         cons = cons_map.get(pid)
         if cons is None or cons.get("stage") != "open":
@@ -386,7 +388,8 @@ def _score_offer(player, offer, league, app):
         score, reasons = _appeal(
             player, offer.get("team"), int(offer.get("aav", 0) or 0),
             int(offer.get("years", 1) or 1),
-            league=league, app=app)
+            league=league, app=app,
+            signing_bonus=int(offer.get("signing_bonus", 0) or 0))
         return max(0.0, min(1.0, float(score or 0.0))), list(reasons or [])
     except Exception:
         pass
@@ -453,10 +456,15 @@ def resolve_consideration(app, league, pid):
                 except Exception:
                     pass
                 if _offer.get("is_user"):
-                    _sign_user_winner(app, league, player, aav, years)
+                    _sign_user_winner(app, league, player, aav, years,
+                                      signing_bonus=int(
+                                          _offer.get("signing_bonus", 0) or 0))
                 else:
                     if not _sign_ai_winner(app, league, player,
-                                           _offer.get("team"), aav, years):
+                                           _offer.get("team"), aav, years,
+                                           signing_bonus=int(
+                                               _offer.get("signing_bonus", 0)
+                                               or 0)):
                         continue
                 signed_winner = (_offer, aav, years)
                 break
@@ -497,7 +505,7 @@ def resolve_consideration(app, league, pid):
         return None
 
 
-def _sign_user_winner(app, league, player, aav, years):
+def _sign_user_winner(app, league, player, aav, years, signing_bonus=0):
     """User won the bidding war: the standard signing path."""
     try:
         # 1-year CBA re-signing ban after a buyout
@@ -513,6 +521,26 @@ def _sign_user_winner(app, league, player, aav, years):
             except Exception:
                 pass
             return
+        # Owner cash budget: charge the signing bonus (if any).
+        try:
+            _sb = int(signing_bonus or 0)
+            if _sb > 0:
+                from salary_cap_system import charge_signing_bonus as _chgb
+                _utm = getattr(app, "user_team", None)
+                if not _chgb(_utm, _sb):
+                    try:
+                        app.add_news(
+                            f"⛔ Ownership blocked the ${_sb:,} signing bonus "
+                            f"for {getattr(player, 'full_name', 'Player')} "
+                            f"-- over the remaining player budget.")
+                    except Exception:
+                        pass
+                    return
+                _c = getattr(player, "contract", None)
+                if _c is not None:
+                    _c.signing_bonus = _sb
+        except Exception:
+            pass
         player.salary = aav
         player.contract_years = years
         app._finalize_contract_signing(player, aav, years, aav, False)
@@ -520,7 +548,7 @@ def _sign_user_winner(app, league, player, aav, years):
         pass
 
 
-def _sign_ai_winner(app, league, player, team, aav, years):
+def _sign_ai_winner(app, league, player, team, aav, years, signing_bonus=0):
     """AI won: mirror the AI signing core (contract, pool removal, roster
     add, rivalry transfer, room cascade, news). Returns False when the
     club can no longer fit the deal (caller falls through to the next
@@ -565,6 +593,12 @@ def _sign_ai_winner(app, league, player, team, aav, years):
             try:
                 contract.salary = aav
                 contract.years_remaining = years
+                # Signing bonus: charged against the owner's cash budget.
+                _sb = int(signing_bonus or 0)
+                if _sb > 0:
+                    from salary_cap_system import charge_signing_bonus as _chgb
+                    if _chgb(team, _sb):
+                        contract.signing_bonus = _sb
             except Exception:
                 pass
         try:

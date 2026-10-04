@@ -1299,7 +1299,7 @@ class DatabaseGenerator:
             if nhl_players is None:
                 nhl_players = self._generate_players_by_position(nhl_roster_size, quality_modifier * 1.1, team)
             for player in nhl_players:
-                team.add_player(player, "roster")
+                team.add_player(player, "roster", force=True)
                 players.append(player)
             
             # Generate AHL/prospects
@@ -1333,7 +1333,7 @@ class DatabaseGenerator:
             # Non-NHL teams get all players in main roster
             all_players = self._generate_players_by_position(actual_target, quality_modifier, team)
             for player in all_players:
-                team.add_player(player, "roster")
+                team.add_player(player, "roster", force=True)
                 players.append(player)
         
         return players

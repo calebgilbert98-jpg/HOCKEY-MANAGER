@@ -340,12 +340,16 @@ def contract_appeal(player, team, aav: int, years: int, *,
                     current_team=None, league=None, app=None,
                     is_offer_sheet: bool = False,
                     market_mult: float = 1.0,
+                    signing_bonus: int = 0,
                     ) -> Tuple[float, List[str]]:
     """0..1 appeal of (team, aav, years) to this player + top reasons.
 
     current_team: the club he'd be leaving (None for long-time free agents).
     market_mult: scales his market ask (e.g. a disrespected GM pays a
     dysfunction premium -- the same dollar is worth less from that club).
+    signing_bonus: annual signing bonus (part of the AAV). Players prefer
+    cash upfront -- a bonus-heavy offer beats straight salary at the same
+    AAV (lockout protection, immediate money).
     """
     ensure_decision_fields(player)
     ambition = getattr(player, "ambition", AMBITION_STABILITY)
@@ -375,6 +379,20 @@ def contract_appeal(player, team, aav: int, years: int, *,
         money_score = max(money_score, 0.55)
         reasons.append("he'll take less for a real shot at the Cup")
     parts["money"] = 0.7 * money_score + 0.3 * term_score
+    # Signing bonus: cash upfront beats deferred salary at the same AAV.
+    # A fully bonus-loaded deal is ~10% more appealing (lockout-proof,
+    # immediate money). Scales linearly with the bonus share of AAV.
+    try:
+        _bonus_share = min(1.0, max(0.0, float(signing_bonus or 0)
+                                    / max(1, float(aav or 1))))
+        if _bonus_share > 0:
+            parts["money"] = min(1.2, parts["money"]
+                                 * (1.0 + 0.10 * _bonus_share))
+            if _bonus_share >= 0.4:
+                reasons.append(f"heavy signing-bonus money "
+                               f"(${int(signing_bonus or 0):,} upfront)")
+    except Exception:
+        pass
     if ratio >= 1.25:
         reasons.append(f"a big overpay ({ratio:.0%} of market)")
     elif ratio <= 0.8:

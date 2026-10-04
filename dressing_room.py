@@ -2884,7 +2884,14 @@ def _practice_receipt(team: Any, **fields: Any) -> Dict[str, Any]:
     rec = {"goal_met": None}
     rec.update(fields)
     receipts.append(rec)
-    del receipts[:-20]
+    # Continuity: old receipts are ARCHIVED, never deleted. The active
+    # list keeps the recent 20 for the UI; everything older moves to
+    # practice_history (append-only, survives seasons) so the practice
+    # story is never reset.
+    if len(receipts) > 20:
+        history = dr.setdefault("practice_history", [])
+        history.extend(receipts[:-20])
+        del receipts[:-20]
     return rec
 
 

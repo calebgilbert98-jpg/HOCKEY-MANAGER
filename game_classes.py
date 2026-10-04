@@ -4039,21 +4039,40 @@ class Team:
         else:
             return f"{self.wins}-{self.losses}"
 
-    def add_player(self, player: Player, roster_type: str = "roster"):
-        """Adds a player to the specified roster (roster, ahl, prospects)."""
+    def add_player(self, player: Player, roster_type: str = "roster",
+                   force: bool = False) -> bool:
+        """Adds a player to the specified roster (roster, ahl, prospects).
+
+        Universal roster-limit gate: the NHL active roster caps at 23.
+        Returns False (refuses) when adding to a full NHL roster, unless
+        force=True (database init, save loading -- paths that build the
+        world rather than transact in it). Every trade, signing, claim,
+        and promotion flows through here, so the limit fires in ALL
+        paths, not just the pre-game blocker.
+        """
         roster_map = { "roster": self.roster, "ahl": self.ahl_roster, "prospects": self.prospects }
-        if roster_type in roster_map:
-            roster_map[roster_type].append(player)
-            player.team_name = self.team_name
-            # Season-history stint tracker: NHL roster joins open a stint.
-            # AHL/prospect moves never open stints.
-            if roster_type == "roster":
-                try:
-                    open_stint(player, _team_abbr_safe(self.team_name))
-                except Exception:
-                    pass
-        else:
+        if roster_type not in roster_map:
             raise ValueError("Invalid roster type specified.")
+        if roster_type == "roster" and not force:
+            try:
+                from roster_limits import ACTIVE_ROSTER_MAX
+            except Exception:
+                ACTIVE_ROSTER_MAX = 23
+            # Emergency fill-ins don't count against the 23 (real NHL).
+            _count = sum(1 for p in self.roster
+                         if not bool(getattr(p, "emergency_filler", False)))
+            if _count >= ACTIVE_ROSTER_MAX:
+                return False
+        roster_map[roster_type].append(player)
+        player.team_name = self.team_name
+        # Season-history stint tracker: NHL roster joins open a stint.
+        # AHL/prospect moves never open stints.
+        if roster_type == "roster":
+            try:
+                open_stint(player, _team_abbr_safe(self.team_name))
+            except Exception:
+                pass
+        return True
 
     def remove_player(self, player: Player):
         """Removes a player from any list they are on."""

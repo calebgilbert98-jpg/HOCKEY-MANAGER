@@ -232,7 +232,7 @@ def import_league_from_csv(teams_path: str, players_path: str,
                                  "D" if pot >= 8 else "F")
         team = teams_by_name.get((pr.get("team") or "").strip().lower())
         if team is not None:
-            team.add_player(p, "roster")
+            team.add_player(p, "roster", force=True)
         else:
             league.free_agents.append(p)
             p.team_name = "Free Agent"

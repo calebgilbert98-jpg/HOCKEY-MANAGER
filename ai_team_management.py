@@ -947,6 +947,23 @@ class AITeamManager:
             priority_score = self._calculate_fa_priority(fa, strategy, team, ovr)
 
             if priority_score > interest_threshold:
+                # Signing bonus: how we make signings competitive. A GM
+                # who really wants the player front-loads cash -- up to
+                # 30% of the AAV for a must-have piece, scaling with
+                # priority and boldness. Gated by the owner's remaining
+                # cash budget (no unlimited bonuses).
+                bonus = 0
+                try:
+                    _cash = team.player_budget_remaining()
+                    if _cash > 0 and priority_score >= 0.7:
+                        _want = min(0.30, 0.10 + 0.20 * priority_score
+                                    * min(1.2, boldness))
+                        bonus = int(offer * _want)
+                        bonus = min(bonus, _cash)
+                        # Round to clean numbers
+                        bonus = (bonus // 100_000) * 100_000
+                except Exception:
+                    bonus = 0
                 decision = AIDecision(
                     team_name=team.team_name,
                     decision_type="free_agent_offer",
@@ -954,13 +971,16 @@ class AITeamManager:
                     offer_details={
                         "salary": offer,
                         "term": self._determine_contract_length(fa, strategy),
-                        "no_trade_clause": ovr > 85
+                        "no_trade_clause": ovr > 85,
+                        "signing_bonus": bonus,
                     },
                     priority_score=priority_score,
                     reasoning=(f"Addresses {fa.primary_position.value} need, "
                                f"fits strategy"
                                + (" -- bold bid for the missing piece"
-                                  if boldness >= 1.10 else "")),
+                                  if boldness >= 1.10 else "")
+                               + (f" -- ${bonus:,} bonus"
+                                  if bonus > 0 else "")),
                     timestamp=current_date
                 )
                 decisions.append(decision)
@@ -1232,8 +1252,17 @@ class AITeamManager:
             # path -- that's a league rule, not a bidding war.)
             try:
                 import ufa_consideration as _uc
+                _bonus = int(details.get("signing_bonus", 0) or 0)
+                # Owner budget gate: the bonus must fit the remaining cash.
+                if _bonus > 0:
+                    try:
+                        if not team.can_afford_bonus(_bonus):
+                            _bonus = 0
+                    except Exception:
+                        _bonus = 0
                 _bid = _uc.submit_ufa_offer(
-                    None, league, p, team, salary, years, is_user=False)
+                    None, league, p, team, salary, years, is_user=False,
+                    signing_bonus=_bonus)
                 if _bid is not None:
                     return True
             except Exception:
