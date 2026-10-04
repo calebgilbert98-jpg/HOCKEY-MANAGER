@@ -327,7 +327,8 @@ class ManagerHubView(ctk.CTkFrame):
         p = self._selected_player()
         if not p:
             return
-        text, _effects = mc.chat_with_player(p, action)
+        _today = getattr(self.app, "current_date", None)
+        text, _effects = mc.chat_with_player(p, action, today=_today)
         messagebox.showinfo("Private Chat", text)
         self._refresh_squad()
 
@@ -740,7 +741,10 @@ class TeamTalkView(ctk.CTkFrame):
                    command=self._say_nothing).pack(pady=(6, 16))
 
     def _choose(self, option):
-        reaction, boost = mc.apply_team_talk(self.team, option, self.context)
+        _ctx = dict(self.context or {})
+        if "today" not in _ctx:
+            _ctx["today"] = getattr(self.app, "current_date", None)
+        reaction, boost = mc.apply_team_talk(self.team, option, _ctx)
         messagebox.showinfo("Dressing Room", reaction, parent=self)
         self.result = (option, reaction, boost)
         self._finish()

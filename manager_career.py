@@ -954,13 +954,39 @@ CHAT_ACTIONS = {
 }
 
 
-def chat_with_player(player, action: str) -> Tuple[str, Dict[str, int]]:
-    """Apply a private chat action. Returns (result_text, effects_dict)."""
+def chat_with_player(player, action: str, today=None) -> Tuple[str, Dict[str, int]]:
+    """Apply a private chat action. Returns (result_text, effects_dict).
+
+    Anti-farming: a player who's been chatted with in the last 3 days
+    tunes out -- "we just talked." Repeated praise goes stale fast.
+    """
+    import datetime as _dt
     personality = get_player_personality(player)
     happiness = getattr(player, "happiness", 70) or 70
     morale = getattr(player, "morale", 70) or 70
     name = f"{player.first_name} {player.last_name}"
     effects = {"happiness": 0, "morale": 0, "concern": 0}
+
+    # --- chat-fatigue: same player, recent chat -> diminished ----------
+    try:
+        if today is None:
+            today = _dt.date.today()
+        elif isinstance(today, str):
+            today = _dt.date.fromisoformat(today[:10])
+        _last = getattr(player, "_last_chat_date", None)
+        if isinstance(_last, str):
+            _last = _dt.date.fromisoformat(_last[:10])
+        stale = (isinstance(_last, _dt.date)
+                 and (today - _last).days < 3)
+    except Exception:
+        stale = False
+    try:
+        player._last_chat_date = today
+    except Exception:
+        pass
+    if stale:
+        return (f"{name} shrugged -- \"We just talked, coach.\" "
+                f"(Private chats lose their punch when repeated.)"), effects
 
     if action == "praise":
         dh, dm = 8, 5
@@ -1363,10 +1389,55 @@ def get_team_talk_options(when: str, context: dict) -> List[dict]:
 
 
 def apply_team_talk(team, option: dict, context: dict) -> Tuple[str, float]:
-    """Apply a team talk. Returns (reaction_text, sim_boost_multiplier)."""
+    """Apply a team talk. Returns (reaction_text, sim_boost_multiplier).
+
+    Anti-farming: players tune out repeated speeches. Talks are logged
+    per team; each talk within the last 7 days halves the effectiveness
+    of the next one, and 4+ talks in a week risks the room tuning out
+    entirely (flat or negative reaction). One heartfelt speech before a
+    big game matters; five in a week is wallpaper.
+    """
+    import datetime as _dt
     boost = float(option.get("boost", 1.0))
     morale_delta = int(option.get("morale", 0))
     fit = option.get("fit", "neutral")
+
+    # --- speech-fatigue bookkeeping -------------------------------------
+    try:
+        today = context.get("today")
+        if isinstance(today, str):
+            today = _dt.date.fromisoformat(today[:10])
+        elif not hasattr(today, "year"):
+            today = _dt.date.today()
+    except Exception:
+        today = _dt.date.today()
+    try:
+        log = getattr(team, "_team_talk_log", None)
+        if not isinstance(log, list):
+            log = []
+            team._team_talk_log = log
+        week_ago = today - _dt.timedelta(days=7)
+        log = [d for d in log
+               if isinstance(d, _dt.date) and d >= week_ago]
+        recent = len(log)
+        log.append(today)
+        team._team_talk_log = log
+    except Exception:
+        recent = 0
+
+    # Diminishing returns: 1.0, 0.5, 0.25, 0.1, then ~nothing
+    fatigue = [1.0, 0.5, 0.25, 0.1, 0.0][min(recent, 4)]
+
+    if recent >= 3:
+        # The room has heard it all before -- tuned out, maybe annoyed
+        import random as _r
+        if _r.random() < 0.35:
+            for p in getattr(team, "roster", []) or []:
+                m = getattr(p, "morale", 70) or 70
+                p.morale = max(1, min(100, m - 5))
+            return ("You said the same thing again -- a few players "
+                    "exchanged glances. The room has tuned you out."), 0.99
+
     if fit == "risky":
         # Backlash: half the squad tunes out
         morale_delta = -1
@@ -1379,11 +1450,21 @@ def apply_team_talk(team, option: dict, context: dict) -> Tuple[str, float]:
     else:
         reaction = "The players nodded along."
 
+    if fatigue < 1.0 and morale_delta > 0:
+        morale_delta = max(0, int(round(morale_delta * fatigue)))
+        boost = 1.0 + (boost - 1.0) * fatigue
+        if recent >= 1:
+            reaction = ("Heard it before -- a polite nod, nothing more. "
+                        "(Speech fatigue: talks lose punch when repeated.)")
+
     for p in getattr(team, "roster", []) or []:
         m = getattr(p, "morale", 70) or 70
         # Leaders and big-game players respond more
         leadership = getattr(p, "leadership", 50) or 50
         adj = morale_delta + (1 if leadership >= 75 and morale_delta > 0 else 0)
+        # Fatigue also dulls the leadership bonus on repeats
+        if fatigue < 1.0 and leadership >= 75 and morale_delta > 0:
+            adj = morale_delta
         p.morale = max(1, min(100, m + adj * 5))
 
     return reaction, boost
