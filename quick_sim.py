@@ -2358,7 +2358,10 @@ class AdvancedGameSim:
         # Base probabilities - tuned for realistic NHL game flow
         # Target: ~70-75 shot attempts from ~225 events per game (~32% shots)
         # Hockey is mostly passing and puck battles, not constant shooting
-        shot_prob = 0.32
+        # Calibrated 2026-10-04: reduced from 0.32 to align with GameSim
+        # (visualizer engine) output -- both engines must produce the same
+        # scoring distribution whether the user watches or quick-sims.
+        shot_prob = 0.24
         pass_prob = 0.40 if len(shooters) > 1 else 0.0
         deke_prob = 0.08
         battle_prob = 0.12
