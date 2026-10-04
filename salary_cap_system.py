@@ -1095,6 +1095,12 @@ _SCARCITY_NEED_TO_GROUP = {
     "G": "Goalie",
 }
 
+# Perf: fa_market_scarcity is a pure function of league state but gets called
+# dozens of times per day (once per FA candidate per AI team). Cache by
+# (league, position group, date) -- the market doesn't move within a day.
+# (Muck 2026-10-03: playthrough perf fix)
+_SCARCITY_CACHE = {}
+
 
 def fa_market_scarcity(league, position):
     """Supply/demand read on the free-agent market for one position.
@@ -1112,6 +1118,16 @@ def fa_market_scarcity(league, position):
     except Exception:
         return out
     out["group"] = group
+    # Cache check: same league + group + date = same market.
+    try:
+        _gm = getattr(league, "game_manager", None)
+        _date_key = str(getattr(_gm, "current_date", "") or "")
+    except Exception:
+        _date_key = ""
+    _cache_key = (id(league), group, _date_key)
+    _cached = _SCARCITY_CACHE.get(_cache_key)
+    if _cached is not None:
+        return dict(_cached)
     try:
         pool = list(getattr(league, "free_agents", None) or [])
     except Exception:
@@ -1177,6 +1193,14 @@ def fa_market_scarcity(league, position):
         out["signal"] = "buyers_market"
     else:
         out["signal"] = "balanced"
+    # Store in day-cache before returning.
+    try:
+        _SCARCITY_CACHE[_cache_key] = dict(out)
+        if len(_SCARCITY_CACHE) > 50:
+            _oldest = next(iter(_SCARCITY_CACHE))
+            del _SCARCITY_CACHE[_oldest]
+    except Exception:
+        pass
     return out
 
 

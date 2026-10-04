@@ -101,6 +101,29 @@ NHL = "National Hockey League"
 
 
 # ---------------------------------------------------------------------------
+# Perf helper: cheap veto pre-filter (Muck 2026-10-03 playthrough perf fix)
+# ---------------------------------------------------------------------------
+def _needs_veto_check(player):
+    """True if player might veto a trade (has a clause or offer-sheet block).
+
+    trade_vetoes() is expensive (16ms for M-NTC); most players have no clause.
+    This cheap check (contract attribute reads) lets callers skip it.
+    """
+    try:
+        import trade_engine as _te
+        if _te.clause_of(player)[0] is not None:
+            return True
+    except Exception:
+        pass
+    try:
+        if int(getattr(player, "offer_sheet_match_no_trade_until", 0) or 0) > 0:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Date helpers (ISO strings on the wire; date objects in logic)
 # ---------------------------------------------------------------------------
 def _iso(d):
@@ -823,7 +846,9 @@ def _find_bidders(app, league, listing, today, ramp):
             # pre-rolled: the offer goes to the user and the conversation
             # is real.
             try:
-                vetoes = te.trade_vetoes(seller, team, [player])
+                # Perf: skip expensive veto analysis when no clause/block exists.
+                vetoes = (te.trade_vetoes(seller, team, [player])
+                          if _needs_veto_check(player) else [])
             except Exception:
                 vetoes = []
             if vetoes:
@@ -1047,7 +1072,7 @@ def _shape_headliner_bid(app, league, bidder, player, seller, chosen, cands,
                 if not pred(a):
                     continue
                 try:
-                    if te.trade_vetoes(bidder, seller, [a]):
+                    if _needs_veto_check(a) and te.trade_vetoes(bidder, seller, [a]):
                         continue
                 except Exception:
                     pass
@@ -1786,7 +1811,7 @@ def build_bid(app, league, bidder, player, seller, ask_points, n_bidders=1):
                         _bl = "GETTABLE"
                     if _bl == "UNTOUCHABLE":
                         continue
-                    if te.trade_vetoes(bidder, seller, [p]):
+                    if _needs_veto_check(p) and te.trade_vetoes(bidder, seller, [p]):
                         continue
                     if getattr(p, "age", 99) <= 23:
                         cands.append(("prospect", p))
@@ -1960,7 +1985,7 @@ def _evaluate_round(app, league, market, listing, today, ramp, tick=False,
                 # fresh conversation when there's no record.
                 waived = False
                 try:
-                    if te.trade_vetoes(seller, bidder, [player]):
+                    if _needs_veto_check(player) and te.trade_vetoes(seller, bidder, [player]):
                         _waived = listing.get("waived_for", []) or []
                         if bname in _waived:
                             waived = True
