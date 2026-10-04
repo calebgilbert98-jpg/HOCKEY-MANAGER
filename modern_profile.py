@@ -1908,8 +1908,20 @@ class PlayerProfile(InGamePopup):
             display_val = 50
         pct = max(0.0, min(1.0, display_val / 100))
 
-        # Bar fill
-        bar_fill = tk.Frame(bar_bg, bg=fill_color or AppColors.ACCENT, height=8)
+        # Bar fill: red/yellow/green by value (2026-10-04), not all teal.
+        if fill_color:
+            _bar_color = fill_color
+        elif display_val >= 75:
+            _bar_color = "#4CAF50"  # green: excellent
+        elif display_val >= 60:
+            _bar_color = "#8BC34A"  # light green: good
+        elif display_val >= 45:
+            _bar_color = "#FFC107"  # yellow: average
+        elif display_val >= 30:
+            _bar_color = "#FF9800"  # orange: below average
+        else:
+            _bar_color = "#F44336"  # red: poor
+        bar_fill = tk.Frame(bar_bg, bg=_bar_color, height=8)
         bar_fill.place(relx=0, rely=0, relwidth=pct, relheight=1)
 
         # Value
