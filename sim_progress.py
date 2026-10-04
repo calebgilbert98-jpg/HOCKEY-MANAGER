@@ -60,7 +60,7 @@ class SimProgressDialog:
         except Exception:
             pass
 
-        tk.Label(self.root, text=title, bg="#0e0e11", fg="#00ceb8",
+        tk.Label(self.root, text=title, bg="#0e0e11", fg="#3B82F6",
                  font=("Segoe UI", 12, "bold")).pack(pady=(16, 6))
 
         self.status_var = tk.StringVar(value=status)

@@ -256,7 +256,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
               activeforeground='#ffffff', relief='flat', padx=18, pady=8,
               font=('Segoe UI', 10)).pack(side='right')
     tk.Button(btn_frame, text=confirm_text, command=lambda: _close(True),
-              bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+              bg='#3B82F6', fg='#0e0e11', activebackground='#2563EB',
               activeforeground='#0e0e11', relief='flat', padx=18, pady=8,
               font=('Segoe UI', 10, 'bold')).pack(side='right', padx=(0, 10))
 
@@ -6803,7 +6803,7 @@ class ScoutingView(ctk.CTkFrame):
                   font=_sfont(self.app.FONT_FAMILY, 9)).pack(anchor='w', pady=(0, 4))
         self.board_list = tk.Listbox(right, height=24, activestyle='none',
                                      bg='#232a3a', fg='#ffffff',
-                                     selectbackground='#0d2b28', relief='flat',
+                                     selectbackground='#14243D', relief='flat',
                                      highlightthickness=1,
                                      highlightbackground='#2e2e38')
         self.board_list.pack(fill='both', expand=True)
@@ -12567,11 +12567,11 @@ class NewsView(ctk.CTkFrame):
                     "milestone", "streak", "hired", "hiring", "general manager")),
     )
     _CATEGORY_COLORS = {
-        "All": "#00ceb8",
+        "All": "#3B82F6",
         "Injuries": "#e74c3c",
         "Trades": "#58a6ff",
         "Signings": "#3fb950",
-        "Development": "#00ceb8",
+        "Development": "#3B82F6",
         "Draft": "#e8b93c",
         "Scores": "#ff9e64",
         "League": "#b392f0",
@@ -16873,7 +16873,7 @@ class GMDashboardView(ctk.CTkFrame):
         fill.pack(fill=tk.X)
         fill.update_idletasks()
         bw = max(1, fill.winfo_width())
-        color = '#00ceb8' if frac >= 0.95 else ('#e0a030' if frac >= 0.85 else '#2a9d8f')
+        color = '#3B82F6' if frac >= 0.95 else ('#e0a030' if frac >= 0.85 else '#2a9d8f')
         fill.create_rectangle(0, 0, bw * frac, 10, fill=color, outline='')
         self._line(card, f"{frac * 100:.0f}% of cap used", secondary=True)
 
@@ -17476,7 +17476,7 @@ class BuyoutCalculatorView(ctk.CTkFrame):
                   font=(self.app.FONT_FAMILY, 11, 'bold')).pack(anchor='w')
         self.lb = tk.Listbox(left, height=22, activestyle='none',
                              bg='#232a3a', fg='#ffffff',
-                             selectbackground='#0d2b28', relief='flat',
+                             selectbackground='#14243D', relief='flat',
                              highlightthickness=1,
                              highlightbackground='#2e2e38',
                              font=(self.app.FONT_FAMILY, 10))

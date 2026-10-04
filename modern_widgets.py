@@ -16,7 +16,7 @@ _DEFAULTS = {
     "primary_text": "#FFFFFF",
     "secondary_text": "#a1a1aa",
     "muted_text": "#71717a",
-    "primary_accent": "#00ceb8",
+    "primary_accent": "#3B82F6",
     "secondary_accent": "#58a6ff",
     "success": "#3fb950",
     "warning": "#d29922",
@@ -401,7 +401,7 @@ def style_combobox(style, style_name="Dark.TCombobox"):
             root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
             root.option_add("*TCombobox*Listbox.foreground",
                             _DEFAULTS["primary_text"])
-            root.option_add("*TCombobox*Listbox.selectBackground", "#0d2b28")
+            root.option_add("*TCombobox*Listbox.selectBackground", "#14243D")
             root.option_add("*TCombobox*Listbox.selectForeground",
                             _DEFAULTS["primary_text"])
         except Exception:
@@ -427,7 +427,7 @@ def apply_dark_form_theme(root):
         root.option_add(f"*{cls}.background", _INPUT_BG)
         root.option_add(f"*{cls}.foreground", _pt if cls != "Listbox" else _st)
         root.option_add(f"*{cls}.insertBackground", _pt)
-        root.option_add(f"*{cls}.selectBackground", "#0d2b28")
+        root.option_add(f"*{cls}.selectBackground", "#14243D")
         root.option_add(f"*{cls}.selectForeground", _pt)
         root.option_add(f"*{cls}.highlightBackground", _INPUT_BORDER)
         root.option_add(f"*{cls}.highlightColor", _INPUT_FOCUS)
@@ -437,7 +437,7 @@ def apply_dark_form_theme(root):
     # Combobox dropdown listbox.
     root.option_add("*TCombobox*Listbox.background", _INPUT_BG)
     root.option_add("*TCombobox*Listbox.foreground", _pt)
-    root.option_add("*TCombobox*Listbox.selectBackground", "#0d2b28")
+    root.option_add("*TCombobox*Listbox.selectBackground", "#14243D")
     root.option_add("*TCombobox*Listbox.selectForeground", _pt)
 
     try:
@@ -665,7 +665,7 @@ class IconTile(tk.Canvas):
 class FormStreak(tk.Canvas):
     """Row of colored dots: W green, L red, OTL/T yellow. Most recent last."""
 
-    COLORS = {"W": "#3fb950", "L": "#00ceb8", "O": "#d29922", "T": "#d29922"}
+    COLORS = {"W": "#3fb950", "L": "#3B82F6", "O": "#d29922", "T": "#d29922"}
 
     def __init__(self, parent, results, *, dot=14, gap=6, bg=None, **kw):
         self._results = [r.upper() for r in results]

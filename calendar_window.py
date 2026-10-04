@@ -22,7 +22,7 @@ class CalendarView(ctk.CTkFrame):
     # Day-cell styles keyed by event priority. Each entry carries the cell
     # background, text color, hover color, and the legend label.
     DAY_STYLES = {
-        'today':      {'bg': '#00ceb8', 'fg': '#0e0e11', 'hover': '#00a896',
+        'today':      {'bg': '#3B82F6', 'fg': '#0e0e11', 'hover': '#2563EB',
                        'label': 'Today'},
         'home':       {'bg': '#2f81f7', 'fg': '#ffffff', 'hover': '#1f6feb',
                        'label': 'Home Game'},

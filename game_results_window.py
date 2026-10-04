@@ -74,12 +74,12 @@ class GameResultsView(ctk.CTkFrame):
                              text="Close",
                              command=self.close_view,
                              font=('Segoe UI', 10),
-                             bg='#00ceb8',
+                             bg='#3B82F6',
                              fg='white',
                              padx=30,
                              pady=8,
                              border=0,
-                             activebackground='#00a894')
+                             activebackground='#2563EB')
         close_btn.pack(side='right')
     
     def _create_games_tab(self):
@@ -125,9 +125,9 @@ class GameResultsView(ctk.CTkFrame):
                             text="View Box Score",
                             command=self._open_box_score,
                             font=('Segoe UI', 10, 'bold'),
-                            bg='#00ceb8', fg='white',
+                            bg='#3B82F6', fg='white',
                             padx=24, pady=6, border=0,
-                            activebackground='#00a894')
+                            activebackground='#2563EB')
         box_btn.pack(side='right')
         self.games_tree.bind('<Double-1>', lambda _e: self._open_box_score())
 
@@ -185,7 +185,7 @@ class GameResultsView(ctk.CTkFrame):
                                 bg='#2A2A2A',
                                 fg='#E0E0E0',
                                 insertbackground='#E0E0E0',
-                                selectbackground='#00ceb8',
+                                selectbackground='#3B82F6',
                                 wrap='word')
         
         # Scrollbar for news

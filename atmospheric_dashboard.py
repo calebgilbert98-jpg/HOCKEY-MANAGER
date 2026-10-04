@@ -35,12 +35,12 @@ class AtmosphericDashboard:
         self.theme.colors.background = '#0e0e11'        # Dark navy
         self.theme.colors.arena_shadow = '#0e0e11'      # Same as background
         self.theme.colors.secondary = '#16161a'         # Lighter panel background
-        self.theme.colors.ice_blue = '#00ceb8'          # Blue accent
+        self.theme.colors.ice_blue = '#3B82F6'          # Blue accent
         self.theme.colors.text_light = '#a1a1aa'        # Light text color
         
         # Keep team-specific primary color but ensure it's not white
         if hasattr(self.theme.colors, 'primary') and self.theme.colors.primary in ['#FFFFFF', '#ffffff', 'white']:
-            self.theme.colors.primary = '#00ceb8'  # Default red if primary is white
+            self.theme.colors.primary = '#3B82F6'  # Default red if primary is white
         
         self.hierarchy_manager = VisualHierarchyManager(self.theme)
         self.animation_manager = AnimationManager(parent)
@@ -2452,9 +2452,9 @@ class TeamStatsView(ctk.CTkFrame):
                  fg='#9aa0aa', bg=bg).pack(pady=5)
 
         tk.Button(self, text="Close", command=self.close_view,
-                  font=('Segoe UI', 10), bg='#00ceb8', fg='white',
+                  font=('Segoe UI', 10), bg='#3B82F6', fg='white',
                   relief='flat', padx=30, pady=8,
-                  activebackground='#00a894').pack(pady=30)
+                  activebackground='#2563EB').pack(pady=30)
 
     def close_view(self):
         """Close this screen (returns via _close_screen)."""
@@ -2496,7 +2496,7 @@ class GamePreviewView(ctk.CTkFrame):
         fonts = theme.fonts if theme is not None else None
         bg = getattr(colors, 'background', '#0e0e11') if colors else '#0e0e11'
         secondary = getattr(colors, 'secondary', '#16161a') if colors else '#16161a'
-        primary = getattr(colors, 'primary', '#00ceb8') if colors else '#00ceb8'
+        primary = getattr(colors, 'primary', '#3B82F6') if colors else '#3B82F6'
         text_light = getattr(colors, 'text_light', '#a1a1aa') if colors else '#a1a1aa'
         heading = fonts['heading'] if fonts else ('Segoe UI', 16, 'bold')
         subheading = fonts['subheading'] if fonts else ('Segoe UI', 12, 'bold')

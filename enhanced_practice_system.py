@@ -1972,7 +1972,7 @@ class PracticeCenterView(ctk.CTkFrame):
         _coach_btn = tk.Button(
             self, text="Coach Runs Practice",
             command=self._coach_runs_practice,
-            bg="#00ceb8", fg="black", font=("Arial", 10, "bold"))
+            bg="#3B82F6", fg="white", font=("Arial", 10, "bold"))
         _coach_btn.pack(pady=(0, 8))
 
         subtitle_label = ttk.Label(self, text="Schedule individual practice sessions for players on the active roster", 

@@ -70,7 +70,7 @@ class ProgressWindow:
                               text="Generating Hockey Database",
                               font=("Segoe UI", 16, "bold"),
                               bg='#1e1e1e',
-                              fg='#00ceb8')
+                              fg='#3B82F6')
         title_label.pack(pady=(0, 20))
         
         # Status label
@@ -86,11 +86,11 @@ class ProgressWindow:
         style = ttk.Style()
         style.theme_use('clam')
         style.configure("Professional.Horizontal.TProgressbar",
-                       background='#00ceb8',
+                       background='#3B82F6',
                        troughcolor='#404040',
                        borderwidth=0,
-                       lightcolor='#00ceb8',
-                       darkcolor='#00ceb8')
+                       lightcolor='#3B82F6',
+                       darkcolor='#3B82F6')
         
         self.progress_bar = ttk.Progressbar(main_frame,
                                           variable=self.progress_var,

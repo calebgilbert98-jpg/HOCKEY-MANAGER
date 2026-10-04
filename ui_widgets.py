@@ -13,7 +13,7 @@ class PillButton(tk.Canvas):
 
     def __init__(self, parent, text, command=None, font=('Helvetica', 10, 'bold'),
                  padx=16, pady=8, bg=None, fg='#a1a1aa',
-                 selected_bg='#00ceb8', selected_fg='white',
+                 selected_bg='#3B82F6', selected_fg='white',
                  hover_bg='#1e1e24', **kw):
         self.text = text
         self.command = command

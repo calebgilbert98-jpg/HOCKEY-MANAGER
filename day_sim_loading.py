@@ -60,7 +60,7 @@ class DaySimLoadingOverlay:
         except Exception:
             bg = '#1e1e1e'
             fg = '#ffffff'
-            accent = '#00ceb8'
+            accent = '#3B82F6'
             font_status = ("Segoe UI", 10)
 
         win = tk.Toplevel(parent) if parent else tk.Tk()

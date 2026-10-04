@@ -327,7 +327,7 @@ def project_extension_cost(player, ask_fn: Callable, identity=None,
 _TRADE_TIERS = (
     (80.0, "UNTOUCHABLE", "#e74c3c"),
     (50.0, "CORE", "#e8b93c"),
-    (35.0, "VALUED", "#00ceb8"),
+    (35.0, "VALUED", "#3B82F6"),
     (0.0, "GETTABLE", "#a1a1aa"),
 )
 

@@ -23,9 +23,9 @@ import media_rumors
 # views and the widget style names read from one source of truth. -----
 _DEADLINE_COLORS = {
     "DEADLINE_BG": '#0e0e11',      # Charcoal background
-    "URGENT_RED": '#00ceb8',       # Teal accent
-    "DEADLINE_RED": '#00ceb8',     # Alias for accent
-    "DEADLINE_GOLD": '#00ceb8',    # Teal for highlights
+    "URGENT_RED": '#3B82F6',       # Teal accent
+    "DEADLINE_RED": '#3B82F6',     # Alias for accent
+    "DEADLINE_GOLD": '#3B82F6',    # Teal for highlights
     "NEUTRAL_GRAY": '#1e1e24',     # Card surface for inactive elements
     "TEXT_WHITE": '#FFFFFF',       # White text
     "SUCCESS_GREEN": '#3DDC84',    # Green for completed trades
@@ -797,19 +797,19 @@ class TradeDeadlineCenter(_DeadlineScreenBase):
         self.notification_active = True
         
         # Create breaking news overlay
-        news_overlay = tk.Frame(self, bg='#00ceb8', relief='raised', bd=3)
+        news_overlay = tk.Frame(self, bg='#3B82F6', relief='raised', bd=3)
         news_overlay.place(relx=0.5, rely=0.1, anchor='center', 
                           relwidth=0.8, height=60)
         
         # Breaking news label
         breaking_label = tk.Label(news_overlay, text="BREAKING NEWS",
-                                 bg='#00ceb8', fg='white',
+                                 bg='#3B82F6', fg='white',
                                  font=('Segoe UI', 12, 'bold'))
         breaking_label.pack(pady=2)
         
         # News content
         news_label = tk.Label(news_overlay, text=news_item,
-                             bg='#00ceb8', fg='white',
+                             bg='#3B82F6', fg='white',
                              font=('Segoe UI', 10),
                              wraplength=600)
         news_label.pack(pady=2)
@@ -824,7 +824,7 @@ class TradeDeadlineCenter(_DeadlineScreenBase):
         # Flash effect
         def flash_news():
             current_bg = news_overlay.cget('bg')
-            new_bg = '#00a894' if current_bg == '#00ceb8' else '#00ceb8'
+            new_bg = '#2563EB' if current_bg == '#3B82F6' else '#3B82F6'
             news_overlay.configure(bg=new_bg)
             breaking_label.configure(bg=new_bg)
             news_label.configure(bg=new_bg)

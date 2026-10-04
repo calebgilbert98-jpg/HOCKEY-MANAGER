@@ -59,12 +59,12 @@ class EventDayHubView(ctk.CTkFrame):
     BG = '#0e0e11'
     PANEL = '#16161a'
     CARD = '#1e1e24'
-    GOLD = '#00ceb8'
+    GOLD = '#3B82F6'
     WHITE = '#F2F5FA'
     MUTED = '#9aa0aa'
     GREEN = '#3DDC84'
     RED = '#FF5A5A'
-    ACCENT = '#00ceb8'
+    ACCENT = '#3B82F6'
     BORDER = '#2a2a30'
 
     EVENT_TITLE = "EVENT DAY"

@@ -79,7 +79,7 @@ class HeroBanner(tk.Frame):
                  subtitle="", logo_size=64,
                  title_font=("Segoe UI", 32, "bold"),
                  subtitle_font=("Segoe UI", 11),
-                 title_fg="#ffffff", subtitle_fg="#00ceb8",
+                 title_fg="#ffffff", subtitle_fg="#3B82F6",
                  bg="#0e0e11", **kwargs):
         super().__init__(parent, height=height, bg=bg, **kwargs)
         self.pack_propagate(False)

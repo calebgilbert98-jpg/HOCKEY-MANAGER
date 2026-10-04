@@ -11,7 +11,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any, Dict, List, Optional
 
-TEAL = "#00ceb8"
+TEAL = "#3B82F6"
 CHARCOAL = "#1a1d21"
 PANEL = "#23272d"
 GOLD = "#d4af37"

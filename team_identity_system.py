@@ -311,7 +311,7 @@ nhl_identity = NHLTeamIdentity()
 # (Pittsburgh, Los Angeles) fall back to the secondary color.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_ACCENT = ("#00ceb8", "#00a896", "#0e0e11")  # legacy teal
+_DEFAULT_ACCENT = ("#3B82F6", "#2563EB", "#0e0e11")  # legacy teal
 
 # WCAG AA minimum for normal text. Every (text, background) pair the
 # module hands out is guaranteed to meet it -- team colors are shifted
@@ -522,7 +522,7 @@ def jersey_chip(parent, team_name, w=46, h=26):
                     colors = c
                     break
         body = colors.primary if colors else "#2a2e35"
-        stripe = colors.secondary if colors else "#00ceb8"
+        stripe = colors.secondary if colors else "#3B82F6"
         trim = (colors.text_on_secondary if colors
                 else "#ffffff")
         if trim.lower() == stripe.lower():

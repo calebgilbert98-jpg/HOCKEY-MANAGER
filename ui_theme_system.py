@@ -21,9 +21,9 @@ class ColorScheme:
     muted_text: str = '#71717a'        # Less important text
     
     # Accent colors
-    primary_accent: str = '#00ceb8'    # Professional red (for buttons, highlights)
+    primary_accent: str = '#3B82F6'    # Professional red (for buttons, highlights)
     secondary_accent: str = '#58a6ff'  # Ice blue (for links, secondary actions)
-    calendar_accent: str = '#00ceb8'   # Blue specifically for calendar elements
+    calendar_accent: str = '#3B82F6'   # Blue specifically for calendar elements
     success: str = '#3fb950'           # Green for positive stats
     warning: str = '#d29922'           # Orange for warnings
     danger: str = '#f85149'            # Red for negative stats
@@ -36,7 +36,7 @@ class ColorScheme:
     border_light: str = '#2e2e38'      # Light borders
     border_dark: str = '#26262e'       # Dark borders
     hover_bg: str = '#1e1e24'          # Hover states
-    selected_bg: str = '#0d2b28'       # Selected items
+    selected_bg: str = '#14243D'       # Selected items
     
     # Data visualization
     stat_excellent: str = '#3fb950'    # 90-100% ratings

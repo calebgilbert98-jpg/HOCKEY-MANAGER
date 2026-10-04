@@ -8,7 +8,7 @@
 # - Generous whitespace and breathing room
 # - Clear visual hierarchy: big bold numbers, small muted labels
 # - Avatar-centric design (circular)
-# - Teal accent color (#00ceb8 - teal accent)
+# - Teal accent color (#3B82F6 - teal accent)
 # - Minimalist, no clutter
 # - Subtle status indicators (dots, pills)
 
@@ -35,16 +35,16 @@ class AppColors:
     TEXT_SECONDARY = "#a1a1aa"  # Muted text (zinc-400)
     TEXT_TERTIARY = "#71717a"   # Very muted (zinc-500)
     
-    # Accent (teal)
-    ACCENT = "#00ceb8"          # Primary accent
-    ACCENT_DIM = "#00a894"      # Darker accent for hover
-    ACCENT_BG = "#0d2b28"       # Accent background (subtle)
+    # Accent (deep blue)
+    ACCENT = "#3B82F6"          # Primary accent
+    ACCENT_DIM = "#2563EB"      # Darker accent for hover
+    ACCENT_BG = "#14243D"       # Accent background (subtle)
     # Contrast-safe text colors, kept in step with ACCENT by
     # App._update_team_colors: ACCENT_TEXT is readable ON the accent,
     # ACCENT_ON_DARK is the accent itself made readable on dark
     # backgrounds. Both guarantee WCAG AA (4.5:1).
-    ACCENT_TEXT = "#0e0e11"     # dark text on the default teal
-    ACCENT_ON_DARK = "#00ceb8"  # default teal, already safe on dark
+    ACCENT_TEXT = "#ffffff"     # white text on the default blue
+    ACCENT_ON_DARK = "#3B82F6"  # default blue, already safe on dark
     
     # Semantic
     SUCCESS = "#3fb950"         # Green (wins, positive)
@@ -53,7 +53,7 @@ class AppColors:
     INFO = "#58a6ff"            # Blue (info)
     
     # Team color fallback
-    TEAM_DEFAULT = "#00ceb8"
+    TEAM_DEFAULT = "#3B82F6"
 
 
 class _AppFontsMeta(type):

@@ -147,7 +147,7 @@ _FB_BG = "#16161d"
 _FB_CARD = "#232a3a"
 _FB_TEXT = "#ffffff"
 _FB_DIM = "#a1a1aa"
-_FB_ACCENT = "#00ceb8"
+_FB_ACCENT = "#3B82F6"
 
 
 def _ensure_filterbar_styles():

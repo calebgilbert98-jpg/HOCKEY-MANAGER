@@ -8,16 +8,16 @@ import sys
 
 import customtkinter as ctk
 
-# ---- Puck Dynasty palette (mirrors modern_ui.py) ----
-TEAL = "#00ceb8"
-TEAL_HOVER = "#00a896"
-TEAL_DARK = "#008f80"
+# ---- Puck Dynasty palette (mirrors modern_ui.py; deep blue accent) ----
+TEAL = "#3B82F6"
+TEAL_HOVER = "#2563EB"
+TEAL_DARK = "#1D4ED8"
 BG = "#0e0e11"          # window background
 PANEL = "#16161a"       # frames / panels
 CARD = "#1e1e24"        # cards, entry fields
 BORDER = "#2e2e38"      # subtle borders
 ROW_HOVER = "#26262e"
-ROW_SELECTED = "#0d2b28"
+ROW_SELECTED = "#14243D"
 TEXT = "#f4f4f5"
 TEXT_DIM = "#a1a1aa"
 TEXT_FAINT = "#71717a"
@@ -26,9 +26,9 @@ GREEN = "#3fb950"
 RED = "#e74c3c"
 BLUE = "#58a6ff"
 
-# Readable text color for the current accent (dark on gold/teal, white on
-# navy/red). set_team_accent() keeps it in sync with TEAL.
-ACCENT_TEXT = BG
+# Readable text color for the current accent (white on blue). set_team_accent()
+# keeps it in sync with TEAL.
+ACCENT_TEXT = "#ffffff"
 
 _THEME_APPLIED = False
 
@@ -52,10 +52,10 @@ def set_team_accent(accent, hover=None, text=None):
     color. Safe to call repeatedly; pass no args to restore legacy teal.
     """
     global TEAL, TEAL_HOVER, TEAL_DARK, ACCENT_TEXT
-    TEAL = accent or "#00ceb8"
+    TEAL = accent or "#3B82F6"
     TEAL_HOVER = hover or _darken_hex(TEAL, 0.85)
     TEAL_DARK = _darken_hex(TEAL, 0.7)
-    ACCENT_TEXT = text or BG
+    ACCENT_TEXT = text or "#ffffff"
 
 
 

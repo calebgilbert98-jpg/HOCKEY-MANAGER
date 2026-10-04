@@ -50,7 +50,7 @@ BG = "#0e0e11"
 CONTENT_BG = "#0e0e11"
 TEXT = "#E8ECF1"
 MUTED = "#8B93A5"
-ACCENT = "#00ceb8"          # home
+ACCENT = "#3B82F6"          # home
 AWAY_COLOR = "#6CB4EE"      # away (ice blue)
 PUCK_COLOR = "#111418"
 # Broadcast-rink palette (real NHL look: bright ice, crisp markings)

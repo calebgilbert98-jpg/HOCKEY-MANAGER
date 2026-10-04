@@ -831,7 +831,7 @@ def _incoming_call_dialog(view, caller, gives, gets, prosp, overall, why):
     ct = getattr(view, '_ct', None) or {}
     BG = ct.get('BG', '#0e0e11'); CARD = ct.get('CARD', '#1e1e24')
     TEXT = ct.get('TEXT', '#F2F5FA'); DIM = ct.get('TEXT_DIM', '#9aa0aa')
-    TEAL = ct.get('TEAL', '#00ceb8'); GOLD = ct.get('GOLD', '#e8b93c')
+    TEAL = ct.get('TEAL', '#3B82F6'); GOLD = ct.get('GOLD', '#e8b93c')
     GREEN = ct.get('GREEN', '#46c93a'); RED = ct.get('RED', '#e5484d')
 
     result = {'choice': 'decline'}
@@ -979,7 +979,7 @@ def _user_counter_flow(view, caller, gives, gets, overall):
     ct = getattr(view, '_ct', None) or {}
     BG = ct.get('BG', '#0e0e11'); CARD = ct.get('CARD', '#1e1e24')
     TEXT = ct.get('TEXT', '#F2F5FA'); DIM = ct.get('TEXT_DIM', '#9aa0aa')
-    TEAL = ct.get('TEAL', '#00ceb8')
+    TEAL = ct.get('TEAL', '#3B82F6')
 
     options = []
     try:

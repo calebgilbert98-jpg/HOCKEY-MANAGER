@@ -82,7 +82,7 @@ class SplashLauncher(tk.Tk):
                                  font=("Segoe UI", 38, "bold"), fill="#ffffff")
         self._canvas.create_text(450, 448,
                                  text="Professional Hockey Management Simulator",
-                                 font=("Segoe UI", 12), fill="#00ceb8")
+                                 font=("Segoe UI", 12), fill="#3B82F6")
 
         # Flashing continue prompt
         self._flash_id = self._canvas.create_text(

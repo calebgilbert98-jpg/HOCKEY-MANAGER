@@ -2369,7 +2369,7 @@ def qol_confirm(parent, title, message, confirm_text="Confirm", cancel_text="Can
               activeforeground='#ffffff', relief='flat', padx=18, pady=8,
               font=('Segoe UI', 10)).pack(side='right')
     tk.Button(btn_frame, text=confirm_text, command=lambda: _close(True),
-              bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+              bg='#3B82F6', fg='#0e0e11', activebackground='#2563EB',
               activeforeground='#0e0e11', relief='flat', padx=18, pady=8,
               font=('Segoe UI', 10, 'bold')).pack(side='right', padx=(0, 10))
 
@@ -3865,7 +3865,7 @@ class HockeyManagerGUI(tk.Tk):
         from modern_widgets import RoundedButton
         self.season_flow_btn = RoundedButton(season_controls_frame, text="Season Flow",
                                             command=self.toggle_season_flow_panel,
-                                            bg="#00ceb8", radius=10,
+                                            bg="#3B82F6", radius=10,
                                             font=(self.FONT_FAMILY, 11, "bold"))
         self.season_flow_btn.pack(pady=(2, 5))
         _qol_add_tooltip(self.season_flow_btn,
@@ -4598,7 +4598,7 @@ class HockeyManagerGUI(tk.Tk):
             return
         toast.overrideredirect(True)
         toast.configure(bg='#16161a')
-        tk.Label(toast, text=text, bg='#16161a', fg='#00ceb8',
+        tk.Label(toast, text=text, bg='#16161a', fg='#3B82F6',
                  font=(self.FONT_FAMILY, 10, 'bold'), padx=16, pady=10).pack()
         try:
             self.update_idletasks()
@@ -4650,7 +4650,7 @@ class HockeyManagerGUI(tk.Tk):
         grid = tk.Frame(dlg, bg='#0e0e11')
         grid.pack(fill='x', padx=20, pady=(0, 8))
         for i, (key, desc) in enumerate(rows):
-            tk.Label(grid, text=key, bg='#1e1e24', fg='#00ceb8',
+            tk.Label(grid, text=key, bg='#1e1e24', fg='#3B82F6',
                      font=(self.FONT_FAMILY, 10, 'bold'), padx=10, pady=6,
                      width=8).grid(row=i, column=0, sticky='w', pady=3)
             tk.Label(grid, text=desc, bg='#0e0e11', fg='#a1a1aa',
@@ -4658,7 +4658,7 @@ class HockeyManagerGUI(tk.Tk):
                          row=i, column=1, sticky='w', padx=(12, 0), pady=3)
 
         tk.Button(dlg, text="Close", command=_close,
-                  bg='#00ceb8', fg='#0e0e11', activebackground='#00a894',
+                  bg='#3B82F6', fg='#0e0e11', activebackground='#2563EB',
                   activeforeground='#0e0e11', relief='flat', padx=24, pady=8,
                   font=(self.FONT_FAMILY, 10, 'bold')).pack(pady=(4, 18))
         dlg.protocol("WM_DELETE_WINDOW", _close)
@@ -6359,7 +6359,7 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             dlg.geometry(f"{w}x{h}")
 
-        tk.Label(dlg, text="GAME DAY", bg="#0e0e11", fg="#00ceb8",
+        tk.Label(dlg, text="GAME DAY", bg="#0e0e11", fg="#3B82F6",
                  font=("Segoe UI", 11, "bold")).pack(pady=(18, 4))
         matchup = f"{getattr(home_team, 'team_name', home_team)}  vs  " \
                   f"{getattr(away_team, 'team_name', away_team)}"
@@ -6382,7 +6382,7 @@ class HockeyManagerGUI(tk.Tk):
             dlg.destroy()
 
         for label, m, bgc in (("Quick Sim", "quick", "#16161a"),
-                              ("Watch Live", "watch", "#00ceb8")):
+                              ("Watch Live", "watch", "#3B82F6")):
             b = tk.Button(btns, text=label, font=("Segoe UI", 12, "bold"),
                           bg=bgc, fg="white", activebackground=bgc,
                           activeforeground="white", relief="flat",
@@ -7487,7 +7487,7 @@ class HockeyManagerGUI(tk.Tk):
             if _act:
                 tk.Button(btn_row, text=_act[0],
                          command=_make_handler(),
-                         bg="#00ceb8", fg="black",
+                         bg="#3B82F6", fg="white",
                          font=("Segoe UI", 10, "bold"),
                          padx=12, pady=6, relief="flat",
                          cursor="hand2").pack(side="left", padx=(0, 8))
@@ -7496,7 +7496,7 @@ class HockeyManagerGUI(tk.Tk):
             if _aact:
                 tk.Button(btn_row, text="\u26a1 " + _aact[0],
                          command=_make_handler("__auto"),
-                         bg="#2a2a30", fg="#00ceb8",
+                         bg="#2a2a30", fg="#3B82F6",
                          font=("Segoe UI", 10, "bold"),
                          padx=12, pady=6, relief="flat",
                          cursor="hand2").pack(side="left", padx=(0, 8))
@@ -23041,7 +23041,7 @@ class CleanEditLinesView(ctk.CTkFrame):
         self.C_CARD = '#16161a'
         self.C_CARD2 = '#1c1c21'
         self.C_BORDER = '#26262b'
-        self.C_ACCENT = '#00ceb8'
+        self.C_ACCENT = '#3B82F6'
         self.C_TEXT = '#f2f2f3'
         self.C_SEC = '#a1a1aa'
         self.C_TER = '#6b6b74'
@@ -24162,7 +24162,7 @@ class CleanEditLinesView(ctk.CTkFrame):
         # Color scheme based on type (dark theme)
         colors = {
             "success": {"bg": "#1d2b22", "border": "#3fb950", "icon": "✅"},
-            "error": {"bg": "#2b1d1f", "border": "#00ceb8", "icon": "❌"},
+            "error": {"bg": "#2b1d1f", "border": "#3B82F6", "icon": "❌"},
             "info": {"bg": "#1b2630", "border": "#17a2b8", "icon": "ℹ️"}
         }
         
@@ -24653,7 +24653,7 @@ class CleanEditLinesView(ctk.CTkFrame):
         tk.Label(header, text=title, bg="#16161a", fg="white",
                  font=self._font(13, 'bold')).pack(anchor="w")
         sign = "+" if total >= 0 else ""
-        color = "#3fb950" if total >= 0 else "#00ceb8"
+        color = "#3fb950" if total >= 0 else "#3B82F6"
         tk.Label(header, text=f"Total chemistry: {sign}{total:g}", bg="#16161a",
                  fg=color, font=self._font(11, 'bold')).pack(anchor="w", pady=(4, 0))
         tk.Label(header, text="Archetype pairings drive chemistry. "
@@ -24672,7 +24672,7 @@ class CleanEditLinesView(ctk.CTkFrame):
         for text, value in drivers:
             row = tk.Frame(body, bg="#16161a")
             row.pack(fill="x", pady=3)
-            dot_color = "#3fb950" if value > 0 else "#00ceb8"
+            dot_color = "#3fb950" if value > 0 else "#3B82F6"
             dot = tk.Canvas(row, width=10, height=10, bg="#16161a",
                             highlightthickness=0)
             dot.create_oval(1, 1, 9, 9, fill=dot_color, outline="")
@@ -25270,7 +25270,7 @@ class TacticsView(tk.Frame):
         font = getattr(parent, 'FONT_FAMILY', 'Helvetica')
         fg = getattr(parent, 'TEXT_COLOR', '#ffffff')
         muted = getattr(parent, 'MUTED_COLOR', '#71717a')
-        accent = '#00ceb8'
+        accent = '#3B82F6'
 
         header = tk.Frame(self, bg=bg)
         header.pack(fill='x', padx=20, pady=(16, 4))
@@ -25332,8 +25332,8 @@ class TacticsView(tk.Frame):
         footer.pack(fill='x', padx=20, pady=(8, 16))
         self._footer = footer
         done_btn = PillButton(footer, text="Done", bg=bg, font=(font, 11, 'bold'),
-                              fg='white', selected_bg='#00ceb8',
-                              selected_fg='white', hover_bg='#00a894',
+                              fg='white', selected_bg='#3B82F6',
+                              selected_fg='white', hover_bg='#2563EB',
                               padx=28, pady=8, command=self.close_view)
         done_btn.pack(side='right')
         done_btn.set_selected(True)  # Done is always in its active visual state
@@ -25524,8 +25524,8 @@ class TacticsView(tk.Frame):
 
         set_btn = PillButton(frame, text="Set & Run This Week", bg=bg,
                              font=(font, 11, 'bold'), fg='white',
-                             selected_bg='#00ceb8', selected_fg='white',
-                             hover_bg='#00a894', padx=24, pady=8,
+                             selected_bg='#3B82F6', selected_fg='white',
+                             hover_bg='#2563EB', padx=24, pady=8,
                              command=self._save_practice_plan)
         set_btn.pack(anchor='w', pady=(12, 0))
         set_btn.set_selected(True)
