@@ -6582,6 +6582,31 @@ class GameSim:
         except Exception:
             pass
 
+    def _instruction_effect(self, team_name, channel, default=1.0):
+        """D1: this team's instruction effect channel (ported from
+        AdvancedGameSim 2026-10-04). Multipliers are efficacy-scaled on
+        the delta (bounded). Never raises.
+        """
+        try:
+            from mesh_system import (coach_instruction_effects as _cie,
+                                     coach_instruction_efficacy as _ceff)
+            _instrs = getattr(self, "_coach_instructions", {}) or {}
+            _fx = _cie(_instrs.get(team_name, ""))
+            _v = float(_fx.get(channel, default))
+            if _v == default:
+                return default
+            # GameSim doesn't track separate coach objects; use default efficacy
+            _eff = 0.7  # conservative default
+            try:
+                _coach = None  # GameSim coach lookup would go here
+                if _coach is not None:
+                    _eff = _ceff(_coach)
+            except Exception:
+                pass
+            return 1.0 + (_v - 1.0) * _eff
+        except Exception:
+            return default
+
     def get_coach_instruction(self, team):
         try:
             return self._coach_instructions.get(
@@ -7796,6 +7821,15 @@ class GameSim:
                 shot_chance *= 1.0 + iq_factor * 1.2
             else:
                 shot_chance *= 1.0 - iq_factor * 0.8
+            # Coach instruction effects (ported from AdvancedGameSim 2026-10-04):
+            # D1 instructions modify shot volume via the instruction channel.
+            try:
+                _instr_fx = self._instruction_effect(
+                    attacking_team.team_name, "shot_volume_mult", 1.0)
+                if _instr_fx != 1.0:
+                    shot_chance *= _instr_fx
+            except Exception:
+                pass
             shot_chance = max(0.2, min(0.85, shot_chance))
         # 6-on-5 (divergence #13): the pulled-goalie extra attacker. The
         # canonical 2.2x lived in the dead _apply_special_situation_modifiers
