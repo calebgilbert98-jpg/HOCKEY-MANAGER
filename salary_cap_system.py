@@ -328,10 +328,10 @@ class SalaryCapSystem:
 #                  + seeded real-life bonus overages (2026-27)
 
 
-# Burial exemption (NHL rule): a one-way contract assigned to the minors
-# still counts against the cap, minus $1.15M + the league minimum.
-# Two-way deals are fully buried -- the minor-league salary never touches
-# the NHL cap. Prospects never count.
+# Burial exemption (NHL rule, CBA Art. 50.5): a one-way contract assigned
+# to the minors still counts against the cap, minus the league minimum
+# + $375k. Two-way deals are fully buried -- the minor-league salary
+# never touches the NHL cap. Prospects never count.
 LEAGUE_MINIMUM_SALARY = 775000
 BURY_EXEMPTION = 1150000 + LEAGUE_MINIMUM_SALARY  # $1,925,000
 
@@ -517,8 +517,13 @@ def league_minimum_salary(season_year=None) -> int:
 
 
 def burial_exemption(season_year=None) -> int:
-    """Burial exemption ($1.15M + league minimum) for a season."""
-    return 1_150_000 + league_minimum_salary(season_year)
+    """Burial exemption (league minimum + $375k) for a season.
+
+    Real NHL CBA Article 50.5: a team burying a one-way contract in the
+    minors gets cap relief equal to the league minimum salary + $375,000
+    (the "Burying Threshold"). E.g. 2026-27: $850k + $375k = $1.225M.
+    """
+    return 375_000 + league_minimum_salary(season_year)
 
 
 # ---------------------------------------------------------------------------
@@ -882,7 +887,7 @@ def minor_league_cap_charge(p) -> int:
         hit = int(getattr(contract, "salary", 0) or 0)
         hit -= int(getattr(p, "retained_amount", 0) or 0)
         # New CBA: the burial exemption floats with the league minimum
-        # ($1.15M + minimum => $2.0M in 2026-27, up from $1.925M).
+        # ($375k + minimum => $1.225M in 2026-27).
         try:
             _bury = burial_exemption()
         except Exception:
@@ -898,7 +903,7 @@ def roster_cap_charge(team) -> int:
     Only the NHL active roster counts at full salary. Prospects never
     count. Players under NHL contract in the minors follow the burial
     rule: two-way deals are fully exempt, one-way deals count salary
-    minus the burial exemption ($1.15M + league minimum, $2.0M in
+    minus the burial exemption (league minimum + $375k, $1.225M in
     2026-27).
 
     Retained salary lowers the charge: a player carrying retained_amount
