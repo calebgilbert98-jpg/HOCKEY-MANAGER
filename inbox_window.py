@@ -93,46 +93,8 @@ class InboxView(ctk.CTkFrame):
     # CTk styling helpers
     # ------------------------------------------------------------------
     def _setup_tree_style(self):
-        """Dark, flat styling for the message list (styled ttk.Treeview per
-        the migration guide -- the list carries 6 columns and per-message
-        color tags)."""
-        ct = self._ct
-        style = ttk.Style(self)
-        style.configure('Inbox.Treeview',
-                        background=ct['CARD'],
-                        fieldbackground=ct['CARD'],
-                        foreground=ct['TEXT'],
-                        borderwidth=0,
-                        relief='flat',
-                        rowheight=30,
-                        font=_ifont(10))
-        style.configure('Inbox.Treeview.Heading',
-                        background=ct['PANEL'],
-                        foreground=ct['TEXT'],
-                        font=_ifont(10, 'bold'),
-                        relief='flat',
-                        borderwidth=0)
-        style.map('Inbox.Treeview',
-                  background=[('selected', ct['ROW_SELECTED'])],
-                  foreground=[('selected', ct['TEXT'])])
-        style.layout('Inbox.Treeview',
-                     [('Treeview.treearea', {'sticky': 'nswe'})])
-        style.configure('Inbox.Vertical.TScrollbar',
-                        background=ct['CARD'],
-                        troughcolor=ct['BG'],
-                        borderwidth=0,
-                        relief='flat',
-                        arrowcolor=ct['TEXT_DIM'])
-        style.configure('Inbox.Horizontal.TScrollbar',
-                        background=ct['CARD'],
-                        troughcolor=ct['BG'],
-                        borderwidth=0,
-                        relief='flat',
-                        arrowcolor=ct['TEXT_DIM'])
-        style.map('Inbox.Vertical.TScrollbar',
-                  background=[('active', ct['BORDER'])])
-        style.map('Inbox.Horizontal.TScrollbar',
-                  background=[('active', ct['BORDER'])])
+        """No-op: the Gmail-style row list (2026-10-04) replaced the
+        ttk.Treeview, so there is no tree style to configure."""
 
     def _create_interface(self):
         """Create the main inbox interface."""
@@ -252,63 +214,192 @@ class InboxView(ctk.CTkFrame):
                               text_color=ct['TEXT'], border_color=ct['BORDER'])
 
     def _create_email_list(self, parent):
-        """Create the email list with filters."""
+        """Gmail-style message list: friendly rows with color indicators.
+
+        Replaces the old spreadsheet Treeview (2026-10-04). Each message is
+        a row card: colored indicator bar on the left, sender + subject +
+        snippet, date on the right. Mandatory messages (requires_response)
+        get a red bar and an "Action needed" pill so they stand out.
+        """
         ct = self._ct
         self._heading(parent, "Messages", size=14).pack(
-            anchor='w', padx=14, pady=(12, 6))
+            anchor='w', padx=14, pady=(12, 2))
 
-        columns = {
-            'priority': ('!', 30),
-            'sender': ('From', 170),
-            'subject': ('Subject', 460),
-            'category': ('Category', 110),
-            'date': ('Date', 100),
-            'status': ('Status', 90)
-        }
+        # Color legend: what each indicator means.
+        legend = ctk.CTkFrame(parent, fg_color="transparent")
+        legend.pack(fill='x', padx=14, pady=(0, 4))
+        for color, text in [(ct['RED'], "Action needed"),
+                            (ct['GOLD'], "Urgent"),
+                            (ct['TEAL'], "Unread")]:
+            ctk.CTkLabel(legend, text="\u25cf", text_color=color,
+                         font=('Segoe UI', _scaled(10))).pack(
+                             side='left', padx=(0, 2))
+            ctk.CTkLabel(legend, text=text, text_color=ct['TEXT_DIM'],
+                         font=('Segoe UI', _scaled(10))).pack(
+                             side='left', padx=(0, 12))
 
-        table_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        table_frame.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self._list_scroll = ctk.CTkScrollableFrame(parent,
+                                                   fg_color="transparent")
+        self._list_scroll.pack(fill='both', expand=True, padx=8, pady=(0, 8))
+        self._speed_up_scroll(self._list_scroll)
+        self._row_widgets = {}   # message.id -> row CTkFrame
+        self._row_messages = {}  # message.id -> EmailMessage
+        self._selected_message_id = None
 
-        self.email_tree = ttk.Treeview(table_frame, columns=list(columns.keys()),
-                                       show='headings', height=8,
-                                       style='Inbox.Treeview')
-
-        for col, (text, width) in columns.items():
-            self.email_tree.heading(col, text=text)
-            self.email_tree.column(col, width=width,
-                                   anchor='w' if col != 'priority' else 'center')
-
-        # Message-row color tags: first tag in the tuple wins on conflicts
-        self.email_tree.tag_configure(
-            'overdue', foreground=ct['GOLD'], font=_ifont(10, 'bold'))
-        self.email_tree.tag_configure(
-            'urgent', foreground=ct['RED'], font=_ifont(10, 'bold'))
-        self.email_tree.tag_configure(
-            'unread', foreground=ct['TEXT'], font=_ifont(10, 'bold'))
-        self.email_tree.tag_configure('read', foreground=ct['TEXT_DIM'])
-        self.email_tree.tag_configure('new_status', foreground=ct['TEAL'])
-
-        v_scrollbar = ttk.Scrollbar(table_frame, orient='vertical',
-                                    style='Inbox.Vertical.TScrollbar',
-                                    command=self.email_tree.yview)
-        h_scrollbar = ttk.Scrollbar(table_frame, orient='horizontal',
-                                    style='Inbox.Horizontal.TScrollbar',
-                                    command=self.email_tree.xview)
-
-        self.email_tree.configure(yscrollcommand=v_scrollbar.set,
-                                  xscrollcommand=h_scrollbar.set)
-
-        self.email_tree.pack(side='left', fill='both', expand=True)
-        v_scrollbar.pack(side='right', fill='y')
-        h_scrollbar.pack(side='bottom', fill='x')
-
-        # Bind events
-        self.email_tree.bind('<<TreeviewSelect>>', self._on_email_select)
-        self.email_tree.bind('<Double-Button-1>', self._on_email_double_click)
-
-        # Context menu
+        # Context menu (right-click on a row)
         self._create_context_menu()
 
+    def _indicator_for(self, message):
+        """Return (bar_color, needs_action) for a message row.
+
+        Red    = mandatory: requires a response / is overdue (blocks Continue)
+        Gold   = urgent or important
+        Blue   = plain unread
+        None   = read, nothing pending
+        """
+        ct = self._ct
+        try:
+            if message.is_overdue():
+                return ct['RED'], True
+        except Exception:
+            pass
+        if getattr(message, 'requires_response', False):
+            return ct['RED'], True
+        if getattr(message, 'is_urgent', False) or message.priority >= 4:
+            return ct['GOLD'], False
+        if getattr(message, 'is_important', False) or message.priority >= 3:
+            return ct['GOLD'], False
+        if not message.is_read:
+            return ct['TEAL'], False
+        return None, False
+
+    def _bind_row_clicks(self, widget, message):
+        """Bind click/double-click/right-click on a row and its children."""
+        widget.bind('<Button-1>',
+                    lambda e, m=message: self._select_message(m))
+        widget.bind('<Double-Button-1>',
+                    lambda e: self._on_row_double_click())
+        widget.bind('<Button-3>',
+                    lambda e, m=message: self._show_row_context_menu(e, m))
+        for child in widget.winfo_children():
+            self._bind_row_clicks(child, message)
+
+    def _add_message_row(self, message):
+        """Add one Gmail-style row card for a message."""
+        ct = self._ct
+        bar_color, needs_action = self._indicator_for(message)
+        unread = not message.is_read
+        mid = getattr(message, 'id', None) or str(id(message))
+
+        row = ctk.CTkFrame(self._list_scroll, fg_color=ct['CARD'],
+                           corner_radius=8)
+        row.pack(fill='x', padx=4, pady=3)
+
+        # Left color indicator bar
+        bar = ctk.CTkFrame(row, fg_color=bar_color or ct['CARD'],
+                           width=4, corner_radius=2)
+        bar.pack(side='left', fill='y', padx=(8, 0), pady=8)
+
+        # Text block: sender / subject + snippet
+        text_frame = ctk.CTkFrame(row, fg_color="transparent")
+        text_frame.pack(side='left', fill='both', expand=True,
+                        padx=(10, 4), pady=7)
+        sender_font = ('Segoe UI', _scaled(11), 'bold') if unread else \
+            ('Segoe UI', _scaled(11))
+        ctk.CTkLabel(text_frame, text=message.sender or "(no sender)",
+                     font=sender_font, text_color=ct['TEXT'],
+                     anchor='w').pack(fill='x')
+        snippet = (getattr(message, 'content', '') or "").replace(
+            "\n", " ").strip()
+        if len(snippet) > 90:
+            snippet = snippet[:90] + "\u2026"
+        subj_line = message.subject or "(no subject)"
+        if snippet:
+            subj_line += f"  \u2014  {snippet}"
+        subj_font = ('Segoe UI', _scaled(10), 'bold') if unread else \
+            ('Segoe UI', _scaled(10))
+        ctk.CTkLabel(text_frame, text=subj_line, font=subj_font,
+                     text_color=ct['TEXT'] if unread else ct['TEXT_DIM'],
+                     anchor='w').pack(fill='x')
+
+        # Right block: date + action pill
+        right = ctk.CTkFrame(row, fg_color="transparent")
+        right.pack(side='right', padx=(4, 10), pady=7)
+        try:
+            age = message.get_age_days()
+        except Exception:
+            age = 0
+        if age <= 0:
+            date_str = "Today"
+        elif age == 1:
+            date_str = "Yesterday"
+        else:
+            try:
+                date_str = message.date_sent.strftime("%m/%d")
+            except Exception:
+                date_str = ""
+        ctk.CTkLabel(right, text=date_str,
+                     font=('Segoe UI', _scaled(10)),
+                     text_color=ct['TEXT_DIM'], anchor='e').pack(anchor='e')
+        if getattr(message, "is_saved", False):
+            ctk.CTkLabel(right, text="\U0001f4cc",
+                         font=('Segoe UI', _scaled(10)),
+                         text_color=ct['TEXT_DIM'], anchor='e').pack(anchor='e')
+        if needs_action:
+            ctk.CTkLabel(right, text="Action needed",
+                         font=('Segoe UI', _scaled(9), 'bold'),
+                         text_color="#ffffff", fg_color=ct['RED'],
+                         corner_radius=10, padx=8, pady=2,
+                         anchor='e').pack(anchor='e', pady=(4, 0))
+
+        self._bind_row_clicks(row, message)
+        self._row_widgets[mid] = row
+        self._row_messages[mid] = message
+        # Keep the legacy tree_maps working for focus_message() callers.
+        try:
+            if not hasattr(self.app, 'tree_maps'):
+                self.app.tree_maps = {}
+            self.app.tree_maps.setdefault('inbox_messages', {})[mid] = message
+        except Exception:
+            pass
+        self._paint_row_selection()
+
+    def _paint_row_selection(self):
+        """Highlight the selected row."""
+        ct = self._ct
+        for mid, row in self._row_widgets.items():
+            try:
+                row.configure(
+                    fg_color=ct['ROW_SELECTED']
+                    if mid == self._selected_message_id else ct['CARD'])
+            except Exception:
+                pass
+
+    def _select_message(self, message):
+        """Select a message row and show it in the preview pane."""
+        mid = getattr(message, 'id', None) or str(id(message))
+        self._selected_message_id = mid
+        self.selected_message = message
+        self._paint_row_selection()
+        self._display_message_preview(message)
+
+    def _clear_rows(self):
+        """Remove all message rows."""
+        for child in self._list_scroll.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        self._row_widgets = {}
+        self._row_messages = {}
+        self._selected_message_id = None
+        self.selected_message = None
+        try:
+            if hasattr(self.app, 'tree_maps') and \
+                    'inbox_messages' in self.app.tree_maps:
+                self.app.tree_maps['inbox_messages'].clear()
+        except Exception:
+            pass
     def _create_email_preview(self, parent):
         """Create the email preview pane."""
         ct = self._ct
@@ -507,98 +598,44 @@ class InboxView(ctk.CTkFrame):
                                       command=self._toggle_save_current)
         self.context_menu.add_command(label="Delete",
                                       command=self._delete_current)
-
-        self.email_tree.bind('<Button-3>', self._show_context_menu)
+        # (Right-click is bound per row in _bind_row_clicks.)
 
     def _show_context_menu(self, event):
-        """Show context menu."""
-        item = self.email_tree.identify('item', event.x, event.y)
-        if item:
-            self.email_tree.selection_set(item)
+        """Legacy context-menu entry point (kept for external callers)."""
+        if self.selected_message is not None:
+            try:
+                self.context_menu.post(event.x_root, event.y_root)
+            except Exception:
+                pass
+
+    def _show_row_context_menu(self, event, message):
+        """Right-click on a Gmail-style row: select it, then show the menu."""
+        try:
+            self._select_message(message)
             self.context_menu.post(event.x_root, event.y_root)
+        except Exception:
+            pass
 
     def _populate_inbox(self):
-        """Populate the inbox with messages."""
-        # Clear existing items
-        for item in self.email_tree.get_children():
-            self.email_tree.delete(item)
-
-        # Clear tree maps
-        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
-            self.app.tree_maps['inbox_messages'].clear()
-
-        # Add messages
+        """Populate the inbox with Gmail-style rows."""
+        self._clear_rows()
         for message in self.inbox.messages:
-            self._add_message_to_tree(message)
-
-        # Update stats
+            self._add_message_row(message)
         self._update_stats()
         self._select_first_message()
 
     def _select_first_message(self):
         """Select the first message so the preview is never empty."""
-        children = self.email_tree.get_children()
-        if children:
-            self.email_tree.selection_set(children[0])
-            self.email_tree.focus(children[0])
-
-    def _row_tags(self, message: EmailMessage):
-        """Return treeview tags for a message: first tag wins on conflicts."""
-        if message.is_overdue():
-            return ('overdue',)
-        if message.is_urgent:
-            return ('urgent',)
-        if not message.is_read:
-            return ('unread',)
-        return ('read',)
-
-    def _add_message_to_tree(self, message: EmailMessage):
-        """Add a single message to the tree."""
-        # Priority indicator
-        priority_icon = ""
-        if message.is_urgent or message.priority >= 4:
-            priority_icon = "!!"
-        elif message.is_important or message.priority >= 3:
-            priority_icon = "!"
-        elif message.requires_response:
-            priority_icon = ">"
-
-        # Status
-        status = "New" if not message.is_read else "Read"
-        if message.is_overdue():
-            status = "Overdue"
-        if getattr(message, "is_saved", False):
-            status = f"📌 {status}"
-
-        # Date formatting
-        date_str = message.date_sent.strftime("%m/%d")
-        if message.get_age_days() == 0:
-            date_str = "Today"
-        elif message.get_age_days() == 1:
-            date_str = "Yesterday"
-
-        # Insert item
-        item_id = self.email_tree.insert('', 'end', values=(
-            priority_icon,
-            message.sender,
-            message.subject[:50] + "..." if len(message.subject) > 50 else message.subject,
-            message.category,
-            date_str,
-            status
-        ))
-
-        # Store message reference in tree_maps
-        if not hasattr(self.app, 'tree_maps'):
-            self.app.tree_maps = {}
-        if 'inbox_messages' not in self.app.tree_maps:
-            self.app.tree_maps['inbox_messages'] = {}
-        self.app.tree_maps['inbox_messages'][item_id] = message
-
-        # Apply styling based on read/urgent/overdue status
-        self.email_tree.item(item_id, tags=self._row_tags(message))
+        try:
+            children = self._list_scroll.winfo_children()
+        except Exception:
+            children = []
+        if children and self._row_messages:
+            first_id = next(iter(self._row_messages))
+            self._select_message(self._row_messages[first_id])
 
     def _apply_filter(self, filter_type: str):
-        """Apply filter to email list."""
+        """Apply filter to the Gmail-style message list."""
         self._current_filter = filter_type
         self._paint_filter_pills()
         # Season Story view replaces the email list entirely.
@@ -606,17 +643,10 @@ class InboxView(ctk.CTkFrame):
             self._show_story_view()
             return
         self._show_email_view()
-        # Clear current view
-        for item in self.email_tree.get_children():
-            self.email_tree.delete(item)
-
-        # Clear tree maps (messages are re-registered below)
-        if hasattr(self.app, 'tree_maps') and 'inbox_messages' in self.app.tree_maps:
-            self.app.tree_maps['inbox_messages'].clear()
+        self._clear_rows()
 
         # Filter messages
         filtered_messages = []
-
         if filter_type == "all":
             filtered_messages = self.inbox.messages
         elif filter_type == "unread":
@@ -632,59 +662,25 @@ class InboxView(ctk.CTkFrame):
 
         # Populate with filtered messages
         for message in filtered_messages:
-            self._add_message_to_tree(message)
+            self._add_message_row(message)
         self._select_first_message()
         self._update_stats()
 
-    def _update_filter_badges(self):
-        """Update per-filter unread count badges on the filter pills.
+    def _on_email_select(self, event=None):
+        """Legacy selection entry point (kept for external callers)."""
+        if self.selected_message is not None:
+            self._display_message_preview(self.selected_message)
 
-        Badges show the number of unread messages visible under each filter,
-        e.g. "Trade (2)". Filters with no unread messages show the plain label.
-        """
-        buttons = getattr(self, '_filter_buttons', {})
-        if not buttons:
-            return
-
-        unread = self.inbox.get_unread_messages()
-        urgent_unread = [m for m in self.inbox.get_urgent_messages() if not m.is_read]
-
-        counts = {
-            'all': len(unread),
-            'unread': len(unread),
-            'urgent': len(urgent_unread),
-            'story': self._story_badge_count(),
-        }
-        for category in ('Trade', 'Scouting', 'Contracts', 'Injuries', 'Media', 'League'):
-            counts[category] = sum(
-                1 for m in self.inbox.get_messages_by_category(category) if not m.is_read)
-
-        for label, filter_type in self._FILTERS:
-            btn = buttons[filter_type]
-            count = counts.get(filter_type, 0)
-            btn.configure(text=f"{label} ({count})" if count > 0 else label)
-
-    def _on_email_select(self, event):
-        """Handle email selection."""
-        selection = self.email_tree.selection()
-        if selection:
-            item = selection[0]
-            # Get message object from tree_maps
-            if (hasattr(self.app, 'tree_maps') and
-                'inbox_messages' in self.app.tree_maps and
-                item in self.app.tree_maps['inbox_messages']):
-                message = self.app.tree_maps['inbox_messages'][item]
-                self.selected_message = message
-                self._display_message_preview(message)
-
-    def _on_email_double_click(self, event):
-        """Handle double-click on email."""
+    def _on_row_double_click(self):
+        """Double-click a row: mark as read and refresh."""
         if self.selected_message:
-            # Mark as read and open full view
             if not self.selected_message.is_read:
                 self.inbox.mark_message_read(self.selected_message.id)
                 self._refresh_inbox()
 
+    def _on_email_double_click(self, event=None):
+        """Handle double-click on email (legacy signature)."""
+        self._on_row_double_click()
     def _display_message_preview(self, message: EmailMessage):
         """Display message in the preview pane."""
         # Update header labels
@@ -876,15 +872,15 @@ class InboxView(ctk.CTkFrame):
     def focus_message(self, message_id) -> bool:
         """Select and display the message with the given id."""
         try:
-            mapping = {}
-            if hasattr(self.app, 'tree_maps'):
-                mapping = self.app.tree_maps.get('inbox_messages', {})
-            for item_id, message in mapping.items():
+            for mid, message in self._row_messages.items():
                 if getattr(message, 'id', None) == message_id:
-                    self.email_tree.selection_set(item_id)
-                    self.email_tree.see(item_id)
-                    self.email_tree.focus(item_id)
-                    self._on_email_select(None)
+                    self._select_message(message)
+                    row = self._row_widgets.get(mid)
+                    if row is not None:
+                        try:
+                            self._list_scroll._parent_canvas.see(row)
+                        except Exception:
+                            pass
                     return True
         except Exception:
             pass
