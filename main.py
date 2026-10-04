@@ -7292,12 +7292,11 @@ class HockeyManagerGUI(tk.Tk):
         return ("Next Day", [])
 
     def _show_continue_blockers(self, blockers):
-        """Tell the user what is blocking day advancement and offer a jump
-        to each blocking task. Eastside grammar (Phase 4): a non-modal
-        card with one jump button per blocker, never a grab_set modal.
-        Dismissing the card never clears the blockers -- they persist
-        until resolved, and the top-nav pill re-reads the live continue
-        state on every press."""
+        """Front-and-center modal: tells the player exactly what's blocking
+        day advancement and what to do about it. (2026-10-04: replaced the
+        easy-to-miss non-modal card per Caleb -- this is now a grab_set
+        modal that can't be overlooked.)
+        Dismissing never clears the blockers -- they persist until resolved."""
         try:
             from popup_system import ask_card
         except Exception:
@@ -7404,12 +7403,122 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
 
-        ask_card(self, "Action Required", _message, _buttons,
-                 on_answer=_answer,
-                 default_on_dismiss="defer",
-                 session_id="continue_blockers", dialog_id="blockers_card",
-                 resolver="continue_blockers_answer",
-                 kind="warning", width=540, height=280)
+        # Front-and-center modal (2026-10-04): the old non-modal card was
+        # too easy to miss. This grab_set dialog lists every blocker with
+        # its actions right there -- no inbox digging required.
+        self._show_blocker_modal(blockers, _answer)
+
+    def _show_blocker_modal(self, blockers, _answer):
+        """Modal dialog listing every day-advance blocker front and center.
+        Each blocker shows its title, what to do, and its action buttons
+        (primary jump, auto-resolve, secondary). grab_set so it can't be
+        missed. Closing dismisses without clearing -- blockers persist."""
+        import tkinter as tk
+        from tkinter import ttk
+
+        win = tk.Toplevel(self)
+        win.title("Cannot Advance Day")
+        win.geometry("640x520")
+        win.configure(bg="#1a1a1e")
+        win.transient(self)
+        win.grab_set()
+        # Center on parent
+        try:
+            win.update_idletasks()
+            x = self.winfo_x() + (self.winfo_width() - 640) // 2
+            y = self.winfo_y() + (self.winfo_height() - 520) // 2
+            win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        except Exception:
+            pass
+
+        # Header
+        hdr = tk.Frame(win, bg="#1a1a1e")
+        hdr.pack(fill="x", padx=20, pady=(16, 8))
+        tk.Label(hdr, text="\u26d4  Day Advancement Blocked",
+                 font=("Segoe UI", 16, "bold"), fg="#ff6b6b",
+                 bg="#1a1a1e").pack(anchor="w")
+        tk.Label(hdr,
+                 text=("The following must be resolved before the day can "
+                       "advance. Click an action to fix it now."),
+                 font=("Segoe UI", 11), fg="#a0a0a8",
+                 bg="#1a1a1e", wraplength=580,
+                 justify="left").pack(anchor="w", pady=(4, 0))
+
+        # Scrollable blocker list
+        canvas = tk.Canvas(win, bg="#1a1a1e", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(win, orient="vertical",
+                                  command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg="#1a1a1e")
+        scroll_frame.bind("<Configure>",
+                         lambda e: canvas.configure(
+                             scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True,
+                    padx=(20, 0), pady=8)
+        scrollbar.pack(side="right", fill="y", padx=(0, 20), pady=8)
+
+        for b in blockers:
+            _bid = b.get("id", "")
+            card = tk.Frame(scroll_frame, bg="#232328", relief="flat", bd=0)
+            card.pack(fill="x", padx=4, pady=6, ipadx=12, ipady=10)
+
+            tk.Label(card, text=b.get("title", "Pending task"),
+                     font=("Segoe UI", 13, "bold"), fg="#ffffff",
+                     bg="#232328", anchor="w").pack(fill="x")
+            _detail = b.get("detail", "")
+            if _detail:
+                tk.Label(card, text=_detail,
+                         font=("Segoe UI", 11), fg="#c0c0c8",
+                         bg="#232328", anchor="w", justify="left",
+                         wraplength=540).pack(fill="x", pady=(4, 8))
+
+            btn_row = tk.Frame(card, bg="#232328")
+            btn_row.pack(fill="x", pady=(0, 2))
+
+            def _make_handler(_b_id=_bid):
+                def _h(_suffix=""):
+                    win.destroy()
+                    _answer(_b_id + _suffix)
+                return _h
+
+            # Primary action (jump to the task)
+            _act = b.get("action")
+            if _act:
+                tk.Button(btn_row, text=_act[0],
+                         command=_make_handler(),
+                         bg="#00ceb8", fg="black",
+                         font=("Segoe UI", 10, "bold"),
+                         padx=12, pady=6, relief="flat",
+                         cursor="hand2").pack(side="left", padx=(0, 8))
+            # Auto-resolve (smart one-click fix)
+            _aact = b.get("auto_action")
+            if _aact:
+                tk.Button(btn_row, text="\u26a1 " + _aact[0],
+                         command=_make_handler("__auto"),
+                         bg="#2a2a30", fg="#00ceb8",
+                         font=("Segoe UI", 10, "bold"),
+                         padx=12, pady=6, relief="flat",
+                         cursor="hand2").pack(side="left", padx=(0, 8))
+            # Secondary action (e.g. IR quick fix)
+            _sact = b.get("secondary_action")
+            if _sact:
+                tk.Button(btn_row, text=_sact[0],
+                         command=_make_handler("__secondary"),
+                         bg="#2a2a30", fg="#c0c0c8",
+                         font=("Segoe UI", 10),
+                         padx=12, pady=6, relief="flat",
+                         cursor="hand2").pack(side="left")
+
+        # Close button
+        tk.Button(win, text="Close (blockers remain)",
+                 command=win.destroy,
+                 bg="#2a2a30", fg="#808088",
+                 font=("Segoe UI", 10),
+                 padx=16, pady=8, relief="flat",
+                 cursor="hand2").pack(pady=(0, 16))
+
+        win.wait_window(win)
 
     def _set_continue_feedback(self, busy, status=""):
         """Drive the dashboard Continue button's processing feedback.
