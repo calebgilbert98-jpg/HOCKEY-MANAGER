@@ -16908,16 +16908,36 @@ class HockeyManagerGUI(tk.Tk):
         a real (non-projection) bracket with no champion yet. Mid-season
         projections never reach league.playoff_bracket, and the
         season-complete check excludes them anyway.
+
+        SAVE/LOAD ROBUSTNESS (Chris 2026-10-04, priority): after restoring
+        a mid-playoff save, the season-complete check can fail (standings
+        wiped, game-count mismatch) even though a live bracket exists. If
+        the bracket is real, uncrowned, and has actual series in it, the
+        playoffs are in progress -- period. This prevents the 420-day
+        limbo where the date advances with no games simmed and no champion.
         """
         try:
-            if not self._check_season_complete():
-                return False
             league = getattr(self, 'league', None)
             bracket = getattr(league, 'playoff_bracket', None)
             if bracket is None \
                     or bool(getattr(bracket, 'is_projection', False)):
                 return False
             if getattr(bracket, 'stanley_cup_champion', None) is not None:
+                return False
+            # A live bracket with real series = playoffs in progress,
+            # even if the season-complete check fails post-restore.
+            try:
+                _series = getattr(bracket, 'playoff_series', None) or {}
+                _has_series = any(
+                    _series.get(r) for r in (
+                        'wild_card', 'division_semifinals', 'division_finals',
+                        'conference_finals', 'stanley_cup_final'))
+                if _has_series:
+                    return True
+            except Exception:
+                pass
+            # Fallback: the original season-complete gate.
+            if not self._check_season_complete():
                 return False
             return True
         except Exception:
@@ -16950,10 +16970,30 @@ class HockeyManagerGUI(tk.Tk):
                 except Exception:
                     pass
             today = getattr(self, 'current_date', None)
+            # Normalize today to a date for comparison (save/load can leave
+            # datetime vs date mismatches that silently skip all games).
+            try:
+                from datetime import date as _date, datetime as _dt
+                if isinstance(today, _dt):
+                    today = today.date()
+            except Exception:
+                pass
             for entry in list(getattr(league, 'schedule', None) or []):
                 if not isinstance(entry, dict) or not entry.get('playoff'):
                     continue
-                if entry.get('date') != today:
+                try:
+                    _ed = entry.get('date')
+                    if isinstance(_ed, _dt):
+                        _ed = _ed.date()
+                    # String fallback: parse ISO format.
+                    if isinstance(_ed, str):
+                        try:
+                            _ed = _dt.fromisoformat(_ed).date()
+                        except Exception:
+                            continue
+                    if _ed != today:
+                        continue
+                except Exception:
                     continue
                 try:
                     bracket.try_play_scheduled_game(
