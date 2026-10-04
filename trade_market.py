@@ -490,6 +490,15 @@ def list_piece(app, league, seller, player, source="seller_list", today=None,
             ask = int(te.player_trade_value(player))
         except Exception:
             return None
+        # Panic/urgency discount (Muck 2026-10-04): a pressured seller
+        # accepts less than full value. Applied once at listing time;
+        # the normal deadline decay still applies on top.
+        try:
+            _disc = float((params or {}).get("ask_discount", 0.0) or 0.0)
+            if 0.0 < _disc <= 0.5:
+                ask = int(ask * (1.0 - _disc))
+        except Exception:
+            pass
         window = params.get("window", BIDDING_WINDOW_BASELINE_DAYS)
         market["seq"] = int(market.get("seq", 0) or 0) + 1
         listing = {

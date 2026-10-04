@@ -240,6 +240,42 @@ def _position_group(p):
                                              else "F")
 
 
+def _shop_before_wire(league, app, team, player):
+    """Trade-first-before-waive for valuable (75+ OVR) players.
+
+    A 75+ OVR player is an asset, not a cap casualty: a real GM calls
+    around before exposing a good player on the wire for nothing. Lists
+    the player on the trade market with an urgent short window.
+
+    Returns True when the player is shopped (or already being shopped) --
+    the caller skips the wire this pass and the market gets its chance.
+    Returns False when the market route is exhausted or unavailable --
+    the caller waives.
+    """
+    try:
+        import trade_market as tm
+        market = tm.get_market(league)
+        pid = getattr(player, "id", None)
+        if pid is None or market is None:
+            return False
+        # Already being shopped: give the market time.
+        try:
+            if tm._active_listings(market, player_id=pid):
+                return True
+        except Exception:
+            pass
+        # Shop him: urgent 3-day window, AI-initiated.
+        try:
+            listing = tm.list_piece(app, league, team, player,
+                                    source="ai_decision",
+                                    params={"window": 3})
+        except Exception:
+            listing = None
+        return listing is not None
+    except Exception:
+        return False
+
+
 def _place_on_wire(league, app, wire, team, player, reason):
     player.on_waivers = True
     player.waiver_days = WAIVER_DAYS
@@ -328,6 +364,13 @@ def process_ai_waivers(league, app=None, rng=None, camp_cuts=False):
                     if _save < 500_000:
                         continue
                     if r.random() > prob:
+                        continue
+                    # Trade-first (Muck 2026-10-04): a 75+ OVR player is
+                    # an asset, not a casualty -- shop him on the trade
+                    # market before the wire. If shopped, skip the wire
+                    # this pass; the market gets its chance.
+                    if ovr >= 75 and _shop_before_wire(league, app, team,
+                                                       p):
                         continue
                     summary["waived"].append(
                         _place_on_wire(league, app, wire, team, p,

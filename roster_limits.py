@@ -265,15 +265,38 @@ def roster_limit_blockers(app):
             return blockers
         n = active_roster_count(team)
         if n > ACTIVE_ROSTER_MAX:
+            # Eastside-style quick fixes: IR-eligible injured players can
+            # be stashed in one click; the rest need manual demotion.
+            _ir_cands = ir_quick_fix_candidates(team)
+            _ir_bit = ""
+            _ir_action = None
+            if _ir_cands:
+                _names = ", ".join(
+                    getattr(p, "full_name", "?") for p, _k in _ir_cands[:3])
+                _ir_bit = (f" {len(_ir_cands)} injured player(s) can go "
+                           f"straight to IR/LTIR ({_names}"
+                           f"{'...' if len(_ir_cands) > 3 else ''}).")
+                def _do_ir_fix(_t=team, _app=app):
+                    try:
+                        _n, _who = apply_ir_quick_fix(
+                            _t, getattr(_app, "current_date", None))
+                        if _n:
+                            _app.add_news(
+                                f"🏥 Placed {', '.join(_who)} on "
+                                f"IR/LTIR ({n - _n} active).")
+                    except Exception:
+                        pass
+                _ir_action = ('IR injured players', _do_ir_fix)
             blockers.append({
                 'id': 'roster_limit_23',
                 'title': 'Active roster over the 23-man limit',
                 'detail': (f"{n} players on the active roster -- the NHL "
                            f"limit is {ACTIVE_ROSTER_MAX} (emergency fill-ins "
-                           f"don't count). Demote or waive players before "
-                           f"advancing."),
+                           f"don't count).{_ir_bit} Demote or waive players "
+                           f"before advancing."),
                 'action': ('Open Roster', getattr(app, 'open_roster_window',
                                                   lambda: None)),
+                'secondary_action': _ir_action,
             })
         s = spc_count(team)
         if s > SPC_LIMIT:
@@ -341,6 +364,58 @@ def roster_limit_blockers(app):
     except Exception:
         pass
     return blockers
+
+
+def ir_quick_fix_candidates(team):
+    """Players eligible for IR right now (Eastside-style quick fix).
+
+    Returns [(player, 'IR'|'LTIR')] for injured roster players who can
+    be stashed to free 23-man spots. The game-day blocker offers this
+    as a one-click action.
+    """
+    out = []
+    try:
+        import ir_system as _irs
+        for p in (getattr(team, "roster", None) or []):
+            try:
+                if _irs.is_on_any_ir(p):
+                    continue
+                _ok_ltir, _ = _irs.eligible_for_ltir(p)
+                if _ok_ltir:
+                    out.append((p, "LTIR"))
+                    continue
+                _ok_ir, _ = _irs.eligible_for_ir(p)
+                if _ok_ir:
+                    out.append((p, "IR"))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def apply_ir_quick_fix(team, current_date=None):
+    """Place all IR-eligible injured players on IR/LTIR (one click).
+
+    Returns (placed_count, [names]). Eastside-style: clear the injured
+    off the active roster so the club is game-day compliant.
+    """
+    placed = []
+    try:
+        import ir_system as _irs
+        for p, kind in ir_quick_fix_candidates(team):
+            try:
+                if kind == "LTIR":
+                    ok, _ = _irs.place_on_ltir(team, p, current_date)
+                else:
+                    ok, _ = _irs.place_on_ir(team, p, current_date)
+                if ok:
+                    placed.append(getattr(p, "full_name", "Player"))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return len(placed), placed
 
 
 # --- Emergency fillers ---------------------------------------------------------

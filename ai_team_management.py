@@ -427,8 +427,11 @@ class AITeamManager:
             fa_decisions = self._evaluate_free_agency(team, strategy, free_agents, current_date)
             team_decisions.extend(fa_decisions)
 
-            # 2. Trade decisions
-            trade_decisions = self._evaluate_trades(team, strategy, teams, current_date)
+            # 2. Trade decisions (identity threads through: _sell_pressure
+            # reads GM personality + skill for the panic/discount gauge)
+            trade_decisions = self._evaluate_trades(team, strategy, teams,
+                                                    current_date,
+                                                    identity=identity)
             team_decisions.extend(trade_decisions)
 
             # 3. Roster management
@@ -987,40 +990,298 @@ class AITeamManager:
         
         return decisions
     
+    def _sell_pressure(self, team: Team, identity, strategy,
+                       current_date: date) -> float:
+        """0.0-1.0 pressure to sell (panic or pragmatism).
+
+        A dynamic reflection of five things, per Chris:
+        1. GM personality + skill: impatient, pressure-reactive GMs panic;
+           skilled GMs (high gm_ability01) hold for value; loyal GMs won't
+           dump "their guys" cheap.
+        2. Team need state: glaring holes with no internal fix push a GM
+           to sell from strength; a complete roster feels no urge.
+        3. Performance: losing streaks and falling out of the playoff
+           picture raise the temperature; overachieving cools it.
+        4. Situation: a star's season-ending injury, a cap crunch, or a
+           trade request forces the GM's hand (rational, not panic).
+        5. Long-term ambitions: a closing window says "sell before the
+           value evaporates"; a rebuild timeline says "wait for the
+           deadline premium."
+
+        Returns 0.0 (stone hands -- hold everything) to 1.0 (full panic --
+        sell at a discount, move core pieces).
+        """
+        try:
+            from ai_extension_planning import gm_ability01 as _ability
+            skill = float(_ability(identity))
+        except Exception:
+            skill = 0.5
+        try:
+            patience = float(getattr(identity, "patience", 0.5) or 0.5)
+            pr = float(getattr(identity, "pressure_response", 0.5) or 0.5)
+            loyalty = float(getattr(identity, "loyalty", 0.5) or 0.5)
+            aggression = float(getattr(identity, "aggression", 0.5) or 0.5)
+        except Exception:
+            patience, pr, loyalty, aggression = 0.5, 0.5, 0.5, 0.5
+
+        pressure = 0.0
+        league = getattr(self, "_league_ref", None)
+
+        # --- 3. Performance ------------------------------------------------
+        try:
+            standings = getattr(league, "standings", None) or {}
+            tname = getattr(team, "team_name", "")
+            st = standings.get(tname, {}) if isinstance(standings, dict) else {}
+            w = int(st.get("W", 0) or 0)
+            l = int(st.get("L", 0) or 0)
+            otl = int(st.get("OTL", 0) or st.get("OT", 0) or 0)
+            gp = w + l + otl
+            if gp >= 10:
+                win_pct = w / gp
+                # Below .450 with real games played: the season is slipping
+                if win_pct < 0.450:
+                    pressure += 0.30 * min(1.0, (0.450 - win_pct) / 0.20)
+                elif win_pct > 0.600:
+                    pressure -= 0.15  # winning cures everything
+            # Losing streak: the room is spiraling
+            streak = 0
+            try:
+                streak = int(getattr(team, "current_losing_streak", 0) or 0)
+            except Exception:
+                pass
+            if streak >= 5:
+                pressure += 0.15 * min(1.0, streak / 10.0)
+        except Exception:
+            pass
+
+        # --- 4. Situation ---------------------------------------------------
+        try:
+            # Star injured long-term: the season may be lost
+            _star_down = False
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if (bool(getattr(p, "is_injured", False))
+                            and int(getattr(p, "injury_games_remaining", 0)
+                                    or 0) >= 20
+                            and float(p.overall_rating()) >= 85):
+                        _star_down = True
+                        break
+                except Exception:
+                    continue
+            if _star_down:
+                pressure += 0.20
+            # Trade request: someone HAS to move
+            for p in (getattr(team, "roster", None) or []):
+                if bool(getattr(p, "transfer_requested", False)):
+                    pressure += 0.10
+                    break
+        except Exception:
+            pass
+
+        # --- 2. Need state ---------------------------------------------------
+        try:
+            needs = list(getattr(strategy, "position_needs", None) or [])
+            if len(needs) >= 2:
+                # Multiple holes, no internal fix: sell from strength
+                pressure += 0.10
+        except Exception:
+            pass
+
+        # --- 5. Long-term ambitions -------------------------------------------
+        try:
+            # Window check: core age. A contender whose core is 33+ should
+            # sell before the value evaporates (smart, not panic).
+            _core_ages = []
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    if float(p.overall_rating()) >= 82:
+                        _core_ages.append(int(getattr(p, "age", 27) or 27))
+                except Exception:
+                    continue
+            if _core_ages:
+                _avg_core = sum(_core_ages) / len(_core_ages)
+                if _avg_core >= 33:
+                    pressure += 0.15
+            # Rebuild timeline: an early-rebuild GM waits for the deadline
+            # premium; a late-rebuild GM (timeline almost done) feels heat.
+            _tl = int(getattr(strategy, "rebuilding_timeline", 0) or 0)
+            if _tl >= 4:
+                pressure -= 0.10  # years away -- no rush
+        except Exception:
+            pass
+
+        # --- 1. Personality + skill modulation ---------------------------------
+        # Impatient + pressure-reactive: amplifies everything above.
+        # Patient + skilled: dampens it. Loyalty: won't dump his guys.
+        _amp = (0.6 + 0.8 * (1.0 - patience) * (0.5 + 0.5 * pr))
+        _damp = (0.7 + 0.6 * skill) * (0.8 + 0.4 * loyalty)
+        pressure = pressure * _amp / _damp
+        # Aggression adds a restless edge: aggressive GMs churn more.
+        pressure += 0.05 * aggression
+
+        return max(0.0, min(1.0, pressure))
+
+    def _trade_sell_candidates(self, team: Team, strategy: TeamStrategy,
+                               pressure: float):
+        """Players the AI is willing to shop; the pool widens with pressure.
+
+        0.00-0.40: veterans 28+ at Good-tier or better -- the classic
+                   rebuild sell. (Muck 2026-10-01 tier gauge.)
+        0.40-0.70: + expensive underperformers 25+ and anyone who asked
+                   out -- a pressured GM moves money, not just age.
+        0.70-1.00: + core pieces on big deals. Never the franchise
+                   cornerstone: the top-2 by OVR are untouchable even in
+                   full panic. A real GM doesn't trade McDavid at 2am.
+        """
+        try:
+            from attribute_composites import talent_tier as _tt
+            from attribute_composites import tier_index as _tix
+
+            def _good_enough(p):
+                try:
+                    return _tix(_tt(p.overall_rating())) <= 3
+                except Exception:
+                    return p.overall_rating() > 75
+        except Exception:
+            def _good_enough(p):
+                try:
+                    return p.overall_rating() > 75
+                except Exception:
+                    return False
+
+        def _ovr(p):
+            try:
+                return float(p.overall_rating())
+            except Exception:
+                return 0.0
+
+        roster = list(getattr(team, "roster", None) or [])
+        # Franchise cornerstones: never shopped, at any pressure.
+        _by_ovr = sorted(roster, key=_ovr, reverse=True)
+        _untouchable = {id(p) for p in _by_ovr[:2]}
+
+        cands = []
+        for p in roster:
+            try:
+                if id(p) in _untouchable:
+                    continue
+                if bool(getattr(p, "on_waivers", False)):
+                    continue
+                try:
+                    import ir_system as _irs
+                    if _irs.is_on_any_ir(p):
+                        continue
+                except Exception:
+                    pass
+                age = int(getattr(p, "age", 27) or 27)
+                ovr = _ovr(p)
+                if not _good_enough(p):
+                    continue
+                # Tier 1: veteran sell.
+                if age > 28:
+                    cands.append((0, -ovr, p))
+                    continue
+                # Tier 2: expensive underperformer / trade request.
+                if pressure >= 0.40:
+                    try:
+                        _hit = int(getattr(getattr(p, "contract", None),
+                                           "salary", 0) or 0)
+                    except Exception:
+                        _hit = 0
+                    _requested = bool(getattr(p, "transfer_requested", False))
+                    if _requested or (age >= 25 and _hit >= 4_000_000
+                                      and ovr < 82):
+                        cands.append((1, -ovr, p))
+                        continue
+                # Tier 3: core piece on a big deal (panic only).
+                if pressure >= 0.70 and ovr >= 82:
+                    try:
+                        _hit = int(getattr(getattr(p, "contract", None),
+                                           "salary", 0) or 0)
+                    except Exception:
+                        _hit = 0
+                    if _hit >= 6_000_000:
+                        cands.append((2, -ovr, p))
+            except Exception:
+                continue
+        # Veterans first, then the pricier gambles; best OVR first inside
+        # each tier.
+        cands.sort(key=lambda c: (c[0], c[1]))
+        return [c[2] for c in cands]
+
     def _evaluate_trades(self, team: Team, strategy: TeamStrategy,
-                        all_teams: List[Team], current_date: date) -> List[AIDecision]:
-        """Evaluate potential trades for a team"""
+                        all_teams: List[Team], current_date: date,
+                        identity=None) -> List[AIDecision]:
+        """Evaluate potential trades for a team.
+
+        Selling is driven by _sell_pressure(): a dynamic 0-1 gauge of GM
+        personality + skill, need state, performance, situation, and
+        long-term ambitions. Pressure widens the sell pool (veterans ->
+        expensive underperformers -> core pieces), quickens the cadence,
+        and -- for low-skill, pressure-reactive GMs -- discounts the ask.
+        Skilled, patient GMs hold for value. No fixed volume targets: the
+        cadence is a dynamic cap and the market's own guards bound it
+        further.
+        """
         decisions = []
-        
+
         if strategy.trade_preference == TradePreference.INACTIVE:
             return decisions
-        
+
+        try:
+            pressure = (float(self._sell_pressure(team, identity, strategy,
+                                                 current_date))
+                        if identity is not None else 0.3)
+        except Exception:
+            pressure = 0.3
+        pressure = max(0.0, min(1.0, pressure))
+
+        # Valuation: the panic discount. Skilled GMs hold for value until
+        # real panic; low-skill, pressure-reactive GMs sell at a discount.
+        try:
+            from ai_extension_planning import gm_ability01 as _ability
+            skill = (float(_ability(identity))
+                     if identity is not None else 0.5)
+        except Exception:
+            skill = 0.5
+        discount = 0.0
+        if pressure >= 0.60:
+            discount = 0.30 * (pressure - 0.60) / 0.40  # up to 30%
+            if skill >= 0.70 and pressure < 0.85:
+                discount = 0.0  # skilled GM holds for value
+
+        # Cadence: dynamic cap, not a target. 1 listing when calm, up to
+        # 4 in full panic.
+        max_shops = 1 + int(pressure * 3.0)
+
         # Look for trade opportunities based on strategy
         if strategy.priority == ManagementPriority.REBUILD:
-            # Look to trade veterans for picks/prospects. Tier-based
-            # (Muck 2026-10-01): trade bait is Good-tier or better --
-            # the same gauge the human reads on the roster screen.
-            try:
-                from attribute_composites import talent_tier as _tt_v
-                from attribute_composites import tier_index as _tix_v
-                veterans = [p for p in team.roster
-                            if p.age > 28
-                            and _tix_v(_tt_v(p.overall_rating())) <= 3]
-            except Exception:
-                veterans = [p for p in team.roster
-                            if p.age > 28 and p.overall_rating() > 75]
-            for veteran in veterans[:2]:  # Limit trade attempts
-                trade_decision = self._create_veteran_trade_offer(veteran, team, strategy, current_date)
+            sellers = self._trade_sell_candidates(team, strategy, pressure)
+            for veteran in sellers[:max_shops]:
+                trade_decision = self._create_veteran_trade_offer(
+                    veteran, team, strategy, current_date,
+                    ask_discount=discount)
                 if trade_decision:
                     decisions.append(trade_decision)
-        
+
         elif strategy.priority == ManagementPriority.CONTEND:
             # Look to acquire impact players
             if strategy.position_needs:
                 target_decision = self._create_acquisition_offer(team, strategy, all_teams, current_date)
                 if target_decision:
                     decisions.append(target_decision)
-        
+            # A struggling contender (high pressure) also sells from the
+            # margins: expensive underperformers fund the fix.
+            if pressure >= 0.55:
+                sellers = self._trade_sell_candidates(team, strategy,
+                                                      pressure)
+                for veteran in sellers[:max(1, max_shops - 1)]:
+                    trade_decision = self._create_veteran_trade_offer(
+                        veteran, team, strategy, current_date,
+                        ask_discount=discount)
+                    if trade_decision:
+                        decisions.append(trade_decision)
+
         return decisions
     
     def _evaluate_roster_moves(self, team: Team, strategy: TeamStrategy,
@@ -2156,8 +2417,19 @@ class AITeamManager:
             except Exception:
                 return
             today = getattr(decision, "timestamp", None)
+            # Panic/urgency discount from _sell_pressure: a pressured,
+            # low-skill GM lists at a discount; a skilled GM holds for
+            # value. Additive: absent key = full ask, as before.
+            _params = None
+            try:
+                _details = getattr(decision, "offer_details", None) or {}
+                _disc = float(_details.get("ask_discount", 0.0) or 0.0)
+                if _disc > 0.0:
+                    _params = {"ask_discount": min(0.5, _disc)}
+            except Exception:
+                _params = None
             tm.list_piece(None, league, team, veteran,
-                          source="ai_decision", today=today)
+                          source="ai_decision", today=today, params=_params)
         except Exception:
             pass
 
@@ -2728,9 +3000,16 @@ class AITeamManager:
         
         return player.overall_rating() > 37  # Default threshold
     
-    def _create_veteran_trade_offer(self, veteran: Player, team: Team, 
-                                  strategy: TeamStrategy, current_date: date) -> Optional[AIDecision]:
-        """Create a trade offer for a veteran player"""
+    def _create_veteran_trade_offer(self, veteran: Player, team: Team,
+                                  strategy: TeamStrategy, current_date: date,
+                                  ask_discount: float = 0.0) -> Optional[AIDecision]:
+        """Create a trade offer for a veteran player.
+
+        ask_discount (0.0-0.3): panic/urgency discount from _sell_pressure.
+        A pressured, low-skill GM accepts less than full value; a skilled
+        GM holds for value (discount 0.0). Carried through to the market
+        listing's ask.
+        """
         if strategy.trade_preference == TradePreference.CONSERVATIVE:
             return None
         
@@ -2764,7 +3043,8 @@ class AITeamManager:
             target_player=veteran,
             offer_details={
                 "seeking": "picks_prospects",
-                "willingness": strategy.trade_preference.value
+                "willingness": strategy.trade_preference.value,
+                "ask_discount": max(0.0, min(0.3, float(ask_discount or 0.0))),
             },
             priority_score=0.7,
             reasoning=f"Rebuilding - trading veteran for future assets",

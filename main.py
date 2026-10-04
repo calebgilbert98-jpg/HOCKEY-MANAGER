@@ -7252,6 +7252,12 @@ class HockeyManagerGUI(tk.Tk):
             _act = b.get('action')
             if _act:
                 _buttons.append((_act[0], b.get('id', _act[0]), "primary"))
+            # Eastside-style quick fix: a secondary one-click action
+            # (e.g. "IR injured players") alongside the primary jump.
+            _sact = b.get('secondary_action')
+            if _sact:
+                _buttons.append((_sact[0], b.get('id', '') + '__secondary',
+                                 "secondary"))
         _buttons.append(("Close", "__close__", "secondary"))
 
         _blockers_snapshot = list(blockers)
@@ -7269,22 +7275,32 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 _live = _blockers_snapshot
             _target = None
+            _lookup_id = (_value[:-11] if _value.endswith('__secondary')
+                          else _value)
             for _b in _live or []:
-                if _b.get('id') == _value:
+                if _b.get('id') == _lookup_id:
                     _target = _b
                     break
             if _target is None:
                 for _b in _blockers_snapshot:
-                    if _b.get('id') == _value:
+                    if _b.get('id') == _lookup_id:
                         _target = _b
                         break
             if _target is not None:
-                _act = _target.get('action')
-                if _act:
-                    try:
-                        _act[1]()
-                    except Exception as e:
-                        print(f"Blocker action failed: {e}")
+                if _value.endswith('__secondary'):
+                    _sact = _target.get('secondary_action')
+                    if _sact:
+                        try:
+                            _sact[1]()
+                        except Exception as e:
+                            print(f"Blocker secondary action failed: {e}")
+                else:
+                    _act = _target.get('action')
+                    if _act:
+                        try:
+                            _act[1]()
+                        except Exception as e:
+                            print(f"Blocker action failed: {e}")
             # R8(i): the blocker may just have been resolved (e.g. the
             # captains picker) -- the top-nav pill must re-read the live
             # continue state instead of staying "Continue (1)".

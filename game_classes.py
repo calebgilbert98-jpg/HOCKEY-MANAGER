@@ -4043,26 +4043,22 @@ class Team:
                    force: bool = False) -> bool:
         """Adds a player to the specified roster (roster, ahl, prospects).
 
-        Universal roster-limit gate: the NHL active roster caps at 23.
-        Returns False (refuses) when adding to a full NHL roster, unless
-        force=True (database init, save loading -- paths that build the
-        world rather than transact in it). Every trade, signing, claim,
-        and promotion flows through here, so the limit fires in ALL
-        paths, not just the pre-game blocker.
+        Eastside-style: the NHL roster has NO hard transaction gate -- you
+        can carry extra players. The restrictions bite on GAME DAY: the
+        dressed lineup is capped at 20 (18 skaters + 2 goalies) and the
+        pre-game blocker enforces it, plus cap compliance. `force` is
+        accepted for API compatibility (DB init paths) but no longer
+        needed for the roster gate. Always returns True (raises on an
+        invalid roster_type).
         """
         roster_map = { "roster": self.roster, "ahl": self.ahl_roster, "prospects": self.prospects }
+        # "ahl_roster" is a common call-site spelling -- accept it as an
+        # alias (Muck 2026-10-04: three AI demotion sites used it and lost
+        # players to a ValueError + dead waiver fallback).
+        if roster_type == "ahl_roster":
+            roster_type = "ahl"
         if roster_type not in roster_map:
             raise ValueError("Invalid roster type specified.")
-        if roster_type == "roster" and not force:
-            try:
-                from roster_limits import ACTIVE_ROSTER_MAX
-            except Exception:
-                ACTIVE_ROSTER_MAX = 23
-            # Emergency fill-ins don't count against the 23 (real NHL).
-            _count = sum(1 for p in self.roster
-                         if not bool(getattr(p, "emergency_filler", False)))
-            if _count >= ACTIVE_ROSTER_MAX:
-                return False
         roster_map[roster_type].append(player)
         player.team_name = self.team_name
         # Season-history stint tracker: NHL roster joins open a stint.

@@ -7,7 +7,9 @@ coach in his final year with "climb" ambition getting a head-coach offer
 from a club with a bench vacancy; a secondary lane lets a club poach a
 high-reputation staffer laterally with a raise.
 
-NHL contract law (symmetric poaching):
+NHL contract law (asymmetric for now -- the user is excluded as poacher
+and victim; symmetric AI<->user poaching with inbox permission decisions
+is future work):
   * Expiring staff (<= 1 year): fair game -- no permission needed, the
     approach goes straight to the staffer.
   * Staff under contract (> 1 year): the poacher must request permission
@@ -15,12 +17,8 @@ NHL contract law (symmetric poaching):
     promotion (assistant -> head coach) and usually DENIED for a lateral
     move, unless the staffer is unhappy (low morale) or the club is
     indifferent. No draft-pick compensation (NHL abolished it in 2016).
-  * The user's club is a full participant: AI clubs can approach the
-    user's staff, and permission requests against the user's under-
-    contract staff arrive as interactive inbox decisions (grant/deny).
-  * The user can also initiate approaches against AI clubs' staff via
-    request_user_poach() -- same permission rules, AI resolves by the
-    same NHL-style logic.
+  * AI clubs only, both sides. The user's staff cannot be approached and
+    the user cannot initiate approaches (yet).
 
 Bounds (so the carousel never churns cartoonishly):
   * each club makes at most one approach per offseason
