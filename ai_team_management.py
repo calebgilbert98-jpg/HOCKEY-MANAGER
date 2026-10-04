@@ -885,6 +885,14 @@ class AITeamManager:
         except Exception:
             pass
         for fa in _prefiltered[:80]:
+            # 1-year CBA re-signing ban after a buyout: not even considered
+            try:
+                from buyout_window import buyout_re_sign_banned as _banned
+                if _banned(fa, getattr(team, "team_name", ""),
+                           current_date):
+                    continue
+            except Exception:
+                pass
             # Tier-quantized (Muck 2026-10-01): the AI targets what the
             # human sees. raw_ovr feeds the shared player-demand
             # machinery (same ask the user faces); ovr below is the

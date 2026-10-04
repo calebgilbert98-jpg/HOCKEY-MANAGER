@@ -34,7 +34,10 @@ WAIVER_DAYS = 2
 ROSTER_LIMIT = 23
 FRANCHISE_OVR = 86          # franchise pieces are never waived
 CAP_CASUALTY_MIN_HIT = 2_000_000   # burying less than this saves ~nothing
-CAP_CASUALTY_MAX_OVR = 79          # ...on a player this good or better
+CAP_CASUALTY_MAX_OVR = 74          # ...on a player this good or better.
+# 75+ OVR players are assets, not casualties -- they go to the trade
+# market first (a 79-OVR player has real trade value; waiving him is
+# giving away an asset for nothing).
 CAP_PRESSURE_BELOW = 1_000_000     # space below this = uncomfortable
 MAX_WAIVERS_PER_CALL = 2
 
@@ -44,8 +47,20 @@ MAX_WAIVERS_PER_CALL = 2
 # ---------------------------------------------------------------------------
 
 def is_waiver_eligible(player):
-    """Waiver eligibility. Parity rule with WaiversView.is_waiver_eligible:
-    age 25+ or 160+ NHL games require waivers."""
+    """Waiver eligibility — real NHL CBA exemption table.
+
+    Exemption is based on age at first NHL contract signing, with separate
+    years/games thresholds. A player is EXEMPT (no waivers needed) until he
+    exceeds EITHER threshold; once exempt status is lost, waivers are
+    required for demotion.
+
+    Age at signing: years exempt / NHL games exempt
+      18: 5 / 160    19: 4 / 160    20: 3 / 160    21: 3 / 140
+      22: 3 / 120    23: 3 / 100    24: 2 / 60     25+: 1 / 30
+
+    Falls back to the legacy rule (age 25+ or 160+ GP) when the signing
+    age is unknown (old saves).
+    """
     try:
         age = int(getattr(player, "age", 0) or 0)
     except Exception:
@@ -54,7 +69,40 @@ def is_waiver_eligible(player):
         games = int(getattr(player, "nhl_games_played", 0) or 0)
     except Exception:
         games = 0
-    return age >= 25 or games >= 160
+    try:
+        sign_age = int(getattr(player, "first_contract_age", 0) or 0)
+    except Exception:
+        sign_age = 0
+    try:
+        pro_years = int(getattr(player, "pro_seasons_accrued", 0) or 0)
+    except Exception:
+        pro_years = 0
+
+    # Unknown signing age (old save): legacy rule
+    if sign_age <= 0:
+        return age >= 25 or games >= 160
+
+    # Real CBA table
+    if sign_age <= 18:
+        _years, _gp = 5, 160
+    elif sign_age == 19:
+        _years, _gp = 4, 160
+    elif sign_age == 20:
+        _years, _gp = 3, 160
+    elif sign_age == 21:
+        _years, _gp = 3, 140
+    elif sign_age == 22:
+        _years, _gp = 3, 120
+    elif sign_age == 23:
+        _years, _gp = 3, 100
+    elif sign_age == 24:
+        _years, _gp = 2, 60
+    else:
+        _years, _gp = 1, 30
+    # Exempt until BOTH thresholds are exceeded
+    if pro_years < _years and games < _gp:
+        return False
+    return True
 
 
 def _is_nhl_team(team):

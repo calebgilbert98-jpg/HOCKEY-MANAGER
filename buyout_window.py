@@ -50,6 +50,32 @@ def _money(n):
         return "$0"
 
 
+def buyout_re_sign_banned(player, team_name, today=None):
+    """True when team_name may not sign player: the 1-year CBA re-signing
+    ban after a buyout. Never raises."""
+    try:
+        ban_team = str(getattr(player, "buyout_ban_team", "") or "")
+        if not ban_team or ban_team != str(team_name or ""):
+            return False
+        ban_until = getattr(player, "buyout_ban_until", None)
+        if ban_until is None:
+            return False
+        if today is None:
+            import datetime as _dt
+            today = _dt.date.today()
+        # ban_until may be a date or ISO string (save/load)
+        if isinstance(ban_until, str):
+            import datetime as _dt
+            ban_until = _dt.date.fromisoformat(ban_until[:10])
+        t = today.date() if hasattr(today, "date") else today
+        if isinstance(t, str):
+            import datetime as _dt
+            t = _dt.date.fromisoformat(t[:10])
+        return t < ban_until
+    except Exception:
+        return False
+
+
 def execute_buyout(league, team, player, season_year=None):
     """Buy out a player's contract. The single data mutation for ALL
     buyout paths (AI window, user calculator, interactive inbox, MP).
@@ -77,6 +103,21 @@ def execute_buyout(league, team, player, season_year=None):
     if player in getattr(team, "roster", []) or []:
         team.roster.remove(player)
     player.team_name = "Free Agent"
+    # Real NHL CBA: a club cannot re-sign a player it bought out for one
+    # year. Stamp the ban (team + expiry date) on the player; the signing
+    # paths check it via buyout_re_sign_banned().
+    try:
+        import datetime as _dt
+        player.buyout_ban_team = str(getattr(team, "team_name", "") or "")
+        _today = getattr(league, "current_date", None)
+        if _today is None:
+            try:
+                _today = _dt.date(int(season_year), 7, 1)
+            except Exception:
+                _today = _dt.date(2026, 7, 1)
+        player.buyout_ban_until = _today + _dt.timedelta(days=365)
+    except Exception:
+        pass
     # His SPC is dead: the player-side retention fields clear (no more
     # discount for anyone). The retaining club's ledger entry stays live
     # -- that dead cap survives the buyout, per CBA.

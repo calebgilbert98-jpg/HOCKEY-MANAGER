@@ -500,6 +500,19 @@ def resolve_consideration(app, league, pid):
 def _sign_user_winner(app, league, player, aav, years):
     """User won the bidding war: the standard signing path."""
     try:
+        # 1-year CBA re-signing ban after a buyout
+        from buyout_window import buyout_re_sign_banned as _banned
+        _ut = getattr(getattr(app, "user_team", None), "team_name", "")
+        if _banned(player, _ut,
+                   getattr(app, "current_date", None)):
+            try:
+                app.add_news(
+                    f"⛔ {getattr(player, 'full_name', 'Player')} cannot "
+                    f"re-sign with {_ut}: the 1-year buyout re-signing "
+                    f"ban is still in effect.")
+            except Exception:
+                pass
+            return
         player.salary = aav
         player.contract_years = years
         app._finalize_contract_signing(player, aav, years, aav, False)
@@ -515,6 +528,14 @@ def _sign_ai_winner(app, league, player, team, aav, years):
     try:
         if team is None:
             return False
+        # 1-year CBA re-signing ban after a buyout
+        try:
+            from buyout_window import buyout_re_sign_banned as _banned
+            if _banned(player, getattr(team, "team_name", ""),
+                       getattr(app, "current_date", None)):
+                return False
+        except Exception:
+            pass
         pool = getattr(league, "free_agents", None)
         if isinstance(pool, list) and player not in pool:
             return False  # someone got him first

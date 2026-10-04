@@ -805,6 +805,11 @@ class Player:
     on_waivers: bool = False
     waiver_days: int = 0
     nhl_games_played: int = 0  # career NHL GP; seeded at generation, accrued per game played
+    # Real NHL waiver exemption (CBA): based on age at first NHL contract
+    # signing + professional years/games accrued. 0 = unknown (old save) ->
+    # falls back to legacy rule in is_waiver_eligible.
+    first_contract_age: int = 0
+    pro_seasons_accrued: int = 0  # pro seasons since first NHL contract
     # New-CBA paper-transaction rule (2026): a player assigned (loaned) to
     # the AHL must play at least one AHL game before he can be recalled.
     #   None -> grandfathered (old save / never assigned) -> recall OK
@@ -1663,6 +1668,12 @@ class Player:
         
         self.seasons_played += 1
         self.is_rookie = (self.seasons_played == 1)
+        # Waiver exemption clock: pro seasons accrue for contracted players
+        try:
+            if getattr(self, "contract", None) is not None:
+                self.pro_seasons_accrued = int(getattr(self, "pro_seasons_accrued", 0) or 0) + 1
+        except Exception:
+            pass
     
     def get_ppg(self) -> float:
         """Get points per game"""
@@ -8054,6 +8065,12 @@ class League:
             # signing Sept-15 age, the used-slide count, and the seasons
             # completed under this SPC.
             player.elc_signing_sept15_age = int(_sage)
+            # Waiver exemption clock starts at first NHL contract signing
+            try:
+                if int(getattr(player, "first_contract_age", 0) or 0) <= 0:
+                    player.first_contract_age = int(_sage)
+            except Exception:
+                pass
             player.elc_slides_used = 0
             player.elc_seasons_completed = 0
             player.elc_signed_season = int(season_year or 0) or None

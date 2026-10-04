@@ -1,20 +1,31 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Offseason staff poaching (D5): the coaching carousel has a heartbeat.
 
-Once per offseason, AI clubs may approach EXPIRING staff (contract_years
+Once per offseason, clubs may approach EXPIRING staff (contract_years
 <= 1) on rival clubs. The signature case is a stud assistant/associate
 coach in his final year with "climb" ambition getting a head-coach offer
 from a club with a bench vacancy; a secondary lane lets a club poach a
 high-reputation staffer laterally with a raise.
 
+NHL contract law (symmetric poaching):
+  * Expiring staff (<= 1 year): fair game -- no permission needed, the
+    approach goes straight to the staffer.
+  * Staff under contract (> 1 year): the poacher must request permission
+    from the staffer's club. Permission is customarily GRANTED for a
+    promotion (assistant -> head coach) and usually DENIED for a lateral
+    move, unless the staffer is unhappy (low morale) or the club is
+    indifferent. No draft-pick compensation (NHL abolished it in 2016).
+  * The user's club is a full participant: AI clubs can approach the
+    user's staff, and permission requests against the user's under-
+    contract staff arrive as interactive inbox decisions (grant/deny).
+  * The user can also initiate approaches against AI clubs' staff via
+    request_user_poach() -- same permission rules, AI resolves by the
+    same NHL-style logic.
+
 Bounds (so the carousel never churns cartoonishly):
   * each club makes at most one approach per offseason
   * each staffer is approached at most once per offseason
   * league-wide cap: 4 successful moves
-
-Parity (P15): the user's club is never a poach victim -- poachers
-already excluded the user's club, and the victim pool now matches
-(one mechanic for everyone). Never raises.
 """
 
 from __future__ import annotations
