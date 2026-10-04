@@ -1,6 +1,11 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """quick_sim.py -- the fast ("quick") simulation engine.
 
+DEPRECATION NOTICE (2026-10-04): Production code now uses GameSim
+(simulation.py) as the single unified engine. AdvancedGameSim is retained
+for backward compatibility with QA scripts and as a reference implementation.
+New code should use GameSim directly.
+
 Extracted verbatim from main.py (2026-09-28) to shrink the main.py god-file,
 the #1 merge-collision surface for two parallel developers. No logic changed.
 
