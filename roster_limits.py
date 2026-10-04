@@ -298,10 +298,17 @@ def roster_limit_blockers(app):
                         return
                     for p in demoted:
                         try:
-                            # Move to minors (AHL affiliate)
-                            p.is_on_active_roster = False
-                            if hasattr(_t, 'farm_team') and _t.farm_team:
-                                _t.farm_team.roster.append(p)
+                            # Move to minors: remove from NHL roster, add to
+                            # AHL affiliate. The 23-man count reads
+                            # team.roster directly, so removal is what clears
+                            # the blocker.
+                            if p in _t.roster:
+                                _t.roster.remove(p)
+                            _ft = getattr(_t, 'farm_team', None)
+                            if _ft is not None:
+                                _fr = getattr(_ft, 'roster', None)
+                                if _fr is not None and p not in _fr:
+                                    _fr.append(p)
                         except Exception:
                             pass
                     _names = ", ".join(
@@ -364,7 +371,16 @@ def roster_limit_blockers(app):
                             if len(recalled) >= _sk + _go:
                                 break
                             try:
-                                p.is_on_active_roster = True
+                                # Move from AHL to NHL roster. The dressed-
+                                # lineup check reads team.roster, so the
+                                # player must actually be on it.
+                                _ft = getattr(_t, 'farm_team', None)
+                                if _ft is not None:
+                                    _fr = getattr(_ft, 'roster', None)
+                                    if _fr is not None and p in _fr:
+                                        _fr.remove(p)
+                                if p not in _t.roster:
+                                    _t.roster.append(p)
                                 recalled.append(p)
                             except Exception:
                                 pass

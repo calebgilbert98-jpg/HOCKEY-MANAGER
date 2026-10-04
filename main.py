@@ -6947,9 +6947,15 @@ class HockeyManagerGUI(tk.Tk):
             for kind, p, ch in moves:
                 try:
                     if kind == 'ltir':
-                        p.on_ir = True
-                    else:  # demote
-                        p.is_on_active_roster = False
+                        p.ir_status = 'LTIR'
+                    else:  # demote: move to farm team
+                        if p in team.roster:
+                            team.roster.remove(p)
+                        _ft = getattr(team, 'farm_team', None)
+                        if _ft is not None:
+                            _fr = getattr(_ft, 'roster', None)
+                            if _fr is not None and p not in _fr:
+                                _fr.append(p)
                 except Exception:
                     pass
             _names = ", ".join(
@@ -7137,9 +7143,19 @@ class HockeyManagerGUI(tk.Tk):
                                         f"Auto-captaincy failed: {err}")
                                     return
                                 cap, alts = result
-                                # Apply via the team's captaincy fields
-                                _t.captain = cap
-                                _t.alternate_captains = list(alts)
+                                # Apply via player.captaincy ('C'/'A'/None),
+                                # then clear any stale letters first.
+                                try:
+                                    for _p in (getattr(_t, 'roster', None)
+                                               or []):
+                                        if getattr(_p, 'captaincy', '') in (
+                                                'C', 'A'):
+                                            _p.captaincy = ''
+                                except Exception:
+                                    pass
+                                cap.captaincy = 'C'
+                                for _a in alts:
+                                    _a.captaincy = 'A'
                                 try:
                                     gm._captaincy_choice_pending = False
                                 except Exception:
@@ -7322,6 +7338,13 @@ class HockeyManagerGUI(tk.Tk):
             if _sact:
                 _buttons.append((_sact[0], b.get('id', '') + '__secondary',
                                  "secondary"))
+            # Auto-resolve (2026-10-04): smart one-click resolution using
+            # real hockey logic (waiver-safe demotions, leadership-based
+            # captaincy, etc.). Runs the auto_action callback.
+            _aact = b.get('auto_action')
+            if _aact:
+                _buttons.append((_aact[0], b.get('id', '') + '__auto',
+                                 "secondary"))
         _buttons.append(("Close", "__close__", "secondary"))
 
         _blockers_snapshot = list(blockers)
@@ -7340,6 +7363,7 @@ class HockeyManagerGUI(tk.Tk):
                 _live = _blockers_snapshot
             _target = None
             _lookup_id = (_value[:-11] if _value.endswith('__secondary')
+                          else _value[:-6] if _value.endswith('__auto')
                           else _value)
             for _b in _live or []:
                 if _b.get('id') == _lookup_id:
@@ -7358,6 +7382,13 @@ class HockeyManagerGUI(tk.Tk):
                             _sact[1]()
                         except Exception as e:
                             print(f"Blocker secondary action failed: {e}")
+                elif _value.endswith('__auto'):
+                    _aact = _target.get('auto_action')
+                    if _aact:
+                        try:
+                            _aact[1]()
+                        except Exception as e:
+                            print(f"Blocker auto action failed: {e}")
                 else:
                     _act = _target.get('action')
                     if _act:
