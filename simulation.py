@@ -2629,6 +2629,11 @@ class GameSim:
             self._spread_tick_timestamps(tick_start_clock, time_elapsed,
                                          tick_log_start, tick_elog_start,
                                          tick_pbp_start)
+            # Single source of truth (2026-10-04): emit positions every tick,
+            # even if no one moved. The visualizer must never fall back to its
+            # own tactical engine due to sim silence -- holding formation is
+            # a valid position, not missing data.
+            self._emit_skate(force=True)
 
         # Rule 26: a delayed call can't survive the horn -- force the
         # whistle at the period boundary.

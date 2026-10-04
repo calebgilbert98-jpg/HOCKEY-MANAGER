@@ -2299,10 +2299,13 @@ class PBPVisualSim(tk.Toplevel):
             # converging on a battle, holding a formation lane, etc. Trust
             # it over our local formation guess. (Carrier sticks to the puck
             # and goalies keep their crease logic below.)
+            # Single source of truth (2026-10-04): the sim emits positions
+            # every tick, even when holding formation. No freshness timeout --
+            # silence means "holding position," not "data missing." The
+            # visualizer reflects the sim, it never second-guesses it.
             pid = getattr(d.get("player"), "id", None)
             sp = self._sim_pos.get(pid) if pid is not None else None
-            sim_fresh = (self.playhead - self._sim_pos_t) < 1.2
-            if (sp is not None and sim_fresh and d["role"] != "G"
+            if (sp is not None and d["role"] != "G"
                     and d["id"] != self.carrier_id):
                 d["tx"], d["ty"] = sp[0], sp[1]
                 continue
