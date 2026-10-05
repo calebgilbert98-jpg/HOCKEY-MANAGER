@@ -450,6 +450,25 @@ def get_scoring_multiplier() -> float:
     return cache["value"]
 
 
+class _AutoRegisterGameStats(dict):
+    """game_stats dict that auto-registers missing player ids.
+
+    Any sim event that selects a player object not on either roster at
+    game start (stale reference, mid-game roster change) gets a template
+    stat entry on first access instead of raising KeyError. The 'player'
+    key is None for auto-registered entries; callers with the player
+    object should use _ensure_player_registered() to populate it.
+    """
+    def __init__(self, template_factory):
+        super().__init__()
+        self._template_factory = template_factory
+
+    def __missing__(self, key):
+        entry = self._template_factory()
+        self[key] = entry
+        return entry
+
+
 class GameSim:
     """
     Manages the state and logic for simulating a single hockey game.
@@ -770,7 +789,9 @@ class GameSim:
         self.real_time_adjustments = {}  # Analytics-driven coaching adjustments
         
         # Enhanced stats tracking for Stages 1, 2 & 3
-        self.game_stats = {p.id: {
+        self.game_stats = _AutoRegisterGameStats(
+            lambda: __import__('copy').deepcopy(self._game_stat_template))
+        self.game_stats.update({p.id: {
             'g': 0, 'a': 0, 'player': p,
             # Shot tracking (Stage 1)
             'shots_on_goal': 0,
@@ -923,14 +944,16 @@ class GameSim:
             'development_tracking_points': 0,
             'ml_model_updates': 0,
             'prediction_error_rate': 0.0
-        } for p in home_team.roster + away_team.roster}
+        } for p in home_team.roster + away_team.roster})
         
-        # Template for on-demand registration of players selected for sim
-        # events who weren't on either roster at game start (stale refs,
-        # mid-game roster changes). Deep-copied by _ensure_player_registered.
+        # Template for on-demand registration. Created from the first
+        # rostered player's entry; _ensure_player_registered and the
+        # _AutoRegisterGameStats.__missing__ hook deep-copy it.
         import copy as _copy
         self._game_stat_template = _copy.deepcopy(next(iter(self.game_stats.values())))
         self._game_stat_template['player'] = None
+        # Rebind the auto-register factory now that the template exists
+        # (the lambda above captured self, so it resolves lazily -- no-op)
 
         # Initialize fatigue for all players
         for player in home_team.roster + away_team.roster:
@@ -9472,9 +9495,10 @@ class GameSim:
         if target_player.id in self.game_stats:
             self.game_stats[target_player.id]['hits_taken'] += 1
         
-        # Update team stats
-        hitting_team_name = hitting_team.team_name
-        target_team_name = target_team.team_name
+        # Update team stats (team may be None if player truly on neither
+        # roster; skip team update then, individual stats already recorded)
+        hitting_team_name = hitting_team.team_name if hitting_team else None
+        target_team_name = target_team.team_name if target_team else None
         
         if hitting_team_name in self.team_stats:
             self.team_stats[hitting_team_name]['hits'] += 1
