@@ -9473,7 +9473,9 @@ class HockeyManagerGUI(tk.Tk):
                       "return_to_junior", "practice_session",
                       "start_practice_plan", "offer_sheet",
                       "request_save", "place_on_waivers",
-                      "answer_ai_offer"):
+                      "answer_ai_offer", "rfa_qualify", "staff_renew",
+                      "offer_sheet_match", "offer_sheet_trade_alt",
+                      "arbitration_walkaway"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9495,6 +9497,11 @@ class HockeyManagerGUI(tk.Tk):
             "claim_waivers": self._mp_claim_waivers,
             "place_on_waivers": self._mp_place_on_waivers,
             "answer_ai_offer": self._mp_answer_ai_offer,
+            "rfa_qualify": self._mp_rfa_qualify,
+            "staff_renew": self._mp_staff_renew,
+            "offer_sheet_match": self._mp_offer_sheet_match,
+            "offer_sheet_trade_alt": self._mp_offer_sheet_trade_alt,
+            "arbitration_walkaway": self._mp_arbitration_walkaway,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
             "hire_staff": self._mp_hire_staff,
@@ -10421,6 +10428,210 @@ class HockeyManagerGUI(tk.Tk):
             return False, f"Waiver placement failed: {e}"
         return True, (f"{player.full_name} placed on waivers -- exposed "
                       f"for 2 days.")
+
+    # -- July offseason decisions (host side) -------------------------------
+    # Each human club's inbox carries its own decision message; the host
+    # applies the decision to the ACTING team (never user_team) and marks
+    # the message done in that team's inbox, so the next STATE_SYNC
+    # retires the buttons on the client's screen. A client whose local
+    # action_done was wiped by a sync simply sees the true state.
+
+    def _mp_swapped_user_team(self, team):
+        """Context manager: run a block with the acting team as user_team
+        (for machinery that addresses app.user_team), then restore."""
+        import contextlib as _cl
+
+        @ _cl.contextmanager
+        def _ctx():
+            _orig_ut = getattr(self, "user_team", None)
+            _gm = getattr(self, "game_manager", None)
+            _orig_gm_ut = getattr(_gm, "user_team", None) \
+                if _gm is not None else None
+            try:
+                self.user_team = team
+                if _gm is not None:
+                    _gm.user_team = team
+                yield
+            finally:
+                self.user_team = _orig_ut
+                if _gm is not None:
+                    _gm.user_team = _orig_gm_ut
+        return _ctx()
+
+    def _mp_mark_inbox_decision(self, team, message_id, key, value,
+                                done_key=None):
+        """Record one inbox decision on the team's canonical message:
+        decided[key] = value; action_done when every card is decided.
+        Returns the message or None."""
+        try:
+            inbox = getattr(team, "inbox", None)
+            msgs = getattr(inbox, "messages", None) or []
+            msg = next((m for m in msgs
+                        if str(getattr(m, "id", "")) == str(message_id)),
+                       None)
+            if msg is None:
+                return None
+            data = getattr(msg, "action_data", None) or {}
+            decided = data.get("decided", {}) or {}
+            decided[str(key)] = value
+            data["decided"] = decided
+            msg.action_data = data
+            cards = data.get(done_key or "cards", []) or []
+            if cards and len(decided) >= len(cards):
+                msg.action_done = True
+            return msg
+        except Exception:
+            return None
+
+    def _mp_rfa_qualify(self, params, team, manager):
+        """Extend or decline a qualifying offer for one RFA."""
+        import rfa_system as _rfa
+        pid = str(params.get("player_id", "") or "")
+        qualify = bool(params.get("qualify", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_qualifying_decision(
+                    self, self.league, team, pid, qualify)
+            except Exception as e:
+                return False, f"Qualifying decision failed: {e}"
+        self._mp_mark_inbox_decision(team, params.get("message_id", ""),
+                                     pid, qualify)
+        ok = bool((res or {}).get("ok", True))
+        return (True, "Qualifying offer extended." if qualify else
+                "Player non-tendered.") if ok else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_staff_renew(self, params, team, manager):
+        """Re-sign an expired staffer (years 1/2/3) or let him walk."""
+        import staff_renewals as _sr
+        sid = str(params.get("staff_id", "") or "")
+        years = params.get("years", None)
+        try:
+            years = int(years) if years is not None else None
+        except (TypeError, ValueError):
+            years = None
+        # Ownership: the staffer must belong to the acting club.
+        try:
+            _ids = {str(getattr(s, "id", ""))
+                    for s in (getattr(team, "staff", None) or [])}
+            if sid not in _ids:
+                return False, "That staffer isn't on your club."
+        except Exception:
+            pass
+        try:
+            ok, lines = _sr.apply_renewal_decision(
+                self.league, sid, years)
+        except Exception as e:
+            return False, f"Renewal failed: {e}"
+        self._mp_mark_inbox_decision(team, params.get("message_id", ""),
+                                     sid, years, done_key="offers")
+        for _ln in lines or []:
+            try:
+                _emo = "✍️ " if years else "🚶 "
+                self.add_news(_emo + str(_ln))
+            except Exception:
+                pass
+        return (True, "Staffer re-signed." if years else
+                "Staffer walks to the pool.") if ok else \
+            (False, "Renewal failed.")
+
+    def _mp_offer_sheet_match(self, params, team, manager):
+        """Match an offer sheet or take the pick compensation."""
+        import rfa_system as _rfa
+        match = bool(params.get("match", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_offer_sheet_match(
+                    self, self.league,
+                    (params.get("player_id")
+                     or ((self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")) or {})
+                         .get("action_data", {}) or {}).get("player_id")),
+                    match)
+            except Exception as e:
+                return False, f"Offer-sheet decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Offer sheet matched." if match else
+                "Took the compensation.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_offer_sheet_trade_alt(self, params, team, manager):
+        """Accept the sign-and-trade package or take the picks."""
+        import rfa_system as _rfa
+        accept = bool(params.get("accept", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_offer_sheet_trade_alt(
+                    self, self.league,
+                    (params.get("player_id")
+                     or ((self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")) or {})
+                         .get("action_data", {}) or {}).get("player_id")),
+                    accept)
+            except Exception as e:
+                return False, f"Trade-alternative decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Sign-and-trade accepted." if accept else
+                "Took the compensation.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_arbitration_walkaway(self, params, team, manager):
+        """Walk away from an arbitration award (48h) or accept it."""
+        import rfa_system as _rfa
+        walk_away = bool(params.get("walk_away", False))
+        msg = self._mp_find_inbox_msg(team, params.get("message_id", ""))
+        data = (getattr(msg, "action_data", None) or {}) if msg else {}
+        pid = params.get("player_id") or data.get("player_id")
+        if not walk_away:
+            # Accept: sign at the awarded terms (mirrors the SP path,
+            # which mutates the acting club's player, not user_team's).
+            try:
+                aav = int(data.get("award_aav", 0) or 0)
+                term = int(data.get("term_years", 1) or 1)
+                person = next(
+                    (p for p in (getattr(team, "roster", None) or [])
+                     if str(getattr(p, "id", "")) == str(pid)), None)
+                if person is not None:
+                    c = getattr(person, "contract", None)
+                    if c is not None:
+                        c.salary = aav
+                        c.years_remaining = term
+            except Exception:
+                pass
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_walk_away(
+                    self, self.league, team, pid, walk_away)
+            except Exception as e:
+                return False, f"Arbitration decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Walked away from the award." if walk_away else
+                "Award accepted.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_find_inbox_msg(self, team, message_id):
+        """Find a message by id in the team's canonical inbox."""
+        try:
+            msgs = getattr(getattr(team, "inbox", None),
+                           "messages", None) or []
+            return next((m for m in msgs
+                         if str(getattr(m, "id", ""))
+                         == str(message_id or "")), None)
+        except Exception:
+            return None
+
+    def _mp_force_inbox_done(self, team, message_id):
+        """Mark a single-decision inbox message done (offer sheets,
+        trade alts, arbitration -- one answer closes the message)."""
+        try:
+            msg = self._mp_find_inbox_msg(team, message_id)
+            if msg is not None:
+                msg.action_done = True
+        except Exception:
+            pass
 
     def _mp_answer_ai_offer(self, params, team, manager):
         """Answer an AI club's inbox trade offer: accept executes the deal,
@@ -18647,15 +18858,31 @@ class HockeyManagerGUI(tk.Tk):
         # Age players and reset stats
         self.league.end_of_season()
 
-        # D5 follow-up: the contract tick above held the user's expired
-        # staff for renewal instead of releasing them. Their offer
-        # arrives as one interactive inbox message (never a popout).
-        # Decline/ignore walks them to the free-agent pool.
+        # D5 follow-up: the contract tick above held expired staff for
+        # renewal instead of releasing them. Their offer arrives as one
+        # interactive inbox message (never a popout). Decline/ignore
+        # walks them to the free-agent pool.
+        # MP: every human-managed club gets its own message; clients
+        # answer via the routed staff_renew action.
         try:
             import staff_renewals as _srq
-            _uq = getattr(self, "user_team", None)
-            if _uq is not None:
-                _srq.queue_user_renewal_message(self.league, _uq, self)
+            _human = []
+            try:
+                from game_classes import is_human_managed as _ihm
+                for _t in (getattr(self.league, "teams", None) or []):
+                    try:
+                        if _ihm(_t):
+                            _human.append(_t)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            if not _human:
+                _uq = getattr(self, "user_team", None)
+                if _uq is not None:
+                    _human = [_uq]
+            for _hq in _human:
+                _srq.queue_user_renewal_message(self.league, _hq, self)
         except Exception:
             pass
 
@@ -20247,6 +20474,24 @@ class HockeyManagerGUI(tk.Tk):
         """Send an email message to the user's inbox."""
         self.user_team.inbox.add_message(message)
         self.update_inbox_notification()
+
+    def send_email_to_team(self, team, message):
+        """Send an email message to a specific club's inbox.
+
+        Multiplayer: the July pass (and other per-team flows) must reach
+        the right GM's inbox, not the host's. Single-player falls back to
+        the user's inbox."""
+        try:
+            inbox = getattr(team, "inbox", None)
+            if inbox is not None:
+                inbox.add_message(message)
+        except Exception:
+            pass
+        try:
+            if team is getattr(self, "user_team", None):
+                self.update_inbox_notification()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Football Manager-style career systems
@@ -23242,7 +23487,23 @@ class HockeyManagerGUI(tk.Tk):
     # ----- RFA inbox actions (rfa_system) -----
     def apply_rfa_qualifying_decision(self, message, player_id, qualify):
         """Inbox action: extend or decline a qualifying offer for one RFA."""
-        if self._mp_client_block("RFA qualifying offers"):
+        # MP: route to the host (authoritative); the host marks the
+        # canonical message done so the sync retires the buttons.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "rfa_qualify", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "player_id": str(player_id),
+                    "qualify": bool(qualify)}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(player_id)] = bool(qualify)
+                data["decided"] = decided
+                message.action_data = data
+                cards = data.get("cards", []) or []
+                if len(decided) >= len(cards):
+                    message.action_done = True
+                return True
             return False
         import rfa_system as _rfa
         data = message.action_data or {}
@@ -23337,7 +23598,22 @@ class HockeyManagerGUI(tk.Tk):
         is never caught short mid-decision; a walked head coach triggers
         the in-house promote fallback, exactly like the automatic path.
         """
-        if self._mp_client_block("staff renewals"):
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "staff_renew", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "staff_id": str(staff_id),
+                    "years": years}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(staff_id)] = years
+                data["decided"] = decided
+                message.action_data = data
+                offers = data.get("offers", []) or []
+                if len(decided) >= len(offers):
+                    message.action_done = True
+                return True
             return False
         import staff_renewals as _sr
         data = message.action_data or {}
@@ -23367,7 +23643,14 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_offer_sheet_match_decision(self, message, match):
         """Inbox action: match an offer sheet or take the pick compensation."""
-        if self._mp_client_block("offer-sheet matches"):
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_match", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "match": bool(match)}):
+                message.action_done = True
+                return True
             return False
         import rfa_system as _rfa
         data = message.action_data or {}
@@ -23384,7 +23667,14 @@ class HockeyManagerGUI(tk.Tk):
     def apply_offer_sheet_trade_alt_decision(self, message, accept):
         """Inbox action: accept the sign-and-trade package or take the
         pick compensation on a declined offer sheet."""
-        if self._mp_client_block("offer-sheet trade alternatives"):
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_trade_alt", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "accept": bool(accept)}):
+                message.action_done = True
+                return True
             return False
         import rfa_system as _rfa
         data = message.action_data or {}
@@ -23400,7 +23690,14 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_arbitration_walkaway_decision(self, message, walk_away):
         """Inbox action: walk away from an arbitration award (48h window)."""
-        if self._mp_client_block("arbitration walkaways"):
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "arbitration_walkaway", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "walk_away": bool(walk_away)}):
+                message.action_done = True
+                return True
             return False
         import rfa_system as _rfa
         data = message.action_data or {}

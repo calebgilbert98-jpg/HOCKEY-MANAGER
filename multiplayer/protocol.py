@@ -191,6 +191,16 @@ SUPPORTED_ACTIONS = {
     "return_to_junior", # params: {team_id, player_id}
     "answer_ai_offer",  # params: {team_id, negotiation_id,
                         #          decision: accept|decline} -- AI's inbox offer
+    # July offseason decisions (host-authoritative; each human club's
+    # inbox carries its own message; the host marks it done so the sync
+    # retires the buttons -- no silent RFA-rights loss for clients).
+    "rfa_qualify",        # params: {team_id, message_id, player_id,
+                          #          qualify: bool}
+    "staff_renew",        # params: {team_id, message_id, staff_id,
+                          #          years: 1|2|3|null}
+    "offer_sheet_match",  # params: {team_id, message_id, match: bool}
+    "offer_sheet_trade_alt",  # params: {team_id, message_id, accept: bool}
+    "arbitration_walkaway",   # params: {team_id, message_id, walk_away: bool}
 }
 
 
