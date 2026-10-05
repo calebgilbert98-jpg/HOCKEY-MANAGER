@@ -839,6 +839,108 @@ def _execute_command(app, cmd):
                             pass
             except Exception:
                 pass
+        elif op == "draft_pick":
+            # User drafts a prospect: record via the live session.
+            try:
+                pid = str(cmd.get("player_id", ""))
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                team = getattr(app, "user_team", None)
+                if league is not None and team is not None and pid:
+                    session = getattr(league, "entry_draft_session", None)
+                    if session is not None:
+                        cur = int(getattr(session, "current_pick", 0) or 0)
+                        overall = cur + 1
+                        tname = getattr(team, "team_name", "")
+                        try:
+                            session.record_pick(overall, tname, pid)
+                        except Exception:
+                            pass
+                        # Move the prospect to the team's prospect list
+                        try:
+                            prospect = None
+                            for q in list(getattr(league, "draft_prospects", None) or []):
+                                if str(getattr(q, "id", "")) == pid:
+                                    prospect = q
+                                    break
+                            if prospect is not None:
+                                try:
+                                    getattr(league, "draft_prospects").remove(prospect)
+                                except Exception:
+                                    pass
+                                plist = getattr(team, "prospects", None)
+                                if plist is None:
+                                    team.prospects = []
+                                    plist = team.prospects
+                                plist.append(prospect)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        elif op == "draft_sim_pick":
+            # AI auto-picks for the current slot.
+            try:
+                import draft_night as dn
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                team = getattr(app, "user_team", None)
+                if league is not None and team is not None:
+                    session = getattr(league, "entry_draft_session", None)
+                    if session is not None:
+                        cur = int(getattr(session, "current_pick", 0) or 0)
+                        overall = cur + 1
+                        # Find current slot owner
+                        slots = list(getattr(session, "slots", None) or [])
+                        owner = None
+                        for s in slots:
+                            try:
+                                if int(s.get("overall", 0)) == overall:
+                                    owner = s.get("owner")
+                                    break
+                            except Exception:
+                                continue
+                        # Available prospects
+                        picked = set()
+                        for p in list(getattr(session, "picks", None) or []):
+                            try:
+                                picked.add(str(p.get("player_id")))
+                            except Exception:
+                                pass
+                        avail = [q for q in list(getattr(league, "draft_prospects", None) or [])
+                                 if str(getattr(q, "id", "")) not in picked]
+                        if avail and owner:
+                            # Find the owning team object
+                            oteam = None
+                            for t in list(getattr(league, "teams", None) or []):
+                                if getattr(t, "team_name", "") == owner:
+                                    oteam = t
+                                    break
+                            if oteam is not None:
+                                import random as _rnd
+                                try:
+                                    avail_sorted = sorted(
+                                        avail,
+                                        key=lambda q: int(getattr(
+                                            q, "draft_ranking", 9999) or 9999))
+                                    rnd = _rnd.Random()
+                                    pick = dn.ai_select_prospect(
+                                        oteam, avail_sorted, None, None,
+                                        1, None, rnd, overall=overall)
+                                except Exception:
+                                    pick = None
+                                if pick is None:
+                                    avail.sort(key=lambda q: int(getattr(q, "overall", 0) or 0),
+                                               reverse=True)
+                                    pick = avail[0] if avail else None
+                                if pick is not None:
+                                    pid = str(getattr(pick, "id", ""))
+                                    session.record_pick(overall, owner, pid)
+            except Exception:
+                pass
         elif op == "set_tactic":
             try:
                 team = getattr(app, "user_team", None)

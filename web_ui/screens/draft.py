@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Entry draft screen: draft board with pick order and results."""
-from flask import Blueprint, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, request
 from web_ui.bridge import _safe
 
 bp = Blueprint("draft", __name__)
@@ -121,3 +121,148 @@ def api_draft():
     if live is None:
         return jsonify({"active": False})
     return jsonify(get_draft_state(live))
+
+
+# --- War room: available / my picks / scout report -----------------------
+
+
+def _draft_session(live):
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+    return _safe(lambda: getattr(league, "entry_draft_session", None))
+
+
+def _prospect_pos(p):
+    """Position string from primary_position enum or position attr."""
+    try:
+        pp = getattr(p, "primary_position", None)
+        if pp is not None:
+            v = getattr(pp, "value", None) or str(pp)
+            # "PlayerPosition.RIGHT_DEFENSE" -> "RD"; value is already "RD"
+            v = str(v).split(".")[-1].replace("RIGHT_", "R").replace("LEFT_", "L").replace("_DEFENSE", "D").replace("_WING", "W").replace("CENTER", "C").replace("GOALIE", "G")
+            return v
+    except Exception:
+        pass
+    return _safe(lambda: str(getattr(p, "position", "?") or "?"), "?")
+
+
+def _available_prospects(live):
+    """Draftable prospects not yet picked."""
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+    if league is None:
+        return []
+    session = _draft_session(live)
+    picked_ids = set()
+    if session is not None:
+        for p in (_safe(lambda: list(getattr(session, "picks", None) or []), []) or []):
+            try:
+                picked_ids.add(str(p.get("player_id")))
+            except Exception:
+                pass
+    prospects = _safe(lambda: list(getattr(league, "draft_prospects", None) or []), []) or []
+    out = []
+    for p in prospects:
+        try:
+            pid = str(getattr(p, "id", ""))
+            if pid in picked_ids:
+                continue
+            out.append({
+                "id": pid,
+                "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                "position": _prospect_pos(p),
+                "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+                "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0), 0),
+                "potential": _safe(lambda: str(getattr(p, "potential_grade", "?") or "?"), "?"),
+            })
+        except Exception:
+            continue
+    try:
+        out.sort(key=lambda d: d.get("overall", 0), reverse=True)
+    except Exception:
+        pass
+    return out
+
+
+@bp.route("/api/draft/available")
+def api_draft_available():
+    live = _live()
+    if live is None:
+        return jsonify({"prospects": []})
+    pos = (request.args.get("pos") or "All").strip()
+    q = (request.args.get("q") or "").strip().lower()
+    prospects = _available_prospects(live)
+    if pos != "All":
+        prospects = [p for p in prospects
+                     if (p.get("position") or "").upper() == pos
+                     or (pos == "D" and (p.get("position") or "").upper() in ("LD", "RD"))
+                     or (pos == "W" and (p.get("position") or "").upper() in ("LW", "RW"))]
+    if q:
+        prospects = [p for p in prospects if q in (p.get("name") or "").lower()]
+    return jsonify({"prospects": prospects})
+
+
+@bp.route("/api/draft/scout_report")
+def api_draft_scout_report():
+    """Scout report for one prospect."""
+    live = _live()
+    if live is None:
+        return jsonify({"error": "no game"}), 503
+    pid = str(request.args.get("player_id") or "")
+    target = None
+    for p in _available_prospects(live):
+        if p["id"] == pid:
+            # Find the real object for attributes
+            gm = _safe(lambda: live.game_manager)
+            league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+            for q in (_safe(lambda: list(getattr(league, "draft_prospects", None) or []), []) or []):
+                if str(getattr(q, "id", "")) == pid:
+                    target = q
+                    break
+            break
+    if target is None:
+        return jsonify({"error": "prospect not found"}), 404
+    attrs = {}
+    for a in ("shooting_accuracy", "shooting_power", "passing", "skating",
+              "checking", "defensive_awareness", "offensive_awareness",
+              "strength", "hockey_iq", "potential_grade"):
+        try:
+            v = getattr(target, a, None)
+            if v is not None:
+                attrs[a] = v if isinstance(v, str) else int(v)
+        except Exception:
+            pass
+    report = _safe(lambda: getattr(target, "scout_report", "") or "", "")
+    strengths = _safe(lambda: list(getattr(target, "strengths", None) or []), []) or []
+    weaknesses = _safe(lambda: list(getattr(target, "weaknesses", None) or []), []) or []
+    return jsonify({
+        "id": pid,
+        "name": _safe(lambda: getattr(target, "full_name", "?"), "?"),
+        "position": _prospect_pos(target),
+        "age": _safe(lambda: int(getattr(target, "age", 0) or 0), 0),
+        "overall": _safe(lambda: int(getattr(target, "overall", 0) or 0), 0),
+        "attributes": attrs,
+        "report": report,
+        "strengths": strengths,
+        "weaknesses": weaknesses,
+    })
+
+
+@bp.route("/api/draft/pick", methods=["POST"])
+def api_draft_pick():
+    """Draft Selected: queue a user pick (2-step confirm on client)."""
+    data = request.get_json(force=True, silent=True) or {}
+    pid = str(data.get("player_id") or "")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    import web_ui.bridge as _b
+    _b.enqueue_command({"op": "draft_pick", "player_id": pid})
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/draft/sim_pick", methods=["POST"])
+def api_draft_sim_pick():
+    """Sim Pick: AI selects for the current slot."""
+    import web_ui.bridge as _b
+    _b.enqueue_command({"op": "draft_sim_pick"})
+    return jsonify({"ok": True})

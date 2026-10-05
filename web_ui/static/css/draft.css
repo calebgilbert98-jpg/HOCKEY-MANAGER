@@ -37,3 +37,44 @@
   border: 1px dashed rgba(255,255,255,.12); border-radius: var(--radius);
   background: linear-gradient(150deg, var(--card2), var(--card));
 }
+
+/* --- Draft war room additions --- */
+.tb-tabs { display: flex; gap: 8px; margin: 14px 0 18px; }
+.tb-tab {
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-tab.active { background: rgba(59,130,246,.18); color: #fff; border-color: rgba(59,130,246,.5); }
+.tb-panel.hidden { display: none; }
+.tb-search {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 12px; font-size: 14px;
+  min-width: 220px; margin-bottom: 10px;
+}
+.tb-pills { display: flex; gap: 6px; margin-bottom: 10px; }
+.tb-pill {
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  color: var(--dim); border-radius: 20px; padding: 4px 14px; font-size: 12px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-pill.active { background: rgba(59,130,246,.25); color: #fff; border-color: rgba(59,130,246,.6); }
+.draft-actions { display: flex; gap: 8px; margin-bottom: 14px; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-btn.tb-accent { background: rgba(59,130,246,.2); border-color: rgba(59,130,246,.5); }
+.tb-btn:disabled { opacity: .5; }
+.fa-card.selected { border-color: rgba(59,130,246,.7); box-shadow: 0 0 0 1px rgba(59,130,246,.5); }
+.mk-row { display: flex; justify-content: space-between; padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05); font-size: 13px; }
+#scout-body h4 { margin: 12px 0 6px; font-size: 14px; }
+#scout-body ul { padding-left: 18px; margin: 4px 0; }
+.cm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.cm-cancel, .cm-submit {
+  border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.cm-cancel { background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); color: #fff; }
+.cm-submit { background: rgba(59,130,246,.25); border: 1px solid rgba(59,130,246,.6); color: #fff; }

@@ -18,8 +18,63 @@
 <main class="draft-main">
   <h1 class="page-title" id="draft-title">Entry Draft</h1>
   <div class="draft-summary" id="draft-summary"></div>
-  <div class="board" id="board"></div>
+
+  <nav class="tb-tabs" id="draft-tabs">
+    <button class="tb-tab active" data-tab="board">Draft Board</button>
+    <button class="tb-tab" data-tab="available">Available</button>
+    <button class="tb-tab" data-tab="mypicks">My Picks</button>
+  </nav>
+
+  <section id="draft-tab-board" class="tb-panel">
+    <div class="board" id="board"></div>
+  </section>
+
+  <section id="draft-tab-available" class="tb-panel hidden">
+    <div class="fa-filters">
+      <input class="tb-search" id="av-q" placeholder="Search prospects…">
+      <div class="tb-pills" id="av-pos">
+        <button class="tb-pill active" data-v="All">All</button>
+        <button class="tb-pill" data-v="C">C</button>
+        <button class="tb-pill" data-v="W">W</button>
+        <button class="tb-pill" data-v="D">D</button>
+        <button class="tb-pill" data-v="G">G</button>
+      </div>
+    </div>
+    <div class="draft-actions">
+      <button class="tb-btn tb-accent" id="btn-draft-selected" disabled>Draft Selected</button>
+      <button class="tb-btn" id="btn-sim-pick">Sim Pick</button>
+      <button class="tb-btn" id="btn-scout">Scout Report</button>
+    </div>
+    <div class="fa-list" id="available-list"></div>
+  </section>
+
+  <section id="draft-tab-mypicks" class="tb-panel hidden">
+    <div id="mypicks-list"></div>
+  </section>
 </main>
+
+<!-- Scout report modal -->
+<div class="cm-overlay" id="scout-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" style="max-width:560px">
+    <div class="cm-head">
+      <div><div class="cm-title" id="scout-title">Scout Report</div></div>
+      <button class="cm-close" id="scout-close">✕</button>
+    </div>
+    <div id="scout-body"></div>
+  </div>
+</div>
+
+<!-- 2-step draft confirm -->
+<div class="cm-overlay" id="confirm-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" style="max-width:420px">
+    <div class="cm-head"><div class="cm-title">Confirm Draft Pick</div></div>
+    <p id="confirm-text"></p>
+    <div class="cm-actions">
+      <button class="cm-cancel" id="confirm-cancel">Cancel</button>
+      <button class="cm-submit" id="confirm-ok">Draft Him</button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/js/draft.js"></script>
 </body>
