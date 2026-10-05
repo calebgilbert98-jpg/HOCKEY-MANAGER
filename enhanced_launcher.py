@@ -533,25 +533,45 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 pass
 
     def _host_multiplayer(self):
-        """Host flow: display name + port, then normal new-game setup."""
+        """Host flow: display name + port + game settings, then start."""
         dlg = InGamePopup(self)
         dlg.title("Host Multiplayer Game")
-        dlg.geometry("400x300")
+        dlg.geometry("400x440")
         dlg.transient(self)
         dlg.grab_set()
+        # Dark card (#14161b) needs explicit light styling (see join dialog).
+        _fg, _bg = "#e8e8e8", "#14161b"
+        _efg, _ebg = "#ffffff", "#2a2e38"
         tk.Label(dlg, text="HOST MULTIPLAYER GAME",
-                 font=AppFonts.H2).pack(pady=(16, 8))
-        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:", fg=_fg, bg=_bg).pack(pady=(4, 0))
         name_var = tk.StringVar(
             value=self.gm_profile['name'].get().strip() or "Host")
-        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=name_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Port:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         port_var = tk.StringVar(value="27107")
-        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+        tk.Entry(dlg, textvariable=port_var, width=10,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
         tk.Label(dlg,
                  text="Friends join over your Radmin VPN network\n"
                       "using your Radmin IP address.",
-                 fg="gray").pack(pady=10)
+                 fg="#9aa0aa", bg=_bg).pack(pady=10)
+        # Game settings live here (bound to the same setup_options the
+        # new-game flow reads) so the host's choices stay as set --
+        # the Multiplayer tab has no other path to them.
+        tk.Label(dlg, text="Game settings:", fg=_fg, bg=_bg,
+                 font=("Segoe UI", 10, "bold")).pack(pady=(4, 2))
+        tk.Checkbutton(dlg, text="Fantasy Draft",
+                       variable=self.setup_options['fantasy_draft'],
+                       fg=_fg, bg=_bg, selectcolor=_ebg,
+                       activebackground=_bg,
+                       activeforeground=_fg).pack(anchor="w", padx=60)
+        tk.Checkbutton(dlg, text="Salary Cap",
+                       variable=self.setup_options['salary_cap'],
+                       fg=_fg, bg=_bg, selectcolor=_ebg,
+                       activebackground=_bg,
+                       activeforeground=_fg).pack(anchor="w", padx=60)
 
         def _go():
             try:
