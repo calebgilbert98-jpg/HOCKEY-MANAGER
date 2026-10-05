@@ -437,6 +437,19 @@ class MultiplayerHost:
         return self._send(peer, P.DRAFT_CLOCK, P.draft_clock_msg(
             clock_id, team_id, overall, round_num, prospects))
 
+    def send_fantasy_draft_clock(self, session_id: str, clock_id: str,
+                                 team_id: str, overall: int, round_num: int,
+                                 available_ids: list,
+                                 shortlist: list) -> bool:
+        """Put a client's team on the fantasy-draft clock for one pick."""
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return False
+        return self._send(peer, P.FANTASY_DRAFT_CLOCK,
+                           P.fantasy_draft_clock_msg(
+                               clock_id, team_id, overall, round_num,
+                               available_ids, shortlist))
+
     def resolve_action(self, client_id: str, msg_seq: int, ok: bool,
                        detail: str = "", broadcast: bool = True) -> None:
         """Answer a queued ACTION. Call from the main thread after applying it.

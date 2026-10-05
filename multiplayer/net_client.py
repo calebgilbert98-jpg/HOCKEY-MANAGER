@@ -385,6 +385,15 @@ class MultiplayerClient:
                 "round_num": msg.get("round_num", 0),
                 "prospects": msg.get("prospects", []) or [],
             }))
+        elif mtype == P.FANTASY_DRAFT_CLOCK:
+            self.events.put(("fantasy_draft_clock", {
+                "clock_id": msg.get("clock_id", ""),
+                "team_id": msg.get("team_id", ""),
+                "overall": msg.get("overall", 0),
+                "round_num": msg.get("round_num", 0),
+                "available_ids": msg.get("available_ids", []) or [],
+                "shortlist": msg.get("shortlist", []) or [],
+            }))
         elif mtype == P.ACTION_ACK:
             seq = msg.get("action_seq")
             self.events.put(("action_ack", {

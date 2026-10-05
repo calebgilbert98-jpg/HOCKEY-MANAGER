@@ -120,6 +120,12 @@ DRAFT_CLOCK = "draft_clock"        # host -> client   {clock_id, team_id,
                                    #  overall, round_num, prospects:
                                    #  [{id, name, pos, ranking}]}
 
+# Message types: fantasy-draft pick clock for a client's team.
+FANTASY_DRAFT_CLOCK = "fantasy_draft_clock"  # host -> client {clock_id,
+                                   #  team_id, overall, round_num,
+                                   #  available_ids: [id], shortlist:
+                                   #  [{id, name, pos, ovr}]}
+
 # Message types: utility
 CHAT = "chat"
 PING = "ping"
@@ -135,6 +141,7 @@ ALL_TYPES = {
     TRADE_OFFER, TRADE_RESPONSE,
     NTC_WAIVER_REQUEST, NTC_WAIVER_ANSWER,
     DRAFT_CLOCK,
+    FANTASY_DRAFT_CLOCK,
     CHAT, PING, PONG, ERROR, GOODBYE,
 }
 
@@ -189,6 +196,7 @@ SUPPORTED_ACTIONS = {
     "press_conference", # params: {team_id, stance, topic?}
     "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
     "return_to_junior", # params: {team_id, player_id}
+    "fantasy_draft_pick",  # params: {team_id, clock_id, player_id}
     "answer_ai_offer",  # params: {team_id, negotiation_id,
                         #          decision: accept|decline} -- AI's inbox offer
     # July offseason decisions (host-authoritative; each human club's
@@ -384,6 +392,15 @@ def draft_clock_msg(clock_id: str, team_id: str, overall: int,
     return {"type": DRAFT_CLOCK, "clock_id": clock_id, "team_id": team_id,
             "overall": overall, "round_num": round_num,
             "prospects": prospects}
+
+
+def fantasy_draft_clock_msg(clock_id: str, team_id: str, overall: int,
+                            round_num: int,
+                            available_ids: List[str],
+                            shortlist: List[Dict[str, Any]]) -> Dict[str, Any]:
+    return {"type": FANTASY_DRAFT_CLOCK, "clock_id": clock_id,
+            "team_id": team_id, "overall": overall, "round_num": round_num,
+            "available_ids": available_ids, "shortlist": shortlist}
 
 
 def error_msg(message: str) -> Dict[str, Any]:

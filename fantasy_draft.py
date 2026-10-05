@@ -1767,6 +1767,28 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Mark draft as started
         self.draft_manager.draft_started = True
 
+        # MULTIPLAYER: register the live draft with the host app so
+        # client-claimed clubs can pick on the clock.
+        try:
+            _app = getattr(self, "app", None)
+            _begin = getattr(_app, "_mp_fantasy_draft_begin", None)
+            if callable(_begin):
+                _begin(self.draft_manager)
+            try:
+                _app._mp_fantasy_view = self
+            except Exception:
+                pass
+            _host = getattr(_app, "mp_host", None)
+            if _host is not None:
+                try:
+                    _host.broadcast_chat(
+                        "Fantasy draft is underway -- claimed clubs pick "
+                        "live on the clock.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         # --- MULTIPLAYER/CHECKPOINTS: per-round draft checkpoints ---
         # Wraps make_pick ONCE so every pick site (human + all AI callers)
         # is covered without touching them. When a pick completes a round,
@@ -4400,6 +4422,26 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             return
             
         current_pick = dm.get_current_pick()
+        # MULTIPLAYER: a client-claimed club picks live on a 60s clock.
+        # The host sends the clock and pauses; the fantasy_draft_pick
+        # action (or the expiry auto-pick) resumes the draft.
+        try:
+            _app = getattr(self, "app", None)
+            _need = getattr(_app, "_mp_fantasy_draft_pick_needed", None)
+            if callable(_need) and current_pick is not None:
+                try:
+                    _app._mp_fantasy_view = self
+                except Exception:
+                    pass
+                if _need(dm, current_pick):
+                    dm.auto_draft_in_flight = False
+                    try:
+                        self.update_display()
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass
         if current_pick and current_pick.team != self.user_team:
             # AI makes pick
             available_players = dm.get_available_players()
@@ -4433,8 +4475,17 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                         
     def complete_draft(self):
         """Handle draft completion"""
-        messagebox.showinfo("Draft Complete", 
+        messagebox.showinfo("Draft Complete",
                           "The fantasy draft is complete! All players have been redistributed among teams.")
+        # MULTIPLAYER: the rosters just changed wholesale -- push a full
+        # sync so every client converges on the drafted rosters.
+        try:
+            _app = getattr(self, "app", None)
+            _host = getattr(_app, "mp_host", None)
+            if _host is not None:
+                _host.broadcast_state("fantasy draft complete")
+        except Exception:
+            pass
         
         # Mark fantasy draft as completed in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):

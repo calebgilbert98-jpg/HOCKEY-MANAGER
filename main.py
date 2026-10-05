@@ -9236,6 +9236,8 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_answer_ntc_request(payload)
         elif kind == "draft_clock":
             self._mp_show_draft_clock(payload)
+        elif kind == "fantasy_draft_clock":
+            self._mp_show_fantasy_clock(payload)
         elif kind == "action_ack":
             self._mp_toast(f"Accepted: {payload.get('action', '')} "
                             f"({payload.get('result', '')})")
@@ -9476,7 +9478,8 @@ class HockeyManagerGUI(tk.Tk):
                       "answer_ai_offer", "rfa_qualify", "staff_renew",
                       "offer_sheet_match", "offer_sheet_trade_alt",
                       "arbitration_walkaway", "coach_checkin",
-                      "emergency_fill", "owner_meeting"):
+                      "emergency_fill", "owner_meeting",
+                      "fantasy_draft_pick"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9506,6 +9509,7 @@ class HockeyManagerGUI(tk.Tk):
             "coach_checkin": self._mp_coach_checkin,
             "emergency_fill": self._mp_emergency_fill,
             "owner_meeting": self._mp_owner_meeting,
+            "fantasy_draft_pick": self._mp_fantasy_draft_pick,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
             "hire_staff": self._mp_hire_staff,
@@ -12298,6 +12302,206 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
 
+    # -- multiplayer fantasy draft --------------------------------------
+    # The fantasy draft runs on the host; each client-claimed club picks
+    # live on a 60s clock (same pattern as the entry draft). The view
+    # calls _mp_fantasy_draft_begin/_mp_fantasy_draft_pick_needed; the
+    # fantasy_draft_pick action answers; expiry auto-picks BPA.
+
+    def _mp_fantasy_draft_begin(self, draft_manager):
+        """Register the active fantasy draft manager for MP picks."""
+        self._mp_fantasy_dm = draft_manager
+        self._mp_fantasy_clock = None
+
+    def _mp_fantasy_draft_pick_needed(self, draft_manager, pick):
+        """The draft view calls this when the current pick belongs to a
+        client-claimed club. Sends the clock; returns True when the draft
+        must pause for the client's answer (or the host's timeout)."""
+        team = getattr(pick, "team", None)
+        if team is None:
+            return False
+        try:
+            import game_classes as _gc
+            _human = bool(_gc.is_human_managed(team))
+            _own = team is getattr(self, "user_team", None)
+        except Exception:
+            return False
+        if not _human or _own:
+            return False
+        session_id = self._mp_peer_session_for_team(
+            getattr(team, "team_name", ""))
+        if not session_id:
+            return False
+        import time as _time
+        import uuid as _uuid
+        clock_id = _uuid.uuid4().hex[:10]
+        try:
+            available = draft_manager.get_available_players() or []
+        except Exception:
+            available = []
+        # Wire payload: full available-id list (client resolves against
+        # its snapshot) + a top-40 shortlist with details for quick picks.
+        try:
+            _ranked = sorted(
+                available,
+                key=lambda p: float(
+                    getattr(p, "overall_rating", lambda: 50)() or 50),
+                reverse=True)
+        except Exception:
+            _ranked = list(available)
+        available_ids = [str(getattr(p, "id", "")) for p in _ranked]
+        shortlist = []
+        for p in _ranked[:40]:
+            try:
+                shortlist.append({
+                    "id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": str(getattr(
+                        getattr(p, "primary_position", None),
+                        "value", "?")),
+                    "ovr": int(float(
+                        getattr(p, "overall_rating",
+                                lambda: 50)() or 50))})
+            except Exception:
+                continue
+        self._mp_fantasy_dm = draft_manager
+        self._mp_fantasy_clock = {
+            "clock_id": clock_id,
+            "team_name": getattr(team, "team_name", ""),
+            "overall": int(getattr(pick, "overall_pick", 0) or 0),
+            "round_num": int(getattr(pick, "round_num", 0) or 0),
+            "deadline": _time.time() + 60,
+            "done": False,
+        }
+        try:
+            self.mp_host.send_fantasy_draft_clock(
+                session_id, clock_id, getattr(team, "team_name", ""),
+                int(getattr(pick, "overall_pick", 0) or 0),
+                int(getattr(pick, "round_num", 0) or 0),
+                available_ids, shortlist)
+        except Exception as e:
+            print(f"fantasy draft clock send failed: {e}")
+            self._mp_fantasy_clock = None
+            return False
+        try:
+            self._mp_toast(
+                f"{getattr(team, 'team_name', '?')} on the fantasy clock "
+                f"(pick #{getattr(pick, 'overall_pick', '?')}) -- waiting "
+                f"on their GM.")
+        except Exception:
+            pass
+        # Schedule the expiry auto-pick on the host's UI thread.
+        try:
+            self.after(61000, self._mp_fantasy_clock_expire)
+        except Exception:
+            pass
+        return True
+
+    def _mp_fantasy_clock_expire(self):
+        """60s elapsed without an answer: BPA auto-pick, draft continues."""
+        st = getattr(self, "_mp_fantasy_clock", None)
+        if not st or st.get("done"):
+            return
+        dm = getattr(self, "_mp_fantasy_dm", None)
+        if dm is None:
+            return
+        st["done"] = True
+        try:
+            import time as _time
+            if _time.time() < float(st.get("deadline", 0) or 0):
+                return  # answered just in time; the pick continues it
+        except Exception:
+            pass
+        self._mp_fantasy_auto_pick(dm, reason="clock expired")
+
+    def _mp_fantasy_auto_pick(self, dm, reason=""):
+        """BPA auto-pick for a client club (timeout or unreachable)."""
+        try:
+            import random as _r
+            pick = dm.get_current_pick()
+            if pick is None:
+                return
+            available = dm.get_available_players() or []
+            if not available:
+                return
+            try:
+                _ranked = sorted(
+                    available,
+                    key=lambda p: float(
+                        getattr(p, "overall_rating", lambda: 50)() or 50),
+                    reverse=True)
+            except Exception:
+                _ranked = list(available)
+            choice = _r.choice(_ranked[:3]) if _ranked else None
+            if choice is None:
+                return
+            if dm.make_pick(choice):
+                try:
+                    dm.assign_drafted_player(pick.team, choice)
+                except Exception:
+                    pass
+                try:
+                    self._mp_toast(
+                        f"{getattr(pick.team, 'team_name', '?')} auto-pick: "
+                        f"{getattr(choice, 'full_name', '?')} ({reason}).")
+                except Exception:
+                    pass
+                view = getattr(self, "_mp_fantasy_view", None)
+                if view is not None:
+                    try:
+                        view.after(400, view.continue_auto_draft)
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"fantasy auto-pick failed: {e}")
+
+    def _mp_fantasy_draft_pick(self, params, team, manager):
+        """Client's live fantasy-draft pick: validate the clock, the turn,
+        and availability, then commit and resume the draft."""
+        import uuid as _uuid  # noqa (kept for symmetry; unused)
+        dm = getattr(self, "_mp_fantasy_dm", None)
+        st = getattr(self, "_mp_fantasy_clock", None)
+        if dm is None or st is None or st.get("done"):
+            return False, "No fantasy pick is waiting on you."
+        if str(params.get("clock_id", "") or "") != str(
+                st.get("clock_id", "")):
+            return False, "Stale draft clock."
+        if getattr(team, "team_name", "") != st.get("team_name", ""):
+            return False, "It's not your club's pick."
+        pick = dm.get_current_pick()
+        if pick is None or getattr(
+                getattr(pick, "team", None), "team_name", "") != \
+                st.get("team_name", ""):
+            return False, "The draft moved on."
+        pid = str(params.get("player_id", "") or "")
+        try:
+            available = {str(getattr(p, "id", "")): p
+                         for p in (dm.get_available_players() or [])}
+        except Exception:
+            available = {}
+        player = available.get(pid)
+        if player is None:
+            return False, "That player is already drafted."
+        st["done"] = True
+        try:
+            ok = dm.make_pick(player)
+        except Exception as e:
+            return False, f"Pick failed: {e}"
+        if not ok:
+            return False, "Pick didn't commit."
+        try:
+            dm.assign_drafted_player(pick.team, player)
+        except Exception:
+            pass
+        view = getattr(self, "_mp_fantasy_view", None)
+        if view is not None:
+            try:
+                view.after(200, view.continue_auto_draft)
+            except Exception:
+                pass
+        return True, (f"Drafted {getattr(player, 'full_name', '?')} "
+                      f"(#{st.get('overall', '?')}).")
+
     def _mp_draft_pick(self, params, team, manager):
         """Answer the draft clock: validate the prospect is still
         available; the DraftView's wait loop executes the pick on the
@@ -12698,6 +12902,151 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast(f"Drafted {p.get('name', '?')}.")
 
         tk.Button(win, text="DRAFT SELECTED PROSPECT",
+                  font=("Segoe UI", 11, "bold"),
+                  command=_draft_selected).pack(pady=(0, 10))
+        win.after(1000, _countdown)
+
+    def _mp_show_fantasy_clock(self, payload):
+        """Fantasy draft: you're on the clock (60s, then BPA auto-pick).
+
+        The host sends the available player ids; this client resolves
+        them against its snapshot for names/positions/ratings."""
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        available_ids = payload.get("available_ids", []) or []
+        shortlist = payload.get("shortlist", []) or []
+        if not available_ids:
+            return
+        # Resolve ids -> snapshot players.
+        try:
+            _all = []
+            _lg = getattr(self, "league", None)
+            for _t in (getattr(_lg, "teams", None) or []):
+                for _attr in ("roster", "ahl_roster", "prospects"):
+                    _all.extend(getattr(_t, _attr, None) or [])
+            _all.extend(getattr(_lg, "free_agents", None) or [])
+            _by_id = {str(getattr(p, "id", "")): p for p in _all}
+        except Exception:
+            _by_id = {}
+        players = []
+        for _pid in available_ids:
+            _p = _by_id.get(str(_pid))
+            if _p is None:
+                continue
+            try:
+                _ovr = int(float(
+                    getattr(_p, "overall_rating", lambda: 50)() or 50))
+            except Exception:
+                _ovr = 50
+            players.append({
+                "id": str(_pid),
+                "name": getattr(_p, "full_name", "?"),
+                "pos": str(getattr(
+                    getattr(_p, "primary_position", None), "value", "?")),
+                "ovr": _ovr,
+            })
+        if not players and shortlist:
+            players = list(shortlist)
+        if not players:
+            return
+        win = tk.Toplevel(self)
+        win.title(f"Fantasy pick #{overall} -- you're on the clock")
+        win.geometry("560x620")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+        tk.Label(
+            win,
+            text=f"Fantasy pick #{overall} (Round {round_num}) -- "
+                 f"your selection",
+            font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
+        self._mp_fantasy_answer = {"clock_id": clock_id,
+                                   "answered": False}
+        state = {"left": 60, "players": players}
+
+        def _countdown():
+            try:
+                if not win.winfo_exists():
+                    return
+                if self._mp_fantasy_answer.get("answered"):
+                    return
+                state["left"] -= 1
+                clock_var.set(f"Clock: {max(state['left'], 0)}s")
+                if state["left"] <= 0:
+                    win.destroy()
+                    self._mp_toast(
+                        "Fantasy clock expired -- BPA auto-pick.")
+                    return
+                win.after(1000, _countdown)
+            except Exception:
+                pass
+
+        clock_var = tk.StringVar(value="Clock: 60s")
+        tk.Label(win, textvariable=clock_var,
+                 font=("Segoe UI", 11)).pack(pady=(0, 6))
+        # Filter box.
+        filter_var = tk.StringVar()
+        tk.Entry(win, textvariable=filter_var,
+                 font=("Segoe UI", 10)).pack(fill="x", padx=10, pady=(0, 6))
+        frame = tk.Frame(win)
+        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        lb = tk.Listbox(frame, font=("Segoe UI", 10), height=20)
+        lb.pack(side="left", fill="both", expand=True)
+        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
+        sb.pack(side="right", fill="y")
+        lb.configure(yscrollcommand=sb.set)
+
+        def _refill(*_a):
+            try:
+                q = (filter_var.get() or "").strip().lower()
+            except Exception:
+                q = ""
+            lb.delete(0, "end")
+            state["shown"] = []
+            for p in state["players"]:
+                if q and q not in p.get("name", "").lower() \
+                        and q not in p.get("pos", "").lower():
+                    continue
+                lb.insert("end",
+                          f"{p.get('ovr', '?'):>3}  {p.get('name', '?')} "
+                          f"({p.get('pos', '?')})")
+                state["shown"].append(p)
+            if state["shown"]:
+                lb.selection_set(0)
+
+        try:
+            filter_var.trace_add("write", _refill)
+        except Exception:
+            pass
+        _refill()
+
+        def _draft_selected():
+            try:
+                sel = lb.curselection()
+            except Exception:
+                sel = ()
+            if not sel:
+                return
+            shown = state.get("shown") or []
+            if sel[0] >= len(shown):
+                return
+            p = shown[sel[0]]
+            if self._mp_fantasy_answer.get("answered"):
+                return
+            self._mp_fantasy_answer["answered"] = True
+            try:
+                self.mp_client.send_action("fantasy_draft_pick", {
+                    "clock_id": clock_id,
+                    "player_id": p.get("id", "")})
+            except Exception as e:
+                self._mp_toast(f"Fantasy pick failed: {e}")
+                return
+            win.destroy()
+            self._mp_toast(f"Drafted {p.get('name', '?')}.")
+
+        tk.Button(win, text="DRAFT SELECTED PLAYER",
                   font=("Segoe UI", 11, "bold"),
                   command=_draft_selected).pack(pady=(0, 10))
         win.after(1000, _countdown)
