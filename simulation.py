@@ -9683,13 +9683,15 @@ class GameSim:
         self.possession_player = player_gaining_puck
 
         # Positional: puck jumps to the thief, teams transition
+        # Use possession_team (guaranteed set above) not gaining_team
+        # (which may be None if the interceptor's team was unresolvable)
         self._ppos_ensure()
         self.puck_pos = self._ppos_get(player_gaining_puck)[:]
-        self._shape_positions(gaining_team, self.puck_pos)
+        self._shape_positions(self.possession_team, self.puck_pos)
         self._emit_skate()
 
         # Zone state follows the new attacking team (see _refresh_zone_state)
-        self._refresh_zone_state(gaining_team)
+        self._refresh_zone_state(self.possession_team)
 
         # Log event
         self._log_event(f"{turnover_type.value.title()}: {player_gaining_puck.full_name} strips puck from {player_losing_puck.full_name}", "TURNOVER")
