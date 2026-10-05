@@ -27893,24 +27893,34 @@ def test_enhanced_simulation():
     print("=" * 60)
 
 def main():
-    """Main function: Puck Dynasty in its OWN native window (2026-10-04).
+    """Main function: Puck Dynasty in its OWN window (2026-10-04).
 
-    Main thread runs the pywebview game window (no browser chrome);
-    a background game thread runs the hidden Tk root + Flask server +
-    command queue. Boots to the web launcher (new career / load game).
+    Tk root on the main thread (hidden) pumps the web command queue;
+    Flask serves the UI in a background thread; the game opens in a
+    chromeless app-mode window (no tabs/address bar -- looks native).
+    Boots to the web launcher (new career / load game).
     Fully offline -- everything is localhost.
     """
     try:
         print("Starting Puck Dynasty...")
+        import tkinter as tk
         try:
-            from web_ui.shell import launch as _launch_shell
+            import web_ui.bridge as _bridge
+            from web_ui.shell import launch as _launch_shell, SETUP_URL
         except ImportError as e:
             print(f"Web UI not available: {e}")
             print("Falling back to direct launch...")
             _direct_launch()
             return
 
-        _launch_shell()  # blocks until the game window closes
+        root = tk.Tk()
+        root.withdraw()  # invisible; the app-mode window is the game
+        _bridge._setup_root = root
+        _bridge.start_web_server(None)  # setup mode: no game yet
+        root.after(250, lambda: _bridge.drain_commands(None, root))
+        _launch_shell(SETUP_URL)  # chromeless window (or tab fallback)
+        print("Game window opened. Waiting for team selection...")
+        root.mainloop()
         print("Application completed")
             
     except KeyboardInterrupt:
