@@ -88,9 +88,21 @@ These are the screens Caleb uses every session. Must be rock-solid.
 - [x] Expiring/All tabs with badge count (includes AHL roster)
 - [x] Auto-Negotiate All: mirrors main.py, inbox digest with results
 
-## Phase 4 — Everything Else (P3+)
+## Phase 4 — Everything Else (P3+) ✅ COMPLETE (2026-10-04)
 
-Per MIGRATION_AUDIT.md priority order.
+- [x] **Standings** — conference-grouped standings with W/L/OTL/PTS, user team highlighted; verified vs live data
+- [x] **Stats** — league leaders (scorers, goals, goalies); fixed position enum display (PlayerPosition.CENTER -> C)
+- [x] **Playoffs** — bracket view with rounds, series scores, champion; handles pre-playoffs state
+- [x] **Schedule** — game list with dates, opponents, scores; verified
+- [x] **Calendar** — month view with event markers; verified
+- [x] **News** — news wire with dates, newest-first; verified
+- [x] **History** — seasons, records, Hall of Fame; verified
+- [x] **Finances** — cap breakdown, payroll, space; verified
+- [x] **Scouting** — assignments via command queue; verified (366 lines)
+- [x] **Development** — training programs, prospect watchlist; verified
+- [x] **Staff** — staff list with roles, ratings, morale; verified
+
+All 11 endpoints return 200 OK with live GameManager data. No 404s, no crashes.
 
 ---
 

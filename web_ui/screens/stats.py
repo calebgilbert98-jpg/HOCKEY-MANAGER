@@ -15,7 +15,8 @@ def _player_stat(p):
     def _num(attr, default=0):
         return _safe(lambda: float(getattr(p, attr, default) or 0), default) or 0
 
-    pos = _safe(lambda: str(getattr(p, "position", "") or ""), "")
+    from web_ui.bridge import _clean_position
+    pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
     return {
         "name": _safe(lambda: getattr(p, "full_name", "?"), "?") or "?",
         "team": _safe(lambda: getattr(p, "team", None) and getattr(p, "team").team_name, "")
