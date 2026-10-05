@@ -13589,8 +13589,6 @@ class ContractNegotiationView(ctk.CTkFrame):
         self._refresh_history()
 
     def submit_offer(self):
-        if self.app._mp_client_block("free-agent signings"):
-            return
         if self.is_elc:
             self._submit_elc_offer()
             return
@@ -13608,6 +13606,23 @@ class ContractNegotiationView(ctk.CTkFrame):
         if years < 1 or years > max_years:
             self.banner_var.set(
                 f"Contract length must be between 1 and {max_years} years.")
+            return
+        # MP: route to the host instead of mutating local state. The host
+        # runs the same validation + signing path; the result comes back
+        # via ACTION_ACK/REJECT and the next STATE_SYNC refreshes the view.
+        try:
+            _sb = int(str(self.signing_var.get()).replace(",", "") or 0)
+        except (ValueError, AttributeError):
+            _sb = 0
+        if _mp_route(self.app, "sign_free_agent", {
+                "player_id": str(getattr(p, "id", "")),
+                "salary": salary,
+                "years": years,
+                "signing_bonus": _sb,
+                "ntc": self._clause_key() != "none",
+                "clause_kind": self._clause_key(),
+                "clause_list_size": int(self.clause_size_var.get() or 10),
+        }):
             return
         # Same signing path as the original popup: stage the offer on the
         # player object, then run the central handler (inbox routing).
@@ -13668,6 +13683,18 @@ class ContractNegotiationView(ctk.CTkFrame):
             self.banner_var.set("Enter valid numbers for salary and bonuses.")
             return
         years = int(self.years_var.get() or 0)
+        # MP: route the ELC offer to the host; the host runs the same
+        # band validation + prospect handshake against the canonical state.
+        if _mp_route(self.app, "sign_free_agent", {
+                "player_id": str(getattr(p, "id", "")),
+                "salary": salary,
+                "years": years,
+                "signing_bonus": sb,
+                "performance_bonus": pb,
+                "elc": True,
+        }):
+            self._record_offer(salary, years, "sent to host")
+            return
         res = self.app.handle_elc_offer(p, salary, sb, pb)
         verdict = res.get("verdict")
         if verdict == "accepted":
@@ -14850,8 +14877,6 @@ class ExtensionNegotiationView(ctk.CTkFrame):
     
     def submit_offer(self):
         """Submit contract offer to the player."""
-        if self.app._mp_client_block("contract extensions"):
-            return
         try:
             # Parse salary with commas
             salary_str = self.salary_var.get().replace(',', '')
@@ -14881,6 +14906,17 @@ class ExtensionNegotiationView(ctk.CTkFrame):
 
             if bonus < 0:
                 self._say("Signing bonus cannot be negative.")
+                return
+
+            # MP: route to the host; the host validates and applies
+            # against the canonical state. Result via ACK/REJECT + sync.
+            if _mp_route(self.app, "extend_contract", {
+                    "player_id": str(getattr(self.player, "id", "")),
+                    "salary": salary,
+                    "years": years,
+                    "signing_bonus": bonus,
+                    "clause": "ntc" if self.ntc_var.get() else "none",
+            }):
                 return
 
             # Calculate likelihood of acceptance
@@ -14966,7 +15002,14 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self._counter_panel = None
 
     def _accept_counter(self, counter_years, counter_salary, bonus):
-        if self.app._mp_client_block("contract extensions"):
+        # MP: the counter acceptance is a fresh extension offer to the host.
+        if _mp_route(self.app, "extend_contract", {
+                "player_id": str(getattr(self.player, "id", "")),
+                "salary": counter_salary,
+                "years": counter_years,
+                "signing_bonus": bonus,
+                "clause": "ntc" if self.ntc_var.get() else "none",
+        }):
             return
         self.player.contract.salary = counter_salary
         self.player.contract.years_remaining = counter_years

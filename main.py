@@ -9700,6 +9700,32 @@ class HockeyManagerGUI(tk.Tk):
     def _mp_sign_free_agent(self, params, team, manager):
         """Sign a free agent: same contract mutation the FA view applies
         (salary / years / signing bonus / NTC flag on the live contract)."""
+        # ELC branch: the client is signing an unsigned rights-held prospect.
+        # Route through the same negotiated ELC path as single-player, with
+        # the acting manager's team (not the host's user_team).
+        if params.get("elc"):
+            _pid = str(params.get("player_id", ""))
+            _prospect = None
+            try:
+                for _p in getattr(team, "prospects", []) or []:
+                    if str(getattr(_p, "id", "")) == _pid:
+                        _prospect = _p
+                        break
+            except Exception:
+                pass
+            if _prospect is None:
+                return False, "That prospect isn't in your system."
+            try:
+                _res = self.handle_elc_offer(
+                    _prospect, params.get("salary", 0),
+                    params.get("signing_bonus", 0),
+                    params.get("performance_bonus", 0), team=team)
+            except Exception as e:
+                return False, f"ELC signing failed: {e}"
+            _v = (_res or {}).get("verdict")
+            if _v == "accepted":
+                return True, f"Signed {_prospect.full_name} to an ELC."
+            return False, (_res or {}).get("note") or f"ELC offer {_v}."
         player = self._mp_find_free_agent(params.get("player_id", ""))
         if player is None:
             return False, "That player is no longer a free agent."
@@ -21771,7 +21797,7 @@ class HockeyManagerGUI(tk.Tk):
                          is_elc=is_elc)
 
     def handle_elc_offer(self, player, salary, signing_bonus=0,
-                         performance_bonus=0):
+                         performance_bonus=0, team=None):
         """Negotiated ELC signing with an unsigned rights-held prospect.
 
         Validates the ELC band (base inside [floor, ceiling], signing
@@ -21785,7 +21811,10 @@ class HockeyManagerGUI(tk.Tk):
         """
         import salary_cap_system as _scs
         league = getattr(self, 'league', None)
-        team = getattr(self, 'user_team', None)
+        # MP: the host passes the acting manager's team; single-player and
+        # the host's own UI leave it None and use user_team as before.
+        if team is None:
+            team = getattr(self, 'user_team', None)
         try:
             season = getattr(league, 'season_year', None)
         except Exception:

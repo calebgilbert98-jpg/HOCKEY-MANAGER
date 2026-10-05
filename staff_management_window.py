@@ -2288,6 +2288,19 @@ class StaffManagementView(ctk.CTkFrame):
     def release_staff_action(self, staff: Staff, details_window=None):
         """Perform staff release action."""
         def _do_release():
+            # MP: route to the host; the host applies severance + trust
+            # shock against the canonical state.
+            try:
+                from windows import _mp_route as _route
+                _app = getattr(self, "app", None) or getattr(self, "parent", None)
+                if _app is not None and _route(
+                        _app, "fire_staff",
+                        {"staff_id": str(getattr(staff, "id", ""))}):
+                    if details_window:
+                        details_window.destroy()
+                    return
+            except Exception:
+                pass
             user_team = self._get_user_team()
             if user_team and staff in user_team.staff:
                 user_team.staff.remove(staff)
