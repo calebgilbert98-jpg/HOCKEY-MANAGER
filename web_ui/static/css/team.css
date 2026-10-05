@@ -1,0 +1,32 @@
+/* Puck Dynasty team overview — NHL 14 broadcast */
+.team-main { max-width: 1200px; margin: 0 auto; padding: 18px 22px 40px; }
+.tm-head { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 18px; }
+.tm-name { font-family: var(--nhl-cond); font-size: 44px; font-weight: 800; letter-spacing: 1px; margin: 4px 0 6px; text-transform: uppercase; }
+.tm-sub { color: var(--dim); font-size: 14px; }
+.tm-sub a { color: var(--nhl-blue); }
+.tm-rec { font-family: var(--nhl-cond); font-size: 40px; font-weight: 800; color: var(--text); }
+.tm-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; margin-bottom: 14px; }
+.tm-card { background: rgba(10,14,24,.85); border: 1px solid rgba(59,130,246,.18); border-radius: var(--nhl-r-sm); padding: 14px 16px; }
+.tm-card h2 { font-family: var(--nhl-cond); font-size: 15px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 10px; color: var(--text); border-bottom: 2px solid rgba(59,130,246,.35); padding-bottom: 6px; }
+.tm-lead-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 4px; }
+.tm-lead-row .rank { color: var(--dim); width: 18px; font-weight: 700; }
+.tm-face { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; object-position: top; border: 1px solid rgba(59,130,246,.5); background: #0a0e18; }
+.tm-lead-row .nm { flex: 1; font-weight: 600; }
+.tm-lead-row .pos { color: var(--dim); font-size: 12px; margin-left: 6px; }
+.tm-lead-row .st { color: var(--dim); font-size: 13px; }
+.tm-lead-row .st b { color: var(--text); }
+.tm-form-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; }
+.tm-form-row .res { font-family: var(--nhl-cond); font-weight: 800; width: 34px; text-align: center; border-radius: 3px; padding: 2px 0; font-size: 13px; }
+.tm-form-row .res.W { background: rgba(34,197,94,.2); color: #4ade80; }
+.tm-form-row .res.L { background: rgba(239,68,68,.2); color: #f87171; }
+.tm-form-row .res.OTL { background: rgba(251,191,36,.2); color: #fbbf24; }
+.tm-form-row .opp { flex: 1; }
+.tm-form-row .score { font-weight: 700; }
+.tm-plist { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.tm-prow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 4px; background: rgba(255,255,255,.02); }
+.tm-prow .nm { flex: 1; font-weight: 600; font-size: 14px; }
+.tm-prow .pos { color: var(--dim); font-size: 12px; }
+.tm-prow .ovr { font-family: var(--nhl-cond); font-weight: 700; color: var(--nhl-blue); }
+.tm-count { color: var(--dim); font-size: 13px; }
+.empty { color: var(--dim); padding: 12px 4px; }
+@media (max-width: 800px) { .tm-grid { grid-template-columns: 1fr; } }

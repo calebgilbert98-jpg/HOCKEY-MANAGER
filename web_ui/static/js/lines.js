@@ -83,6 +83,7 @@ const S = {
   dirty: false,
 };
 let dragPayload = null; // {src:'roster'|'slot', id, slot?}
+let justDragged = false; // suppress click-to-profile right after a drag
 
 const $ = (id) => document.getElementById(id);
 function esc(s) {
@@ -168,11 +169,13 @@ function rosterCard(p) {
   el.innerHTML =
     '<span class="ovr ' + ovrBand(p.overall) + '">' + esc(p.overall) + '</span>' +
     face +
-    '<span class="nm"><span class="n">' + esc(p.name) + '</span>' +
+    '<span class="nm clickable-text" data-href="/player/' + esc(pid) + '" title="Open player profile"><span class="n">' + esc(p.name) + '</span>' +
     '<span class="s">Age ' + esc(p.age) + '</span></span>' +
     '<span class="pos">' + esc(p.position) + '</span>' +
     (dressed ? '<span class="dressed">' + esc(dressed) + '</span>' : '');
   el.addEventListener('dragstart', (e) => {
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 150);
     dragPayload = { src: 'roster', id: pid };
     el.classList.add('dragging');
     e.dataTransfer.effectAllowed = 'move';
@@ -235,10 +238,12 @@ function slotEl(slot) {
       : '';
     who.innerHTML =
       wface +
-      '<div class="n">' + esc(p.name) + '</div>' +
+      '<div class="n clickable-text" data-href="/player/' + esc(String(p.id)) + '" title="Open player profile">' + esc(p.name) + '</div>' +
       '<div class="s"><span class="' + ovrBand(p.overall) + '">' + esc(p.overall) + ' OVR</span> · ' +
       esc(p.position) + ' · Age ' + esc(p.age) + '</div>';
     who.addEventListener('dragstart', (e) => {
+      justDragged = true;
+      setTimeout(() => { justDragged = false; }, 150);
       dragPayload = { src: 'slot', slot, id: String(p.id) };
       who.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -483,3 +488,11 @@ boot();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (suppressed right after drags).
+document.addEventListener('click', (e) => {
+  if (justDragged) return;
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

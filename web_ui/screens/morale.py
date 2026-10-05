@@ -72,6 +72,7 @@ def api_morale():
             rs.ensure_reputation_fields(coach)
             style = rs.coach_style(coach)
             out["coach"] = {
+                "id": _safe(lambda: str(getattr(coach, "id", "")), ""),
                 "name": _safe(lambda: getattr(coach, "full_name", "Coach"), "Coach"),
                 "style": style.get("label", ""),
                 "description": style.get("description", ""),

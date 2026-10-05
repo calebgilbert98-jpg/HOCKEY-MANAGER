@@ -23,6 +23,13 @@
   --shadow-tile: 0 2px 10px rgba(0,0,0,.45);
   --shadow-lift: 0 14px 34px rgba(0,0,0,.55);
   --font: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  /* team-color tint vars (overridden per-team by hub.js; defaults = deep blue) */
+  --team1: #3B82F6;
+  --team2: #1E40AF;
+  --team1-deep: #20447f;
+  --team1-soft: #24406b;
+  --team1-wash: rgba(59,130,246,.10);
+  --team1-glow: rgba(59,130,246,.28);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { scrollbar-color: #2b3a55 transparent; }
@@ -1082,3 +1089,52 @@ select.nhl-select option, select.nhl option { background: #0d1424; color: var(--
 }
 /* keep footer hints above the fixed ticker */
 footer.hints { padding-bottom: 44px; }
+
+/* ============================================================
+   Subtle team-color theming — "arena lighting tint", not jersey.
+   Vars (--team1, --team1-deep, --team1-soft, --team1-wash, --team1-glow)
+   are set per-team by hub.js from /api/state team_colors.
+   Dark navy base stays dominant; backgrounds and text are untouched.
+   ============================================================ */
+
+/* Hero Continue bar: team color (darkened) melts into the house blue */
+.th-hero {
+  background: linear-gradient(135deg, var(--team1-deep) 0%, #1f5ad0 55%, #16367f 100%);
+}
+.th-hero:hover {
+  box-shadow: 0 20px 60px var(--team1-glow), inset 0 1px 0 rgba(255,255,255,.3);
+}
+
+/* Panel section headers: muted team underline */
+.th-panel-head { border-bottom-color: var(--team1-soft); }
+
+/* Tiles: faint team line along the top edge (inset, no layout shift) */
+.th-tile {
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.05),
+              inset 0 3px 0 -1px var(--team1-soft);
+}
+.th-tile:hover {
+  border-color: var(--team1-soft);
+  box-shadow: 0 14px 34px rgba(0,0,0,.5), 0 0 0 1px var(--team1-wash),
+              inset 0 3px 0 -1px var(--team1-soft);
+}
+
+/* Standings: user's row washed in team color, abbr chip readable */
+.th-table tr.me td { background: var(--team1-wash); }
+.th-table tr.me .abbr { background: #fff; color: var(--team1-deep); }
+
+/* Stat strip: top accent picks up the muted team tone */
+.th-strip-block { border-top-color: var(--team1-soft); }
+
+/* News ticker: top rule + label chip carry the team tone */
+.th-ticker { border-top-color: var(--team1-soft); }
+.th-ticker-label { background: var(--team1-deep); }
+
+/* ---------- shared clickable entities (all screens) ---------- */
+.clickable { cursor: pointer; }
+.clickable-text { cursor: pointer; transition: color .15s ease; }
+.clickable-text:hover { color: #fff; text-decoration: underline; text-decoration-color: rgba(59,130,246,.6); text-underline-offset: 3px; }
+tr.clickable { transition: background .15s ease; }
+tr.clickable:hover td { background: rgba(59,130,246,.12); }
+.card-clickable { cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
+.card-clickable:hover { background: rgba(59,130,246,.10); box-shadow: inset 0 0 0 1px rgba(59,130,246,.35); }

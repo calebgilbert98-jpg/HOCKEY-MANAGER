@@ -44,7 +44,7 @@ function renderWire(players) {
     el.innerHTML = `
       <div class="w-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
       <div class="w-info">
-        <div class="w-name">${esc(p.name)}</div>
+        <div class="w-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
         <div class="w-sub">${esc(p.position)} · Age ${p.age} · ${salaryStr(p.salary)}${p.waiver_team ? ' · from ' + esc(p.waiver_team) : ''}</div>
       </div>
       <div class="w-clock">⏱ ${esc(deadlineStr(p.waiver_days))}</div>
@@ -93,3 +93,10 @@ loadWire();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

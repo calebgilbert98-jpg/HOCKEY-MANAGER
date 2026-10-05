@@ -28,6 +28,7 @@ MOCK_STATE = {
         "points": 26,
         "standing": "2nd in Atlantic",
     },
+    "team_colors": {"primary": "#FFB81C", "secondary": "#000000"},
     "date": "November 18, 2026",
     "next_game": {
         "opponent": "Toronto Maple Leafs",
@@ -66,19 +67,19 @@ MOCK_STATE = {
         ],
         "leaders": {
             "points": [
-                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
-                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
-                {"name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
+                {"id": "mock-pastrnak", "name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+                {"id": "mock-marchand", "name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"id": "mock-mcavoy", "name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
             ],
             "goals": [
-                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
-                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"id": "mock-pastrnak", "name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+                {"id": "mock-marchand", "name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
                 {"name": "Pavel Zacha", "portrait": "/static/img/portraits/portrait_01.webp", "pos": "C", "g": 8, "a": 10, "pts": 18},
             ],
             "assists": [
-                {"name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
-                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
-                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+                {"id": "mock-mcavoy", "name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
+                {"id": "mock-marchand", "name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"id": "mock-pastrnak", "name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
             ],
         },
         "form": {

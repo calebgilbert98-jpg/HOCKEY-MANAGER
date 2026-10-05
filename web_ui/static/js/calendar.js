@@ -92,7 +92,7 @@ function dayCell(dayNum, iso, games) {
   for (const g of mine) {
     const ha = g.is_home ? 'vs' : '@';
     html += `<div class="cal-game${g.preseason ? ' pre' : ''}">`
-      + `<span class="cal-ha">${ha}</span> ${esc(g.opponent)}`
+      + `<span class="cal-ha">${ha}</span> <span class="clickable-text" data-href="/team/${encodeURIComponent(g.opponent)}" title="Open team overview">${esc(g.opponent)}</span>`
       + (g.preseason ? ' <span class="cal-tag">PRE</span>' : '')
       + `</div>`;
   }
@@ -119,3 +119,10 @@ loadCalendar();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

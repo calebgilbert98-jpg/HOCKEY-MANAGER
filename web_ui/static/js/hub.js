@@ -21,6 +21,40 @@ function thSeason(dateStr) {
   return `FRANCHISE · ${y}-${String(y + 1).slice(2)} SEASON`;
 }
 
+/* ---------- subtle team-color theming ----------
+   Precomputes muted variants in JS (no color-mix dependency) and sets
+   them as CSS vars on :root. Everything stays dark; tints are whispers. */
+function _hexRgb(hex) {
+  const m = /^#([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function _mixHex(a, b, t) {
+  // t=0 -> a, t=1 -> b
+  const ca = _hexRgb(a), cb = _hexRgb(b);
+  if (!ca || !cb) return a;
+  const c = ca.map((v, i) => Math.round(v + (cb[i] - v) * t));
+  return '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+}
+function _rgba(hex, alpha) {
+  const c = _hexRgb(hex);
+  if (!c) return hex;
+  return `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
+}
+function applyTeamColors(tc) {
+  const root = document.documentElement;
+  const p = (tc && _hexRgb(tc.primary)) ? tc.primary : '#3B82F6';
+  const s = (tc && _hexRgb(tc.secondary)) ? tc.secondary : '#1E40AF';
+  const set = (k, v) => root.style.setProperty(k, v);
+  set('--team1', p);
+  set('--team2', s);
+  set('--team1-deep', _mixHex(p, '#000000', 0.45));   // hero gradient start
+  set('--team1-soft', _mixHex(p, '#0e1626', 0.55));   // muted borders/accents
+  set('--team1-wash', _rgba(p, 0.10));                // faint row backgrounds
+  set('--team1-glow', _rgba(p, 0.28));                // hover glows
+}
+
 async function loadState() {
   try {
     const res = await fetch('/api/state');
@@ -38,6 +72,7 @@ async function loadState() {
 function renderHub(s) {
   const team = s.team || {};
   const rec = team.record || {};
+  applyTeamColors(s.team_colors);
   document.getElementById('th-season').textContent = thSeason(s.date);
   document.getElementById('th-team').textContent = (team.name || '—').toUpperCase();
   document.getElementById('th-record').textContent =
@@ -164,7 +199,7 @@ function renderPanels(p) {
   document.getElementById('panel-standings-head').textContent = divName;
   const st = document.getElementById('panel-standings-table');
   const rows = (p.standings || []).map((r, i) => `
-    <tr class="${r.is_user ? 'me' : ''} clickable" data-href="/standings" title="Open standings">
+    <tr class="${r.is_user ? 'me' : ''} clickable" data-href="/team/${encodeURIComponent(r.name)}" title="Open team overview">
       <td class="rk">${i + 1}</td>
       <td class="tm"><span class="abbr">${esc(r.abbr)}</span> ${esc(r.name)}</td>
       <td>${r.w}</td><td>${r.l}</td><td>${r.otl}</td><td class="pts">${r.pts}</td>

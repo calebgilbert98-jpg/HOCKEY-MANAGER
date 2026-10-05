@@ -20,6 +20,7 @@ import queue
 import threading
 import hashlib
 import os
+import re
 from datetime import date, datetime
 
 COMMAND_QUEUE = queue.Queue()
@@ -67,6 +68,52 @@ def _safe(fn, default=None):
         return fn()
     except Exception:
         return default
+
+
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_DEFAULT_TEAM_PRIMARY = "#3B82F6"    # deep blue (current UI accent)
+_DEFAULT_TEAM_SECONDARY = "#1E40AF"
+
+
+def _valid_hex(value, fallback):
+    if isinstance(value, str) and _HEX_COLOR_RE.match(value.strip()):
+        return value.strip().upper()
+    return fallback
+
+
+def _team_colors_dict(team):
+    """Subtle team-color tinting for the hub. Fallback chain:
+    1. team.primary_color / team.secondary_color attributes
+    2. team_identity_system lookup by team name (case-insensitive)
+    3. deep-blue defaults.
+    Always returns validated hex strings; never raises."""
+    primary = _safe(lambda: getattr(team, "primary_color", None))
+    secondary = _safe(lambda: getattr(team, "secondary_color", None))
+    try:
+        if not (isinstance(primary, str) and _HEX_COLOR_RE.match(primary.strip())):
+            from team_identity_system import nhl_identity
+            name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
+            colors = None
+            try:
+                colors = nhl_identity.get_team_colors(name) if name else None
+            except Exception:
+                colors = None
+            if colors is None and name:
+                key = str(name).strip().lower()
+                for n, c in _safe(lambda: nhl_identity.team_colors.items(), []) or []:
+                    if str(n).lower() == key:
+                        colors = c
+                        break
+            if colors is not None:
+                primary = _safe(lambda: colors.primary, primary)
+                if not (isinstance(secondary, str) and _HEX_COLOR_RE.match(secondary.strip())):
+                    secondary = _safe(lambda: colors.secondary, secondary)
+    except Exception:
+        pass
+    return {
+        "primary": _valid_hex(primary, _DEFAULT_TEAM_PRIMARY),
+        "secondary": _valid_hex(secondary, _DEFAULT_TEAM_SECONDARY),
+    }
 
 
 # Clean position abbreviations: PlayerPosition.CENTER -> "C", etc.
@@ -481,6 +528,7 @@ def get_hub_state(app):
 
     return {
         "team": {**t, "points": pts},
+        "team_colors": _team_colors_dict(team),
         "date": date_str,
         "inbox": {"unread": unread, "action_needed": action_needed},
         "next_game": next_game,

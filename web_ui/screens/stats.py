@@ -18,6 +18,7 @@ def _player_stat(p):
     from web_ui.bridge import _clean_position
     pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
     return {
+        "id": _safe(lambda: str(getattr(p, "id", id(p)))),
         "name": _safe(lambda: getattr(p, "full_name", "?"), "?") or "?",
         "team": _safe(lambda: getattr(p, "team", None) and getattr(p, "team").team_name, "")
                or _safe(lambda: str(getattr(p, "team_name", "") or ""), ""),
@@ -58,7 +59,7 @@ def _stats_payload(live):
             continue
 
     def _fmt_leader(r):
-        return {"name": r["name"], "team": r["team"], "pos": r["pos"],
+        return {"id": r.get("id"), "name": r["name"], "team": r["team"], "pos": r["pos"],
                 "gp": r["gp"], "g": r["g"], "a": r["a"], "pts": r["pts"],
                 "pim": r["pim"], "pm": r["pm"],
                 "sv_pct": r["sv_pct"], "gaa": r["gaa"], "so": r["so"]}

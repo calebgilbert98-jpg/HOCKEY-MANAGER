@@ -61,13 +61,18 @@ function renderCandidates(data) {
     const el = document.createElement('div');
     el.className = 'cand';
     el.title = 'Click to select as captain';
-    el.innerHTML = `<span class="nm">${esc(c.name)}</span>
+    el.innerHTML = `<span class="nm">${c.id ? `<span class="clickable-text" data-href="/player/${esc(c.id)}" title="Open player profile">${esc(c.name)}</span>` : esc(c.name)}</span>
       ${curIds.has(String(c.id)) ? '<span class="cur">CURRENT ' + esc(c.captaincy) + '</span>' : ''}
       <span class="ld">Ldr ${c.leadership}</span>
       <div class="sub">${esc(c.position)} · Age ${c.age} · ${c.overall} OVR${c.injured ? ' · Injured' : ''}</div>`;
     el.addEventListener('click', () => {
       document.getElementById('pick-c').value = c.id;
       document.getElementById('pick-status').textContent = `${c.name} selected as captain`;
+    });
+    const nm = el.querySelector('.clickable-text[data-href]');
+    if (nm) nm.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.location.href = nm.dataset.href;
     });
     host.appendChild(el);
   }
@@ -124,3 +129,10 @@ loadCaptains();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

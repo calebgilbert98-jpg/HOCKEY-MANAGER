@@ -24,7 +24,7 @@ function renderSchedule(games) {
       <div class="g-match">
         <span class="g-team">${esc(g.is_home ? g.home : g.away)}</span>
         <span class="g-vs">${g.is_home ? 'vs' : '@'}</span>
-        <span class="g-team opp">${esc(g.opponent)}</span>
+        <span class="g-team opp clickable-text" data-href="/team/${encodeURIComponent(g.opponent)}" title="Open team overview">${esc(g.opponent)}</span>
       </div>
       ${g.preseason ? '<span class="g-tag">Preseason</span>' : ''}
       ${g.is_home ? '<span class="g-tag home">Home</span>' : ''}`;
@@ -46,3 +46,10 @@ loadSchedule();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

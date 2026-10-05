@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/team.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <span class="tb-kicker" id="tm-div">—</span>
+</header>
+
+<main class="team-main">
+  <div class="tm-head">
+    <div>
+      <div class="bcast-kicker">Team Overview</div>
+      <h1 class="tm-name" id="tm-name">—</h1>
+      <div class="tm-sub" id="tm-sub">—</div>
+    </div>
+    <div class="tm-rec" id="tm-rec">—</div>
+  </div>
+
+  <div class="tm-grid">
+    <section class="tm-card">
+      <h2>Team Leaders</h2>
+      <div id="tm-leaders"><div class="empty">Loading…</div></div>
+    </section>
+    <section class="tm-card">
+      <h2>Recent Form</h2>
+      <div id="tm-form"><div class="empty">Loading…</div></div>
+    </section>
+  </div>
+
+  <section class="tm-card tm-roster">
+    <h2>Roster <span class="tm-count" id="tm-count"></span></h2>
+    <div class="tm-plist" id="tm-players"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<script src="/static/js/team.js"></script>
+</body>
+</html>

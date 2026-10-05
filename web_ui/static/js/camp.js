@@ -45,3 +45,10 @@ loadCamp();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

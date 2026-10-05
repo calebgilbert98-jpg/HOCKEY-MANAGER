@@ -63,7 +63,7 @@ function renderContracts(contracts, summary) {
     if (c.no_trade) clauses.push('NTC');
     if (c.two_way) clauses.push('2-way');
     el.innerHTML = `
-      <div class="c-name">${esc(c.name)}${clauses.length ? ' <span class="c-clause">' + clauses.map(esc).join(' · ') + '</span>' : ''}</div>
+      <div class="c-name">${c.id ? `<span class="clickable-text" data-href="/player/${esc(c.id)}" title="Open player profile">${esc(c.name)}</span>` : esc(c.name)}${clauses.length ? ' <span class="c-clause">' + clauses.map(esc).join(' · ') + '</span>' : ''}</div>
       <div class="c-pos">${esc(c.position)} · Age ${c.age}</div>
       <div class="c-hit">${salaryStr(c.cap_hit)}</div>
       <div class="c-term${c.expiring ? ' hot' : ''}">${esc(termStr(c.years_remaining))}${c.expiring ? ' ⚠' : ''}</div>
@@ -555,3 +555,10 @@ loadContracts();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

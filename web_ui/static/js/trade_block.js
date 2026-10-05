@@ -64,7 +64,7 @@ function renderMine(players) {
       <div class="b-head">
         <div class="b-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
         <div>
-          <div class="b-name">${esc(p.name)}</div>
+          <div class="b-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
           <div class="b-sub">${esc(p.position)} · Age ${p.age} · ${salaryStr(p.salary)}</div>
         </div>
       </div>
@@ -298,3 +298,10 @@ loadMine();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

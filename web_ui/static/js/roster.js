@@ -148,7 +148,7 @@ function renderTable() {
     return `<tr data-id="${esc(p.id)}" class="${p.injured ? 'injured' : ''}">
       <td><input type="checkbox" class="row-sel" data-id="${esc(p.id)}" ${checked}></td>
       <td>${esc(p.jersey)}</td>
-      <td class="p-name" data-id="${esc(p.id)}">${face}<span>${esc(p.name)}${cap}</span></td>
+      <td class="p-name clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile" data-id="${esc(p.id)}">${face}<span>${esc(p.name)}${cap}</span></td>
       <td>${esc(p.position)}</td>
       <td>${p.age}</td>
       <td><span class="tier">${esc(p.tier)}</span></td>
@@ -385,3 +385,10 @@ showView();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, .row-sel')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

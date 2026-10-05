@@ -207,13 +207,19 @@ function assetCard(asset, kind, side, checked) {
        <span class="ac-sub">${asset.year ? 'Round ' + asset.round + ' · ' + asset.year : ''}${asset.protection ? ' · ' + esc(asset.protection) : ''}</span>`
     : `<span class="ac-ovr ${ovrClass(asset.overall)}">${asset.overall}</span>
        <span class="ac-info">
-         <span class="ac-name">${esc(asset.name)}${asset.captaincy ? ' <span class="p-c">' + esc(asset.captaincy) + '</span>' : ''}</span>
+         <span class="ac-name">${asset.id ? `<span class="clickable-text" data-href="/player/${esc(asset.id)}" title="Open player profile">${esc(asset.name)}</span>` : esc(asset.name)}${asset.captaincy ? ' <span class="p-c">' + esc(asset.captaincy) + '</span>' : ''}</span>
          <span class="ac-sub">${esc(asset.position)} · Age ${asset.age} · ${fmtSalary(asset.salary)}</span>
        </span>
        ${asset.injured ? '<span class="ac-inj">INJ</span>' : ''}
        ${asset.level ? '<span class="ac-level">' + esc(asset.level) + '</span>' : ''}`;
   wrap.innerHTML = info + (checked ? '<span class="ac-check">✓</span>' : '');
   wrap.addEventListener('click', () => toggleAsset(id, kind, side));
+  // Player name navigates to profile without toggling the card.
+  const nm = wrap.querySelector('.clickable-text[data-href]');
+  if (nm) nm.addEventListener('click', (e) => {
+    e.stopPropagation();
+    window.location.href = nm.dataset.href;
+  });
   // Terms row (retention / protection) under give-side assets in the deal.
   if (side === 'give' && checked) {
     const t = termsRow(asset, kind);
@@ -571,3 +577,11 @@ loadTeams();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls;
+// asset-card names handle their own navigation with stopPropagation above).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, .asset-card')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

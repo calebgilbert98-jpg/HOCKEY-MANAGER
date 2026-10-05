@@ -31,7 +31,7 @@ async function loadMorale() {
     // Coach card
     const coach = d.coach;
     document.getElementById('coach-body').innerHTML = coach ? `
-      <div class="coach-name">${esc(coach.name)}</div>
+      <div class="coach-name">${coach.id ? `<span class="clickable-text" data-href="/staff/${esc(coach.id)}" title="Open staff profile">${esc(coach.name)}</span>` : esc(coach.name)}</div>
       <div class="coach-style">${esc(coach.style)}</div>
       <div class="dim">${esc(coach.description || '')}</div>
       <div class="coach-meta">GM trust: ${coach.gm_trust}/100</div>` :
@@ -52,7 +52,7 @@ async function loadMorale() {
     // Player response table
     document.getElementById('response-body').innerHTML = (d.players || []).map(p => `
       <tr>
-        <td><strong>${esc(p.name)}</strong></td>
+        <td>${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile"><strong>${esc(p.name)}</strong></span>` : `<strong>${esc(p.name)}</strong>`}</td>
         <td>${esc(p.engagement || '—')}</td>
         <td><span class="resp resp-${respClass(p.response)}">${esc(p.response)}</span></td>
         <td>${p.happiness}/100</td>
@@ -100,3 +100,10 @@ loadMorale();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

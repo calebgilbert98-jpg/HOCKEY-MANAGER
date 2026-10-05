@@ -35,7 +35,7 @@ function renderStandings(data) {
             <th class="num">OTL</th><th class="pts">PTS</th>
           </tr></thead>
           <tbody>${rows.map((r, i) => `
-            <tr class="${r.is_user ? 'user-team' : ''}">
+            <tr class="${r.is_user ? 'user-team' : ''} clickable" data-href="/team/${encodeURIComponent(r.name)}" title="Open team overview">
               <td class="rank">${i + 1}</td>
               <td class="tname">${esc(r.name)}<span class="div-tag">${esc(r.division || '')}</span></td>
               <td class="num">${r.gp}</td>
@@ -65,3 +65,10 @@ loadStandings();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

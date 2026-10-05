@@ -49,7 +49,7 @@ function renderStaff(staff, count) {
         <div class="s-head">
           <div class="s-rt" style="--c:${barColor(s.rating)}">${s.rating}</div>
           <div>
-            <div class="s-name">${esc(s.name)}</div>
+            <div class="s-name">${s.id ? `<span class="clickable-text" data-href="/staff/${esc(s.id)}" title="Open staff profile">${esc(s.name)}</span>` : esc(s.name)}</div>
             <div class="s-sub">${esc(sub || s.role)}</div>
           </div>
         </div>
@@ -80,3 +80,10 @@ document.addEventListener('DOMContentLoaded', loadStaff);
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

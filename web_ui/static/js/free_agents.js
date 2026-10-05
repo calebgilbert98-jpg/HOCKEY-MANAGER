@@ -89,7 +89,7 @@ function renderFA() {
     el.innerHTML = `
       <div class="fa-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
       <div class="fa-info">
-        <div class="fa-name">${esc(p.name)} <span class="fa-tag">${esc(p.fa_type)}</span></div>
+        <div class="fa-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)} <span class="fa-tag">${esc(p.fa_type)}</span></div>
         <div class="fa-sub">${esc(p.position)} · Age ${p.age} · Asking ${salaryStr(p.ask)}</div>
       </div>
       <div class="fa-bar"><span style="width:${Math.min(100, p.overall)}%;background:${barColor(p.overall)}"></span></div>
@@ -624,7 +624,7 @@ function renderStaff(staff) {
     el.innerHTML = `
       <div class="fa-head">
         <div class="fa-ov" style="--c:${barColor(s.overall)}">${s.overall}</div>
-        <div><div class="fa-name">${esc(s.name)}</div>
+        <div><div class="fa-name">${s.id ? `<span class="clickable-text" data-href="/staff/${esc(s.id)}" title="Open staff profile">${esc(s.name)}</span>` : esc(s.name)}</div>
         <div class="fa-sub">${esc(s.role)} · ${esc(s.department)} · ${s.experience} yrs exp</div></div>
       </div>
       <div class="fa-actions">
@@ -758,4 +758,11 @@ bindCompare();
 document.getElementById('fa-list').addEventListener('click', e => {
   const b = e.target.closest('[data-analysis]');
   if (b) openAnalysis(b.dataset.analysis, b.dataset.nm);
+});
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
 });

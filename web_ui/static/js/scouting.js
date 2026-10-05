@@ -24,9 +24,9 @@ function renderAssignments(items) {
     el.className = 'assign-card';
     const acc = (r.accuracy || '?').toLowerCase();
     el.innerHTML = `
-      <div class="a-player">${esc(p.name)}</div>
+      <div class="a-player">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
       <div class="a-meta">${esc(p.position)} · ${p.age || '?'} yrs · OVR ${p.overall || '?'}</div>
-      <div class="a-scout">Scout: <b>${esc(s.name)}</b> <span>(${esc(s.role)})</span></div>
+      <div class="a-scout">Scout: ${s.id ? `<span class="clickable-text" data-href="/staff/${esc(s.id)}" title="Open staff profile"><b>${esc(s.name)}</b></span>` : `<b>${esc(s.name)}</b>`} <span>(${esc(s.role)})</span></div>
       <div class="a-progress">
         <span class="acc ${acc}">${esc(r.accuracy || '?')}</span>
         <span class="a-detail">${r.viewings || 0} viewings · ${esc(r.region || '')} · ${r.reliability != null ? Math.round(r.reliability * 100) + '% reliable' : ''}</span>
@@ -187,3 +187,10 @@ loadBeats();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

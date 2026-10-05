@@ -100,7 +100,7 @@ function renderAvailable(prospects) {
     el.innerHTML = `
       <div class="fa-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
       <div class="fa-info">
-        <div class="fa-name">${esc(p.name)}</div>
+        <div class="fa-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
         <div class="fa-sub">${esc(p.position)} · Age ${p.age} · Potential ${esc(p.potential)}</div>
       </div>
       <div class="fa-bar"><span style="width:${Math.min(100, p.overall)}%;background:${barColor(p.overall)}"></span></div>`;
@@ -111,6 +111,11 @@ function renderAvailable(prospects) {
       document.getElementById('btn-draft-selected').disabled = false;
     });
     el.addEventListener('dblclick', () => { draftState.selected = p; askDraftConfirm(p); });
+    const nm = el.querySelector('.clickable-text[data-href]');
+    if (nm) nm.addEventListener('click', (e) => {
+      e.stopPropagation();
+      window.location.href = nm.dataset.href;
+    });
     host.appendChild(el);
   }
 }
@@ -208,3 +213,10 @@ async function loadMyPicks() {
     }
   } catch (e) { console.error(e); }
 }
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

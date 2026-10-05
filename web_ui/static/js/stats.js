@@ -36,7 +36,7 @@ function renderSkaterTable(id, rows, highlight) {
     <tbody>${rows.map((r, i) => `
       <tr>
         <td class="rank">${i + 1}</td>
-        <td class="pname">${esc(r.name)}<span class="pos-tag">${esc(r.pos)}</span>
+        <td class="pname">${r.id ? `<span class="clickable-text" data-href="/player/${esc(r.id)}" title="Open player profile">${esc(r.name)}</span>` : esc(r.name)}<span class="pos-tag">${esc(r.pos)}</span>
             <span class="pteam">${esc(r.team)}</span></td>
         <td class="num">${r.gp}</td>
         <td class="num"${highlight === 'g' ? ' style="font-weight:800;color:var(--text)"' : ''}>${r.g}</td>
@@ -63,7 +63,7 @@ function renderGoalieTable(id, rows) {
     <tbody>${rows.map((r, i) => `
       <tr>
         <td class="rank">${i + 1}</td>
-        <td class="pname">${esc(r.name)}<span class="pteam">${esc(r.team)}</span></td>
+        <td class="pname">${r.id ? `<span class="clickable-text" data-href="/player/${esc(r.id)}" title="Open player profile">${esc(r.name)}</span>` : esc(r.name)}<span class="pteam">${esc(r.team)}</span></td>
         <td class="num">${r.gp}</td>
         <td class="stat" style="color:var(--accent)">${r.sv_pct.toFixed(3)}</td>
         <td class="num">${r.gaa.toFixed(2)}</td>
@@ -86,3 +86,10 @@ loadStats();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

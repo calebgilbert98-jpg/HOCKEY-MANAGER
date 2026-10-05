@@ -51,14 +51,14 @@ function seriesCard(s) {
   el.innerHTML = `
     <div class="series-row">
       <span class="series-team ${t1w ? 'winner' : 'loser'}">
-        <span class="abbr-sm">${esc(s.team1)}</span>
+        ${s.team1_name ? `<span class="abbr-sm clickable-text" data-href="/team/${encodeURIComponent(s.team1_name)}" title="Open team overview">${esc(s.team1)}</span>` : `<span class="abbr-sm">${esc(s.team1)}</span>`}
         <span class="series-score">${s.team1_wins}</span>
       </span>
       ${t1w ? '<span class="series-note"><span class="cup">★</span></span>' : (lead1 ? '<span class="series-note">leads</span>' : '')}
     </div>
     <div class="series-row">
       <span class="series-team ${t2w ? 'winner' : 'loser'}">
-        <span class="abbr-sm">${esc(s.team2)}</span>
+        ${s.team2_name ? `<span class="abbr-sm clickable-text" data-href="/team/${encodeURIComponent(s.team2_name)}" title="Open team overview">${esc(s.team2)}</span>` : `<span class="abbr-sm">${esc(s.team2)}</span>`}
         <span class="series-score">${s.team2_wins}</span>
       </span>
       ${t2w ? '<span class="series-note"><span class="cup">★</span></span>' : (lead2 ? '<span class="series-note">leads</span>' : '')}
@@ -86,3 +86,10 @@ loadPlayoffs();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});

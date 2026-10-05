@@ -34,7 +34,7 @@ function renderPrograms(programs) {
       <div class="prog-head">
         <div class="ov" style="--c:${ovColor(p.overall || 0)}">${esc(p.overall || 0)}</div>
         <div>
-          <div class="prog-name">${esc(p.name)}</div>
+          <div class="prog-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
           <div class="prog-sub">${esc(p.position)} · Age ${esc(p.age)}${p.injured ? ' · Injured' : ''}</div>
         </div>
       </div>
@@ -57,7 +57,7 @@ function renderProspects(prospects) {
     el.innerHTML = `
       <div class="pr-ov" style="--c:${ovColor(p.overall || 0)}">${esc(p.overall || 0)}</div>
       <div>
-        <div class="pr-name">${esc(p.name)}</div>
+          <div class="pr-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
         <div class="pr-sub">${esc(p.position)} · Age ${esc(p.age)}</div>
       </div>
       <span class="pr-squad ${p.squad === 'AHL' ? 'ahl' : ''}">${esc(p.squad || '')}</span>
@@ -76,3 +76,10 @@ loadDev();
   beat();
   setInterval(beat, 30000);
 })();
+
+// Shared: clickable entities navigate via data-href (not from action controls).
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select, label')) return;
+  const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});
