@@ -1,4 +1,26 @@
-// Puck Dynasty web hub — tile rendering + API (POC)
+// Puck Dynasty tile hub — target-matched rendering (ARTIFACT_TARGET.jpg)
+const TH_ICONS = {
+  roster: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="8" r="3.6"/><path d="M3.5 19c.6-3.2 3.2-5 6.5-5s5.9 1.8 6.5 5"/><path d="M18.5 8v6M15.5 11h6"/></svg>',
+  inbox: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13l2.7-7.5h12.6L21 13v6a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 19z"/><path d="M3 13h6l1.2 2h3.6L15 13h6"/></svg>',
+  schedule: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><path d="M7.5 13.5h3M7.5 16.5h5.5"/></svg>',
+  stats: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="M7 20v-7M12 20V9M17 20v-10"/></svg>',
+  lines: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3.5" width="14" height="17" rx="2"/><path d="M9 8.5h6M9 12h6M9 15.5h4"/></svg>',
+  trades: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/></svg>',
+  scouting: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.3 15.3L20.5 20.5"/></svg>',
+  staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c.5-3 2.9-4.6 6-4.6s5.5 1.6 6 4.6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.6c2.9.1 5 1.6 5.5 4.4"/></svg>',
+  watch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12.5" rx="2.5"/><path d="M10.5 9.8v4.4L14.5 12z"/></svg>',
+  tactics: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r=".8" fill="currentColor"/></svg>',
+  default: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/></svg>',
+};
+const TH_PRIMARY = ['roster', 'inbox', 'schedule', 'stats'];
+
+function thSeason(dateStr) {
+  const m = String(dateStr || '').match(/(19|20)\d{2}/);
+  if (!m) return 'FRANCHISE';
+  const y = parseInt(m[0], 10);
+  return `FRANCHISE · ${y}-${String(y + 1).slice(2)} SEASON`;
+}
+
 async function loadState() {
   try {
     const res = await fetch('/api/state');
@@ -10,86 +32,76 @@ async function loadState() {
 }
 
 function renderHub(s) {
-  document.getElementById('team-name').textContent = s.team.name;
-  document.getElementById('team-record').textContent =
-    `${s.team.record.w}-${s.team.record.l}-${s.team.record.otl}`;
-  document.getElementById('team-standing').textContent = s.team.standing;
-  document.getElementById('game-date').textContent = s.date;
-  document.getElementById('inbox-pill').textContent = s.inbox.unread;
+  const team = s.team || {};
+  const rec = team.record || {};
+  document.getElementById('th-season').textContent = thSeason(s.date);
+  document.getElementById('th-team').textContent = (team.name || '—').toUpperCase();
+  document.getElementById('th-record').textContent =
+    `${rec.w ?? 0}-${rec.l ?? 0}-${rec.otl ?? 0}`;
 
-  // Next game panel (live data)
-  if (s.next_game) {
-    const ng = s.next_game;
-    document.getElementById('next-home').textContent = ng.home_abbr;
-    document.getElementById('next-away').textContent = ng.away_abbr;
-    document.getElementById('next-when').textContent =
-      `${ng.date}${ng.time ? ' · ' + ng.time : ''} · ${ng.is_home ? 'Home' : 'Away'}`;
-  }
-
-  // Inbox peek (live data)
-  const peek = document.querySelector('.inbox-peek');
-  if (peek && s.recent_inbox) {
-    // keep the label row, replace message rows
-    peek.querySelectorAll('.inbox-row').forEach(r => r.remove());
-    for (const m of s.recent_inbox) {
-      const row = document.createElement('div');
-      row.className = 'inbox-row' + (m.urgent || m.action ? ' urgent' : '');
-      row.innerHTML = `<span class="dot"></span> ${esc(m.subject)}` +
-        (m.action ? ' <em>Action needed</em>' : '');
-      peek.appendChild(row);
-    }
-    if (!s.recent_inbox.length) {
-      const row = document.createElement('div');
-      row.className = 'inbox-row';
-      row.innerHTML = '<span class="dot"></span> No new messages';
-      peek.appendChild(row);
+  // Hero next-game line (handles live + mock shapes)
+  const ng = s.next_game;
+  let nextTxt = 'Next: —';
+  if (ng) {
+    if (typeof ng.home === 'string' && typeof ng.away === 'string') {
+      nextTxt = `Next: ${ng.away} at ${ng.home}`;
+    } else if (ng.opponent) {
+      const isHome = ng.is_home ?? ng.home;
+      nextTxt = isHome ? `Next: ${ng.opponent} at ${team.name || ''}`
+                       : `Next: ${team.name || ''} at ${ng.opponent}`;
     }
   }
+  document.getElementById('th-next').textContent = nextTxt;
 
-  // Stat strip (live data)
-  if (s.stat_strip) {
-    const st = s.stat_strip;
-    let strip = document.getElementById('stat-strip');
-    if (!strip) {
-      strip = document.createElement('div');
-      strip.id = 'stat-strip';
-      strip.className = 'stat-strip';
-      document.querySelector('.hub-main').prepend(strip);
-    }
-    const capM = (st.cap_space / 1e6).toFixed(1);
-    strip.innerHTML = `
-      <div class="stat"><span class="stat-val">${esc(st.record)}</span><span class="stat-label">Record</span></div>
-      <div class="stat"><span class="stat-val">${st.points}</span><span class="stat-label">Points</span></div>
-      <div class="stat"><span class="stat-val">${st.gpg}</span><span class="stat-label">G/Gm</span></div>
-      <div class="stat"><span class="stat-val">${st.gapg}</span><span class="stat-label">GA/Gm</span></div>
-      <div class="stat"><span class="stat-val">$${capM}M</span><span class="stat-label">Cap Space</span></div>`;
-  }
-
-  const grid = document.getElementById('tile-grid');
+  // Tiles: primary four, then the rest under MORE
+  const tiles = s.tiles || [];
+  const grid = document.getElementById('th-grid');
+  const more = document.getElementById('th-grid-more');
   grid.innerHTML = '';
-  for (const t of s.tiles) {
-    const el = document.createElement('div');
-    el.className = `tile ${t.size}${t.accent ? ' accent' : ''}`;
-    const isHero = (t.size || '').includes('hero');
-    el.innerHTML = `
-      ${t.badge ? `<span class="badge">${t.badge}</span>` : ''}
-      <span class="icon">${t.icon}</span>
-      <h3>${t.title}</h3>
-      <p class="${isHero ? 'hero-sub' : ''}">${t.subtitle}</p>`;
-    el.addEventListener('click', () => openTile(t));
-    grid.appendChild(el);
+  more.innerHTML = '';
+  const primaries = [];
+  const rest = [];
+  for (const t of tiles) {
+    if (t.id === 'continue') continue; // hero handles it
+    (TH_PRIMARY.includes(t.id) ? primaries : rest).push(t);
   }
+  // keep primary order stable
+  primaries.sort((a, b) => TH_PRIMARY.indexOf(a.id) - TH_PRIMARY.indexOf(b.id));
+  for (const t of primaries) grid.appendChild(thTile(t, false));
+  for (const t of rest) more.appendChild(thTile(t, true));
+  document.querySelector('.th-more-label').style.display = rest.length ? '' : 'none';
+}
+
+function thTile(t, compact) {
+  const el = document.createElement('button');
+  el.className = 'th-tile';
+  el.setAttribute('aria-label', t.title);
+  el.innerHTML = `
+    ${t.badge ? `<span class="th-badge">${t.badge}</span>` : ''}
+    <span class="th-icon">${TH_ICONS[t.id] || TH_ICONS.default}</span>
+    <h3 class="th-label">${esc(t.title)}</h3>
+    ${compact && t.subtitle ? `<p class="th-sub">${esc(t.subtitle)}</p>` : ''}`;
+  el.addEventListener('click', () => openTile(t));
+  return el;
 }
 
 function openTile(t) {
   const known = ['inbox','roster','schedule','watch','lines','waivers','captains',
     'trades','trade_block','free_agents','staff','development','camp','morale',
     'standings','stats','playoffs','calendar','news','history','finances',
-    'contracts','scouting','draft','settings','save'];
+    'contracts','scouting','draft','settings','save','tactics'];
   if (known.includes(t.id)) { window.location.href = '/' + t.id; return; }
-  if (t.id === 'continue') { continueFlow(); return; }
   console.log('open', t.id);
 }
+
+/* ---------- hero: Continue flow ---------- */
+function heroActivate() {
+  continueFlow();
+}
+document.getElementById('th-hero').addEventListener('click', heroActivate);
+document.getElementById('th-hero').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); heroActivate(); }
+});
 
 async function continueFlow() {
   let st;
@@ -160,9 +172,33 @@ function esc(s) {
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 }
 
-document.getElementById('btn-play').addEventListener('click', () => {
-  console.log('play game');
+/* ---------- top bar: back + menu ---------- */
+document.getElementById('btn-back').addEventListener('click', () => {
+  if (history.length > 1) history.back();
 });
+const menuBtn = document.getElementById('btn-menu');
+const menu = document.getElementById('th-menu');
+menuBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  menu.hidden = !menu.hidden;
+});
+document.addEventListener('click', (e) => {
+  if (!menu.hidden && !e.target.closest('.th-menuwrap')) menu.hidden = true;
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (!menu.hidden) menu.hidden = true;
+    closeBlockerModal();
+  }
+});
+
+function exitGame() {
+  if (!confirm('Exit Puck Dynasty? Make sure your career is saved.')) return;
+  fetch('/api/exit', {method: 'POST'}).catch(() => {});
+  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#888;font-size:18px">Puck Dynasty has exited. You can close this tab.</div>';
+}
+document.getElementById('btn-exit')?.addEventListener('click', exitGame);
+document.getElementById('menu-exit')?.addEventListener('click', exitGame);
 
 loadState();
 
@@ -173,10 +209,3 @@ loadState();
   beat();
   setInterval(beat, 30000);
 })();
-
-// Exit button: shuts the game down cleanly.
-document.getElementById('btn-exit')?.addEventListener('click', async () => {
-  if (!confirm('Exit Puck Dynasty? Make sure your career is saved.')) return;
-  try { await fetch('/api/exit', {method: 'POST'}); } catch (e) {}
-  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#888;font-size:18px">Puck Dynasty has exited. You can close this tab.</div>';
-});

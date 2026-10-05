@@ -455,3 +455,209 @@ body {
 .data-table tbody tr { transition: background .13s ease; }
 .data-table tbody tr:hover { background: rgba(59,130,246,.06); }
 .data-table tbody tr:last-child td { border-bottom: none; }
+
+/* ============================================================
+   TILE HUB — precise target match (2026-10-04)
+   Reference: ARTIFACT_TARGET.jpg (Puck Dynasty Tile Hub artifact).
+   All classes prefixed th-. Deep blue #3B82F6 only. No teal.
+   ============================================================ */
+
+body.th {
+  --th-bg: #060a13;
+  --th-tile: #0d1526;
+  --th-tile2: #090f1c;
+  --th-line: rgba(255,255,255,.09);
+  --th-blue: #3B82F6;
+  --th-red: #f0435a;
+  --th-yellow: #fbbf24;
+  --th-cond: 'Arial Narrow', 'HelveticaNeue-CondensedBold', 'Roboto Condensed',
+             'Franklin Gothic Medium', 'Segoe UI', system-ui, sans-serif;
+  background: var(--th-bg);
+  font-family: var(--th-cond);
+}
+
+body.th .arena-bg { display: none; }
+
+/* ---------- top bar ---------- */
+.th-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 20px 30px 6px; max-width: 1120px; margin: 0 auto;
+}
+.th-navbtn {
+  width: 58px; height: 58px; border-radius: 50%;
+  background: rgba(255,255,255,.09); border: none; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .15s ease, transform .15s ease;
+}
+.th-navbtn:hover { background: rgba(255,255,255,.16); transform: translateY(-1px); }
+.th-title { font-size: 23px; font-weight: 600; color: #fff; letter-spacing: .2px; }
+.th-menuwrap { position: relative; }
+.th-menu {
+  position: absolute; right: 0; top: 66px; z-index: 50;
+  background: #141c30; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 12px; min-width: 190px; padding: 6px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.6);
+}
+.th-menu a, .th-menu button {
+  display: block; width: 100%; text-align: left;
+  padding: 11px 14px; border: none; background: none; color: #e8edf7;
+  font-size: 15px; font-family: inherit; text-decoration: none;
+  border-radius: 8px; cursor: pointer;
+}
+.th-menu a:hover, .th-menu button:hover { background: rgba(59,130,246,.16); }
+
+/* ---------- franchise header ---------- */
+.th-wrap { max-width: 1120px; margin: 0 auto; padding: 0 0 30px; }
+.th-franchise {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 16px; padding: 22px 30px 0;
+}
+.th-eyebrow {
+  font-size: 14px; font-weight: 800; letter-spacing: 3.5px;
+  color: var(--th-blue); text-transform: uppercase; margin-bottom: 8px;
+}
+.th-team {
+  font-size: clamp(42px, 6.4vw, 68px); font-weight: 900;
+  font-stretch: condensed; text-transform: uppercase;
+  letter-spacing: .5px; line-height: .98; color: #fff;
+  text-shadow: 0 3px 16px rgba(0,0,0,.45);
+}
+.th-franchise-right { text-align: right; padding-bottom: 4px; flex: none; }
+.th-record {
+  font-size: clamp(30px, 4vw, 44px); font-weight: 800;
+  font-stretch: condensed; color: #fff; letter-spacing: 1px;
+  text-shadow: 0 2px 10px rgba(0,0,0,.4);
+}
+.th-rule {
+  border: none; border-top: 1px solid var(--th-line);
+  margin: 20px 30px 22px;
+}
+
+/* ---------- hero tile ---------- */
+.th-hero {
+  position: relative; overflow: hidden; cursor: pointer;
+  margin: 0 30px; border-radius: 14px;
+  background: linear-gradient(135deg, #2f7cf6 0%, #1f5ad0 55%, #16367f 100%);
+  box-shadow: 0 14px 44px rgba(47,124,246,.35), inset 0 1px 0 rgba(255,255,255,.25);
+  transition: transform .18s ease, box-shadow .18s ease, filter .18s ease;
+  isolation: isolate;
+}
+.th-hero::before {
+  /* giant concentric arcs, top-right — matches target */
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 84% 6%, rgba(255,255,255,.10) 0 150px, transparent 151px),
+    radial-gradient(circle at 84% 6%, transparent 0 218px, rgba(255,255,255,.07) 219px, rgba(255,255,255,.07) 268px, transparent 269px),
+    radial-gradient(circle at 84% 6%, transparent 0 336px, rgba(255,255,255,.05) 337px, rgba(255,255,255,.05) 386px, transparent 387px);
+}
+.th-hero:hover { transform: translateY(-4px); filter: brightness(1.06);
+  box-shadow: 0 20px 60px rgba(47,124,246,.5), inset 0 1px 0 rgba(255,255,255,.3); }
+.th-hero:active { transform: translateY(-1px); }
+.th-hero:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+.th-hero-inner { position: relative; z-index: 1; padding: 42px 40px 38px; }
+.th-pill {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 11px 22px; border-radius: 999px;
+  background: rgba(6,12,26,.32); border: 1px solid rgba(255,255,255,.28);
+  font-size: 16px; font-weight: 600; color: #fff; letter-spacing: .2px;
+}
+.th-dot { width: 13px; height: 13px; border-radius: 50%; background: var(--th-yellow);
+  box-shadow: 0 0 10px rgba(251,191,36,.9); flex: none; }
+.th-hero-title {
+  margin: 36px 0 0; font-size: clamp(58px, 9vw, 102px); font-weight: 900;
+  font-stretch: condensed; text-transform: uppercase; letter-spacing: 1.5px;
+  line-height: .94; color: #fff; text-shadow: 0 4px 22px rgba(0,0,0,.3);
+}
+.th-hero-next { display: flex; align-items: center; gap: 18px; margin-top: 34px; }
+.th-arrow {
+  width: 58px; height: 58px; border-radius: 50%; background: #fff; color: #1c3f92;
+  display: flex; align-items: center; justify-content: center; flex: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.28);
+  transition: transform .18s ease;
+}
+.th-hero:hover .th-arrow { transform: translateX(4px); }
+.th-next-text { font-size: 21px; font-weight: 500; color: rgba(255,255,255,.94); letter-spacing: .2px; }
+
+/* ---------- tile grid ---------- */
+.th-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 18px; margin: 20px 30px 0;
+}
+.th-tile {
+  position: relative; overflow: hidden; cursor: pointer;
+  min-height: 196px; border-radius: 13px;
+  background: linear-gradient(160deg, var(--th-tile), var(--th-tile2));
+  border: 1px solid var(--th-line);
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.05);
+  padding: 28px; display: flex; flex-direction: column; justify-content: flex-end;
+  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  isolation: isolate; text-align: left; width: 100%; font-family: inherit; color: #fff;
+}
+.th-tile::before {
+  /* faint dark-blue concentric arcs — target's tile texture */
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(circle at 68% 26%, rgba(59,130,246,.13) 0 92px, transparent 93px),
+    radial-gradient(circle at 68% 26%, transparent 0 142px, rgba(59,130,246,.09) 143px, rgba(59,130,246,.09) 182px, transparent 183px),
+    radial-gradient(circle at 68% 26%, transparent 0 232px, rgba(59,130,246,.06) 233px, rgba(59,130,246,.06) 268px, transparent 269px);
+}
+.th-tile:hover { transform: translateY(-4px); border-color: rgba(59,130,246,.55);
+  box-shadow: 0 14px 34px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.35); }
+.th-tile:active { transform: translateY(-1px); }
+.th-tile:focus-visible { outline: 3px solid #93c5fd; outline-offset: 2px; }
+.th-icon {
+  position: absolute; top: 26px; left: 28px; z-index: 1;
+  width: 42px; height: 42px; color: var(--th-blue);
+  filter: drop-shadow(0 2px 8px rgba(59,130,246,.4));
+}
+.th-icon svg { width: 100%; height: 100%; }
+.th-label {
+  position: relative; z-index: 1; margin: 0;
+  font-size: 31px; font-weight: 900; font-stretch: condensed;
+  text-transform: uppercase; letter-spacing: 1.5px; color: #fff;
+  text-shadow: 0 2px 10px rgba(0,0,0,.5);
+}
+.th-badge {
+  position: absolute; top: 18px; right: 18px; z-index: 2;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ff6b7e, var(--th-red) 70%);
+  color: #fff; font-size: 21px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 16px rgba(240,67,90,.55), inset 0 1px 0 rgba(255,255,255,.35);
+}
+
+/* ---------- more section ---------- */
+.th-more-label {
+  margin: 30px 30px 12px; font-size: 13px; font-weight: 800;
+  letter-spacing: 4px; color: rgba(255,255,255,.38); text-transform: uppercase;
+}
+.th-grid-more .th-tile { min-height: 118px; padding: 20px 24px; }
+.th-grid-more .th-icon { top: 18px; left: 24px; width: 30px; height: 30px; }
+.th-grid-more .th-label { font-size: 21px; }
+.th-grid-more .th-sub { position: relative; z-index: 1; margin: 6px 0 0;
+  font-size: 13.5px; color: rgba(255,255,255,.55); font-weight: 500; letter-spacing: .3px; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 720px) {
+  .th-topbar { padding: 14px 18px 4px; }
+  .th-navbtn { width: 48px; height: 48px; }
+  .th-title { font-size: 19px; }
+  .th-franchise { padding: 16px 18px 0; }
+  .th-rule { margin: 16px 18px 18px; }
+  .th-hero { margin: 0 18px; }
+  .th-hero-inner { padding: 30px 26px 28px; }
+  .th-hero-next { margin-top: 24px; }
+  .th-arrow { width: 48px; height: 48px; }
+  .th-next-text { font-size: 17px; }
+  .th-grid { margin: 16px 18px 0; gap: 12px; }
+  .th-tile { min-height: 150px; padding: 20px; }
+  .th-icon { top: 18px; left: 20px; width: 34px; height: 34px; }
+  .th-label { font-size: 24px; }
+  .th-badge { width: 38px; height: 38px; font-size: 17px; top: 14px; right: 14px; }
+  .th-more-label { margin: 24px 18px 10px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .th-hero, .th-tile, .th-navbtn, .th-arrow { transition: none; }
+  .th-hero:hover, .th-tile:hover { transform: none; }
+}

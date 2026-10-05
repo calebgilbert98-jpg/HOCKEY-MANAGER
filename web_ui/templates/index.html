@@ -6,46 +6,55 @@
 <title>Puck Dynasty</title>
 <link rel="stylesheet" href="/static/css/hub.css">
 </head>
-<body>
+<body class="th">
 <div class="arena-bg"></div>
 
-<header class="topbar">
-  <div class="team-block">
-    <div class="team-logo">B</div>
-    <div>
-      <div class="team-name" id="team-name">Boston Bruins</div>
-      <div class="team-sub"><span id="team-record">12-5-2</span> · <span id="team-standing">2nd in Atlantic</span></div>
+<header class="th-topbar">
+  <button class="th-navbtn" id="btn-back" aria-label="Back">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+  </button>
+  <div class="th-title">Puck Dynasty Tile Hub</div>
+  <div class="th-menuwrap">
+    <button class="th-navbtn" id="btn-menu" aria-label="Menu" aria-haspopup="true">
+      <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+    </button>
+    <div class="th-menu" id="th-menu" hidden>
+      <a href="/save">Save / Load</a>
+      <a href="/settings">Settings</a>
+      <button id="menu-exit">Exit game</button>
     </div>
   </div>
-  <div class="date-block" id="game-date">November 18, 2026</div>
 </header>
 
-<main class="hub">
-  <div class="hub-main">
-    <div class="eyebrow">Franchise HQ</div>
-    <section class="tile-grid" id="tile-grid">
-      <!-- tiles injected by hub.js -->
-    </section>
-  </div>
+<main class="th-wrap">
+  <section class="th-franchise">
+    <div class="th-franchise-left">
+      <div class="th-eyebrow" id="th-season">FRANCHISE · 2026-27 SEASON</div>
+      <h1 class="th-team" id="th-team">BOSTON BRUINS</h1>
+    </div>
+    <div class="th-franchise-right">
+      <div class="th-record" id="th-record">0-0-0</div>
+    </div>
+  </section>
+  <hr class="th-rule">
 
-  <aside class="side-panel">
-    <div class="panel-card next-game">
-      <div class="panel-label">Next Game</div>
-      <div class="matchup">
-        <span class="abbr" id="next-home">BOS</span>
-        <span class="vs">vs</span>
-        <span class="abbr" id="next-away">TOR</span>
+  <section class="th-hero" id="th-hero" role="button" tabindex="0" aria-label="Continue season">
+    <div class="th-hero-inner">
+      <span class="th-pill"><span class="th-dot"></span>Ready to play</span>
+      <h2 class="th-hero-title">CONTINUE<br>SEASON</h2>
+      <div class="th-hero-next">
+        <span class="th-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
+        </span>
+        <span class="th-next-text" id="th-next">Next: —</span>
       </div>
-      <div class="next-when" id="next-when">Tonight, 7:00 PM · Home</div>
-      <button class="btn-primary" id="btn-play">Play Game</button>
     </div>
-    <div class="panel-card inbox-peek">
-      <div class="panel-label">Inbox <span class="pill" id="inbox-pill">3</span></div>
-      <div class="inbox-row urgent"><span class="dot"></span> Roster move required <em>Action needed</em></div>
-      <div class="inbox-row"><span class="dot"></span> Head scout: draft board update</div>
-      <div class="inbox-row"><span class="dot"></span> League: trade deadline in 10 days</div>
-    </div>
-  </aside>
+  </section>
+
+  <section class="th-grid" id="th-grid" aria-label="Primary"></section>
+
+  <div class="th-more-label">MORE</div>
+  <section class="th-grid th-grid-more" id="th-grid-more" aria-label="More"></section>
 </main>
 
 <footer class="hints">
