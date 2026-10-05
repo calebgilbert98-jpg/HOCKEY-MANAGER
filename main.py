@@ -22856,6 +22856,26 @@ class HockeyManagerGUI(tk.Tk):
         way (clean-shutdown bookkeeping runs first so the launcher does
         not mistake this for a crash).
         """
+        # Tear down multiplayer first: open sockets keep the process
+        # alive in the background even after the windows are gone.
+        try:
+            _h = getattr(self, "mp_host", None)
+            if _h is not None:
+                try:
+                    _h.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            _c = getattr(self, "mp_client", None)
+            if _c is not None:
+                try:
+                    _c.disconnect()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         try:
             self.destroy()
         except Exception:
