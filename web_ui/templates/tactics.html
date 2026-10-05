@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tactics — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/tactics.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub">Team Tactics</div>
+</header>
+
+<main class="tactics-main">
+  <p class="tactics-intro">Your game plan shapes sim results in every situation.</p>
+
+  <nav class="tactics-tabs" id="tactics-tabs">
+    <button data-tab="systems" class="active">Systems</button>
+    <button data-tab="practice">Practice</button>
+  </nav>
+
+  <section id="view-systems">
+    <div id="tactic-groups"></div>
+    <div class="impact-card">
+      <h3>Expected Impact</h3>
+      <div id="impact-lines"></div>
+    </div>
+  </section>
+
+  <section id="view-practice" class="hidden">
+    <h3>Weekly Practice Planner</h3>
+    <p class="dim">Set the week's focus. The plan repeats every Sunday until you change it.</p>
+    <h4>Focus</h4>
+    <div class="pill-row" id="practice-foci"></div>
+    <h4>Intensity</h4>
+    <div class="pill-row" id="practice-intensity"></div>
+    <label class="bag-row"><input type="checkbox" id="bag-skate"> Bag skate (punishment skate)</label>
+    <p class="dim small">May stop a slide now (+2% one-game compete edge). Repeated punishment erodes trust — every skate is logged.</p>
+    <button class="btn primary" id="practice-save">Set &amp; Run Practice</button>
+  </section>
+</main>
+
+<script src="/static/js/tactics.js"></script>
+</body>
+</html>

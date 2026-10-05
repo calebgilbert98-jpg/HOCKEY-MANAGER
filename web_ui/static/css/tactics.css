@@ -1,0 +1,37 @@
+/* Puck Dynasty web tactics styles */
+.tactics-main { max-width: 860px; margin: 0 auto; padding: 6px 24px 40px; }
+.tactics-intro { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
+.tactics-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+.tactics-tabs button {
+  background: var(--card); border: 1px solid rgba(255,255,255,.08);
+  color: var(--dim); border-radius: 10px; padding: 9px 20px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+}
+.tactics-tabs button.active { background: var(--accent); color: #fff; border-color: transparent; }
+.hidden { display: none !important; }
+.tactic-group { margin-bottom: 20px; }
+.tactic-group h3 { margin: 0 0 2px; font-size: 15px; }
+.tactic-group .dim { font-size: 12px; color: var(--dim); margin: 0 0 8px; }
+.pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill-row button {
+  background: var(--card); border: 1px solid rgba(255,255,255,.12);
+  color: var(--dim); border-radius: 999px; padding: 8px 18px;
+  font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.pill-row button.active { background: var(--accent); color: #fff; border-color: transparent; }
+.impact-card {
+  background: var(--card); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px; padding: 18px; margin-top: 8px;
+}
+.impact-card h3 { margin: 0 0 10px; font-size: 15px; }
+.impact-line { font-size: 13px; color: var(--dim); margin-bottom: 6px; line-height: 1.45; }
+.dim { color: var(--dim); }
+.dim.small { font-size: 11px; }
+#view-practice h3 { font-size: 17px; margin-bottom: 4px; }
+#view-practice h4 { font-size: 13px; margin: 16px 0 8px; }
+.bag-row { display: flex; gap: 8px; align-items: center; margin: 14px 0 4px; font-size: 13px; font-weight: 700; }
+.btn {
+  border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 700;
+  cursor: pointer; border: none; margin-top: 12px;
+}
+.btn.primary { background: var(--accent); color: #fff; }

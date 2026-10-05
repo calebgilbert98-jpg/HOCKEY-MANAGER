@@ -279,6 +279,8 @@ def get_hub_state(app):
              "size": "small", "icon": "👔"},
             {"id": "watch", "title": "Watch Game", "subtitle": "Live visualizer",
              "size": "medium", "icon": "📺"},
+            {"id": "tactics", "title": "Tactics", "subtitle": "Systems & practice",
+             "size": "small", "icon": "♟️"},
         ],
     }
 
@@ -652,6 +654,30 @@ def _execute_command(app, cmd):
                                 if p not in app.trade_block:
                                     app.trade_block.append(p)
                                 break
+            except Exception:
+                pass
+        elif op == "set_tactic":
+            try:
+                team = getattr(app, "user_team", None)
+                attr = cmd.get("attr", "")
+                value = cmd.get("value", "")
+                if team is not None and attr.startswith("tactic_"):
+                    setattr(team, attr, value)
+            except Exception:
+                pass
+        elif op == "set_practice":
+            try:
+                team = getattr(app, "user_team", None)
+                if team is not None:
+                    import dressing_room as _dr
+                    fields = _dr.ensure_dressing_room_fields(team)
+                    plan = fields.get("practice_plan") or {}
+                    if cmd.get("focus"):
+                        plan["focus"] = cmd["focus"]
+                    if cmd.get("intensity"):
+                        plan["intensity"] = cmd["intensity"]
+                    plan["bag_skate"] = bool(cmd.get("bag_skate"))
+                    fields["practice_plan"] = plan
             except Exception:
                 pass
         elif op == "roster_move":
