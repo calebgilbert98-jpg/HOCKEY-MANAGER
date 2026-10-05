@@ -11304,9 +11304,10 @@ class HockeyManagerGUI(tk.Tk):
         try:
             engine = getattr(self, "practice_engine", None)
             if engine is None:
-                # Fall back to a fresh engine bound to the league
+                # Fall back to a fresh engine (takes no constructor args;
+                # histories are module-level shared state).
                 from enhanced_practice_system import PracticeEngine
-                engine = PracticeEngine(getattr(self, "league", None))
+                engine = PracticeEngine()
             result = engine.schedule_practice(player, ptype, intensity, total)
         except Exception as e:
             return False, f"Practice scheduling failed: {e}"
