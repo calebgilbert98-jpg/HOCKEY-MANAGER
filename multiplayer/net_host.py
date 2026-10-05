@@ -101,6 +101,11 @@ class MultiplayerHost:
         # into the all_ready() / broadcast calls below.
         self._ready: Dict[str, str] = {}
         self._ready_lock = threading.Lock()
+        # Rejoin: stable client token -> team_id. Survives disconnects;
+        # a returning client with a known token gets its team back
+        # without re-claiming (and without losing it to someone else).
+        self._rejoin: Dict[str, str] = {}
+        self._rejoin_lock = threading.Lock()
         # Async snapshot state: only one serialization worker runs at a
         # time; extra requests coalesce into _snapshot_pending (latest wins).
         self._snapshot_lock = threading.Lock()
@@ -533,6 +538,20 @@ class MultiplayerHost:
             i += 1
         peer.name = name
         peer.handshake_done = True
+        # Rejoin: stash the token on the peer, then check for a remembered
+        # team. A returning client gets its claim restored immediately.
+        try:
+            peer.rejoin_token = str(msg.get("rejoin_token", "") or "")
+        except Exception:
+            peer.rejoin_token = ""
+        _restored_team = None
+        try:
+            _tok = getattr(peer, "rejoin_token", "") or ""
+            if _tok:
+                with self._rejoin_lock:
+                    _restored_team = self._rejoin.get(_tok)
+        except Exception:
+            pass
         try:
             teams = self._get_teams() if self._get_teams else []
         except Exception:
@@ -542,6 +561,24 @@ class MultiplayerHost:
                              self._teams_taken(), teams))
         self._send(peer, P.LOBBY_STATE,
                    P.lobby_state(self.get_lobby()))
+        # Rejoin restore: if this token owned a team and nobody took it
+        # while they were gone, hand it straight back.
+        try:
+            if _restored_team:
+                _taken_now = self._teams_taken()
+                if _restored_team not in _taken_now:
+                    peer.team_id = _restored_team
+                    self._broadcast(P.TEAM_CLAIMED,
+                                   P.team_claimed(_restored_team, peer.name))
+                    self._broadcast(P.LOBBY_STATE,
+                                   P.lobby_state(self.get_lobby()))
+                    self.events.put(
+                        ("team_claimed",
+                         {"session_id": peer.session_id, "name": name,
+                          "team_id": _restored_team, "rejoin": True}))
+                    self.events.put(("advance_changed", {}))
+        except Exception:
+            pass
         self.events.put(("manager_joined",
                          {"session_id": peer.session_id, "name": name}))
 
@@ -573,6 +610,16 @@ class MultiplayerHost:
                 f"{team_id} is already managed by {taken[team_id]}"))
             return
         peer.team_id = team_id
+        # Remember for rejoin: this token owns this team until explicitly
+        # released or the team is claimed by someone else (can't happen --
+        # claims are exclusive).
+        try:
+            _tok = getattr(peer, "rejoin_token", "") or ""
+            if _tok:
+                with self._rejoin_lock:
+                    self._rejoin[_tok] = team_id
+        except Exception:
+            pass
         self._broadcast(P.TEAM_CLAIMED, P.team_claimed(team_id, peer.name))
         self._broadcast(P.LOBBY_STATE, P.lobby_state(self.get_lobby()))
         self.events.put(("team_claimed",

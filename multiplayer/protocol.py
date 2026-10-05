@@ -284,8 +284,13 @@ class MessageReader:
 # Message constructors (keeps call sites honest about required fields)
 # ---------------------------------------------------------------------------
 
-def hello(name: str, version: int) -> Dict[str, Any]:
-    return {"type": HELLO, "name": name, "version": version}
+def hello(name: str, version: int,
+          rejoin_token: str = "") -> Dict[str, Any]:
+    """HELLO payload. ``rejoin_token`` is the client's stable identity
+    (persisted locally across sessions); a host that remembers it
+    restores the client's team claim instead of requiring a re-claim."""
+    return {"type": HELLO, "name": name, "version": version,
+            "rejoin_token": rejoin_token or ""}
 
 
 def welcome(session_id: str, game_date: str, teams_taken: Dict[str, str],

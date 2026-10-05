@@ -9223,13 +9223,103 @@ class HockeyManagerGUI(tk.Tk):
         elif kind == "disconnected":
             from popup_system import messagebox
             try:
-                messagebox.showerror(
+                _promote = messagebox.askyesno(
                     "Disconnected",
                     f"Lost connection to the host ({payload.get('reason', '')}).\n"
-                    "Your last synced state was kept as a fallback checkpoint.")
+                    "Your last synced state was kept as a fallback checkpoint.\n\n"
+                    "Promote this client to host so the session can continue?")
             except Exception:
-                pass
+                _promote = False
             self.mp_client = None  # stops the poll loop
+            if _promote:
+                try:
+                    self._mp_promote_to_host()
+                except Exception as e:
+                    try:
+                        messagebox.showerror(
+                            "Promote Failed",
+                            f"Couldn't take over as host:\n{e}")
+                    except Exception:
+                        pass
+
+    def _mp_promote_to_host(self):
+        """Take over as host from the client's last synced checkpoint.
+
+        Loads saves/checkpoints/client_last_sync.hm into the full game
+        state, then starts a MultiplayerHost on the same port so the
+        session continues. The promoting client becomes the host and keeps
+        managing their claimed team locally.
+        """
+        import os
+        import gzip
+        import pickle
+        from multiplayer import net_host as _nh
+        from multiplayer import protocol as _p
+        _ckpt = os.path.join("saves", "checkpoints", "client_last_sync.hm")
+        if not os.path.exists(_ckpt):
+            raise FileNotFoundError(
+                "No fallback checkpoint found (client_last_sync.hm).")
+        # Load the synced state into the app (same path as Load Game).
+        _ok = False
+        try:
+            _ok = bool(self.save_manager.load_game(_ckpt))
+        except Exception:
+            _ok = False
+        if not _ok:
+            # Fall back to raw state restore if the manager path fails.
+            with gzip.open(_ckpt, "rb") as _fh:
+                _data = pickle.load(_fh)
+            try:
+                self.save_manager.restore_game_data(_data)
+                _ok = True
+            except Exception:
+                _ok = False
+        if not _ok:
+            raise RuntimeError("Couldn't load the fallback checkpoint.")
+        try:
+            self.refresh_all_views()
+        except Exception:
+            pass
+        _save_mgr = self.save_manager
+        _gm = getattr(self, "game_manager", None)
+
+        def _state_provider():
+            _blob = gzip.compress(pickle.dumps(
+                _save_mgr.create_save_data(),
+                protocol=pickle.HIGHEST_PROTOCOL))
+            return _blob, str(getattr(self, "current_date", "")), "host-sync"
+
+        def _get_teams():
+            try:
+                return [{"id": t.team_name, "name": t.team_name}
+                        for t in _gm.league.teams]
+            except Exception:
+                return []
+
+        _port = _p.DEFAULT_PORT
+        try:
+            _old = getattr(self, "mp_client", None)
+            _port = int(getattr(_old, "port", 0) or 0) or _p.DEFAULT_PORT
+        except Exception:
+            pass
+        _host = _nh.MultiplayerHost(
+            _state_provider,
+            host_name=f"{getattr(self, 'user_team', None) and getattr(self.user_team, 'team_name', 'Host') or 'Host'} (promoted)",
+            port=_port, get_teams=_get_teams)
+        _host.start()
+        self.mp_host = _host
+        try:
+            self.after(250, self._poll_multiplayer)
+        except Exception:
+            pass
+        try:
+            from popup_system import messagebox as _mb
+            _mb.showinfo(
+                "Hosting",
+                f"You are now the host (port {_port}).\n"
+                "Other managers can reconnect to continue the session.")
+        except Exception:
+            pass
 
     def _mp_find_team(self, team_id):
         try:

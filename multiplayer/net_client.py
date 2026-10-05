@@ -78,6 +78,37 @@ class MultiplayerClient:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _rejoin_token() -> str:
+        """Stable client identity for rejoin, persisted across sessions.
+
+        Stored in the user's saves dir so a dropped client is recognized
+        when it reconnects and gets its team claim restored by the host.
+        """
+        try:
+            import os
+            _dir = os.path.join(os.path.expanduser("~"), ".puck-dynasty")
+            os.makedirs(_dir, exist_ok=True)
+            _path = os.path.join(_dir, "mp_client_token")
+            try:
+                with open(_path, "r") as fh:
+                    _tok = (fh.read() or "").strip()
+                if _tok:
+                    return _tok
+            except OSError:
+                pass
+            import uuid as _uuid
+            _tok = _uuid.uuid4().hex
+            try:
+                with open(_path, "w") as fh:
+                    fh.write(_tok)
+            except OSError:
+                pass
+            return _tok
+        except Exception:
+            import uuid as _uuid
+            return _uuid.uuid4().hex
+
     def connect(self, host: str, port: int,
                 timeout: float = CONNECT_TIMEOUT) -> Dict:
         """Connect + handshake. Returns the WELCOME payload.
@@ -103,7 +134,8 @@ class MultiplayerClient:
                                              daemon=True)
         self._recv_thread.start()
         self._send_raw(P.encode_message(P.HELLO, self._next_seq(),
-                                        P.hello(self.name, PROTOCOL_VERSION)))
+                                        P.hello(self.name, PROTOCOL_VERSION,
+                                                self._rejoin_token())))
         deadline = time.time() + WELCOME_TIMEOUT
         while time.time() < deadline:
             for kind, payload in self._drain_nowait():
