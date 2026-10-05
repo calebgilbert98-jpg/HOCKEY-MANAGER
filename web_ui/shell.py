@@ -19,10 +19,13 @@ Fallbacks: regular browser tab if no Edge/Chrome found.
 """
 import os
 import subprocess
+import time
+import urllib.request
 import webbrowser
 
 SETUP_URL = "http://localhost:5050/setup"
 GAME_URL = "http://localhost:5050/"
+HEALTH_URL = "http://127.0.0.1:5050/api/health"
 APP_TITLE = "Puck Dynasty"
 
 
@@ -42,8 +45,29 @@ def _find_browser():
     return None
 
 
+def _wait_for_server(timeout=10.0):
+    """Poll /api/health until Flask is accepting connections.
+
+    Prevents the race where the browser opens localhost:5050 before
+    Flask has bound the port (user would see "can't reach this page").
+    Returns True if the server responded, False on timeout.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(HEALTH_URL, timeout=1) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.15)
+    return False
+
+
 def launch(url=SETUP_URL):
     """Open the game in its own chromeless window. Never raises."""
+    if not _wait_for_server():
+        print("⚠️ Web server did not respond on :5050 — opening URL anyway")
     exe = _find_browser()
     if exe:
         try:

@@ -2588,14 +2588,17 @@ class HockeyManagerGUI(tk.Tk):
                 set_app(self)
                 print("🌐 Game attached to web UI")
             else:
-                start_web_server(self)
-                self.after(250, lambda: drain_commands(self, self))
-                print("🌐 Web UI running at http://localhost:5050/")
-                try:
-                    from web_ui.shell import launch as launch_shell
-                    self.after(1200, lambda: launch_shell())
-                except Exception as e:
-                    print(f"⚠️ Game shell failed to start: {e}")
+                if start_web_server(self) is None:
+                    print("⚠️ Web UI server failed to start "
+                          "(port 5050 in use?) — continuing without web UI")
+                else:
+                    self.after(250, lambda: drain_commands(self, self))
+                    print("🌐 Web UI running at http://localhost:5050/")
+                    try:
+                        from web_ui.shell import launch as launch_shell
+                        self.after(1200, lambda: launch_shell())
+                    except Exception as e:
+                        print(f"⚠️ Game shell failed to start: {e}")
         except Exception as e:
             print(f"⚠️ Web UI failed to start: {e}")
 
@@ -27921,7 +27924,11 @@ def main():
         root = tk.Tk()
         root.withdraw()  # invisible; the app-mode window is the game
         _bridge._setup_root = root
-        _bridge.start_web_server(None)  # setup mode: no game yet
+        if _bridge.start_web_server(None) is None:  # setup mode: no game yet
+            print("Web UI server failed to start (port 5050 in use?).")
+            print("Close the other copy and try again.")
+            root.destroy()
+            return
         root.after(250, lambda: _bridge.drain_commands(None, root))
         _launch_shell(SETUP_URL)  # chromeless window (or tab fallback)
         print("Game window opened. Waiting for team selection...")

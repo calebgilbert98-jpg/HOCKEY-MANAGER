@@ -1631,7 +1631,13 @@ def create_app(game_app=None):
 
 
 def start_web_server(game_app, port=5050):
-    """Start Flask in a background thread bound to the live game."""
+    """Start Flask in a background thread bound to the live game.
+
+    Verifies the port is actually listening afterwards — if another
+    process holds the port, app.run() dies inside the thread and the
+    user would otherwise get a dead browser window with no explanation.
+    Returns the thread on success, None if the server never came up.
+    """
     global _server_thread
     if _server_thread is not None and _server_thread.is_alive():
         return _server_thread
@@ -1647,4 +1653,16 @@ def start_web_server(game_app, port=5050):
     _server_thread = threading.Thread(target=_run, daemon=True,
                                       name="puck-web-ui")
     _server_thread.start()
-    return _server_thread
+    # Confirm Flask actually bound the port (catches "port in use").
+    import socket as _socket
+    import time as _time
+    for _ in range(40):  # ~6s
+        try:
+            with _socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return _server_thread
+        except OSError:
+            _time.sleep(0.15)
+    print(f"Web UI server did not come up on port {port} "
+          f"(already in use?)")
+    _server_thread = None
+    return None
