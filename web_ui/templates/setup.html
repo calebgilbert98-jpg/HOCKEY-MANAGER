@@ -16,15 +16,91 @@
     <p class="tagline">Build your <b>dynasty</b>. Choose your path to the Cup.</p>
   </header>
 
-  <div class="setup-cols">
-    <section class="setup-card setup-card-wide">
+  <nav class="setup-tabs" id="setup-tabs">
+    <button data-tab="gm" class="active">Create GM</button>
+    <button data-tab="team">Choose Team</button>
+    <button data-tab="advanced">Advanced Setup</button>
+    <button data-tab="load">Load Game</button>
+    <button data-tab="mp">Multiplayer</button>
+  </nav>
+
+  <!-- TAB: Create GM -->
+  <section class="setup-tab" id="tab-gm">
+    <div class="setup-card">
+      <h2>General Manager Profile</h2>
+      <p class="card-sub">Define your identity as a hockey executive. Your choices affect team morale, trade negotiations, and media relations.</p>
+      <div class="setup-grid">
+        <label class="fld">Full name
+          <div class="fld-inline">
+            <input id="gm-name" type="text" value="General Manager" maxlength="40" class="nhl">
+            <button id="btn-gm-random-name" class="btn-ghost" title="Random name">🎲</button>
+          </div>
+        </label>
+        <div class="fld-row">
+          <label class="fld">Age
+            <select id="gm-age" class="nhl"></select>
+          </label>
+          <label class="fld">Experience
+            <select id="gm-exp" class="nhl">
+              <option>First-Time GM</option>
+              <option>Assistant GM Experience</option>
+              <option>Former GM</option>
+              <option>Veteran Executive</option>
+            </select>
+          </label>
+        </div>
+        <div class="fld-row">
+          <label class="fld">Hockey background
+            <select id="gm-bg" class="nhl">
+              <option>Former Player</option>
+              <option>Former Coach</option>
+              <option>Former Scout</option>
+              <option>Business Executive</option>
+              <option>Analytics Expert</option>
+            </select>
+          </label>
+          <label class="fld">Management style
+            <select id="gm-style" class="nhl">
+              <option>Players' GM</option>
+              <option>Strict Disciplinarian</option>
+              <option>Analytics-Focused</option>
+              <option selected>Balanced</option>
+              <option>Old-School</option>
+            </select>
+          </label>
+        </div>
+        <div class="fld-row">
+          <label class="fld">Contract length
+            <select id="gm-contract" class="nhl">
+              <option>1 Year (Prove It)</option>
+              <option selected>2 Years</option>
+              <option>3 Years</option>
+              <option>4 Years</option>
+              <option>5 Years (Long-term)</option>
+            </select>
+          </label>
+          <label class="fld">Initial reputation
+            <select id="gm-rep" class="nhl">
+              <option>Unknown</option>
+              <option>Rising Star</option>
+              <option>Proven Executive</option>
+              <option>Legendary</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="gm-preview" id="gm-preview"></div>
+      <button id="btn-gm-random" class="btn-ghost">Generate Random Profile</button>
+    </div>
+  </section>
+
+  <!-- TAB: Choose Team -->
+  <section class="setup-tab hidden" id="tab-team">
+    <div class="setup-card setup-card-wide">
       <h2>New Career</h2>
       <p class="card-sub">Take over a franchise from opening night and shape its future.</p>
 
       <div class="setup-grid">
-        <label class="fld">Your name
-          <input id="gm-name" type="text" value="General Manager" maxlength="40" class="nhl">
-        </label>
         <div class="fld-row">
           <label class="fld">League
             <select id="league-picker" class="nhl"></select>
@@ -45,6 +121,37 @@
           <button data-val="large" title="~12,000 players · slowest">Large</button>
         </div>
         <p class="setup-hint" id="db-size-hint">~8,000 players · recommended</p>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Season start date</div>
+        <div class="fpills" id="start-date-pills">
+          <button data-val="August 1, 2024">Aug 1</button>
+          <button data-val="September 1, 2024" class="active">Sep 1</button>
+          <button data-val="October 1, 2024">Oct 1</button>
+          <button data-val="November 1, 2024">Nov 1</button>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Season length</div>
+        <div class="fpills" id="season-len-pills">
+          <button data-val="Default (84 Games)" class="active">84 games</button>
+          <button data-val="Short Season (20 Games)">20 games</button>
+          <button data-val="Half Season (41 Games)">41 games</button>
+          <button data-val="Extended Season (100 Games)">100 games</button>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Difficulty</div>
+        <div class="fpills" id="difficulty-pills">
+          <button data-val="Rookie">Rookie</button>
+          <button data-val="Amateur">Amateur</button>
+          <button data-val="Professional" class="active">Professional</button>
+          <button data-val="Realistic">Realistic</button>
+          <button data-val="Hall of Fame">Hall of Fame</button>
+        </div>
       </div>
 
       <div class="setup-sect">
@@ -69,6 +176,12 @@
             <span><b>Fog of war</b> <em>— unscouted players show noisy ratings</em></span></label>
           <label class="opt-row"><input type="checkbox" id="opt-fantasy">
             <span><b>Fantasy draft</b> <em>— redistribute all players at startup</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-cap" checked>
+            <span><b>Salary cap</b> <em>— realistic cap management ($104M)</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-injuries" checked>
+            <span><b>Injuries</b> <em>— player injuries and recovery system</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-morale" checked>
+            <span><b>Morale system</b> <em>— morale and team chemistry effects</em></span></label>
         </div>
       </div>
 
@@ -81,14 +194,124 @@
       </div>
 
       <button id="btn-new" class="primary">Start Career →</button>
-    </section>
+    </div>
+  </section>
 
-    <section class="setup-card">
+  <!-- TAB: Advanced Setup -->
+  <section class="setup-tab hidden" id="tab-advanced">
+    <div class="setup-card setup-card-wide">
+      <h2>Advanced Configuration</h2>
+      <p class="card-sub">Fine-tune your hockey management experience.</p>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Presets</div>
+        <div class="fpills" id="preset-pills">
+          <button data-val="arcade" title="Fast, fun, fantasy draft, no cap">🕹️ Arcade</button>
+          <button data-val="realistic" title="Full sim, real difficulty">📊 Realistic</button>
+          <button data-val="challenge" title="Maximum difficulty">🔥 Challenge</button>
+          <button data-val="quick" title="Short season, fast">⚡ Quick</button>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">AI difficulty</div>
+        <div class="setup-grid">
+          <div class="fld-row">
+            <label class="fld">Trade difficulty
+              <select id="opt-trade-diff" class="nhl">
+                <option>Very Easy</option>
+                <option>Easy</option>
+                <option selected>Realistic</option>
+                <option>Hard</option>
+                <option>Nearly Impossible</option>
+              </select>
+            </label>
+            <label class="fld">CPU GM intelligence
+              <select id="opt-cpu-iq" class="nhl">
+                <option>Low (Predictable)</option>
+                <option selected>Medium (Balanced)</option>
+                <option>High (Challenging)</option>
+                <option>Maximum (Ruthless)</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Gameplay features</div>
+        <div class="setup-opts">
+          <label class="opt-row"><input type="checkbox" id="opt-intl" checked>
+            <span><b>International players</b> <em>— European leagues, juniors, prospects</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-no-penalties">
+            <span><b>Start without cap penalties</b> <em>— clear real-life dead cap</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-progression" checked>
+            <span><b>Realistic progression</b> <em>— age curves and usage-based development</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-composite">
+            <span><b>Composite ratings</b> <em>— show Chance Creation, Finishing, Skating…</em></span></label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: Load Game -->
+  <section class="setup-tab hidden" id="tab-load">
+    <div class="setup-card">
       <h2>Load Game</h2>
       <p class="card-sub">Pick up right where you left off.</p>
       <div id="save-list" class="save-list"><p class="dim">Looking for saves…</p></div>
-    </section>
-  </div>
+      <div class="save-actions">
+        <button id="btn-save-delete" class="btn-ghost" disabled>Delete Selected</button>
+        <button id="btn-save-import" class="btn-ghost">Import Save</button>
+        <input type="file" id="save-file-input" accept=".dat,.save,.pkl" hidden>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB: Multiplayer -->
+  <section class="setup-tab hidden" id="tab-mp">
+    <div class="setup-card">
+      <h2>Multiplayer</h2>
+      <p class="card-sub">Play with friends over your Radmin VPN / virtual LAN network. One player hosts the canonical game; others join and claim teams.</p>
+      <div class="mp-cols">
+        <div class="mp-panel">
+          <h3>Host a Game</h3>
+          <label class="fld">Display name
+            <input id="mp-host-name" type="text" class="nhl" maxlength="30" placeholder="Your name">
+          </label>
+          <label class="fld">Port
+            <input id="mp-host-port" type="number" class="nhl" value="27107" min="1024" max="65535">
+          </label>
+          <p class="setup-hint">Friends join using your Radmin VPN IP address.</p>
+          <button id="btn-mp-host" class="primary">Host Game →</button>
+          <div id="mp-host-status" class="mp-status"></div>
+          <div id="mp-lobby" class="mp-lobby hidden">
+            <h4>Lobby — connected GMs</h4>
+            <div id="mp-lobby-list"></div>
+            <button id="btn-mp-start" class="primary">Start Multiplayer Game →</button>
+          </div>
+        </div>
+        <div class="mp-panel">
+          <h3>Join a Game</h3>
+          <label class="fld">Host IP address
+            <input id="mp-join-ip" type="text" class="nhl" placeholder="e.g. 26.123.45.67">
+          </label>
+          <label class="fld">Port
+            <input id="mp-join-port" type="number" class="nhl" value="27107" min="1024" max="65535">
+          </label>
+          <label class="fld">Your name
+            <input id="mp-join-name" type="text" class="nhl" maxlength="30" placeholder="Your name">
+          </label>
+          <button id="btn-mp-join" class="primary">Join Game →</button>
+          <div id="mp-join-status" class="mp-status"></div>
+          <div id="mp-team-claim" class="hidden">
+            <h4>Claim your team</h4>
+            <div id="mp-team-list" class="mp-team-list"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
   <div id="setup-progress" class="setup-progress hidden">
     <div class="progress-card">

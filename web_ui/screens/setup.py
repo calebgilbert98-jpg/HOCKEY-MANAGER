@@ -89,19 +89,64 @@ def api_setup():
         team = data.get("team") or "Boston Bruins"
         ok = enqueue_command("setup_new_game", team=team,
                              gm_name=data.get("gm_name") or "General Manager",
+                             gm_profile=data.get("gm_profile") or {},
                              database_size=data.get("database_size") or "default",
                              leagues=data.get("leagues") or ["NHL", "AHL"],
                              sim_detail=data.get("sim_detail") or {"NHL": "full"},
                              fog_of_war=data.get("fog_of_war", True),
                              fantasy_draft=bool(data.get("fantasy_draft")),
+                             salary_cap=data.get("salary_cap", True),
+                             injuries=data.get("injuries", True),
+                             morale_system=data.get("morale_system", True),
+                             start_date=data.get("start_date") or "September 1, 2024",
+                             season_length=data.get("season_length") or "Default (84 Games)",
+                             difficulty=data.get("difficulty") or "Professional",
+                             trade_difficulty=data.get("trade_difficulty") or "Realistic",
+                             cpu_gm_intelligence=data.get("cpu_gm_intelligence") or "Medium (Balanced)",
+                             international_players=data.get("international_players", True),
+                             start_without_cap_penalties=bool(data.get("start_without_cap_penalties")),
+                             realistic_progression=data.get("realistic_progression", True),
+                             show_composite_ratings=bool(data.get("show_composite_ratings")),
                              playoff_format=data.get("playoff_format") or "divisional",
-                             user_league=data.get("user_league") or "NHL")
+                             user_league=data.get("user_league") or "NHL",
+                             multiplayer_host=bool(data.get("multiplayer_host")))
     elif mode == "load":
         ok = enqueue_command("setup_load_game", path=data.get("path"))
     else:
         return jsonify({"ok": False, "error": "unknown mode"}), 400
     _bridge._web_setup_status = {"status": "starting"}
     return jsonify({"ok": ok})
+
+
+@bp.route("/api/saves/delete", methods=["POST"])
+def api_saves_delete():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("path") or ""
+    # Safety: only allow deleting files inside saves/
+    norm = os.path.normpath(path)
+    if not norm.startswith("saves" + os.sep) and norm != "saves":
+        return jsonify({"ok": False, "error": "invalid path"}), 400
+    try:
+        os.remove(norm)
+        return jsonify({"ok": True})
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp.route("/api/saves/import", methods=["POST"])
+def api_saves_import():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"ok": False, "error": "no file"}), 400
+    import re
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", f.filename)[:80]
+    os.makedirs("saves", exist_ok=True)
+    dest = os.path.join("saves", safe)
+    try:
+        f.save(dest)
+        return jsonify({"ok": True, "path": dest})
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @bp.route("/api/setup_status")

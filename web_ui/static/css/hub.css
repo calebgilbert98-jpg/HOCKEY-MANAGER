@@ -900,3 +900,21 @@ select.nhl-select option, select.nhl option { background: #0d1424; color: var(--
 .verdict-badge.ok { background: rgba(52,211,153,.16); color: #4ade80; border: 1px solid rgba(74,222,128,.4); }
 .verdict-badge.warn { background: rgba(251,191,36,.13); color: #fbbf24; border: 1px solid rgba(251,191,36,.4); }
 .verdict-badge.bad { background: rgba(239,68,68,.14); color: #f87171; border: 1px solid rgba(239,68,68,.4); }
+
+/* ---------- loading gate: hide content until data arrives ---------- */
+.th-loading {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; flex-direction: column; gap: 16px;
+  align-items: center; justify-content: center;
+  background: #05070d;
+  font-family: var(--nhl-cond); font-weight: 700; font-size: 14px;
+  letter-spacing: 3px; color: var(--dim); text-transform: uppercase;
+  transition: opacity .25s ease;
+}
+.th-loading.done { opacity: 0; pointer-events: none; }
+.th-spinner {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 3px solid rgba(59,130,246,.25); border-top-color: var(--nhl-blue);
+  animation: th-spin 0.8s linear infinite;
+}
+@keyframes th-spin { to { transform: rotate(360deg); } }

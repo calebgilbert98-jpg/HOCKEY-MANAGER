@@ -28,6 +28,10 @@ async function loadState() {
     renderHub(s);
   } catch (e) {
     console.error('API failed', e);
+  } finally {
+    // Reveal the page only once data (or failure) is in — no staggered load.
+    const l = document.getElementById('th-loading');
+    if (l) l.classList.add('done');
   }
 }
 

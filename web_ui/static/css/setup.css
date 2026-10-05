@@ -191,3 +191,65 @@ button.primary:active { transform: translateY(0); }
   .setup-crest, .spinner { animation: none; }
   .setup-card, .save-row, button.primary { transition: none; }
 }
+
+/* ---------- setup tabs ---------- */
+.setup-tabs {
+  display: flex; gap: 4px; justify-content: center;
+  margin: 18px auto 6px; max-width: 900px;
+  border-bottom: 2px solid var(--nhl-blue);
+}
+.setup-tabs button {
+  background: transparent; border: 0; color: var(--dim);
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.2px;
+  padding: 10px 22px; cursor: pointer;
+  border-bottom: 3px solid transparent; margin-bottom: -2px;
+}
+.setup-tabs button:hover { color: var(--text); }
+.setup-tabs button.active { color: #fff; border-bottom-color: var(--nhl-blue); }
+.setup-tab.hidden { display: none; }
+
+/* ---------- GM profile ---------- */
+.fld-inline { display: flex; gap: 8px; }
+.fld-inline input { flex: 1; }
+.gm-preview {
+  margin: 14px 0; padding: 14px 18px;
+  background: var(--nhl-panel2); border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r-sm); font-size: 14px; line-height: 1.6;
+}
+.gm-preview b { font-family: var(--nhl-cond); font-size: 17px; }
+
+/* ---------- save actions ---------- */
+.save-actions { display: flex; gap: 10px; margin-top: 14px; }
+.save-row.selected { border-color: var(--nhl-blue); background: var(--nhl-panel2); }
+
+/* ---------- multiplayer ---------- */
+.mp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 6px; }
+@media (max-width: 700px) { .mp-cols { grid-template-columns: 1fr; } }
+.mp-panel {
+  background: var(--nhl-panel2); border-radius: var(--nhl-r);
+  padding: 18px; border: 1px solid rgba(255,255,255,0.06);
+}
+.mp-panel h3 {
+  font-family: var(--nhl-cond); text-transform: uppercase;
+  letter-spacing: 1px; margin: 0 0 12px; color: var(--nhl-blue);
+}
+.mp-panel h4 {
+  font-family: var(--nhl-cond); text-transform: uppercase;
+  font-size: 14px; letter-spacing: 1px; margin: 14px 0 8px;
+}
+.mp-panel .fld { margin-bottom: 10px; }
+.mp-status { font-size: 13px; color: var(--dim); margin-top: 10px; line-height: 1.5; }
+.mp-lobby { margin-top: 12px; }
+.mp-member {
+  padding: 8px 12px; background: var(--nhl-panel);
+  border-radius: var(--nhl-r-sm); margin-bottom: 6px; font-size: 13px;
+}
+.mp-team-list { display: flex; flex-wrap: wrap; gap: 8px; max-height: 220px; overflow-y: auto; }
+.mp-team-btn {
+  background: var(--nhl-panel); border: 1px solid rgba(255,255,255,0.1);
+  color: var(--text); border-radius: var(--nhl-r-sm);
+  padding: 8px 12px; font-size: 12px; cursor: pointer;
+}
+.mp-team-btn:hover:not(:disabled) { border-color: var(--nhl-blue); }
+.mp-team-btn.claimed { opacity: 0.45; cursor: not-allowed; }

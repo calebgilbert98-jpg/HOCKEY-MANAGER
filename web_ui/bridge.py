@@ -542,6 +542,23 @@ def _do_setup_new_game(cmd):
                 playoff_format=cmd.get("playoff_format") or "divisional",
             )
             db_config = build_database_config(wiz)
+
+            # GM profile (v0.18.4 Create GM tab parity)
+            gm_profile = None
+            try:
+                from game_classes import GMProfile
+                gp = cmd.get("gm_profile") or {}
+                if gp.get("name"):
+                    gm_profile = GMProfile(
+                        name=gp.get("name") or gm_name,
+                        age=int(gp.get("age") or 35),
+                        former_player=(gp.get("background") == "Former Player"),
+                        coaching_experience=(gp.get("background") == "Former Coach"),
+                        management_style=gp.get("management_style") or "Balanced",
+                    )
+            except Exception:
+                gm_profile = None
+
             settings = {
                 'database_size': 'Standard',
                 'database_config': db_config,
@@ -549,9 +566,23 @@ def _do_setup_new_game(cmd):
                 'user_team': wiz["user_team"],
                 'user_league': wiz["user_league"],
                 'gm_name': wiz["gm_name"],
+                'gm_profile': gm_profile,
                 'fog_of_war': wiz["fog_of_war"],
                 'sim_detail': wiz["sim_detail"],
                 'playoff_format': wiz["playoff_format"],
+                # v0.18.4 launcher options
+                'start_date': cmd.get("start_date") or "September 1, 2024",
+                'season_length': cmd.get("season_length") or "Default (84 Games)",
+                'difficulty': cmd.get("difficulty") or "Professional",
+                'trade_difficulty': cmd.get("trade_difficulty") or "Realistic",
+                'cpu_gm_intelligence': cmd.get("cpu_gm_intelligence") or "Medium (Balanced)",
+                'salary_cap': cmd.get("salary_cap", True),
+                'injuries': cmd.get("injuries", True),
+                'morale_system': cmd.get("morale_system", True),
+                'international_players': cmd.get("international_players", True),
+                'start_without_cap_penalties': bool(cmd.get("start_without_cap_penalties")),
+                'realistic_progression': cmd.get("realistic_progression", True),
+                'show_composite_ratings': bool(cmd.get("show_composite_ratings")),
             }
         except Exception:
             # Fallback to the previous hardcoded defaults.
@@ -582,6 +613,23 @@ def _do_setup_new_game(cmd):
         except Exception:
             pass
         set_app(app)
+        # Multiplayer host: wire up after the game exists (v0.18.4 parity).
+        try:
+            from web_ui.screens.multiplayer import (
+                get_pending_host_config, wire_host)
+            mp_cfg = get_pending_host_config()
+            if mp_cfg or cmd.get("multiplayer_host"):
+                name = (mp_cfg or {}).get("name") or "Host"
+                port = int((mp_cfg or {}).get("port") or 27107)
+                host, err = wire_host(app, gm, name, port)
+                if err:
+                    print(f"Multiplayer host failed: {err}")
+                else:
+                    print(f"Multiplayer hosting on port {port}")
+                    _web_setup_status = {"status": "ready",
+                                         "detail": "Hosting multiplayer"}
+        except Exception as e:
+            print(f"Multiplayer wiring skipped: {e}")
         _web_setup_status = {"status": "ready"}
     except Exception as e:
         import traceback
