@@ -63,15 +63,40 @@ def _safe(fn, default=None):
         return default
 
 
+# Clean position abbreviations: PlayerPosition.CENTER -> "C", etc.
+# The raw str(enum) gives "PlayerPosition.CENTER" which looks terrible in the UI.
+_POSITION_ABBR = {
+    "CENTER": "C", "LEFT_WING": "LW", "RIGHT_WING": "RW",
+    "LEFT_DEFENSE": "LD", "RIGHT_DEFENSE": "RD", "GOALIE": "G",
+    "C": "C", "LW": "LW", "RW": "RW", "LD": "LD", "RD": "RD", "G": "G",
+}
+
+
+def _clean_position(pos):
+    """Map a position enum/string to a clean abbreviation."""
+    try:
+        s = str(pos or "")
+        # Handle "PlayerPosition.CENTER" -> "CENTER" -> "C"
+        if "." in s:
+            s = s.split(".")[-1]
+        s = s.strip().upper()
+        return _POSITION_ABBR.get(s, s or "?")
+    except Exception:
+        return "?"
+
+
 def to_web_player(p):
     """Player -> JSON-safe dict."""
     return {
         "id": _safe(lambda: str(getattr(p, "id", id(p)))),
         "name": _safe(lambda: getattr(p, "full_name", "?")),
-        "position": _safe(lambda: str(getattr(p, "primary_position", "") or "") or "?"),
+        "position": _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?"),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
         "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0)),
-        "salary": _safe(lambda: int(getattr(p, "salary", 0) or 0)),
+        "salary": _safe(lambda: int(
+            getattr(p, "salary", 0)
+            or getattr(getattr(p, "contract", None), "salary", 0)
+            or 0)),
         "captaincy": _safe(lambda: getattr(p, "captaincy", "") or ""),
         "injured": _safe(lambda: bool(getattr(p, "injured", False))),
     }
@@ -654,6 +679,131 @@ def _execute_command(app, cmd):
                                 if p not in app.trade_block:
                                     app.trade_block.append(p)
                                 break
+            except Exception:
+                pass
+        elif op == "trade_block_remove":
+            try:
+                pid = str(cmd.get("player_id", ""))
+                block = getattr(app, "trade_block", None) or []
+                for p in list(block):
+                    try:
+                        if str(getattr(p, "id", "")) == pid:
+                            block.remove(p)
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        elif op == "trade_block_simulate_offers":
+            try:
+                fn = getattr(app, "process_trade_block_offers", None)
+                if callable(fn):
+                    fn()
+            except Exception:
+                pass
+        elif op == "trade_block_generate_interest":
+            # Mirror of TradeBlockWindow.generate_trade_interest: sync the
+            # manual block into real trade_market listings, then run the
+            # genuine AI bidder computation per listing.
+            try:
+                import trade_market as tm
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                if league is not None:
+                    market = tm.get_market(league)
+                    today = tm._today(app)
+                    heat = tm.deadline_heat(app, league, today)
+                    params = tm._heat_params(heat)
+                    tm._sync_user_block(app, league, market, today, params)
+                    for li in list(market.get("listings", []) or []):
+                        try:
+                            if (isinstance(li, dict)
+                                    and li.get("source") == "user_block"):
+                                bidders = tm._find_bidders(
+                                    app, league, li, today, heat >= 0.5)
+                                if bidders:
+                                    ai = li.setdefault("ai_interest", [])
+                                    seen = {r.get("team") for r in ai
+                                            if isinstance(r, dict)}
+                                    for b in bidders:
+                                        tname = (b.get("team") if isinstance(
+                                            b, dict) else str(b))
+                                        if tname not in seen:
+                                            ai.append({
+                                                "team": tname,
+                                                "interest": (b.get("interest")
+                                                             if isinstance(
+                                                                 b, dict)
+                                                             else ""),
+                                                "status": "Open",
+                                            })
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+        elif op == "trade_block_decline_interest":
+            # Mirror of TradeBlockWindow.decline_interest: mark the team's
+            # row Declined on the real listing so it never resurrects.
+            try:
+                pname = cmd.get("player", "")
+                tname = cmd.get("team", "")
+                import trade_market as tm
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                if league is not None:
+                    market = tm.get_market(league)
+                    for li in list(market.get("listings", []) or []):
+                        try:
+                            if not isinstance(li, dict):
+                                continue
+                            if ((li.get("player_name") or "") != pname):
+                                continue
+                            for r in (li.get("ai_interest") or []):
+                                if (isinstance(r, dict)
+                                        and r.get("team") == tname
+                                        and r.get("status") != "Declined"):
+                                    r["status"] = "Declined"
+                            dteams = li.setdefault("declined_teams", [])
+                            if tname not in dteams:
+                                dteams.append(tname)
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+        elif op == "trade_block_express_interest":
+            # Mirror of TradeBlockWindow.express_interest: record genuine
+            # interest via trade_market.add_target (canonical user store).
+            try:
+                import trade_market as tm
+                pid = str(cmd.get("player_id", "") or "")
+                pname = cmd.get("player", "")
+                tname = cmd.get("team", "")
+                player = None
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                if league is not None:
+                    for t in (getattr(league, "teams", None) or []):
+                        try:
+                            if getattr(t, "team_name", "") != tname:
+                                continue
+                            for p in (getattr(t, "roster", None) or []):
+                                if (str(getattr(p, "id", "")) == pid
+                                        or getattr(p, "full_name", "") == pname):
+                                    player = p
+                                    break
+                            break
+                        except Exception:
+                            continue
+                if player is not None:
+                    tm.add_target(
+                        player, source="user",
+                        note=f"Trade interest expressed ({tname} block)")
             except Exception:
                 pass
         elif op == "set_tactic":

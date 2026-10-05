@@ -91,7 +91,9 @@ def to_roster_player(p):
         "tier": _tier_label(_safe(lambda: getattr(p, "overall", 0))),
         "potential": _safe(lambda: getattr(p, "potential", 0), 0),
         "salary": _safe(lambda: int(getattr(p, "salary", 0) or 0)),
-        "salary_fmt": _fmt_money(_safe(lambda: getattr(p, "salary", 0))),
+        "salary_fmt": _fmt_money(_safe(lambda: (
+            getattr(p, "salary", 0)
+            or getattr(getattr(p, "contract", None), "salary", 0)))),
         "contract_years": _safe(lambda: getattr(c, "years_remaining", 0), 0) if c else 0,
         "has_contract": c is not None,
         "ntc": _safe(lambda: bool(getattr(c, "no_trade_clause", False)), False) if c else False,
