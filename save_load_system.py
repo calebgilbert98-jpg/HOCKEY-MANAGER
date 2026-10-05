@@ -1038,6 +1038,20 @@ class GameSaveManager:
                     elif isinstance(game, (tuple, list)) and len(game) >= 3:
                         game_date, home_team, away_team = game[0], game[1], game[2]
                         if home_team == 'NHL_EVENT':
+                            # NHL special events (All-Star, draft, etc.): serialize
+                            # the event metadata so they survive the round-trip.
+                            # away_team slot holds the metadata dict.
+                            meta = away_team if isinstance(away_team, dict) else {}
+                            schedule_data.append({
+                                'date': game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date),
+                                'home_team': 'NHL_EVENT',
+                                'away_team': 'NHL_EVENT',
+                                'league': '',
+                                'event_type': meta.get('type'),
+                                'event_title': meta.get('title'),
+                                'event_description': meta.get('description'),
+                                'nhl_event': True,
+                            })
                             continue
                         league = getattr(home_team, 'league_name', '')
                         league = {'National Hockey League': 'NHL',
@@ -2687,7 +2701,19 @@ class GameSaveManager:
             for game_data in schedule_data:
                 try:
                     game_date = datetime.fromisoformat(game_data['date']).date()
-                    
+
+                    # NHL special events: restore as (date, 'NHL_EVENT', meta) tuples
+                    if game_data.get('nhl_event') or game_data.get('home_team') == 'NHL_EVENT':
+                        meta = {}
+                        if game_data.get('event_type'):
+                            meta['type'] = game_data['event_type']
+                        if game_data.get('event_title'):
+                            meta['title'] = game_data['event_title']
+                        if game_data.get('event_description'):
+                            meta['description'] = game_data['event_description']
+                        schedule.append((game_date, 'NHL_EVENT', meta))
+                        continue
+
                     # Find teams by name
                     home_team = None
                     away_team = None
