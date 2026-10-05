@@ -17,15 +17,69 @@
   </header>
 
   <div class="setup-cols">
-    <section class="setup-card">
+    <section class="setup-card setup-card-wide">
       <h2>New Career</h2>
       <p class="card-sub">Take over a franchise from opening night and shape its future.</p>
-      <label class="fld">Your name
-        <input id="gm-name" type="text" value="General Manager" maxlength="40">
-      </label>
-      <label class="fld">Take control of
-        <select id="team-picker"><option>Loading teams…</option></select>
-      </label>
+
+      <div class="setup-grid">
+        <label class="fld">Your name
+          <input id="gm-name" type="text" value="General Manager" maxlength="40" class="nhl">
+        </label>
+        <div class="fld-row">
+          <label class="fld">League
+            <select id="league-picker" class="nhl"></select>
+          </label>
+          <label class="fld">Take control of
+            <select id="team-picker" class="nhl"><option>Loading teams…</option></select>
+          </label>
+          <button id="btn-random" class="btn-ghost" title="Random team">🎲</button>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Database size</div>
+        <div class="fpills" id="db-size-pills">
+          <button data-val="default" title="~8,000 players · recommended">Default</button>
+          <button data-val="small" title="~2,500 players · fastest">Small</button>
+          <button data-val="medium" title="~6,000 players · balanced">Medium</button>
+          <button data-val="large" title="~12,000 players · slowest">Large</button>
+        </div>
+        <p class="setup-hint" id="db-size-hint">~8,000 players · recommended</p>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Leagues</div>
+        <div class="fpills" id="league-pills">
+          <button data-val="NHL" class="active">NHL</button>
+          <button data-val="AHL" class="active">AHL</button>
+          <button data-val="ECHL">ECHL</button>
+          <button data-val="KHL">KHL</button>
+        </div>
+      </div>
+
+      <div class="setup-sect" id="sim-detail-sect">
+        <div class="setup-sect-h">Simulation detail</div>
+        <div id="sim-detail-rows"></div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Options</div>
+        <div class="setup-opts">
+          <label class="opt-row"><input type="checkbox" id="opt-fog" checked>
+            <span><b>Fog of war</b> <em>— unscouted players show noisy ratings</em></span></label>
+          <label class="opt-row"><input type="checkbox" id="opt-fantasy">
+            <span><b>Fantasy draft</b> <em>— redistribute all players at startup</em></span></label>
+        </div>
+      </div>
+
+      <div class="setup-sect">
+        <div class="setup-sect-h">Playoff format</div>
+        <div class="fpills" id="playoff-pills">
+          <button data-val="divisional" class="active" title="Top 3 per division + 2 wild cards">Divisional</button>
+          <button data-val="conference" title="Top 8 per conference, classic 1v8">Conference</button>
+        </div>
+      </div>
+
       <button id="btn-new" class="primary">Start Career →</button>
     </section>
 

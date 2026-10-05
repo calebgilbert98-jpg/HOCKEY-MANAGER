@@ -495,27 +495,63 @@ _web_setup_status = {"status": "idle"}  # idle|generating|ready|error
 
 
 def _do_setup_new_game(cmd):
-    """Create a new career from the web setup page (main thread)."""
+    """Create a new career from the web setup page (main thread).
+
+    Accepts the full v0.18.4 wizard config: database_size, leagues,
+    sim_detail, fog_of_war, fantasy_draft, playoff_format, user_league.
+    """
     global _web_setup_status
     _web_setup_status = {"status": "generating", "detail": "Building league..."}
     try:
         import main as _main
         team = cmd.get("team") or "Boston Bruins"
-        settings = {
-            'database_size': 'Standard',
-            'fantasy_draft': False,
-            'user_team': team,
-            'user_league': 'NHL',
-            'gm_name': cmd.get("gm_name") or "General Manager",
-            'fog_of_war': True,
-            'sim_detail': {'NHL': 'full'},
-            'playoff_format': 'divisional',
-        }
+        gm_name = cmd.get("gm_name") or "General Manager"
+
+        # Build a validated wizard config, then a DatabaseConfig for
+        # league selection (mirrors new_game_setup on the desktop flow).
+        db_config = None
+        try:
+            from new_game_setup import make_config, build_database_config
+            wiz = make_config(
+                mode="custom",
+                database_size=cmd.get("database_size") or "default",
+                leagues=cmd.get("leagues") or ["NHL", "AHL"],
+                sim_detail=cmd.get("sim_detail"),
+                fog_of_war=cmd.get("fog_of_war", True),
+                gm_name=gm_name,
+                user_league=cmd.get("user_league") or "NHL",
+                user_team=team,
+                playoff_format=cmd.get("playoff_format") or "divisional",
+            )
+            db_config = build_database_config(wiz)
+            settings = {
+                'database_size': 'Standard',
+                'database_config': db_config,
+                'fantasy_draft': bool(cmd.get("fantasy_draft")),
+                'user_team': wiz["user_team"],
+                'user_league': wiz["user_league"],
+                'gm_name': wiz["gm_name"],
+                'fog_of_war': wiz["fog_of_war"],
+                'sim_detail': wiz["sim_detail"],
+                'playoff_format': wiz["playoff_format"],
+            }
+        except Exception:
+            # Fallback to the previous hardcoded defaults.
+            settings = {
+                'database_size': 'Standard',
+                'fantasy_draft': False,
+                'user_team': team,
+                'user_league': 'NHL',
+                'gm_name': gm_name,
+                'fog_of_war': True,
+                'sim_detail': {'NHL': 'full'},
+                'playoff_format': 'divisional',
+            }
         _web_setup_status = {"status": "generating",
                              "detail": "Generating players..."}
         gm = _main.GameManager()
         gm.apply_startup_settings(settings)
-        gm.set_user_team(team)
+        gm.set_user_team(settings['user_team'])
         _web_setup_status = {"status": "generating",
                              "detail": "Starting game..."}
         app = _main.HockeyManagerGUI(gm)
