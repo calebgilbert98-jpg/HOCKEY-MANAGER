@@ -624,6 +624,12 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             host.start()
             app.mp_host = host
             try:
+                _htm = getattr(app, "user_team", None)
+                if _htm is not None:
+                    host.host_team_id = _htm.team_name
+            except Exception:
+                pass
+            try:
                 app._mp_seed_host_reservations(host)
             except Exception:
                 pass

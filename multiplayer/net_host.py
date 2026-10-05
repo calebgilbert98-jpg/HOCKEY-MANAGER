@@ -98,6 +98,9 @@ class MultiplayerHost:
         # Once start_game() fires, the lobby is over: late joiners get the
         # live state immediately instead of waiting for another start.
         self._game_started = False
+        # The host's own club (managed locally, not as a peer). Clients
+        # may not claim it -- set by the game layer after host start.
+        self.host_team_id: Optional[str] = None
         # EHM-style advance sync: session_ids of client managers who have
         # readied for the day's advance. Reset every day. Only peers with
         # a claimed team count as active (spectators never block).
@@ -753,8 +756,11 @@ class MultiplayerHost:
 
     def _teams_taken(self) -> Dict[str, str]:
         with self._peers_lock:
-            return {p.team_id: p.name for p in self._peers.values()
-                    if p.team_id}
+            taken = {p.team_id: p.name for p in self._peers.values()
+                     if p.team_id}
+        if self.host_team_id:
+            taken.setdefault(self.host_team_id, self.host_name)
+        return taken
 
     def _find_peer(self, session_id: str) -> Optional[_Peer]:
         with self._peers_lock:
