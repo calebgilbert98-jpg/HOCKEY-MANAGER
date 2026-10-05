@@ -681,20 +681,10 @@ class MultiplayerHost:
                 f"{team_id} is already managed by {taken[team_id]}"))
             return
         _tok = getattr(peer, "rejoin_token", "") or ""
-        # Reservation: a team saved with a GM token belongs to that GM.
-        # Anyone else is refused -- the seat survives host restarts.
-        try:
-            with self._rejoin_lock:
-                _holder = next((_t for _t, _tm in self._rejoin.items()
-                                if _tm == team_id), "")
-                _holder_name = self._rejoin_names.get(_holder, "") if _holder else ""
-        except Exception:
-            _holder, _holder_name = "", ""
-        if _holder and _holder != _tok:
-            self._send(peer, P.ERROR, P.error_msg(
-                f"{team_id} is reserved for {_holder_name or 'its GM'} -- "
-                f"they reclaim it automatically when they rejoin."))
-            return
+        # Good-faith multiplayer (Chris, 2026-10-05): no persistent
+        # reservation refusals. Anyone may claim any club that isn't held
+        # by a currently-connected peer. Returning GMs still get their
+        # seat back automatically via the rejoin token (see _on_hello).
         peer.team_id = team_id
         # Remember for rejoin: this token owns this team until explicitly
         # released (drop_reservation) or the GM claims a different club.

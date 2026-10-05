@@ -12836,12 +12836,18 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = pickle.loads(gzip.decompress(save_bytes))
         except Exception as e:
-            print(f"Snapshot decode failed (non-fatal): {e}")
+            print(f"Snapshot decode failed: {e}")
+            self._mp_snapshot_failed(f"Could not decode the host's game "
+                                     f"state ({e}). Make sure both sides run "
+                                     f"the same build.")
             return
         try:
             self.save_manager._restore_game_state(data)
         except Exception as e:
-            print(f"Snapshot restore failed (non-fatal): {e}")
+            print(f"Snapshot restore failed: {e}")
+            self._mp_snapshot_failed(f"Could not load the host's game "
+                                     f"state ({e}). Make sure both sides run "
+                                     f"the same build.")
             return
         try:
             # Re-sync GUI mirrors that __init__ seeded from defaults.
@@ -12874,6 +12880,19 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast(f"Synced: {label}")
         except Exception as e:
             print(f"Snapshot view refresh failed (non-fatal): {e}")
+
+    def _mp_snapshot_failed(self, message):
+        """A host snapshot that won't load is fatal for a client -- say so
+        loudly instead of leaving a black/broken window."""
+        try:
+            from tkinter import messagebox
+            messagebox.showerror("Could not join", message)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def _mp_toast(self, text):
         """Small auto-dismissing notification (main thread only)."""

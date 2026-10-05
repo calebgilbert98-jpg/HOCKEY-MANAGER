@@ -831,9 +831,10 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                                      for m in managers])
                         _refresh_teams()
                     elif kind == "team_claimed":
-                        taken[payload.get("team_id", "")] = payload.get(
-                            "name", "")
-                        if payload.get("name", "") == client.name:
+                        _who = payload.get("manager_name",
+                                           payload.get("name", ""))
+                        taken[payload.get("team_id", "")] = _who
+                        if _who == client.name:
                             status.config(
                                 text=f"Claimed {payload.get('team_id', '')}. "
                                      "Waiting for host to start...")
