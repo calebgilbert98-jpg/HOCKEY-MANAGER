@@ -1183,6 +1183,8 @@ class FantasyDraftView(tk.Frame):
             self._show_unavailable_panel(self._draft_unavailable)
             return
 
+        # Draft starts PAUSED -- the user resumes from the lobby when ready.
+        self.draft_paused = True
         self.user_team = game_manager.user_team
 
         # Ensure user team is set - if not, use the first team in the draft
@@ -1689,6 +1691,41 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                                 style='TButton')
         begin_button.pack()
         
+    def toggle_draft_pause(self):
+        """Toggle the draft between paused and running."""
+        self.draft_paused = not self.draft_paused
+        try:
+            self.pause_button.config(
+                text="⏸ Pause Draft" if not self.draft_paused else "▶ Resume Draft")
+        except Exception:
+            pass
+        if not self.draft_paused:
+            # Resuming: kick the auto-draft chain back off.
+            try:
+                dm = self.draft_manager
+                if not dm.is_draft_complete():
+                    dm.auto_draft_in_flight = True
+                    self.after(500, self.continue_auto_draft)
+            except Exception:
+                pass
+
+    def open_staff_from_draft(self):
+        """Open the staff view (coaching philosophy etc.) from the draft screen."""
+        try:
+            app = getattr(self, 'app', None)
+            if app is not None and hasattr(app, 'open_staff_management_window'):
+                app.open_staff_management_window()
+            elif app is not None and hasattr(app, 'show_screen'):
+                from staff_management_window import StaffManagementView
+                app.show_screen("staff_management", "Staff",
+                                StaffManagementView)
+        except Exception as e:
+            try:
+                from tkinter import messagebox
+                messagebox.showerror("Error", f"Could not open staff view: {e}")
+            except Exception:
+                pass
+
     def show_main_draft_interface(self, parent):
         """Show the main draft interface with tabs"""
         # Create notebook for tabs
@@ -2389,7 +2426,19 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Sim rest of draft button
         self.integrated_sim_rest_button = ttk.Button(btn_container, text="Sim Rest of Draft", 
                                                    command=self.sim_rest_of_draft, style='Accent.TButton')
-        self.integrated_sim_rest_button.pack(side=tk.LEFT, ipady=8, ipadx=8)
+        self.integrated_sim_rest_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
+
+        # Pause/Resume button (draft starts paused)
+        self.pause_button = ttk.Button(btn_container, text="▶ Resume Draft",
+                                       command=self.toggle_draft_pause,
+                                       style='Accent.TButton')
+        self.pause_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
+
+        # View Staff button (coaching philosophy, etc.)
+        self.view_staff_button = ttk.Button(btn_container, text="View Staff",
+                                            command=self.open_staff_from_draft,
+                                            style='TButton')
+        self.view_staff_button.pack(side=tk.LEFT, ipady=8, ipadx=8)
         
         # Force update to ensure visibility
         button_frame.update_idletasks()
@@ -4460,6 +4509,10 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         rebuilt view resumes it from the flag -- no silent stall.
         """
         dm = self.draft_manager
+        # Paused: do not advance. The user resumes from the lobby.
+        if getattr(self, 'draft_paused', False):
+            dm.auto_draft_in_flight = False
+            return
         if dm.is_draft_complete():
             dm.auto_draft_in_flight = False
             self.complete_draft()
