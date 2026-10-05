@@ -97,6 +97,7 @@ def _build_id_meta(home_team, away_team):
                     "team": idx,
                     "name": _player_name(p),
                     "goalie": "GOALIE" in pos,
+                    "jersey": _safe(lambda: getattr(p, "jersey_number", ""), ""),
                 }
             except Exception:
                 continue
@@ -277,7 +278,8 @@ def _skate_to_client(ev, meta):
         if team is None:
             team = 0 if pids in home_ids else (1 if pids in away_ids else 0)
         entry = {"x": round(float(x), 1), "y": round(float(y), 1),
-                 "team": team, "name": m.get("name", "")}
+                 "team": team, "name": m.get("name", ""),
+                 "jersey": m.get("jersey", "")}
         if m.get("goalie"):
             goalies.append(entry)
         else:

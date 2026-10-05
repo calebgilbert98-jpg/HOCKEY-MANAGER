@@ -1,50 +1,88 @@
-/* Puck Dynasty — Watch Game · NHL 14 broadcast reskin */
-/* Fullscreen broadcast strip + scorebug, condensed type, angular edges. */
-html, body { height: 100%; }
-.watch-wrap { display: flex; flex-direction: column; height: 100vh; background: #06090e; }
-.watch-bar {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 20px; background: rgba(10,14,26,.95); z-index: 10;
-  border-bottom: 1px solid var(--nhl-line-blue);
+/* Puck Dynasty — Watch Game · broadcast dark rink */
+html, body { height: 100%; margin: 0; }
+.watch-wrap {
+  display: flex; flex-direction: column; height: 100vh;
+  background: #05080f; color: #fff; overflow: hidden;
 }
 
-/* scorebug: condensed uppercase teams, big condensed score */
+/* ---- top bar + scorebug ---- */
+.watch-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; background: #0a0f1c; z-index: 10;
+  border-bottom: 2px solid #1c2a45; flex: none;
+}
 .scorebug {
-  display: flex; align-items: center; gap: 12px;
-  font-family: var(--nhl-cond);
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--nhl-cond, "Arial Narrow", sans-serif);
+  background: #111a2e; border: 1px solid #2a3c5f;
+  border-radius: 6px; padding: 6px 14px;
+  box-shadow: 0 2px 12px rgba(0,0,0,.5);
 }
 .sb-team {
-  font-size: 21px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
-  color: #fff;
+  font-size: 20px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
+  padding: 2px 10px; border-radius: 4px;
 }
-.sb-team.home { color: #93c5fd; } .sb-team.away { color: #e8b93c; }
+.sb-team.home { background: #1d4ed8; color: #fff; }
+.sb-team.away { background: #b91c1c; color: #fff; }
 .sb-score {
-  font-size: 32px; font-weight: 900; min-width: 36px; text-align: center;
-  color: #fff; line-height: 1;
-  text-shadow: 0 2px 8px rgba(0,0,0,.6);
+  font-size: 30px; font-weight: 900; min-width: 34px; text-align: center;
+  line-height: 1; text-shadow: 0 2px 6px rgba(0,0,0,.6);
 }
-.sb-period, .sb-clock {
-  font-family: var(--nhl-cond);
-  font-size: 13px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase;
-  color: var(--dim); background: rgba(255,255,255,.06);
-  border: 1px solid var(--nhl-line);
-  padding: 4px 10px; border-radius: var(--nhl-r-sm);
+.sb-mid { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.sb-period {
+  font-size: 11px; font-weight: 800; letter-spacing: 2px; color: #93c5fd;
 }
-.sb-clock { color: #fff; }
+.sb-clock {
+  font-size: 15px; font-weight: 800; letter-spacing: 1px; color: #fff;
+  font-variant-numeric: tabular-nums;
+}
 
 .watch-controls { display: flex; gap: 8px; }
 .watch-controls button {
-  background: rgba(255,255,255,.08); border: 1px solid var(--nhl-line);
-  color: #fff;
-  width: 40px; height: 40px; border-radius: var(--nhl-r);
-  font-size: 17px; cursor: pointer;
+  background: #16213a; border: 1px solid #2a3c5f; color: #fff;
+  min-width: 46px; height: 42px; border-radius: 6px;
+  font-size: 16px; font-weight: 800; cursor: pointer;
   transition: background .13s ease, border-color .13s ease;
+  font-family: var(--nhl-cond, "Arial Narrow", sans-serif);
 }
-.watch-controls button:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue); }
-.rink-stage { flex: 1; position: relative; overflow: hidden; }
-.rink-stage canvas { position: absolute; inset: 0; }
-.watch-hint {
-  text-align: center; padding: 8px; color: var(--dimmer);
-  font-family: var(--nhl-cond);
-  font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+.watch-controls button:hover { background: #1d4ed8; border-color: #3b82f6; }
+.watch-controls button.active { background: #1d4ed8; border-color: #60a5fa; }
+
+/* ---- rink stage ---- */
+.rink-stage { flex: 1; position: relative; overflow: hidden; min-height: 0; }
+.rink-stage canvas { position: absolute; inset: 0; display: block; }
+
+/* event ticker: small text feed, bottom-left over the rink */
+.event-ticker {
+  position: absolute; left: 14px; bottom: 12px; max-width: 44%;
+  display: flex; flex-direction: column; gap: 4px; pointer-events: none;
 }
+.ticker-item {
+  background: rgba(8,12,24,.82); border-left: 3px solid #3b82f6;
+  padding: 5px 10px; font-size: 12.5px; border-radius: 0 4px 4px 0;
+  font-family: var(--nhl-cond, "Arial Narrow", sans-serif);
+  letter-spacing: .4px; animation: tickin .25s ease-out;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ticker-item.goal { border-left-color: #ffd700; color: #ffe98a; font-weight: 700; }
+.ticker-item.penalty { border-left-color: #f59e0b; }
+@keyframes tickin { from { opacity: 0; transform: translateX(-8px); } }
+
+/* ---- bottom status bar ---- */
+.watch-statusbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 7px 18px; background: #0a0f1c; flex: none;
+  border-top: 1px solid #1c2a45;
+  font-family: var(--nhl-cond, "Arial Narrow", sans-serif);
+  font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase;
+  color: #8b98b8;
+}
+.ws-live { display: flex; align-items: center; gap: 7px; color: #fff; font-weight: 800; }
+.ws-dot {
+  width: 9px; height: 9px; border-radius: 50%; background: #ef4444;
+  box-shadow: 0 0 8px #ef4444; animation: pulse 1.6s infinite;
+}
+@keyframes pulse { 50% { opacity: .45; } }
+.ws-live.final .ws-dot { background: #6b7280; box-shadow: none; animation: none; }
+.ws-game { color: #cdd8ee; font-weight: 700; }
+.ws-hint { margin-left: auto; color: #5b6a8c; }
