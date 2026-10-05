@@ -2592,7 +2592,7 @@ class HockeyManagerGUI(tk.Tk):
                 self.after(250, lambda: drain_commands(self, self))
                 print("🌐 Web UI running at http://localhost:5050/")
                 try:
-                    from web_ui.shell import launch_shell
+                    from web_ui.shell import launch as launch_shell
                     self.after(1200, lambda: launch_shell())
                 except Exception as e:
                     print(f"⚠️ Game shell failed to start: {e}")
