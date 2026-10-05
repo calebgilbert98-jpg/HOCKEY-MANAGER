@@ -370,21 +370,12 @@ class GameManager:
             
             # Handle fantasy draft if enabled
             _fd = settings.get('fantasy_draft', False)
-            try:
-                with open("mp_diag.log", "a") as _f:
-                    _f.write(f"[GAME-CREATE] fantasy_draft={_fd!r}, "
-                             f"user_team={getattr(self, 'user_team', None)}\n")
-            except Exception:
-                pass
             if _fd:
-                print("Fantasy draft enabled - starting interactive fantasy draft...")
-                self.start_interactive_fantasy_draft()
-                try:
-                    with open("mp_diag.log", "a") as _f:
-                        _f.write(f"[GAME-CREATE] pending_fantasy_draft="
-                                 f"{getattr(self, 'pending_fantasy_draft', 'MISSING')}\n")
-                except Exception:
-                    pass
+                print("Fantasy draft enabled - will start after game loads...")
+                # Set the flag now; the GUI starts the draft once fully loaded
+                # (the inbox isn't ready during apply_startup_settings).
+                self.pending_fantasy_draft = True
+                self._fantasy_draft_deferred = True
             
             # Generate league schedule
             print("Generating league schedule...")
@@ -656,18 +647,7 @@ class GameManager:
     
     def add_fantasy_draft_inbox_message(self):
         """Add a fantasy draft notification message to the user's inbox"""
-        try:
-            with open("mp_diag.log", "a") as _f:
-                _f.write(f"[DRAFT-EMAIL] called, user_team={self.user_team}, "
-                         f"has_inbox={hasattr(self, 'inbox_messages')}\n")
-        except Exception:
-            pass
         if not self.user_team:
-            try:
-                with open("mp_diag.log", "a") as _f:
-                    _f.write("[DRAFT-EMAIL] ABORT: no user_team\n")
-            except Exception:
-                pass
             return
             
         from game_classes import EmailMessage

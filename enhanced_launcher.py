@@ -585,15 +585,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 messagebox.showwarning("Port", "Port must be a number.")
                 return
             # Explicitly persist the dialog's settings.
-            _fdv, _scv = bool(_fd_var.get()), bool(_sc_var.get())
-            try:
-                with open("mp_diag.log", "a") as _f:
-                    _f.write(f"[HOST-DIALOG] fantasy_draft={_fdv}, "
-                             f"salary_cap={_scv}\n")
-            except Exception:
-                pass
-            self.setup_options['fantasy_draft'].set(_fdv)
-            self.setup_options['salary_cap'].set(_scv)
+            # Explicitly persist the dialog's settings.
+            self.setup_options['fantasy_draft'].set(bool(_fd_var.get()))
+            self.setup_options['salary_cap'].set(bool(_sc_var.get()))
             self._mp_mode = "host"
             self._mp_config = {"name": name_var.get().strip() or "Host",
                                "port": port}
@@ -2365,6 +2359,18 @@ This profile will influence player relationships, media interactions, and trade 
             if getattr(self, '_mp_mode', None) == 'host':
                 print("Wiring multiplayer host...")
                 self._wire_multiplayer_host(app, gm)
+
+            # Start a deferred fantasy draft once the GUI is fully up.
+            # (The inbox isn't ready during apply_startup_settings, so the
+            # draft flag is set there and fired here.)
+            if getattr(gm, '_fantasy_draft_deferred', False):
+                def _fire_draft():
+                    try:
+                        gm._fantasy_draft_deferred = False
+                        gm.start_interactive_fantasy_draft()
+                    except Exception as e:
+                        print(f"Deferred fantasy draft failed: {e}")
+                app.after(2500, _fire_draft)
             
             # Don't destroy the old launcher yet - it can cause Tk root issues
             # Just ensure the new app is in front
