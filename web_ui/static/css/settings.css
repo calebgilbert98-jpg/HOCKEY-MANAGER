@@ -34,3 +34,20 @@
 .set-val.on { color: #4ade80; }
 .set-val.off { color: var(--dim); }
 .set-val.unknown { color: var(--gold); font-weight: 600; }
+
+/* ---------- game-day mode toggle ---------- */
+.seg-toggle {
+  display: inline-flex; gap: 0; border: 1px solid var(--nhl-blue);
+  border-radius: var(--nhl-r-sm); overflow: hidden;
+}
+.seg-toggle button {
+  background: transparent; color: var(--dim); border: 0;
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.8px;
+  padding: 8px 16px; cursor: pointer;
+}
+.seg-toggle button.active {
+  background: var(--nhl-blue); color: #fff;
+}
+.seg-toggle button:not(.active):hover { color: var(--text); }
+.set-hint { font-size: 12px; color: var(--dim); margin: 8px 0 0; }

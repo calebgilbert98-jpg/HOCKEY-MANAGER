@@ -23,6 +23,10 @@ from datetime import date, datetime
 COMMAND_QUEUE = queue.Queue()
 _web_app_ref = None       # the live HockeyManagerGUI (or mock in tests)
 _server_thread = None
+
+# Watch mode: 'watch' = show visualizer for games, 'quick' = sim instantly.
+# Toggleable in Settings; the Continue flow respects it.
+_watch_mode = 'quick'
 _last_heartbeat = 0.0      # last time the browser tab pinged
 _heartbeat_seen = False   # True once the tab has checked in at least once
 _shutting_down = False
@@ -302,8 +306,6 @@ def get_hub_state(app):
              "size": "small", "icon": "🔭"},
             {"id": "staff", "title": "Staff", "subtitle": "Coaches & management",
              "size": "small", "icon": "👔"},
-            {"id": "watch", "title": "Watch Game", "subtitle": "Live visualizer",
-             "size": "medium", "icon": "📺"},
             {"id": "tactics", "title": "Tactics", "subtitle": "Systems & practice",
              "size": "small", "icon": "♟️"},
         ],
@@ -375,7 +377,23 @@ def get_continue_state(app):
             })
         except Exception:
             continue
-    return {"label": label, "blocked": bool(web_blockers), "blockers": web_blockers}
+    # Does the user's team play today? (for watch-mode routing)
+    # Check if the next scheduled game is today.
+    has_games = False
+    try:
+        sched = get_schedule(app, limit=1)
+        if sched:
+            gm = _safe(lambda: app.game_manager)
+            today = _safe(lambda: gm.current_date)
+            # get_schedule returns date strings like "Mon 10/05"; compare
+            # against today's formatted string.
+            if today and hasattr(today, 'strftime'):
+                today_str = today.strftime("%a %m/%d")
+                has_games = sched[0].get("date") == today_str
+    except Exception:
+        pass
+    return {"label": label, "blocked": bool(web_blockers), "blockers": web_blockers,
+            "has_games": has_games}
 
 
 def get_schedule(app, limit=40):
@@ -1656,6 +1674,19 @@ def create_app(game_app=None):
     def heartbeat():
         note_heartbeat()
         return jsonify({"ok": True})
+
+    @app.route("/api/watch_mode", methods=["GET", "POST"])
+    def watch_mode():
+        """Get or set the game-day mode: 'watch' or 'quick'."""
+        global _watch_mode
+        if request.method == "POST":
+            data = request.get_json(force=True, silent=True) or {}
+            mode = data.get("mode")
+            if mode in ("watch", "quick"):
+                _watch_mode = mode
+                return jsonify({"ok": True, "mode": _watch_mode})
+            return jsonify({"ok": False, "error": "mode must be watch or quick"}), 400
+        return jsonify({"mode": _watch_mode})
 
     @app.route("/api/exit", methods=["POST"])
     def exit_game():

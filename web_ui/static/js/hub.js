@@ -86,7 +86,7 @@ function thTile(t, compact) {
 }
 
 function openTile(t) {
-  const known = ['inbox','roster','schedule','watch','lines','waivers','captains',
+  const known = ['inbox','roster','schedule','lines','waivers','captains',
     'trades','trade_block','free_agents','staff','development','camp','morale',
     'standings','stats','playoffs','calendar','news','history','finances',
     'contracts','scouting','draft','settings','save','tactics'];
@@ -109,13 +109,21 @@ async function continueFlow() {
     st = await (await fetch('/api/continue_state')).json();
   } catch (e) { return; }
   if (!st.blocked) {
-    if (confirm('Advance the day?')) advanceDay();
+    if (confirm('Advance the day?')) advanceDay(st);
     return;
   }
   showBlockerModal(st.blockers);
 }
 
-function advanceDay() {
+async function advanceDay(st) {
+  // If watch mode is on and today has games, open the visualizer instead.
+  try {
+    const wm = await (await fetch('/api/watch_mode')).json();
+    if (wm.mode === 'watch' && st && st.has_games) {
+      window.location.href = '/watch';
+      return;
+    }
+  } catch (e) { /* fall through to quick sim */ }
   fetch('/api/command', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},

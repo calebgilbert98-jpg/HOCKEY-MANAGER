@@ -4,6 +4,39 @@ async function loadSettings() {
     const res = await fetch('/api/settings');
     const data = await res.json();
     renderSettings(data);
+    renderWatchMode();
+  } catch (e) { console.error(e); }
+}
+
+async function renderWatchMode() {
+  try {
+    const res = await fetch('/api/watch_mode');
+    const data = await res.json();
+    const mode = data.mode || 'quick';
+    const grid = document.getElementById('settings-grid');
+    const card = document.createElement('div');
+    card.className = 'set-card';
+    card.innerHTML = `<h2>Game Day</h2>
+      <div class="set-row"><span>How to handle games</span>
+        <div class="seg-toggle" role="group" aria-label="Game day mode">
+          <button class="${mode === 'watch' ? 'active' : ''}" data-mode="watch">📺 Watch games</button>
+          <button class="${mode === 'quick' ? 'active' : ''}" data-mode="quick">⚡ Quick sim all</button>
+        </div>
+      </div>
+      <p class="set-hint">Watch opens the live visualizer on game days. Quick sim resolves them instantly.</p>`;
+    card.querySelectorAll('.seg-toggle button').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const m = btn.dataset.mode;
+        await fetch('/api/watch_mode', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({mode: m}),
+        });
+        card.querySelectorAll('.seg-toggle button').forEach(b =>
+          b.classList.toggle('active', b.dataset.mode === m));
+      });
+    });
+    grid.prepend(card);
   } catch (e) { console.error(e); }
 }
 
