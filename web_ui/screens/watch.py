@@ -161,12 +161,18 @@ def _ensure_live_sim():
                     pass
             finally:
                 try:
+                    hs = _safe(lambda: sim.home_score, 0)
+                    aws = _safe(lambda: sim.away_score, 0)
                     q.put({
                         "type": "game_end",
-                        "home_score": _safe(lambda: sim.home_score, 0),
-                        "away_score": _safe(lambda: sim.away_score, 0),
+                        "home_score": hs,
+                        "away_score": aws,
                         "period": _safe(lambda: sim.period, 3),
                     })
+                    # Mark the game as watched so advance-day doesn't re-sim it.
+                    # The sim already updated player stats; we just need to
+                    # record the result and flag the schedule entry.
+                    _mark_game_watched(home, away, hs, aws)
                 except Exception:
                     pass
                 with _watch_lock:
@@ -183,6 +189,70 @@ def _ensure_live_sim():
         )
         thread.start()
         return _watch
+
+
+def _mark_game_watched(home_team, away_team, home_score, away_score):
+    """Record a watched game's result so advance-day skips re-simming it.
+
+    The GameSim already updated player/team stats. This records the
+    result in game_results and flags the schedule entry as watched.
+    """
+    try:
+        live = _safe(lambda: _bridge._web_app_ref)
+        if live is None:
+            return
+        gm = _safe(lambda: live.game_manager)
+        if gm is None:
+            return
+        from datetime import date as _date
+        today = _safe(lambda: gm.current_date)
+        hn = _safe(lambda: home_team.team_name, "")
+        an = _safe(lambda: away_team.team_name, "")
+
+        # 1. Flag the schedule entry
+        sched = _safe(lambda: list(getattr(getattr(gm, "league", None), "schedule", None) or []), []) or []
+        for g in sched:
+            try:
+                if not isinstance(g, dict):
+                    continue
+                gd = g.get("date")
+                # Match date and teams
+                if gd != today:
+                    continue
+                gh = g.get("home_team")
+                ga = g.get("away_team")
+                # Handle both Team objects and strings
+                ghn = getattr(gh, "team_name", gh) if gh else ""
+                gan = getattr(ga, "team_name", ga) if ga else ""
+                if ghn == hn and gan == an:
+                    g["watched"] = True
+                    g["watched_home_score"] = home_score
+                    g["watched_away_score"] = away_score
+                    break
+            except Exception:
+                continue
+
+        # 2. Record in game_results so the day-advance sees it as played
+        try:
+            result = {
+                "date": today,
+                "home_team": hn,
+                "away_team": an,
+                "home_score": home_score,
+                "away_score": away_score,
+                "watched": True,
+            }
+            rec = _safe(lambda: getattr(live, "_record_game_result", None))
+            if callable(rec):
+                rec(result)
+            else:
+                gr = _safe(lambda: getattr(live, "game_results", None))
+                if isinstance(gr, list):
+                    gr.append(result)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------

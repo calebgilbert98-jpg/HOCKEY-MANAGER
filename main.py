@@ -13025,6 +13025,11 @@ class HockeyManagerGUI(tk.Tk):
                     game_date, home_team, away_team = game[0], game[1], game[2]
                 elif isinstance(game, dict) and all(key in game for key in ['date', 'home_team', 'away_team']):
                     game_date, home_team, away_team = game['date'], game['home_team'], game['away_team']
+                    # Web visualizer already simmed this game: the result is
+                    # recorded and stats are updated. Skip re-simming to avoid
+                    # double-counting.
+                    if game.get('watched'):
+                        continue
                 else:
                     continue  # Skip malformed games silently
             except (IndexError, KeyError, ValueError):
