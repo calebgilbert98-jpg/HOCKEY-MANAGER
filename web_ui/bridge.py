@@ -114,16 +114,43 @@ def to_web_message(m):
     }
 
 
+# Canonical NHL abbreviations: Team objects don't carry an `abbreviation`
+# attribute, so the web UI maps full names here (else "Boston Bruins"
+# becomes "BB" and nothing matches "BOS").
+TEAM_ABBR = {
+    "Anaheim Ducks": "ANA", "Boston Bruins": "BOS", "Buffalo Sabres": "BUF",
+    "Calgary Flames": "CGY", "Carolina Hurricanes": "CAR",
+    "Chicago Blackhawks": "CHI", "Colorado Avalanche": "COL",
+    "Columbus Blue Jackets": "CBJ", "Dallas Stars": "DAL",
+    "Detroit Red Wings": "DET", "Edmonton Oilers": "EDM",
+    "Florida Panthers": "FLA", "Los Angeles Kings": "LAK",
+    "Minnesota Wild": "MIN", "Montreal Canadiens": "MTL",
+    "Montréal Canadiens": "MTL", "Nashville Predators": "NSH",
+    "New Jersey Devils": "NJD", "New York Islanders": "NYI",
+    "New York Rangers": "NYR", "Ottawa Senators": "OTT",
+    "Philadelphia Flyers": "PHI", "Pittsburgh Penguins": "PIT",
+    "San Jose Sharks": "SJS", "Seattle Kraken": "SEA",
+    "St. Louis Blues": "STL", "Tampa Bay Lightning": "TBL",
+    "Toronto Maple Leafs": "TOR", "Utah Hockey Club": "UTA",
+    "Utah Mammoth": "UTA", "Vancouver Canucks": "VAN",
+    "Vegas Golden Knights": "VGK", "Washington Capitals": "WSH",
+    "Winnipeg Jets": "WPG",
+}
+
+
 def to_web_team(t):
     """Team -> JSON-safe dict (hub header data)."""
+    _tname = _safe(lambda: str(getattr(t, "team_name", "?")), "?")
+    _abbr = (_safe(lambda: getattr(t, "abbreviation", ""), "") or
+             TEAM_ABBR.get(_tname) or
+             "".join(w[0] for w in _tname.split()[:3]).upper())
     wins = _safe(lambda: int(getattr(t, "wins", 0) or 0), 0)
     losses = _safe(lambda: int(getattr(t, "losses", 0) or 0), 0)
     otl = _safe(lambda: int(getattr(t, "ot_losses", 0) or 0), 0)
     return {
-        "name": _safe(lambda: getattr(t, "team_name", "?")),
+        "name": _tname,
         "city": _safe(lambda: getattr(t, "city", "")),
-        "abbr": _safe(lambda: getattr(t, "abbreviation", "") or
-                      "".join(w[0] for w in str(getattr(t, "team_name", "?")).split()[:3]).upper()),
+        "abbr": _abbr,
         "wins": wins,
         "losses": losses,
         "otl": otl,
@@ -465,7 +492,9 @@ def _execute_command(app, cmd):
             _do_setup_load_game(cmd)
             return
         elif op == "advance_day":
-            fn = getattr(app, "advance_day", None) or getattr(app, "_on_continue", None)
+            fn = (getattr(app, "advance_day", None)
+                  or getattr(app, "_on_continue_pressed", None)
+                  or getattr(app, "_on_continue", None))
             if callable(fn):
                 fn()
         elif op == "mark_read":

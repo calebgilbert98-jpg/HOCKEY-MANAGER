@@ -63,6 +63,31 @@ def get_lines(app):
     if team is None:
         return {"units": [], "roster": []}
     lineup = _safe(lambda: team.lineup, {}) or {}
+    if not lineup or not lineup.get("Forwards"):
+        # Fresh game: the sim hasn't built lines yet. Use the game's own
+        # best-lines algorithm so the screen isn't empty. best_lines
+        # returns flat keys like F1_LW/D1_L; normalize to LW1/LD1 form.
+        try:
+            from quick_sim import best_lines
+            raw = best_lines(team) or {}
+            _norm = {"F": "", "D": "D"}
+            norm = {}
+            for k, v in raw.items():
+                ks = str(k)
+                if ks.startswith("F") and "_" in ks:
+                    # F1_LW -> LW1, F2_C -> C2
+                    parts = ks.split("_", 1)
+                    norm[f"{parts[1]}{parts[0][1:]}"] = v
+                elif ks.startswith("D") and "_" in ks:
+                    # D1_L -> LD1, D2_R -> RD2
+                    parts = ks.split("_", 1)
+                    side = "L" if parts[1] == "L" else "R"
+                    norm[f"{side}D{parts[0][1:]}"] = v
+                elif ks in ("G1", "G2"):
+                    norm[ks] = v
+            lineup = norm
+        except Exception:
+            lineup = {}
     roster = _safe(lambda: list(team.roster), []) or []
     return {
         "units": _group_lineup(lineup),
