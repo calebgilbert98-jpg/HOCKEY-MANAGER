@@ -32,6 +32,11 @@ HANDLER_METHODS = [
     "_mp_route_trade_offer", "_mp_resolve_trade_response",
     "_mp_clear_proposal_waivers", "_apply_management_action",
     "_apply_multiplayer_action", "_mp_is_goalie",
+    "_mp_place_on_waivers", "_mp_answer_ai_offer",
+    "_mp_rfa_qualify", "_mp_staff_renew", "_mp_offer_sheet_match",
+    "_mp_offer_sheet_trade_alt", "_mp_arbitration_walkaway",
+    "_mp_coach_checkin", "_mp_emergency_fill", "_mp_owner_meeting",
+    "_mp_fantasy_draft_pick",
 ]
 
 

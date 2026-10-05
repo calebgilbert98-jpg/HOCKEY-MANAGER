@@ -10593,9 +10593,9 @@ class HockeyManagerGUI(tk.Tk):
                 res = _rfa.apply_offer_sheet_match(
                     self, self.league,
                     (params.get("player_id")
-                     or ((self._mp_find_inbox_msg(
-                         team, params.get("message_id", "")) or {})
-                         .get("action_data", {}) or {}).get("player_id")),
+                     or (getattr(self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")), "action_data",
+                         None) or {}).get("player_id")),
                     match)
             except Exception as e:
                 return False, f"Offer-sheet decision failed: {e}"
@@ -10614,9 +10614,9 @@ class HockeyManagerGUI(tk.Tk):
                 res = _rfa.apply_offer_sheet_trade_alt(
                     self, self.league,
                     (params.get("player_id")
-                     or ((self._mp_find_inbox_msg(
-                         team, params.get("message_id", "")) or {})
-                         .get("action_data", {}) or {}).get("player_id")),
+                     or (getattr(self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")), "action_data",
+                         None) or {}).get("player_id")),
                     accept)
             except Exception as e:
                 return False, f"Trade-alternative decision failed: {e}"
@@ -12446,13 +12446,13 @@ class HockeyManagerGUI(tk.Tk):
         dm = getattr(self, "_mp_fantasy_dm", None)
         if dm is None:
             return
-        st["done"] = True
         try:
             import time as _time
             if _time.time() < float(st.get("deadline", 0) or 0):
                 return  # answered just in time; the pick continues it
         except Exception:
             pass
+        st["done"] = True
         self._mp_fantasy_auto_pick(dm, reason="clock expired")
 
     def _mp_fantasy_auto_pick(self, dm, reason=""):
