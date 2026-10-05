@@ -1,59 +1,33 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
-"""Game shell (2026-10-04): the game is ONE window.
+"""Game shell (2026-10-04): the game is ONE browser tab.
 
-Launches the web UI inside an embedded browser window (pywebview, which
-uses Edge WebView2 on Windows — preinstalled on Win10/11). The Tkinter
-root is withdrawn (invisible) but its mainloop keeps running to drain
-the web command queue. No OS popup windows: every dialog is an in-page
-web modal.
+Opens the system browser to the local web UI. Everything runs on
+localhost, fully offline. The Tk root is withdrawn (invisible) but its
+mainloop keeps pumping the web command queue.
 
-Falls back to the system browser if pywebview is unavailable.
-Fully offline: everything is localhost.
+Why not an embedded webview: on Windows, embedded browser engines
+require the main thread, which Tkinter already owns -- running one off
+the main thread hard-crashes the process (seen in v0.21.0). The system
+browser is a separate process, so there is no threading conflict, and
+"the game is the only tab" is exactly the UX requested.
+
+Lifecycle: the tab heartbeats every 30s; if it goes silent for 150s
+(closed/crashed) the game shuts itself down so no ghost process
+lingers. An Exit button in the hub also shuts down cleanly.
 """
-import threading
 import webbrowser
 
 WEB_URL = "http://localhost:5050/"
-APP_TITLE = "Puck Dynasty"
+SETUP_URL = "http://localhost:5050/setup"
 
 
-def launch_shell(tk_root):
-    """Show the game window. Call after the web server is up."""
-    # Hide the Tk root: it stays alive for the command queue, but the
-    # webview is the only visible window.
+def launch_shell(url=WEB_URL):
+    """Open the game in the system browser. Never raises."""
     try:
-        tk_root.withdraw()
-    except Exception:
-        pass
-
-    try:
-        import webview
-
-        def _run():
-            try:
-                webview.create_window(
-                    APP_TITLE, WEB_URL,
-                    width=1600, height=950,
-                    resizable=True,
-                )
-                webview.start()
-            except Exception:
-                pass
-            finally:
-                # Webview closed: shut the game down cleanly.
-                try:
-                    tk_root.after(0, tk_root.quit)
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        print("🖥️  Game window: embedded webview")
+        webbrowser.open(url)
+        print(f"🖥️  Game opened in browser: {url}")
         return True
-    except ImportError:
-        print("⚠️ pywebview not installed; opening system browser instead")
-        try:
-            webbrowser.open(WEB_URL)
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"⚠️ Could not open browser: {e}")
+        print(f"   Open this URL manually: {url}")
         return False

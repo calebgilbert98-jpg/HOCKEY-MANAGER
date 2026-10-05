@@ -116,3 +116,18 @@ document.getElementById('btn-play').addEventListener('click', () => {
 });
 
 loadState();
+
+// Shared heartbeat: tells the game the tab is still open (every 30s).
+// If the tab goes silent the game shuts itself down cleanly.
+(function () {
+  const beat = () => fetch('/api/heartbeat', {method: 'POST'}).catch(() => {});
+  beat();
+  setInterval(beat, 30000);
+})();
+
+// Exit button: shuts the game down cleanly.
+document.getElementById('btn-exit')?.addEventListener('click', async () => {
+  if (!confirm('Exit Puck Dynasty? Make sure your career is saved.')) return;
+  try { await fetch('/api/exit', {method: 'POST'}); } catch (e) {}
+  document.body.innerHTML = '<div style="display:flex;height:100vh;align-items:center;justify-content:center;color:#888;font-size:18px">Puck Dynasty has exited. You can close this tab.</div>';
+});

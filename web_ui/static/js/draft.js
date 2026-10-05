@@ -57,3 +57,11 @@ function esc(s) {
 }
 
 loadDraft();
+
+// Shared heartbeat: tells the game the tab is still open (every 30s).
+// If the tab goes silent the game shuts itself down cleanly.
+(function () {
+  const beat = () => fetch('/api/heartbeat', {method: 'POST'}).catch(() => {});
+  beat();
+  setInterval(beat, 30000);
+})();

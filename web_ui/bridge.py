@@ -23,6 +23,34 @@ from datetime import date, datetime
 COMMAND_QUEUE = queue.Queue()
 _web_app_ref = None       # the live HockeyManagerGUI (or mock in tests)
 _server_thread = None
+_last_heartbeat = 0.0      # last time the browser tab pinged
+_heartbeat_seen = False   # True once the tab has checked in at least once
+_shutting_down = False
+
+
+def set_app(game_app):
+    """Attach the live game after web setup completes."""
+    global _web_app_ref
+    _web_app_ref = game_app
+
+
+def server_running():
+    """True if the Flask thread is already up (web setup flow)."""
+    return _server_thread is not None and _server_thread.is_alive()
+
+
+def note_heartbeat():
+    global _last_heartbeat, _heartbeat_seen
+    import time
+    _last_heartbeat = time.time()
+    _heartbeat_seen = True
+
+
+def heartbeat_expired(timeout_s=150):
+    """True if the browser tab has gone silent (closed/crashed)."""
+    import time
+    return (_heartbeat_seen and not _shutting_down
+            and time.time() - _last_heartbeat > timeout_s)
 
 
 # ------------------------------------------------------------------
@@ -281,27 +309,157 @@ def drain_commands(app, root):
     """Drain the queue on the Tk main thread; reschedules itself.
 
     Call once from the GUI: root.after(100, lambda: drain_commands(app, root))
+    Uses the live _web_app_ref when set (web setup attaches the game late).
     """
+    live = _web_app_ref if _web_app_ref is not None else app
     try:
         while True:
             try:
                 cmd = COMMAND_QUEUE.get_nowait()
             except queue.Empty:
                 break
-            _execute_command(app, cmd)
+            _execute_command(live, cmd)
     except Exception:
         pass
+    # Browser tab gone silent? Shut the game down cleanly so no ghost
+    # process lingers (the Sept-2026 exit-hang lesson, web edition).
+    if _web_app_ref is not None and heartbeat_expired():
+        try:
+            _shutdown(root)
+        except Exception:
+            pass
+        return
     try:
         root.after(250, lambda: drain_commands(app, root))
     except Exception:
         pass
 
 
+_setup_root = None  # the hidden Tk root whose mainloop pumps commands
+
+
+def _shutdown(root):
+    """Quit the Tk mainloop and tear down roots so the process exits."""
+    global _shutting_down
+    _shutting_down = True
+    roots = []
+    try:
+        if _setup_root is not None:
+            roots.append(_setup_root)
+    except Exception:
+        pass
+    try:
+        if _web_app_ref is not None and _web_app_ref not in roots:
+            roots.append(_web_app_ref)
+    except Exception:
+        pass
+    if root is not None and root not in roots:
+        roots.append(root)
+    for r in roots:
+        try:
+            r.quit()      # stop whichever mainloop is running
+        except Exception:
+            pass
+    for r in roots:
+        try:
+            r.destroy()   # tear down so the process can exit
+        except Exception:
+            pass
+
+
+_web_setup_status = {"status": "idle"}  # idle|generating|ready|error
+
+
+def _do_setup_new_game(cmd):
+    """Create a new career from the web setup page (main thread)."""
+    global _web_setup_status
+    _web_setup_status = {"status": "generating", "detail": "Building league..."}
+    try:
+        import main as _main
+        team = cmd.get("team") or "Boston Bruins"
+        settings = {
+            'database_size': 'Standard',
+            'fantasy_draft': False,
+            'user_team': team,
+            'user_league': 'NHL',
+            'gm_name': cmd.get("gm_name") or "General Manager",
+            'fog_of_war': True,
+            'sim_detail': {'NHL': 'full'},
+            'playoff_format': 'divisional',
+        }
+        _web_setup_status = {"status": "generating",
+                             "detail": "Generating players..."}
+        gm = _main.GameManager()
+        gm.apply_startup_settings(settings)
+        gm.set_user_team(team)
+        _web_setup_status = {"status": "generating",
+                             "detail": "Starting game..."}
+        app = _main.HockeyManagerGUI(gm)
+        try:
+            app.withdraw()  # the browser tab is the window
+        except Exception:
+            pass
+        try:
+            app.startup_settings = settings
+        except Exception:
+            pass
+        set_app(app)
+        _web_setup_status = {"status": "ready"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _web_setup_status = {"status": "error", "detail": str(e)}
+
+
+def _do_setup_load_game(cmd):
+    """Load a save from the web setup page (main thread)."""
+    global _web_setup_status
+    _web_setup_status = {"status": "generating", "detail": "Loading save..."}
+    try:
+        import main as _main
+        from save_load_system import GameSaveManager
+        path = cmd.get("path")
+        gm = _main.GameManager()
+        save_mgr = GameSaveManager(gm)
+        if not path or not save_mgr.load_game(path):
+            _web_setup_status = {"status": "error",
+                                 "detail": "Could not load save."}
+            return
+        app = _main.HockeyManagerGUI(gm)
+        try:
+            app.withdraw()
+        except Exception:
+            pass
+        if hasattr(app.game_manager, 'current_date'):
+            app.current_date = app.game_manager.current_date
+        if hasattr(app.game_manager, 'user_team'):
+            app.user_team = app.game_manager.user_team
+        try:
+            app.update_all_views()
+        except Exception:
+            pass
+        set_app(app)
+        _web_setup_status = {"status": "ready"}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        _web_setup_status = {"status": "error", "detail": str(e)}
+
+
 def _execute_command(app, cmd):
     """Run one queued command on the main thread. Never raises."""
     try:
         op = cmd.get("op")
-        if op == "advance_day":
+        if op == "exit_game":
+            _shutdown(_setup_root)
+            return
+        elif op == "setup_new_game":
+            _do_setup_new_game(cmd)
+            return
+        elif op == "setup_load_game":
+            _do_setup_load_game(cmd)
+            return
+        elif op == "advance_day":
             fn = getattr(app, "advance_day", None) or getattr(app, "_on_continue", None)
             if callable(fn):
                 fn()
@@ -756,6 +914,17 @@ def create_app(game_app=None):
             return jsonify({"ok": False, "error": "no op"}), 400
         ok = enqueue_command(op, **{k: v for k, v in data.items() if k != "op"})
         return jsonify({"ok": ok, "queued": op})
+
+    @app.route("/api/heartbeat", methods=["POST"])
+    def heartbeat():
+        note_heartbeat()
+        return jsonify({"ok": True})
+
+    @app.route("/api/exit", methods=["POST"])
+    def exit_game():
+        # User clicked Exit in the web UI: shut down cleanly.
+        enqueue_command("exit_game")
+        return jsonify({"ok": True})
 
     return app
 

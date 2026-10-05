@@ -2578,17 +2578,24 @@ class HockeyManagerGUI(tk.Tk):
         # thread and drain its command queue on the Tk mainloop. The web UI
         # replaces Tkinter screens one by one; the game logic is untouched.
         try:
-            from web_ui.bridge import start_web_server, drain_commands
-            start_web_server(self)
-            self.after(250, lambda: drain_commands(self, self))
-            print("🌐 Web UI running at http://localhost:5050/")
-            # Game shell (2026-10-04): the game is ONE embedded window.
-            # Tk root is withdrawn; every dialog is an in-page web modal.
-            try:
-                from web_ui.shell import launch_shell
-                self.after(1200, lambda: launch_shell(self))
-            except Exception as e:
-                print(f"⚠️ Game shell failed to start: {e}")
+            from web_ui.bridge import (start_web_server, set_app,
+                                       server_running, drain_commands)
+            if server_running():
+                # Web setup flow (2026-10-04): the server is already up in
+                # setup mode; this game attaches to it. The hidden setup
+                # root's mainloop keeps draining commands -- do NOT
+                # double-schedule here (this root runs no mainloop).
+                set_app(self)
+                print("🌐 Game attached to web UI")
+            else:
+                start_web_server(self)
+                self.after(250, lambda: drain_commands(self, self))
+                print("🌐 Web UI running at http://localhost:5050/")
+                try:
+                    from web_ui.shell import launch_shell
+                    self.after(1200, lambda: launch_shell())
+                except Exception as e:
+                    print(f"⚠️ Game shell failed to start: {e}")
         except Exception as e:
             print(f"⚠️ Web UI failed to start: {e}")
 
@@ -27886,35 +27893,34 @@ def test_enhanced_simulation():
     print("=" * 60)
 
 def main():
-    """Main function to start the game with splash launcher"""
+    """Main function: the game is ONE browser tab (2026-10-04).
+
+    Boots straight to the web setup page (new career / load game). A
+    hidden Tk root pumps the web command queue; the game attaches after
+    setup. Fully offline -- everything is localhost.
+    """
     try:
         print("Starting Puck Dynasty...")
-        
-        # Import and launch splash screen first
+        import tkinter as tk
         try:
-            from splash_launcher import SplashLauncher
-            print("Launching splash screen...")
-            splash = SplashLauncher()
-            splash._launch_enhanced = False  # Initialize flag
-            splash.mainloop()
-            
-            # After mainloop exits, check if we should launch enhanced
-            if getattr(splash, '_launch_enhanced', False):
-                splash._run_enhanced_launcher()
-            
-            print("Application completed")
-            
+            import web_ui.bridge as _bridge
+            from web_ui.shell import launch_shell, SETUP_URL
         except ImportError as e:
-            print(f"Splash launcher not available: {e}")
+            print(f"Web UI not available: {e}")
             print("Falling back to direct launch...")
             _direct_launch()
-            
-        except Exception as e:
-            print(f"Splash launcher error: {e}")
-            import traceback
-            traceback.print_exc()
-            print("Falling back to direct launch...")
-            _direct_launch()
+            return
+
+        root = tk.Tk()
+        root.withdraw()  # invisible; the browser tab is the window
+        _bridge._setup_root = root
+        _bridge.start_web_server(None)  # setup mode: no game yet
+        root.after(250, lambda: _bridge.drain_commands(None, root))
+        # Heartbeat starts when the tab checks in; until then no timeout.
+        launch_shell(SETUP_URL)
+        print("Browser opened to setup. Waiting for team selection...")
+        root.mainloop()
+        print("Application completed")
             
     except KeyboardInterrupt:
         print("Interrupted by user")

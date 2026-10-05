@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Puck Dynasty — Setup</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/setup.css">
+</head>
+<body>
+<div class="setup-wrap">
+  <header class="setup-hero">
+    <h1>🏒 Puck Dynasty</h1>
+    <p>Choose your path to the Cup</p>
+  </header>
+
+  <div class="setup-cols">
+    <section class="setup-card">
+      <h2>New Career</h2>
+      <label class="fld">Your name
+        <input id="gm-name" type="text" value="General Manager" maxlength="40">
+      </label>
+      <label class="fld">Take control of
+        <select id="team-picker"><option>Loading teams…</option></select>
+      </label>
+      <button id="btn-new" class="primary">Start Career →</button>
+    </section>
+
+    <section class="setup-card">
+      <h2>Load Game</h2>
+      <div id="save-list" class="save-list"><p class="dim">Looking for saves…</p></div>
+    </section>
+  </div>
+
+  <div id="setup-progress" class="setup-progress hidden">
+    <div class="spinner"></div>
+    <p id="setup-detail">Starting…</p>
+  </div>
+</div>
+<script src="/static/js/setup.js"></script>
+</body>
+</html>
