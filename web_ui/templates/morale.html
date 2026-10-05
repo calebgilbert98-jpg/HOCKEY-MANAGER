@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Morale — Puck Dynasty</title>
+<title>Dressing Room — Puck Dynasty</title>
 <link rel="stylesheet" href="/static/css/hub.css">
 <link rel="stylesheet" href="/static/css/morale.css">
 </head>
@@ -12,13 +12,48 @@
 
 <header class="topbar">
   <a class="back" href="/">← Hub</a>
-  <div class="team-sub" id="morale-date"></div>
+  <div class="team-sub" id="morale-headline"></div>
 </header>
 
 <main class="morale-main">
-  <h1>Dressing Room</h1>
-  <div class="morale-summary" id="morale-summary"></div>
-  <div class="morale-list" id="morale-list"></div>
+  <div class="morale-row">
+    <div class="morale-card" id="coach-card">
+      <h3>Coaching</h3>
+      <div id="coach-body"></div>
+      <div class="action-row">
+        <button class="btn secondary" data-action="bag_skate">Bag Skate</button>
+        <button class="btn secondary" data-action="speech">Speech</button>
+        <button class="btn secondary" data-action="practice">Practice</button>
+        <button class="btn secondary" data-action="back_room">Back Room</button>
+        <button class="btn secondary" data-action="line_control" id="line-control-btn">Lines: Coach</button>
+      </div>
+    </div>
+    <div class="morale-card" id="watch-card">
+      <h3>Watch List</h3>
+      <div id="watch-body"></div>
+    </div>
+  </div>
+
+  <div class="morale-card">
+    <h3>Player Response to Coach</h3>
+    <div class="table-wrap">
+      <table class="morale-table">
+        <thead><tr><th>Player</th><th>Engagement</th><th>Response</th><th>Happiness</th><th>Morale</th><th>Tier</th></tr></thead>
+        <tbody id="response-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="morale-row">
+    <div class="morale-card">
+      <h3>Dynamics Feed</h3>
+      <div id="feed-body" class="feed"></div>
+    </div>
+    <div class="morale-card">
+      <h3>Hierarchy</h3>
+      <div id="hierarchy-body"></div>
+    </div>
+  </div>
 </main>
 
 <script src="/static/js/morale.js"></script>

@@ -46,17 +46,17 @@ These are the screens Caleb uses every session. Must be rock-solid.
 
 ## Phase 2 — Club Management (P1)
 
-### 2.1 Roster (5 tabs)
-- [ ] NHL / AHL / Prospects / Depth Chart / Salary Cap tabs
-- [ ] Sort/filter/search
-- [ ] Bulk moves with CBA validation
-- [ ] Right-click player menu
-- [ ] Click → player profile
+### 2.1 Roster (5 tabs) ✅ DONE (2026-10-04, commit 7c4e5bd)
+- [x] NHL / AHL / Prospects / Depth Chart / Salary Cap tabs
+- [x] Sort/filter/search
+- [x] Bulk moves with CBA validation (CHL-NHL, ELC gate, junior return)
+- [x] Right-click player menu (context menu)
+- [x] Click → player profile (modal with attributes)
 
-### 2.2 Tactics (6 groups)
-- [ ] Even Strength / PP / PK / Line Matching / Forecheck / OZ pickers
-- [ ] Expected impact readout
-- [ ] Practice tab
+### 2.2 Tactics (6 groups) ✅ DONE (2026-10-04, commit 313060e)
+- [x] Even Strength / PP / PK / Line Matching / Forecheck / OZ pickers
+- [x] Expected impact readout (same xG tables as sim)
+- [x] Practice tab (focus/intensity/bag skate)
 
 ### 2.3 Morale / Dressing Room
 - [ ] Full morale view (not read-only stub)

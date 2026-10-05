@@ -665,6 +665,37 @@ def _execute_command(app, cmd):
                     setattr(team, attr, value)
             except Exception:
                 pass
+        elif op == "morale_action":
+            try:
+                import reputation_system as _rs
+                team = getattr(app, "user_team", None)
+                action = cmd.get("action", "")
+                if team is None:
+                    return
+                # Find head coach
+                coach = None
+                for s in list(getattr(team, "staff", None) or []):
+                    if "head coach" in str(getattr(s, "role", "")).lower():
+                        coach = s
+                        break
+                roster = list(getattr(team, "roster", None) or [])
+                if action == "bag_skate" and coach is not None:
+                    _rs.apply_bag_skate(team, coach, roster)
+                elif action == "speech" and coach is not None:
+                    _rs.apply_inspiring_speech(team, coach, roster)
+                elif action == "practice" and coach is not None:
+                    _rs.apply_great_practice(team, coach, roster)
+                elif action == "back_room":
+                    import media_engine
+                    media_engine.gm_public_backing(
+                        getattr(app, "league", None), team, "room",
+                        user_triggered=True)
+                elif action == "line_control":
+                    # Toggle GM/coach line control
+                    cur = getattr(team, "line_control", "coach") or "coach"
+                    team.line_control = "gm" if cur == "coach" else "coach"
+            except Exception as e:
+                print(f"morale_action failed: {e}")
         elif op == "set_practice":
             try:
                 team = getattr(app, "user_team", None)
