@@ -18,6 +18,15 @@
 <main class="contracts-main">
   <h1 class="page-title">Contracts</h1>
   <p class="contracts-sub" id="cap-line">Roster contracts sorted by cap hit.</p>
+
+  <nav class="tb-tabs" id="contracts-tabs">
+    <button class="tb-tab active" data-tab="all">All Contracts</button>
+    <button class="tb-tab" data-tab="expiring">Expiring <span class="tb-badge" id="exp-badge"></span></button>
+  </nav>
+  <div class="contracts-actions">
+    <button class="tb-btn tb-accent" id="btn-auto-neg">Auto-Negotiate All Expiring</button>
+  </div>
+
   <div class="contracts-list" id="contracts-list"></div>
 </main>
 

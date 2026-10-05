@@ -941,6 +941,71 @@ def _execute_command(app, cmd):
                                     session.record_pick(overall, owner, pid)
             except Exception:
                 pass
+        elif op == "auto_negotiate_extensions":
+            # Mirror of main.py auto_negotiate_extensions: run
+            # handle_contract_offer for every expiring player/staff, then
+            # send one inbox digest with results.
+            try:
+                from datetime import date as _date
+                team = getattr(app, "user_team", None)
+                if team is None:
+                    return
+                expiring = []
+                for lst in ("roster", "ahl_roster"):
+                    for p in list(getattr(team, lst, None) or []):
+                        try:
+                            yrs = getattr(p, "contract_years",
+                                          getattr(getattr(p, "contract", None),
+                                                  "years_remaining", 0))
+                            if int(yrs or 0) == 1:
+                                expiring.append(p)
+                        except Exception:
+                            continue
+                for s in list(getattr(team, "staff", None) or []):
+                    try:
+                        yrs = getattr(s, "contract_years",
+                                      getattr(s, "years_remaining", 0))
+                        if int(yrs or 0) == 1:
+                            expiring.append(s)
+                    except Exception:
+                        continue
+                results = []
+                for person in expiring:
+                    try:
+                        contract = getattr(person, "contract", None)
+                        if contract is not None:
+                            salary = getattr(person, "salary",
+                                             getattr(contract, "salary", 750000))
+                            years = getattr(person, "contract_years",
+                                            getattr(contract, "years_remaining", 1))
+                        else:
+                            salary = getattr(person, "salary", 750000)
+                            years = getattr(person, "contract_years", 1)
+                        person.salary = salary
+                        person.contract_years = years
+                        fn = getattr(app, "handle_contract_offer", None)
+                        accepted = fn(person, extension=True,
+                                      notify="quiet") if callable(fn) else False
+                        nm = getattr(person, "full_name",
+                                     getattr(person, "name", "Unknown"))
+                        results.append(f"{nm}: {'Accepted' if accepted else 'Rejected'}")
+                    except Exception:
+                        continue
+                if results:
+                    try:
+                        from game_classes import EmailMessage
+                        app.send_email_to_user(EmailMessage(
+                            sender="Assistant GM", sender_type="Staff",
+                            date_sent=_date.today(),
+                            category="Contracts", priority=2,
+                            subject="Auto-Negotiation Results",
+                            content=("Automatic extension negotiations complete:\n"
+                                     + "\n".join(results)),
+                        ))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
         elif op == "set_tactic":
             try:
                 team = getattr(app, "user_team", None)

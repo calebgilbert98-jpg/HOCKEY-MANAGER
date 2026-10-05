@@ -1,11 +1,28 @@
 /* Puck Dynasty web contracts */
+let contractsTab = 'all';
 async function loadContracts() {
   try {
-    const res = await fetch('/api/contracts');
+    const res = await fetch('/api/contracts?tab=' + contractsTab);
     const data = await res.json();
     renderContracts(data.contracts || [], data.summary || {});
+    const exp = (data.contracts || []).filter(c => c.expiring).length;
+    const badge = document.getElementById('exp-badge');
+    if (badge) badge.textContent = contractsTab === 'all' ? exp || '' : '';
   } catch (e) { console.error(e); }
 }
+document.getElementById('contracts-tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tb-tab');
+  if (!b) return;
+  document.querySelectorAll('#contracts-tabs .tb-tab').forEach(t => t.classList.remove('active'));
+  b.classList.add('active');
+  contractsTab = b.dataset.tab;
+  loadContracts();
+});
+document.getElementById('btn-auto-neg').addEventListener('click', async () => {
+  if (!confirm('Auto-negotiate extensions with all expiring contracts? Results will arrive in your inbox.')) return;
+  await fetch('/api/contracts/auto_negotiate', { method: 'POST' });
+  alert('Auto-negotiation queued — check your inbox for results.');
+});
 
 function salaryStr(s) {
   s = s || 0;

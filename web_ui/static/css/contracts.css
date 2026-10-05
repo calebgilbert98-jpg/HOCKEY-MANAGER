@@ -146,3 +146,24 @@
   align-self: center; color: var(--dim); font-size: 12px;
   background: none; border: none; font-style: italic; padding: 4px 8px;
 }
+
+/* --- Contracts tab additions --- */
+.tb-tabs { display: flex; gap: 8px; margin: 14px 0 12px; }
+.tb-tab {
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-tab.active { background: rgba(59,130,246,.18); color: #fff; border-color: rgba(59,130,246,.5); }
+.tb-badge {
+  display: inline-block; min-width: 20px; text-align: center;
+  background: var(--accent); color: #fff; border-radius: 10px;
+  font-size: 11px; padding: 1px 6px; margin-left: 4px;
+}
+.contracts-actions { margin-bottom: 14px; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-btn.tb-accent { background: rgba(59,130,246,.2); border-color: rgba(59,130,246,.5); }

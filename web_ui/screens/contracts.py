@@ -59,11 +59,19 @@ def api_contracts():
     live = _live()
     if live is None:
         return jsonify({"contracts": [], "summary": {}})
-    roster = _safe(lambda: list(getattr(live.user_team, "roster", None) or []), []) or []
+    from flask import request as _rq
+    only_expiring = (_rq.args.get("tab") or "all") == "expiring"
+    team = _safe(lambda: getattr(live, "user_team", None))
+    roster = []
+    for lst in ("roster", "ahl_roster"):
+        roster.extend(_safe(lambda: list(getattr(team, lst, None) or []), []) or [])
     rows = []
     for p in roster:
         try:
-            rows.append(_to_web_contract(p))
+            d = _to_web_contract(p)
+            if only_expiring and not d.get("expiring"):
+                continue
+            rows.append(d)
         except Exception:
             continue
     try:
@@ -678,3 +686,10 @@ def _validate_neg_offer(live, player, aav, years, kind):
         return _fa._sign_eligibility(live, player)
     except Exception:
         return False, "Could not validate counter-offer terms."
+
+@bp.route("/api/contracts/auto_negotiate", methods=["POST"])
+def api_contracts_auto_negotiate():
+    """Auto-Negotiate All: queue extension talks for every expiring deal."""
+    import web_ui.bridge as _b
+    _b.enqueue_command({"op": "auto_negotiate_extensions"})
+    return jsonify({"ok": True})
