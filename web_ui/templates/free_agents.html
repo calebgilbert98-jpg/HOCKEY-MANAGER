@@ -41,8 +41,61 @@
     </select>
   </div>
 
-  <div class="fa-list" id="fa-list"></div>
+  <nav class="tb-tabs" id="fa-tabs">
+    <button class="tb-tab active" data-tab="players">Players</button>
+    <button class="tb-tab" data-tab="staff">Staff</button>
+    <button class="tb-tab" data-tab="market">Market Overview</button>
+  </nav>
+
+  <section id="fa-tab-players" class="tb-panel">
+    <div class="fa-compare-bar">
+      <button class="tb-btn" id="btn-compare" disabled>Compare Selected (<span id="cmp-n">0</span>)</button>
+    </div>
+    <div class="fa-list" id="fa-list"></div>
+  </section>
+  <section id="fa-tab-staff" class="tb-panel hidden">
+    <div class="fa-filters">
+      <input class="tb-search" id="staff-q" placeholder="Search staff by name…">
+      <select class="fa-sort" id="staff-dept">
+        <option value="All">All departments</option>
+        <option>Management</option><option>Coaching</option>
+        <option>Development</option><option>Scouting</option>
+        <option>Medical</option><option>Analytics</option>
+      </select>
+    </div>
+    <div class="fa-list" id="staff-list"></div>
+  </section>
+  <section id="fa-tab-market" class="tb-panel hidden">
+    <div id="market-overview"></div>
+  </section>
 </main>
+
+<!-- Market analysis modal -->
+<div class="cm-overlay" id="analysis-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true">
+    <div class="cm-head">
+      <div><div class="cm-title" id="analysis-title">Market Analysis</div></div>
+      <button class="cm-close" id="analysis-close">✕</button>
+    </div>
+    <div class="tb-tabs" id="analysis-tabs">
+      <button class="tb-tab active" data-atab="value">Value</button>
+      <button class="tb-tab" data-atab="comps">Comparables</button>
+      <button class="tb-tab" data-atab="proj">Projection</button>
+    </div>
+    <div id="analysis-body"></div>
+  </div>
+</div>
+
+<!-- Compare modal -->
+<div class="cm-overlay" id="compare-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" style="max-width:720px">
+    <div class="cm-head">
+      <div><div class="cm-title">Compare Players</div></div>
+      <button class="cm-close" id="compare-close">✕</button>
+    </div>
+    <div id="compare-body"></div>
+  </div>
+</div>
 
 <!-- v2 contract offer modal (in-page; never a desktop window) -->
 <div class="cm-overlay" id="offer-modal" hidden>

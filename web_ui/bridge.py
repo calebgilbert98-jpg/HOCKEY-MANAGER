@@ -806,6 +806,39 @@ def _execute_command(app, cmd):
                         note=f"Trade interest expressed ({tname} block)")
             except Exception:
                 pass
+        elif op == "hire_staff":
+            try:
+                sid = str(cmd.get("staff_id", ""))
+                salary = int(cmd.get("salary") or 0)
+                years = int(cmd.get("years") or 3)
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                team = getattr(app, "user_team", None)
+                if league is not None and team is not None and sid:
+                    pool = list(getattr(league, "free_agent_staff", None) or [])
+                    target = None
+                    for s in pool:
+                        if str(getattr(s, "id", "")) == sid:
+                            target = s
+                            break
+                    if target is not None:
+                        try:
+                            pool.remove(target)
+                            league.free_agent_staff = pool
+                        except Exception:
+                            pass
+                        try:
+                            target.salary = salary or getattr(target, "salary", 100000)
+                            target.contract_years = years
+                            staff = getattr(team, "staff", None)
+                            if staff is None:
+                                team.staff = []
+                                staff = team.staff
+                            staff.append(target)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         elif op == "set_tactic":
             try:
                 team = getattr(app, "user_team", None)

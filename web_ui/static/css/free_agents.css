@@ -175,3 +175,47 @@
   align-self: center; color: var(--dim); font-size: 12px;
   background: none; border: none; font-style: italic; padding: 4px 8px;
 }
+
+/* --- FA 3-tab additions --- */
+.tb-tabs { display: flex; gap: 8px; margin: 14px 0 18px; }
+.tb-tab {
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-tab.active { background: rgba(59,130,246,.18); color: #fff; border-color: rgba(59,130,246,.5); }
+.tb-panel.hidden { display: none; }
+.fa-compare-bar { margin-bottom: 10px; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-btn:disabled { opacity: .5; }
+.tb-btn.tb-accent { background: rgba(59,130,246,.2); border-color: rgba(59,130,246,.5); }
+.tb-mini {
+  background: rgba(59,130,246,.14); border: 1px solid rgba(59,130,246,.35);
+  color: #cfe3ff; border-radius: 8px; padding: 4px 10px; font-size: 12px;
+  font-weight: 700; cursor: pointer; margin-left: 6px;
+}
+.tb-search {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 12px; font-size: 14px;
+  min-width: 220px;
+}
+.cmp-label { font-size: 12px; color: var(--dim); margin-left: 8px; cursor: pointer; }
+.cmp-label input { accent-color: #3B82F6; }
+.mk-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.mk-card {
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 12px; padding: 16px;
+}
+.mk-card h3 { margin: 0 0 10px; font-size: 14px; color: var(--dim); }
+.mk-big { font-size: 28px; font-weight: 800; }
+.mk-row { display: flex; justify-content: space-between; padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05); font-size: 13px; }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cmp-table th, .cmp-table td { padding: 8px 10px; text-align: left;
+  border-bottom: 1px solid rgba(255,255,255,.07); }
+.cmp-table th { background: rgba(59,130,246,.1); }
+.dim { color: var(--dim); }

@@ -336,3 +336,229 @@ def api_free_agents_demands():
                  "period -- the player fields all clubs' bids before "
                  "deciding. This is not an instant signing."),
     })
+
+
+# --- Staff tab ----------------------------------------------------------
+
+
+def _to_web_staff(s):
+    """Staff member -> JSON-safe dict."""
+    try:
+        name = _safe(lambda: getattr(s, "full_name", None) or getattr(s, "name", "?"), "?")
+        role = _safe(lambda: str(getattr(getattr(s, "role", ""), "value", getattr(s, "role", "")) or ""), "")
+        dept = _safe(lambda: str(getattr(s, "department", "") or ""), "")
+        age = _safe(lambda: int(getattr(s, "age", 0) or 0), 0)
+        sal = _safe(lambda: int(getattr(s, "salary", 0) or 0), 0)
+        # Overall: average of key ratings or a rating attribute
+        ovr = 0
+        try:
+            ratings = []
+            for attr in ("tactics", "development", "scouting", "leadership",
+                         "motivation", "discipline", "man_management"):
+                v = getattr(s, attr, None)
+                if isinstance(v, (int, float)) and v > 0:
+                    ratings.append(v)
+            if ratings:
+                ovr = int(sum(ratings) / len(ratings))
+            else:
+                ovr = int(getattr(s, "overall", 0) or getattr(s, "rating", 0) or 0)
+        except Exception:
+            pass
+        exp = _safe(lambda: int(getattr(s, "experience", 0) or getattr(s, "years_experience", 0) or 0), 0)
+        sid = _safe(lambda: str(getattr(s, "id", "")), "")
+        return {"id": sid, "name": name, "role": role, "department": dept,
+                "age": age, "salary": sal, "overall": ovr, "experience": exp}
+    except Exception:
+        return {"id": "", "name": "?", "role": "", "department": "",
+                "age": 0, "salary": 0, "overall": 0, "experience": 0}
+
+
+@bp.route("/api/free_agents/staff")
+def api_free_agents_staff():
+    """Free-agent staff with filters: role, department, search."""
+    live = _live()
+    if live is None:
+        return jsonify({"staff": []})
+    league = _safe(lambda: getattr(getattr(live, "game_manager", None), "league", None))
+    pool = _safe(lambda: list(getattr(league, "free_agent_staff", None)
+                              or getattr(league, "staff_free_agents", None) or []), []) or []
+    role = (request.args.get("role") or "All").strip()
+    dept = (request.args.get("department") or "All").strip()
+    q = (request.args.get("q") or "").strip().lower()
+    out = []
+    for s in pool:
+        try:
+            d = _to_web_staff(s)
+            if role != "All" and d["role"] != role:
+                continue
+            if dept != "All" and d["department"] != dept:
+                continue
+            if q and q not in d["name"].lower():
+                continue
+            out.append(d)
+        except Exception:
+            continue
+    try:
+        out.sort(key=lambda d: d.get("overall", 0), reverse=True)
+    except Exception:
+        pass
+    return jsonify({"staff": out})
+
+
+@bp.route("/api/free_agents/staff/hire", methods=["POST"])
+def api_free_agents_staff_hire():
+    """Queue hiring a free-agent staff member."""
+    data = request.get_json(force=True, silent=True) or {}
+    sid = str(data.get("staff_id") or "")
+    if not sid:
+        return jsonify({"ok": False, "error": "staff_id required"}), 400
+    enqueue_command({"op": "hire_staff", "staff_id": sid,
+                     "salary": int(data.get("salary") or 0),
+                     "years": int(data.get("years") or 3)})
+    return jsonify({"ok": True})
+
+
+# --- Market Overview tab -------------------------------------------------
+
+
+@bp.route("/api/free_agents/market")
+def api_free_agents_market():
+    """Market overview: counts, top available by position, avg asking."""
+    live = _live()
+    if live is None:
+        return jsonify({})
+    league = _safe(lambda: getattr(getattr(live, "game_manager", None), "league", None))
+    pool = _safe(lambda: list(getattr(league, "free_agents", None) or []), []) or []
+    by_pos, by_type = {}, {"UFA": 0, "RFA": 0}
+    total_ask, n_ask = 0, 0
+    top = []
+    for p in pool:
+        try:
+            d = _to_web_fa(p)
+            pos = d.get("position") or "?"
+            by_pos[pos] = by_pos.get(pos, 0) + 1
+            ft = d.get("fa_type") or "FA"
+            if ft in by_type:
+                by_type[ft] += 1
+            ask = d.get("ask") or 0
+            if ask:
+                total_ask += ask
+                n_ask += 1
+            top.append(d)
+        except Exception:
+            continue
+    try:
+        top.sort(key=lambda d: d.get("overall", 0), reverse=True)
+    except Exception:
+        pass
+    return jsonify({
+        "total": len(pool),
+        "by_position": by_pos,
+        "by_type": by_type,
+        "avg_ask": int(total_ask / n_ask) if n_ask else 0,
+        "top_available": top[:10],
+    })
+
+
+# --- Market Analysis -------------------------------------------------------
+
+
+@bp.route("/api/free_agents/analysis")
+def api_free_agents_analysis():
+    """Market analysis for one player: value, comparables, projection."""
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    pid = request.args.get("player_id")
+    p = _find_fa(live, pid)
+    if p is None:
+        return jsonify({"ok": False, "error": "player not found"}), 404
+    d = _to_web_fa(p)
+    ask = d.get("ask") or 0
+    # Market value: use the game's valuation when available
+    try:
+        mv = int(_safe(lambda: live.calculate_player_value(p), 0) or 0)
+    except Exception:
+        mv = 0
+    if not mv:
+        # Fallback: rough value from overall/age
+        ovr = d.get("overall") or 70
+        age = d.get("age") or 28
+        mv = int(max(750000, (ovr - 60) * 450000 * max(0.4, 1 - (age - 28) * 0.06)))
+    diff = mv - ask
+    if diff > 500000:
+        verdict, vcolor = f"UNDERVALUED by ${diff:,}", "green"
+    elif diff < -500000:
+        verdict, vcolor = f"OVERVALUED by ${abs(diff):,}", "red"
+    else:
+        verdict, vcolor = "FAIRLY VALUED", "blue"
+    # Comparables: same position, similar overall (+/-3), from FA pool
+    comps = []
+    try:
+        league = _safe(lambda: getattr(getattr(live, "game_manager", None), "league", None))
+        pool = _safe(lambda: list(getattr(league, "free_agents", None) or []), []) or []
+        pos, ovr = d.get("position"), d.get("overall") or 70
+        for q in pool:
+            try:
+                if q is p:
+                    continue
+                qd = _to_web_fa(q)
+                if qd.get("position") != pos:
+                    continue
+                if abs((qd.get("overall") or 0) - ovr) > 3:
+                    continue
+                comps.append({"name": qd.get("name"), "overall": qd.get("overall"),
+                              "age": qd.get("age"), "ask": qd.get("ask")})
+                if len(comps) >= 5:
+                    break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    # Projection: suggested term + AAV range
+    age = d.get("age") or 28
+    years_max = _term_bounds(live, extension=False)[1]
+    suggested_years = _suggested_years(p, years_max)
+    proj_low = int(mv * 0.9)
+    proj_high = int(mv * 1.1)
+    return jsonify({
+        "ok": True,
+        "player": d,
+        "value": {"market_value": mv, "ask": ask, "verdict": verdict,
+                  "color": vcolor},
+        "comparables": comps,
+        "projection": {"years": suggested_years,
+                       "aav_low": proj_low, "aav_high": proj_high},
+    })
+
+
+# --- Compare Players -------------------------------------------------------
+
+
+@bp.route("/api/free_agents/compare")
+def api_free_agents_compare():
+    """Side-by-side comparison of 2-3 free agents."""
+    live = _live()
+    if live is None:
+        return jsonify({"players": []})
+    pids = [p for p in (request.args.get("player_ids") or "").split(",") if p][:3]
+    out = []
+    for pid in pids:
+        p = _find_fa(live, pid)
+        if p is None:
+            continue
+        try:
+            d = _to_web_fa(p)
+            # Add key attributes for comparison
+            attrs = {}
+            for a in ("shooting_accuracy", "passing", "skating", "checking",
+                      "defensive_awareness", "offensive_awareness", "strength"):
+                try:
+                    attrs[a] = int(getattr(p, a, 0) or 0)
+                except Exception:
+                    pass
+            d["compare_attrs"] = attrs
+            out.append(d)
+        except Exception:
+            continue
+    return jsonify({"players": out})

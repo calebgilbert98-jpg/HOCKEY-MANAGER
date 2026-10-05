@@ -93,7 +93,9 @@ function renderFA() {
         <div class="fa-sub">${esc(p.position)} · Age ${p.age} · Asking ${salaryStr(p.ask)}</div>
       </div>
       <div class="fa-bar"><span style="width:${Math.min(100, p.overall)}%;background:${barColor(p.overall)}"></span></div>
-      <button class="btn-offer" data-id="${esc(p.id)}">Make offer</button>`;
+      <button class="btn-offer" data-id="${esc(p.id)}">Make offer</button>
+      <button class="tb-mini" data-analysis="${esc(p.id)}" data-nm="${esc(p.name)}">Analysis</button>
+      <label class="cmp-label"><input type="checkbox" class="cmp-check" data-pid="${esc(p.id)}"> Compare</label>`;
     const btn = el.querySelector('.btn-offer');
     btn.addEventListener('click', () => makeOffer(btn, p.id, p.ask, p.name));
     list.appendChild(el);
@@ -585,3 +587,175 @@ loadFA();
   beat();
   setInterval(beat, 30000);
 })();
+
+/* ---------- 3-tab navigation ---------- */
+(function initFaTabs() {
+  const tabs = document.getElementById('fa-tabs');
+  if (!tabs) return;
+  tabs.addEventListener('click', e => {
+    const b = e.target.closest('.tb-tab');
+    if (!b) return;
+    tabs.querySelectorAll('.tb-tab').forEach(t => t.classList.remove('active'));
+    b.classList.add('active');
+    document.querySelectorAll('#fa-tab-players,#fa-tab-staff,#fa-tab-market')
+      .forEach(p => p.classList.add('hidden'));
+    document.getElementById('fa-tab-' + b.dataset.tab).classList.remove('hidden');
+    if (b.dataset.tab === 'staff') loadStaff();
+    if (b.dataset.tab === 'market') loadMarket();
+  });
+})();
+
+/* ---------- Staff tab ---------- */
+async function loadStaff() {
+  const q = document.getElementById('staff-q').value || '';
+  const dept = document.getElementById('staff-dept').value || 'All';
+  try {
+    const res = await fetch('/api/free_agents/staff?' + new URLSearchParams({ q, department: dept }));
+    const data = await res.json();
+    renderStaff(data.staff || []);
+  } catch (e) { console.error(e); }
+}
+function renderStaff(staff) {
+  const host = document.getElementById('staff-list');
+  host.innerHTML = staff.length ? '' : '<div class="block-empty">No free-agent staff found.</div>';
+  for (const s of staff) {
+    const el = document.createElement('div');
+    el.className = 'fa-card';
+    el.innerHTML = `
+      <div class="fa-head">
+        <div class="fa-ov" style="--c:${barColor(s.overall)}">${s.overall}</div>
+        <div><div class="fa-name">${esc(s.name)}</div>
+        <div class="fa-sub">${esc(s.role)} · ${esc(s.department)} · ${s.experience} yrs exp</div></div>
+      </div>
+      <div class="fa-actions">
+        <button class="tb-mini" data-hire="${esc(s.id)}" data-nm="${esc(s.name)}">Hire</button>
+      </div>`;
+    host.appendChild(el);
+  }
+}
+document.getElementById('staff-q').addEventListener('input', () => loadStaff());
+document.getElementById('staff-dept').addEventListener('change', () => loadStaff());
+document.getElementById('staff-list').addEventListener('click', async e => {
+  const b = e.target.closest('[data-hire]');
+  if (!b) return;
+  const salary = prompt(`Offer annual salary for ${b.dataset.nm} (e.g. 150000):`, '150000');
+  if (!salary) return;
+  await fetch('/api/free_agents/staff/hire', { method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ staff_id: b.dataset.hire, salary: parseInt(salary) || 0, years: 3 }) });
+  alert('Hire offer queued.');
+  setTimeout(loadStaff, 800);
+});
+
+/* ---------- Market Overview tab ---------- */
+async function loadMarket() {
+  try {
+    const res = await fetch('/api/free_agents/market');
+    const d = await res.json();
+    const host = document.getElementById('market-overview');
+    const posRows = Object.entries(d.by_position || {})
+      .sort((a, b) => b[1] - a[1])
+      .map(([p, n]) => `<div class="mk-row"><span>${esc(p)}</span><b>${n}</b></div>`).join('');
+    const topRows = (d.top_available || []).map(p =>
+      `<div class="mk-row"><span>${esc(p.name)} <span class="dim">${esc(p.position)} · ${p.overall} OVR</span></span>
+       <b>${salaryStr(p.ask)}</b></div>`).join('');
+    host.innerHTML = `
+      <div class="mk-grid">
+        <div class="mk-card"><h3>Market Size</h3><div class="mk-big">${d.total}</div>
+          <div class="dim">${d.by_type.UFA} UFA · ${d.by_type.RFA} RFA</div></div>
+        <div class="mk-card"><h3>Avg Asking</h3><div class="mk-big">${salaryStr(d.avg_ask)}</div></div>
+        <div class="mk-card"><h3>By Position</h3>${posRows}</div>
+        <div class="mk-card"><h3>Top Available</h3>${topRows}</div>
+      </div>`;
+  } catch (e) { console.error(e); }
+}
+
+/* ---------- Market Analysis modal ---------- */
+let analysisData = null, analysisTab = 'value';
+async function openAnalysis(pid, name) {
+  try {
+    const res = await fetch('/api/free_agents/analysis?player_id=' + encodeURIComponent(pid));
+    const d = await res.json();
+    if (!d.ok) return alert(d.error || 'Analysis unavailable');
+    analysisData = d;
+    analysisTab = 'value';
+    document.getElementById('analysis-title').textContent = 'Market Analysis — ' + name;
+    document.querySelectorAll('#analysis-tabs .tb-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.atab === 'value'));
+    renderAnalysis();
+    document.getElementById('analysis-modal').hidden = false;
+  } catch (e) { console.error(e); }
+}
+function renderAnalysis() {
+  const d = analysisData, host = document.getElementById('analysis-body');
+  if (analysisTab === 'value') {
+    const v = d.value;
+    host.innerHTML = `
+      <p>Market value: <b>${'$' + v.market_value.toLocaleString()}</b><br>
+      Asking: <b>${'$' + v.ask.toLocaleString()}</b></p>
+      <p style="color:${v.color === 'green' ? '#4CAF50' : v.color === 'red' ? '#F44336' : '#3B82F6'}">
+      <b>${esc(v.verdict)}</b></p>`;
+  } else if (analysisTab === 'comps') {
+    host.innerHTML = d.comparables.length
+      ? '<ul>' + d.comparables.map(c =>
+          `<li><b>${esc(c.name)}</b> — ${c.overall} OVR, age ${c.age}, ask ${salaryStr(c.ask)}</li>`).join('') + '</ul>'
+      : '<p class="dim">No comparable players found.</p>';
+  } else {
+    const p = d.projection;
+    host.innerHTML = `<p>Suggested term: <b>${p.years} years</b><br>
+      Projected AAV range: <b>${salaryStr(p.aav_low)} – ${salaryStr(p.aav_high)}</b></p>`;
+  }
+}
+document.getElementById('analysis-tabs').addEventListener('click', e => {
+  const b = e.target.closest('.tb-tab');
+  if (!b) return;
+  document.querySelectorAll('#analysis-tabs .tb-tab').forEach(t => t.classList.remove('active'));
+  b.classList.add('active');
+  analysisTab = b.dataset.atab;
+  renderAnalysis();
+});
+document.getElementById('analysis-close').addEventListener('click', () =>
+  document.getElementById('analysis-modal').hidden = true);
+
+/* ---------- Compare ---------- */
+const cmpSel = new Set();
+function bindCompare() {
+  document.getElementById('fa-list').addEventListener('change', e => {
+    const cb = e.target.closest('input.cmp-check');
+    if (!cb) return;
+    if (cb.checked) { if (cmpSel.size < 3) cmpSel.add(cb.dataset.pid); else cb.checked = false; }
+    else cmpSel.delete(cb.dataset.pid);
+    document.getElementById('cmp-n').textContent = cmpSel.size;
+    document.getElementById('btn-compare').disabled = !cmpSel.size;
+  });
+  document.getElementById('btn-compare').addEventListener('click', async () => {
+    if (!cmpSel.size) return;
+    const res = await fetch('/api/free_agents/compare?player_ids=' + [...cmpSel].map(encodeURIComponent).join(','));
+    const d = await res.json();
+    const ps = d.players || [];
+    const attrs = ['overall', 'age', 'ask'];
+    const extra = ['shooting_accuracy', 'passing', 'skating', 'checking', 'defensive_awareness'];
+    let html = '<table class="cmp-table"><tr><th></th>' +
+      ps.map(p => `<th>${esc(p.name)}</th>`).join('') + '</tr>';
+    for (const a of attrs.concat(extra)) {
+      html += `<tr><td class="dim">${esc(a)}</td>` + ps.map(p => {
+        let v = p[a];
+        if (v == null && p.compare_attrs) v = p.compare_attrs[a];
+        if (a === 'ask') v = salaryStr(v);
+        return `<td>${esc(v == null ? '—' : v)}</td>`;
+      }).join('') + '</tr>';
+    }
+    html += '</table>';
+    document.getElementById('compare-body').innerHTML = html;
+    document.getElementById('compare-modal').hidden = false;
+  });
+  document.getElementById('compare-close').addEventListener('click', () =>
+    document.getElementById('compare-modal').hidden = true);
+}
+bindCompare();
+
+/* Hook analysis buttons into player cards (delegated) */
+document.getElementById('fa-list').addEventListener('click', e => {
+  const b = e.target.closest('[data-analysis]');
+  if (b) openAnalysis(b.dataset.analysis, b.dataset.nm);
+});
