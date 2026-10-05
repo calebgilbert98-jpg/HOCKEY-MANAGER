@@ -10,13 +10,15 @@
 <body>
 <div class="setup-wrap">
   <header class="setup-hero">
-    <h1>🏒 Puck Dynasty</h1>
-    <p>Choose your path to the Cup</p>
+    <div class="setup-crest">🏒</div>
+    <h1>Puck Dynasty</h1>
+    <p class="tagline">Build your <b>dynasty</b>. Choose your path to the Cup.</p>
   </header>
 
   <div class="setup-cols">
     <section class="setup-card">
       <h2>New Career</h2>
+      <p class="card-sub">Take over a franchise from opening night and shape its future.</p>
       <label class="fld">Your name
         <input id="gm-name" type="text" value="General Manager" maxlength="40">
       </label>
@@ -28,14 +30,19 @@
 
     <section class="setup-card">
       <h2>Load Game</h2>
+      <p class="card-sub">Pick up right where you left off.</p>
       <div id="save-list" class="save-list"><p class="dim">Looking for saves…</p></div>
     </section>
   </div>
 
   <div id="setup-progress" class="setup-progress hidden">
-    <div class="spinner"></div>
-    <p id="setup-detail">Starting…</p>
+    <div class="progress-card">
+      <div class="spinner"></div>
+      <p id="setup-detail">Starting…</p>
+    </div>
   </div>
+
+  <footer class="setup-foot">Puck Dynasty runs <b>fully offline</b> — your franchise lives on this machine.</footer>
 </div>
 <script src="/static/js/setup.js"></script>
 </body>
