@@ -13015,93 +13015,542 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             self._mp_toast(f"Waiver answer failed: {e}")
 
-    def _mp_show_draft_clock(self, payload):
-        """You're on the clock: pick a prospect (60s, then auto-pick)."""
-        clock_id = payload.get("clock_id", "")
-        overall = payload.get("overall", 0)
-        round_num = payload.get("round_num", 0)
-        prospects = payload.get("prospects") or []
-        if not prospects:
-            return
+    # -- MP draft-clock pick UI (Eastside standard, shared) -------------------
+
+    _MP_PICK_POS_GROUPS = {
+        "All": None,
+        "Forwards": {"C", "LW", "RW"},
+        "Defense": {"LD", "RD", "D"},
+        "Goalies": {"G"},
+    }
+
+    def _mp_pick_player_pos(self, player):
+        try:
+            return str(getattr(
+                getattr(player, "primary_position", None), "value", "?"))
+        except Exception:
+            return "?"
+
+    def _mp_pick_player_ovr(self, player, ctx=None):
+        try:
+            if ctx is not None:
+                from player_views import column_sort
+                v = column_sort("ovr", player, ctx)
+                if v is not None:
+                    return int(float(v))
+        except Exception:
+            pass
+        try:
+            return int(float(
+                getattr(player, "overall_rating", lambda: 50)() or 50))
+        except Exception:
+            return 50
+
+    def _mp_pick_player_age(self, player):
+        try:
+            return int(getattr(player, "age", 0) or 0)
+        except Exception:
+            return 0
+
+    def _mp_draft_pick_window(self, *, title, players, board, my_team_id,
+                              clock_id, action_name, answer_attr,
+                              expire_toast, draft_button_text,
+                              extra_columns=()):
+        """Shared Eastside-style pick UI for MP draft clocks.
+
+        Tab 1 "Available": ViewsFiltersPanel (view buttons + FilterBar
+        search/attribute filters) + position-group row + sortable
+        Treeview; double-click or "View Card" opens the player card.
+        Tab 2 "My Picks": this client's drafted players from the board.
+        Tab 3 "All Picks": every committed pick, team by team.
+
+        Non-modal (no grab_set). 60s countdown preserved; answering
+        sets the <answer_attr> guard dict like the legacy windows.
+        """
+        import tkinter.ttk as ttk
+        board = board or []
         win = tk.Toplevel(self)
-        win.title(f"Draft pick #{overall} -- you're on the clock")
-        win.geometry("520x560")
-        win.attributes("-topmost", True)
-        tk.Label(win, text=f"Pick #{overall} (Round {round_num}) -- "
-                           f"your selection",
-                 font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
-        self._mp_draft_answer = {"clock_id": clock_id, "answered": False}
-        state = {"left": 60}
+        win.title(title)
+        win.geometry("900x700")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        setattr(self, answer_attr,
+                {"clock_id": clock_id, "answered": False})
+        state = {"left": 60, "players": list(players or []),
+                 "pos_group": "All", "sort": ("ovr", True)}
+
+        # Filter context for PlayerFilter.matches.
+        try:
+            from player_views import ViewContext
+            _fctx = ViewContext(app=self, mode="full")
+        except Exception:
+            _fctx = None
+
+        # -- header ------------------------------------------------------
+        header = tk.Frame(win)
+        header.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(header, text=title,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        clock_var = tk.StringVar(value="Clock: 60s")
+        tk.Label(header, textvariable=clock_var,
+                 font=("Segoe UI", 11, "bold"),
+                 fg="#e8b93c").pack(side="right")
 
         def _countdown():
             try:
                 if not win.winfo_exists():
                     return
-                if self._mp_draft_answer.get("answered"):
+                if getattr(self, answer_attr, {}).get("answered"):
                     return
                 state["left"] -= 1
                 clock_var.set(f"Clock: {max(state['left'], 0)}s")
                 if state["left"] <= 0:
-                    win.destroy()
-                    self._mp_toast("Draft clock expired -- auto-pick.")
+                    try:
+                        win.destroy()
+                    except Exception:
+                        pass
+                    self._mp_toast(expire_toast)
                     return
                 win.after(1000, _countdown)
             except Exception:
                 pass
 
-        clock_var = tk.StringVar(value="Clock: 60s")
-        tk.Label(win, textvariable=clock_var,
-                 font=("Segoe UI", 11)).pack(pady=(0, 6))
-        frame = tk.Frame(win)
-        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        lb = tk.Listbox(frame, font=("Segoe UI", 11), height=18)
-        lb.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
-        sb.pack(side="right", fill="y")
-        lb.configure(yscrollcommand=sb.set)
-        for p in prospects:
-            lb.insert("end", f"#{p.get('ranking', '?')} "
-                             f"{p.get('name', '?')} ({p.get('pos', '?')})")
+        # -- tabs ---------------------------------------------------------
+        nb = ttk.Notebook(win)
+        nb.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+
+        tab_avail = tk.Frame(nb)
+        tab_mine = tk.Frame(nb)
+        tab_all = tk.Frame(nb)
+        nb.add(tab_avail, text="Available")
+        nb.add(tab_mine, text="My Picks")
+        nb.add(tab_all, text="All Picks")
+
+        # -- Tab 1: Available ---------------------------------------------
+        try:
+            from player_view_ui import ViewsFiltersPanel
+            panel = ViewsFiltersPanel(
+                tab_avail, default_label="All",
+                on_view_change=lambda name: _apply_view(name),
+                on_filter_change=lambda: _refill())
+            panel.pack(fill="x", padx=4, pady=(4, 0))
+        except Exception:
+            panel = None
+
+        # Position-group row (All / Forwards / Defense / Goalies).
+        pg_row = tk.Frame(tab_avail)
+        pg_row.pack(fill="x", padx=8, pady=(4, 2))
+        tk.Label(pg_row, text="Position:",
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        pg_vars = {}
+        pg_buttons = {}
+
+        def _set_pos_group(name):
+            state["pos_group"] = name
+            for n, b in pg_buttons.items():
+                try:
+                    b.configure(
+                        relief="sunken" if n == name else "raised")
+                except Exception:
+                    pass
+            _refill()
+
+        for _gname in ("All", "Forwards", "Defense", "Goalies"):
+            _b = tk.Button(pg_row, text=_gname,
+                           font=("Segoe UI", 9),
+                           command=lambda n=_gname: _set_pos_group(n))
+            _b.pack(side="left", padx=2)
+            pg_buttons[_gname] = _b
+        # state["pos_group"] already defaults to "All"; the first real
+        # refill happens after the tree exists (see _refill() below).
+        try:
+            pg_buttons["All"].configure(relief="sunken")
+        except Exception:
+            pass
+
+        _base_cols = (["ovr", "name", "pos", "age"]
+                      + list(extra_columns or ()))
+        state["cols"] = list(_base_cols)
+        tree = ttk.Treeview(tab_avail, columns=state["cols"],
+                            show="headings", height=18)
+        _tsb = ttk.Scrollbar(tab_avail, orient="vertical",
+                             command=tree.yview)
+        tree.configure(yscrollcommand=_tsb.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(8, 0), pady=(0, 4))
+        _tsb.pack(side="left", fill="y", padx=(0, 8), pady=(0, 4))
+
+        def _col_header(key):
+            try:
+                from player_views import COLUMN_DEFS
+                _d = COLUMN_DEFS.get(key)
+                if _d is not None:
+                    return _d.header
+            except Exception:
+                pass
+            return {"ovr": "OVR", "name": "Name", "pos": "Pos",
+                    "age": "Age", "rank": "Rank", "pot": "Pot"}.get(
+                        key, key)
+
+        def _col_width(key):
+            try:
+                from player_views import COLUMN_DEFS
+                _d = COLUMN_DEFS.get(key)
+                if _d is not None:
+                    return _d.width
+            except Exception:
+                pass
+            return {"ovr": 60, "name": 260, "pos": 60, "age": 60,
+                    "rank": 70, "pot": 60}.get(key, 80)
+
+        def _cell_raw(p, key):
+            # Raw (sortable) value for any column key.
+            try:
+                if key == "ovr":
+                    return self._mp_pick_player_ovr(p, _fctx)
+                if key == "name":
+                    return getattr(p, "full_name", "") or ""
+                if key == "pos":
+                    return self._mp_pick_player_pos(p)
+                if key == "age":
+                    return self._mp_pick_player_age(p)
+                if key == "rank":
+                    return int(getattr(p, "draft_ranking", 0) or 0) \
+                        or None
+                if key == "pot":
+                    return str(getattr(p, "potential_grade", "?")
+                               or "?")
+                if _fctx is not None:
+                    from player_views import column_sort
+                    return column_sort(key, p, _fctx)
+            except Exception:
+                pass
+            return None
+
+        def _cell_text(p, key):
+            _v = _cell_raw(p, key)
+            if _v is None:
+                return "--"
+            try:
+                from player_views import _fmt_val
+                return _fmt_val(_v)
+            except Exception:
+                return str(_v)
+
+        def _rebuild_columns():
+            _cols = state["cols"]
+            tree.configure(columns=_cols)
+            for _c in _cols:
+                tree.heading(_c, text=_col_header(_c),
+                             command=lambda c=_c: _sort_by(c))
+                tree.column(_c, width=_col_width(_c),
+                            anchor="w" if _c == "name" else "center")
+
+        def _apply_view(view_name):
+            # Eastside column views: rebuild the table for the picked
+            # view. "All" (the default) restores the draft base columns.
+            try:
+                if not view_name or view_name == "All":
+                    _cols = list(_base_cols)
+                else:
+                    from player_views import get_view_columns
+                    _cols = list(
+                        get_view_columns(view_name) or []) or list(
+                            _base_cols)
+                    if "name" not in _cols:
+                        _cols.insert(0, "name")
+                state["cols"] = _cols
+                state["sort"] = (_cols[0], True)
+                _rebuild_columns()
+                _refill()
+            except Exception:
+                pass
+
+        def _sort_by(col):
+            _key, _rev = state["sort"]
+            _rev = (not _rev) if _key == col else True
+            state["sort"] = (col, _rev)
+            _refill()
+
+        _rebuild_columns()
+
+        def _filtered_players():
+            _out = []
+            try:
+                _pf = panel.get_filter() if panel is not None else None
+            except Exception:
+                _pf = None
+            _grp = self._MP_PICK_POS_GROUPS.get(state["pos_group"])
+            for p in state["players"]:
+                try:
+                    if _grp is not None and \
+                            self._mp_pick_player_pos(p) not in _grp:
+                        continue
+                    if _pf is not None and not _pf.is_empty() \
+                            and _fctx is not None \
+                            and not _pf.matches(p, _fctx):
+                        continue
+                except Exception:
+                    continue
+                _out.append(p)
+            _key, _rev = state["sort"]
+            _num, _txt, _miss = [], [], []
+            for p in _out:
+                try:
+                    _v = _cell_raw(p, _key)
+                except Exception:
+                    _v = None
+                _nm = getattr(p, "full_name", "") or ""
+                if _v is None:
+                    _miss.append(p)
+                elif isinstance(_v, (int, float)):
+                    _num.append((_v, _nm.lower(), p))
+                else:
+                    _txt.append((str(_v).lower(), _nm.lower(), p))
+            _num.sort(key=lambda r: (r[0], r[1]), reverse=_rev)
+            _txt.sort(key=lambda r: (r[0], r[1]), reverse=_rev)
+            return [p for _, _, p in _num] + \
+                [p for _, _, p in _txt] + _miss
+
+        state["shown"] = []
+
+        def _refill():
+            try:
+                if not win.winfo_exists():
+                    return
+                for _iid in tree.get_children():
+                    tree.delete(_iid)
+                state["shown"] = _filtered_players()
+                _cols = state["cols"]
+                for p in state["shown"]:
+                    try:
+                        tree.insert(
+                            "", "end",
+                            values=[_cell_text(p, _c) for _c in _cols])
+                    except Exception:
+                        pass
+                try:
+                    if panel is not None:
+                        panel.set_count(len(state["shown"]),
+                                        len(state["players"]))
+                except Exception:
+                    pass
+                _kids = tree.get_children()
+                if _kids:
+                    tree.selection_set(_kids[0])
+            except Exception:
+                pass
+
+        def _selected_player():
+            try:
+                _sel = tree.selection()
+                if not _sel:
+                    return None
+                _idx = tree.index(_sel[0])
+                _shown = state.get("shown") or []
+                if 0 <= _idx < len(_shown):
+                    return _shown[_idx]
+            except Exception:
+                pass
+            return None
+
+        def _view_card(_event=None):
+            p = _selected_player()
+            if p is None:
+                return
+            try:
+                self.open_player_profile(p)
+            except Exception as e:
+                try:
+                    self._mp_toast(f"Couldn't open player card: {e}")
+                except Exception:
+                    pass
+
+        try:
+            tree.bind("<Double-1>", _view_card)
+        except Exception:
+            pass
+
+        btn_row = tk.Frame(tab_avail)
+        btn_row.pack(fill="x", padx=8, pady=(0, 10))
+        tk.Button(btn_row, text="View Card",
+                  font=("Segoe UI", 10),
+                  command=_view_card).pack(side="left", padx=(0, 8))
 
         def _draft_selected():
-            try:
-                sel = lb.curselection()
-            except Exception:
-                sel = ()
-            if not sel:
+            p = _selected_player()
+            if p is None:
                 return
-            p = prospects[sel[0]]
-            if self._mp_draft_answer.get("answered"):
+            if getattr(self, answer_attr, {}).get("answered"):
                 return
-            self._mp_draft_answer["answered"] = True
+            getattr(self, answer_attr)["answered"] = True
             try:
-                self.mp_client.send_action("draft_pick", {
+                self.mp_client.send_action(action_name, {
                     "clock_id": clock_id,
-                    "player_id": p.get("id", "")})
+                    "player_id": str(getattr(p, "id", ""))})
             except Exception as e:
                 self._mp_toast(f"Draft pick failed: {e}")
                 return
-            win.destroy()
-            self._mp_toast(f"Drafted {p.get('name', '?')}.")
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            self._mp_toast(
+                f"Drafted {getattr(p, 'full_name', '?')}.")
 
-        tk.Button(win, text="DRAFT SELECTED PROSPECT",
-                  font=("Segoe UI", 11, "bold"),
-                  command=_draft_selected).pack(pady=(0, 10))
+        tk.Button(btn_row, text=draft_button_text,
+                  font=("Segoe UI", 10, "bold"),
+                  command=_draft_selected).pack(side="left")
+
+        # -- Tab 2: My Picks ----------------------------------------------
+        _mine_cols = ("overall", "round", "player")
+        _mine_tree = ttk.Treeview(tab_mine, columns=_mine_cols,
+                                  show="headings", height=20)
+        for _c, _h, _w in (("overall", "#", 60), ("round", "Rd", 60),
+                           ("player", "Player", 400)):
+            _mine_tree.heading(_c, text=_h)
+            _mine_tree.column(_c, width=_w,
+                              anchor="w" if _c == "player" else "center")
+        _mine_tree.pack(fill="both", expand=True, padx=8, pady=8)
+        _n_mine = 0
+        for _b in sorted(board, key=lambda d: int(d.get("overall", 0)
+                                                  or 0)):
+            try:
+                if str(_b.get("team_id", "")) != str(my_team_id or ""):
+                    continue
+                _mine_tree.insert("", "end", values=(
+                    _b.get("overall", ""), _b.get("round_num", ""),
+                    _b.get("player_name", "?")))
+                _n_mine += 1
+            except Exception:
+                pass
+        if _n_mine == 0:
+            _mine_tree.insert("", "end", values=("", "", "No picks yet"))
+
+        # -- Tab 3: All Picks ----------------------------------------------
+        _all_cols = ("overall", "round", "team", "player")
+        _all_tree = ttk.Treeview(tab_all, columns=_all_cols,
+                                 show="headings", height=20)
+        for _c, _h, _w in (("overall", "#", 60), ("round", "Rd", 60),
+                           ("team", "Team", 200),
+                           ("player", "Player", 300)):
+            _all_tree.heading(_c, text=_h)
+            _all_tree.column(_c, width=_w,
+                              anchor="w" if _c in ("team", "player")
+                              else "center")
+        _all_tree.pack(fill="both", expand=True, padx=8, pady=8)
+        try:
+            _all_tree.tag_configure(
+                "teamlink", foreground="#4a9eff",
+                font=("Segoe UI", 10, "underline"))
+        except Exception:
+            pass
+        for _b in sorted(board, key=lambda d: int(d.get("overall", 0)
+                                                  or 0)):
+            try:
+                _iid = _all_tree.insert("", "end", values=(
+                    _b.get("overall", ""), _b.get("round_num", ""),
+                    _b.get("team_id", "?"), _b.get("player_name", "?")),
+                    tags=("teamlink",))
+            except Exception:
+                pass
+        if not board:
+            _all_tree.insert("", "end",
+                             values=("", "", "", "No picks yet"))
+
+        def _open_team_from_row(event):
+            # Click a team name -> that club's overview (read-only for
+            # other clubs, per open_team_overview).
+            try:
+                _row = _all_tree.identify_row(event.y)
+                _col = _all_tree.identify_column(event.x)
+                if not _row or _col != "#3":
+                    return
+                _vals = _all_tree.item(_row, "values") or ()
+                _tname = str(_vals[2]) if len(_vals) > 2 else ""
+                if not _tname:
+                    return
+                _team = None
+                for _t in (getattr(getattr(self, "league", None),
+                                   "teams", None) or []):
+                    if str(getattr(_t, "team_name", "")) == _tname:
+                        _team = _t
+                        break
+                if _team is not None:
+                    self.open_team_overview(_team)
+            except Exception:
+                pass
+
+        try:
+            _all_tree.bind("<Button-1>", _open_team_from_row)
+        except Exception:
+            pass
+
+        _refill()
         win.after(1000, _countdown)
+        return win
+
+    def _mp_show_draft_clock(self, payload):
+        """You're on the clock: pick a prospect (60s, then auto-pick).
+
+        Eastside-standard UI: filterable/sortable available list with
+        player cards, plus My Picks / All Picks tabs from the board.
+        """
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        prospects = payload.get("prospects") or []
+        board = payload.get("board") or []
+        team_id = payload.get("team_id", "")
+        if not prospects:
+            return
+        # Resolve prospect dicts -> snapshot Player objects so the
+        # filter/card machinery works on real data.
+        try:
+            _by_id = {}
+            _lg = getattr(self, "league", None)
+            for _p in (getattr(_lg, "draft_prospects", None) or []):
+                _by_id[str(getattr(_p, "id", ""))] = _p
+        except Exception:
+            _by_id = {}
+        players = []
+        for _pd in prospects:
+            _p = _by_id.get(str(_pd.get("id", "")))
+            if _p is not None:
+                players.append(_p)
+        if not players:
+            return
+        self._mp_draft_pick_window(
+            title=f"Draft pick #{overall} -- you're on the clock",
+            players=players, board=board, my_team_id=team_id,
+            clock_id=clock_id, action_name="draft_pick",
+            answer_attr="_mp_draft_answer",
+            expire_toast="Draft clock expired -- auto-pick.",
+            draft_button_text="DRAFT SELECTED PROSPECT",
+            extra_columns=("rank", "pot"))
 
     def _mp_show_fantasy_clock(self, payload):
-        """Fantasy draft: you're on the clock (60s, then BPA auto-pick).
+        """Fantasy draft: you're on the clock (60s, then auto-pick).
 
+        Eastside-standard UI: filterable/sortable available list with
+        player cards, plus My Picks / All Picks tabs from the board.
         The host sends the available player ids; this client resolves
-        them against its snapshot for names/positions/ratings."""
+        them against its snapshot for full Player objects.
+        """
         clock_id = payload.get("clock_id", "")
         overall = payload.get("overall", 0)
         round_num = payload.get("round_num", 0)
         available_ids = payload.get("available_ids", []) or []
         shortlist = payload.get("shortlist", []) or []
+        board = payload.get("board") or []
+        team_id = payload.get("team_id", "")
         if not available_ids:
             return
-        # Resolve ids -> snapshot players.
+        # Resolve ids -> snapshot Player objects (kept as objects so
+        # filters, sorting, and player cards work on real data).
         try:
             _all = []
             _lg = getattr(self, "league", None)
@@ -13112,128 +13561,23 @@ class HockeyManagerGUI(tk.Tk):
             _by_id = {str(getattr(p, "id", "")): p for p in _all}
         except Exception:
             _by_id = {}
-        players = []
-        for _pid in available_ids:
-            _p = _by_id.get(str(_pid))
-            if _p is None:
-                continue
-            try:
-                _ovr = int(float(
-                    getattr(_p, "overall_rating", lambda: 50)() or 50))
-            except Exception:
-                _ovr = 50
-            players.append({
-                "id": str(_pid),
-                "name": getattr(_p, "full_name", "?"),
-                "pos": str(getattr(
-                    getattr(_p, "primary_position", None), "value", "?")),
-                "ovr": _ovr,
-            })
+        players = [_by_id[str(_pid)] for _pid in available_ids
+                   if str(_pid) in _by_id]
         if not players and shortlist:
-            players = list(shortlist)
+            # Shortlist-only fallback: dicts can't drive filters/cards,
+            # so there is nothing useful to show.
+            return
         if not players:
             return
-        win = tk.Toplevel(self)
-        win.title(f"Fantasy pick #{overall} -- you're on the clock")
-        win.geometry("560x620")
-        try:
-            win.attributes("-topmost", True)
-        except Exception:
-            pass
-        tk.Label(
-            win,
-            text=f"Fantasy pick #{overall} (Round {round_num}) -- "
-                 f"your selection",
-            font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
-        self._mp_fantasy_answer = {"clock_id": clock_id,
-                                   "answered": False}
-        state = {"left": 60, "players": players}
-
-        def _countdown():
-            try:
-                if not win.winfo_exists():
-                    return
-                if self._mp_fantasy_answer.get("answered"):
-                    return
-                state["left"] -= 1
-                clock_var.set(f"Clock: {max(state['left'], 0)}s")
-                if state["left"] <= 0:
-                    win.destroy()
-                    self._mp_toast(
-                        "Fantasy clock expired -- BPA auto-pick.")
-                    return
-                win.after(1000, _countdown)
-            except Exception:
-                pass
-
-        clock_var = tk.StringVar(value="Clock: 60s")
-        tk.Label(win, textvariable=clock_var,
-                 font=("Segoe UI", 11)).pack(pady=(0, 6))
-        # Filter box.
-        filter_var = tk.StringVar()
-        tk.Entry(win, textvariable=filter_var,
-                 font=("Segoe UI", 10)).pack(fill="x", padx=10, pady=(0, 6))
-        frame = tk.Frame(win)
-        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        lb = tk.Listbox(frame, font=("Segoe UI", 10), height=20)
-        lb.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
-        sb.pack(side="right", fill="y")
-        lb.configure(yscrollcommand=sb.set)
-
-        def _refill(*_a):
-            try:
-                q = (filter_var.get() or "").strip().lower()
-            except Exception:
-                q = ""
-            lb.delete(0, "end")
-            state["shown"] = []
-            for p in state["players"]:
-                if q and q not in p.get("name", "").lower() \
-                        and q not in p.get("pos", "").lower():
-                    continue
-                lb.insert("end",
-                          f"{p.get('ovr', '?'):>3}  {p.get('name', '?')} "
-                          f"({p.get('pos', '?')})")
-                state["shown"].append(p)
-            if state["shown"]:
-                lb.selection_set(0)
-
-        try:
-            filter_var.trace_add("write", _refill)
-        except Exception:
-            pass
-        _refill()
-
-        def _draft_selected():
-            try:
-                sel = lb.curselection()
-            except Exception:
-                sel = ()
-            if not sel:
-                return
-            shown = state.get("shown") or []
-            if sel[0] >= len(shown):
-                return
-            p = shown[sel[0]]
-            if self._mp_fantasy_answer.get("answered"):
-                return
-            self._mp_fantasy_answer["answered"] = True
-            try:
-                self.mp_client.send_action("fantasy_draft_pick", {
-                    "clock_id": clock_id,
-                    "player_id": p.get("id", "")})
-            except Exception as e:
-                self._mp_toast(f"Fantasy pick failed: {e}")
-                return
-            win.destroy()
-            self._mp_toast(f"Drafted {p.get('name', '?')}.")
-
-        tk.Button(win, text="DRAFT SELECTED PLAYER",
-                  font=("Segoe UI", 11, "bold"),
-                  command=_draft_selected).pack(pady=(0, 10))
-        win.after(1000, _countdown)
-
+        self._mp_draft_pick_window(
+            title=f"Fantasy pick #{overall} (Round {round_num}) -- "
+                  f"your selection",
+            players=players, board=board, my_team_id=team_id,
+            clock_id=clock_id, action_name="fantasy_draft_pick",
+            answer_attr="_mp_fantasy_answer",
+            expire_toast="Fantasy clock expired -- auto-pick.",
+            draft_button_text="DRAFT SELECTED PLAYER",
+            extra_columns=())
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
         def _gp(stats):
