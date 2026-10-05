@@ -1935,6 +1935,34 @@ class InboxView(ctk.CTkFrame):
         # Refresh per-filter unread badges
         self._update_filter_badges()
 
+    def _update_filter_badges(self):
+        """Append unread counts to the filter pills (e.g. 'Unread (3)').
+
+        Missing method that broke the inbox open path -- every pill shows
+        its live count; failures degrade to plain labels, never a crash.
+        """
+        try:
+            msgs = list(getattr(self.inbox, "messages", []) or [])
+        except Exception:
+            msgs = []
+        try:
+            unread = [m for m in msgs if not getattr(m, "read", True)]
+            urgent = [m for m in unread
+                      if getattr(m, "urgent", False)]
+            saved = [m for m in msgs if getattr(m, "saved", False)]
+            counts = {"all": len(unread), "unread": len(unread),
+                      "urgent": len(urgent), "saved": len(saved)}
+        except Exception:
+            counts = {}
+        _labels = dict(self._FILTERS)
+        for ftype, btn in getattr(self, "_filter_buttons", {}).items():
+            try:
+                base = _labels.get(ftype, ftype)
+                n = counts.get(ftype, 0)
+                btn.configure(text=f"{base} ({n})" if n else base)
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Season Story view (Muck 2026-10-02)
     #
