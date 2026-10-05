@@ -116,14 +116,19 @@ def to_web_message(m):
 
 def to_web_team(t):
     """Team -> JSON-safe dict (hub header data)."""
+    wins = _safe(lambda: int(getattr(t, "wins", 0) or 0), 0)
+    losses = _safe(lambda: int(getattr(t, "losses", 0) or 0), 0)
+    otl = _safe(lambda: int(getattr(t, "ot_losses", 0) or 0), 0)
     return {
         "name": _safe(lambda: getattr(t, "team_name", "?")),
         "city": _safe(lambda: getattr(t, "city", "")),
         "abbr": _safe(lambda: getattr(t, "abbreviation", "") or
                       "".join(w[0] for w in str(getattr(t, "team_name", "?")).split()[:3]).upper()),
-        "wins": _safe(lambda: int(getattr(t, "wins", 0) or 0)),
-        "losses": _safe(lambda: int(getattr(t, "losses", 0) or 0)),
-        "otl": _safe(lambda: int(getattr(t, "ot_losses", 0) or 0)),
+        "wins": wins,
+        "losses": losses,
+        "otl": otl,
+        # JS hub expects team.record.{w,l,otl} (matches mock shape)
+        "record": {"w": wins, "l": losses, "otl": otl},
         "roster_size": _safe(lambda: len(getattr(t, "roster", None) or [])),
     }
 
