@@ -214,3 +214,35 @@
 .prop-note { font-size: 13px; min-height: 18px; color: var(--dim); }
 .prop-note.ok { color: var(--green); }
 .prop-note.err { color: var(--red); }
+
+/* ---------- deal summary ---------- */
+.deal-summary { margin-top: 18px; padding: 14px 18px; }
+.deal-summary[hidden] { display: none; }
+.deal-cols { display: flex; gap: 16px; align-items: stretch; margin-top: 10px; }
+.deal-side { flex: 1; min-width: 0; }
+.deal-side-title {
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.2px; color: var(--nhl-blue);
+  margin-bottom: 8px;
+}
+.deal-divider {
+  align-self: center; font-size: 22px; color: var(--dim); flex: none;
+}
+.deal-items { display: flex; flex-wrap: wrap; gap: 8px; min-height: 40px; }
+.deal-chip {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--nhl-panel2); border: 1px solid var(--nhl-blue);
+  border-radius: var(--nhl-r-sm); padding: 6px 8px 6px 6px;
+  cursor: pointer; transition: border-color .15s;
+}
+.deal-chip:hover { border-color: var(--red); }
+.deal-chip .dc-ovr {
+  font-family: var(--nhl-cond); font-size: 18px; font-weight: 800;
+  min-width: 30px; text-align: center;
+}
+.deal-chip .dc-info { display: flex; flex-direction: column; line-height: 1.25; }
+.deal-chip .dc-name { font-weight: 700; font-size: 13px; }
+.deal-chip .dc-sub { font-size: 11px; color: var(--dim); }
+.deal-chip .dc-ret { color: var(--gold); }
+.deal-chip .dc-x { color: var(--dim); font-size: 13px; margin-left: 4px; }
+.deal-chip:hover .dc-x { color: var(--red); }

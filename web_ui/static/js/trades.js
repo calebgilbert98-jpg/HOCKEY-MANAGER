@@ -144,6 +144,7 @@ async function selectPartner(id, name) {
     state.partnerPlayers = [];
     state.partnerPicks = [];
     renderGet();
+    renderDeal();
     resetVerdict('Select a partner team and add players or picks on both sides.');
     return;
   }
@@ -152,6 +153,7 @@ async function selectPartner(id, name) {
     state.partnerPlayers = a.players || [];
     state.partnerPicks = a.picks || [];
     renderGet();
+    renderDeal();
     scheduleEvaluate();
   } catch (e) { console.error(e); }
 }
@@ -327,7 +329,64 @@ function toggleAsset(id, kind, side) {
   pruneTerms();
   if (side === 'give') { renderGive(); updateSlots(); }
   else renderGet();
+  renderDeal();
   scheduleEvaluate();
+}
+
+/* Deal summary: only the pieces actually being offered, at a glance. */
+function dealChip(asset, kind, side) {
+  const id = String(asset.id);
+  const chip = document.createElement('div');
+  chip.className = 'deal-chip' + (kind === 'pick' ? ' pick' : '');
+  chip.title = 'Click to remove from the deal';
+  if (kind === 'pick') {
+    chip.innerHTML = `<span class="dc-name">${esc(asset.label)}</span>
+      <span class="dc-sub">${asset.year ? asset.year + ' R' + asset.round : ''}</span>
+      <span class="dc-x">✕</span>`;
+  } else {
+    const ret = side === 'give' && state.retention[id]
+      ? ' <span class="dc-ret">(' + state.retention[id] + '% ret.)</span>' : '';
+    chip.innerHTML = `<span class="dc-ovr ${ovrClass(asset.overall)}">${asset.overall}</span>
+      <span class="dc-info"><span class="dc-name">${esc(asset.name)}</span>
+      <span class="dc-sub">${esc(asset.position)} · ${fmtSalary(asset.salary)}${ret}</span></span>
+      <span class="dc-x">✕</span>`;
+  }
+  chip.addEventListener('click', () => toggleAsset(id, kind, side));
+  return chip;
+}
+
+function renderDeal() {
+  const sec = el('deal-summary');
+  const getBox = el('deal-get');
+  const giveBox = el('deal-give');
+  getBox.innerHTML = '';
+  giveBox.innerHTML = '';
+  let count = 0;
+  const byId = id => state.partnerPlayers.concat(state.partnerPicks)
+    .find(a => String(a.id) === String(id));
+  const myById = id => state.userPlayers.concat(state.userPicks)
+    .find(a => String(a.id) === String(id));
+  for (const pid of state.wantPids) {
+    const a = byId(pid);
+    if (a) { getBox.appendChild(dealChip(a, 'player', 'get')); count++; }
+  }
+  for (const pid of state.wantPicks) {
+    const a = byId(pid);
+    if (a) { getBox.appendChild(dealChip(a, 'pick', 'get')); count++; }
+  }
+  for (const pid of state.givePids) {
+    const a = myById(pid);
+    if (a) { giveBox.appendChild(dealChip(a, 'player', 'give')); count++; }
+  }
+  for (const pid of state.givePicks) {
+    const a = myById(pid);
+    if (a) { giveBox.appendChild(dealChip(a, 'pick', 'give')); count++; }
+  }
+  if (!count) {
+    getBox.innerHTML = '<div class="empty-note">Nothing selected</div>';
+    giveBox.innerHTML = '<div class="empty-note">Nothing selected</div>';
+  }
+  sec.hidden = count === 0;
 }
 
 /* ---------- live AI verdict ---------- */
