@@ -63,6 +63,15 @@ def mp_self(team):
 def mp_team(name="MP Team"):
     t = Team(team_name=name, city="Test", division="X", conference="Y")
     t.roster, t.ahl_roster, t.prospects = [], [], []
+    # Legal lineup: 18 skaters + 2 goalies, so demote/waive guards pass.
+    for i in range(18):
+        t.roster.append(skater(seed=1000 + i, age=25, games=300,
+                              first="Filler", last=f"S{i}"))
+    for i in range(2):
+        g = Player(f"FillerG{i}", "Goalie", 28, PlayerPosition.GOALIE)
+        g.contract = Contract(salary=1_000_000, years_remaining=2)
+        g.on_waivers = False
+        t.roster.append(g)
     return t
 
 

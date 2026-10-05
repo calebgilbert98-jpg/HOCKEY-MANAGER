@@ -55,7 +55,7 @@ class FakeHost:
 def make_contract(nmc=False):
     return SimpleNamespace(no_movement_clause=nmc, no_trade_clause=False,
                            modified_ntc_teams=0, salary=5_000_000,
-                           ntc_waiver_for="")
+                           years_remaining=2, ntc_waiver_for="")
 
 
 def make_player(pid, nmc=False):
@@ -71,6 +71,23 @@ def make_team():
                            buyout_cap_hits={})
     team.remove_player = lambda p: team.roster.remove(p) \
         if p in team.roster else None
+    # Legal lineup (18+2) so the dress-minimum guard doesn't block the
+    # demote under test. SimpleNamespace fillers matching make_player.
+    for i in range(18):
+        f = SimpleNamespace(id=f"fill-s{i}", full_name=f"Filler S{i}",
+                            contract=make_contract(), on_waivers=False,
+                            waiver_days=0, age=25, nhl_games_played=300,
+                            is_injured=False, position="C",
+                            ahl_games_since_assignment=None)
+        team.roster.append(f)
+    for i in range(2):
+        g = SimpleNamespace(id=f"fill-g{i}", full_name=f"Filler G{i}",
+                            contract=make_contract(), on_waivers=False,
+                            waiver_days=0, age=28, nhl_games_played=200,
+                            is_injured=False, position="G",
+                            primary_position=SimpleNamespace(value="G"),
+                            ahl_games_since_assignment=None)
+        team.roster.append(g)
     return team
 
 
