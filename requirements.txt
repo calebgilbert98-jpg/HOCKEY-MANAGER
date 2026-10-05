@@ -20,3 +20,5 @@ customtkinter>=5.2.0
 # Web UI: Flask serves the tile frontend on localhost (offline)
 Flask>=3.0.0
 
+# Native game window (pywebview on main thread; Edge WebView2 on Windows)
+pywebview>=4.4.0

@@ -36,6 +36,7 @@ a = Analysis(
         'PIL.ImageFont', 'PIL.ImageOps',
         'customtkinter',
         'flask', 'werkzeug',
+        'webview',
         'web_ui', 'web_ui.bridge', 'web_ui.shell',
     ] + _first_party + [
         # Auto-discover web UI screens: bridge.py loads them dynamically
