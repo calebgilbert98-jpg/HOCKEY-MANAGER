@@ -1083,6 +1083,10 @@ class GameSaveManager:
                         'round_key': game.get('round_key') if isinstance(game, dict) else None,
                         'marquee': bool(game.get('marquee')) if isinstance(game, dict) else False,
                         'hype_tags': list(game.get('hype_tags') or []) if isinstance(game, dict) else [],
+                        # Played flag: must survive the round-trip or reloaded
+                        # schedules forget which games were already played
+                        # (46 played playoff games lost it in sweep Run 11).
+                        'played': bool(game.get('played')) if isinstance(game, dict) else False,
                     })
                 except (AttributeError, TypeError, IndexError) as e:
                     # Log skipped games instead of silently dropping them;
@@ -2740,6 +2744,10 @@ class GameSaveManager:
                         # no stats), not treat them as real games.
                         if game_data.get('preseason'):
                             _restored['preseason'] = True
+                        # Played-flag round-trip (sweep Run 11): a reloaded
+                        # schedule must remember which games were played.
+                        if game_data.get('played'):
+                            _restored['played'] = True
                         # BUG-002 fix (2026-10-03): playoff stamps round-trip.
                         if game_data.get('playoff'):
                             _restored['playoff'] = True
