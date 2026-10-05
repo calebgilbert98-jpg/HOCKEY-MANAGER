@@ -1014,3 +1014,71 @@ select.nhl-select option, select.nhl option { background: #0d1424; color: var(--
   box-shadow: 0 0 0 1px #0a0f1c;
   background: #0a0f1c;
 }
+
+/* ---------- clickable at-a-glance panels (NHL 14 broadcast hover) ---------- */
+.clickable { cursor: pointer; }
+#panel-standings-table tr.clickable { transition: background .15s ease; }
+#panel-standings-table tr.clickable:hover td { background: rgba(59,130,246,.14); }
+#panel-standings-table tr.clickable:hover .tm { color: #fff; }
+.th-lead-row.clickable { transition: background .15s ease; border-radius: 4px; }
+.th-lead-row.clickable:hover { background: rgba(59,130,246,.14); }
+.th-lead-row.clickable:hover .nm { color: #fff; }
+.th-ng-click { border-radius: 6px; transition: background .15s ease; padding: 4px 6px; margin: -4px -6px; }
+.th-ng-click:hover { background: rgba(59,130,246,.10); box-shadow: inset 0 0 0 1px rgba(59,130,246,.35); }
+
+/* ---------- v0.18.4-style team stat strip ---------- */
+.th-strip {
+  display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px;
+  margin: 10px 0 12px;
+}
+.th-strip-block {
+  background: linear-gradient(180deg, var(--card2), var(--card));
+  border: 1px solid rgba(59,130,246,.18);
+  border-top: 2px solid var(--accent);
+  border-radius: 4px; padding: 8px 10px 7px; min-width: 0;
+}
+.th-strip-val {
+  font-family: var(--nhl-display, 'Arial Narrow', sans-serif);
+  font-size: 24px; font-weight: 800; color: var(--text);
+  letter-spacing: .5px; line-height: 1.1; white-space: nowrap;
+}
+.th-strip-label {
+  font-size: 10px; font-weight: 700; letter-spacing: 1.6px;
+  text-transform: uppercase; color: var(--accent); margin-top: 2px;
+}
+.th-strip-sub {
+  font-size: 10px; color: var(--dimmer); margin-top: 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ---------- bottom news ticker ---------- */
+.th-ticker {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+  display: flex; align-items: stretch;
+  background: #04060b; border-top: 2px solid var(--accent);
+  height: 34px; overflow: hidden;
+  font-family: var(--nhl-cond, 'Arial Narrow', sans-serif);
+}
+.th-ticker-label {
+  flex: 0 0 auto; display: flex; align-items: center;
+  background: var(--accent-deep); color: #fff;
+  font-size: 11px; font-weight: 800; letter-spacing: 2px;
+  padding: 0 14px; text-transform: uppercase; white-space: nowrap;
+}
+.th-ticker-viewport { flex: 1; overflow: hidden; display: flex; align-items: center; }
+.th-ticker-track {
+  display: inline-flex; align-items: center; gap: 28px;
+  white-space: nowrap; padding-left: 28px;
+  animation: th-ticker-scroll 60s linear infinite;
+  will-change: transform;
+}
+.th-ticker:hover .th-ticker-track { animation-play-state: paused; }
+.th-ticker-item { font-size: 13px; font-weight: 600; letter-spacing: .6px; color: var(--text); text-transform: uppercase; }
+.th-ticker-item.is-score { color: var(--accent); font-weight: 800; }
+.th-ticker-sep { color: var(--accent-dim); font-size: 10px; }
+@keyframes th-ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+/* keep footer hints above the fixed ticker */
+footer.hints { padding-bottom: 44px; }

@@ -99,6 +99,21 @@ MOCK_STATE = {
             "is_home": True,
         },
     },
+    "stat_strip": {
+        "record": "12-5-2", "gp": 19, "points": 26, "div_rank": 2,
+        "gpg": 3.42, "off_rank": 4, "gapg": 2.68, "def_rank": 6,
+        "pp_pct": 22.4, "pk_pct": 84.1,
+        "streak": "W2", "last10": "7-2-1", "cap_space": 4250000,
+    },
+    "ticker": [
+        {"kind": "score", "text": "BOS 4 — 2 TOR  FINAL"},
+        {"kind": "score", "text": "NYR 3 — 5 PIT  FINAL"},
+        {"kind": "score", "text": "EDM 2 — 1 VAN  FINAL  ·  Nov 18"},
+        {"kind": "news", "text": "Bruins sign F Jake DeBrusk to 2-year extension"},
+        {"kind": "news", "text": "TRADE: Maple Leafs acquire D from Blackhawks for 2nd-round pick"},
+        {"kind": "news", "text": "Panthers place G on IR, recall backup from AHL"},
+        {"kind": "news", "text": "Lightning F fined $5,000 for slashing"},
+    ],
 }
 
 

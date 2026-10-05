@@ -76,6 +76,60 @@ function renderHub(s) {
   document.querySelector('.th-more-label').style.display = rest.length ? '' : 'none';
 
   renderPanels(s.panels || {});
+  renderStrip(s.stat_strip || {});
+  renderTicker(s.ticker || []);
+}
+
+function fmtCap(n) {
+  if (n == null) return '—';
+  const v = Number(n);
+  if (!isFinite(v)) return '—';
+  const m = v / 1e6;
+  return '$' + (m >= 10 ? m.toFixed(1) : m.toFixed(2)) + 'M';
+}
+
+function ord(n) {
+  if (n == null) return '';
+  const v = Number(n);
+  if (!isFinite(v)) return '';
+  const teen = v % 100;
+  if (teen >= 11 && teen <= 13) return v + 'th';
+  return v + ({1: 'st', 2: 'nd', 3: 'rd'}[v % 10] || 'th');
+}
+
+function renderStrip(st) {
+  const el = document.getElementById('th-strip');
+  if (!el) return;
+  const dash = v => (v == null || v === '' ? '—' : v);
+  const blocks = [
+    {label: 'Record', val: dash(st.record), sub: st.gp != null ? `${st.gp} GP` : ''},
+    {label: 'Points', val: dash(st.points), sub: st.div_rank ? `${ord(st.div_rank)} in division` : ''},
+    {label: 'Goals / GM', val: dash(st.gpg), sub: st.off_rank ? `Offense: ${ord(st.off_rank)}` : 'Offense'},
+    {label: 'Against / GM', val: dash(st.gapg), sub: st.def_rank ? `Defense: ${ord(st.def_rank)}` : 'Defense'},
+    {label: 'Power Play', val: st.pp_pct != null ? st.pp_pct + '%' : '—', sub: 'Conversion'},
+    {label: 'Penalty Kill', val: st.pk_pct != null ? st.pk_pct + '%' : '—', sub: 'Kill rate'},
+    {label: 'Streak', val: dash(st.streak), sub: st.last10 ? `Last 10: ${st.last10}` : 'Last 10'},
+    {label: 'Cap Space', val: fmtCap(st.cap_space), sub: 'Salary cap'},
+  ];
+  el.innerHTML = blocks.map(b =>
+    `<div class="th-strip-block"><div class="th-strip-val">${b.val}</div>` +
+    `<div class="th-strip-label">${b.label}</div>` +
+    (b.sub ? `<div class="th-strip-sub">${b.sub}</div>` : '') + `</div>`
+  ).join('');
+}
+
+function renderTicker(items) {
+  const track = document.getElementById('th-ticker-track');
+  const bar = document.getElementById('th-ticker');
+  if (!track || !bar) return;
+  if (!items.length) { bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  const sep = '<span class="th-ticker-sep">◆</span>';
+  const html = items.map(i =>
+    `<span class="th-ticker-item ${i.kind === 'score' ? 'is-score' : ''}">${esc(i.text)}</span>`
+  ).join(sep) + sep;
+  // Duplicate for a seamless loop
+  track.innerHTML = html + html;
 }
 
 function renderPanels(p) {
@@ -84,6 +138,7 @@ function renderPanels(p) {
   const ngBody = document.getElementById('panel-next-body');
   if (ng) {
     ngBody.innerHTML = `
+      <div class="th-ng-click clickable" data-href="/schedule" title="Open schedule">
       <div class="th-ng-date">${esc(ng.date)}${ng.time ? ' · ' + esc(ng.time) : ''}</div>
       <div class="th-ng-matchup">
         <div class="th-ng-team">
@@ -98,7 +153,8 @@ function renderPanels(p) {
           <span class="th-ng-rec">${esc(ng.home_rec)}</span>
         </div>
       </div>
-      <div class="th-ng-venue">${ng.is_home ? 'HOME' : 'AWAY'}</div>`;
+      <div class="th-ng-venue">${ng.is_home ? 'HOME' : 'AWAY'}</div>
+      </div>`;
   } else {
     ngBody.innerHTML = '<div class="th-empty">No upcoming games</div>';
   }
@@ -108,7 +164,7 @@ function renderPanels(p) {
   document.getElementById('panel-standings-head').textContent = divName;
   const st = document.getElementById('panel-standings-table');
   const rows = (p.standings || []).map((r, i) => `
-    <tr class="${r.is_user ? 'me' : ''}">
+    <tr class="${r.is_user ? 'me' : ''} clickable" data-href="/standings" title="Open standings">
       <td class="rk">${i + 1}</td>
       <td class="tm"><span class="abbr">${esc(r.abbr)}</span> ${esc(r.name)}</td>
       <td>${r.w}</td><td>${r.l}</td><td>${r.otl}</td><td class="pts">${r.pts}</td>
@@ -123,7 +179,7 @@ function renderPanels(p) {
   const lcol = (title, list, key) => `
     <div class="th-lead-col"><div class="th-lead-title">${title}</div>
       ${(list || []).map((r, i) => `
-        <div class="th-lead-row">
+        <div class="th-lead-row${r.id ? ' clickable' : ''}"${r.id ? ` data-href="/player/${esc(r.id)}" title="Open player profile"` : ''}>
           <span class="rk">${i + 1}</span>
           ${leadImg(r)}
           <span class="nm">${esc(r.name)} <em>${esc(r.pos)}</em></span>
@@ -283,6 +339,12 @@ document.getElementById('btn-exit')?.addEventListener('click', exitGame);
 document.getElementById('menu-exit')?.addEventListener('click', exitGame);
 
 loadState();
+
+// Delegated clicks for at-a-glance panels: any .clickable with data-href navigates.
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('.clickable[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});
 
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 // If the tab goes silent the game shuts itself down cleanly.

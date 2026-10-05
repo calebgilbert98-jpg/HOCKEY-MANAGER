@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Player Profile — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/player.css">
+</head>
+<body data-pid="{{ pid }}">
+<div class="arena-bg"></div>
+
+<header class="topbar">
+  <a class="back" href="javascript:history.back()">← Back</a>
+  <div class="team-sub">Player Profile</div>
+  <a class="back" href="/">Hub</a>
+</header>
+
+<main class="player-main">
+  <!-- header -->
+  <section class="player-header" id="p-header">
+    <div class="p-portrait">
+      <img id="p-portrait-img" alt="player portrait" hidden>
+      <div class="p-portrait-fallback" id="p-portrait-fallback">?</div>
+    </div>
+    <div class="p-head-info">
+      <h1 class="p-name" id="p-name">—</h1>
+      <div class="p-pills" id="p-pills"></div>
+      <div class="p-strip" id="p-strip"></div>
+      <div class="p-strip dim" id="p-rights-strip"></div>
+    </div>
+  </section>
+
+  <!-- tabs -->
+  <nav class="player-tabs" id="p-tabs">
+    <button data-tab="overview" class="active">Overview</button>
+    <button data-tab="health">Health</button>
+    <button data-tab="analytics">Analytics</button>
+    <button data-tab="personality">Personality</button>
+    <button data-tab="scout">Scout Report</button>
+    <button data-tab="dynamics">Dynamics</button>
+    <button data-tab="history">History</button>
+  </nav>
+
+  <!-- Overview -->
+  <section class="ptab" id="tab-overview">
+    <div class="card">
+      <h2>Season Stats</h2>
+      <div class="stat-cards" id="ov-stats"></div>
+      <div id="ov-splits" hidden>
+        <div class="splits-title">Per-team splits</div>
+        <div id="ov-splits-list"></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Contract</h2>
+      <div id="ov-contract"></div>
+    </div>
+    <div class="card" id="ov-composites-card" hidden>
+      <h2>Composite Ratings</h2>
+      <div id="ov-composites"></div>
+    </div>
+    <div class="card">
+      <h2>Attributes</h2>
+      <div class="attr-cols" id="ov-attrs"></div>
+    </div>
+  </section>
+
+  <!-- Health -->
+  <section class="ptab" id="tab-health" hidden>
+    <div class="card">
+      <h2>Medical Status</h2>
+      <div id="h-status"></div>
+    </div>
+    <div class="card" id="h-active-card" hidden>
+      <h2 class="danger">Active Injury</h2>
+      <div id="h-active"></div>
+    </div>
+    <div class="card">
+      <h2>Injury History</h2>
+      <div class="caption">Most recent first. Career totals below.</div>
+      <div id="h-history"></div>
+      <hr class="sep">
+      <div id="h-totals"></div>
+    </div>
+  </section>
+
+  <!-- Analytics -->
+  <section class="ptab" id="tab-analytics" hidden>
+    <div class="card">
+      <h2>Deep Dive — Advanced Analytics</h2>
+      <div class="caption accent" id="a-lens"></div>
+      <p class="explainer">Estimates, not tracking data: modeled metrics are shown with your
+      department's confidence interval (±); observed box-score facts are exact. Shot locations
+      ARE tracked for simulated games (each club keeps its last 10), so the shot map below is
+      real tracking data — the modeled metrics around it are not. Hover ⓘ on any metric for
+      what it is (and isn't).</p>
+      <div id="a-sections"></div>
+    </div>
+    <div class="card">
+      <h2>Shot Map — Where His Chances Come From</h2>
+      <div class="caption" id="a-shot-note"></div>
+      <canvas id="a-shotmap" width="620" height="300" hidden></canvas>
+      <div class="shot-legend" id="a-shot-legend" hidden>
+        <span style="color:#2ecc71">● Goal</span>
+        <span style="color:#3498db">● Save</span>
+        <span style="color:#7f8c8d">● Blocked</span>
+        <span style="color:#f1c40f">● Disallowed</span>
+      </div>
+      <div class="caption">Dot size = chance quality (engine xG). Attacking right. A cluster at the
+      net-front describes his role; a spray from the perimeter asks whether his deployment
+      fits — the map poses the question, it doesn't answer it.</div>
+    </div>
+  </section>
+
+  <!-- Personality -->
+  <section class="ptab" id="tab-personality" hidden>
+    <div class="card">
+      <h2>Personality</h2>
+      <div id="per-body"></div>
+    </div>
+  </section>
+
+  <!-- Scout Report -->
+  <section class="ptab" id="tab-scout" hidden>
+    <div class="card">
+      <h2>NHL Readiness</h2>
+      <div id="s-readiness"></div>
+    </div>
+    <div class="card">
+      <h2>Scout Report</h2>
+      <div id="s-report"></div>
+    </div>
+  </section>
+
+  <!-- Dynamics -->
+  <section class="ptab" id="tab-dynamics" hidden>
+    <div class="card">
+      <h2>Team Dynamics</h2>
+      <div id="d-body"></div>
+    </div>
+  </section>
+
+  <!-- History -->
+  <section class="ptab" id="tab-history" hidden>
+    <div class="card">
+      <h2>Season History</h2>
+      <div class="caption">Per-team splits — mid-season trades shown separately.</div>
+      <div id="hi-body"></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/js/player.js"></script>
+</body>
+</html>

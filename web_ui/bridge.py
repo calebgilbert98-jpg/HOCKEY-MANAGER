@@ -234,6 +234,171 @@ def to_web_team(t):
     }
 
 
+def _stat_strip(team, gm, t):
+    """v0.18.4-style team stat strip. All reads defensive; missing -> None."""
+    strip = {
+        "record": f"{t.get('wins', 0)}-{t.get('losses', 0)}-{t.get('otl', 0)}",
+        "gp": None, "points": None, "div_rank": None,
+        "gpg": None, "off_rank": None, "gapg": None, "def_rank": None,
+        "pp_pct": None, "pk_pct": None,
+        "streak": None, "last10": None, "cap_space": None,
+    }
+    try:
+        if team is None or gm is None:
+            return strip
+        league = _safe(lambda: gm.league)
+        teams = _safe(lambda: list(league.teams), []) or [] if league else []
+        me_name = _safe(lambda: getattr(team, "team_name", ""), "")
+        my_div = _safe(lambda: getattr(team, "division", ""), "") or ""
+
+        gp = _safe(lambda: int(getattr(team, "games_played", 0) or 0), 0)
+        gf = _safe(lambda: int(getattr(team, "goals_for", 0) or 0), 0)
+        ga = _safe(lambda: int(getattr(team, "goals_against", 0) or 0), 0)
+        strip["gp"] = gp
+        strip["points"] = t.get("wins", 0) * 2 + t.get("otl", 0)
+        strip["gpg"] = round(gf / gp, 2) if gp else 0.0
+        strip["gapg"] = round(ga / gp, 2) if gp else 0.0
+        cap = _safe(lambda: getattr(team, "cap_space", None), None)
+        strip["cap_space"] = cap
+
+        # League-wide ranks: points (division), offense, defense
+        if teams:
+            table = _safe(lambda: dict(getattr(league, "standings", None) or {}), {}) or {}
+            div_pts, off, deff = [], [], []
+            for tm in teams:
+                try:
+                    nm = _safe(lambda: getattr(tm, "team_name", ""), "")
+                    if not nm:
+                        continue
+                    row = table.get(nm, {}) if isinstance(table.get(nm), dict) else {}
+                    p = int(row.get("Points", 0) or 0)
+                    dv = _safe(lambda: getattr(tm, "division", ""), "") or ""
+                    tg = _safe(lambda: int(getattr(tm, "games_played", 0) or 0), 0)
+                    tgf = _safe(lambda: int(getattr(tm, "goals_for", 0) or 0), 0)
+                    tga = _safe(lambda: int(getattr(tm, "goals_against", 0) or 0), 0)
+                    if my_div and dv == my_div:
+                        div_pts.append((nm, p))
+                    if tg:
+                        off.append((nm, tgf / tg))
+                        deff.append((nm, tga / tg))
+                except Exception:
+                    continue
+            div_pts.sort(key=lambda x: -x[1])
+            for i, (nm, _) in enumerate(div_pts, 1):
+                if nm == me_name:
+                    strip["div_rank"] = i
+                    break
+            off.sort(key=lambda x: -x[1])
+            for i, (nm, _) in enumerate(off, 1):
+                if nm == me_name:
+                    strip["off_rank"] = i
+                    break
+            deff.sort(key=lambda x: x[1])
+            for i, (nm, _) in enumerate(deff, 1):
+                if nm == me_name:
+                    strip["def_rank"] = i
+                    break
+
+        # PP% / PK%: season aggregates if the sim tracks them
+        pp_o = _safe(lambda: getattr(team, "pp_opportunities", None), None)
+        pp_g = _safe(lambda: getattr(team, "pp_goals", None), None)
+        if pp_o and pp_g is not None and pp_o > 0:
+            strip["pp_pct"] = round(pp_g / pp_o * 100, 1)
+        pk_o = _safe(lambda: getattr(team, "pk_opportunities", None), None)
+        pk_ga = _safe(lambda: getattr(team, "pk_goals_against", None), None)
+        if pk_o and pk_ga is not None and pk_o > 0:
+            strip["pk_pct"] = round((pk_o - pk_ga) / pk_o * 100, 1)
+
+        # Streak + last-10 from completed games
+        sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
+        done = []
+        for g in sched:
+            try:
+                if not isinstance(g, dict) or g.get("home_score") is None:
+                    continue
+                hn = _team_name(g.get("home_team"))
+                an = _team_name(g.get("away_team"))
+                if me_name not in (hn, an):
+                    continue
+                hs = int(g.get("home_score") or 0)
+                aws = int(g.get("away_score") or 0)
+                mine = hs if hn == me_name else aws
+                theirs = aws if hn == me_name else hs
+                res = "W" if mine > theirs else "L"
+                done.append({"d": g.get("date"), "res": res})
+            except Exception:
+                continue
+        done.sort(key=lambda g: (g["d"] is None, g["d"]), reverse=True)
+        if done:
+            sk, sc = "", 0
+            for g in done:
+                if not sk:
+                    sk, sc = g["res"], 1
+                elif g["res"] == sk:
+                    sc += 1
+                else:
+                    break
+            strip["streak"] = f"{sk}{sc}"
+            last10 = done[:10]
+            w = sum(1 for g in last10 if g["res"] == "W")
+            l = len(last10) - w
+            strip["last10"] = f"{w}-{l}"
+    except Exception:
+        pass
+    return strip
+
+
+def _ticker_items(app, gm):
+    """Scrolling ticker: recent league scores + news log. Newest first."""
+    items = []
+    try:
+        league = _safe(lambda: gm.league)
+        sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
+        scored = []
+        for g in sched:
+            try:
+                if not isinstance(g, dict) or g.get("home_score") is None:
+                    continue
+                hn = _team_name(g.get("home_team"))
+                an = _team_name(g.get("away_team"))
+                hs = int(g.get("home_score") or 0)
+                aws = int(g.get("away_score") or 0)
+                d = g.get("date")
+                ds = d.strftime("%b %d") if hasattr(d, "strftime") else ""
+                scored.append({
+                    "d": d, "kind": "score",
+                    "text": f"{TEAM_ABBR.get(an, an[:3].upper())} {aws} — "
+                            f"{hs} {TEAM_ABBR.get(hn, hn[:3].upper())}  FINAL"
+                            + (f"  ·  {ds}" if ds else ""),
+                })
+            except Exception:
+                continue
+        scored.sort(key=lambda g: (g["d"] is None, g["d"]), reverse=True)
+        items.extend(scored[:12])
+
+        # News log: signings, trades, injuries, callups
+        raw = _safe(lambda: list(getattr(app, "news_log", None) or []), []) or []
+        news = []
+        for entry in raw:
+            try:
+                story = entry.get("story", "") if isinstance(entry, dict) else str(entry)
+                story = (story or "").strip()
+                if not story:
+                    continue
+                d = entry.get("date") if isinstance(entry, dict) else None
+                news.append({"d": d, "kind": "news", "text": story})
+            except Exception:
+                continue
+        try:
+            news.sort(key=lambda x: str(x["d"] or ""), reverse=True)
+        except Exception:
+            pass
+        items.extend(news[:12])
+    except Exception:
+        pass
+    return [{"kind": i["kind"], "text": i["text"]} for i in items[:24]]
+
+
 def get_hub_state(app):
     """Full hub payload from the live game."""
     team = _safe(lambda: app.user_team)
@@ -307,11 +472,12 @@ def get_hub_state(app):
     except Exception:
         pass
 
-    # Stat strip
-    gp = _safe(lambda: int(getattr(team, "games_played", 0) or 0), 0)
-    gf = _safe(lambda: int(getattr(team, "goals_for", 0) or 0), 0)
-    ga = _safe(lambda: int(getattr(team, "goals_against", 0) or 0), 0)
-    cap_space = _safe(lambda: int(getattr(team, "cap_space", 0) or 0), 0)
+    # Stat strip (v0.18.4-style): record, points+rank, offense/defense ranks,
+    # PP%/PK%, streak, last-10, cap space
+    stat_strip = _stat_strip(team, gm, t)
+
+    # Scrolling news ticker: recent league scores + news log
+    ticker = _ticker_items(app, gm)
 
     return {
         "team": {**t, "points": pts},
@@ -319,13 +485,8 @@ def get_hub_state(app):
         "inbox": {"unread": unread, "action_needed": action_needed},
         "next_game": next_game,
         "recent_inbox": recent,
-        "stat_strip": {
-            "record": f"{t.get('wins', 0)}-{t.get('losses', 0)}-{t.get('otl', 0)}",
-            "points": pts,
-            "gpg": round(gf / gp, 2) if gp else 0,
-            "gapg": round(ga / gp, 2) if gp else 0,
-            "cap_space": cap_space,
-        },
+        "stat_strip": stat_strip,
+        "ticker": ticker,
         "tiles": [
             {"id": "continue", "title": "Continue", "subtitle": "Advance the day",
              "size": "hero", "icon": "▶", "accent": True},
