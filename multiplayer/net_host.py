@@ -105,7 +105,10 @@ class MultiplayerHost:
         # Rejoin: stable client token -> team_id. Survives disconnects;
         # a returning client with a known token gets its team back
         # without re-claiming (and without losing it to someone else).
+        # Seeded from save data on host start so reservations survive
+        # host restarts (see seed_reservations).
         self._rejoin: Dict[str, str] = {}
+        self._rejoin_names: Dict[str, str] = {}
         self._rejoin_lock = threading.Lock()
         # Async snapshot state: only one serialization worker runs at a
         # time; extra requests coalesce into _snapshot_pending (latest wins).
@@ -170,6 +173,50 @@ class MultiplayerHost:
         with self._peers_lock:
             return [p.team_id for p in self._peers.values()
                     if p.handshake_done and p.team_id]
+
+    def seed_reservations(self, reservations: Dict[str, str],
+                          names: Optional[Dict[str, str]] = None) -> None:
+        """Seed token -> team_id reservations from save data.
+
+        Call right after host start: teams whose saves carry an mp_gm_token
+        are reserved for that GM. A returning GM auto-reclaims on HELLO;
+        anyone else is refused the reserved club.
+        """
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in (reservations or {}).items():
+                    if _tok and _team:
+                        self._rejoin[_tok] = _team
+                for _tok, _name in (names or {}).items():
+                    if _tok and _name:
+                        self._rejoin_names[_tok] = _name
+        except Exception:
+            pass
+
+    def drop_reservation(self, team_id: str) -> bool:
+        """Release a team's GM reservation (host-side). Returns True when
+        one was held. The team becomes claimable by anyone."""
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in list(self._rejoin.items()):
+                    if _team == team_id:
+                        del self._rejoin[_tok]
+                        self._rejoin_names.pop(_tok, None)
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def reservation_holder(self, team_id: str) -> Optional[str]:
+        """Display name holding the reservation on team_id, if any."""
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in self._rejoin.items():
+                    if _team == team_id:
+                        return self._rejoin_names.get(_tok)
+        except Exception:
+            pass
+        return None
 
     def get_lobby(self) -> List[Dict[str, str]]:
         with self._peers_lock:
@@ -576,7 +623,8 @@ class MultiplayerHost:
                     self.events.put(
                         ("team_claimed",
                          {"session_id": peer.session_id, "name": name,
-                          "team_id": _restored_team, "rejoin": True}))
+                          "team_id": _restored_team, "rejoin": True,
+                          "gm_token": _tok}))
                     self.events.put(("advance_changed", {}))
         except Exception:
             pass
@@ -610,22 +658,37 @@ class MultiplayerHost:
             self._send(peer, P.ERROR, P.error_msg(
                 f"{team_id} is already managed by {taken[team_id]}"))
             return
+        _tok = getattr(peer, "rejoin_token", "") or ""
+        # Reservation: a team saved with a GM token belongs to that GM.
+        # Anyone else is refused -- the seat survives host restarts.
+        try:
+            with self._rejoin_lock:
+                _holder = next((_t for _t, _tm in self._rejoin.items()
+                                if _tm == team_id), "")
+                _holder_name = self._rejoin_names.get(_holder, "") if _holder else ""
+        except Exception:
+            _holder, _holder_name = "", ""
+        if _holder and _holder != _tok:
+            self._send(peer, P.ERROR, P.error_msg(
+                f"{team_id} is reserved for {_holder_name or 'its GM'} -- "
+                f"they reclaim it automatically when they rejoin."))
+            return
         peer.team_id = team_id
         # Remember for rejoin: this token owns this team until explicitly
-        # released or the team is claimed by someone else (can't happen --
-        # claims are exclusive).
+        # released (drop_reservation) or the GM claims a different club.
         try:
-            _tok = getattr(peer, "rejoin_token", "") or ""
             if _tok:
                 with self._rejoin_lock:
                     self._rejoin[_tok] = team_id
+                    self._rejoin_names[_tok] = peer.name
         except Exception:
             pass
         self._broadcast(P.TEAM_CLAIMED, P.team_claimed(team_id, peer.name))
         self._broadcast(P.LOBBY_STATE, P.lobby_state(self.get_lobby()))
         self.events.put(("team_claimed",
                          {"session_id": peer.session_id,
-                          "name": peer.name, "team_id": team_id}))
+                          "name": peer.name, "team_id": team_id,
+                          "gm_token": _tok}))
         # A newly active manager joins the advance gate for this cycle.
         self.events.put(("advance_changed", {}))
 

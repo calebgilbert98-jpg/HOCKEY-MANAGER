@@ -48,6 +48,38 @@ class ConnectionError(Exception):
     """Raised when the client cannot reach / handshake with a host."""
 
 
+def get_machine_token() -> str:
+    """This machine's stable multiplayer identity, persisted across sessions.
+
+    Used as the GM token: the host stamps it on claimed teams and saves it,
+    so the GM's seat survives host restarts and they reclaim their club on
+    rejoin. Also used by a host to stamp its own team.
+    """
+    try:
+        import os
+        _dir = os.path.join(os.path.expanduser("~"), ".puck-dynasty")
+        os.makedirs(_dir, exist_ok=True)
+        _path = os.path.join(_dir, "mp_client_token")
+        try:
+            with open(_path, "r") as fh:
+                _tok = (fh.read() or "").strip()
+            if _tok:
+                return _tok
+        except OSError:
+            pass
+        import uuid as _uuid
+        _tok = _uuid.uuid4().hex
+        try:
+            with open(_path, "w") as fh:
+                fh.write(_tok)
+        except OSError:
+            pass
+        return _tok
+    except Exception:
+        import uuid as _uuid
+        return _uuid.uuid4().hex
+
+
 class MultiplayerClient:
     """Connection to a multiplayer host. UI-agnostic; see module docstring."""
 
@@ -85,29 +117,7 @@ class MultiplayerClient:
         Stored in the user's saves dir so a dropped client is recognized
         when it reconnects and gets its team claim restored by the host.
         """
-        try:
-            import os
-            _dir = os.path.join(os.path.expanduser("~"), ".puck-dynasty")
-            os.makedirs(_dir, exist_ok=True)
-            _path = os.path.join(_dir, "mp_client_token")
-            try:
-                with open(_path, "r") as fh:
-                    _tok = (fh.read() or "").strip()
-                if _tok:
-                    return _tok
-            except OSError:
-                pass
-            import uuid as _uuid
-            _tok = _uuid.uuid4().hex
-            try:
-                with open(_path, "w") as fh:
-                    fh.write(_tok)
-            except OSError:
-                pass
-            return _tok
-        except Exception:
-            import uuid as _uuid
-            return _uuid.uuid4().hex
+        return get_machine_token()
 
     def connect(self, host: str, port: int,
                 timeout: float = CONNECT_TIMEOUT) -> Dict:

@@ -593,7 +593,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
 
             def _get_teams():
                 try:
-                    return [{"id": t.team_name, "name": t.team_name}
+                    return [{"id": t.team_name, "name": t.team_name,
+                             "reserved_by": getattr(t, "mp_gm_name", "") or ""}
                             for t in gm.league.teams]
                 except Exception:
                     return []
@@ -602,6 +603,10 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                                    port=port, get_teams=_get_teams)
             host.start()
             app.mp_host = host
+            try:
+                app._mp_seed_host_reservations(host)
+            except Exception:
+                pass
             # The host manages the team picked in the launcher, locally.
             cpm.checkpoint("Game started")
             host.notify_checkpoint("Game started", str(app.current_date))

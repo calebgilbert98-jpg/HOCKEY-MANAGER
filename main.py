@@ -9167,10 +9167,27 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_resolve_ntc_answer(payload)
         elif kind == "team_claimed":
             team = self._mp_find_team(payload.get("team_id", ""))
+            _gtok = str(payload.get("gm_token", "") or "")
+            _gname = str(payload.get("name", "?") or "?")
             if team is not None:
                 # A real person runs this club now: the AI must leave it
                 # alone (parity with the local user's is_user_team).
                 team.is_human_managed = True
+                # GM persistence: stamp who runs this club. Saved with the
+                # team so the seat survives host restarts -- the GM gets
+                # their club back on rejoin.
+                if _gtok:
+                    try:
+                        _lg = getattr(self, "league", None)
+                        for _t in (getattr(_lg, "teams", None) or []):
+                            if (_t is not team and
+                                    getattr(_t, "mp_gm_token", "") == _gtok):
+                                _t.mp_gm_token = ""
+                                _t.mp_gm_name = ""
+                    except Exception:
+                        pass
+                    team.mp_gm_token = _gtok
+                    team.mp_gm_name = _gname
             self._mp_toast(
                 f"{payload.get('name', '?')} "
                 f"claimed {payload.get('team_id', '')}")
@@ -9302,7 +9319,8 @@ class HockeyManagerGUI(tk.Tk):
 
         def _get_teams():
             try:
-                return [{"id": t.team_name, "name": t.team_name}
+                return [{"id": t.team_name, "name": t.team_name,
+                         "reserved_by": getattr(t, "mp_gm_name", "") or ""}
                         for t in _gm.league.teams]
             except Exception:
                 return []
@@ -9319,6 +9337,7 @@ class HockeyManagerGUI(tk.Tk):
             port=_port, get_teams=_get_teams)
         _host.start()
         self.mp_host = _host
+        self._mp_seed_host_reservations(_host)
         try:
             self.after(250, self._poll_multiplayer)
         except Exception:
@@ -9331,6 +9350,70 @@ class HockeyManagerGUI(tk.Tk):
                 "Other managers can reconnect to continue the session.")
         except Exception:
             pass
+
+    def _mp_seed_host_reservations(self, host):
+        """Seed a new host's GM reservations from the league's save data.
+
+        Teams whose saves carry an mp_gm_token are reserved for that GM:
+        they auto-reclaim on rejoin and nobody else can squat them. Also
+        stamps the host's own club with this machine's identity so the
+        host's seat persists too.
+        """
+        try:
+            _lg = getattr(self, "league", None)
+            _res, _names = {}, {}
+            for _t in (getattr(_lg, "teams", None) or []):
+                _tok = getattr(_t, "mp_gm_token", "") or ""
+                if _tok:
+                    _res[_tok] = getattr(_t, "team_name", "")
+                    _nm = getattr(_t, "mp_gm_name", "") or ""
+                    if _nm:
+                        _names[_tok] = _nm
+            try:
+                host.seed_reservations(_res, _names)
+            except Exception:
+                pass
+            # The host's own seat: stamp this machine's identity on the
+            # local club so it persists like any other GM's.
+            try:
+                from multiplayer.net_client import get_machine_token as _gmt
+                _mine = _gmt()
+                _ut = getattr(self, "user_team", None)
+                if _mine and _ut is not None:
+                    _ut.mp_gm_token = _mine
+                    _ut.is_human_managed = True
+                    try:
+                        _prof = getattr(self, "gm_profile", None) or {}
+                        _nm = (_prof.get("name", "")
+                               if isinstance(_prof, dict) else "")
+                        if _nm:
+                            _ut.mp_gm_name = str(_nm)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _mp_host_release_team(self, team_id):
+        """Host-side: release a GM's reservation on a team (e.g. the GM is
+        gone for good). Clears the save-stamped identity and the host's
+        reservation so anyone can claim the club. The team's progress is
+        untouched -- only the seat is freed."""
+        try:
+            team = self._mp_find_team(team_id)
+            if team is not None:
+                team.mp_gm_token = ""
+                team.mp_gm_name = ""
+            _host = getattr(self, "mp_host", None)
+            if _host is not None:
+                try:
+                    _host.drop_reservation(team_id)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
 
     def _mp_find_team(self, team_id):
         try:

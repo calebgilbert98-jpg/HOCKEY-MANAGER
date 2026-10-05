@@ -737,6 +737,9 @@ class GameSaveManager:
                 # GM name + profile. Missing = old save -> defaults.
                 'gm_name': getattr(team, 'gm_name', 'General Manager') or 'General Manager',
                 'gm_profile': _safe_asdict(getattr(team, 'gm_profile', None)),
+                # MP GM persistence: who runs this club. Missing = old save.
+                'mp_gm_token': getattr(team, 'mp_gm_token', '') or '',
+                'mp_gm_name': getattr(team, 'mp_gm_name', '') or '',
             }
             
             return team_data
@@ -2500,6 +2503,9 @@ class GameSaveManager:
                                     (team_data.get('analytics_games', None) or [])][-10:]
             # GM name + profile. Absent in old saves -> defaults.
             team.gm_name = team_data.get('gm_name', None) or 'General Manager'
+            # MP GM persistence. Absent in old saves -> unreserved.
+            team.mp_gm_token = team_data.get('mp_gm_token', '') or ''
+            team.mp_gm_name = team_data.get('mp_gm_name', '') or ''
             _gp = team_data.get('gm_profile', None)
             if isinstance(_gp, dict) and _gp:
                 try:
