@@ -1,0 +1,87 @@
+# Puck Dynasty Web UI — Painstaking Migration Plan
+
+**Source:** `main` branch v0.18.4 (Tkinter) — the complete, working game  
+**Target:** `web-ui` branch — must reach full functional parity, screen by screen  
+**Rule:** Each screen is migrated COMPLETELY or not at all. No shallow ports.  
+**Testing:** Every screen tested against LIVE game data (real GameManager, not mocks) before marking complete.
+
+## Phase 1 — Core Loop (P0) — Current Focus
+
+These are the screens Caleb uses every session. Must be rock-solid.
+
+### 1.1 Continue / Day Advance ✅ FIXED (2026-10-04)
+- [x] Bridge calls `_on_continue_pressed` (was calling non-existent `advance_day`)
+- [ ] Test: advance 7 days, verify date changes, games sim, inbox fills
+- [ ] Blocker modal appears when blockers exist
+- [ ] Auto-resolve options work
+
+### 1.2 Hub / Dashboard
+- [x] Tiles render with live data (record nesting fixed)
+- [ ] All 10 tiles link to correct screens
+- [ ] Tile data refreshes after Continue
+- [ ] Next game tile shows real opponent/date
+
+### 1.3 Inbox
+- [x] Gmail-style cards render
+- [ ] Action buttons work (trade offers, contract counters, etc.)
+- [ ] Mark read/unread persists
+- [ ] Mandatory messages block Continue until resolved
+
+### 1.4 Lines — ✅ FIXED (2026-10-04)
+- [x] Falls back to `best_lines()` when lineup empty
+- [x] Key normalization (F1_LW → LW1)
+- [ ] Edit mode: drag/swap players works
+- [ ] Save persists to team.lineup
+- [ ] PP/PK units editable
+
+### 1.5 Trades — ✅ FIXED (2026-10-04)
+- [x] TEAM_ABBR map (BOS not BB)
+- [x] `/api/trades/assets` implemented
+- [ ] Full trade flow: pick partner → add players → AI verdict → propose → inbox response
+- [ ] Retention (0/25/50%) works
+- [ ] Pick protection works
+
+## Phase 2 — Club Management (P1)
+
+### 2.1 Roster (5 tabs)
+- [ ] NHL / AHL / Prospects / Depth Chart / Salary Cap tabs
+- [ ] Sort/filter/search
+- [ ] Bulk moves with CBA validation
+- [ ] Right-click player menu
+- [ ] Click → player profile
+
+### 2.2 Tactics (6 groups)
+- [ ] Even Strength / PP / PK / Line Matching / Forecheck / OZ pickers
+- [ ] Expected impact readout
+- [ ] Practice tab
+
+### 2.3 Morale / Dressing Room
+- [ ] Full morale view (not read-only stub)
+- [ ] Team talks, Bag Skate, etc.
+
+## Phase 3 — Trades & Contracts (P2)
+
+### 3.1 Trade Block (full)
+### 3.2 Free Agents (3 tabs + negotiation)
+### 3.3 Draft (war room)
+### 3.4 Contracts/Extensions (full negotiation)
+
+## Phase 4 — Everything Else (P3+)
+
+Per MIGRATION_AUDIT.md priority order.
+
+---
+
+## Process Per Screen
+
+1. **Read** the Tkinter implementation completely (find the View class)
+2. **List** every feature: data shown, buttons, dialogs, writes
+3. **Implement** web version with ALL features (not a subset)
+4. **Test** against live GameManager (`/tmp/test_gm.pkl` pattern)
+5. **Verify** no mock data, no 404s, no empty states
+6. **Commit** with clear message; update this checklist
+
+## Known Issues to Fix
+
+- [ ] Visualizer double-sim: watched games need "played" flag so advance-day skips them
+- [ ] Artifact visual parity: hub doesn't match puck-dynasty-tile-hub artifact design
