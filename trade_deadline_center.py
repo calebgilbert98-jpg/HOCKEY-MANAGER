@@ -1897,6 +1897,26 @@ class EmergencyTradeInterface(_DeadlineScreenBase):
             self._set_status("No expiring contracts on your roster -- "
                              "nothing to list.")
             return
+        # MULTIPLAYER: route the block to the host; the canonical trade
+        # block registry lives there and the market listings sync from it.
+        # Local listing would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route, \
+                _mp_is_client as _is_client
+            if _is_client(self.app):
+                _ids = [str(getattr(p, "id", "")) for p in expiring]
+                if _route(self.app, "set_trade_block",
+                          {"player_ids": _ids}):
+                    names = ", ".join(str(getattr(p, "full_name", "?"))
+                                      for p in expiring[:4])
+                    if len(expiring) > 4:
+                        names += f" (+{len(expiring) - 4} more)"
+                    self._set_status(
+                        f"Fire sale sent: {len(_ids)} expiring contract(s) "
+                        f"listed on the trade block: {names}.")
+                    return
+        except Exception:
+            pass
         block = getattr(self.app, 'trade_block', None)
         if block is None:
             block = []

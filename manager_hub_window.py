@@ -102,6 +102,29 @@ class ManagerHubView(ctk.CTkFrame):
         self.patience_label.pack(anchor="w", pady=(5, 2))
 
         def _request_patience():
+            # MULTIPLAYER: route to the host; the board and roster morale
+            # are canonical there. Local application would diverge.
+            try:
+                from windows import _mp_route as _route, \
+                    _mp_is_client as _is_client
+                if _is_client(self.app):
+                    def _met(_msg=""):
+                        try:
+                            messagebox.showinfo(
+                                "Owner meeting",
+                                str(_msg) or "Meeting requested -- the host "
+                                "applies it.")
+                        except Exception:
+                            pass
+                        try:
+                            self._refresh_board()
+                        except Exception:
+                            pass
+                    if _route(self.app, "owner_meeting", {},
+                              on_sent=_met):
+                        return
+            except Exception:
+                pass
             board = self.career.board
             today = ""
             try:

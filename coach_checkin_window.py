@@ -761,6 +761,35 @@ class CheckinView(ctk.CTkFrame):
             elif beat == "tactics":
                 fields["tactics_framing"] = framing
         try:
+            # MULTIPLAYER: route the completed check-in to the host; the
+            # canonical mandate history lives there. Local completion
+            # would diverge the snapshot.
+            _routed = False
+            try:
+                from windows import _mp_route as _route, \
+                    _mp_is_client as _is_client
+                if _is_client(getattr(self, "app", None)):
+                    _fields = {
+                        "notes": list(draft.get("notes", [])),
+                    }
+                    for rec in draft.get("chosen", []):
+                        beat, framing = rec.get("beat"), rec.get("framing")
+                        if beat == "expectations":
+                            _fields["expectation_framing"] = framing
+                        elif beat == "room":
+                            _fields["room_framing"] = framing
+                        elif beat == "rookies":
+                            _fields["rookie_framing"] = framing
+                        elif beat == "tactics":
+                            _fields["tactics_framing"] = framing
+                    if _route(self.app, "coach_checkin",
+                              {"fields": _fields}):
+                        self._note("Check-in sent -- the host records it.")
+                        _routed = True
+            except Exception:
+                pass
+            if _routed:
+                return
             if m is not None and hasattr(m, "complete_checkin"):
                 m.complete_checkin(self.team, fields, apply_trust=True,
                                    per_beat_applied=True)

@@ -9475,7 +9475,8 @@ class HockeyManagerGUI(tk.Tk):
                       "request_save", "place_on_waivers",
                       "answer_ai_offer", "rfa_qualify", "staff_renew",
                       "offer_sheet_match", "offer_sheet_trade_alt",
-                      "arbitration_walkaway"):
+                      "arbitration_walkaway", "coach_checkin",
+                      "emergency_fill", "owner_meeting"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9502,6 +9503,9 @@ class HockeyManagerGUI(tk.Tk):
             "offer_sheet_match": self._mp_offer_sheet_match,
             "offer_sheet_trade_alt": self._mp_offer_sheet_trade_alt,
             "arbitration_walkaway": self._mp_arbitration_walkaway,
+            "coach_checkin": self._mp_coach_checkin,
+            "emergency_fill": self._mp_emergency_fill,
+            "owner_meeting": self._mp_owner_meeting,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
             "hire_staff": self._mp_hire_staff,
@@ -10632,6 +10636,89 @@ class HockeyManagerGUI(tk.Tk):
                 msg.action_done = True
         except Exception:
             pass
+
+    def _mp_coach_checkin(self, params, team, manager):
+        """Complete a quarterly coach check-in: same complete_checkin()
+        the conversation UI calls -- trust deltas land on the canonical
+        mandate history."""
+        try:
+            import coach_checkins as _cc
+        except Exception:
+            return False, "Coach check-ins aren't available."
+        fields = params.get("fields", None)
+        if not isinstance(fields, dict):
+            return False, "Malformed check-in."
+        # Plain-data only: notes/framing strings, no live objects.
+        _clean = {}
+        for k in ("notes", "expectation_framing", "room_framing",
+                  "rookie_framing", "tactics_framing"):
+            v = fields.get(k)
+            if isinstance(v, str):
+                _clean[k] = v[:2000]
+            elif isinstance(v, list):
+                _clean[k] = [str(x)[:500] for x in v[:50]]
+        try:
+            _entry = _cc.complete_checkin(
+                team, _clean, apply_trust=True, per_beat_applied=True)
+        except Exception as e:
+            return False, f"Check-in failed: {e}"
+        return True, "Check-in recorded."
+
+    def _mp_emergency_fill(self, params, team, manager):
+        """Summon emergency fill-ins: the host computes the shortfall on
+        canonical state and assigns league fillers (same as SP)."""
+        try:
+            import roster_limits as _rl
+        except Exception:
+            return False, "Roster limits aren't available."
+        try:
+            sk, go = _rl.lineup_shortfall(team)
+        except Exception:
+            sk, go = 0, 0
+        if sk <= 0 and go <= 0:
+            return True, "No fill-ins needed -- you can dress a legal lineup."
+        try:
+            summoned = _rl.summon_emergency_fillers(team)
+        except Exception as e:
+            return False, f"Summon failed: {e}"
+        n = len(summoned or [])
+        return True, (f"League office assigned {n} emergency fill-in(s) "
+                      f"so you can ice a legal lineup.")
+
+    def _mp_owner_meeting(self, params, team, manager):
+        """Request an owner meeting: the room settles (morale +2) when
+        patience is granted. The board roll only runs for the host's own
+        club -- in MP the board is the host save's single shared board
+        and client boards aren't advanced; clients get the team-scoped
+        morale effect with honest messaging."""
+        try:
+            _is_host_team = team is getattr(self, "user_team", None)
+        except Exception:
+            _is_host_team = False
+        if _is_host_team:
+            try:
+                board = self.career.board
+                today = ""
+                try:
+                    today = self.current_date.isoformat()
+                except Exception:
+                    pass
+                granted, headline, body = board.request_patience(today)
+            except Exception as e:
+                return False, f"Owner meeting failed: {e}"
+        else:
+            granted, headline = True, "The room settles"
+            body = ("Your owner hears you out. (League boards are the "
+                    "host's in multiplayer -- your club's morale still "
+                    "responds to the meeting.)")
+        if granted:
+            try:
+                for p in (getattr(team, "roster", None) or []):
+                    m = getattr(p, "morale", 70) or 70
+                    p.morale = min(100, m + 2)
+            except Exception:
+                pass
+        return True, f"{headline}: {body}"
 
     def _mp_answer_ai_offer(self, params, team, manager):
         """Answer an AI club's inbox trade offer: accept executes the deal,

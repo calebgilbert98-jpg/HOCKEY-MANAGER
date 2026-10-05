@@ -201,6 +201,10 @@ SUPPORTED_ACTIONS = {
     "offer_sheet_match",  # params: {team_id, message_id, match: bool}
     "offer_sheet_trade_alt",  # params: {team_id, message_id, accept: bool}
     "arbitration_walkaway",   # params: {team_id, message_id, walk_away: bool}
+    # Manager-hub decisions (host-authoritative; team-scoped effects).
+    "coach_checkin",    # params: {team_id, fields: {...}}
+    "emergency_fill",   # params: {team_id} -- summon league fill-ins
+    "owner_meeting",    # params: {team_id} -- patience request + morale
 }
 
 

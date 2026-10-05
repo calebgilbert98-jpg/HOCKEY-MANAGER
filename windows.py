@@ -2376,6 +2376,15 @@ class RosterView(ctk.CTkFrame):
                     "(18 skaters + 2 goalies) -- no emergency fill-ins "
                     "needed.")
                 return
+            # MULTIPLAYER: route to the host; the canonical roster lives
+            # there. Local summoning would diverge the snapshot.
+            if _mp_is_client(self.app):
+                if _mp_route(self.app, "emergency_fill", {}):
+                    try:
+                        self.update_all_views()
+                    except Exception:
+                        pass
+                    return
             summoned = _rl.summon_emergency_fillers(team)
             if summoned:
                 need = []
