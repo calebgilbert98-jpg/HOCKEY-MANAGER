@@ -2886,6 +2886,20 @@ class HockeyManagerGUI(tk.Tk):
             self.setup_autosave()  # Set up autosave system
             self.setup_close_protocol()  # Set up save prompt on close
             self.update_all_views()
+        elif self.mp_client is not None or self.mp_host is not None:
+            # Multiplayer: the team arrives via the host snapshot
+            # (_apply_multiplayer_snapshot), never via a picker. Showing
+            # the single-player team dialog here is a dead end. Build
+            # the dashboard now; the snapshot fills in the team and
+            # refreshes the views when it lands.
+            print("Multiplayer mode -- team comes from the host snapshot; "
+                  "skipping team selection dialog.")
+            self._finalize_phase2_initialization()
+            self.deiconify()
+            self._create_main_dashboard()
+            self._apply_phase3_optimizations()
+            self.setup_close_protocol()
+            self.update()
         else:
             # For now, skip launcher integration and use simple team selection
             # The launcher system needs to be redesigned for proper integration
