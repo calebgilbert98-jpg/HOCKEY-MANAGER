@@ -64,10 +64,29 @@ These are the screens Caleb uses every session. Must be rock-solid.
 
 ## Phase 3 — Trades & Contracts (P2)
 
-### 3.1 Trade Block (full)
-### 3.2 Free Agents (3 tabs + negotiation)
-### 3.3 Draft (war room)
-### 3.4 Contracts/Extensions (full negotiation)
+### 3.1 Trade Block (full) ✅ DONE (2026-10-04)
+- [x] Your Block tab: filters (pos/min OVR/max age), bulk add/remove
+- [x] Shop Player (value + interested teams), Suggest Value
+- [x] Simulate Offers (process_trade_block_offers), Generate Interest (real _find_bidders)
+- [x] Trade Interest tab: real league.trade_market listings, decline persists
+- [x] Other Teams tab: other clubs' blocks, Express Interest, Negotiate -> Trade Center
+
+### 3.2 Free Agents (3 tabs + negotiation) ✅ DONE (2026-10-04)
+- [x] Players tab: existing + Compare (up to 3 side-by-side), Market Analysis button
+- [x] Staff tab: league.free_agent_staff, role/dept/search filters, Hire via bridge op
+- [x] Market Overview: size, UFA/RFA split, avg ask, by-position, top-10
+- [x] Market Analysis modal: Value/Comparables/Projection
+
+### 3.3 Draft (war room) ✅ DONE (2026-10-04)
+- [x] Available tab: 336 prospects, pos/search filters, click-select
+- [x] Scout Report modal: attributes, strengths/weaknesses
+- [x] My Picks tab from live board
+- [x] Draft Selected: 2-step confirm -> record_pick
+- [x] Sim Pick: ai_select_prospect (canonical AI)
+
+### 3.4 Contracts/Extensions (full negotiation) ✅ DONE (2026-10-04)
+- [x] Expiring/All tabs with badge count (includes AHL roster)
+- [x] Auto-Negotiate All: mirrors main.py, inbox digest with results
 
 ## Phase 4 — Everything Else (P3+)
 
