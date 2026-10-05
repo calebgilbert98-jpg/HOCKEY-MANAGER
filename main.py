@@ -11763,6 +11763,11 @@ class HockeyManagerGUI(tk.Tk):
                 and params.get("clock_id") != st.get("clock_id"):
             return False, "That clock expired -- wait for the next one.", \
                 True
+        # Double-submit guard: the first registered pick is final. A
+        # retry/dupe arriving after the pick is locked must not overwrite
+        # it (adversarial sweep 2026-10-05).
+        if st.get("pick_id"):
+            return False, "Your pick is already registered.", True
         prospect = None
         try:
             for p in getattr(getattr(self, "league", None),

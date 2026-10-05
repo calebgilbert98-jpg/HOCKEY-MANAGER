@@ -127,9 +127,13 @@ class ChaosNet:
     def claim(self, client_idx, team_id):
         c = self.clients[client_idx]
         c.claim_team(team_id)
-        k, p = drain(c, "team_claimed")
-        assert p["team_id"] == team_id, p
-        return p
+        # TEAM_CLAIMED broadcasts to everyone; wait for OUR claim.
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            k, p = drain(c, "team_claimed", timeout=1.0)
+            if p["team_id"] == team_id:
+                return p
+        raise AssertionError(f"timeout waiting for claim of {team_id}")
 
     def fire(self, client_idx, action, params, auto_resolve=True,
              ok=True, detail="chaos-ok"):
@@ -157,6 +161,14 @@ class ChaosNet:
             c._sock.close()
         except Exception:
             pass
+
+    def set_client_token(self, token):
+        """Write a distinct rejoin token (simulates another machine)."""
+        import os as _os
+        _dir = _os.path.join(_os.path.expanduser("~"), ".puck-dynasty")
+        _os.makedirs(_dir, exist_ok=True)
+        with open(_os.path.join(_dir, "mp_client_token"), "w") as fh:
+            fh.write(token)
 
     def teardown(self):
         for c in self.clients:
