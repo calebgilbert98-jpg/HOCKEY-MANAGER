@@ -379,6 +379,7 @@ class MultiplayerClient:
             }))
         elif mtype == P.DRAFT_CLOCK:
             self.events.put(("draft_clock", {
+                "board": msg.get("board", []) or [],
                 "clock_id": msg.get("clock_id", ""),
                 "team_id": msg.get("team_id", ""),
                 "overall": msg.get("overall", 0),
@@ -387,6 +388,7 @@ class MultiplayerClient:
             }))
         elif mtype == P.FANTASY_DRAFT_CLOCK:
             self.events.put(("fantasy_draft_clock", {
+                "board": msg.get("board", []) or [],
                 "clock_id": msg.get("clock_id", ""),
                 "team_id": msg.get("team_id", ""),
                 "overall": msg.get("overall", 0),

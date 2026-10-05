@@ -9232,8 +9232,29 @@ class DraftView(ctk.CTkFrame):
                 self.clock_label.configure(
                     text=f"{team_on_clock.team_name} (GM deciding...)")
                 try:
+                    _board = []
+                    try:
+                        for _i in range(int(getattr(
+                                self, "current_pick", 0) or 0)):
+                            _r, _t, _dp = self.draft_order[_i]
+                            _pl = getattr(_dp, "player", None) \
+                                if _dp is not None else None
+                            if _pl is None:
+                                continue
+                            _board.append({
+                                "overall": _i + 1,
+                                "round_num": int(_r or 0),
+                                "team_id": str(getattr(
+                                    _t, "team_name", "") or ""),
+                                "player_name": str(getattr(
+                                    _pl, "full_name", "?") or "?"),
+                                "player_id": str(
+                                    getattr(_pl, "id", "") or ""),
+                            })
+                    except Exception:
+                        _board = []
                     self.app._mp_open_draft_clock(
-                        team_on_clock, round_num, overall)
+                        team_on_clock, round_num, overall, _board)
                 except Exception as e:
                     print(f"draft clock failed (non-fatal): {e}")
                 try:
@@ -17999,3 +18020,115 @@ class GameDetailWindow(InGamePopup):
                 self._line(self.body,
                            f"{medals[i]}  {name} ({tname}) — {rating}/10",
                            secondary=True)
+
+
+class TeamOverviewView(ctk.CTkFrame):
+    """Read-only overview of another club (Eastside-style team info).
+
+    What you see when you click a team name for a club you don't run:
+    identity, record, roster, and key numbers -- but no management
+    actions. Player names are clickable (player cards); the roster is
+    otherwise read-only.
+    """
+
+    def __init__(self, parent, app=None, team=None):
+        from ctk_theme import (
+            init_ctk_theme, heading, body, TEAL, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, GOLD,
+        )
+        init_ctk_theme()
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.team = team
+        self._close_screen = None
+        self.configure(fg_color=BG)
+        self._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD,
+                        BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        GOLD=GOLD)
+        self._heading = heading
+        self._body = body
+        if team is None:
+            self._body(self, "No team selected.", size=12)
+            return
+        self._build()
+
+    def _build(self):
+        t = self.team
+        app = self.app
+        # Header
+        self._heading(
+            self,
+            f"{getattr(t, 'city', '')} {getattr(t, 'team_name', '')}",
+            size=20).pack(anchor="w", padx=16, pady=(14, 2))
+        # Record line
+        try:
+            st = (getattr(getattr(app, "league", None), "standings", None)
+                  or {}).get(getattr(t, "team_name", ""), {}) or {}
+            _w = st.get("W", 0)
+            _l = st.get("L", 0)
+            _o = st.get("OTL", 0)
+            _p = st.get("Points", 0)
+            record = f"{_w}-{_l}-{_o}  ({_p} pts)"
+        except Exception:
+            record = "--"
+        div = getattr(t, "division", "") or ""
+        conf = getattr(t, "conference", "") or ""
+        self._body(self, f"{record}" + (f"  |  {div}" if div else "")
+                   + (f"  |  {conf}" if conf else ""),
+                   size=12).pack(anchor="w", padx=16, pady=(0, 10))
+        # Stat strip
+        try:
+            roster = list(getattr(t, "roster", None) or [])
+            avg = (sum(p.overall_rating() for p in roster)
+                   / max(len(roster), 1)) if roster else 0
+        except Exception:
+            roster, avg = [], 0
+        strip = ctk.CTkFrame(self, fg_color=self._ct["CARD"])
+        strip.pack(fill="x", padx=16, pady=(0, 12))
+        for label, val in (("TEAM AVG", f"{avg:.1f}" if avg else "--"),
+                           ("ROSTER", str(len(roster)))):
+            cell = ctk.CTkFrame(strip, fg_color="transparent")
+            cell.pack(side="left", padx=18, pady=10)
+            self._body(cell, label, size=10).pack(anchor="w")
+            self._heading(cell, val, size=16).pack(anchor="w")
+        # Roster table (read-only; names open player cards)
+        self._heading(self, "Roster", size=14).pack(
+            anchor="w", padx=16, pady=(0, 6))
+        cols = ("Name", "Pos", "Age", "OVR")
+        tree = ttk.Treeview(self, columns=cols, show="headings", height=18)
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=140 if c == "Name" else 70,
+                        anchor="w" if c == "Name" else "center")
+        tree.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._pmap = {}
+        try:
+            _rows = sorted(
+                roster,
+                key=lambda p: float(
+                    getattr(p, "overall_rating", lambda: 0)() or 0),
+                reverse=True)
+        except Exception:
+            _rows = list(roster)
+        for p in _rows:
+            try:
+                _pos = str(getattr(
+                    getattr(p, "primary_position", None), "value", "?"))
+                _iid = tree.insert("", "end", values=(
+                    getattr(p, "full_name", "?"), _pos,
+                    getattr(p, "age", "?"),
+                    int(float(getattr(p, "overall_rating",
+                                      lambda: 0)() or 0))))
+                self._pmap[_iid] = p
+            except Exception:
+                continue
+        tree.bind("<Double-1>", self._on_double)
+
+    def _on_double(self, event):
+        try:
+            iid = event.widget.identify_row(event.y)
+            p = self._pmap.get(iid)
+            if p is not None:
+                self.app.open_player_profile(p)
+        except Exception:
+            pass

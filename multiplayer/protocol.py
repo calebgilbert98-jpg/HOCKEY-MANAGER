@@ -394,19 +394,23 @@ def ntc_waiver_request_msg(waiver_id: str, player_id: str, player_name: str,
 
 def draft_clock_msg(clock_id: str, team_id: str, overall: int,
                     round_num: int,
-                    prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
+                    prospects: List[Dict[str, Any]],
+                    board: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"type": DRAFT_CLOCK, "clock_id": clock_id, "team_id": team_id,
             "overall": overall, "round_num": round_num,
-            "prospects": prospects}
+            "prospects": prospects, "board": board or []}
 
 
 def fantasy_draft_clock_msg(clock_id: str, team_id: str, overall: int,
                             round_num: int,
                             available_ids: List[str],
-                            shortlist: List[Dict[str, Any]]) -> Dict[str, Any]:
+                            shortlist: List[Dict[str, Any]],
+                            board: List[Dict[str, Any]] = None
+                            ) -> Dict[str, Any]:
     return {"type": FANTASY_DRAFT_CLOCK, "clock_id": clock_id,
             "team_id": team_id, "overall": overall, "round_num": round_num,
-            "available_ids": available_ids, "shortlist": shortlist}
+            "available_ids": available_ids, "shortlist": shortlist,
+            "board": board or []}
 
 
 def error_msg(message: str) -> Dict[str, Any]:

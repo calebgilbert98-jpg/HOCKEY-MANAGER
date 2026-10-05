@@ -12299,7 +12299,7 @@ class HockeyManagerGUI(tk.Tk):
 
     # -- entry-draft pick clock (host side) --------------------------------
 
-    def _mp_open_draft_clock(self, team, round_num, overall):
+    def _mp_open_draft_clock(self, team, round_num, overall, board=None):
         """Put a claimed team on the draft clock: notify its manager with
         a shortlist; their draft_pick action answers. 60s, then BPA."""
         import time as _time
@@ -12333,7 +12333,7 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 self.mp_host.send_draft_clock(
                     session_id, clock_id, team.team_name, overall,
-                    round_num, wire)
+                    round_num, wire, board)
             except Exception as e:
                 print(f"draft clock send failed: {e}")
         try:
@@ -12406,6 +12406,25 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 continue
         self._mp_fantasy_dm = draft_manager
+        # Draft board so far: every committed pick, for the client's
+        # "My Picks" / "All Picks" tabs.
+        _board = []
+        try:
+            for _dp in (getattr(draft_manager, "draft_picks", None) or []):
+                _pl = getattr(_dp, "player", None)
+                if _pl is None:
+                    continue
+                _board.append({
+                    "overall": int(getattr(_dp, "overall_pick", 0) or 0),
+                    "round_num": int(getattr(_dp, "round_num", 0) or 0),
+                    "team_id": str(getattr(
+                        getattr(_dp, "team", None), "team_name", "") or ""),
+                    "player_name": str(
+                        getattr(_pl, "full_name", "?") or "?"),
+                    "player_id": str(getattr(_pl, "id", "") or ""),
+                })
+        except Exception:
+            _board = []
         self._mp_fantasy_clock = {
             "clock_id": clock_id,
             "team_name": getattr(team, "team_name", ""),
@@ -12419,7 +12438,7 @@ class HockeyManagerGUI(tk.Tk):
                 session_id, clock_id, getattr(team, "team_name", ""),
                 int(getattr(pick, "overall_pick", 0) or 0),
                 int(getattr(pick, "round_num", 0) or 0),
-                available_ids, shortlist)
+                available_ids, shortlist, _board)
         except Exception as e:
             print(f"fantasy draft clock send failed: {e}")
             self._mp_fantasy_clock = None
@@ -20417,6 +20436,28 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_draft_window(self):
         return self.show_screen('draft', 'NHL Draft', DraftView)
+
+    def open_team_overview(self, team):
+        """Click a team name anywhere -> see that club.
+
+        Your own club opens the normal home screen. Any other club
+        opens the read-only TeamOverviewView (record, roster, numbers;
+        player names still open cards) -- no management actions, since
+        you're not their staff."""
+        try:
+            from windows import TeamOverviewView
+            _mine = getattr(self, "user_team", None)
+            if team is not None and team is _mine:
+                try:
+                    self.show_home()
+                except Exception:
+                    pass
+                return
+            _name = getattr(team, "team_name", "?") or "?"
+            self.show_screen(f"team_{_name}", _name, TeamOverviewView,
+                             team=team)
+        except Exception as e:
+            print(f"open_team_overview failed (non-fatal): {e}")
 
     def open_schedule_window(self):
         return self.show_screen('schedule', 'Schedule', ScheduleView)
