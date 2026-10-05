@@ -8580,19 +8580,19 @@ class HockeyManagerGUI(tk.Tk):
             and getattr(self, 'mp_host', None) is None
 
     def _mp_client_block(self, what):
-        """Phase-1 honesty guard for MP clients.
+        """Honesty guard for MP clients.
 
         Returns True when running as a multiplayer client: the caller must
         abort WITHOUT mutating local state (the next STATE_SYNC would wipe
-        it silently). Shows a notice explaining client sync is coming.
+        it silently). Shows a notice explaining the action needs the host.
         Non-client modes return False (proceed normally).
         """
         if not self._mp_client_mode():
             return False
         try:
             self._mp_toast(
-                f"Multiplayer: {what} isn't synced to the host yet — "
-                "client management support is coming in the next update.")
+                f"Multiplayer: {what} needs the host — "
+                "ask the host to do it, or use the routed action.")
         except Exception:
             pass
         return True
@@ -22728,6 +22728,17 @@ class HockeyManagerGUI(tk.Tk):
     def accept_contract_counter(self, message):
         """Inbox action: accept the agent's counter-offer as-is."""
         data = message.action_data or {}
+        # MP: route to host instead of mutating the snapshot.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _pid = str(getattr(self._find_inbox_player(data), "id", ""))
+            if _route(self, "extend_contract", {
+                    "player_id": _pid,
+                    "salary": data.get("asking_price", 0),
+                    "years": data.get("years", 1),
+            }):
+                message.action_done = True
+                return True
         person = self._find_inbox_player(data)
         if person is None:
             message.action_done = True
@@ -22797,6 +22808,8 @@ class HockeyManagerGUI(tk.Tk):
     # ----- RFA inbox actions (rfa_system) -----
     def apply_rfa_qualifying_decision(self, message, player_id, qualify):
         """Inbox action: extend or decline a qualifying offer for one RFA."""
+        if self._mp_client_block("RFA qualifying offers"):
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_qualifying_decision(
@@ -22822,6 +22835,16 @@ class HockeyManagerGUI(tk.Tk):
         like the RFA actions -- this does NOT re-check the calendar gate
         in transaction_windows (the user may resolve it after July 1).
         """
+        # MP: route to host (buyout_player protocol action exists).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _data = getattr(message, "action_data", None) or {}
+            _person = self._find_inbox_player(_data)
+            if _route(self, "buyout_player", {
+                    "player_id": str(getattr(_person, "id", "")),
+            }):
+                message.action_done = True
+                return True
         import buyout_window as _bw
         data = message.action_data or {}
         ok = False
@@ -22880,6 +22903,8 @@ class HockeyManagerGUI(tk.Tk):
         is never caught short mid-decision; a walked head coach triggers
         the in-house promote fallback, exactly like the automatic path.
         """
+        if self._mp_client_block("staff renewals"):
+            return False
         import staff_renewals as _sr
         data = message.action_data or {}
         try:
@@ -22908,6 +22933,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_offer_sheet_match_decision(self, message, match):
         """Inbox action: match an offer sheet or take the pick compensation."""
+        if self._mp_client_block("offer-sheet matches"):
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_offer_sheet_match(
@@ -22923,6 +22950,8 @@ class HockeyManagerGUI(tk.Tk):
     def apply_offer_sheet_trade_alt_decision(self, message, accept):
         """Inbox action: accept the sign-and-trade package or take the
         pick compensation on a declined offer sheet."""
+        if self._mp_client_block("offer-sheet trade alternatives"):
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_offer_sheet_trade_alt(
@@ -22937,6 +22966,8 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_arbitration_walkaway_decision(self, message, walk_away):
         """Inbox action: walk away from an arbitration award (48h window)."""
+        if self._mp_client_block("arbitration walkaways"):
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         aav = int(data.get("award_aav", 0) or 0)
@@ -23391,7 +23422,10 @@ class CleanEditLinesView(ctk.CTkFrame):
         self.lineup = getattr(self.app.user_team, "lineup", None)
         if not self.lineup:
             self.lineup = best_lines(self.app.user_team)
-        self.app.user_team.lineup = self.lineup
+        # MP: don't write back to the snapshot on view open; the host
+        # owns the canonical lineup.
+        if not getattr(self.app, "_mp_client_mode", lambda: False)():
+            self.app.user_team.lineup = self.lineup
 
         # Get players organized by position
         self.forwards = [p for p in self.app.user_team.roster
@@ -25347,6 +25381,19 @@ class CleanEditLinesView(ctk.CTkFrame):
         """Save the current lineup and close the window"""
         # Extract player selections and save to lineup
         self.save_lineup_from_interface()
+        # MP: route to host instead of writing the snapshot.
+        try:
+            _res = self._mp_send_lines()
+            if _res:
+                if _res is True:
+                    messagebox.showinfo(
+                        "Lines Sent",
+                        "Your lineup was sent to the host and applies on "
+                        "the next sync.")
+                self.destroy()
+                return
+        except Exception:
+            pass
         self.app.user_team.lineup = self.lineup
         messagebox.showinfo("Saved", "Your lines have been saved!")
         self.destroy()
@@ -26342,6 +26389,19 @@ class TradeBlockWindow(tk.Frame):
     def add_selected_to_block(self):
         # Convert selected IDs to player objects
         selected_players = [p for p in self.parent.user_team.roster if p.id in self.selected_items]
+        # MP: route to host; the host mutates the canonical block and the
+        # next sync refreshes. Don't touch the snapshot locally.
+        if _mp_is_client(self.parent):
+            _new_ids = [str(getattr(p, "id", ""))
+                        for p in getattr(self.parent, "trade_block", [])]
+            _new_ids += [str(getattr(p, "id", ""))
+                         for p in selected_players
+                         if str(getattr(p, "id", "")) not in _new_ids]
+            _mp_route(self.parent, "set_trade_block",
+                      {"player_ids": _new_ids})
+            self.selected_items.clear()
+            self._populate_tree()
+            return
         for player in selected_players:
             if player not in self.parent.trade_block:
                 self.parent.trade_block.append(player)
@@ -26352,16 +26412,20 @@ class TradeBlockWindow(tk.Frame):
     def remove_selected_from_block(self):
         # Convert selected IDs to player objects
         selected_players = [p for p in self.parent.user_team.roster if p.id in self.selected_items]
+        # MP: route to host; don't mutate the snapshot locally.
+        if _mp_is_client(self.parent):
+            _remove = {str(getattr(p, "id", "")) for p in selected_players}
+            _new_ids = [str(getattr(p, "id", ""))
+                        for p in getattr(self.parent, "trade_block", [])
+                        if str(getattr(p, "id", "")) not in _remove]
+            _mp_route(self.parent, "set_trade_block",
+                      {"player_ids": _new_ids})
+            self.selected_items.clear()
+            self._populate_tree()
+            return
         for player in selected_players:
             if player in self.parent.trade_block:
                 self.parent.trade_block.remove(player)
-        # MP client: keep the host's league-level block in sync --
-        # send the list that was actually mutated.
-        if _mp_is_client(self.parent):
-            _mp_route(self.parent, "set_trade_block",
-                      {"player_ids":
-                       [str(getattr(p, "id", ""))
-                        for p in getattr(self.parent, "trade_block", [])]})
         self.selected_items.clear()
         self._populate_tree()
         self.parent.update_all_views()

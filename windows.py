@@ -8248,6 +8248,9 @@ class DraftView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def start_draft(self):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("draft setup"):
+            return
         # Re-entry guard: __init__ starts the draft, so an explicit second
         # call (as the runtime QA once did) must not rebuild the order,
         # re-roll the 32 team boards, or re-drive the market -- a rebuild
@@ -9547,6 +9550,9 @@ class DraftView(ctk.CTkFrame):
             return False
 
     def execute_pick(self, team, player, reach=False, steal=False):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("draft picks"):
+            return
         # BUG-2 fix: transactional commit -- the overall pick number is the
         # idempotency key. A repeat call for an already-committed overall
         # (stale re-entry, double event) is rejected, never double-applied.
@@ -9905,6 +9911,9 @@ class DraftView(ctk.CTkFrame):
                        command=_propose).pack(pady=10)
 
     def _swap_pick_owner(self, draft_pick, new_team):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("pick swaps"):
+            return
         """Point a draft pick (and its draft-order slot) at a new owner."""
         try:
             draft_pick.current_team = new_team.team_name
@@ -9988,6 +9997,9 @@ class DraftView(ctk.CTkFrame):
 
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("pick swaps"):
+            return
         user_team = self.app.user_team
         # Gating Phase 3 (A1/A3): the on-clock slot is re-read live. If a
         # mid-draft trade or a clock auto-pick moved/spent it while the
