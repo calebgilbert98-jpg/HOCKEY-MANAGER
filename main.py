@@ -12456,26 +12456,23 @@ class HockeyManagerGUI(tk.Tk):
         self._mp_fantasy_auto_pick(dm, reason="clock expired")
 
     def _mp_fantasy_auto_pick(self, dm, reason=""):
-        """BPA auto-pick for a client club (timeout or unreachable)."""
+        """Smart auto-pick for a client club (timeout or unreachable).
+
+        Uses the draft manager's team-aware valuation -- positional needs
+        from the picks already made, age/contract value, cap pressure --
+        not raw BPA, so the auto-drafted roster looks like a real GM
+        built it."""
         try:
             import random as _r
             pick = dm.get_current_pick()
             if pick is None:
-                return
+                return None
             available = dm.get_available_players() or []
             if not available:
-                return
-            try:
-                _ranked = sorted(
-                    available,
-                    key=lambda p: float(
-                        getattr(p, "overall_rating", lambda: 50)() or 50),
-                    reverse=True)
-            except Exception:
-                _ranked = list(available)
-            choice = _r.choice(_ranked[:3]) if _ranked else None
+                return None
+            choice = self._mp_fantasy_smart_choice(dm, pick.team, available)
             if choice is None:
-                return
+                return None
             if dm.make_pick(choice):
                 try:
                     dm.assign_drafted_player(pick.team, choice)
@@ -12487,14 +12484,61 @@ class HockeyManagerGUI(tk.Tk):
                         f"{getattr(choice, 'full_name', '?')} ({reason}).")
                 except Exception:
                     pass
+                try:
+                    if getattr(self, "mp_host", None) is not None:
+                        _ov = getattr(pick, "overall_pick", 0) or 0
+                        self.mp_host.broadcast_draft_update(
+                            "fantasy", int(_ov), int(getattr(
+                                pick, "round_num", 0) or 0),
+                            str(getattr(pick.team, "team_name", "") or ""),
+                            str(getattr(choice, "full_name", "?") or "?"))
+                except Exception:
+                    pass
                 view = getattr(self, "_mp_fantasy_view", None)
                 if view is not None:
                     try:
                         view.after(400, view.continue_auto_draft)
                     except Exception:
                         pass
+                return choice
+            return None
         except Exception as e:
             print(f"fantasy auto-pick failed: {e}")
+            return None
+
+    def _mp_fantasy_smart_choice(self, dm, team, available):
+        """Pick the best-valued available player for `team`.
+
+        Team-aware: positional need from picks already made, youth
+        preference, contract value, and cap pressure all feed the
+        draft manager's valuation. A little randomness among the top
+        candidates keeps drafts from being deterministic."""
+        try:
+            import random as _r
+            _round = 1
+            try:
+                _cur = dm.get_current_pick()
+                _round = int(getattr(_cur, "round_num", 1) or 1)
+            except Exception:
+                pass
+            _scored = []
+            for _p in available:
+                try:
+                    _v = float(dm.calculate_player_draft_value(
+                        _p, team, _round))
+                except Exception:
+                    try:
+                        _v = float(_p.overall_rating())
+                    except Exception:
+                        _v = 50.0
+                _scored.append((_v, _p))
+            if not _scored:
+                return None
+            _scored.sort(key=lambda t: t[0], reverse=True)
+            _top = [p for _, p in _scored[:5]]
+            return _r.choice(_top) if _top else None
+        except Exception:
+            return None
 
     def _mp_on_draft_update(self, payload):
         """Spectator feed: a draft pick was committed on the host.

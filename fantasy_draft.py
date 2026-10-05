@@ -4207,6 +4207,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
 
     def _sim_rest_of_draft_confirmed(self):
         """Run the rest-of-draft sim after the user confirmed."""
+        # MULTIPLAYER: a client may be on the clock right now. Cancel it
+        # so their late answer can't land mid-sim and corrupt the order.
+        try:
+            _app = getattr(self, "app", None)
+            _st = getattr(_app, "_mp_fantasy_clock", None)
+            if isinstance(_st, dict) and not _st.get("done"):
+                _st["done"] = True
+            if _app is not None and getattr(_app, "mp_host", None) \
+                    is not None:
+                try:
+                    _app.mp_host.broadcast_chat(
+                        "Host is simulating the rest of the fantasy draft.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
         current_pick = self.draft_manager.get_current_pick()
         remaining_picks = (len(self.draft_manager.draft_picks)
                            - self.draft_manager.current_pick)
@@ -4244,27 +4260,55 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             progress_var.set(f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} ({percentage}%)")
             progress_window.update()
         
-            # AI selection logic with team needs
+            # Smart selection: team-aware valuation (positional need
+            # from picks already made, age/contract value, cap pressure).
+            # In multiplayer the host's smart choice keeps every club's
+            # auto-drafted roster logical.
             available_players = self.draft_manager.get_available_players()
             if not available_players:
                 break
-            
-            team_needs = self.analyze_team_needs(current_pick.team)
-            suitable_players = self.filter_by_team_needs(available_players, team_needs)
-        
-            if not suitable_players:
-                suitable_players = available_players[:20]  # Fallback to best available
-            
-            # Weight selection towards top players with some randomness
-            top_candidates = suitable_players[:10]
-            weights = [10, 8, 6, 5, 4, 3, 2, 2, 1, 1][:len(top_candidates)]
-            ai_pick = random.choices(top_candidates, weights=weights, k=1)[0]
-        
+            try:
+                _app = getattr(self, "app", None)
+                _smart = getattr(_app, "_mp_fantasy_smart_choice", None)
+                ai_pick = (_smart(self.draft_manager, current_pick.team,
+                                  available_players)
+                           if callable(_smart) else None)
+            except Exception:
+                ai_pick = None
+            if ai_pick is None:
+                team_needs = self.analyze_team_needs(current_pick.team)
+                suitable_players = self.filter_by_team_needs(
+                    available_players, team_needs)
+                if not suitable_players:
+                    suitable_players = available_players[:20]
+                top_candidates = suitable_players[:10]
+                weights = [10, 8, 6, 5, 4, 3, 2, 2, 1,
+                           1][:len(top_candidates)]
+                ai_pick = random.choices(
+                    top_candidates, weights=weights, k=1)[0]
+
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Roster assignment (23-man NHL cap) on the manager.
                 self.draft_manager.assign_drafted_player(
                     current_pick.team, ai_pick)
+                # MULTIPLAYER: spectators see each pick live.
+                try:
+                    _app2 = getattr(self, "app", None)
+                    _host = (getattr(_app2, "mp_host", None)
+                             if _app2 is not None else None)
+                    if _host is not None:
+                        _host.broadcast_draft_update(
+                            "fantasy",
+                            int(getattr(current_pick, "overall_pick", 0)
+                                or 0),
+                            int(getattr(current_pick, "round_num", 0)
+                                or 0),
+                            str(getattr(current_pick.team, "team_name", "")
+                                or ""),
+                            str(getattr(ai_pick, "full_name", "?") or "?"))
+                except Exception:
+                    pass
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
