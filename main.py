@@ -9238,6 +9238,8 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_show_draft_clock(payload)
         elif kind == "fantasy_draft_clock":
             self._mp_show_fantasy_clock(payload)
+        elif kind == "draft_update":
+            self._mp_on_draft_update(payload)
         elif kind == "action_ack":
             self._mp_toast(f"Accepted: {payload.get('action', '')} "
                             f"({payload.get('result', '')})")
@@ -9251,34 +9253,73 @@ class HockeyManagerGUI(tk.Tk):
         elif kind == "error":
             self._mp_toast(f"Host: {payload.get('message', '')}")
         elif kind == "disconnected":
-            from popup_system import messagebox
-            try:
-                _promote = messagebox.askyesno(
-                    "Disconnected",
-                    f"Lost connection to the host ({payload.get('reason', '')}).\n"
-                    "Your last synced state was kept as a fallback checkpoint.\n\n"
-                    "Promote this client to host so the session can continue?")
-            except Exception:
-                _promote = False
-            # Capture the session port before dropping the client: promotion
-            # must reuse the session port, not silently fall back to default.
+            # Non-modal (screen-shift rule): no blocking question. A
+            # dismissible card offers promotion; the last-synced state
+            # stays browsable either way.
             try:
                 self._mp_last_host_port = int(
                     getattr(self.mp_client, "port", 0) or 0)
             except Exception:
                 self._mp_last_host_port = 0
+            _reason = payload.get("reason", "")
             self.mp_client = None  # stops the poll loop
-            if _promote:
-                try:
-                    self._mp_promote_to_host()
-                except Exception as e:
-                    try:
-                        messagebox.showerror(
-                            "Promote Failed",
-                            f"Couldn't take over as host:\n{e}")
-                    except Exception:
-                        pass
+            try:
+                self._mp_show_promote_card(_reason)
+            except Exception:
+                pass
 
+    def _mp_show_promote_card(self, reason):
+        """Non-modal disconnect card: offer host promotion without
+        blocking. The last-synced state stays browsable."""
+        try:
+            card = tk.Toplevel(self)
+        except Exception:
+            return
+        card.title("Disconnected")
+        card.geometry("440x220")
+        # Non-modal: no grab, no topmost seizure -- dismissible, and the
+        # main window stays usable.
+        tk.Label(
+            card, text="Lost connection to the host",
+            font=("Segoe UI", 12, "bold")).pack(pady=(14, 4))
+        tk.Label(
+            card,
+            text=f"{reason}\n\nYour last synced state was kept as a "
+                 f"fallback checkpoint.\nPromote this client to host so "
+                 f"the session can continue?",
+            font=("Segoe UI", 10), wraplength=400,
+            justify="left").pack(padx=16, pady=(0, 12))
+
+        def _promote():
+            try:
+                card.destroy()
+            except Exception:
+                pass
+            try:
+                self._mp_promote_to_host()
+            except Exception as e:
+                try:
+                    from popup_system import messagebox
+                    messagebox.showerror(
+                        "Promote Failed",
+                        f"Couldn't take over as host:\n{e}")
+                except Exception:
+                    pass
+
+        def _dismiss():
+            try:
+                card.destroy()
+            except Exception:
+                pass
+
+        row = tk.Frame(card)
+        row.pack(pady=(0, 14))
+        tk.Button(row, text="Promote to host",
+                  font=("Segoe UI", 10, "bold"),
+                  command=_promote).pack(side="left", padx=8)
+        tk.Button(row, text="Stay offline",
+                  font=("Segoe UI", 10),
+                  command=_dismiss).pack(side="left", padx=8)
     def _mp_promote_to_host(self):
         """Take over as host from the client's last synced checkpoint.
 
@@ -12455,6 +12496,32 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             print(f"fantasy auto-pick failed: {e}")
 
+    def _mp_on_draft_update(self, payload):
+        """Spectator feed: a draft pick was committed on the host.
+        Toast it and refresh an open draft view so remote managers and
+        spectators see progress without waiting for a full STATE_SYNC."""
+        try:
+            _draft = str(payload.get("draft", "") or "")
+            _ov = payload.get("overall", 0)
+            _team = str(payload.get("team_id", "") or "?")
+            _player = str(payload.get("player_name", "") or "?")
+            self._mp_toast(
+                f"Draft pick #{_ov}: {_team} selects {_player}.")
+            if _draft == "fantasy":
+                view = getattr(self, "_mp_fantasy_view", None)
+                if view is not None:
+                    try:
+                        view.after(200, view.continue_auto_draft)
+                    except Exception:
+                        pass
+            elif _draft == "entry":
+                try:
+                    self.update_all_views()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _mp_fantasy_draft_pick(self, params, team, manager):
         """Client's live fantasy-draft pick: validate the clock, the turn,
         and availability, then commit and resume the draft."""
@@ -12491,6 +12558,17 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Pick didn't commit."
         try:
             dm.assign_drafted_player(pick.team, player)
+        except Exception:
+            pass
+        try:
+            if getattr(self, "mp_host", None) is not None:
+                self.mp_host.broadcast_draft_update(
+                    "fantasy", int(st.get("overall", 0) or 0),
+                    int(dm.get_current_round() or 0) if hasattr(
+                        dm, "get_current_round") else 0,
+                    str(getattr(getattr(pick, "team", None),
+                                "team_name", "") or ""),
+                    str(getattr(player, "full_name", "?") or "?"))
         except Exception:
             pass
         view = getattr(self, "_mp_fantasy_view", None)
@@ -12707,6 +12785,10 @@ class HockeyManagerGUI(tk.Tk):
             if hasattr(self.game_manager, 'current_date'):
                 self.current_date = self.game_manager.current_date
             # Clients view the league through THEIR claimed team.
+            # Teamless joiners are spectators: they browse the league
+            # through the host's club but every management action is
+            # refused (see _mp_route).
+            self._mp_spectator = False
             if self.mp_client is not None and getattr(self.mp_client, 'team_id', None):
                 claimed = self._mp_find_team(self.mp_client.team_id)
                 if claimed is not None:
@@ -12714,6 +12796,13 @@ class HockeyManagerGUI(tk.Tk):
                     self.user_team = claimed
             elif hasattr(self.game_manager, 'user_team'):
                 self.user_team = self.game_manager.user_team
+                if self.mp_client is not None:
+                    self._mp_spectator = True
+                    try:
+                        self._mp_toast(
+                            "Spectating -- management actions are disabled.")
+                    except Exception:
+                        pass
             self._update_team_colors()
             self.update_all_views()
             if label:
@@ -12742,8 +12831,11 @@ class HockeyManagerGUI(tk.Tk):
     # -- client-side multiplayer dialogs ------------------------------------
 
     def _mp_show_trade_offer(self, payload):
-        """Incoming human-to-human trade offer: Accept / Reject."""
-        from popup_system import messagebox
+        """Incoming human-to-human trade offer: Accept / Reject.
+
+        Non-modal (screen-shift rule): a dismissible card, not a blocking
+        question. The offer stays answerable until the card is closed --
+        the rest of the app stays usable."""
         offer_id = payload.get("offer_id", "")
         from_team = payload.get("from_team", "?")
         manager = payload.get("manager", "?")
@@ -12778,21 +12870,49 @@ class HockeyManagerGUI(tk.Tk):
         for kid, prot in (offer.get("pick_protection") or {}).items():
             lines.append(f"    (protection: {prot})")
         try:
-            accept = messagebox.askyesno(
-                "Trade offer", "\n".join(lines) +
-                "\n\nAccept this trade?")
+            card = tk.Toplevel(self)
         except Exception:
-            accept = False
-        if self.mp_client is None:
             return
-        try:
-            self.mp_client.send_trade_response(
-                offer_id, "accept" if accept else "reject")
-        except Exception as e:
-            self._mp_toast(f"Trade answer failed: {e}")
-            return
-        self._mp_toast("Trade accepted -- waiting on the league office."
-                       if accept else "Trade offer rejected.")
+        card.title(f"Trade offer from {from_team}")
+        card.geometry("480x520")
+        # Non-modal: no grab, no topmost seizure.
+        tk.Label(card, text=f"Trade offer from {manager} ({from_team})",
+                 font=("Segoe UI", 12, "bold")).pack(pady=(12, 6))
+        body = tk.Text(card, font=("Segoe UI", 10), height=18, wrap="word")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        body.insert("1.0", "\n".join(lines))
+        body.configure(state="disabled")
+        answered = {"done": False}
+
+        def _answer(decision):
+            if answered["done"]:
+                return
+            answered["done"] = True
+            try:
+                card.destroy()
+            except Exception:
+                pass
+            if self.mp_client is None:
+                return
+            try:
+                self.mp_client.send_trade_response(offer_id, decision)
+            except Exception as e:
+                self._mp_toast(f"Trade answer failed: {e}")
+                return
+            self._mp_toast(
+                "Trade accepted -- waiting on the league office."
+                if decision == "accept" else "Trade offer rejected.")
+
+        row = tk.Frame(card)
+        row.pack(pady=(0, 12))
+        tk.Button(row, text="Accept",
+                  font=("Segoe UI", 10, "bold"),
+                  command=lambda: _answer("accept")).pack(
+                      side="left", padx=8)
+        tk.Button(row, text="Reject",
+                  font=("Segoe UI", 10),
+                  command=lambda: _answer("reject")).pack(
+                      side="left", padx=8)
 
     def _mp_answer_ntc_request(self, payload):
         """No-trade/no-movement waiver prompt: same choices as single-player

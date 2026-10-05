@@ -396,6 +396,14 @@ class MultiplayerHost:
     def broadcast_chat(self, text: str) -> None:
         self._broadcast(P.CHAT, P.chat_msg(self.host_name, text))
 
+    def broadcast_draft_update(self, draft: str, overall: int,
+                               round_num: int, team_id: str,
+                               player_name: str) -> None:
+        """Lightweight pick notice so spectators see draft progress."""
+        self._broadcast(P.DRAFT_UPDATE, {
+            "draft": draft, "overall": overall, "round_num": round_num,
+            "team_id": team_id, "player_name": player_name})
+
     def find_peer_by_team(self, team_id: str) -> Optional["_Peer"]:
         """The connected client managing ``team_id``, if any."""
         with self._peers_lock:

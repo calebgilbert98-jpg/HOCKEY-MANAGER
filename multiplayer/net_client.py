@@ -394,6 +394,14 @@ class MultiplayerClient:
                 "available_ids": msg.get("available_ids", []) or [],
                 "shortlist": msg.get("shortlist", []) or [],
             }))
+        elif mtype == P.DRAFT_UPDATE:
+            self.events.put(("draft_update", {
+                "draft": msg.get("draft", ""),
+                "overall": msg.get("overall", 0),
+                "round_num": msg.get("round_num", 0),
+                "team_id": msg.get("team_id", ""),
+                "player_name": msg.get("player_name", ""),
+            }))
         elif mtype == P.ACTION_ACK:
             seq = msg.get("action_seq")
             self.events.put(("action_ack", {

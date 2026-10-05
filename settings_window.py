@@ -281,6 +281,30 @@ class SettingsView(ctk.CTkFrame):
             pass
 
 
+    def _mp_client_notice(self, content):
+        """Multiplayer: sim-affecting settings are the host's. Show an
+        honest notice and return True for clients (callers should disable
+        their sim controls)."""
+        try:
+            from windows import _mp_is_client as _is_client
+            if not _is_client(getattr(self, "app", None)):
+                return False
+        except Exception:
+            return False
+        try:
+            note = tk.Label(
+                content,
+                text=("Multiplayer: league settings (draft quality, "
+                      "scoring, career rules) are the host's -- changes "
+                      "here won't affect the shared league. Display and "
+                      "notification preferences still apply to you."),
+                bg="#5c4a1a", fg="#ffcc00", wraplength=560,
+                justify="left", font=AppFonts.SMALL)
+            note.pack(fill="x", padx=4, pady=(0, 10), before=content.winfo_children()[0])
+        except Exception:
+            pass
+        return True
+
     def _ask_confirm(self, text, on_yes, on_no=None):
         """Show an in-view Yes/No panel (replaces messagebox.askyesno)."""
         old = getattr(self, "_confirm_panel", None)
@@ -452,24 +476,28 @@ class SettingsView(ctk.CTkFrame):
         return inner
 
     def _row(self, parent, label, var, values, width=18, hint=None):
-        """A labeled dropdown row."""
+        """A labeled dropdown row. Returns the dropdown widget."""
         row = tk.Frame(parent, bg=AppColors.BG_ELEVATED)
         row.pack(fill="x", pady=4)
         tk.Label(row, text=label, bg=AppColors.BG_ELEVATED,
                  fg=AppColors.TEXT_PRIMARY, font=AppFonts.SMALL).pack(
                      side="left")
-        SettingsDropdown(row, textvariable=var, values=values, width=width,
-                         on_select=self._mark_changed).pack(
-                             side="left", padx=(10, 0))
+        dd = SettingsDropdown(row, textvariable=var, values=values,
+                              width=width,
+                              on_select=self._mark_changed)
+        dd.pack(side="left", padx=(10, 0))
         if hint:
             tk.Label(row, text=hint, bg=AppColors.BG_ELEVATED,
                      fg=AppColors.TEXT_TERTIARY,
                      font=AppFonts.CAPTION).pack(side="left", padx=(10, 0))
+        return dd
 
     def _check(self, parent, text, var, pady=3):
-        ModernCheck(parent, text=text, variable=var,
-                    command=self._mark_changed,
-                    font=AppFonts.SMALL).pack(anchor="w", pady=pady)
+        chk = ModernCheck(parent, text=text, variable=var,
+                          command=self._mark_changed,
+                          font=AppFonts.SMALL)
+        chk.pack(anchor="w", pady=pady)
+        return chk
 
     def _caption(self, parent, text):
         tk.Label(parent, text=text, bg=AppColors.BG_ELEVATED,
@@ -567,6 +595,7 @@ class SettingsView(ctk.CTkFrame):
 
     def _create_simulation_tab(self, content):
         """Game simulation preferences."""
+        _mp = self._mp_client_notice(content)
         # NOTE: the old "Game simulation speed" dropdown was removed --
         # the value was saved but never read anywhere, so the control was
         # a dead end. The stored value is preserved untouched in case a
@@ -589,14 +618,24 @@ class SettingsView(ctk.CTkFrame):
 
         league = self._section(content, "League & Scoring")
         self.draft_quality_var = tk.StringVar()
-        self._row(league, "Draft class quality:", self.draft_quality_var,
-                  ['Weak', 'Normal', 'Strong', 'Generational'], width=14,
-                  hint="applies to future draft classes")
+        _dq = self._row(league, "Draft class quality:",
+                        self.draft_quality_var,
+                        ['Weak', 'Normal', 'Strong', 'Generational'],
+                        width=14,
+                        hint="applies to future draft classes")
         self.scoring_level_var = tk.StringVar()
-        self._row(league, "Scoring level:", self.scoring_level_var,
-                  ['Low (Current)', 'Medium (NHL Baseline)',
-                   'High (Arcade)'], width=22,
-                  hint="goals per game: ~5.5 / ~6.0 / 7+")
+        _sl = self._row(league, "Scoring level:", self.scoring_level_var,
+                        ['Low (Current)', 'Medium (NHL Baseline)',
+                         'High (Arcade)'], width=22,
+                        hint="goals per game: ~5.5 / ~6.0 / 7+")
+        if _mp:
+            # Host's league, host's rules -- changing these locally
+            # would be a lie.
+            for _dd in (_dq, _sl):
+                try:
+                    _dd.configure(state="disabled")
+                except Exception:
+                    pass
 
     def _create_notifications_tab(self, content):
         """Notification preferences."""
@@ -621,10 +660,16 @@ class SettingsView(ctk.CTkFrame):
 
     def _create_career_tab(self, content):
         """Career / job security preferences."""
+        _mp = self._mp_client_notice(content)
         job = self._section(content, "Job Security")
         self.gm_can_be_sacked_var = tk.BooleanVar()
-        self._check(job, "Board can sack the GM (job is on the line)",
-                    self.gm_can_be_sacked_var)
+        _sack = self._check(job, "Board can sack the GM (job is on the line)",
+                            self.gm_can_be_sacked_var)
+        if _mp:
+            try:
+                _sack.configure(state="disabled")
+            except Exception:
+                pass
         tk.Label(job,
                  text=("If off, your job is safe no matter what — board confidence "
                        "still affects budgets and morale."),

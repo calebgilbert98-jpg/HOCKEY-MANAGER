@@ -120,6 +120,11 @@ DRAFT_CLOCK = "draft_clock"        # host -> client   {clock_id, team_id,
                                    #  overall, round_num, prospects:
                                    #  [{id, name, pos, ranking}]}
 
+# Message types: live draft-pick notification for spectators.
+DRAFT_UPDATE = "draft_update"    # host -> all    {draft: "entry"|"fantasy",
+                                 #  overall, round_num, team_id,
+                                 #  player_name}
+
 # Message types: fantasy-draft pick clock for a client's team.
 FANTASY_DRAFT_CLOCK = "fantasy_draft_clock"  # host -> client {clock_id,
                                    #  team_id, overall, round_num,
@@ -142,6 +147,7 @@ ALL_TYPES = {
     NTC_WAIVER_REQUEST, NTC_WAIVER_ANSWER,
     DRAFT_CLOCK,
     FANTASY_DRAFT_CLOCK,
+    DRAFT_UPDATE,
     CHAT, PING, PONG, ERROR, GOODBYE,
 }
 

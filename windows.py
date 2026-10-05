@@ -44,6 +44,15 @@ def _mp_route(app, action, params, on_sent=None):
         client = getattr(app, "mp_client", None)
         if client is None:
             return False
+        if getattr(app, "_mp_spectator", False):
+            try:
+                messagebox.showinfo(
+                    "Spectating",
+                    "You're watching as a spectator -- claim a team to "
+                    "manage.")
+            except Exception:
+                pass
+            return True
         p = dict(params or {})
         team = getattr(app, "user_team", None)
         p.setdefault("team_id",
@@ -9639,6 +9648,16 @@ class DraftView(ctk.CTkFrame):
         try:
             self.app.league.draft_prospects.remove(player)
         except ValueError:
+            pass
+        # MP: spectators see the pick live, not just on STATE_SYNC.
+        try:
+            _host = getattr(self.app, "mp_host", None)
+            if _host is not None:
+                _host.broadcast_draft_update(
+                    "entry", int(overall), int(round_num),
+                    str(getattr(team, "team_name", "") or ""),
+                    str(getattr(player, "full_name", "?") or "?"))
+        except Exception:
             pass
         try:
             pos = player.primary_position.value

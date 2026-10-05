@@ -795,6 +795,14 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             team_buttons[tid] = btn
         _refresh_teams()
 
+        def _spectate():
+            # Watch without managing: no team claim, no ready gate.
+            client.team_id = None
+            status.config(text="Spectating. Waiting for host to start...")
+
+        _ThemedButton(lobby, text="Watch as spectator", style="secondary",
+                      command=_spectate).pack(pady=(6, 10))
+
         def _poll():
             try:
                 if not lobby.winfo_exists():
