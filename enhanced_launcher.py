@@ -586,12 +586,14 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 return
             # Explicitly persist the dialog's settings.
             _fdv, _scv = bool(_fd_var.get()), bool(_sc_var.get())
-            print(f"[HOST-DIALOG-DIAG] checkbox fantasy_draft={_fdv}, "
-                  f"salary_cap={_scv}")
+            try:
+                with open("mp_diag.log", "a") as _f:
+                    _f.write(f"[HOST-DIALOG] fantasy_draft={_fdv}, "
+                             f"salary_cap={_scv}\n")
+            except Exception:
+                pass
             self.setup_options['fantasy_draft'].set(_fdv)
             self.setup_options['salary_cap'].set(_scv)
-            print(f"[HOST-DIALOG-DIAG] setup_options fantasy_draft="
-                  f"{self.setup_options['fantasy_draft'].get()}")
             self._mp_mode = "host"
             self._mp_config = {"name": name_var.get().strip() or "Host",
                                "port": port}

@@ -370,13 +370,21 @@ class GameManager:
             
             # Handle fantasy draft if enabled
             _fd = settings.get('fantasy_draft', False)
-            print(f"[FANTASY-DRAFT-DIAG] settings.get('fantasy_draft')={_fd!r}, "
-                  f"user_team={getattr(self, 'user_team', None)}")
+            try:
+                with open("mp_diag.log", "a") as _f:
+                    _f.write(f"[GAME-CREATE] fantasy_draft={_fd!r}, "
+                             f"user_team={getattr(self, 'user_team', None)}\n")
+            except Exception:
+                pass
             if _fd:
                 print("Fantasy draft enabled - starting interactive fantasy draft...")
                 self.start_interactive_fantasy_draft()
-                print(f"[FANTASY-DRAFT-DIAG] pending_fantasy_draft="
-                      f"{getattr(self, 'pending_fantasy_draft', 'MISSING')}")
+                try:
+                    with open("mp_diag.log", "a") as _f:
+                        _f.write(f"[GAME-CREATE] pending_fantasy_draft="
+                                 f"{getattr(self, 'pending_fantasy_draft', 'MISSING')}\n")
+                except Exception:
+                    pass
             
             # Generate league schedule
             print("Generating league schedule...")
