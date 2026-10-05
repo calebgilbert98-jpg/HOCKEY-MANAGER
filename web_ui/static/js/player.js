@@ -11,17 +11,17 @@
   }
 
   function barColor(v) {
-    if (v >= 75) return 'b5';
-    if (v >= 60) return 'b4';
-    if (v >= 45) return 'b3';
-    if (v >= 30) return 'b2';
-    return 'b1';
+    if (v >= 75) return '#4CAF50';
+    if (v >= 60) return '#8BC34A';
+    if (v >= 45) return '#FFC107';
+    if (v >= 30) return '#FF9800';
+    return '#F44336';
   }
 
   function attrRow(label, value, fillStyle) {
     const v = Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
-    const cls = fillStyle ? '' : ' ' + barColor(v);
-    const style = ` style="width:${v}%;${fillStyle ? `background:${fillStyle};` : ''}"`;
+    const bg = fillStyle || barColor(v);
+    const style = ` style="width:${v}%;background:${bg};"`;
     return `<div class="attr-row"><span class="an" title="${esc(label)}">${esc(label)}</span>` +
       `<span class="ab"><span class="fill${cls}"${style}></span></span>` +
       `<span class="av">${v}</span></div>`;

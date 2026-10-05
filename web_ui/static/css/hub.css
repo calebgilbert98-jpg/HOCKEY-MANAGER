@@ -97,7 +97,7 @@ body {
 /* ---------- layout ---------- */
 .hub {
   display: grid; grid-template-columns: minmax(0,1fr) 310px; gap: 22px;
-  padding: 22px 32px 20px; max-width: 1340px; margin: 0 auto;
+  padding: 22px 32px 20px; max-width: 1840px; margin: 0 auto;
   align-items: start;
 }
 .hub-main { min-width: 0; }
@@ -255,7 +255,7 @@ body {
 /* ---------- footer ---------- */
 .hints {
   display: flex; align-items: center; gap: 20px;
-  max-width: 1340px; margin: 0 auto; padding: 12px 32px 22px;
+  max-width: 1840px; margin: 0 auto; padding: 12px 32px 22px;
   color: var(--dimmer); font-size: 12.5px;
 }
 .hints b { color: var(--dim); font-weight: 700; }
@@ -488,7 +488,7 @@ body.th .arena-bg { display: none; }
 /* ---------- top bar (compact: fits 1080p without scroll) ---------- */
 .th-topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 30px 4px; max-width: 1400px; margin: 0 auto;
+  padding: 10px 30px 4px; max-width: 1840px; margin: 0 auto;
 }
 .th-navbtn {
   width: 44px; height: 44px; border-radius: 50%;
@@ -514,7 +514,7 @@ body.th .arena-bg { display: none; }
 .th-menu a:hover, .th-menu button:hover { background: rgba(59,130,246,.16); }
 
 /* ---------- franchise header (compact) ---------- */
-.th-wrap { max-width: 1400px; margin: 0 auto; padding: 0 0 12px; }
+.th-wrap { max-width: 1840px; margin: 0 auto; padding: 0 0 12px; }
 .th-franchise {
   display: flex; align-items: flex-end; justify-content: space-between;
   gap: 16px; padding: 10px 30px 0;
@@ -655,7 +655,7 @@ body.th .arena-bg { display: none; }
 /* ---------- footer (compact) ---------- */
 footer.hints {
   display: flex; align-items: center; gap: 16px;
-  max-width: 1400px; margin: 0 auto; padding: 8px 30px 10px;
+  max-width: 1840px; margin: 0 auto; padding: 8px 30px 10px;
   color: rgba(255,255,255,.35); font-size: 12px;
 }
 footer.hints b { color: rgba(255,255,255,.55); font-weight: 700; }
@@ -1076,7 +1076,7 @@ select.nhl-select option, select.nhl option { background: #0d1424; color: var(--
 .th-ticker-track {
   display: inline-flex; align-items: center; gap: 28px;
   white-space: nowrap; padding-left: 28px;
-  animation: th-ticker-scroll 60s linear infinite;
+  animation: th-ticker-scroll 120s linear infinite;
   will-change: transform;
 }
 .th-ticker:hover .th-ticker-track { animation-play-state: paused; }

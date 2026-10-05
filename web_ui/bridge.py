@@ -17,6 +17,7 @@ Usage (from the game):
     start_web_server(app)   # app = HockeyManagerGUI instance
 """
 import queue
+import sys
 import threading
 import hashlib
 import os
@@ -141,7 +142,26 @@ def _clean_position(pos):
 # ------------------------------------------------------------------
 # Player portraits (NHL 14-style generated faces)
 # ------------------------------------------------------------------
-_PORTRAIT_DIR = os.path.join(os.path.dirname(__file__), "static", "img", "portraits")
+def _resolve_portrait_dir():
+    """Find the portraits dir in dev, PyInstaller bundle, or cwd layouts."""
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "static", "img", "portraits"),
+        os.path.join(os.path.dirname(__file__), "..", "web_ui", "static", "img", "portraits"),
+        os.path.join(os.getcwd(), "web_ui", "static", "img", "portraits"),
+    ]
+    # PyInstaller one-dir bundle: data files live under sys._MEIPASS
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.insert(0, os.path.join(meipass, "web_ui", "static", "img", "portraits"))
+    for c in candidates:
+        try:
+            if os.path.isdir(c):
+                return os.path.normpath(c)
+        except Exception:
+            continue
+    return os.path.normpath(candidates[0])
+
+_PORTRAIT_DIR = _resolve_portrait_dir()
 _portrait_files = None  # cached sorted list; rescanned on demand
 
 
