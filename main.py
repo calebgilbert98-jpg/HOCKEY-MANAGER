@@ -9472,7 +9472,8 @@ class HockeyManagerGUI(tk.Tk):
                       "set_captaincy", "set_trade_block",
                       "return_to_junior", "practice_session",
                       "start_practice_plan", "offer_sheet",
-                      "request_save"):
+                      "request_save", "place_on_waivers",
+                      "answer_ai_offer"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9492,6 +9493,8 @@ class HockeyManagerGUI(tk.Tk):
             "call_up": self._mp_call_up,
             "return_to_junior": self._mp_return_to_junior,
             "claim_waivers": self._mp_claim_waivers,
+            "place_on_waivers": self._mp_place_on_waivers,
+            "answer_ai_offer": self._mp_answer_ai_offer,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
             "hire_staff": self._mp_hire_staff,
@@ -10186,11 +10189,12 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return True, f"{player.full_name} placed on waivers."
 
-    def _mp_begin_consent_flow(self, team, player, manager):
-        """Host-side NMC consent for a demotion: stash the intent, ask the
-        client's player via NTC_WAIVER_REQUEST (context="waivers").
-        Returns (True, status, no-broadcast) -- the demotion itself runs
-        when the answer comes back in _mp_resolve_ntc_answer."""
+    def _mp_begin_consent_flow(self, team, player, manager, kind="demote"):
+        """Host-side NMC consent: stash the intent, ask the client's player
+        via NTC_WAIVER_REQUEST (context="waivers"). kind="demote" runs the
+        waiver-assignment on grant; kind="expose" only exposes him to the
+        wire. Returns (True, status, no-broadcast) -- the mutation itself
+        runs when the answer comes back in _mp_resolve_ntc_answer."""
         import uuid as _uuid
         waiver_id = _uuid.uuid4().hex[:10]
         session_id = self._mp_peer_session_for_team(team.team_name)
@@ -10202,7 +10206,7 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             detail = "no-movement clause"
         self._mp_pending_ntc[waiver_id] = {
-            "kind": "demote",
+            "kind": kind,
             "team_id": team.team_name,
             "manager": manager,
             "player_id": str(getattr(player, "id", "")),
@@ -10371,6 +10375,115 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return True, (f"Claim submitted for {player.full_name} -- processed "
                       f"at noon in waiver priority order.")
+
+    def _mp_place_on_waivers(self, params, team, manager):
+        """Expose a player to the waiver wire: mirrors
+        WaiversView._place_on_waivers_after_consent (2-day window, claimed
+        at noon in priority order). An NMC blocks exposure without the
+        player's consent -- the host asks via NTC_WAIVER_REQUEST
+        (context="waivers"), exactly like send_to_minors. The client's
+        word is never trusted."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if getattr(player, "on_waivers", False):
+            return False, f"{player.full_name} is already on waivers."
+        # Waiver window, same as single-player (transaction_windows.py).
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self, "current_date", None))
+            if not _ok:
+                return False, f"Waivers are closed ({_why})."
+        except Exception:
+            pass
+        try:
+            import trade_engine as te
+            kind, _detail = te.clause_of(player) or (None, "")
+        except Exception:
+            kind = None
+        if kind == "NMC":
+            return self._mp_begin_consent_flow(team, player, manager,
+                                              kind="expose")
+        return self._mp_apply_waiver_exposure(team, player)
+
+    def _mp_apply_waiver_exposure(self, team, player):
+        """The actual wire exposure (runs after any NMC consent)."""
+        try:
+            player.on_waivers = True
+            player.waiver_days = 2
+            _wl = getattr(self, "waiver_list", None)
+            if isinstance(_wl, list) and player not in _wl:
+                _wl.append(player)
+            self.add_news(f"{player.full_name} placed on waivers "
+                          f"by {team.team_name}.")
+        except Exception as e:
+            return False, f"Waiver placement failed: {e}"
+        return True, (f"{player.full_name} placed on waivers -- exposed "
+                      f"for 2 days.")
+
+    def _mp_answer_ai_offer(self, params, team, manager):
+        """Answer an AI club's inbox trade offer: accept executes the deal,
+        decline walks away. Runs the canonical negotiation machinery with
+        the acting team swapped in as user_team (so inbox delivery and
+        message-done marking address the right club), then restores. The
+        trade deadline is enforced -- no post-deadline accepts."""
+        import trade_negotiation as tn
+        neg_id = str(params.get("negotiation_id", "") or "")
+        decision = str(params.get("decision", "") or "")
+        if decision not in ("accept", "decline"):
+            return False, "Unknown decision."
+        neg = tn.get_negotiation(self, neg_id)
+        if neg is None or not neg.is_open:
+            return False, "That offer is no longer on the table."
+        partner = tn.find_team(self, neg.partner_team_name)
+        if partner is None:
+            return False, "The other club is gone."
+        # Ownership: the accepting team must hold the user side's assets.
+        try:
+            user_objs, missing_u = tn.resolve_assets(self, neg.user_assets)
+        except Exception:
+            user_objs, missing_u = [], ["?"]
+        if missing_u:
+            return False, "An asset changed clubs -- the offer is stale."
+        try:
+            import trade_engine as _te
+            _roster_ids = {str(getattr(p, "id", ""))
+                           for p in (getattr(team, "roster", None) or [])}
+            _asset_ids = {str(getattr(a, "id", "")) for a in user_objs
+                          if not _te._is_pick(a)}
+            if not _asset_ids <= _roster_ids:
+                return False, "That offer wasn't made to your club."
+        except Exception:
+            pass
+        if decision == "accept":
+            try:
+                import trade_engine as te
+                if not te.trades_allowed(
+                        str(getattr(self, "current_date", "")),
+                        getattr(self, "league", None)):
+                    return False, "The trade deadline has passed."
+            except Exception:
+                pass
+        _orig_ut = getattr(self, "user_team", None)
+        _gm = getattr(self, "game_manager", None)
+        _orig_gm_ut = getattr(_gm, "user_team", None) if _gm else None
+        try:
+            self.user_team = team
+            if _gm is not None:
+                _gm.user_team = team
+            if decision == "accept":
+                ok = tn.accept_negotiation(self, neg.id)
+            else:
+                ok = tn.decline_negotiation(self, neg.id)
+        finally:
+            self.user_team = _orig_ut
+            if _gm is not None:
+                _gm.user_team = _orig_gm_ut
+        if decision == "decline":
+            return True, "Walked away from the offer."
+        return (True, "Deal accepted.") if ok else \
+            (False, "The deal fell through -- see your inbox.")
 
     def _mp_buyout_player(self, params, team, manager):
         """Buy out a contract: same cap-hit schedule the buyout view
@@ -10988,7 +11101,38 @@ class HockeyManagerGUI(tk.Tk):
 
     def _mp_team_talk(self, params, team, manager):
         """Deliver a team talk: the same give_talk() the coach's whiteboard
-        uses -- same tones, same momentum queue, same outcome tiers."""
+        uses -- same tones, same momentum queue, same outcome tiers.
+
+        Two shapes: tone-based {tone, situation, speaker, ...} (dressing
+        room whiteboard) and option-based {option: {...}, context: {...}}
+        (manager-hub / inbox bundle talks via mc.apply_team_talk)."""
+        # Option-based branch (manager hub + inbox bundle).
+        if isinstance(params.get("option"), dict):
+            try:
+                import manager_career as _mc
+            except Exception:
+                return False, "Dressing room isn't available."
+            _opt = dict(params.get("option") or {})
+            _ctx = dict(params.get("talk_context") or {})
+            # Sanity bounds: the option rides from the client's snapshot;
+            # clamp to the ranges the SP UI can produce.
+            try:
+                _opt["boost"] = max(0.5, min(2.0,
+                                            float(_opt.get("boost", 1.0))))
+            except (TypeError, ValueError):
+                _opt["boost"] = 1.0
+            try:
+                _opt["morale"] = max(-5, min(5,
+                                             int(_opt.get("morale", 0))))
+            except (TypeError, ValueError):
+                _opt["morale"] = 0
+            if _opt.get("fit") not in ("good", "risky", "neutral"):
+                _opt["fit"] = "neutral"
+            try:
+                reaction, boost = _mc.apply_team_talk(team, _opt, _ctx)
+            except Exception as e:
+                return False, f"Team talk failed: {e}"
+            return True, str(reaction or "The room heard you.")
         try:
             import dressing_room as _dr
         except Exception:
@@ -11024,7 +11168,50 @@ class HockeyManagerGUI(tk.Tk):
 
     def _mp_press_conference(self, params, team, manager):
         """Answer the press: the same cascade_on_press() the podium UI
-        triggers -- stance maps straight onto the response choice."""
+        triggers -- stance maps straight onto the response choice.
+
+        Second shape: {answers: [...], kind} for the inbox bundle pressers.
+        Applies the same team-scoped effects (roster morale, fan sentiment)
+        _career_apply_press_answers computes. The board effect is skipped:
+        in MP the board is the host save's single shared board and client
+        boards aren't advanced -- applying a client's presser to it would
+        move the host's standing."""
+        # Inbox-bundle answer branch.
+        if isinstance(params.get("answers"), list):
+            _answers = [a for a in (params.get("answers") or [])
+                        if isinstance(a, dict)][:8]
+            _kind = str(params.get("kind", "presser") or "presser")[:24]
+            _tm = sum(int(a.get("morale_effect", 0) or 0) for a in _answers)
+            _tf = sum(int(a.get("fan_effect", 0) or 0) for a in _answers)
+            try:
+                if _tm:
+                    for p in (getattr(team, "roster", None) or []):
+                        m = getattr(p, "morale", 70) or 70
+                        p.morale = max(1, min(100,
+                                             m + (5 if _tm > 0 else -5)))
+                if _tf:
+                    from fan_sentiment import nudge_fan_sentiment
+                    nudge_fan_sentiment(
+                        team, _tf * 2.5,
+                        reason=f"presser ({_kind}): {_tf:+d}",
+                        current_date=getattr(self, "current_date", None))
+                _summary = (f"{_kind}: " + "; ".join(
+                    str(a.get("label", "")) for a in _answers))
+                try:
+                    _car = getattr(self, "career", None)
+                    _ph = getattr(_car, "press_history", None)
+                    if isinstance(_ph, list):
+                        _ph.append({
+                            "date": getattr(
+                                getattr(self, "current_date", None),
+                                "isoformat", lambda: "")(),
+                            "type": _kind,
+                            "summary": f"[{team.team_name}] {_summary}"})
+                except Exception:
+                    pass
+            except Exception as e:
+                return False, f"Press conference failed: {e}"
+            return True, f"Presser answered ({_kind})."
         try:
             import dressing_room as _dr
         except Exception:
@@ -11203,6 +11390,9 @@ class HockeyManagerGUI(tk.Tk):
         if pend.get("kind", "trade") == "demote":
             self._mp_resolve_demote_answer(pend, waiver_id, choice)
             return
+        if pend.get("kind") == "expose":
+            self._mp_resolve_expose_answer(pend, waiver_id, choice)
+            return
         proposal = pend["proposal"]
         vetoes = pend["vetoes"]
         if pend["veto_idx"] >= len(vetoes):
@@ -11320,6 +11510,64 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 self.mp_host.broadcast_chat(
                     f"Demotion failed after the waiver was granted: "
+                    f"{detail}")
+            except Exception:
+                pass
+
+    def _mp_resolve_expose_answer(self, pend, waiver_id, choice):
+        """Resolve a wire-exposure NMC consent: "ask" rolls the player's
+        decision (context="waivers", like single-player); anything else
+        keeps him off the wire. The exposure itself only ever runs here,
+        on the host, after a granted answer."""
+        import trade_engine as te
+        self._mp_pending_ntc.pop(waiver_id, None)
+        team = self._mp_find_team(pend.get("team_id", ""))
+        name = pend.get("player_name", "The player")
+        if team is None:
+            return
+        player = self._mp_team_player(team, pend.get("player_id", ""))
+        if player is None:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} moved clubs while his waiver answer was "
+                    f"pending -- exposure cancelled.")
+            except Exception:
+                pass
+            return
+        if choice != "ask":
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} stays off the wire "
+                    f"({pend.get('manager', 'his GM')} didn't ask him to "
+                    f"waive his {pend.get('clause', 'no-movement clause')}).")
+            except Exception:
+                pass
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, None, league,
+                                             context="waivers")
+        except Exception as e:
+            granted, why = False, str(e)
+        if not granted:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} refused to waive his "
+                    f"{pend.get('clause', 'no-movement clause')} ({why}) -- "
+                    f"he stays off the wire.")
+            except Exception:
+                pass
+            return
+        try:
+            self.mp_host.broadcast_chat(
+                f"{name} agreed to be exposed on waivers ({why}).")
+        except Exception:
+            pass
+        ok, detail = self._mp_apply_waiver_exposure(team, player)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Exposure failed after the waiver was granted: "
                     f"{detail}")
             except Exception:
                 pass
@@ -20557,6 +20805,22 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             ans = data["presser"][q_index]["answers"][ans_index]
+            # MULTIPLAYER: route the answer's effects to the host; the
+            # bundle records the pending choice.
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _a = {k: ans.get(k) for k in
+                      ("label", "morale_effect", "board_effect",
+                       "fan_effect") if isinstance(ans, dict)}
+                if _route(self, "press_conference",
+                          {"answers": [_a], "kind": "pre-match"}):
+                    answered = data.get("presser_answered") or []
+                    if 0 <= q_index < len(answered):
+                        answered[q_index] = True
+                    reaction = ans.get("reaction", "")
+                    data.setdefault("presser_reactions", {})[q_index] = \
+                        reaction
+                    return reaction or "Answer sent -- host applies it."
             self._career_apply_press_answers([ans], "pre-match")
             answered = data.get("presser_answered") or []
             if 0 <= q_index < len(answered):
@@ -20592,6 +20856,26 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             opt = data["talk_options"][opt_index]
+            # MULTIPLAYER: route the option to the host (canonical room
+            # state); the bundle records the pending choice.
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _o = {k: opt.get(k) for k in
+                      ("label", "text", "boost", "morale", "fit")
+                      if isinstance(opt, dict)}
+                _c = {}
+                try:
+                    _t = (data.get("talk_context") or {}).get("today")
+                    _c["today"] = _t.isoformat() \
+                        if hasattr(_t, "isoformat") else str(_t)
+                except Exception:
+                    pass
+                if _route(self, "team_talk",
+                          {"option": _o, "talk_context": _c}):
+                    data["talk_chosen"] = opt_index
+                    data["talk_boost"] = 1.0
+                    data["talk_reaction"] = "Talk sent -- host applies it."
+                    return "Talk sent -- the host applies it."
             reaction, boost = manager_career.apply_team_talk(
                 self.user_team, opt, data.get("talk_context") or {})
             data["talk_chosen"] = opt_index
@@ -20650,6 +20934,24 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             ans = data["questions"][q_index]["answers"][ans_index]
+            # MULTIPLAYER: route the answer's effects to the host (see
+            # _answer_bundle_presser).
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _a = {k: ans.get(k) for k in
+                      ("label", "morale_effect", "board_effect",
+                       "fan_effect") if isinstance(ans, dict)}
+                if _route(self, "press_conference",
+                          {"answers": [_a],
+                           "kind": str(data.get("kind", "post-match"))}):
+                    answered = data.get("answered") or []
+                    if 0 <= q_index < len(answered):
+                        answered[q_index] = True
+                    if answered and all(answered):
+                        message.action_done = True
+                    reaction = ans.get("reaction", "")
+                    data.setdefault("reactions", {})[q_index] = reaction
+                    return reaction or "Answer sent -- host applies it."
             self._career_apply_press_answers([ans], data.get("kind", "post-match"))
             answered = data.get("answered") or []
             if 0 <= q_index < len(answered):

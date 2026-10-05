@@ -167,6 +167,8 @@ SUPPORTED_ACTIONS = {
                        # host-side (NTC_WAIVER_REQUEST, context="waivers")
     "call_up",          # params: {team_id, player_id}
     "claim_waivers",    # params: {team_id, player_id}
+    "place_on_waivers", # params: {team_id, player_id} -- expose to the wire
+                        # (2-day window, claimed at noon in priority order)
     "buyout_player",    # params: {team_id, player_id}
     "extend_contract",  # params: {team_id, player_id, salary, years,
                         #          clause?: none|ntc|nmc|mntc, clause_teams?: int}
@@ -187,6 +189,8 @@ SUPPORTED_ACTIONS = {
     "press_conference", # params: {team_id, stance, topic?}
     "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
     "return_to_junior", # params: {team_id, player_id}
+    "answer_ai_offer",  # params: {team_id, negotiation_id,
+                        #          decision: accept|decline} -- AI's inbox offer
 }
 
 

@@ -1611,6 +1611,29 @@ class StaffManagementView(ctk.CTkFrame):
             if not user_team:
                 return
 
+            # MULTIPLAYER: route each firing to the host (fire_staff);
+            # the canonical staff list lives there. Local removal would
+            # diverge the snapshot.
+            try:
+                from windows import _mp_route as _route, \
+                    _mp_is_client as _is_client
+                if _is_client(self.app):
+                    _sent = 0
+                    for staff in selected_staff_list:
+                        if staff in user_team.staff:
+                            if _route(self.app, "fire_staff", {
+                                    "staff_id": str(getattr(
+                                        staff, "id", ""))}):
+                                _sent += 1
+                    self.selected_staff.clear()
+                    try:
+                        self.update_current_staff_view()
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
             released_count = 0
             for staff in selected_staff_list:
                 if staff in user_team.staff:

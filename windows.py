@@ -14023,6 +14023,29 @@ class WaiversView(ctk.CTkFrame):
     
     def place_on_waivers(self, item=None):
         """Place the selected player on waivers."""
+        # MULTIPLAYER: route to the host up front. The host owns the
+        # canonical wire and runs the NMC consent itself (NTC_WAIVER_REQUEST,
+        # like send_to_minors) -- the client's local consent roll is never
+        # trusted. Works for NMC and non-NMC players alike.
+        if _mp_is_client(self.app):
+            _pid = None
+            try:
+                _it = item
+                if not _it:
+                    _sel = self.eligible_tree.selection()
+                    _it = _sel[0] if _sel else None
+                if _it:
+                    _pid = int(self.eligible_tree.item(_it, "tags")[0])
+            except Exception:
+                _pid = None
+            if _pid and _mp_route(self.app, "place_on_waivers",
+                                 {"player_id": str(_pid)}):
+                try:
+                    self.populate_eligible_players()
+                    self.populate_waiver_wire()
+                except Exception:
+                    pass
+                return
         # Waiver window (the wire doesn't run in the June dead month).
         # One rulebook in transaction_windows.py.
         try:
@@ -14169,6 +14192,17 @@ class WaiversView(ctk.CTkFrame):
                               f"{_waive_warn}",
                               confirm_text="Place on Waivers")
         if confirm:
+            # MULTIPLAYER: route to the host; the canonical waiver wire
+            # lives there. On route, the host validates + applies and the
+            # next STATE_SYNC refreshes the views.
+            if _mp_route(self.app, "place_on_waivers", {
+                    "player_id": str(getattr(player, "id", ""))}):
+                try:
+                    self.populate_eligible_players()
+                    self.populate_waiver_wire()
+                except Exception:
+                    pass
+                return
             # Add to waiver list
             player.on_waivers = True
             player.waiver_days = 2  # Players stay on waivers for 2 days

@@ -1274,6 +1274,19 @@ class InboxView(ctk.CTkFrame):
         neg = self._trade_neg_from_message(message)
         if neg is None:
             return
+        # MULTIPLAYER: the negotiation lives on the host. Route the
+        # answer; the host executes against canonical state and the next
+        # sync refreshes. Local accept would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route
+            if _route(self.app, "answer_ai_offer",
+                      {"negotiation_id": str(getattr(neg, "id", "")),
+                       "decision": "accept"}):
+                message.action_done = True
+                self._refresh_inbox()
+                return
+        except Exception:
+            pass
         try:
             tn.accept_negotiation(self.app, neg.id)
         except Exception as e:
@@ -1287,6 +1300,18 @@ class InboxView(ctk.CTkFrame):
         neg = self._trade_neg_from_message(message)
         if neg is None:
             return
+        # MULTIPLAYER: route the walk-away so the host closes the
+        # negotiation; a local decline would be wiped by the next sync.
+        try:
+            from windows import _mp_route as _route
+            if _route(self.app, "answer_ai_offer",
+                      {"negotiation_id": str(getattr(neg, "id", "")),
+                       "decision": "decline"}):
+                message.action_done = True
+                self._refresh_inbox()
+                return
+        except Exception:
+            pass
         try:
             tn.decline_negotiation(self.app, neg.id)
         except Exception as e:

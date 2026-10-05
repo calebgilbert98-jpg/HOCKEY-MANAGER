@@ -1674,6 +1674,49 @@ class QuickTradeInterface(_DeadlineScreenBase):
             pass
         try:
             import trade_negotiation as tn
+            pname = str(getattr(self.partner_team, 'team_name', 'them'))
+            # MULTIPLAYER: route the raw offer to the host BEFORE the local
+            # negotiation machinery -- the host runs the waiver flow over
+            # the wire and evaluates the deal against canonical state.
+            # Local send_offer would execute the trade on the snapshot.
+            _routed = False
+            try:
+                from windows import _mp_route as _route
+                import trade_engine as _te
+                _is_pick = _te._is_pick
+                _offer = {
+                    "players_out": [str(getattr(a, "id", ""))
+                                    for a in self.user_assets
+                                    if not _is_pick(a)],
+                    "picks_out": [str(getattr(a, "id", ""))
+                                  for a in self.user_assets
+                                  if _is_pick(a)],
+                    "players_in": [str(getattr(a, "id", ""))
+                                   for a in self.partner_assets
+                                   if not _is_pick(a)],
+                    "picks_in": [str(getattr(a, "id", ""))
+                                 for a in self.partner_assets
+                                 if _is_pick(a)],
+                    "retention": {},
+                    "pick_protection": {},
+                }
+                def _qt_sent():
+                    messagebox.showinfo(
+                        "Offer sent",
+                        f"Your offer is with {pname}'s front office. "
+                        "If any of your players must waive a clause, "
+                        "you'll be asked.")
+                    self._qt_sent = True
+                _routed = _route(
+                    self.app, "propose_trade",
+                    {"partner_team_id": getattr(self.partner_team,
+                                                "team_name", ""),
+                     "offer": _offer},
+                    on_sent=_qt_sent)
+            except Exception:
+                _routed = False
+            if _routed:
+                return
             neg = tn.send_offer(self.app, self.partner_team,
                                 list(self.user_assets),
                                 list(self.partner_assets))
@@ -1684,7 +1727,6 @@ class QuickTradeInterface(_DeadlineScreenBase):
         self._qt_sent = True  # consume-once: the deal is in the inbox now
         # Confirmation reflects real post-send state: on deadline day the
         # AI answers instantly, so read the negotiation's actual status.
-        pname = str(getattr(self.partner_team, 'team_name', 'them'))
         try:
             you = tn.asset_summary(neg.user_assets)
             them = tn.asset_summary(neg.partner_assets)

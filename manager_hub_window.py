@@ -744,6 +744,31 @@ class TeamTalkView(ctk.CTkFrame):
         _ctx = dict(self.context or {})
         if "today" not in _ctx:
             _ctx["today"] = getattr(self.app, "current_date", None)
+        # MULTIPLAYER: route the option to the host; the canonical room
+        # state lives there. Local apply would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route
+            _opt = {k: option.get(k) for k in
+                    ("label", "text", "boost", "morale", "fit")
+                    if isinstance(option, dict)}
+            _c = {}
+            try:
+                _t = _ctx.get("today")
+                _c["today"] = _t.isoformat() if hasattr(_t, "isoformat") \
+                    else str(_t)
+            except Exception:
+                pass
+            if _route(self.app, "team_talk",
+                      {"option": _opt, "talk_context": _c}):
+                messagebox.showinfo(
+                    "Dressing Room",
+                    "Talk sent -- the host applies it; watch for the "
+                    "result.", parent=self)
+                self.result = (option, "sent", 1.0)
+                self._finish()
+                return
+        except Exception:
+            pass
         reaction, boost = mc.apply_team_talk(self.team, option, _ctx)
         messagebox.showinfo("Dressing Room", reaction, parent=self)
         self.result = (option, reaction, boost)
