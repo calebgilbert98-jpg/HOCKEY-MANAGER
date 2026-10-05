@@ -58,9 +58,9 @@ These are the screens Caleb uses every session. Must be rock-solid.
 - [x] Expected impact readout (same xG tables as sim)
 - [x] Practice tab (focus/intensity/bag skate)
 
-### 2.3 Morale / Dressing Room
-- [ ] Full morale view (not read-only stub)
-- [ ] Team talks, Bag Skate, etc.
+### 2.3 Morale / Dressing Room ✅ DONE (2026-10-04, commit 31aa9c8)
+- [x] Full morale view (chemistry, coach card, watch list, response table, feed, hierarchy)
+- [x] Team talks, Bag Skate, Speech, Practice, Back Room, Line Control toggle
 
 ## Phase 3 — Trades & Contracts (P2)
 
