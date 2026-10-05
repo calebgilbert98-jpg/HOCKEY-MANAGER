@@ -667,21 +667,29 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         """Join flow: connect dialog, then lobby."""
         dlg = InGamePopup(self)
         dlg.title("Join Multiplayer Game")
-        dlg.geometry("400x320")
+        dlg.geometry("400x340")
         dlg.transient(self)
         dlg.grab_set()
+        # The popup card is dark (#14161b) -- plain tk widgets default to
+        # black text, which is invisible on it. Style everything explicitly.
+        _fg, _bg = "#e8e8e8", "#14161b"
+        _efg, _ebg = "#ffffff", "#2a2e38"
         tk.Label(dlg, text="JOIN MULTIPLAYER GAME",
-                 font=AppFonts.H2).pack(pady=(16, 8))
-        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:", fg=_fg, bg=_bg).pack(pady=(4, 0))
         name_var = tk.StringVar(
             value=self.gm_profile['name'].get().strip() or "Guest")
-        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Host IP (host's Radmin VPN IP):").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=name_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Host IP (host's Radmin VPN IP):",
+                 fg=_fg, bg=_bg).pack(pady=(8, 0))
         host_var = tk.StringVar(value="")
-        tk.Entry(dlg, textvariable=host_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=host_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Port:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         port_var = tk.StringVar(value="27107")
-        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+        tk.Entry(dlg, textvariable=port_var, width=10,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
 
         def _go():
             try:
@@ -708,10 +716,12 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         from multiplayer.net_client import MultiplayerClient
         wait = InGamePopup(self)
         wait.title("Connecting")
-        wait.geometry("280x100")
+        wait.geometry("300x110")
         wait.transient(self)
-        tk.Label(wait, text=f"Connecting to {cfg['host']}:{cfg['port']}..."
-                 ).pack(pady=30)
+        tk.Label(wait,
+                 text=f"Connecting to {cfg['host']}:{cfg['port']}...",
+                 fg="#e8e8e8", bg="#14161b",
+                 font=("Segoe UI", 10)).pack(pady=30)
 
         def _work():
             client = MultiplayerClient(cfg["name"])
@@ -749,22 +759,27 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         lobby.title("Multiplayer Lobby")
         lobby.geometry("460x520")
         self._mp_lobby = lobby
+        _fg, _bg = "#e8e8e8", "#14161b"
         tk.Label(lobby, text="MULTIPLAYER LOBBY",
-                 font=AppFonts.H2).pack(pady=(12, 4))
-        status = tk.Label(lobby, text="Connected. Claim a team!")
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(12, 4))
+        status = tk.Label(lobby, text="Connected. Claim a team!",
+                          fg=_fg, bg=_bg)
         status.pack()
-        tk.Label(lobby, text="Managers:").pack(pady=(8, 0))
+        tk.Label(lobby, text="Managers:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         mgr_var = tk.StringVar(value=[])
-        tk.Listbox(lobby, listvariable=mgr_var, height=5).pack(
+        tk.Listbox(lobby, listvariable=mgr_var, height=5,
+                   fg="#ffffff", bg="#2a2e38",
+                   selectbackground="#1f6feb").pack(
             fill="x", padx=16, pady=4)
 
-        teams_frame = tk.Frame(lobby)
+        teams_frame = tk.Frame(lobby, bg=_bg)
         teams_frame.pack(fill="both", expand=True, padx=16, pady=6)
-        tk.Label(teams_frame, text="Claim your team:").pack(anchor="w")
-        canvas = tk.Canvas(teams_frame)
+        tk.Label(teams_frame, text="Claim your team:",
+                 fg=_fg, bg=_bg).pack(anchor="w")
+        canvas = tk.Canvas(teams_frame, bg=_bg, highlightthickness=0)
         scrollbar = tk.Scrollbar(teams_frame, orient="vertical",
                                  command=canvas.yview)
-        btn_frame = tk.Frame(canvas)
+        btn_frame = tk.Frame(canvas, bg="#14161b")
         btn_frame.bind("<Configure>",
                        lambda e: canvas.configure(
                            scrollregion=canvas.bbox("all")))
