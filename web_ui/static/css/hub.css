@@ -918,3 +918,99 @@ select.nhl-select option, select.nhl option { background: #0d1424; color: var(--
   animation: th-spin 0.8s linear infinite;
 }
 @keyframes th-spin { to { transform: rotate(360deg); } }
+
+/* ---------- at-a-glance panels ---------- */
+.th-panels {
+  display: grid;
+  grid-template-columns: 1.1fr 1.3fr 1.5fr 1fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+.th-panel {
+  background: linear-gradient(180deg, #0b1220 0%, #070b14 100%);
+  border: 1px solid #1b2740;
+  border-radius: var(--nhl-r-sm);
+  overflow: hidden;
+}
+.th-panel-head {
+  font-family: var(--nhl-cond); font-weight: 700; font-size: 13px;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--text);
+  padding: 8px 12px; background: #0e1626;
+  border-bottom: 2px solid var(--nhl-blue);
+}
+.th-panel-body { padding: 10px 12px; font-size: 13px; }
+.th-empty { color: var(--dim); font-size: 12px; padding: 6px 0; }
+
+/* standings table */
+.th-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.th-table thead th {
+  font-family: var(--nhl-cond); font-size: 11px; letter-spacing: 1px;
+  color: var(--dim); text-transform: uppercase; text-align: right;
+  padding: 4px 6px; border-bottom: 1px solid #1b2740;
+}
+.th-table thead th:nth-child(2) { text-align: left; }
+.th-table tbody td { padding: 4px 6px; text-align: right; color: var(--text); border-bottom: 1px solid #0e1626; }
+.th-table tbody td.tm { text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.th-table tbody td.rk { color: var(--dim); }
+.th-table tbody td.pts { font-weight: 700; color: #fff; }
+.th-table .abbr {
+  display: inline-block; min-width: 34px; text-align: center;
+  font-family: var(--nhl-cond); font-weight: 700; font-size: 11px;
+  background: var(--nhl-blue); color: #fff; border-radius: 3px;
+  padding: 1px 5px; margin-right: 6px;
+}
+.th-table tr.me td { background: rgba(59,130,246,.14); }
+.th-table tr.me .abbr { background: #fff; color: var(--nhl-blue); }
+
+/* next game */
+.th-ng-date { font-family: var(--nhl-cond); font-size: 12px; letter-spacing: 1.5px; color: var(--dim); text-transform: uppercase; }
+.th-ng-matchup { display: flex; align-items: center; gap: 10px; margin: 10px 0; }
+.th-ng-team { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.th-ng-team:last-child { text-align: right; }
+.th-ng-abbr { font-family: var(--nhl-cond); font-weight: 700; font-size: 26px; color: #fff; }
+.th-ng-name { font-size: 12px; color: var(--text); }
+.th-ng-rec { font-size: 12px; color: var(--dim); font-weight: 700; }
+.th-ng-at { font-family: var(--nhl-cond); font-size: 18px; color: var(--nhl-blue); font-weight: 700; }
+.th-ng-venue {
+  display: inline-block; font-family: var(--nhl-cond); font-size: 11px; font-weight: 700;
+  letter-spacing: 2px; color: var(--nhl-blue); border: 1px solid var(--nhl-blue);
+  border-radius: 3px; padding: 2px 10px;
+}
+
+/* leaders */
+#panel-leaders-body { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.th-lead-title { font-family: var(--nhl-cond); font-size: 11px; letter-spacing: 1.5px; color: var(--dim); margin-bottom: 6px; }
+.th-lead-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; border-bottom: 1px solid #0e1626; }
+.th-lead-row .rk { color: var(--dim); font-size: 11px; min-width: 12px; }
+.th-lead-row .nm { flex: 1; font-size: 12.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.th-lead-row .nm em { font-style: normal; color: var(--dim); font-size: 11px; margin-left: 4px; }
+.th-lead-row .vl { font-family: var(--nhl-cond); font-weight: 700; font-size: 15px; color: #fff; }
+
+/* form */
+.th-streak { font-family: var(--nhl-cond); font-size: 12px; letter-spacing: 2px; color: var(--dim); margin-bottom: 8px; }
+.th-streak b { color: #fff; font-size: 16px; margin-left: 6px; }
+.th-form-list { display: flex; gap: 6px; }
+.th-form-game {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  background: #0e1626; border: 1px solid #1b2740; border-radius: 4px; padding: 6px 4px;
+}
+.th-form-res { font-family: var(--nhl-cond); font-weight: 700; font-size: 14px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 3px; }
+.th-form-res.W { background: #16a34a; color: #fff; }
+.th-form-res.L { background: #dc2626; color: #fff; }
+.th-form-res.OTL { background: #b45309; color: #fff; }
+.th-form-opp { font-size: 11px; color: var(--dim); }
+.th-form-score { font-size: 12px; font-weight: 700; color: var(--text); }
+
+@media (max-width: 1100px) {
+  .th-panels { grid-template-columns: 1fr 1fr; }
+}
+
+/* ---------- hub team-leader portraits ---------- */
+.th-lead-row { align-items: center; }
+.th-lead-face {
+  width: 26px; height: 26px; flex: 0 0 26px;
+  border-radius: 50%; object-fit: cover; object-position: top center;
+  border: 1.5px solid rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 1px #0a0f1c;
+  background: #0a0f1c;
+}

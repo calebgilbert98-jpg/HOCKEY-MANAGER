@@ -175,3 +175,14 @@
 /* shake for invalid drops */
 @keyframes le-shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
 .le-shake { animation: le-shake .25s ease 2; }
+
+/* ---------- player portraits ---------- */
+.le-face {
+  width: 32px; height: 32px; flex: 0 0 32px;
+  border-radius: 50%; object-fit: cover; object-position: top center;
+  border: 2px solid rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 1px #0a0f1c;
+  background: #0a0f1c;
+}
+.le-slot .who { display: flex; align-items: center; gap: 8px; }
+.le-slot .who .le-face { width: 28px; height: 28px; flex-basis: 28px; }

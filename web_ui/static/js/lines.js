@@ -162,8 +162,12 @@ function rosterCard(p) {
   el.dataset.id = pid;
   const dressed = slotOf(pid);
   if (S.sel && S.sel.kind === 'roster' && S.sel.id === pid) el.classList.add('selected');
+  const face = p.portrait
+    ? '<img class="le-face" src="' + esc(p.portrait) + '" alt="" loading="lazy" onerror="this.remove()">'
+    : '';
   el.innerHTML =
     '<span class="ovr ' + ovrBand(p.overall) + '">' + esc(p.overall) + '</span>' +
+    face +
     '<span class="nm"><span class="n">' + esc(p.name) + '</span>' +
     '<span class="s">Age ' + esc(p.age) + '</span></span>' +
     '<span class="pos">' + esc(p.position) + '</span>' +
@@ -226,7 +230,11 @@ function slotEl(slot) {
     who.className = 'who';
     who.draggable = true;
     who.dataset.id = String(p.id);
+    const wface = p.portrait
+      ? '<img class="le-face" src="' + esc(p.portrait) + '" alt="" loading="lazy" onerror="this.remove()">'
+      : '';
     who.innerHTML =
+      wface +
       '<div class="n">' + esc(p.name) + '</div>' +
       '<div class="s"><span class="' + ovrBand(p.overall) + '">' + esc(p.overall) + ' OVR</span> · ' +
       esc(p.position) + ' · Age ' + esc(p.age) + '</div>';

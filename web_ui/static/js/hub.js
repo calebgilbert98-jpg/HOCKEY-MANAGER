@@ -74,6 +74,76 @@ function renderHub(s) {
   for (const t of primaries) grid.appendChild(thTile(t, false));
   for (const t of rest) more.appendChild(thTile(t, true));
   document.querySelector('.th-more-label').style.display = rest.length ? '' : 'none';
+
+  renderPanels(s.panels || {});
+}
+
+function renderPanels(p) {
+  // --- Next game ---
+  const ng = p.next_game;
+  const ngBody = document.getElementById('panel-next-body');
+  if (ng) {
+    ngBody.innerHTML = `
+      <div class="th-ng-date">${esc(ng.date)}${ng.time ? ' · ' + esc(ng.time) : ''}</div>
+      <div class="th-ng-matchup">
+        <div class="th-ng-team">
+          <span class="th-ng-abbr">${esc(ng.away_abbr)}</span>
+          <span class="th-ng-name">${esc(ng.away)}</span>
+          <span class="th-ng-rec">${esc(ng.away_rec)}</span>
+        </div>
+        <div class="th-ng-at">@</div>
+        <div class="th-ng-team">
+          <span class="th-ng-abbr">${esc(ng.home_abbr)}</span>
+          <span class="th-ng-name">${esc(ng.home)}</span>
+          <span class="th-ng-rec">${esc(ng.home_rec)}</span>
+        </div>
+      </div>
+      <div class="th-ng-venue">${ng.is_home ? 'HOME' : 'AWAY'}</div>`;
+  } else {
+    ngBody.innerHTML = '<div class="th-empty">No upcoming games</div>';
+  }
+
+  // --- Division standings ---
+  const divName = p.division ? p.division.toUpperCase() + ' DIVISION' : 'DIVISION STANDINGS';
+  document.getElementById('panel-standings-head').textContent = divName;
+  const st = document.getElementById('panel-standings-table');
+  const rows = (p.standings || []).map((r, i) => `
+    <tr class="${r.is_user ? 'me' : ''}">
+      <td class="rk">${i + 1}</td>
+      <td class="tm"><span class="abbr">${esc(r.abbr)}</span> ${esc(r.name)}</td>
+      <td>${r.w}</td><td>${r.l}</td><td>${r.otl}</td><td class="pts">${r.pts}</td>
+    </tr>`).join('');
+  st.innerHTML = `<thead><tr><th>#</th><th>TEAM</th><th>W</th><th>L</th><th>OTL</th><th>PTS</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="th-empty">—</td></tr>'}</tbody>`;
+
+  // --- Team leaders ---
+  const ld = p.leaders || {};
+  const leadImg = r => r.portrait
+    ? `<img class="th-lead-face" src="${esc(r.portrait)}" alt="" loading="lazy" onerror="this.remove()">`
+    : '';
+  const lcol = (title, list, key) => `
+    <div class="th-lead-col"><div class="th-lead-title">${title}</div>
+      ${(list || []).map((r, i) => `
+        <div class="th-lead-row">
+          <span class="rk">${i + 1}</span>
+          ${leadImg(r)}
+          <span class="nm">${esc(r.name)} <em>${esc(r.pos)}</em></span>
+          <span class="vl">${r[key]}</span>
+        </div>`).join('') || '<div class="th-empty">—</div>'}
+    </div>`;
+  document.getElementById('panel-leaders-body').innerHTML =
+    lcol('POINTS', ld.points, 'pts') + lcol('GOALS', ld.goals, 'g') + lcol('ASSISTS', ld.assists, 'a');
+
+  // --- Recent form ---
+  const f = p.form || {};
+  const games = (f.last5 || []).map(g => `
+    <div class="th-form-game">
+      <span class="th-form-res ${g.res}">${g.res}</span>
+      <span class="th-form-opp">${g.home ? 'vs' : '@'} ${esc(g.opp_abbr)}</span>
+      <span class="th-form-score">${esc(g.score)}</span>
+    </div>`).join('');
+  document.getElementById('panel-form-body').innerHTML = `
+    <div class="th-streak">STREAK <b>${esc(f.streak || '—')}</b></div>
+    <div class="th-form-list">${games || '<div class="th-empty">No games yet</div>'}</div>`;
 }
 
 function thTile(t, compact) {

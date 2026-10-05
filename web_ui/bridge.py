@@ -18,6 +18,8 @@ Usage (from the game):
 """
 import queue
 import threading
+import hashlib
+import os
 from datetime import date, datetime
 
 COMMAND_QUEUE = queue.Queue()
@@ -89,10 +91,51 @@ def _clean_position(pos):
         return "?"
 
 
+# ------------------------------------------------------------------
+# Player portraits (NHL 14-style generated faces)
+# ------------------------------------------------------------------
+_PORTRAIT_DIR = os.path.join(os.path.dirname(__file__), "static", "img", "portraits")
+_portrait_files = None  # cached sorted list; rescanned on demand
+
+
+def _portrait_file_list():
+    """Sorted portrait filenames, rescanned when the dir changes."""
+    global _portrait_files
+    try:
+        names = sorted(
+            f for f in os.listdir(_PORTRAIT_DIR)
+            if f.lower().endswith((".webp", ".png", ".jpg", ".jpeg"))
+        )
+    except Exception:
+        names = []
+    if _portrait_files != names:
+        _portrait_files = names
+    return _portrait_files
+
+
+def player_portrait(player_id):
+    """Deterministic portrait URL for any player ID.
+
+    Hash mod portrait count, so adding portrait_05.webp etc. is picked up
+    automatically. Returns None when the portraits directory is empty or
+    missing (callers fall back to the current display).
+    """
+    try:
+        files = _portrait_file_list()
+        if not files:
+            return None
+        h = hashlib.md5(str(player_id).encode("utf-8")).hexdigest()
+        return "/static/img/portraits/" + files[int(h, 16) % len(files)]
+    except Exception:
+        return None
+
+
 def to_web_player(p):
     """Player -> JSON-safe dict."""
+    pid = _safe(lambda: str(getattr(p, "id", id(p))))
     return {
-        "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+        "id": pid,
+        "portrait": player_portrait(pid),
         "name": _safe(lambda: getattr(p, "full_name", "?")),
         "position": _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?"),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
@@ -309,7 +352,166 @@ def get_hub_state(app):
             {"id": "tactics", "title": "Tactics", "subtitle": "Systems & practice",
              "size": "small", "icon": "♟️"},
         ],
+        "panels": _hub_panels(team, gm),
     }
+
+
+def _hub_panels(team, gm):
+    """At-a-glance dashboard panels: standings, leaders, form, next game.
+    All reads defensive; returns {} on any failure."""
+    try:
+        league = _safe(lambda: gm.league)
+        if league is None or team is None:
+            return {}
+        me_name = _safe(lambda: team.team_name, "")
+        teams = _safe(lambda: list(league.teams), []) or []
+        table = _safe(lambda: dict(league.standings), {}) or {}
+        sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
+        today = _safe(lambda: gm.current_date)
+
+        # --- Division standings (user's division) ---
+        my_div = _safe(lambda: team.division, "") or ""
+        div_rows = []
+        for t in teams:
+            try:
+                if my_div and _safe(lambda: t.division, "") != my_div:
+                    continue
+                name = _safe(lambda: t.team_name, "")
+                if not name:
+                    continue
+                row = _safe(lambda: table.get(name), {}) or {}
+                w = _safe(lambda: int(row.get("W", 0) or 0), 0)
+                l = _safe(lambda: int(row.get("L", 0) or 0), 0)
+                otl = _safe(lambda: int(row.get("OTL", 0) or 0), 0)
+                pts = _safe(lambda: int(row.get("Points", 0) or 0), 0)
+                div_rows.append({
+                    "name": name,
+                    "abbr": TEAM_ABBR.get(name, name[:3].upper()),
+                    "w": w, "l": l, "otl": otl, "pts": pts,
+                    "is_user": name == me_name,
+                })
+            except Exception:
+                continue
+        div_rows.sort(key=lambda r: (-r["pts"], -r["w"], r["name"]))
+
+        # --- Team leaders (top 3 pts / goals / assists, skaters only) ---
+        skaters = []
+        for p in _safe(lambda: list(team.roster), []) or []:
+            try:
+                pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
+                if pos.upper() == "G":
+                    continue
+                pid = _safe(lambda: str(getattr(p, "id", id(p))), "")
+                skaters.append({
+                    "id": pid,
+                    "portrait": player_portrait(pid),
+                    "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                    "pos": pos,
+                    "g": int(_safe(lambda: getattr(p, "goals", 0) or 0, 0)),
+                    "a": int(_safe(lambda: getattr(p, "assists", 0) or 0, 0)),
+                    "pts": int(_safe(lambda: getattr(p, "points", 0) or 0, 0)),
+                })
+            except Exception:
+                continue
+        leaders = {
+            "points": sorted(skaters, key=lambda r: (-r["pts"], -r["g"]))[:3],
+            "goals": sorted(skaters, key=lambda r: (-r["g"], -r["a"]))[:3],
+            "assists": sorted(skaters, key=lambda r: (-r["a"], -r["g"]))[:3],
+        }
+
+        # --- Recent form: last 5 completed games + streak ---
+        done = []
+        for g in sched:
+            try:
+                if not isinstance(g, dict):
+                    continue
+                if g.get("home_score") is None:
+                    continue
+                hn = _team_name(g.get("home_team"))
+                an = _team_name(g.get("away_team"))
+                if me_name not in (hn, an):
+                    continue
+                hs = int(g.get("home_score") or 0)
+                aws = int(g.get("away_score") or 0)
+                mine = hs if hn == me_name else aws
+                theirs = aws if hn == me_name else hs
+                res = "W" if mine > theirs else ("OTL" if mine == theirs else "L")
+                # OTL detection: if tied at regulation... keep simple: loss by 1 = OTL
+                if res == "L" and abs(mine - theirs) == 1:
+                    res = "OTL"
+                done.append({
+                    "d": g.get("date"),
+                    "res": res,
+                    "score": f"{mine}-{theirs}",
+                    "opp": an if hn == me_name else hn,
+                    "opp_abbr": TEAM_ABBR.get(an if hn == me_name else hn, "?"),
+                    "home": hn == me_name,
+                })
+            except Exception:
+                continue
+        done.sort(key=lambda g: (g["d"] is None, g["d"]), reverse=True)
+        last5 = done[:5]
+        # Streak from most recent
+        streak, sc = "", 0
+        for g in done:
+            r = g["res"]
+            key = "W" if r == "W" else "L"  # OTL counts as non-win for streak
+            if not streak:
+                streak, sc = key, 1
+            elif key == streak:
+                sc += 1
+            else:
+                break
+        streak_txt = f"{streak}{sc}" if streak else "—"
+
+        # --- Next game with both teams' records ---
+        next_game = None
+        try:
+            cands = []
+            for g in sched:
+                if not isinstance(g, dict):
+                    continue
+                if g.get("home_score") is not None:
+                    continue
+                hn = _team_name(g.get("home_team"))
+                an = _team_name(g.get("away_team"))
+                if me_name not in (hn, an):
+                    continue
+                d = g.get("date")
+                if today is not None and d is not None and d < today:
+                    continue
+                cands.append((d, hn, an, g.get("time")))
+            cands.sort(key=lambda x: (x[0] is None, x[0]))
+            if cands:
+                d, hn, an, tm = cands[0]
+                ds = d.strftime("%a %b %d") if hasattr(d, "strftime") else str(d or "")
+                def _rec(nm):
+                    r = _safe(lambda: table.get(nm), {}) or {}
+                    w = _safe(lambda: int(r.get("W", 0) or 0), 0)
+                    l = _safe(lambda: int(r.get("L", 0) or 0), 0)
+                    otl = _safe(lambda: int(r.get("OTL", 0) or 0), 0)
+                    return f"{w}-{l}-{otl}"
+                next_game = {
+                    "date": ds,
+                    "time": str(tm or ""),
+                    "home": hn, "away": an,
+                    "home_abbr": TEAM_ABBR.get(hn, hn[:3].upper()),
+                    "away_abbr": TEAM_ABBR.get(an, an[:3].upper()),
+                    "home_rec": _rec(hn), "away_rec": _rec(an),
+                    "is_home": hn == me_name,
+                }
+        except Exception:
+            pass
+
+        return {
+            "division": my_div,
+            "standings": div_rows,
+            "leaders": leaders,
+            "form": {"last5": last5, "streak": streak_txt},
+            "next_game": next_game,
+        }
+    except Exception:
+        return {}
 
 
 def get_inbox_messages(app, filter_type="all"):

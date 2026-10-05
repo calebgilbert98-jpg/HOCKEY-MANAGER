@@ -219,3 +219,14 @@
   border-radius: var(--nhl-r-sm); cursor: pointer;
 }
 .ctx-menu button:hover { background: var(--nhl-blue-soft); color: #fff; }
+
+/* ---------- player portraits (NHL 14 broadcast style) ---------- */
+.p-name { display: flex; align-items: center; gap: 10px; }
+.p-portrait {
+  width: 34px; height: 34px; flex: 0 0 34px;
+  border-radius: 50%; object-fit: cover; object-position: top center;
+  border: 2px solid rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 1px #0a0f1c, 0 2px 6px rgba(0, 0, 0, 0.6);
+  background: #0a0f1c;
+}
+tr.injured .p-portrait { filter: grayscale(0.6); }

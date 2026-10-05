@@ -6,6 +6,8 @@ validation, and player context actions.
 """
 from flask import Blueprint, jsonify, render_template, request
 
+from web_ui.bridge import player_portrait
+
 bp = Blueprint("roster", __name__)
 
 
@@ -81,8 +83,10 @@ def _health_badges(p):
 def to_roster_player(p):
     """Rich player dict for roster tables (all Tkinter columns)."""
     c = _safe(lambda: getattr(p, "contract", None))
+    pid = _safe(lambda: str(getattr(p, "id", id(p))))
     return {
-        "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+        "id": pid,
+        "portrait": player_portrait(pid),
         "name": _safe(lambda: getattr(p, "full_name", "?")),
         "position": _safe(lambda: str(getattr(p, "primary_position", "") or "?")),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),

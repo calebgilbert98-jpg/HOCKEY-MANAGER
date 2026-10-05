@@ -56,6 +56,49 @@ MOCK_STATE = {
         {"id": "staff", "title": "Staff", "subtitle": "Coaches & management",
          "size": "small", "icon": "👔"},
     ],
+    "panels": {
+        "division": "Atlantic",
+        "standings": [
+            {"name": "Toronto Maple Leafs", "abbr": "TOR", "w": 13, "l": 4, "otl": 2, "pts": 28, "is_user": False},
+            {"name": "Boston Bruins", "abbr": "BOS", "w": 12, "l": 5, "otl": 2, "pts": 26, "is_user": True},
+            {"name": "Florida Panthers", "abbr": "FLA", "w": 11, "l": 6, "otl": 2, "pts": 24, "is_user": False},
+            {"name": "Tampa Bay Lightning", "abbr": "TBL", "w": 10, "l": 7, "otl": 2, "pts": 22, "is_user": False},
+        ],
+        "leaders": {
+            "points": [
+                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
+            ],
+            "goals": [
+                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"name": "Pavel Zacha", "portrait": "/static/img/portraits/portrait_01.webp", "pos": "C", "g": 8, "a": 10, "pts": 18},
+            ],
+            "assists": [
+                {"name": "Charlie McAvoy", "portrait": "/static/img/portraits/portrait_04.webp", "pos": "D", "g": 4, "a": 16, "pts": 20},
+                {"name": "Brad Marchand", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "LW", "g": 9, "a": 15, "pts": 24},
+                {"name": "David Pastrnak", "portrait": "/static/img/portraits/portrait_03.webp", "pos": "RW", "g": 14, "a": 12, "pts": 26},
+            ],
+        },
+        "form": {
+            "last5": [
+                {"res": "W", "opp": "Toronto Maple Leafs", "opp_abbr": "TOR", "score": "4-2", "home": True},
+                {"res": "W", "opp": "Montreal Canadiens", "opp_abbr": "MTL", "score": "3-1", "home": False},
+                {"res": "OTL", "opp": "Florida Panthers", "opp_abbr": "FLA", "score": "2-3", "home": True},
+                {"res": "W", "opp": "Ottawa Senators", "opp_abbr": "OTT", "score": "5-2", "home": True},
+                {"res": "L", "opp": "Tampa Bay Lightning", "opp_abbr": "TBL", "score": "1-4", "home": False},
+            ],
+            "streak": "W2",
+        },
+        "next_game": {
+            "date": "Thu Nov 19", "time": "7:00 PM",
+            "home": "Boston Bruins", "away": "Toronto Maple Leafs",
+            "home_abbr": "BOS", "away_abbr": "TOR",
+            "home_rec": "12-5-2", "away_rec": "13-4-2",
+            "is_home": True,
+        },
+    },
 }
 
 

@@ -142,10 +142,13 @@ function renderTable() {
       `<span class="badge badge-${h.toLowerCase()}">${esc(h)}</span>`).join(' ');
     const cap = p.captaincy ? ` <span class="p-c">${esc(p.captaincy)}</span>` : '';
     const ntc = [p.ntc ? 'NTC' : '', p.nmc ? 'NMC' : ''].filter(Boolean).join(' ');
+    const face = p.portrait
+      ? `<img class="p-portrait" src="${esc(p.portrait)}" alt="" loading="lazy" onerror="this.remove()">`
+      : '';
     return `<tr data-id="${esc(p.id)}" class="${p.injured ? 'injured' : ''}">
       <td><input type="checkbox" class="row-sel" data-id="${esc(p.id)}" ${checked}></td>
       <td>${esc(p.jersey)}</td>
-      <td class="p-name" data-id="${esc(p.id)}">${esc(p.name)}${cap}</td>
+      <td class="p-name" data-id="${esc(p.id)}">${face}<span>${esc(p.name)}${cap}</span></td>
       <td>${esc(p.position)}</td>
       <td>${p.age}</td>
       <td><span class="tier">${esc(p.tier)}</span></td>
