@@ -29,19 +29,20 @@ These are the screens Caleb uses every session. Must be rock-solid.
 - [ ] Mark read/unread persists
 - [ ] Mandatory messages block Continue until resolved
 
-### 1.4 Lines — ✅ FIXED (2026-10-04)
+### 1.4 Lines — ✅ VERIFIED (2026-10-04)
 - [x] Falls back to `best_lines()` when lineup empty
 - [x] Key normalization (F1_LW → LW1)
-- [ ] Edit mode: drag/swap players works
-- [ ] Save persists to team.lineup
-- [ ] PP/PK units editable
+- [x] Edit mode exists; POST /api/lines/set queues set_lines_real
+- [x] Save persists via apply_lines_payload + flatten_lineup (real machinery)
+- [ ] PP/PK units editable (GAP: only ES slots; Tkinter has PP1/PP2/PK1/PK2)
 
-### 1.5 Trades — ✅ FIXED (2026-10-04)
+### 1.5 Trades — ✅ VERIFIED (2026-10-04)
 - [x] TEAM_ABBR map (BOS not BB)
-- [x] `/api/trades/assets` implemented
-- [ ] Full trade flow: pick partner → add players → AI verdict → propose → inbox response
-- [ ] Retention (0/25/50%) works
-- [ ] Pick protection works
+- [x] `/api/trades/assets` implemented (200 with 27 players on live data)
+- [x] Trade builder UI exists with AI verdict via /api/trades/evaluate
+- [x] Retention (0/25/50%) ported; pick protection UI ported
+- [ ] Full E2E: propose → inbox response (needs live negotiation test)
+- [ ] Async AI response (1-3 days via inbox) — web does immediate execution
 
 ## Phase 2 — Club Management (P1)
 
