@@ -9690,6 +9690,11 @@ class GameSim:
         
         # Update team defensive stats
         defending_team = self._get_player_team(defending_player)
+        if defending_team is None:
+            # Player not found on either roster (e.g. stale reference after
+            # a mid-game roster move); player stats above are already
+            # recorded, so just skip the team-level update.
+            return
         team_name = defending_team.team_name
         
         if team_name in self.team_stats:
