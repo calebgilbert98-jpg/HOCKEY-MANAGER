@@ -21697,6 +21697,12 @@ class HockeyManagerGUI(tk.Tk):
         return None
 
     def send_to_ahl(self, player):
+        # MP: route to host; the host applies waivers/NMC/rules canonically.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "send_to_minors",
+                      {"player_id": str(getattr(player, "id", ""))}):
+                return
         # R1 (roster limits): the club must always be able to dress 18+2.
         # A demotion that breaks the dressed minimum is refused up front.
         try:
@@ -21858,6 +21864,12 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
+        # MP: route to host; the host applies the paper-transaction rule.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "call_up",
+                      {"player_id": str(getattr(player, "id", ""))}):
+                return
         # New-CBA paper-transaction rule: a freshly assigned player must
         # play at least one AHL game before he can be recalled.
         try:

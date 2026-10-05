@@ -6941,12 +6941,30 @@ class ScoutingView(ctk.CTkFrame):
         self._refresh_scouts()
 
     def _clear_region(self):
+        # MP: route the region clear to the host.
         if self.selected_scout:
+            try:
+                from windows import _mp_route as _route
+            except ImportError:
+                _route = None
+            if _route is not None and _route(
+                    self.app, "assign_scout", {
+                        "scout_id": str(getattr(
+                            self.selected_scout, "id", "")),
+                        "region": None,
+                    }):
+                self.region_var.set("")
+                self._refresh_scouts()
+                return
             self.scmod.set_scout_region(self._gm, self.selected_scout, None)
             self.region_var.set("")
             self._refresh_scouts()
 
     def _hire_scout(self):
+        # MP: the quick-hire generates a staffer locally, which can't route;
+        # use the staff market UI (hire_staff) instead.
+        if self.app._mp_client_block("quick scout hire"):
+            return
         from game_classes import Staff, StaffRole
         import random as _r
         names = [("Jim", "Gregory"), ("Marie", "Labelle"), ("Ken", "Holland"),
@@ -10659,6 +10677,9 @@ class ScheduleView(ctk.CTkFrame):
         self.update_views()
 
     def _launch_game_viewer(self, game_data, commit=True):
+        # MP: game simulation is host-only.
+        if self.app._mp_client_block("game simulation"):
+            return
         """Launch the game viewer for a specific game.
 
         Args:
@@ -10744,6 +10765,9 @@ class ScheduleView(ctk.CTkFrame):
         }
 
     def _simulate_game(self, game_data):
+        # MP: game simulation is host-only.
+        if self.app._mp_client_block("game simulation"):
+            return
         """Simulate a game and store the results."""
         try:
             from simulation import GameSim
