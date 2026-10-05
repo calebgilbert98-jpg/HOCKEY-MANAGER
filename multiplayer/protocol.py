@@ -177,7 +177,10 @@ SUPPORTED_ACTIONS = {
     "hire_staff",       # params: {team_id, staff_id, role, salary, years, assignment: nhl|ahl}
     "fire_staff",       # params: {team_id, staff_id}
     "assign_scout",     # params: {team_id, scout_id, region}
-    "set_practice",     # params: {team_id, focus, intensity}
+    "set_practice",
+    "start_practice_plan",  # params: {team_id, player_id, practice_type,
+                           #          intensity, total_sessions}
+    "offer_sheet",        # params: {team_id, player_id, aav, years}     # params: {team_id, focus, intensity}
     "practice_session", # params: {team_id, player_id, practice_type, intensity, duration, trainer_quality}
     "team_talk",        # params: {team_id, tone, situation, speaker?}
     "press_conference", # params: {team_id, stance, topic?}

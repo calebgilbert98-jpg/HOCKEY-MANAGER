@@ -2263,8 +2263,6 @@ class PracticeCenterView(ctk.CTkFrame):
     
     def _start_practice_schedule(self):
         """Start a practice schedule for the selected player"""
-        if self.app._mp_client_block("practice plans"):
-            return
         if not self.selected_player:
             return
         
@@ -2275,6 +2273,23 @@ class PracticeCenterView(ctk.CTkFrame):
             duration_weeks = self.duration_var.get()
             
             total_sessions = sessions_per_week * duration_weeks
+            
+            # MP: route to the host; the host schedules against the
+            # canonical state and the result comes back via ACK/REJECT.
+            try:
+                from windows import _mp_route as _route
+                _app = getattr(self, "app", None)
+                if _app is not None and _route(
+                        _app, "start_practice_plan", {
+                            "player_id": str(getattr(
+                                self.selected_player, "id", "")),
+                            "practice_type": practice_type.value,
+                            "intensity": intensity.value,
+                            "total_sessions": total_sessions,
+                        }):
+                    return
+            except Exception:
+                pass
             
             result = self.practice_engine.schedule_practice(
                 self.selected_player, practice_type, intensity, total_sessions

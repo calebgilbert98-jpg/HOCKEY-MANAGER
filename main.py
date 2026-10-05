@@ -9302,6 +9302,8 @@ class HockeyManagerGUI(tk.Tk):
             "fire_staff": self._mp_fire_staff,
             "assign_scout": self._mp_assign_scout,
             "set_practice": self._mp_set_practice,
+            "start_practice_plan": self._mp_start_practice_plan,
+            "offer_sheet": self._mp_offer_sheet,
             "practice_session": self._mp_practice_session,
             "team_talk": self._mp_team_talk,
             "press_conference": self._mp_press_conference,
@@ -10628,6 +10630,146 @@ class HockeyManagerGUI(tk.Tk):
         return True, _msg
 
     # -- dressing-room actions (host side) --------------------------------
+
+    def _mp_start_practice_plan(self, params, team, manager):
+        """Start a multi-day practice plan: mirrors the practice view's
+        schedule_practice call against the canonical state."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            from enhanced_practice_system import (
+                PracticeType, PracticeIntensity)
+            ptype = PracticeType(params.get("practice_type", ""))
+            intensity = PracticeIntensity(params.get("intensity", ""))
+            total = int(params.get("total_sessions", 0))
+        except (ValueError, TypeError):
+            return False, "Invalid practice plan parameters."
+        if total <= 0:
+            return False, "Practice plan needs at least one session."
+        try:
+            engine = getattr(self, "practice_engine", None)
+            if engine is None:
+                # Fall back to a fresh engine bound to the league
+                from enhanced_practice_system import PracticeEngine
+                engine = PracticeEngine(getattr(self, "league", None))
+            result = engine.schedule_practice(player, ptype, intensity, total)
+        except Exception as e:
+            return False, f"Practice scheduling failed: {e}"
+        if getattr(result, "success", False):
+            return True, f"Practice plan started for {player.full_name}."
+        return False, getattr(result, "message", "Schedule failed.")
+
+    def _mp_offer_sheet(self, params, team, manager):
+        """Present an offer sheet to an RFA: mirrors the offer-sheet UI's
+        _present_offer_sheet flow against the canonical state. The host
+        runs window/compensation/cap/willingness/match checks and executes
+        the same rfa_system helpers single-player uses."""
+        try:
+            import rfa_system as _rfa
+        except Exception:
+            return False, "Offer sheets aren't available."
+        # Find the RFA player: search all teams' RFAs for the ID.
+        _pid = str(params.get("player_id", ""))
+        player, original_team = None, None
+        try:
+            for _t in getattr(getattr(self, "league", None), "teams", []) or []:
+                for _p in getattr(_t, "roster", []) or []:
+                    if str(getattr(_p, "id", "")) == _pid:
+                        # RFA = restricted: has contract, team holds rights
+                        _c = getattr(_p, "contract", None)
+                        if _c is not None and getattr(
+                                _c, "restricted", False):
+                            player, original_team = _p, _t
+                            break
+                if player is not None:
+                    break
+        except Exception:
+            pass
+        if player is None:
+            return False, "That player isn't an RFA."
+        if original_team is team:
+            return False, "You can't offer-sheet your own player."
+        try:
+            aav = int(params.get("aav", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid offer sheet terms."
+        if aav <= 0 or years <= 0:
+            return False, "Offer sheet needs a positive AAV and term."
+        league = getattr(self, "league", None)
+        # 1. Window.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "offer_sheet", getattr(self, "current_date", None))
+            if not _ok:
+                return False, _why
+        except Exception:
+            pass
+        # 2. Compensation + own picks (same fallback the engine uses:
+        # walk forward through the club's own upcoming picks).
+        label, picks = _rfa.offer_sheet_compensation(aav)
+        try:
+            _yr = int(getattr(league, "season_year", 2026) or 2026) + 1
+            _missing = []
+            _used = set()
+            for _rnd in picks or []:
+                _found = None
+                for _yy in range(_yr, _yr + 7):
+                    _cand = _rfa.own_pick_available(team, _yy, _rnd)
+                    if _cand is not None and id(_cand) not in _used:
+                        _found = _cand
+                        _used.add(id(_cand))
+                        break
+                if _found is None:
+                    _missing.append(_rnd)
+            if _missing:
+                return False, (
+                    f"You don't hold your own picks for the required "
+                    f"compensation ({label}).")
+        except Exception:
+            pass
+        # 3. Cap + roster room.
+        try:
+            from salary_cap_system import cap_breakdown as _cb
+            _space = int(_cb(team).get("space", 0) or 0)
+        except Exception:
+            _space = 0
+        if _space < aav:
+            return False, f"Not enough cap space: ${_space:,} vs ${aav:,}/yr."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Your NHL roster is full (23/23)."
+        # 4. Player willingness.
+        try:
+            import player_decision as _pd
+            willing, _appeal, reasons = _pd.player_accepts_offer_sheet(
+                player, team, aav, years, original_team,
+                league=league, app=self, rng=getattr(self, "_rng", None))
+        except Exception:
+            willing, reasons = True, []
+        if not willing:
+            _why_txt = f" {reasons[0]}" if reasons else ""
+            return False, f"{player.full_name} won't sign.{_why_txt}"
+        # 5. Match or decline -- the same ai_match_decision July uses.
+        try:
+            if _rfa.ai_match_decision(original_team, player, aav, label):
+                mres = _rfa.apply_offer_sheet_matched(
+                    league, team, original_team, player, aav, years, app=self)
+                return True, (f"{original_team.team_name} matched. "
+                              f"He stays.")
+            res = _rfa.execute_offer_sheet(
+                league, team, original_team, player, aav, years,
+                app=self, rng=getattr(self, "_rng", None))
+        except Exception as e:
+            return False, f"Offer sheet failed: {e}"
+        if not res.get("ok"):
+            return False, f"The sheet failed: {res.get('reason', 'unknown')}."
+        try:
+            self.add_news(res.get("story", ""))
+        except Exception:
+            pass
+        return True, f"He's yours! {label} goes to {original_team.team_name}."
 
     def _mp_team_talk(self, params, team, manager):
         """Deliver a team talk: the same give_talk() the coach's whiteboard
