@@ -21432,14 +21432,25 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_inbox_window(self, focus_message_id=None):
         """Show the inbox as a full-screen view (EHM-style), not a popup."""
-        from inbox_window import InboxView
-        view = self.show_screen('inbox', 'Inbox', InboxView)
-        if focus_message_id:
+        try:
+            from inbox_window import InboxView
+            view = self.show_screen('inbox', 'Inbox', InboxView)
+            if focus_message_id:
+                try:
+                    view.focus_message(focus_message_id)
+                except Exception:
+                    pass
+            return view
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             try:
-                view.focus_message(focus_message_id)
+                from tkinter import messagebox
+                messagebox.showerror("Inbox",
+                                     f"Could not open the inbox:\n{e}")
             except Exception:
                 pass
-        return view
+            return None
 
     def close_inbox_screen(self):
         """Leave the full-screen inbox and restore the dashboard."""
