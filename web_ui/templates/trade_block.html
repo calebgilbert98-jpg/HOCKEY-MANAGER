@@ -17,9 +17,81 @@
 
 <main class="block-main">
   <h1 class="page-title">Trade Block</h1>
-  <p class="block-sub">Players your club has made available for trade talks.</p>
-  <div class="block-grid" id="block-grid"></div>
+
+  <nav class="tb-tabs" id="tb-tabs">
+    <button class="tb-tab active" data-tab="mine">Your Block</button>
+    <button class="tb-tab" data-tab="interest">Trade Interest <span class="tb-badge" id="interest-badge"></span></button>
+    <button class="tb-tab" data-tab="others">Other Teams</button>
+  </nav>
+
+  <!-- TAB 1: Your Block -->
+  <section id="tab-mine" class="tb-panel">
+    <div class="tb-filters" id="tb-filters">
+      <div class="tb-filter-row">
+        <span class="tb-filter-label">Pos</span>
+        <div class="tb-pills" id="pill-pos">
+          <button class="tb-pill active" data-v="All">All</button>
+          <button class="tb-pill" data-v="C">C</button>
+          <button class="tb-pill" data-v="W">W</button>
+          <button class="tb-pill" data-v="D">D</button>
+          <button class="tb-pill" data-v="G">G</button>
+        </div>
+      </div>
+      <div class="tb-filter-row">
+        <span class="tb-filter-label">Min OVR</span>
+        <input class="tb-num" id="f-min-ovr" type="number" min="0" max="99" placeholder="—">
+        <span class="tb-filter-label">Max Age</span>
+        <input class="tb-num" id="f-max-age" type="number" min="18" max="45" placeholder="—">
+        <button class="tb-btn" id="btn-apply-filters">Apply</button>
+      </div>
+    </div>
+    <div class="tb-actions">
+      <button class="tb-btn" id="btn-add">＋ Add Players</button>
+      <button class="tb-btn tb-danger" id="btn-remove">Remove Selected</button>
+      <button class="tb-btn" id="btn-shop">Shop Player</button>
+      <button class="tb-btn" id="btn-suggest">Suggest Value</button>
+      <button class="tb-btn tb-accent" id="btn-simulate">Simulate Offers</button>
+      <button class="tb-btn tb-accent" id="btn-interest">Generate Interest</button>
+    </div>
+    <div class="block-grid" id="block-grid"></div>
+  </section>
+
+  <!-- TAB 2: Trade Interest -->
+  <section id="tab-interest" class="tb-panel hidden">
+    <p class="block-sub">AI teams showing interest in your block players. Declining removes them permanently.</p>
+    <div class="tb-list" id="interest-list"></div>
+  </section>
+
+  <!-- TAB 3: Other Teams -->
+  <section id="tab-others" class="tb-panel hidden">
+    <p class="block-sub">Players other clubs have made available.</p>
+    <div class="block-grid" id="others-grid"></div>
+  </section>
 </main>
+
+<!-- Add players modal -->
+<div class="tb-modal hidden" id="add-modal">
+  <div class="tb-modal-card">
+    <h2>Add to Trade Block</h2>
+    <input class="tb-search" id="add-search" placeholder="Search your roster…">
+    <div class="tb-modal-list" id="add-list"></div>
+    <div class="tb-modal-actions">
+      <button class="tb-btn" id="add-cancel">Cancel</button>
+      <button class="tb-btn tb-accent" id="add-confirm">Add Selected</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shop / Suggest modal -->
+<div class="tb-modal hidden" id="info-modal">
+  <div class="tb-modal-card">
+    <h2 id="info-title">Player</h2>
+    <div id="info-body"></div>
+    <div class="tb-modal-actions">
+      <button class="tb-btn tb-accent" id="info-close">Close</button>
+    </div>
+  </div>
+</div>
 
 <script src="/static/js/trade_block.js"></script>
 </body>

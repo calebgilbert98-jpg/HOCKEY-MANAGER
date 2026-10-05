@@ -40,3 +40,86 @@
   padding: 40px 20px; border: 1px dashed rgba(255,255,255,.12);
   border-radius: 12px; grid-column: 1 / -1;
 }
+
+/* --- Trade Block 3-tab additions --- */
+.tb-tabs { display: flex; gap: 8px; margin: 14px 0 18px; }
+.tb-tab {
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-tab.active { background: rgba(59,130,246,.18); color: #fff; border-color: rgba(59,130,246,.5); }
+.tb-badge {
+  display: inline-block; min-width: 20px; text-align: center;
+  background: var(--accent); color: #fff; border-radius: 10px;
+  font-size: 11px; padding: 1px 6px; margin-left: 4px;
+}
+.tb-panel.hidden { display: none; }
+.tb-filters { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07);
+  border-radius: 12px; padding: 12px 16px; margin-bottom: 12px; }
+.tb-filter-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; flex-wrap: wrap; }
+.tb-filter-label { font-size: 12px; color: var(--dim); font-weight: 700; min-width: 58px; }
+.tb-pills { display: flex; gap: 6px; }
+.tb-pill {
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.1);
+  color: var(--dim); border-radius: 20px; padding: 4px 14px; font-size: 12px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-pill.active { background: rgba(59,130,246,.25); color: #fff; border-color: rgba(59,130,246,.6); }
+.tb-num {
+  width: 64px; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 8px; padding: 5px 8px; font-size: 13px;
+}
+.tb-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 14px; font-size: 13px;
+  font-weight: 700; cursor: pointer;
+}
+.tb-btn:hover { background: rgba(255,255,255,.1); }
+.tb-btn.tb-accent { background: rgba(59,130,246,.2); border-color: rgba(59,130,246,.5); }
+.tb-btn.tb-danger { background: rgba(244,67,54,.12); border-color: rgba(244,67,54,.4); }
+.tb-btn:disabled { opacity: .5; cursor: default; }
+.tb-mini {
+  background: rgba(59,130,246,.14); border: 1px solid rgba(59,130,246,.35);
+  color: #cfe3ff; border-radius: 8px; padding: 4px 10px; font-size: 12px;
+  font-weight: 700; cursor: pointer; margin-top: 8px; margin-right: 6px;
+}
+.tb-mini.tb-danger { background: rgba(244,67,54,.12); border-color: rgba(244,67,54,.4); color: #ffc9c4; }
+.block-card.selected { border-color: rgba(59,130,246,.7); box-shadow: 0 0 0 1px rgba(59,130,246,.5); }
+.b-check { float: right; }
+.b-check input { width: 18px; height: 18px; accent-color: #3B82F6; }
+.b-row-actions { margin-top: 6px; }
+.tb-list { display: flex; flex-direction: column; gap: 10px; }
+.tb-interest-row {
+  display: flex; justify-content: space-between; align-items: center;
+  background: linear-gradient(150deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.06); border-radius: 12px; padding: 12px 16px;
+}
+.tb-row-btns { display: flex; gap: 6px; }
+.tb-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+}
+.tb-modal.hidden { display: none; }
+.tb-modal-card {
+  background: #151a23; border: 1px solid rgba(255,255,255,.1); border-radius: 16px;
+  padding: 22px; width: min(520px, 92vw); max-height: 80vh; overflow: auto;
+}
+.tb-modal-card h2 { margin: 0 0 12px; font-size: 18px; }
+.tb-search {
+  width: 100%; background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: #fff; border-radius: 10px; padding: 8px 12px; font-size: 14px; margin-bottom: 10px;
+}
+.tb-modal-list { display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow: auto; }
+.tb-add-row {
+  display: flex; gap: 10px; align-items: center; padding: 8px 10px;
+  border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.tb-add-row:hover { background: rgba(255,255,255,.05); }
+.tb-add-row input { accent-color: #3B82F6; }
+.tb-add-row .dim { color: var(--dim); margin-left: auto; }
+.tb-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+#info-body ul { padding-left: 18px; }
+#info-body li { margin: 4px 0; font-size: 14px; }
+.dim { color: var(--dim); }
