@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Lines — Puck Dynasty</title>
+<title>Line Editor — Puck Dynasty</title>
 <link rel="stylesheet" href="/static/css/hub.css">
 <link rel="stylesheet" href="/static/css/lines.css">
 </head>
@@ -12,24 +12,48 @@
 
 <header class="topbar">
   <a class="back" href="/">← Hub</a>
-  <div class="team-sub" id="lines-sub">Line combinations</div>
+  <div class="team-sub" id="lines-sub">Line editor</div>
 </header>
 
-<main class="lines-main">
-  <div class="lines-head">
-    <h1 class="page-title">Line Combinations</h1>
-    <div class="lines-actions">
-      <button class="btn-new hidden" id="save-lines-btn">Save Lines</button>
-      <button class="btn-ghost hidden" id="cancel-lines-btn">Cancel</button>
-      <button class="btn-new" id="edit-lines-btn">Edit Lines</button>
+<main class="le-main">
+  <div class="le-head">
+    <div>
+      <h1 class="page-title">Line Editor</h1>
+      <p class="le-note" id="lines-note">Drag players onto the ice — or tap a player, then tap a slot.</p>
+    </div>
+    <div class="le-toolbar">
+      <button class="btn-ghost" id="btn-autobest" title="Fill every slot with the best available player per position">Auto Best</button>
+      <button class="btn-ghost" id="btn-clear" title="Empty every slot">Clear All</button>
+      <button class="btn-ghost" id="btn-cancel" title="Revert unsaved changes">Cancel</button>
+      <button class="btn-primary" id="btn-save" disabled>Save Lines</button>
     </div>
   </div>
-  <p class="lines-note" id="lines-note">Current lines. Use Edit Lines to change them.</p>
-  <div id="lines-units"></div>
-  <div id="lines-editor" class="hidden"></div>
 
-  <h2 class="lines-h2">Roster reference</h2>
-  <div id="lines-roster" class="lines-roster"></div>
+  <div class="le-grid">
+    <aside class="le-roster" id="roster-panel">
+      <div class="le-roster-tools">
+        <input id="roster-search" type="search" placeholder="Search players…" autocomplete="off" aria-label="Search players">
+        <div class="le-filters">
+          <button class="le-filter on" data-f="ALL">All</button>
+          <button class="le-filter" data-f="F">F</button>
+          <button class="le-filter" data-f="D">D</button>
+          <button class="le-filter" data-f="G">G</button>
+        </div>
+      </div>
+      <div class="le-roster-count" id="roster-count"></div>
+      <div class="le-roster-list" id="roster-list" aria-label="Roster — drop here to remove a player from the lines"></div>
+      <div class="le-roster-hint">Drag a dressed player back here to remove them from the lines.</div>
+    </aside>
+
+    <section class="le-ice">
+      <div id="lines-units"></div>
+      <div class="le-legend">
+        <span class="lg lg-green"></span> Natural position
+        <span class="lg lg-yellow"></span> Playable
+        <span class="lg lg-red"></span> Out of position
+      </div>
+    </section>
+  </div>
 </main>
 
 <script src="/static/js/lines.js"></script>
