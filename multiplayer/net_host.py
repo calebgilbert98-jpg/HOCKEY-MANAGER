@@ -95,6 +95,9 @@ class MultiplayerHost:
         self._listener: Optional[socket.socket] = None
         self._threads: List[threading.Thread] = []
         self._last_game_date = "unknown"
+        # Once start_game() fires, the lobby is over: late joiners get the
+        # live state immediately instead of waiting for another start.
+        self._game_started = False
         # EHM-style advance sync: session_ids of client managers who have
         # readied for the day's advance. Reset every day. Only peers with
         # a claimed team count as active (spectators never block).
@@ -313,6 +316,7 @@ class MultiplayerHost:
 
     def start_game(self) -> None:
         """Leave the lobby: tell clients the game is starting, then sync state."""
+        self._game_started = True
         self._broadcast(P.START_GAME, {"type": P.START_GAME})
         self.broadcast_state_async("Game started")
 
@@ -631,6 +635,14 @@ class MultiplayerHost:
                              self._teams_taken(), teams))
         self._send(peer, P.LOBBY_STATE,
                    P.lobby_state(self.get_lobby()))
+        # Late join: the game is already underway -- don't park them in
+        # the lobby waiting for a start that already happened. Sync the
+        # live state straight away (the client builds its game from it).
+        if self._game_started:
+            try:
+                self._send_state_to(peer, "Joined game in progress")
+            except Exception:
+                pass
         # Rejoin restore: if this token owned a team and nobody took it
         # while they were gone, hand it straight back.
         try:

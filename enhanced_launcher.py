@@ -906,15 +906,17 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         try:
             from main import GameManager, HockeyManagerGUI
             gm = GameManager()
-            self.withdraw()
             app = HockeyManagerGUI(gm, mp_client=client)
             # Clients never checkpoint locally; the host owns the ring.
             app._apply_multiplayer_snapshot(save_bytes, label or "Joined game")
-            app.mainloop()
+            # The game is up -- retire the launcher entirely. Withdrawing
+            # left a ghost home window alongside the game; destroying is
+            # clean (a failed build below still deiconifies on error).
             try:
                 self.destroy()
             except Exception:
                 pass
+            app.mainloop()
         except Exception as e:
             messagebox.showerror("Join failed",
                                  f"Could not build the game:\n{e}")
