@@ -557,18 +557,23 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                  text="Friends join over your Radmin VPN network\n"
                       "using your Radmin IP address.",
                  fg="#9aa0aa", bg=_bg).pack(pady=10)
-        # Game settings live here (bound to the same setup_options the
-        # new-game flow reads) so the host's choices stay as set --
-        # the Multiplayer tab has no other path to them.
+        # Game settings live here so the host's choices stay as set --
+        # the Multiplayer tab has no other path to them. Local vars are
+        # pushed into setup_options explicitly on CONTINUE (the popup
+        # card's variable sync proved unreliable).
         tk.Label(dlg, text="Game settings:", fg=_fg, bg=_bg,
                  font=("Segoe UI", 10, "bold")).pack(pady=(4, 2))
+        _fd_var = tk.BooleanVar(
+            value=bool(self.setup_options['fantasy_draft'].get()))
+        _sc_var = tk.BooleanVar(
+            value=bool(self.setup_options['salary_cap'].get()))
         tk.Checkbutton(dlg, text="Fantasy Draft",
-                       variable=self.setup_options['fantasy_draft'],
+                       variable=_fd_var,
                        fg=_fg, bg=_bg, selectcolor=_ebg,
                        activebackground=_bg,
                        activeforeground=_fg).pack(anchor="w", padx=60)
         tk.Checkbutton(dlg, text="Salary Cap",
-                       variable=self.setup_options['salary_cap'],
+                       variable=_sc_var,
                        fg=_fg, bg=_bg, selectcolor=_ebg,
                        activebackground=_bg,
                        activeforeground=_fg).pack(anchor="w", padx=60)
@@ -579,6 +584,9 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             except ValueError:
                 messagebox.showwarning("Port", "Port must be a number.")
                 return
+            # Explicitly persist the dialog's settings.
+            self.setup_options['fantasy_draft'].set(bool(_fd_var.get()))
+            self.setup_options['salary_cap'].set(bool(_sc_var.get()))
             self._mp_mode = "host"
             self._mp_config = {"name": name_var.get().strip() or "Host",
                                "port": port}
