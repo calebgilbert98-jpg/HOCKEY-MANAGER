@@ -59,7 +59,7 @@ StateProvider = Callable[[], Tuple[bytes, str, str]]
 class _Peer:
     __slots__ = ("sock", "addr", "reader", "session_id", "name",
                  "team_id", "seq", "last_seen", "send_lock",
-                 "handshake_done", "alive")
+                 "handshake_done", "alive", "rejoin_token")
 
     def __init__(self, sock: socket.socket, addr):
         self.sock = sock
@@ -68,6 +68,7 @@ class _Peer:
         self.session_id = uuid.uuid4().hex[:12]
         self.name = "?"
         self.team_id: Optional[str] = None
+        self.rejoin_token: str = ""
         self.seq = 0
         self.last_seen = time.time()
         self.send_lock = threading.Lock()
