@@ -1945,9 +1945,10 @@ class GameSim:
         self.game_stats[player_id]['performance_trajectory'] = trajectory
         self.game_stats[player_id]['career_projection_confidence'] = confidence
         
-        # Update team predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['development_projections'] += 1
+        # Update team predictions (skip if team unresolvable)
+        team_name = self._get_player_team_name(player)
+        if team_name is not None:
+            self.team_stats[team_name]['development_projections'] += 1
         
         return trajectory, confidence
 
@@ -1976,9 +1977,10 @@ class GameSim:
         # Update player stats
         self.game_stats[player_id]['injury_risk_score'] = total_risk
         
-        # Update team injury predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['injury_predictions'] += 1
+        # Update team injury predictions (skip if team unresolvable)
+        team_name = self._get_player_team_name(player)
+        if team_name is not None:
+            self.team_stats[team_name]['injury_predictions'] += 1
         
         # Add to ML training data
         model_data = self.ml_models['injury_prediction']
@@ -9305,6 +9307,8 @@ class GameSim:
         # Trait: Enforcer aura - teammates hit harder when enforcer is on ice
         try:
             hitting_team = self._get_player_team(hitting_player)
+            if hitting_team is None:
+                raise ValueError("skip: hitting team unresolvable")
             on_ice = self._on_ice_skaters(hitting_team)
             for teammate in on_ice:
                 if teammate.id != hitting_player.id:
