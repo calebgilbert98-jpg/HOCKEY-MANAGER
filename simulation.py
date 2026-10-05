@@ -6095,6 +6095,12 @@ class GameSim:
                          if p.primary_position != PlayerPosition.GOALIE]
         away_fallback = [p for p in self._get_on_ice(self.away_team)
                          if p.primary_position != PlayerPosition.GOALIE]
+        # Degenerate case: no skaters on ice for a side (shouldn't happen,
+        # but must not crash the sim). Keep current possession.
+        if not home_centers and not home_fallback:
+            return self.possession_team or self.home_team
+        if not away_centers and not away_fallback:
+            return self.possession_team or self.home_team
         home_player = random.choice(home_centers) if home_centers else random.choice(home_fallback)
         away_player = random.choice(away_centers) if away_centers else random.choice(away_fallback)
         
