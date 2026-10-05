@@ -111,6 +111,8 @@ def to_web_message(m):
         "is_overdue": overdue,
         "is_saved": _safe(lambda: bool(getattr(m, "is_saved", False))),
         "priority": _safe(lambda: int(getattr(m, "priority", 1) or 1)),
+        "action_type": _safe(lambda: getattr(m, "action_type", None)),
+        "content": _safe(lambda: getattr(m, "content", ""), ""),
     }
 
 
@@ -185,10 +187,73 @@ def get_hub_state(app):
     t = to_web_team(team) if team else {}
     pts = t.get("wins", 0) * 2 + t.get("otl", 0)
 
+    # Next game (same logic as Tkinter HomeDashboard._next_game)
+    next_game = None
+    try:
+        sched = _safe(lambda: list(getattr(gm.league, "schedule", None) or []), []) or []
+        me_name = _safe(lambda: getattr(team, "team_name", ""), "")
+        today = _safe(lambda: gm.current_date)
+        cands = []
+        for entry in sched:
+            if not isinstance(entry, dict):
+                continue
+            d = entry.get("date")
+            hn = _team_name(entry.get("home_team"))
+            an = _team_name(entry.get("away_team"))
+            if entry.get("home_score") is not None:
+                continue
+            if hn != me_name and an != me_name:
+                continue
+            if today is not None and d is not None and d < today:
+                continue
+            cands.append((d, hn, an, entry.get("time")))
+        cands.sort(key=lambda x: (x[0] is None, x[0]))
+        if cands:
+            d, hn, an, tm = cands[0]
+            ds = d.strftime("%b %d") if hasattr(d, "strftime") else str(d or "")
+            next_game = {
+                "date": ds,
+                "home": hn, "away": an,
+                "home_abbr": TEAM_ABBR.get(hn, hn[:3].upper()),
+                "away_abbr": TEAM_ABBR.get(an, an[:3].upper()),
+                "is_home": hn == me_name,
+                "time": str(tm or ""),
+            }
+    except Exception:
+        pass
+
+    # Recent inbox (3 newest)
+    recent = []
+    try:
+        _msgs = _safe(lambda: list(inbox.messages), []) or [] if inbox else []
+        for m in _msgs[:3]:
+            recent.append({
+                "subject": _safe(lambda: getattr(m, "subject", ""), ""),
+                "urgent": bool(_safe(lambda: getattr(m, "is_urgent", False), False)),
+                "action": bool(_safe(lambda: getattr(m, "requires_response", False), False)),
+            })
+    except Exception:
+        pass
+
+    # Stat strip
+    gp = _safe(lambda: int(getattr(team, "games_played", 0) or 0), 0)
+    gf = _safe(lambda: int(getattr(team, "goals_for", 0) or 0), 0)
+    ga = _safe(lambda: int(getattr(team, "goals_against", 0) or 0), 0)
+    cap_space = _safe(lambda: int(getattr(team, "cap_space", 0) or 0), 0)
+
     return {
         "team": {**t, "points": pts},
         "date": date_str,
         "inbox": {"unread": unread, "action_needed": action_needed},
+        "next_game": next_game,
+        "recent_inbox": recent,
+        "stat_strip": {
+            "record": f"{t.get('wins', 0)}-{t.get('losses', 0)}-{t.get('otl', 0)}",
+            "points": pts,
+            "gpg": round(gf / gp, 2) if gp else 0,
+            "gapg": round(ga / gp, 2) if gp else 0,
+            "cap_space": cap_space,
+        },
         "tiles": [
             {"id": "continue", "title": "Continue", "subtitle": "Advance the day",
              "size": "hero", "icon": "▶", "accent": True},
@@ -476,6 +541,19 @@ def _do_setup_load_game(cmd):
         import traceback
         traceback.print_exc()
         _web_setup_status = {"status": "error", "detail": str(e)}
+
+
+
+def _find_inbox_message(app, message_id):
+    """Find an inbox message by ID. Returns (inbox, message) or (None, None)."""
+    team = _safe(lambda: getattr(app, "user_team", None))
+    inbox = _safe(lambda: getattr(team, "inbox", None))
+    if not inbox or not message_id:
+        return None, None
+    for m in _safe(lambda: list(inbox.messages), []) or []:
+        if str(_safe(lambda: getattr(m, "id", ""), "")) == str(message_id):
+            return inbox, m
+    return inbox, None
 
 
 def _execute_command(app, cmd):
@@ -963,6 +1041,45 @@ def _execute_command(app, cmd):
                 _wt_store(True, summary or "Trade completed.", verdict)
             except Exception:
                 pass
+        elif op == "inbox_trade_accept":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    import trade_negotiation as tn
+                    neg_id = (getattr(msg, "action_data", None) or {}).get("negotiation_id")
+                    if neg_id:
+                        tn.accept_negotiation(app, neg_id)
+                    msg.action_done = True
+                except Exception:
+                    pass
+        elif op == "inbox_trade_decline":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    import trade_negotiation as tn
+                    neg_id = (getattr(msg, "action_data", None) or {}).get("negotiation_id")
+                    if neg_id:
+                        tn.decline_negotiation(app, neg_id)
+                    msg.action_done = True
+                except Exception:
+                    pass
+        elif op == "inbox_contract_accept":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    fn = getattr(app, "accept_contract_counter", None)
+                    if callable(fn):
+                        fn(msg)
+                    msg.action_done = True
+                except Exception:
+                    pass
+        elif op == "inbox_contract_walkaway":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    msg.action_done = True
+                except Exception:
+                    pass
         elif op == "delete_message":
             mid = cmd.get("message_id")
             team = getattr(app, "user_team", None)

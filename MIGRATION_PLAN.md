@@ -15,11 +15,13 @@ These are the screens Caleb uses every session. Must be rock-solid.
 - [ ] Blocker modal appears when blockers exist
 - [ ] Auto-resolve options work
 
-### 1.2 Hub / Dashboard
+### 1.2 Hub / Dashboard ✅ DONE (2026-10-04)
 - [x] Tiles render with live data (record nesting fixed)
-- [ ] All 10 tiles link to correct screens
-- [ ] Tile data refreshes after Continue
-- [ ] Next game tile shows real opponent/date
+- [x] All 10 tiles link to correct screens (verified)
+- [x] Tile data refreshes after Continue (page reload)
+- [x] Next game panel shows real opponent/date (BOS @ DET Sep 22)
+- [x] Stat strip: Record/Points/G-Gm/GA-Gm/Cap Space (live)
+- [x] Inbox peek shows 3 most recent live messages
 
 ### 1.3 Inbox
 - [x] Gmail-style cards render

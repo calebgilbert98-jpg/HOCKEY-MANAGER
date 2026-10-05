@@ -56,15 +56,55 @@ function esc(s) {
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 }
 
+// Action buttons per message action_type (mirrors Tkinter inbox_window.py)
+function actionButtons(m) {
+  const at = m.action_type;
+  if (!at) return '';
+  const btn = (op, label, primary) =>
+    `<button class="btn-${primary ? 'primary' : 'ghost'}" data-op="${op}" data-mid="${esc(m.id)}">${label}</button>`;
+  switch (at) {
+    case 'trade_offer':
+      return `<div class="msg-actions">
+        ${btn('inbox_trade_accept', 'Accept Trade', true)}
+        ${btn('inbox_trade_decline', 'Decline', false)}
+        <a class="btn-ghost" href="/trades">Review & Adjust</a></div>`;
+    case 'trade_counter':
+      return `<div class="msg-actions">
+        ${btn('inbox_trade_accept', 'Accept Counter', true)}
+        ${btn('inbox_trade_decline', 'Walk Away', false)}
+        <a class="btn-ghost" href="/trades">Review & Adjust</a></div>`;
+    case 'contract_counter':
+      return `<div class="msg-actions">
+        ${btn('inbox_contract_accept', 'Accept', true)}
+        <a class="btn-ghost" href="/contracts">Make New Offer</a>
+        ${btn('inbox_contract_walkaway', 'Walk Away', false)}</div>`;
+    default:
+      return '';
+  }
+}
+
 async function openReader(m) {
   openId = m.id;
   document.getElementById('r-from').textContent = m.sender;
   document.getElementById('r-date').textContent = m.date;
   document.getElementById('r-subject').textContent = m.subject;
   document.getElementById('r-category').textContent = m.category;
-  // full body comes from the row snippet in POC; the bridge will add /api/message/:id
-  document.getElementById('r-body').textContent = m.snippet || '(no content)';
+  document.getElementById('r-body').textContent = m.content || m.snippet || '(no content)';
   document.getElementById('r-read').textContent = m.is_read ? 'Mark as unread' : 'Mark as read';
+  // action buttons
+  let ab = document.getElementById('r-actions');
+  if (!ab) {
+    ab = document.createElement('div');
+    ab.id = 'r-actions';
+    document.getElementById('r-body').after(ab);
+  }
+  ab.innerHTML = actionButtons(m);
+  ab.querySelectorAll('button[data-op]').forEach(b =>
+    b.addEventListener('click', async () => {
+      await sendCommand(b.dataset.op, {message_id: b.dataset.mid});
+      closeReader();
+      setTimeout(() => loadInbox(currentFilter), 600);
+    }));
   document.getElementById('reader').hidden = false;
 }
 

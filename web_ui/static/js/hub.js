@@ -17,6 +17,54 @@ function renderHub(s) {
   document.getElementById('game-date').textContent = s.date;
   document.getElementById('inbox-pill').textContent = s.inbox.unread;
 
+  // Next game panel (live data)
+  if (s.next_game) {
+    const ng = s.next_game;
+    document.getElementById('next-home').textContent = ng.home_abbr;
+    document.getElementById('next-away').textContent = ng.away_abbr;
+    document.getElementById('next-when').textContent =
+      `${ng.date}${ng.time ? ' · ' + ng.time : ''} · ${ng.is_home ? 'Home' : 'Away'}`;
+  }
+
+  // Inbox peek (live data)
+  const peek = document.querySelector('.inbox-peek');
+  if (peek && s.recent_inbox) {
+    // keep the label row, replace message rows
+    peek.querySelectorAll('.inbox-row').forEach(r => r.remove());
+    for (const m of s.recent_inbox) {
+      const row = document.createElement('div');
+      row.className = 'inbox-row' + (m.urgent || m.action ? ' urgent' : '');
+      row.innerHTML = `<span class="dot"></span> ${esc(m.subject)}` +
+        (m.action ? ' <em>Action needed</em>' : '');
+      peek.appendChild(row);
+    }
+    if (!s.recent_inbox.length) {
+      const row = document.createElement('div');
+      row.className = 'inbox-row';
+      row.innerHTML = '<span class="dot"></span> No new messages';
+      peek.appendChild(row);
+    }
+  }
+
+  // Stat strip (live data)
+  if (s.stat_strip) {
+    const st = s.stat_strip;
+    let strip = document.getElementById('stat-strip');
+    if (!strip) {
+      strip = document.createElement('div');
+      strip.id = 'stat-strip';
+      strip.className = 'stat-strip';
+      document.querySelector('.hub-main').prepend(strip);
+    }
+    const capM = (st.cap_space / 1e6).toFixed(1);
+    strip.innerHTML = `
+      <div class="stat"><span class="stat-val">${esc(st.record)}</span><span class="stat-label">Record</span></div>
+      <div class="stat"><span class="stat-val">${st.points}</span><span class="stat-label">Points</span></div>
+      <div class="stat"><span class="stat-val">${st.gpg}</span><span class="stat-label">G/Gm</span></div>
+      <div class="stat"><span class="stat-val">${st.gapg}</span><span class="stat-label">GA/Gm</span></div>
+      <div class="stat"><span class="stat-val">$${capM}M</span><span class="stat-label">Cap Space</span></div>`;
+  }
+
   const grid = document.getElementById('tile-grid');
   grid.innerHTML = '';
   for (const t of s.tiles) {
