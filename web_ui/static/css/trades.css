@@ -92,3 +92,97 @@
 .prop-note.err { color: var(--red); }
 .my-list { max-height: 30vh; }
 #btn-propose:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+
+/* ---- v2: trade-builder modal ---- */
+.trades-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 16px; margin-bottom: 18px;
+}
+.trades-head .trades-hint { margin-bottom: 0; }
+#btn-trade-builder { flex: none; margin-top: 4px; }
+
+.tb-overlay {
+  position: fixed; inset: 0; z-index: 1000;
+  background: rgba(4, 7, 12, .78);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.tb-overlay[hidden] { display: none; }
+.tb-panel {
+  width: min(1180px, 100%); max-height: 92vh; overflow-y: auto;
+  background: var(--card);
+  border: 1px solid rgba(59,130,246,.35); border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.7);
+  padding: 22px 26px;
+}
+.tb-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.tb-header .panel-label { font-size: 15px; }
+.tb-sub { font-size: 12.5px; color: var(--dim); margin-top: 2px; }
+.tb-close {
+  background: transparent; border: 1px solid rgba(255,255,255,.14);
+  color: var(--dim); border-radius: 10px; width: 34px; height: 34px;
+  cursor: pointer; font-size: 15px;
+}
+.tb-close:hover { color: var(--text); border-color: var(--accent); }
+
+.tb-teams {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 16px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.tb-teams-label { font-size: 13px; color: var(--dim); display: flex; flex-direction: column; gap: 6px; }
+#tb-partner-select {
+  background: var(--card2); color: var(--text);
+  border: 1px solid rgba(59,130,246,.4); border-radius: 10px;
+  padding: 9px 12px; font-size: 14px; min-width: 280px;
+}
+.tb-your { font-size: 13px; color: var(--dim); }
+
+.tb-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .tb-cols { grid-template-columns: 1fr; } }
+.tb-col {
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.07); border-radius: 14px; padding: 14px;
+}
+.tb-sub-label { font-size: 11px; margin: 10px 0 6px; }
+.tb-sub-label:first-of-type { margin-top: 0; }
+.tb-list { max-height: 26vh; }
+.tb-val { font-size: 12px; color: var(--dim); font-weight: 400; margin-left: 8px; }
+.tb-pick-row .pr-ov { background: rgba(232,185,60,.15); }
+.tb-level { margin-left: auto; font-size: 10px; font-weight: 700; color: var(--dim); }
+
+.tb-verdict {
+  display: flex; gap: 14px; align-items: flex-start;
+  margin-top: 16px; padding: 14px 16px;
+  background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 14px;
+}
+.tb-verdict-badge {
+  flex: none; font-size: 13px; font-weight: 800; letter-spacing: .5px;
+  text-transform: uppercase; border-radius: 10px; padding: 8px 14px;
+  border: 1px solid rgba(255,255,255,.15); color: var(--dim);
+}
+.tb-verdict-badge.accept { color: #4CAF50; border-color: #4CAF50; background: rgba(76,175,80,.1); }
+.tb-verdict-badge.reject { color: var(--red); border-color: var(--red); background: rgba(231,76,60,.1); }
+.tb-verdict-badge.counter { color: var(--gold); border-color: var(--gold); background: rgba(232,185,60,.1); }
+.tb-verdict-body { flex: 1; min-width: 0; }
+.tb-verdict-reason { font-size: 13.5px; line-height: 1.45; }
+.tb-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.tb-bar-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
+.tb-bar-row .tb-bar-label { width: 86px; flex: none; }
+.tb-bar-track {
+  flex: 1; height: 10px; border-radius: 6px;
+  background: rgba(255,255,255,.06); overflow: hidden;
+}
+.tb-bar-fill { height: 100%; border-radius: 6px; background: var(--accent); transition: width .3s ease; }
+.tb-bar-fill.give { background: #4CAF50; }
+.tb-bar-fill.get { background: var(--accent); }
+.tb-bar-pts { width: 90px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+
+.tb-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 14px; margin-top: 16px;
+}
+.tb-actions .prop-note { margin-top: 0; flex: 1; }
+#tb-propose:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }

@@ -76,8 +76,7 @@ document.getElementById('new-btn').addEventListener('click', () => {
 document.getElementById('cancel-btn').addEventListener('click', () => {
   document.getElementById('modal').classList.add('hidden');
 });
-document.getElementById('assign-btn').addEventListener('click', async () => {
-  const prospectId = document.getElementById('prospect-sel').value;
+document.getElementById('assign-btn').addEventListener('click', async () => {  const prospectId = document.getElementById('prospect-sel').value;
   const scoutId = document.getElementById('scout-sel').value;
   const msg = document.getElementById('assign-msg');
   if (!prospectId || !scoutId) {
@@ -103,4 +102,80 @@ function esc(s) {
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 }
 
+/* ---- Regional beats (real assignment flow) ---- */
+async function loadBeats() {
+  try {
+    const res = await fetch('/api/scouting/options');
+    const data = await res.json();
+    renderBeats(data.scouts || []);
+    fillBeatForm(data);
+  } catch (e) { console.error(e); }
+}
+
+function renderBeats(scouts) {
+  const grid = document.getElementById('beat-grid');
+  grid.innerHTML = '';
+  if (!scouts.length) {
+    grid.innerHTML = '<div class="empty">No scouts on staff. Hire scouts via Staff to cover regions.</div>';
+    return;
+  }
+  for (const s of scouts) {
+    const el = document.createElement('div');
+    el.className = 'beat-card' + (s.current_region ? '' : ' beat-idle');
+    el.innerHTML = `
+      <div class="a-player">${esc(s.name)}</div>
+      <div class="a-meta">${esc(s.role)} · ability ${s.judging_ability} · potential ${s.judging_potential}</div>
+      <div class="beat-region">${s.current_region ? '📍 ' + esc(s.current_region) : '<i>Unassigned</i>'}</div>`;
+    grid.appendChild(el);
+  }
+}
+
+function fillBeatForm(data) {
+  const ss = document.getElementById('beat-scout-sel');
+  const rs = document.getElementById('beat-region-sel');
+  const scouts = data.scouts || [];
+  ss.innerHTML = scouts.map(s =>
+    `<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.role)})${s.current_region ? ' — ' + esc(s.current_region) : ''}</option>`
+  ).join('') || '<option value="">No scouts on staff</option>';
+  const opt = r => `<option value="${esc(r)}">${esc(r)}</option>`;
+  const am = (data.amateur_regions || []).map(opt).join('');
+  const pro = (data.pro_leagues || []).map(opt).join('');
+  rs.innerHTML =
+    (am ? `<optgroup label="Amateur regions">${am}</optgroup>` : '') +
+    (pro ? `<optgroup label="Pro leagues">${pro}</optgroup>` : '') +
+    (!(am || pro) ? (data.regions || []).map(opt).join('') : '');
+}
+
+async function submitBeat(recall) {
+  const scoutId = document.getElementById('beat-scout-sel').value;
+  const region = recall ? '' : document.getElementById('beat-region-sel').value;
+  const msg = document.getElementById('beat-msg');
+  if (!scoutId) { msg.textContent = 'Pick a scout first.'; msg.className = 'err'; return; }
+  try {
+    const res = await fetch('/api/scouting/assign', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({scout_id: scoutId, region: region}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      msg.textContent = (data.message || 'Done') + ' Takes effect on the game thread.';
+      msg.className = 'ok';
+      setTimeout(() => { document.getElementById('beat-modal').classList.add('hidden'); loadBeats(); }, 900);
+    } else {
+      msg.textContent = 'Failed: ' + (data.error || 'unknown error'); msg.className = 'err';
+    }
+  } catch (e) { msg.textContent = 'Request failed: ' + e; msg.className = 'err'; }
+}
+
+document.getElementById('beat-btn').addEventListener('click', () => {
+  document.getElementById('beat-modal').classList.remove('hidden');
+  document.getElementById('beat-msg').textContent = '';
+});
+document.getElementById('beat-cancel-btn').addEventListener('click', () => {
+  document.getElementById('beat-modal').classList.add('hidden');
+});
+document.getElementById('beat-assign-btn').addEventListener('click', () => submitBeat(false));
+document.getElementById('beat-recall-btn').addEventListener('click', () => submitBeat(true));
+
 loadScouting();
+loadBeats();

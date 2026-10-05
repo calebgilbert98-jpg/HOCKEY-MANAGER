@@ -16,9 +16,17 @@
 </header>
 
 <main class="lines-main">
-  <h1>Line Combinations</h1>
-  <p class="lines-note">Current lines, read-only. Web editing (set_lines) coming soon.</p>
+  <div class="lines-head">
+    <h1>Line Combinations</h1>
+    <div class="lines-actions">
+      <button class="btn-new hidden" id="save-lines-btn">Save Lines</button>
+      <button class="btn-ghost hidden" id="cancel-lines-btn">Cancel</button>
+      <button class="btn-new" id="edit-lines-btn">Edit Lines</button>
+    </div>
+  </div>
+  <p class="lines-note" id="lines-note">Current lines. Use Edit Lines to change them.</p>
   <div id="lines-units"></div>
+  <div id="lines-editor" class="hidden"></div>
 
   <h2 class="lines-h2">Roster reference</h2>
   <div id="lines-roster" class="lines-roster"></div>

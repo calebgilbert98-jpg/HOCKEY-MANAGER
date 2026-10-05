@@ -190,3 +190,317 @@ async function proposeTrade() {
 
 document.getElementById('btn-propose').addEventListener('click', proposeTrade);
 loadTeams();
+
+
+/* ============================================================
+ * v2: Trade Builder modal — live AI evaluation (appended, 2026-10-04)
+ * Namespaced `tb*` to avoid collisions with the v1 builder above.
+ * ============================================================ */
+const tbState = {
+  userTeam: null,
+  userPlayers: [],   // {..player, level}
+  userPicks: [],
+  partnerId: '',
+  partnerName: '',
+  partnerPlayers: [],
+  partnerPicks: [],
+  givePids: new Set(),
+  givePicks: new Set(),
+  wantPids: new Set(),
+  wantPicks: new Set(),
+  verdict: null,     // last /api/trades/evaluate payload
+  evalTimer: null,
+  resultTimer: null,
+};
+
+const tbEl = id => document.getElementById(id);
+
+async function tbOpen() {
+  tbEl('tb-overlay').hidden = false;
+  document.body.style.overflow = 'hidden';
+  await tbLoadTeams();
+  await tbLoadMyAssets();
+}
+
+function tbClose() {
+  tbEl('tb-overlay').hidden = true;
+  document.body.style.overflow = '';
+  if (tbState.resultTimer) { clearInterval(tbState.resultTimer); tbState.resultTimer = null; }
+}
+
+async function tbLoadTeams() {
+  try {
+    const res = await fetch('/api/trades/teams');
+    const data = await res.json();
+    tbState.userTeam = data.user_team || null;
+    const sel = tbEl('tb-partner-select');
+    sel.innerHTML = '<option value="">— select a team —</option>';
+    for (const t of (data.teams || [])) {
+      if (t.is_user) continue;
+      const opt = document.createElement('option');
+      // assets API accepts abbr, name, or team_name; abbr is shortest
+      opt.value = t.abbr || t.name;
+      opt.textContent = `${t.city} ${t.name}${t.on_block ? ' · on block' : ''}`;
+      sel.appendChild(opt);
+    }
+    tbEl('tb-your-team').textContent = tbState.userTeam
+      ? 'Your team: ' + tbState.userTeam : '';
+  } catch (e) { console.error(e); }
+}
+
+/* team_id lookup for assets: use abbr primarily (API matches it) */
+async function tbFetchAssets(teamId) {
+  const res = await fetch('/api/trades/assets?team_id=' + encodeURIComponent(teamId));
+  if (!res.ok) throw new Error('assets fetch failed: ' + res.status);
+  return res.json();
+}
+
+async function tbLoadMyAssets() {
+  try {
+    // user team lookup: teams list gives abbr; find it for the user team
+    const res = await fetch('/api/trades/teams');
+    const data = await res.json();
+    const mine = (data.teams || []).find(t => t.is_user);
+    const id = mine ? (mine.abbr || mine.name) : null;
+    if (!id) return;
+    const a = await tbFetchAssets(id);
+    tbState.userPlayers = a.players || [];
+    tbState.userPicks = a.picks || [];
+    tbRenderGive();
+  } catch (e) { console.error(e); }
+}
+
+async function tbOnPartnerChange() {
+  const sel = tbEl('tb-partner-select');
+  tbState.partnerId = sel.value;
+  tbState.partnerName = sel.value ? sel.options[sel.selectedIndex].text : '';
+  tbState.wantPids.clear();
+  tbState.wantPicks.clear();
+  if (!tbState.partnerId) {
+    tbState.partnerPlayers = [];
+    tbState.partnerPicks = [];
+    tbRenderGet();
+    tbResetVerdict('Select a partner team and add assets on both sides.');
+    return;
+  }
+  try {
+    const a = await tbFetchAssets(tbState.partnerId);
+    tbState.partnerPlayers = a.players || [];
+    tbState.partnerPicks = a.picks || [];
+    tbRenderGet();
+    tbScheduleEvaluate();
+  } catch (e) { console.error(e); }
+}
+
+function tbRow(asset, kind, side, checked) {
+  // asset: player dict or pick dict; kind 'player'|'pick'
+  const el = document.createElement('label');
+  const id = String(asset.id);
+  el.className = 'player-row' + (kind === 'pick' ? ' tb-pick-row' : '')
+    + (checked ? ' checked' : '')
+    + (asset.injured ? ' injured' : '');
+  const dataAttr = kind === 'pick' ? 'data-pick' : 'data-pid';
+  const info = kind === 'pick'
+    ? `<span class="pr-info"><span class="pr-name">${esc(asset.label)}</span>
+       <span class="pr-sub">${asset.protection ? 'Protected: ' + esc(asset.protection) + ' · ' : ''}${esc(asset.original_team || '')}</span></span>`
+    : `<span class="pr-ov">${asset.overall}</span>
+       <span class="pr-info"><span class="pr-name">${esc(asset.name)}${asset.captaincy ? ' <span class="p-c">' + esc(asset.captaincy) + '</span>' : ''}</span>
+       <span class="pr-sub">${esc(asset.position)} · Age ${asset.age} · ${fmtSalary(asset.salary)}</span></span>
+       ${asset.injured ? '<span class="pr-inj">INJ</span>' : ''}
+       ${asset.level ? '<span class="tb-level">' + esc(asset.level) + '</span>' : ''}`;
+  el.innerHTML = `<input type="checkbox" ${dataAttr}="${esc(id)}" data-side="${side}" data-kind="${kind}"${checked ? ' checked' : ''}>${info}`;
+  el.querySelector('input').addEventListener('change', tbOnToggle);
+  return el;
+}
+
+function tbRenderList(elId, items, kind, side, selSet) {
+  const list = tbEl(elId);
+  list.innerHTML = '';
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-note">None</div>';
+    return;
+  }
+  const sorted = [...items].sort((a, b) =>
+    kind === 'pick'
+      ? (a.year - b.year) || (a.round - b.round)
+      : (b.overall - a.overall));
+  for (const a of sorted) {
+    list.appendChild(tbRow(a, kind, side, selSet.has(String(a.id))));
+  }
+}
+
+function tbRenderGive() {
+  tbRenderList('tb-give-players', tbState.userPlayers, 'player', 'give', tbState.givePids);
+  tbRenderList('tb-give-picks', tbState.userPicks, 'pick', 'give', tbState.givePicks);
+}
+
+function tbRenderGet() {
+  tbRenderList('tb-get-players', tbState.partnerPlayers, 'player', 'get', tbState.wantPids);
+  tbRenderList('tb-get-picks', tbState.partnerPicks, 'pick', 'get', tbState.wantPicks);
+}
+
+function tbOnToggle(ev) {
+  const id = ev.target.dataset.kind === 'pick'
+    ? (ev.target.dataset.pick || '') : (ev.target.dataset.pid || '');
+  const set = {
+    'give:player': tbState.givePids, 'give:pick': tbState.givePicks,
+    'get:player': tbState.wantPids, 'get:pick': tbState.wantPicks,
+  }[ev.target.dataset.side + ':' + ev.target.dataset.kind];
+  if (!set) return;
+  ev.target.checked ? set.add(id) : set.delete(id);
+  ev.target.closest('.player-row').classList.toggle('checked', ev.target.checked);
+  tbScheduleEvaluate();
+}
+
+function tbScheduleEvaluate() {
+  if (tbState.evalTimer) clearTimeout(tbState.evalTimer);
+  tbState.evalTimer = setTimeout(tbEvaluate, 450);
+}
+
+function tbResetVerdict(msg) {
+  tbState.verdict = null;
+  tbEl('tb-badge').className = 'tb-verdict-badge';
+  tbEl('tb-badge').textContent = '—';
+  tbEl('tb-reason').textContent = msg || 'Select a partner team and add assets on both sides.';
+  tbEl('tb-bars').innerHTML = '';
+  tbEl('tb-give-val').textContent = '';
+  tbEl('tb-get-val').textContent = '';
+  tbEl('tb-propose').disabled = true;
+}
+
+async function tbEvaluate() {
+  const q = new URLSearchParams({
+    target_team_id: tbState.partnerId,
+    give_pids: [...tbState.givePids].join(','),
+    give_picks: [...tbState.givePicks].join(','),
+    want_pids: [...tbState.wantPids].join(','),
+    want_picks: [...tbState.wantPicks].join(','),
+  });
+  if (!tbState.partnerId) { tbResetVerdict(); return; }
+  tbEl('tb-badge').textContent = '…';
+  try {
+    const res = await fetch('/api/trades/evaluate?' + q.toString());
+    const data = await res.json();
+    tbState.verdict = data;
+    tbRenderVerdict(data);
+  } catch (e) {
+    console.error(e);
+    tbResetVerdict('Could not reach the trade evaluator: ' + e.message);
+  }
+}
+
+function tbRenderVerdict(d) {
+  const badge = tbEl('tb-badge');
+  const v = String(d.verdict || 'reject').toLowerCase();
+  badge.className = 'tb-verdict-badge ' + (v === 'accept' ? 'accept' : v === 'counter' ? 'counter' : 'reject');
+  badge.textContent = v === 'accept' ? 'GM accepts' : v === 'counter' ? 'GM counters' : 'GM rejects';
+  tbEl('tb-reason').textContent = d.reason || '';
+
+  const gv = d.give_value || 0, pv = d.get_value || 0;
+  tbEl('tb-give-val').textContent = gv ? `(${gv} pts)` : '';
+  tbEl('tb-get-val').textContent = pv ? `(${pv} pts)` : '';
+  const max = Math.max(gv, pv, 1);
+  tbEl('tb-bars').innerHTML = `
+    <div class="tb-bar-row"><span class="tb-bar-label">You give</span>
+      <div class="tb-bar-track"><div class="tb-bar-fill give" style="width:${(100 * gv / max).toFixed(1)}%"></div></div>
+      <span class="tb-bar-pts">${gv} pts</span></div>
+    <div class="tb-bar-row"><span class="tb-bar-label">You get</span>
+      <div class="tb-bar-track"><div class="tb-bar-fill get" style="width:${(100 * pv / max).toFixed(1)}%"></div></div>
+      <span class="tb-bar-pts">${pv} pts</span></div>
+    ${d.label ? `<div class="tb-bar-row"><span class="tb-bar-label">Valuation</span><span>${esc(d.label)}</span></div>` : ''}`;
+
+  // Propose is only enabled when the REAL AI verdict says accept.
+  tbEl('tb-propose').disabled = v !== 'accept';
+  tbEl('tb-note').textContent = '';
+  tbEl('tb-note').className = 'prop-note';
+}
+
+async function tbPropose() {
+  const v = tbState.verdict;
+  if (!v || String(v.verdict).toLowerCase() !== 'accept') return;
+  const btn = tbEl('tb-propose');
+  btn.disabled = true;
+  btn.textContent = 'Proposing…';
+  const note = tbEl('tb-note');
+  try {
+    const res = await fetch('/api/trades/propose', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        target_team_id: tbState.partnerId,
+        give_pids: [...tbState.givePids],
+        give_picks: [...tbState.givePicks],
+        want_pids: [...tbState.wantPids],
+        want_picks: [...tbState.wantPicks],
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      note.textContent = 'Trade queued — executing on the game thread. Watching for the result…';
+      note.className = 'prop-note';
+      tbPollResult();
+    } else {
+      note.textContent = 'Failed: ' + (data.error || 'could not queue trade');
+      note.className = 'prop-note err';
+      btn.disabled = false;
+      btn.textContent = 'Propose trade';
+    }
+  } catch (e) {
+    note.textContent = 'Failed: ' + e.message;
+    note.className = 'prop-note err';
+    btn.disabled = false;
+    btn.textContent = 'Propose trade';
+  }
+}
+
+/* The command executes on the Tk main thread; poll for its outcome. */
+async function tbPollResult() {
+  const note = tbEl('tb-note');
+  const btn = tbEl('tb-propose');
+  let tries = 0;
+  if (tbState.resultTimer) clearInterval(tbState.resultTimer);
+  tbState.resultTimer = setInterval(async () => {
+    tries++;
+    try {
+      const res = await fetch('/api/trades/result');
+      const data = await res.json();
+      const r = data.result;
+      if (r && r.marker === 'execute_trade') {
+        clearInterval(tbState.resultTimer);
+        tbState.resultTimer = null;
+        if (r.ok) {
+          note.textContent = 'Trade completed: ' + (r.summary || 'done.');
+          note.className = 'prop-note ok';
+          // clear the builder; refresh asset lists
+          tbState.givePids.clear(); tbState.givePicks.clear();
+          tbState.wantPids.clear(); tbState.wantPicks.clear();
+          await tbLoadMyAssets();
+          tbOnPartnerChange();
+        } else {
+          note.textContent = 'Trade blocked: ' + (r.summary || 'the GM rejected it at execution.');
+          note.className = 'prop-note err';
+          btn.disabled = false;
+          btn.textContent = 'Propose trade';
+          tbScheduleEvaluate(); // re-run eval against live state
+        }
+      } else if (tries > 60) {
+        clearInterval(tbState.resultTimer);
+        tbState.resultTimer = null;
+        note.textContent = 'No execution result yet — check the game / inbox.';
+        btn.disabled = false;
+        btn.textContent = 'Propose trade';
+      }
+    } catch (e) { /* keep polling */ }
+  }, 1000);
+}
+
+tbEl('btn-trade-builder').addEventListener('click', tbOpen);
+tbEl('tb-close').addEventListener('click', tbClose);
+tbEl('tb-overlay').addEventListener('click', e => {
+  if (e.target === tbEl('tb-overlay')) tbClose();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !tbEl('tb-overlay').hidden) tbClose();
+});
+tbEl('tb-partner-select').addEventListener('change', tbOnPartnerChange);
+tbEl('tb-propose').addEventListener('click', tbPropose);

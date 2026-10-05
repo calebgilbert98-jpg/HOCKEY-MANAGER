@@ -383,21 +383,261 @@ def _execute_command(app, cmd):
                     fn()
             except Exception:
                 pass
-        elif op in ("sign_free_agent", "extend_contract", "propose_trade",
-                    "add_scouting_assignment"):
-            # Complex multi-step flows (negotiation dialogs, trade builder):
-            # v1 falls back to the desktop window; the web page is read-only
-            # until the web transaction flow is built.
+        elif op == "sign_free_agent_real":
+            # v2 web contract flow: validated UFA offer (years + AAV) from
+            # the in-page modal. Re-validates with the real game gates,
+            # then runs the real signing path:
+            # HockeyManagerGUI.handle_contract_offer (main.py:21978).
+            # Outcome stashed on app._web_contract_result for
+            # GET /api/contracts/result polling (in-page, no OS popup).
+            def _wc_store(ok, summary):
+                try:
+                    app._web_contract_result = {
+                        "marker": "sign_free_agent_real",
+                        "ok": bool(ok),
+                        "summary": str(summary or ""),
+                    }
+                except Exception:
+                    pass
+
+            pid = cmd.get("player_id")
             try:
-                fallback = {
-                    "sign_free_agent": "open_free_agency_window",
-                    "extend_contract": "open_contract_extensions_window",
-                    "propose_trade": "open_trade_window",
-                    "add_scouting_assignment": "open_scouting_window",
-                }.get(op)
-                fn = getattr(app, fallback, None) if fallback else None
-                if callable(fn):
-                    fn()
+                years = int(cmd.get("years", 1))
+            except (TypeError, ValueError):
+                years = 0
+            try:
+                aav = int(cmd.get("aav", 0))
+            except (TypeError, ValueError):
+                aav = 0
+            try:
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                team = getattr(app, "user_team", None)
+                pool = list(getattr(league, "free_agents", None) or [])
+                player = next((p for p in pool
+                               if str(getattr(p, "id", id(p))) == str(pid)),
+                              None)
+                ok, reason = True, ""
+                if player is None or team is None:
+                    ok, reason = False, "Player not found."
+                if ok:
+                    import roster_limits as _rl
+                    ok, reason = _rl.can_sign_player(player)
+                if ok:
+                    import transaction_windows as _tw
+                    ok, reason = _tw.check_window(
+                        "sign_ufa", getattr(app, "current_date", None))
+                if ok:
+                    ok, reason = app._validate_contract_terms(
+                        player, aav, years, extension=False)
+                if ok:
+                    # Same staging as ContractNegotiationView.submit_offer
+                    # (windows.py): the offer rides on the player object.
+                    player.salary = aav
+                    player.contract_years = years
+                    app.handle_contract_offer(player, extension=False,
+                                              notify="inbox")
+                    _wc_store(True, "Offer submitted — the response will "
+                                    "arrive in your inbox.")
+                elif reason:
+                    _wc_store(False, reason)
+            except Exception:
+                pass
+        elif op == "extend_contract_real":
+            # v2 web contract flow: validated extension (years + AAV) from
+            # the in-page modal. Re-validates with the real game gates,
+            # then runs the real re-sign path:
+            # handle_contract_offer(extension=True) (main.py:21978).
+            def _wc_store(ok, summary):
+                try:
+                    app._web_contract_result = {
+                        "marker": "extend_contract_real",
+                        "ok": bool(ok),
+                        "summary": str(summary or ""),
+                    }
+                except Exception:
+                    pass
+
+            pid = cmd.get("player_id")
+            try:
+                years = int(cmd.get("years", 1))
+            except (TypeError, ValueError):
+                years = 0
+            try:
+                aav = int(cmd.get("aav", 0))
+            except (TypeError, ValueError):
+                aav = 0
+            try:
+                team = getattr(app, "user_team", None)
+                roster = list(getattr(team, "roster", None) or [])
+                player = next((p for p in roster
+                               if str(getattr(p, "id", id(p))) == str(pid)),
+                              None)
+                ok, reason = True, ""
+                if player is None or team is None:
+                    ok, reason = False, "Player not found."
+                if ok:
+                    import transaction_windows as _tw
+                    ok, reason = _tw.check_window(
+                        "extension", getattr(app, "current_date", None),
+                        ctx={"player": player})
+                if ok:
+                    ok, reason = app._validate_contract_terms(
+                        player, aav, years, extension=True)
+                if ok:
+                    # Same staging as the desktop extension flow.
+                    player.salary = aav
+                    player.contract_years = years
+                    app.handle_contract_offer(player, extension=True,
+                                              notify="inbox")
+                    _wc_store(True, "Extension submitted — the response "
+                                    "will arrive in your inbox.")
+                elif reason:
+                    _wc_store(False, reason)
+            except Exception:
+                pass
+        elif op == "add_scouting_assignment_real":
+            # Web region assignment (replaces the v1 desktop fallback):
+            # scout -> region on game_manager.scout_region_assignments
+            # via scouting.set_scout_region (scouting.py:132).
+            try:
+                from web_ui.screens.scouting import apply_region_assignment
+                apply_region_assignment(app, cmd.get("scout_id"),
+                                        cmd.get("region"))
+            except Exception:
+                pass
+        elif op == "add_scouting_assignment":
+            # Replaces the old v1 desktop fallback ("open_scouting_window"):
+            # real player-targeted assignment into app.scouting_assignments
+            # via scouting_window_helpers.create_scout_assignment.
+            try:
+                from web_ui.screens.scouting import apply_player_assignment
+                apply_player_assignment(app, cmd.get("prospect_id"),
+                                        cmd.get("scout_id"))
+            except Exception:
+                pass
+        elif op == "set_lines_real":
+            # Web line editor: re-validate server-side, then apply through
+            # the real machinery (quick_sim.flatten_lineup, same as the
+            # desktop editor and _mp_set_lines).
+            try:
+                from web_ui.screens.lines import (validate_lines_payload,
+                                                  apply_lines_payload)
+                team = getattr(app, "user_team", None)
+                slot_lines = cmd.get("lines") or {}
+                ok, err, resolved = validate_lines_payload(team, slot_lines)
+                if ok and resolved is not None:
+                    apply_lines_payload(team, resolved)
+            except Exception:
+                pass
+        elif op == "execute_trade":
+            # Web trade builder (v2 modal): re-validate with the REAL AI
+            # verdict, then call the REAL trade_engine.execute_trade().
+            # Never executes a deal the AI rejects. Stashes the outcome on
+            # app._web_trade_result for GET /api/trades/result polling.
+            try:
+                import trade_engine as _te
+            except Exception:
+                _te = None
+
+            def _wt_store(ok, summary, verdict=""):
+                try:
+                    app._web_trade_result = {
+                        "marker": "execute_trade",
+                        "ok": bool(ok),
+                        "summary": str(summary or ""),
+                        "verdict": str(verdict or ""),
+                    }
+                except Exception:
+                    pass
+
+            try:
+                if _te is None:
+                    _wt_store(False, "Trade engine unavailable.", "")
+                    return
+
+                user_team = getattr(app, "user_team", None)
+                gm = getattr(app, "game_manager", None)
+                league = (getattr(gm, "league", None)
+                          or getattr(app, "league", None))
+
+                # Find the partner team (abbr, name, team_name, "City Name").
+                target_id = str(cmd.get("target_team_id") or "").strip().lower()
+                partner = None
+                for _t in (getattr(league, "teams", None) or []):
+                    _nm = str(getattr(_t, "team_name", "") or "")
+                    _cands = {
+                        str(getattr(_t, "abbreviation", "") or "").lower(),
+                        _nm.lower(),
+                        f"{getattr(_t, 'city', '')} {_nm}".strip().lower(),
+                    }
+                    if target_id and target_id in _cands:
+                        partner = _t
+                        break
+                if user_team is None or partner is None:
+                    _wt_store(False, "Could not resolve teams.", "")
+                    return
+
+                # Resolve asset ids -> live objects (players + picks).
+                _pid_want = {str(x) for x in (cmd.get("give_pids") or [])}
+                _pick_want = {str(x) for x in (cmd.get("give_picks") or [])}
+                _pid_get = {str(x) for x in (cmd.get("want_pids") or [])}
+                _pick_get = {str(x) for x in (cmd.get("want_picks") or [])}
+
+                def _resolve(team, pid_set, pick_set):
+                    _players, _picks = [], []
+                    for _attr in ("roster", "ahl_roster", "prospects"):
+                        for _p in (getattr(team, _attr, None) or []):
+                            if str(getattr(_p, "id", "")) in pid_set:
+                                _players.append(_p)
+                    _by_year = getattr(team, "draft_picks", None) or {}
+                    for _pk_list in _by_year.values():
+                        for _pk in (_pk_list or []):
+                            if str(getattr(_pk, "id", "")) in pick_set:
+                                _picks.append(_pk)
+                    return _players + _picks
+
+                give_assets = _resolve(user_team, _pid_want, _pick_want)
+                want_assets = _resolve(partner, _pid_get, _pick_get)
+                if not give_assets and not want_assets:
+                    _wt_store(False, "Empty proposal.", "")
+                    return
+
+                # RE-VALIDATE with the real AI before any mutation.
+                try:
+                    resp = _te.ai_consider_trade(
+                        partner, give_assets, want_assets,
+                        user_team=user_team)
+                    verdict = str(getattr(resp, "decision", "") or "")
+                    message = str(getattr(resp, "message", "") or "")
+                except Exception:
+                    _wt_store(False, "AI evaluation failed.", "")
+                    return
+                if verdict != "accept":
+                    _wt_store(False,
+                              f"GM rejected the deal: {message}", verdict)
+                    return
+
+                # Real execution on the Tk main thread (same call the
+                # desktop flow uses via trade_negotiation._complete).
+                from datetime import date as _dt
+                _cur = getattr(gm, "current_date", None)
+                date_str = str(_cur) if _cur else str(_dt.today())
+                _board = getattr(getattr(app, "career", None), "board", None)
+                trade = _te.execute_trade(
+                    user_team, partner, give_assets, want_assets,
+                    date_str, league=league, board=_board)
+                summary = str(getattr(trade, "summary", "") or "")
+                if summary.startswith("BLOCKED:"):
+                    _wt_store(False, summary[8:].strip(), verdict)
+                    return
+                try:
+                    if not hasattr(gm, "trade_history"):
+                        gm.trade_history = []
+                    gm.trade_history.append(trade)
+                except Exception:
+                    pass
+                _wt_store(True, summary or "Trade completed.", verdict)
             except Exception:
                 pass
         elif op == "delete_message":

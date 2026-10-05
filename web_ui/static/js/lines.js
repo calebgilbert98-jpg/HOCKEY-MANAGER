@@ -65,4 +65,120 @@ function esc(s) {
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 }
 
+/* ---- In-page line editor (real write path) ---- */
+let editData = null;
+
+const GROUP_DEFS = [
+  { title: 'Forwards', units: [1, 2, 3, 4].map(n => ({ label: 'Line ' + n, slots: ['LW' + n, 'C' + n, 'RW' + n] })) },
+  { title: 'Defense', units: [1, 2, 3].map(n => ({ label: 'Pairing ' + n, slots: ['LD' + n, 'RD' + n] })) },
+  { title: 'Goalies', units: [{ label: 'Goalies', slots: ['G1', 'G2'] }] },
+];
+
+function setNote(text, cls) {
+  const n = document.getElementById('lines-note');
+  n.textContent = text;
+  n.className = 'lines-note' + (cls ? ' ' + cls : '');
+}
+
+function setEditMode(on) {
+  document.getElementById('lines-units').classList.toggle('hidden', on);
+  document.getElementById('lines-editor').classList.toggle('hidden', !on);
+  document.getElementById('edit-lines-btn').classList.toggle('hidden', on);
+  document.getElementById('save-lines-btn').classList.toggle('hidden', !on);
+  document.getElementById('cancel-lines-btn').classList.toggle('hidden', !on);
+}
+
+async function enterEdit() {
+  try {
+    const res = await fetch('/api/lines/editable');
+    editData = await res.json();
+    renderEditor(editData);
+    setEditMode(true);
+    setNote('Pick a player for each slot, then Save Lines.');
+  } catch (e) { setNote('Could not load editor: ' + e, 'err'); }
+}
+
+function renderEditor(data) {
+  const host = document.getElementById('lines-editor');
+  host.innerHTML = '';
+  const curBySlot = {};
+  for (const s of data.slots || []) curBySlot[s.slot] = s.player;
+  for (const g of GROUP_DEFS) {
+    const sec = document.createElement('section');
+    sec.innerHTML = `<h2 class="lines-h2">${g.title}</h2>`;
+    for (const u of g.units) {
+      const div = document.createElement('div');
+      div.className = 'unit';
+      let html = `<div class="unit-label">${esc(u.label)}</div><div class="unit-row">`;
+      for (const slot of u.slots) {
+        const pool = (data.pools || {})[slot] || [];
+        const cur = curBySlot[slot];
+        const curId = cur ? String(cur.id) : '';
+        const opts = [`<option value="">— Empty —</option>`].concat(pool.map(p =>
+          `<option value="${esc(p.id)}"${String(p.id) === curId ? ' selected' : ''}>${esc(p.name)} — ${esc(p.position)}, ${p.overall} OVR</option>`
+        )).join('');
+        html += `<div class="slot slot-edit">
+          <div class="slot-pos">${esc(slot)}</div>
+          <select data-slot="${esc(slot)}" aria-label="${esc(slot)}">${opts}</select>
+        </div>`;
+      }
+      div.innerHTML = html + '</div>';
+      sec.appendChild(div);
+    }
+    host.appendChild(sec);
+  }
+  host.querySelectorAll('select').forEach(sel =>
+    sel.addEventListener('change', highlightDupes));
+}
+
+function currentSelections() {
+  const out = {};
+  document.querySelectorAll('#lines-editor select').forEach(sel => {
+    out[sel.dataset.slot] = sel.value;
+  });
+  return out;
+}
+
+function highlightDupes() {
+  const seen = {};
+  document.querySelectorAll('#lines-editor select').forEach(sel => {
+    const v = sel.value;
+    sel.classList.remove('slot-dupe');
+    if (!v) return;
+    if (seen[v]) { sel.classList.add('slot-dupe'); seen[v].classList.add('slot-dupe'); }
+    else seen[v] = sel;
+  });
+}
+
+async function saveLines() {
+  const lines = currentSelections();
+  const seen = {}, dupes = [];
+  for (const [slot, pid] of Object.entries(lines)) {
+    if (!pid) continue;
+    if (seen[pid]) dupes.push(pid);
+    else seen[pid] = slot;
+  }
+  if (dupes.length) { setNote('One player per slot — fix the highlighted duplicates.', 'err'); return; }
+  try {
+    const res = await fetch('/api/lines/set', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({lines}),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      setEditMode(false);
+      setNote('Lines saved — they take effect on the game thread.', 'ok');
+      loadLines();
+    } else {
+      setNote('Could not save: ' + (data.error || 'unknown error'), 'err');
+    }
+  } catch (e) { setNote('Request failed: ' + e, 'err'); }
+}
+
+document.getElementById('edit-lines-btn').addEventListener('click', enterEdit);
+document.getElementById('cancel-lines-btn').addEventListener('click', () => {
+  setEditMode(false); setNote('Current lines. Use Edit Lines to change them.');
+});
+document.getElementById('save-lines-btn').addEventListener('click', saveLines);
+
 loadLines();

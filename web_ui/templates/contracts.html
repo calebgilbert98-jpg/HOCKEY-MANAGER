@@ -21,6 +21,39 @@
   <div class="contracts-list" id="contracts-list"></div>
 </main>
 
+<!-- v2 extension modal (in-page; never a desktop window) -->
+<div class="cm-overlay" id="ext-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" aria-labelledby="ext-title">
+    <div class="cm-head">
+      <div>
+        <div class="cm-title" id="ext-title">Contract extension</div>
+        <div class="cm-player" id="ext-player">—</div>
+      </div>
+      <button class="cm-close" id="ext-close" aria-label="Close">✕</button>
+    </div>
+    <div class="cm-ask" id="ext-ask">—</div>
+    <div class="cm-field">
+      <label for="ext-years">Term <span class="cm-val" id="ext-years-val">—</span></label>
+      <input type="range" id="ext-years" min="1" max="7" step="1" value="4">
+    </div>
+    <div class="cm-field">
+      <label for="ext-aav">AAV (cap hit/yr) <span class="cm-val" id="ext-aav-val">—</span></label>
+      <div class="cm-stepper">
+        <button class="cm-step" id="ext-aav-down" aria-label="Decrease AAV">−</button>
+        <input type="text" id="ext-aav" inputmode="numeric" value="">
+        <button class="cm-step" id="ext-aav-up" aria-label="Increase AAV">+</button>
+      </div>
+      <div class="cm-hint" id="ext-aav-hint">—</div>
+    </div>
+    <div class="cm-cap" id="ext-cap">—</div>
+    <div class="cm-note" id="ext-note"></div>
+    <div class="cm-actions">
+      <button class="cm-cancel" id="ext-cancel">Cancel</button>
+      <button class="cm-submit" id="ext-submit" disabled>Extend</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/contracts.js"></script>
 </body>
 </html>

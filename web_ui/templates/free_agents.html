@@ -44,6 +44,39 @@
   <div class="fa-list" id="fa-list"></div>
 </main>
 
+<!-- v2 contract offer modal (in-page; never a desktop window) -->
+<div class="cm-overlay" id="offer-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" aria-labelledby="offer-title">
+    <div class="cm-head">
+      <div>
+        <div class="cm-title" id="offer-title">Contract offer</div>
+        <div class="cm-player" id="offer-player">—</div>
+      </div>
+      <button class="cm-close" id="offer-close" aria-label="Close">✕</button>
+    </div>
+    <div class="cm-ask" id="offer-ask">—</div>
+    <div class="cm-field">
+      <label for="offer-years">Term <span class="cm-val" id="offer-years-val">—</span></label>
+      <input type="range" id="offer-years" min="1" max="6" step="1" value="4">
+    </div>
+    <div class="cm-field">
+      <label for="offer-aav">AAV (cap hit/yr) <span class="cm-val" id="offer-aav-val">—</span></label>
+      <div class="cm-stepper">
+        <button class="cm-step" id="offer-aav-down" aria-label="Decrease AAV">−</button>
+        <input type="text" id="offer-aav" inputmode="numeric" value="">
+        <button class="cm-step" id="offer-aav-up" aria-label="Increase AAV">+</button>
+      </div>
+      <div class="cm-hint" id="offer-aav-hint">—</div>
+    </div>
+    <div class="cm-cap" id="offer-cap">—</div>
+    <div class="cm-note" id="offer-note"></div>
+    <div class="cm-actions">
+      <button class="cm-cancel" id="offer-cancel">Cancel</button>
+      <button class="cm-submit" id="offer-submit" disabled>Sign</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/free_agents.js"></script>
 </body>
 </html>

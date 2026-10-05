@@ -16,3 +16,9 @@ customtkinter>=5.2.0
 
 # Performance monitoring (optional)
 # psutil>=5.8.0  # Uncomment if performance monitoring is enabled
+
+# Web UI: Flask serves the tile frontend on localhost (offline)
+Flask>=3.0.0
+
+# Embedded game window (uses Edge WebView2 on Windows, preinstalled)
+pywebview>=4.4.0

@@ -28,12 +28,23 @@ a = Analysis(
         ('*.png', '.'),
         ('icons', 'icons'),
         ('assets', 'assets'),
+        ('web_ui/templates', 'web_ui/templates'),
+        ('web_ui/static', 'web_ui/static'),
     ],
     hiddenimports=[
         'PIL', 'PIL.Image', 'PIL.ImageTk', 'PIL.ImageDraw',
         'PIL.ImageFont', 'PIL.ImageOps',
         'customtkinter',
-    ] + _first_party,
+        'flask', 'werkzeug',
+        'webview',
+        'web_ui', 'web_ui.bridge', 'web_ui.shell',
+    ] + _first_party + [
+        # Auto-discover web UI screens: bridge.py loads them dynamically
+        # via importlib, so they must be force-included here.
+        'web_ui.screens.' + _f[:-3]
+        for _f in _os.listdir(_os.path.join(_spec_dir, 'web_ui', 'screens'))
+        if _f.endswith('.py') and _f != '__init__.py'
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

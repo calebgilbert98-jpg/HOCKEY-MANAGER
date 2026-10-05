@@ -82,3 +82,70 @@
     "btn btn"; }
   .btn-offer { width: 100%; }
 }
+
+/* ---- v2 contract modal (shared .cm-* pattern with contracts.css) ---- */
+.cm-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(4, 8, 14, .72);
+  backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 18px;
+}
+.cm-overlay[hidden] { display: none; }
+.cm-card {
+  width: 460px; max-width: 100%; max-height: 92vh; overflow-y: auto;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(59,130,246,.35); border-radius: var(--radius);
+  padding: 20px 22px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.6);
+}
+.cm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.cm-title { font-size: 18px; font-weight: 800; }
+.cm-player { font-size: 13px; color: var(--dim); margin-top: 3px; }
+.cm-close {
+  background: none; border: none; color: var(--dim); font-size: 16px;
+  cursor: pointer; padding: 4px 8px; border-radius: 8px;
+}
+.cm-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+.cm-ask { font-size: 14px; font-weight: 700; margin: 14px 0 4px; color: var(--gold); }
+.cm-field { margin: 12px 0; }
+.cm-field label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 6px; }
+.cm-val { color: var(--text); font-weight: 800; }
+.cm-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.cm-stepper { display: flex; gap: 8px; align-items: center; }
+.cm-stepper input {
+  flex: 1; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 10px;
+  padding: 9px 12px; font-size: 14px; font-weight: 700; text-align: center;
+}
+.cm-step {
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer;
+  background: var(--card2); border: 1px solid rgba(255,255,255,.12);
+  color: var(--text); font-size: 18px; font-weight: 800;
+}
+.cm-step:hover { border-color: rgba(59,130,246,.6); }
+.cm-hint { font-size: 11.5px; color: var(--dim); margin-top: 6px; }
+.cm-cap {
+  font-size: 13.5px; margin: 14px 0 4px; padding: 10px 12px;
+  background: rgba(59,130,246,.1); border: 1px solid rgba(59,130,246,.3);
+  border-radius: 10px;
+}
+.cm-cap.over { background: rgba(231,76,60,.1); border-color: rgba(231,76,60,.4); }
+.cm-cap .good { color: #4CAF50; }
+.cm-cap .bad { color: var(--red); }
+.cm-dim { color: var(--dim); font-size: 12px; }
+.cm-note { font-size: 12.5px; color: var(--dim); margin: 8px 0 2px; min-height: 16px; }
+.cm-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 14px; }
+.cm-cancel {
+  padding: 10px 18px; border-radius: 10px; cursor: pointer;
+  background: transparent; border: 1px solid rgba(255,255,255,.15);
+  color: var(--dim); font-size: 13.5px; font-weight: 700;
+}
+.cm-cancel:hover { color: var(--text); border-color: rgba(255,255,255,.3); }
+.cm-submit {
+  padding: 10px 26px; border-radius: 10px; border: none; cursor: pointer;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  color: #fff; font-size: 13.5px; font-weight: 800;
+}
+.cm-submit:disabled { opacity: .45; cursor: default; }
+.cm-submit:hover:not(:disabled) { box-shadow: 0 8px 22px rgba(59,130,246,.45); }

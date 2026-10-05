@@ -22,7 +22,12 @@ class MockScout:
     def __init__(self, sid, name, role="Amateur Scout"):
         self.id = sid
         self.full_name = name
-        self.role = SimpleNamespace(value=role)
+        # Real StaffRole enum so scouting.is_scout() validation passes.
+        try:
+            from game_classes import StaffRole as _SR
+            self.role = _SR[role.upper().replace(" ", "_").replace("/", "_")]
+        except Exception:
+            self.role = SimpleNamespace(value=role)
         self.judging_player_ability = 16
         self.judging_player_potential = 15
         self.experience = 10
@@ -64,7 +69,7 @@ mock_app = SimpleNamespace(
     user_team=SimpleNamespace(
         team_name="My Team",
         scouting_reports={200: MockReport(player_a, scout_a)},
-        staff=[scout_a, MockScout("s2", "Pro Phil", "Pro Scout")],
+        staff=[scout_a, MockScout("s2", "Pro Phil", "Professional Scout")],
     ),
     league=SimpleNamespace(
         draft_prospects=prospects,

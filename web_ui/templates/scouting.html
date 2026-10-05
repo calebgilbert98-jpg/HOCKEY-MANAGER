@@ -27,6 +27,15 @@
   </section>
 
   <section>
+    <div class="sec-head">
+      <h2>Regional Beats</h2>
+      <button class="btn-new" id="beat-btn">Assign Regional Beat</button>
+    </div>
+    <p class="modal-sub">Scouts on a regional beat file reports on prospects from that region every day.</p>
+    <div class="beat-grid" id="beat-grid"></div>
+  </section>
+
+  <section>
     <h2>Scouting Reports</h2>
     <div class="report-list" id="report-list"></div>
   </section>
@@ -45,6 +54,23 @@
       <button class="modal-close" id="cancel-btn">Cancel</button>
     </div>
     <p class="modal-sub" id="assign-msg"></p>
+  </div>
+</div>
+
+<div class="modal-ov hidden" id="beat-modal">
+  <div class="modal-card">
+    <h2>Assign Regional Beat</h2>
+    <p class="modal-sub">Send a scout to cover a region or pro league. The assignment lasts until you change or recall it.</p>
+    <label class="fld-label">Scout</label>
+    <select id="beat-scout-sel" class="fld"></select>
+    <label class="fld-label">Region / League</label>
+    <select id="beat-region-sel" class="fld"></select>
+    <div class="modal-actions">
+      <button class="btn-auto" id="beat-assign-btn">Assign</button>
+      <button class="btn-ghost" id="beat-recall-btn">Recall</button>
+    </div>
+    <button class="modal-close" id="beat-cancel-btn">Cancel</button>
+    <p class="modal-sub" id="beat-msg"></p>
   </div>
 </div>
 

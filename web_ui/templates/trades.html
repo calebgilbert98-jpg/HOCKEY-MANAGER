@@ -16,9 +16,65 @@
 </header>
 
 <main class="trades-main">
-  <h1>Trade Center</h1>
-  <p class="trades-hint">Pick a team, select the players you want, pick who you give up, then propose the deal.</p>
+  <div class="trades-head">
+    <div>
+      <h1>Trade Center</h1>
+      <p class="trades-hint">Pick a team, select the players you want, pick who you give up, then propose the deal.</p>
+    </div>
+    <button class="btn-primary" id="btn-trade-builder">⚖️ Trade Builder — live AI verdict</button>
+  </div>
 
+<!-- v2: interactive trade-builder modal (live AI evaluation, picks included) -->
+<div class="tb-overlay" id="tb-overlay" hidden>
+  <div class="tb-panel" role="dialog" aria-modal="true" aria-label="Trade builder">
+    <div class="tb-header">
+      <div>
+        <div class="panel-label">Trade Builder</div>
+        <div class="tb-sub">Live AI verdict · the GM must accept before you can propose</div>
+      </div>
+      <button class="tb-close" id="tb-close" aria-label="Close">✕</button>
+    </div>
+
+    <div class="tb-teams">
+      <label class="tb-teams-label">Trade partner
+        <select id="tb-partner-select"><option value="">— select a team —</option></select>
+      </label>
+      <div class="tb-your" id="tb-your-team"></div>
+    </div>
+
+    <div class="tb-cols">
+      <section class="tb-col">
+        <div class="prop-title">You give <span class="tb-val" id="tb-give-val"></span></div>
+        <div class="panel-label tb-sub-label">Players</div>
+        <div class="player-list tb-list" id="tb-give-players"></div>
+        <div class="panel-label tb-sub-label">Picks</div>
+        <div class="player-list tb-list" id="tb-give-picks"></div>
+      </section>
+      <section class="tb-col">
+        <div class="prop-title">You get <span class="tb-val" id="tb-get-val"></span></div>
+        <div class="panel-label tb-sub-label">Players</div>
+        <div class="player-list tb-list" id="tb-get-players"></div>
+        <div class="panel-label tb-sub-label">Picks</div>
+        <div class="player-list tb-list" id="tb-get-picks"></div>
+      </section>
+    </div>
+
+    <div class="tb-verdict" id="tb-verdict">
+      <div class="tb-verdict-badge" id="tb-badge">—</div>
+      <div class="tb-verdict-body">
+        <div class="tb-verdict-reason" id="tb-reason">Select a partner team and add assets on both sides.</div>
+        <div class="tb-bars" id="tb-bars"></div>
+      </div>
+    </div>
+
+    <div class="tb-actions">
+      <div class="prop-note" id="tb-note"></div>
+      <button class="btn-primary" id="tb-propose" disabled>Propose trade</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/trades.js"></script>
   <div class="trades-grid">
     <!-- Left: team selector -->
     <section class="panel-card teams-panel">

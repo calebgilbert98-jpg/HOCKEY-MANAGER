@@ -2582,6 +2582,13 @@ class HockeyManagerGUI(tk.Tk):
             start_web_server(self)
             self.after(250, lambda: drain_commands(self, self))
             print("🌐 Web UI running at http://localhost:5050/")
+            # Game shell (2026-10-04): the game is ONE embedded window.
+            # Tk root is withdrawn; every dialog is an in-page web modal.
+            try:
+                from web_ui.shell import launch_shell
+                self.after(1200, lambda: launch_shell(self))
+            except Exception as e:
+                print(f"⚠️ Game shell failed to start: {e}")
         except Exception as e:
             print(f"⚠️ Web UI failed to start: {e}")
 
