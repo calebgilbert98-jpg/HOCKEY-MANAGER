@@ -8857,6 +8857,17 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast(f"Could not reach host: {e}")
         self._mp_refresh_continue_ui()
 
+    def _mp_request_host_save(self):
+        """Client asks the host to save the game now."""
+        client = getattr(self, "mp_client", None)
+        if client is None:
+            return
+        try:
+            client.send_action("request_save", {})
+            self._mp_toast("Save requested -- the host will confirm.")
+        except Exception as e:
+            self._mp_toast(f"Could not reach host: {e}")
+
     def _mp_evaluate_advance_gate(self, why=""):
         """Broadcast ADVANCE_STATUS; fire the day's advance when all active
         managers (host included) are ready. Main thread only."""
@@ -9394,6 +9405,7 @@ class HockeyManagerGUI(tk.Tk):
             "set_practice": self._mp_set_practice,
             "start_practice_plan": self._mp_start_practice_plan,
             "offer_sheet": self._mp_offer_sheet,
+            "request_save": self._mp_request_save,
             "practice_session": self._mp_practice_session,
             "team_talk": self._mp_team_talk,
             "press_conference": self._mp_press_conference,
@@ -10860,6 +10872,23 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             pass
         return True, f"He's yours! {label} goes to {original_team.team_name}."
+
+    def _mp_request_save(self, params, team, manager):
+        """A client asked the host to save: save canonically and broadcast
+        a checkpoint notice so everyone knows the save landed."""
+        try:
+            _label = f"Save requested by {manager}"
+            self.save_manager.save_game()
+            try:
+                _host = getattr(self, "mp_host", None)
+                if _host is not None:
+                    _host.notify_checkpoint(
+                        _label, str(getattr(self, "current_date", "")))
+            except Exception:
+                pass
+            return True, "Game saved."
+        except Exception as e:
+            return False, f"Save failed: {e}"
 
     def _mp_team_talk(self, params, team, manager):
         """Deliver a team talk: the same give_talk() the coach's whiteboard

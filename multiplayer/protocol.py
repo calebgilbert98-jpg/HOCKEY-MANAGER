@@ -180,7 +180,8 @@ SUPPORTED_ACTIONS = {
     "set_practice",
     "start_practice_plan",  # params: {team_id, player_id, practice_type,
                            #          intensity, total_sessions}
-    "offer_sheet",        # params: {team_id, player_id, aav, years}     # params: {team_id, focus, intensity}
+    "offer_sheet",        # params: {team_id, player_id, aav, years}
+    "request_save",       # params: {team_id} -- client asks host to save     # params: {team_id, focus, intensity}
     "practice_session", # params: {team_id, player_id, practice_type, intensity, duration, trainer_quality}
     "team_talk",        # params: {team_id, tone, situation, speaker?}
     "press_conference", # params: {team_id, stance, topic?}
