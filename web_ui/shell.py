@@ -48,10 +48,10 @@ def launch(url=SETUP_URL):
     if exe:
         try:
             # --app: chromeless window (no tabs/address bar). Looks native.
-            # --user-data-dir: separate profile so the game window doesn't
-            # share tabs/cookies with the user's normal browsing.
+            # (No --user-data-dir: a relative one broke Edge on some
+            # machines; the default profile is the reliable choice.)
             subprocess.Popen(
-                [exe, f"--app={url}", "--user-data-dir=PuckDynastyProfile"],
+                [exe, f"--app={url}"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
             )
