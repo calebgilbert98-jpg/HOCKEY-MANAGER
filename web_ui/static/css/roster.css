@@ -1,32 +1,143 @@
 /* Puck Dynasty web roster styles */
-.roster-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
-.roster-main h1 { font-size: 26px; margin-bottom: 14px; }
-.roster-grid {
-  display: grid; gap: 12px;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+.roster-main { max-width: 1180px; margin: 0 auto; padding: 6px 24px 40px; }
+
+/* Tab bar */
+.roster-tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.roster-tabs button {
+  background: var(--card); border: 1px solid rgba(255,255,255,.08);
+  color: var(--dim); border-radius: 10px; padding: 10px 18px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
 }
-.player-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 14px; transition: transform .14s ease, box-shadow .14s ease;
+.roster-tabs button.active {
+  background: var(--accent); color: #fff; border-color: transparent;
 }
-.player-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,.5); }
-.player-card.injured { opacity: .75; border-color: rgba(231,76,60,.35); }
-.p-head { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
-.p-ov {
-  width: 46px; height: 46px; border-radius: 10px; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 19px; font-weight: 800; color: #fff;
-  background: var(--c, #666);
-  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+.roster-tabs button span { opacity: .75; font-weight: 600; }
+.hidden { display: none !important; }
+
+/* Toolbar */
+.roster-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+  background: var(--card); border-radius: 12px; padding: 10px 14px;
+  border: 1px solid rgba(255,255,255,.06);
 }
-.p-name { font-size: 15px; font-weight: 700; }
+.filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.pill-group { display: flex; gap: 4px; align-items: center; }
+.pill-label { font-size: 11px; font-weight: 800; color: var(--dim); margin-right: 2px; }
+.pill-group button {
+  background: transparent; border: 1px solid rgba(255,255,255,.12);
+  color: var(--dim); border-radius: 999px; padding: 4px 12px;
+  font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.pill-group button.active { background: var(--accent); color: #fff; border-color: transparent; }
+.search {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; padding: 7px 12px; color: var(--text); font-size: 13px;
+  min-width: 160px;
+}
+.bulk-actions { display: flex; gap: 8px; }
+.btn {
+  border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 700;
+  cursor: pointer; border: 1px solid rgba(255,255,255,.12);
+  background: var(--card2); color: var(--text); text-decoration: none;
+  display: inline-block;
+}
+.btn.primary { background: var(--accent); color: #fff; border-color: transparent; }
+.btn.secondary { background: transparent; }
+
+/* Table */
+.table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,.06); }
+.roster-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.roster-table th {
+  background: var(--card2); color: var(--dim); text-align: left;
+  padding: 10px 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
+  white-space: nowrap; position: sticky; top: 0;
+}
+.roster-table th.sortable { cursor: pointer; }
+.roster-table th.sortable:hover { color: var(--text); }
+.roster-table td { padding: 9px 12px; border-top: 1px solid rgba(255,255,255,.04); white-space: nowrap; }
+.roster-table tbody tr:hover { background: rgba(255,255,255,.03); }
+.roster-table tr.injured { opacity: .7; }
+.p-name { font-weight: 700; cursor: pointer; color: var(--accent); }
+.p-name:hover { text-decoration: underline; }
 .p-c {
   display: inline-block; background: var(--gold); color: #111;
-  font-size: 11px; font-weight: 800; border-radius: 6px; padding: 1px 6px;
-  vertical-align: 1px;
+  font-size: 10px; font-weight: 800; border-radius: 5px; padding: 1px 5px;
 }
-.p-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
-.p-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
-.p-bar span { display: block; height: 100%; border-radius: 3px; }
-.p-inj { margin-top: 8px; font-size: 12px; color: var(--red); font-weight: 700; }
+.tier { font-weight: 700; color: var(--accent); }
+.clause { font-size: 10px; color: var(--gold); font-weight: 800; }
+.badge {
+  display: inline-block; font-size: 10px; font-weight: 800; border-radius: 5px;
+  padding: 2px 7px; margin-right: 4px;
+}
+.badge-ir, .badge-inj { background: rgba(231,76,60,.2); color: #ff8a80; }
+.badge-ltir { background: rgba(156,39,176,.25); color: #ea80fc; }
+.badge-emergency { background: rgba(255,152,0,.2); color: #ffcc80; }
+.badge-suspended { background: rgba(244,67,54,.25); color: #ff8a80; }
+.roster-summary { margin-top: 10px; font-size: 12px; color: var(--dim); }
+
+/* Depth chart */
+.depth-unit { margin-bottom: 18px; }
+.depth-unit h3 { font-size: 15px; margin-bottom: 8px; color: var(--dim); }
+.depth-slots { display: flex; gap: 10px; flex-wrap: wrap; }
+.depth-slot {
+  background: var(--card); border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px; padding: 10px 14px; min-width: 150px; cursor: pointer;
+}
+.depth-slot:hover { border-color: var(--accent); }
+.depth-slot.empty { opacity: .45; cursor: default; }
+.slot-pos { font-size: 11px; font-weight: 800; color: var(--dim); }
+.slot-name { font-size: 14px; font-weight: 700; margin: 2px 0; }
+.slot-sub { font-size: 11px; color: var(--dim); }
+
+/* Salary cap */
+.cap-card {
+  background: var(--card); border: 1px solid rgba(255,255,255,.06);
+  border-radius: 12px; padding: 18px; margin-bottom: 16px;
+}
+.cap-card h3 { margin: 0 0 12px; font-size: 16px; }
+.cap-bar-row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+.cap-bar { height: 12px; border-radius: 6px; background: rgba(255,255,255,.08); overflow: hidden; margin-bottom: 14px; }
+.cap-bar span { display: block; height: 100%; background: var(--accent); border-radius: 6px; }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.cap-grid label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 2px; }
+.cap-grid strong { font-size: 16px; }
+.cap-grid strong.pos { color: #4CAF50; }
+.cap-grid strong.neg { color: #F44336; }
+
+/* Profile modal */
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.modal-card {
+  background: var(--card); border-radius: 14px; padding: 24px;
+  max-width: 520px; width: 100%; max-height: 85vh; overflow-y: auto;
+  position: relative; border: 1px solid rgba(255,255,255,.1);
+}
+.modal-x {
+  position: absolute; top: 12px; right: 12px; background: transparent;
+  border: none; color: var(--dim); font-size: 18px; cursor: pointer;
+}
+.modal-card h2 { margin: 0 0 4px; font-size: 22px; }
+.p-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 16px 0; }
+.p-facts label { display: block; font-size: 11px; color: var(--dim); }
+.attr-list { margin: 8px 0 16px; }
+.attr-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+.attr-row span { width: 90px; text-transform: capitalize; color: var(--dim); }
+.attr-bar { flex: 1; height: 7px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+.attr-bar span { display: block; height: 100%; }
+.profile-actions { display: flex; gap: 8px; margin-top: 12px; }
+
+/* Context menu */
+.ctx-menu {
+  position: fixed; z-index: 200; background: var(--card2);
+  border: 1px solid rgba(255,255,255,.12); border-radius: 10px;
+  padding: 6px; min-width: 190px; box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+.ctx-menu button {
+  display: block; width: 100%; text-align: left; background: transparent;
+  border: none; color: var(--text); padding: 9px 12px; font-size: 13px;
+  border-radius: 6px; cursor: pointer;
+}
+.ctx-menu button:hover { background: rgba(255,255,255,.08); }

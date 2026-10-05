@@ -639,6 +639,29 @@ def _execute_command(app, cmd):
                     pass
             except Exception:
                 pass
+        elif op == "trade_block_add":
+            try:
+                pid = str(cmd.get("player_id", ""))
+                team = getattr(app, "user_team", None)
+                if team is not None and pid:
+                    if not hasattr(app, "trade_block"):
+                        app.trade_block = []
+                    for lst in ("roster", "ahl_roster", "prospects"):
+                        for p in list(getattr(team, lst, None) or []):
+                            if str(getattr(p, "id", "")) == pid:
+                                if p not in app.trade_block:
+                                    app.trade_block.append(p)
+                                break
+            except Exception:
+                pass
+        elif op == "roster_move":
+            # Move players between rosters with CBA validation.
+            # Mirrors RosterView.move_player logic (windows.py).
+            try:
+                from web_ui.screens.roster import execute_roster_move
+                execute_roster_move(app, cmd)
+            except Exception as e:
+                print(f"roster_move failed: {e}")
         elif op == "save_game":
             try:
                 fn = getattr(app, "open_save_window", None)
@@ -1137,10 +1160,6 @@ def create_app(game_app=None):
     def inbox_page():
         return render_template("inbox.html")
 
-    @app.route("/roster")
-    def roster_page():
-        return render_template("roster.html")
-
     @app.route("/api/health")
     def health():
         return jsonify({"ok": True,
@@ -1162,13 +1181,6 @@ def create_app(game_app=None):
             return jsonify([])
         f = request.args.get("filter", "all")
         return jsonify(get_inbox_messages(live, f))
-
-    @app.route("/api/roster")
-    def roster():
-        live = _live()
-        if live is None:
-            return jsonify([])
-        return jsonify(get_roster(live))
 
     @app.route("/api/schedule")
     def schedule():

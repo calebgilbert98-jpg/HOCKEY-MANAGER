@@ -12,13 +12,74 @@
 
 <header class="topbar">
   <a class="back" href="/">← Hub</a>
-  <div class="team-sub" id="roster-count"></div>
+  <div class="team-sub" id="roster-headline"></div>
 </header>
 
 <main class="roster-main">
-  <h1>Roster</h1>
-  <div class="roster-grid" id="roster-grid"></div>
+  <nav class="roster-tabs" id="roster-tabs">
+    <button data-tab="nhl" class="active">NHL Roster <span id="cnt-nhl"></span></button>
+    <button data-tab="ahl">AHL Roster <span id="cnt-ahl"></span></button>
+    <button data-tab="prospects">Prospects <span id="cnt-prospects"></span></button>
+    <button data-tab="depth">Depth Chart</button>
+    <button data-tab="cap">Salary Cap</button>
+  </nav>
+
+  <!-- Roster tables (nhl/ahl/prospects) -->
+  <section id="view-table" class="roster-view">
+    <div class="roster-toolbar">
+      <div class="filters">
+        <div class="pill-group" id="f-pos">
+          <span class="pill-label">Pos</span>
+          <button data-v="All" class="active">All</button><button data-v="F">F</button><button data-v="D">D</button><button data-v="G">G</button>
+        </div>
+        <div class="pill-group" id="f-age">
+          <span class="pill-label">Age</span>
+          <button data-v="All" class="active">All</button><button data-v="U23">U23</button><button data-v="23-29">23–29</button><button data-v="30+">30+</button>
+        </div>
+        <div class="pill-group" id="f-ovr">
+          <span class="pill-label">OVR</span>
+          <button data-v="All" class="active">All</button><button data-v="70">70+</button><button data-v="80">80+</button><button data-v="90">90+</button>
+        </div>
+        <input id="f-search" class="search" type="search" placeholder="Search name…">
+      </div>
+      <div class="bulk-actions" id="bulk-actions"></div>
+    </div>
+    <div class="table-wrap">
+      <table class="roster-table" id="roster-table">
+        <thead><tr id="roster-head"></tr></thead>
+        <tbody id="roster-body"></tbody>
+      </table>
+    </div>
+    <div class="roster-summary" id="roster-summary"></div>
+  </section>
+
+  <!-- Depth chart -->
+  <section id="view-depth" class="roster-view hidden">
+    <div id="depth-units"></div>
+  </section>
+
+  <!-- Salary cap -->
+  <section id="view-cap" class="roster-view hidden">
+    <div class="cap-card" id="cap-overview"></div>
+    <div class="cap-card">
+      <h3>Contracts</h3>
+      <div class="table-wrap">
+        <table class="roster-table" id="cap-table">
+          <thead><tr><th>Player</th><th>Pos</th><th>Cap Hit</th><th>Years</th><th>Clauses</th></tr></thead>
+          <tbody id="cap-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </main>
+
+<!-- Player profile modal -->
+<div id="profile-modal" class="modal hidden">
+  <div class="modal-card" id="profile-card"></div>
+</div>
+
+<!-- Context menu -->
+<div id="ctx-menu" class="ctx-menu hidden"></div>
 
 <script src="/static/js/roster.js"></script>
 </body>
