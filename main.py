@@ -9460,7 +9460,16 @@ class HockeyManagerGUI(tk.Tk):
                       "send_to_minors", "call_up", "claim_waivers",
                       "buyout_player", "extend_contract", "hire_staff",
                       "fire_staff", "assign_scout", "set_practice",
-                      "team_talk", "press_conference", "draft_pick"):
+                      "team_talk", "press_conference", "draft_pick",
+                      # Adversarial sweep 2026-10-05: these were in
+                      # SUPPORTED_ACTIONS with working handlers + UI
+                      # routes, but this gate dropped them as
+                      # "unsupported". ntc_waiver_answer / trade_response
+                      # stay out: they ride dedicated message types.
+                      "set_captaincy", "set_trade_block",
+                      "return_to_junior", "practice_session",
+                      "start_practice_plan", "offer_sheet",
+                      "request_save"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9620,6 +9629,7 @@ class HockeyManagerGUI(tk.Tk):
         team.lineup = flatten_lineup(nested)
         return True, "Lines saved."
 
+    @staticmethod
     @staticmethod
     def _mp_is_goalie(player):
         pos = getattr(player, "primary_position", "")
@@ -11047,6 +11057,15 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Unknown partner team."
         if partner is team:
             return False, "You can't trade with yourself."
+        # Event boundary: the trade freeze / deadline applies to MP
+        # proposals exactly like the SP trade UI (te.trades_allowed).
+        try:
+            if not te.trades_allowed(str(getattr(self, "current_date", "")),
+                                     getattr(self, "league", None)):
+                return False, ("Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
         offer = params.get("offer") or {}
         if not isinstance(offer, dict):
             return False, "Malformed offer."
@@ -11545,6 +11564,16 @@ class HockeyManagerGUI(tk.Tk):
         """Run a fully-cleared proposal through the canonical trade
         engine: clause preflight, cap validation, retention, asset moves."""
         import trade_engine as te
+        # Event boundary: a deal proposed before the freeze but accepted
+        # after it must still die here -- same as the SP deadline center.
+        try:
+            if not te.trades_allowed(str(getattr(self, "current_date", "")),
+                                     getattr(self, "league", None)):
+                self._mp_clear_proposal_waivers(proposal)
+                return False, ("Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
         team = self._mp_find_team(proposal["proposer_team_id"])
         partner = self._mp_find_team(proposal["partner_team_id"])
         if team is None or partner is None:
