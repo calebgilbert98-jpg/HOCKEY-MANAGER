@@ -70,11 +70,12 @@ function renderHub(s) {
   for (const t of s.tiles) {
     const el = document.createElement('div');
     el.className = `tile ${t.size}${t.accent ? ' accent' : ''}`;
+    const isHero = (t.size || '').includes('hero');
     el.innerHTML = `
       ${t.badge ? `<span class="badge">${t.badge}</span>` : ''}
       <span class="icon">${t.icon}</span>
       <h3>${t.title}</h3>
-      <p>${t.subtitle}</p>`;
+      <p class="${isHero ? 'hero-sub' : ''}">${t.subtitle}</p>`;
     el.addEventListener('click', () => openTile(t));
     grid.appendChild(el);
   }

@@ -141,3 +141,79 @@
   border-radius: 6px; cursor: pointer;
 }
 .ctx-menu button:hover { background: rgba(255,255,255,.08); }
+
+/* ============================================================
+   ROSTER OVERHAUL — premium sports-app feel, not spreadsheet (2026-10-04)
+   ============================================================ */
+
+/* Table: airier, softer, no grid lines */
+.table-wrap {
+  border-radius: 14px; border: 1px solid rgba(255,255,255,.07);
+  background: linear-gradient(170deg, rgba(26,35,52,.6), rgba(19,26,38,.6));
+  box-shadow: 0 4px 20px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04);
+  overflow: hidden;
+}
+.roster-table { font-size: 14px; }
+.roster-table th {
+  background: transparent;
+  padding: 14px 16px 12px;
+  font-size: 10.5px; letter-spacing: 1.4px; font-weight: 800;
+  color: var(--dimmer);
+  border-bottom: 1px solid rgba(59,130,246,.18);
+}
+.roster-table td {
+  padding: 13px 16px;
+  border-top: none;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.roster-table tbody tr {
+  transition: background .14s ease, transform .14s ease;
+}
+.roster-table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(59,130,246,.09), rgba(59,130,246,.03));
+}
+.roster-table tbody tr:last-child td { border-bottom: none; }
+.p-name {
+  font-size: 14.5px; font-weight: 750; color: var(--text);
+  letter-spacing: .2px;
+}
+.p-name:hover { color: var(--accent); text-decoration: none; }
+
+/* OVR badge: bold pill, not plain text */
+.ovr-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 38px; height: 26px; padding: 0 8px;
+  border-radius: 8px; font-weight: 800; font-size: 13.5px;
+  background: rgba(59,130,246,.14); color: #93c5fd;
+  border: 1px solid rgba(59,130,246,.3);
+}
+
+/* Toolbar: more breathing room */
+.roster-toolbar {
+  padding: 14px 18px; border-radius: 14px; margin-bottom: 16px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  box-shadow: 0 2px 12px rgba(0,0,0,.3);
+}
+.roster-tabs { margin-bottom: 18px; gap: 10px; }
+.roster-tabs button {
+  padding: 11px 20px; border-radius: 12px; font-size: 14px;
+  font-family: var(--font-display); text-transform: uppercase;
+  letter-spacing: .8px;
+}
+
+/* Depth chart slots: more card-like */
+.depth-slot {
+  border-radius: 12px; padding: 14px 16px; min-width: 170px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  box-shadow: 0 3px 12px rgba(0,0,0,.3);
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+.depth-slot:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(0,0,0,.45), 0 0 0 1px rgba(59,130,246,.3);
+}
+.slot-name { font-size: 15.5px; }
+
+/* Attribute bars: value-colored glow */
+.attr-bar { height: 8px; border-radius: 5px; }
+.attr-bar span { border-radius: 5px; box-shadow: 0 0 8px currentColor; }

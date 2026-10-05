@@ -342,3 +342,116 @@ body {
   .tile, .tile::after, .btn-primary, .btn-auto { transition: none; animation: none; }
   .tile:hover { transform: none; }
 }
+
+/* ============================================================
+   VISUAL OVERHAUL — 2K franchise cinematic language (2026-10-04)
+   Typography hierarchy, bolder tiles, premium data displays.
+   Deep blue #3B82F6 only. Selective rounding. No teal.
+   ============================================================ */
+
+:root {
+  /* Display type: heavy, condensed-leaning system stack for headlines.
+     (Offline-safe: no webfonts. Weight + spacing carry the 2K feel.) */
+  --font-display: 'Arial Narrow', 'Helvetica Neue Condensed', 'Segoe UI', system-ui, sans-serif;
+  --shadow-display: 0 2px 12px rgba(0,0,0,.5);
+}
+
+/* ---------- page titles (shared across screens) ---------- */
+.page-title {
+  font-family: var(--font-display);
+  font-size: 34px; font-weight: 900;
+  letter-spacing: .5px; text-transform: uppercase;
+  line-height: 1.05; margin: 4px 0 6px;
+  background: linear-gradient(180deg, #ffffff 20%, #b9c9e8 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  text-shadow: none;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,.4));
+}
+.page-sub {
+  font-size: 14px; color: var(--dim); font-weight: 500;
+  margin-bottom: 20px; line-height: 1.5;
+}
+.section-h {
+  font-family: var(--font-display);
+  font-size: 19px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.2px; color: var(--text);
+  margin: 26px 0 12px; display: flex; align-items: center; gap: 10px;
+}
+.section-h::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(59,130,246,.35), transparent);
+}
+
+/* ---------- tiles: more cinematic ---------- */
+.tile {
+  /* deeper cinematic gradient + vignette */
+  background:
+    linear-gradient(165deg, rgba(255,255,255,.07) 0%, transparent 42%),
+    radial-gradient(120% 90% at 50% 0%, rgba(59,130,246,.08), transparent 55%),
+    linear-gradient(150deg, var(--card2), var(--card) 78%);
+}
+.tile h3 {
+  font-family: var(--font-display);
+  font-size: 19px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; line-height: 1.1;
+  text-shadow: 0 2px 8px rgba(0,0,0,.45);
+}
+.tile p { font-size: 13px; margin-top: 5px; }
+.tile.hero h3 {
+  font-size: 40px; letter-spacing: 1px;
+  text-shadow: 0 3px 14px rgba(0,0,0,.5);
+}
+.tile.hero .hero-sub {
+  display: block; margin-top: 8px;
+  font-family: var(--font); font-size: 13.5px; font-weight: 600;
+  text-transform: none; letter-spacing: .2px;
+  color: rgba(219,234,254,.9);
+}
+.tile.large h3 { font-size: 23px; }
+
+/* stat strip: bolder numbers */
+.stat-strip {
+  display: flex; gap: 0; margin-bottom: 18px;
+  background: linear-gradient(160deg, var(--card2), var(--card));
+  border: 1px solid rgba(255,255,255,.07);
+  border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow-tile), inset 0 1px 0 rgba(255,255,255,.05);
+}
+.stat-strip .stat {
+  flex: 1; padding: 14px 10px 12px; text-align: center;
+  border-left: 1px solid rgba(255,255,255,.05);
+}
+.stat-strip .stat:first-child { border-left: none; }
+.stat-strip .stat-val {
+  display: block; font-family: var(--font-display);
+  font-size: 24px; font-weight: 800; color: var(--text);
+  letter-spacing: .5px; line-height: 1.1;
+}
+.stat-strip .stat-label {
+  display: block; font-size: 10.5px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: 1.4px;
+  margin-top: 4px; font-weight: 700;
+}
+
+/* ---------- buttons: premium ---------- */
+.btn-primary, .btn-auto, .btn-new {
+  font-family: var(--font-display);
+  text-transform: uppercase; letter-spacing: 1px;
+  font-size: 14px;
+}
+
+/* ---------- data tables: de-Excel ---------- */
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
+.data-table th {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: var(--dimmer); font-weight: 800; text-align: left;
+  padding: 12px 14px; border-bottom: 1px solid rgba(255,255,255,.08);
+  white-space: nowrap;
+}
+.data-table td {
+  padding: 13px 14px; border-bottom: 1px solid rgba(255,255,255,.035);
+  vertical-align: middle;
+}
+.data-table tbody tr { transition: background .13s ease; }
+.data-table tbody tr:hover { background: rgba(59,130,246,.06); }
+.data-table tbody tr:last-child td { border-bottom: none; }
