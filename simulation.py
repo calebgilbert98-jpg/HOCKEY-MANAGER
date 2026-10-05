@@ -8423,6 +8423,19 @@ class GameSim:
         except Exception:
             return 1.0
 
+    def _eff(self, player, team, value):
+        """Familiarity-adjusted attribute value.
+        
+        Central choke point for positional familiarity: multiply any
+        player attribute by the player's familiarity factor for their
+        current lineup slot. Out-of-position players perform worse
+        across ALL skills, not just shooting.
+        """
+        try:
+            return value * self._familiarity_factor(player, team)
+        except Exception:
+            return value
+
     def _slot_to_position(self, slot):
         """Map lineup slot (F1_LW, D2_R, G1) to position (LW, RD, G)."""
         s = str(slot).upper()
