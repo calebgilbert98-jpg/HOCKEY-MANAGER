@@ -2889,16 +2889,20 @@ class HockeyManagerGUI(tk.Tk):
         elif self.mp_client is not None or self.mp_host is not None:
             # Multiplayer: the team arrives via the host snapshot
             # (_apply_multiplayer_snapshot), never via a picker. Showing
-            # the single-player team dialog here is a dead end. Build
-            # the dashboard now; the snapshot fills in the team and
-            # refreshes the views when it lands.
+            # the single-player team dialog here is a dead end. The
+            # dashboard is built by _apply_multiplayer_snapshot once the
+            # team is known -- building it now (no team, empty league)
+            # crashes and leaves broken views.
             print("Multiplayer mode -- team comes from the host snapshot; "
                   "skipping team selection dialog.")
-            self._finalize_phase2_initialization()
+            self._mp_dashboard_pending = True
             self.deiconify()
-            self._create_main_dashboard()
-            self._apply_phase3_optimizations()
-            self.setup_close_protocol()
+            try:
+                tk.Label(self, text="Syncing with host...",
+                         font=("Segoe UI", 16),
+                         fg="#e8e8e8", bg="#14161b").pack(expand=True)
+            except Exception:
+                pass
             self.update()
         else:
             # For now, skip launcher integration and use simple team selection
@@ -12887,6 +12891,17 @@ class HockeyManagerGUI(tk.Tk):
                             "Spectating -- management actions are disabled.")
                     except Exception:
                         pass
+            if getattr(self, "_mp_dashboard_pending", False):
+                self._mp_dashboard_pending = False
+                try:
+                    for _w in self.winfo_children():
+                        _w.destroy()
+                except Exception:
+                    pass
+                self._finalize_phase2_initialization()
+                self._create_main_dashboard()
+                self._apply_phase3_optimizations()
+                self.setup_close_protocol()
             self._update_team_colors()
             self.update_all_views()
             if label:
