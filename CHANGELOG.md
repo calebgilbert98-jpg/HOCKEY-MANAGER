@@ -3,6 +3,15 @@
 All notable changes to Puck Dynasty are documented here. Dates are in
 America/Halifax time.
 
+## [0.25.0] - 2026-10-05 (web-ui experimental)
+
+### Highlights
+- At-a-glance hub panels: next game preview, division standings, team stat leaders, recent form — fills 1080p with no scrolling.
+- 20 NHL 14-style player portraits, deterministically assigned; shown on roster, hub leaders, and lines editor.
+- Watch Game tile removed from hub; new Settings toggle: Watch games vs Quick sim all (Continue respects it).
+- Launcher 1:1 parity with v0.18.4: Create GM tab (profile, presets), Advanced Setup tab, Multiplayer tab (host/join), save delete/import.
+- Game window opens maximized; hub shows loading gate instead of staggered hero load.
+
 ## [0.13.0] - 2026-10-01
 
 ### Highlights
