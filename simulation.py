@@ -6231,6 +6231,11 @@ class GameSim:
 
     def _update_faceoff_stats(self, home_player, away_player, winner_player, outcome):
         """Update faceoff statistics for both players."""
+        # Guard: a faceoff participant may not be registered in game_stats
+        # (e.g. stale reference); skip unregistered players rather than crash.
+        for p in (home_player, away_player):
+            if p.id not in self.game_stats:
+                return
         # Update basic faceoff stats
         self.game_stats[home_player.id]['faceoffs_taken'] += 1
         self.game_stats[away_player.id]['faceoffs_taken'] += 1
