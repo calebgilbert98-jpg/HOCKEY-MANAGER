@@ -1,72 +1,110 @@
-/* Puck Dynasty web development screen */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
-
+/* Puck Dynasty web development — NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .dev-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
-.dev-main h1 { font-size: 26px; margin-bottom: 18px; }
 .dev-main section { margin-bottom: 30px; }
-.dev-main h2 { font-size: 18px; margin-bottom: 12px; }
-.dev-main h2 .sub { font-size: 12px; color: var(--dim); font-weight: 600; margin-left: 6px; }
+.dev-main h2 {
+  font-family: var(--nhl-cond);
+  font-size: 19px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--text);
+  margin-bottom: 12px; display: flex; align-items: center; gap: 10px;
+}
+.dev-main h2::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
+}
+.dev-main h2 .sub {
+  font-family: var(--font); font-size: 12px; color: var(--dim);
+  font-weight: 600; margin-left: 6px; letter-spacing: 0; text-transform: none;
+}
 
+/* player cards: NHL 14 pattern — big OVR block, condensed uppercase name */
 .prog-grid {
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
 }
 .prog-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 16px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r);
+  padding: 14px 16px;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
 .prog-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.35);
-  border-color: rgba(59,130,246,.4);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+  border-color: var(--nhl-blue); border-left-color: var(--nhl-blue);
 }
 .prog-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .ov {
-  width: 46px; height: 46px; border-radius: 10px; flex: none;
+  width: 54px; height: 54px; border-radius: var(--nhl-r-sm); flex: none;
   display: flex; align-items: center; justify-content: center;
-  font-size: 19px; font-weight: 800; color: #fff; background: var(--c, #3B82F6);
+  font-family: var(--nhl-cond); font-size: 24px; font-weight: 900;
+  color: #fff; background: var(--c, var(--nhl-blue));
   box-shadow: 0 2px 10px rgba(0,0,0,.4);
 }
-.prog-name { font-size: 15px; font-weight: 700; }
+.prog-name {
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff;
+}
 .prog-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
-.prog-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.prog-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .tag {
-  font-size: 12px; font-weight: 700; border-radius: 8px; padding: 3px 10px;
-  background: rgba(59,130,246,.15); color: #93c5fd;
-  border: 1px solid rgba(59,130,246,.3);
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase;
+  border-radius: var(--nhl-r-sm); padding: 3px 10px;
+  background: var(--nhl-blue-soft); color: #93c5fd;
+  border: 1px solid var(--nhl-line-blue);
 }
 .tag.intensity { background: rgba(232,185,60,.12); color: var(--gold); border-color: rgba(232,185,60,.3); }
 .tag.assigned { background: rgba(255,255,255,.05); color: var(--dim); border-color: rgba(255,255,255,.12); }
 
-.prospect-list { display: flex; flex-direction: column; gap: 8px; }
+/* prospect watchlist rows */
+.prospect-list { display: flex; flex-direction: column; gap: 6px; }
 .prospect-row {
-  display: grid; grid-template-columns: 44px 1fr auto auto auto; gap: 14px; align-items: center;
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 10px;
-  padding: 10px 16px; transition: transform .14s ease, box-shadow .14s ease;
+  display: grid; grid-template-columns: 50px 1fr auto auto auto; gap: 14px; align-items: center;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 10px 16px 10px 10px;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
-.prospect-row:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
+.prospect-row:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0,0,0,.45);
+  border-color: var(--nhl-line-blue);
+}
 .pr-ov {
-  width: 40px; height: 40px; border-radius: 9px;
+  width: 50px; height: 50px; border-radius: var(--nhl-r-sm);
   display: flex; align-items: center; justify-content: center;
-  font-size: 17px; font-weight: 800; color: #fff; background: var(--c, #3B82F6);
+  font-family: var(--nhl-cond); font-size: 21px; font-weight: 900;
+  color: #fff; background: var(--c, var(--nhl-blue));
 }
-.pr-name { font-size: 14.5px; font-weight: 700; }
+.pr-name {
+  font-family: var(--nhl-cond);
+  font-size: 16px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .7px; color: #fff;
+}
 .pr-sub { font-size: 12px; color: var(--dim); margin-top: 1px; }
-.pr-squad { font-size: 11px; font-weight: 800; color: var(--dim); letter-spacing: 1px; }
+.pr-squad {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; color: var(--dim); letter-spacing: 2px;
+}
 .pr-squad.ahl { color: #93c5fd; }
 .pr-bar { width: 120px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
 .pr-bar span { display: block; height: 100%; border-radius: 3px; }
 .pr-badge {
-  font-size: 11px; font-weight: 700; color: #93c5fd;
-  background: rgba(59,130,246,.15); border: 1px solid rgba(59,130,246,.3);
-  border-radius: 8px; padding: 2px 9px;
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: #93c5fd;
+  background: var(--nhl-blue-soft); border: 1px solid var(--nhl-line-blue);
+  border-radius: var(--nhl-r-sm); padding: 2px 9px;
 }
 
+/* empty states match the kit's .empty-note (class name kept for JS toggles) */
 .empty {
-  background: rgba(255,255,255,.03); border: 1px dashed rgba(255,255,255,.12);
-  border-radius: 12px; padding: 26px; text-align: center;
-  color: var(--dim); font-size: 14px;
+  padding: 28px 20px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
 }

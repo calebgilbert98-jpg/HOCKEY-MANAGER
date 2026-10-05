@@ -1,22 +1,29 @@
-/* Puck Dynasty web settings styles */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty — Game Settings · NHL 14 broadcast reskin */
+/* Kit components (hub.css) supply tokens; this file styles page-specific selectors. */
+
 .settings-main { max-width: 980px; margin: 0 auto; padding: 6px 24px 40px; }
-.settings-main h1 { font-size: 26px; margin-bottom: 6px; }
-.set-sub { color: var(--dim); font-size: 13.5px; margin-bottom: 18px; max-width: 640px; line-height: 1.5; }
+.set-sub { color: var(--dim); font-size: 13.5px; margin-bottom: 18px; max-width: 640px; line-height: 1.5; font-weight: 600; }
 .set-ro {
-  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px;
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px;
   color: var(--dim); border: 1px solid rgba(255,255,255,.15);
-  border-radius: 10px; padding: 4px 12px;
+  border-radius: var(--nhl-r-sm); padding: 4px 12px;
 }
 .set-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
 .set-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
-  padding: 18px; transition: transform .14s ease, box-shadow .14s ease;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 18px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
-.set-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,.5); }
-.set-card h2 { font-size: 15px; margin-bottom: 10px; letter-spacing: .3px; }
+.set-card:hover { transform: translateY(-3px); border-color: var(--nhl-line-blue); box-shadow: 0 10px 26px rgba(0,0,0,.5); }
+.set-card h2 {
+  font-family: var(--nhl-cond);
+  font-size: 16px; font-weight: 800; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--dim);
+  margin: 0 0 10px; display: flex; align-items: center; gap: 10px;
+}
+.set-card h2::after { content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent); }
 .set-row {
   display: flex; justify-content: space-between; align-items: center; gap: 10px;
   font-size: 13.5px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.05);
@@ -24,6 +31,6 @@
 .set-row:first-of-type { border-top: none; }
 .set-row span { color: var(--dim); }
 .set-val { font-weight: 700; text-align: right; }
-.set-val.on { color: #4CAF50; }
+.set-val.on { color: #4ade80; }
 .set-val.off { color: var(--dim); }
 .set-val.unknown { color: var(--gold); font-weight: 600; }

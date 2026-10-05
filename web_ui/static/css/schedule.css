@@ -1,21 +1,47 @@
-/* Puck Dynasty web schedule styles */
+/* Puck Dynasty web schedule styles — NHL 14 broadcast skin.
+   Game rows reskinned as broadcast panels; dates in condensed type. */
+
 .sched-main { max-width: 760px; margin: 0 auto; padding: 6px 24px 40px; }
-.sched-main h1 { font-size: 26px; margin-bottom: 14px; }
 .game-list { display: flex; flex-direction: column; gap: 8px; }
 .game-row {
   display: flex; align-items: center; gap: 16px;
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 13px 16px; transition: transform .14s ease;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 13px 16px;
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease;
 }
-.game-row:hover { transform: translateY(-2px); }
-.g-date { font-size: 13px; color: var(--dim); font-weight: 600; width: 86px; flex: none; }
+.game-row:hover {
+  transform: translateY(-2px);
+  border-color: var(--nhl-blue);
+  box-shadow: 0 8px 22px rgba(0,0,0,.5), var(--nhl-glow);
+}
+.g-date {
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.2px; color: var(--dim);
+  width: 92px; flex: none;
+}
 .g-match { flex: 1; font-size: 15px; }
 .g-team { font-weight: 700; }
 .g-team.opp { color: var(--dim); font-weight: 600; }
-.g-vs { color: var(--dim); margin: 0 8px; font-size: 13px; }
+.g-vs { color: var(--dimmer); margin: 0 8px; font-size: 13px; }
 .g-tag {
-  font-size: 11px; font-weight: 700; border-radius: 8px; padding: 3px 9px;
-  background: rgba(255,255,255,.08); color: var(--dim); flex: none;
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.2px;
+  border-radius: var(--nhl-r-sm); padding: 3px 9px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--nhl-line); color: var(--dim); flex: none;
 }
-.g-tag.home { background: rgba(59,130,246,.18); color: #93c5fd; }
+.g-tag.home {
+  background: var(--nhl-blue-soft); color: #93c5fd;
+  border-color: var(--nhl-line-blue);
+}
+.empty {
+  padding: 28px 20px; text-align: center;
+  font-family: var(--nhl-cond);
+  font-size: 15px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--dimmer);
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
+}

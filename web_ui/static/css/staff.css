@@ -1,41 +1,50 @@
-/* Puck Dynasty web staff styles */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty web staff — NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .staff-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
-.staff-main h1 { font-size: 26px; margin-bottom: 16px; }
 .role-group { margin-bottom: 22px; }
 .role-title {
-  font-size: 14px; text-transform: uppercase; letter-spacing: 1.5px;
-  color: var(--dim); font-weight: 700; margin-bottom: 10px;
-  display: flex; align-items: center; gap: 10px;
+  font-family: var(--nhl-cond);
+  font-size: 16px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--text);
+  margin-bottom: 10px; display: flex; align-items: center; gap: 10px;
 }
 .role-title .count {
-  background: rgba(255,255,255,.08); border-radius: 10px;
-  padding: 1px 9px; font-size: 11px;
+  font-family: var(--nhl-cond);
+  background: var(--nhl-blue-soft); color: #93c5fd;
+  border: 1px solid var(--nhl-line-blue);
+  border-radius: var(--nhl-r-sm); padding: 1px 9px; font-size: 12px;
 }
 .staff-grid {
   display: grid; gap: 12px;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 }
+/* staff cards: NHL 14 pattern — big rating block, condensed uppercase name */
 .staff-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 14px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r);
+  padding: 14px 16px;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
 .staff-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.3);
-  border-color: rgba(59,130,246,.35);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+  border-color: var(--nhl-blue); border-left-color: var(--nhl-blue);
 }
 .s-head { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; }
 .s-rt {
-  width: 46px; height: 46px; border-radius: 10px; flex: none;
+  width: 54px; height: 54px; border-radius: var(--nhl-r-sm); flex: none;
   display: flex; align-items: center; justify-content: center;
-  font-size: 19px; font-weight: 800; color: #fff;
-  background: var(--c, #666);
+  font-family: var(--nhl-cond); font-size: 24px; font-weight: 900;
+  color: #fff; background: var(--c, #666);
   box-shadow: 0 2px 10px rgba(0,0,0,.4);
 }
-.s-name { font-size: 15px; font-weight: 700; }
+.s-name {
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff;
+}
 .s-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
 .s-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
 .s-bar span { display: block; height: 100%; border-radius: 3px; }
@@ -43,5 +52,15 @@
   display: flex; gap: 14px; margin-top: 10px;
   font-size: 12px; color: var(--dim);
 }
-.s-meta b { color: var(--text); font-weight: 700; }
-.staff-empty { color: var(--dim); font-size: 14px; padding: 24px 0; }
+.s-meta b {
+  font-family: var(--nhl-cond); color: var(--text);
+  font-weight: 800; font-size: 14px; letter-spacing: .5px;
+}
+/* empty state matches the kit's .empty-note (class name kept for JS) */
+.staff-empty {
+  padding: 28px 20px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
+}

@@ -1,11 +1,10 @@
-/* Puck Dynasty web save/load styles */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty — Save / Load · NHL 14 broadcast reskin */
+/* Kit components (hub.css) supply tokens; this file styles page-specific selectors. */
+
 .save-main { max-width: 980px; margin: 0 auto; padding: 6px 24px 40px; }
-.save-main h1 { font-size: 26px; margin-bottom: 16px; }
 .save-panel {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
   padding: 18px; margin-bottom: 18px;
 }
 .save-row {
@@ -13,11 +12,31 @@
   font-size: 14px; padding: 8px 0; border-top: 1px solid rgba(255,255,255,.05);
 }
 .save-row:first-child { border-top: none; }
-.save-row span { color: var(--dim); }
+.save-row span { color: var(--dim); font-weight: 600; }
 .save-row b { font-weight: 700; text-align: right; word-break: break-all; }
+
+/* broadcast tiles: angular, condensed uppercase, blue leading edge */
 .save-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.save-tiles .tile { min-height: 150px; }
-.save-status { margin-top: 16px; font-size: 14px; color: var(--dim); min-height: 22px; }
-.save-status.ok { color: #4CAF50; }
+.save-tiles .tile {
+  border-radius: var(--nhl-r); border: 1px solid var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  min-height: 150px; padding: 22px; cursor: pointer;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+}
+.save-tiles .tile::before, .save-tiles .tile::after { display: none; }
+.save-tiles .tile:hover {
+  transform: translateY(-3px); border-color: var(--nhl-blue);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+}
+.save-tiles .tile .icon { font-size: 30px; margin-bottom: 10px; }
+.save-tiles .tile h3 {
+  font-family: var(--nhl-cond);
+  font-size: 24px; font-weight: 900; letter-spacing: 1.5px;
+  text-transform: uppercase; color: #fff; margin: 0 0 6px;
+}
+.save-tiles .tile p { color: var(--dim); font-size: 13.5px; margin: 0; }
+.save-status { margin-top: 16px; font-size: 14px; color: var(--dim); min-height: 22px; font-weight: 600; }
+.save-status.ok { color: #4ade80; }
 .save-status.err { color: var(--red); }
 @media (max-width: 700px) { .save-tiles { grid-template-columns: 1fr; } }

@@ -1,35 +1,48 @@
-/* Puck Dynasty web history */
+/* Puck Dynasty web history — NHL 14 broadcast skin.
+   Champion + record cards are broadcast panels; years/values in condensed type. */
+
 .history-main {
   max-width: 900px; margin: 0 auto; padding: 6px 32px 40px;
 }
-.history-main h1 { font-size: 26px; margin-bottom: 20px; }
 .section-title {
-  font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
-  color: var(--dim); font-weight: 700; margin: 26px 0 12px;
+  font-family: var(--nhl-cond);
+  font-size: 15px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim);
+  margin: 26px 0 12px;
   display: flex; align-items: center; gap: 8px;
+}
+.section-title::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
 }
 section:first-of-type .section-title { margin-top: 0; }
 
 .champ-list { display: flex; flex-direction: column; gap: 12px; }
 .champ-card {
-  background: linear-gradient(160deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: var(--radius);
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r);
+  box-shadow: 0 4px 18px rgba(0,0,0,.4);
   padding: 18px 22px;
   display: flex; align-items: center; gap: 18px;
   transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
 .champ-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.3);
-  border-color: rgba(59,130,246,.35);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+  border-color: var(--nhl-blue);
 }
 .champ-year {
-  font-size: 15px; font-weight: 800; color: var(--dim);
-  min-width: 52px;
+  font-family: var(--nhl-cond);
+  font-size: 18px; font-weight: 900; letter-spacing: 1px;
+  color: var(--dim); min-width: 56px;
 }
 .champ-cup { font-size: 30px; }
-.champ-team { font-size: 19px; font-weight: 700; }
+.champ-team {
+  font-family: var(--nhl-cond);
+  font-size: 22px; font-weight: 900; text-transform: uppercase;
+  letter-spacing: 1.2px; color: #fff;
+}
 .champ-detail { font-size: 13px; color: var(--dim); margin-top: 3px; }
 .champ-meta {
   margin-left: auto; text-align: right; font-size: 12.5px; color: var(--dim);
@@ -42,33 +55,43 @@ section:first-of-type .section-title { margin-top: 0; }
   gap: 12px;
 }
 .record-card {
-  background: linear-gradient(160deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: var(--radius); padding: 16px 18px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r); padding: 16px 18px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4);
   transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
 .record-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5);
-  border-color: rgba(59,130,246,.35);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+  border-color: var(--nhl-blue);
 }
-.record-label { font-size: 12.5px; color: var(--dim); font-weight: 600; margin-bottom: 6px; }
-.record-value { font-size: 24px; font-weight: 800; }
+.record-label {
+  font-family: var(--nhl-cond);
+  font-size: 12.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.8px; color: var(--dim); margin-bottom: 6px;
+}
+.record-value {
+  font-family: var(--nhl-cond);
+  font-size: 30px; font-weight: 900; color: #fff;
+}
 .record-sub { font-size: 12px; color: var(--dim); margin-top: 4px; }
 
 .empty-wrap { display: flex; justify-content: center; padding: 60px 0; }
 .empty-card {
   text-align: center; max-width: 420px;
-  background: linear-gradient(160deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: var(--radius); padding: 44px 36px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r); padding: 44px 36px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4);
 }
 .empty-icon { font-size: 46px; margin-bottom: 14px; }
-.empty-card h2 { font-size: 22px; margin-bottom: 10px; }
+.empty-card h2 {
+  font-family: var(--nhl-cond);
+  font-size: 22px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.5px; margin-bottom: 10px;
+}
 .empty-card p { color: var(--dim); font-size: 14px; line-height: 1.6; }
-
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
 
 @media (max-width: 900px) {
   .history-main { padding: 6px 16px 32px; }

@@ -1,57 +1,63 @@
-/* Puck Dynasty — finances screen (matches hub.css visual language) */
-.back {
-  color: var(--dim); text-decoration: none; font-weight: 700; font-size: 15px;
-}
-.back:hover { color: var(--text); }
-
+/* Puck Dynasty — finances: NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .fin-main {
   max-width: 980px; margin: 0 auto; padding: 6px 32px 32px;
   display: flex; flex-direction: column; gap: 18px;
 }
-.fin-main h1 { font-size: 30px; letter-spacing: .3px; }
 
-/* hero cap card */
-.fin-hero {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: var(--radius); padding: 26px;
-  transition: transform .16s ease, box-shadow .16s ease;
+/* hero cap card: kit .bpanel (see template) supplies the frame */
+.fin-hero { position: relative; overflow: hidden; }
+.fin-hero::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 3px;
+  background: var(--nhl-blue); box-shadow: 0 0 12px rgba(59,130,246,.7);
 }
-.fin-hero:hover { transform: translateY(-2px); box-shadow: 0 12px 32px rgba(0,0,0,.5); }
 .fin-status {
-  display: inline-block; font-size: 12px; font-weight: 800;
-  text-transform: uppercase; letter-spacing: 1.5px;
-  padding: 5px 14px; border-radius: 20px; margin-bottom: 18px;
+  display: inline-block;
+  font-family: var(--nhl-cond);
+  font-size: 12.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.8px; padding: 6px 14px;
+  border-radius: var(--nhl-r-sm); margin-bottom: 18px;
+  border: 1px solid transparent;
 }
-.fin-status.comfortable { background: rgba(52,211,153,.15); color: #34d399; }
-.fin-status.tight { background: rgba(232,185,60,.15); color: var(--gold); }
-.fin-status.over { background: rgba(231,76,60,.15); color: var(--red); }
+.fin-status.comfortable { background: rgba(52,211,153,.15); color: #34d399; border-color: rgba(52,211,153,.35); }
+.fin-status.tight { background: rgba(232,185,60,.15); color: var(--gold); border-color: rgba(232,185,60,.35); }
+.fin-status.over { background: rgba(231,76,60,.15); color: var(--red); border-color: rgba(231,76,60,.4); }
 
+/* broadcast stat strip: condensed display numbers */
 .fin-numbers {
   display: flex; gap: 40px; align-items: baseline; margin-bottom: 20px;
   flex-wrap: wrap;
 }
 .fin-number { display: flex; flex-direction: column; gap: 4px; }
-.fin-label { font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--dim); font-weight: 700; }
-.fin-value { font-size: 30px; font-weight: 800; }
-.fin-value.big { font-size: 46px; }
+.fin-label {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim);
+}
+.fin-value {
+  font-family: var(--nhl-cond);
+  font-size: 32px; font-weight: 800; letter-spacing: .5px; line-height: 1;
+}
+.fin-value.big { font-size: 52px; font-weight: 900; }
 .fin-value.comfortable { color: #34d399; }
 .fin-value.tight { color: var(--gold); }
 .fin-value.over { color: var(--red); }
 
-/* gauge bar */
+/* cap gauge: angular broadcast bar */
 .gauge {
-  position: relative; height: 22px; border-radius: 11px;
+  position: relative; height: 18px;
+  border-radius: var(--nhl-r-sm);
   background: rgba(255,255,255,.06); overflow: hidden;
+  border: 1px solid rgba(255,255,255,.05);
 }
 .gauge-fill {
-  height: 100%; border-radius: 11px; width: 0;
+  height: 100%; border-radius: 2px; width: 0;
   transition: width .6s ease;
   background: linear-gradient(90deg, #34d399, #10b981);
 }
 .gauge-fill.tight { background: linear-gradient(90deg, var(--gold), #d97706); }
-.gauge-fill.over { background: linear-gradient(90deg, var(--red), #b91c1c); }
-.gauge-fill.budget { background: linear-gradient(90deg, var(--accent), var(--accent-dim)); }
+.gauge-fill.over { background: linear-gradient(90deg, var(--red), var(--red-deep)); }
+.gauge-fill.budget { background: linear-gradient(90deg, var(--nhl-blue), var(--accent-dim)); }
 .gauge-floor {
   position: absolute; top: 0; bottom: 0; width: 2px;
   background: rgba(255,255,255,.45);
@@ -73,28 +79,43 @@
   border-top: 1px solid rgba(255,255,255,.05);
 }
 .bd-row:first-of-type { border-top: none; }
-.bd-row .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.bd-row .num {
+  font-family: var(--nhl-cond); font-variant-numeric: tabular-nums;
+  font-weight: 800; font-size: 16px;
+}
 .bd-row.total { font-weight: 800; font-size: 16px; }
-.bd-row.total .num { color: var(--accent); }
+.bd-row.total .num { color: var(--nhl-blue); }
 .bd-row.dead .num { color: var(--gold); }
 .bd-note { font-size: 12px; color: var(--dim); }
 
-/* cap hit table */
+/* cap hit table: broadcast table */
 .fin-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .fin-table th {
-  text-align: left; font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: 1px; color: var(--dim); padding: 8px 10px;
-  border-bottom: 1px solid rgba(255,255,255,.08);
+  font-family: var(--nhl-cond);
+  text-align: left; font-size: 11px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 1.8px; color: var(--dimmer);
+  padding: 10px; border-bottom: 1px solid var(--nhl-line-blue);
+  white-space: nowrap;
 }
-.fin-table td { padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,.04); }
-.fin-table th.num, .fin-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.fin-table td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.fin-table th.num, .fin-table td.num {
+  text-align: right; font-family: var(--nhl-cond);
+  font-variant-numeric: tabular-nums; font-weight: 800; font-size: 15px;
+}
 .fin-table tbody tr { transition: background .12s ease; }
-.fin-table tbody tr:hover { background: rgba(59,130,246,.08); }
-.fin-table .inj { color: var(--red); font-size: 11px; font-weight: 700; margin-left: 6px; }
-.fin-row-me { background: rgba(59,130,246,.05); }
+.fin-table tbody tr:hover { background: rgba(59,130,246,.07); }
+.fin-table tbody tr:last-child td { border-bottom: none; }
+.fin-table .inj {
+  font-family: var(--nhl-cond);
+  color: #f87171; font-size: 10.5px; font-weight: 800; letter-spacing: 1px;
+  margin-left: 8px; padding: 2px 7px;
+  background: rgba(239,68,68,.14); border: 1px solid rgba(239,68,68,.4);
+  border-radius: var(--nhl-r-sm);
+}
+.fin-row-me { background: rgba(59,130,246,.06); border-left: 3px solid var(--nhl-blue); }
 
 @media (max-width: 760px) {
   .fin-grid { grid-template-columns: 1fr; }
-  .fin-value.big { font-size: 34px; }
+  .fin-value.big { font-size: 38px; }
   .fin-numbers { gap: 24px; }
 }

@@ -1,43 +1,93 @@
-/* Puck Dynasty web morale styles */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty web morale — NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .morale-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
 .morale-row { display: flex; gap: 14px; margin-bottom: 14px; }
-.morale-row .morale-card { flex: 1; }
+.morale-row .morale-card { flex: 1; margin-bottom: 0; }
+
+/* dressing-room cards: broadcast panels (kit .bpanel pattern) */
 .morale-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 16px 18px; margin-bottom: 14px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 18px; margin-bottom: 14px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
 }
-.morale-card h3 { margin: 0 0 12px; font-size: 15px; }
-.coach-name { font-size: 17px; font-weight: 800; }
-.coach-style { font-size: 13px; color: var(--accent); font-weight: 700; margin: 2px 0; }
+.morale-card h3 {
+  font-family: var(--nhl-cond);
+  font-size: 15px; font-weight: 800; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--dim);
+  margin: 0 0 14px; display: flex; align-items: center; gap: 10px;
+}
+.morale-card h3::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
+}
+.coach-name {
+  font-family: var(--nhl-cond);
+  font-size: 20px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff;
+}
+.coach-style {
+  font-family: var(--nhl-cond);
+  font-size: 14px; color: var(--nhl-blue); font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase; margin: 4px 0;
+}
 .coach-meta { font-size: 12px; color: var(--dim); margin-top: 8px; }
 .dim { color: var(--dim); font-size: 13px; }
-.action-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+/* GM action buttons: angular condensed filter-pill look */
+.action-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
 .btn {
-  border-radius: 8px; padding: 8px 14px; font-size: 12px; font-weight: 700;
-  cursor: pointer; border: 1px solid rgba(255,255,255,.12);
-  background: transparent; color: var(--text);
+  font-family: var(--nhl-cond);
+  border-radius: var(--nhl-r-sm); padding: 7px 14px;
+  font-size: 12.5px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  cursor: pointer; border: 1px solid rgba(255,255,255,.15);
+  background: transparent; color: var(--dim);
+  transition: all .13s ease;
 }
-.btn:hover { background: rgba(255,255,255,.06); }
+.btn:hover { color: #fff; border-color: rgba(255,255,255,.35); background: rgba(255,255,255,.04); }
 .btn:disabled { opacity: .5; cursor: default; }
+
 .watch-item { font-size: 13px; margin-bottom: 8px; line-height: 1.4; }
 .table-wrap { overflow-x: auto; }
+
+/* player response table: broadcast table */
 .morale-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .morale-table th {
-  text-align: left; padding: 8px 10px; font-size: 11px; color: var(--dim);
-  text-transform: uppercase; letter-spacing: .4px;
+  font-family: var(--nhl-cond);
+  text-align: left; padding: 10px;
+  font-size: 11px; font-weight: 800; letter-spacing: 1.8px;
+  text-transform: uppercase; color: var(--dimmer);
+  border-bottom: 1px solid var(--nhl-line-blue); white-space: nowrap;
 }
-.morale-table td { padding: 8px 10px; border-top: 1px solid rgba(255,255,255,.04); }
-.resp { font-size: 11px; font-weight: 800; border-radius: 6px; padding: 3px 9px; }
-.resp-good { background: rgba(76,175,80,.2); color: #81c784; }
-.resp-neutral { background: rgba(255,255,255,.08); color: var(--dim); }
-.resp-warn { background: rgba(255,193,7,.2); color: #ffd54f; }
-.resp-bad { background: rgba(244,67,54,.2); color: #e57373; }
+.morale-table td { padding: 11px 10px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.morale-table tbody tr { transition: background .12s ease; }
+.morale-table tbody tr:hover { background: rgba(59,130,246,.07); }
+.morale-table tbody tr:last-child td { border-bottom: none; }
+.morale-table td strong {
+  font-family: var(--nhl-cond); font-weight: 800;
+  letter-spacing: .6px; text-transform: uppercase; font-size: 14px;
+}
+/* response badges: sharp, condensed, unmistakable */
+.resp {
+  font-family: var(--nhl-cond);
+  font-size: 11.5px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  border-radius: var(--nhl-r-sm); padding: 3px 10px;
+  border: 1px solid transparent;
+}
+.resp-good { background: rgba(76,175,80,.2); color: #81c784; border-color: rgba(76,175,80,.35); }
+.resp-neutral { background: rgba(255,255,255,.08); color: var(--dim); border-color: rgba(255,255,255,.12); }
+.resp-warn { background: rgba(255,193,7,.2); color: #ffd54f; border-color: rgba(255,193,7,.35); }
+.resp-bad { background: rgba(244,67,54,.2); color: #e57373; border-color: rgba(244,67,54,.4); }
+
 .feed { max-height: 260px; overflow-y: auto; }
 .feed-item { display: flex; gap: 8px; font-size: 13px; margin-bottom: 8px; line-height: 1.4; }
 .feed-icon { font-weight: 800; flex: none; }
 .feed-icon.up { color: #4CAF50; }
 .feed-icon.down { color: #F44336; }
 .hier-row { font-size: 13px; margin-bottom: 6px; }
+.hier-row strong {
+  font-family: var(--nhl-cond);
+  letter-spacing: 1px; text-transform: uppercase; color: var(--nhl-blue);
+}

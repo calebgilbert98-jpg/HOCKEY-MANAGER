@@ -1,82 +1,123 @@
-/* Puck Dynasty web scouting styles */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty web scouting — NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .scout-main { max-width: 960px; margin: 0 auto; padding: 6px 24px 40px; }
-.scout-main h1 { font-size: 26px; margin-bottom: 18px; }
 .scout-main section { margin-bottom: 28px; }
 .sec-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.sec-head h2, .scout-main section > h2 { font-size: 18px; }
+.sec-head h2 {
+  font-family: var(--nhl-cond);
+  font-size: 19px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--text);
+  display: flex; align-items: center; gap: 10px;
+}
 .btn-new {
-  padding: 9px 16px; border: none; border-radius: 10px; cursor: pointer;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #fff; font-size: 13.5px; font-weight: 700;
+  font-family: var(--nhl-cond);
+  padding: 9px 16px; border: none; border-radius: var(--nhl-r); cursor: pointer;
+  background: linear-gradient(135deg, #60a5fa, var(--nhl-blue) 55%, var(--accent-dim));
+  color: #fff; font-size: 13.5px; font-weight: 800;
+  letter-spacing: 1px; text-transform: uppercase;
   transition: transform .15s ease, box-shadow .15s ease;
 }
 .btn-new:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(59,130,246,.45); }
 
+/* assignment + beat cards: NHL 14 panel pattern, blue edge */
 .assign-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
-.assign-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
-  padding: 16px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+.assign-card, .beat-card {
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r);
+  padding: 14px 16px;
+  transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
-.assign-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.3); border-color: rgba(59,130,246,.4); }
-.a-player { font-size: 16px; font-weight: 700; }
-.a-meta { font-size: 12.5px; color: var(--dim); margin: 3px 0 10px; }
+.assign-card:hover, .beat-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
+  border-color: var(--nhl-blue); border-left-color: var(--nhl-blue);
+}
+.a-player {
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff;
+}
+.a-meta { font-size: 12.5px; color: var(--dim); margin: 4px 0 10px; }
 .a-scout { font-size: 13px; color: var(--dim); margin-bottom: 10px; }
 .a-scout b { color: var(--text); }
 .a-progress { display: flex; align-items: center; gap: 10px; }
 .acc {
-  font-size: 13px; font-weight: 800; border-radius: 8px; padding: 3px 10px; flex: none;
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 900; letter-spacing: 1px;
+  border-radius: var(--nhl-r-sm); padding: 3px 10px; flex: none;
   background: rgba(255,255,255,.08); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1);
 }
-.acc.a { background: rgba(52,211,153,.18); color: #34d399; }
-.acc.b { background: rgba(59,130,246,.18); color: #93c5fd; }
-.acc.c { background: rgba(232,185,60,.18); color: var(--gold); }
-.acc.d, .acc.f { background: rgba(231,76,60,.15); color: #f1948a; }
+.acc.a { background: rgba(52,211,153,.18); color: #34d399; border-color: rgba(52,211,153,.35); }
+.acc.b { background: rgba(59,130,246,.18); color: #93c5fd; border-color: rgba(59,130,246,.4); }
+.acc.c { background: rgba(232,185,60,.18); color: var(--gold); border-color: rgba(232,185,60,.35); }
+.acc.d, .acc.f { background: rgba(231,76,60,.15); color: #f1948a; border-color: rgba(231,76,60,.35); }
 .a-detail { font-size: 12px; color: var(--dim); }
 
-.report-list { display: flex; flex-direction: column; gap: 8px; }
+/* scouting reports: sharp broadcast rows, condensed names */
+.report-list { display: flex; flex-direction: column; gap: 6px; }
 .report-row {
   display: flex; align-items: center; gap: 14px;
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 12px 16px; transition: transform .14s ease;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 12px 16px;
+  transition: transform .14s ease, border-color .14s ease;
 }
-.report-row:hover { transform: translateY(-2px); }
-.r-name { font-weight: 700; font-size: 15px; flex: 1; }
-.r-name small { display: block; font-weight: 400; color: var(--dim); font-size: 12px; }
+.report-row:hover { transform: translateY(-2px); border-color: var(--nhl-line-blue); }
+.r-name {
+  font-family: var(--nhl-cond);
+  font-weight: 800; font-size: 16px; text-transform: uppercase;
+  letter-spacing: .7px; color: #fff; flex: 1;
+}
+.r-name small {
+  display: block; font-family: var(--font); font-weight: 400;
+  color: var(--dim); font-size: 12px; text-transform: none;
+  letter-spacing: 0; margin-top: 2px;
+}
 .r-region { font-size: 12.5px; color: var(--dim); width: 170px; flex: none; }
-.r-pot { font-size: 12.5px; color: var(--gold); font-weight: 700; width: 150px; flex: none; }
-.r-done {
-  font-size: 11px; font-weight: 800; border-radius: 8px; padding: 3px 9px; flex: none;
-  background: rgba(52,211,153,.18); color: #34d399;
+.r-pot {
+  font-family: var(--nhl-cond);
+  font-size: 13.5px; color: var(--gold); font-weight: 800;
+  letter-spacing: 1px; text-transform: uppercase; width: 150px; flex: none;
 }
+.r-done {
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+  border-radius: var(--nhl-r-sm); padding: 3px 9px; flex: none;
+  background: rgba(52,211,153,.18); color: #34d399;
+  border: 1px solid rgba(52,211,153,.35);
+}
+/* empty states match the kit's .empty-note (class name kept for JS-rendered states) */
 .empty {
-  color: var(--dim); font-size: 14px; padding: 22px; text-align: center;
-  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--radius);
+  padding: 28px 20px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
 }
 
 .hidden { display: none; }
-.fld-label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); font-weight: 700; margin: 14px 0 6px; }
-.fld {
-  width: 100%; padding: 10px 12px; border-radius: 10px; font-size: 14px;
-  background: var(--card); color: var(--text); border: 1px solid rgba(255,255,255,.12);
+/* form labels condensed; selects use the kit's .nhl input class (see template) */
+.fld-label {
+  display: block;
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim); margin: 14px 0 6px;
 }
 .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
 #assign-msg { margin-top: 12px; }
 #assign-msg.ok { color: #34d399; }
 #assign-msg.err { color: var(--red); }
 
-/* Regional beats */
+/* regional beats */
 .beat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-.beat-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: var(--radius);
-  padding: 14px 16px; transition: transform .14s ease, box-shadow .14s ease;
+.beat-region {
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--nhl-blue); margin-top: 8px;
 }
-.beat-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,.5); }
-.beat-region { font-size: 13.5px; font-weight: 700; color: var(--accent); margin-top: 8px; }
 .beat-idle .beat-region { color: var(--dim); font-weight: 400; }
 #beat-msg.ok { color: #34d399; }
 #beat-msg.err { color: var(--red); }

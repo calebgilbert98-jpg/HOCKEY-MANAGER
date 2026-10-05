@@ -1,14 +1,21 @@
-/* Puck Dynasty Trade Center — single-page builder */
+/* Puck Dynasty Trade Center — NHL 14 broadcast reskin (2026-10-05).
+   Uses ONLY the NHL 14 BROADCAST KIT tokens/components from hub.css
+   (--nhl-bg, --nhl-panel, --nhl-line, --nhl-blue, --nhl-cond, --nhl-r,
+   --nhl-r-sm, --nhl-glow, .bcast-head, .bpanel, .fpills, .nhl-input). */
+
 .trades-main { padding: 6px 32px 40px; max-width: 1400px; margin: 0 auto; }
+
+/* .bcast-head (kit) provides the header band styling; keep flex layout here */
 .trades-head {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: 16px; margin-bottom: 18px;
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
 }
-.trades-hint { color: var(--dim); font-size: 13.5px; margin: 6px 0 0; }
+.trades-hint { color: var(--dim); font-size: 13.5px; margin: 8px 0 0; }
 .retention-pill {
-  flex: none; margin-top: 4px; font-size: 12px; font-weight: 700;
-  color: var(--dim); border: 1px solid rgba(255,255,255,.12);
-  border-radius: 999px; padding: 7px 14px; white-space: nowrap;
+  flex: none; margin-top: 4px;
+  font-family: var(--nhl-cond);
+  font-size: 12.5px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase;
+  color: var(--dim); border: 1px solid rgba(255,255,255,.14);
+  border-radius: var(--nhl-r-sm); padding: 7px 14px; white-space: nowrap;
 }
 .retention-pill.full { color: var(--gold); border-color: var(--gold); }
 
@@ -18,144 +25,173 @@
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-bottom: 10px;
 }
-.team-search {
-  background: var(--card2); color: var(--text);
-  border: 1px solid rgba(255,255,255,.1); border-radius: 10px;
-  padding: 8px 12px; font-size: 13px; width: 240px;
-}
-.team-search:focus { outline: none; border-color: var(--accent); }
+/* .nhl-input (kit) styles #team-search; keep width here */
+.team-search { width: 240px; }
 .team-tiles {
   display: grid; gap: 8px;
   grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   max-height: 190px; overflow-y: auto; padding: 2px;
 }
 .team-tile {
-  position: relative; border-radius: 12px; padding: 10px 8px;
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
+  position: relative; border-radius: var(--nhl-r); padding: 10px 8px;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
   cursor: pointer; text-align: center;
   transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
 .team-tile:hover {
   transform: translateY(-2px);
   box-shadow: 0 8px 20px rgba(0,0,0,.5), 0 0 0 1px rgba(59,130,246,.35);
-  border-color: rgba(59,130,246,.4);
+  border-color: var(--nhl-blue);
 }
 .team-tile.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent), 0 8px 24px rgba(59,130,246,.25);
-  background: linear-gradient(150deg, rgba(59,130,246,.22), var(--card));
+  border-color: var(--nhl-blue);
+  box-shadow: 0 0 0 2px var(--nhl-blue), 0 8px 24px rgba(59,130,246,.25);
+  background: linear-gradient(160deg, rgba(59,130,246,.2), var(--nhl-panel));
 }
-.t-abbr { font-size: 20px; font-weight: 800; letter-spacing: 1px; color: #dbeafe; }
+.t-abbr {
+  font-family: var(--nhl-cond);
+  font-size: 22px; font-weight: 900; letter-spacing: 1.5px; color: #dbeafe;
+}
 .t-name { font-size: 10.5px; color: var(--dim); margin-top: 3px; line-height: 1.25; }
-.t-record { font-size: 10.5px; color: var(--dim); margin-top: 1px; }
+.t-record {
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; letter-spacing: 1px; color: var(--dim); margin-top: 1px;
+}
 .t-block {
-  display: inline-block; margin-top: 5px; font-size: 9.5px; font-weight: 700;
+  display: inline-block; margin-top: 5px; font-size: 9.5px; font-weight: 800; letter-spacing: .8px;
   color: var(--gold); border: 1px solid var(--gold);
-  border-radius: 8px; padding: 1px 7px;
+  border-radius: var(--nhl-r-sm); padding: 1px 7px;
 }
 
-/* ---------- deal columns ---------- */
+/* ---------- deal columns (kit .bpanel class added in HTML for styling) ---------- */
 .trade-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 860px) { .trade-cols { grid-template-columns: 1fr; } }
-.trade-col {
-  background: rgba(255,255,255,.02);
-  border: 1px solid rgba(255,255,255,.07); border-radius: 16px; padding: 16px;
-}
 .col-head { margin-bottom: 10px; }
 .prop-title {
-  font-size: 17px; font-weight: 800; letter-spacing: .8px; text-transform: uppercase;
-  font-stretch: condensed;
+  font-family: var(--nhl-cond);
+  font-size: 19px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: #fff;
 }
 .col-val { font-size: 13px; color: var(--dim); font-weight: 400; margin-left: 8px; letter-spacing: 0; text-transform: none; }
 .col-sub { font-size: 12.5px; color: var(--dim); margin-top: 2px; }
-.sub-label { font-size: 11px; margin: 12px 0 6px; }
+.sub-label { margin: 12px 0 6px; }
 .sub-label:first-of-type { margin-top: 0; }
 .hint-inline { font-weight: 400; text-transform: none; letter-spacing: 0; opacity: .7; }
 .asset-list {
   display: flex; flex-direction: column; gap: 6px;
   max-height: 300px; overflow-y: auto; padding-right: 2px;
 }
-.empty-note { color: var(--dim); font-size: 13px; padding: 10px 4px; }
+/* .empty-note comes from the kit; local fallback removed intentionally */
 
-/* ---------- asset cards ---------- */
+/* ---------- asset cards: kit .pcard pattern (JS-generated markup) ---------- */
 .asset-card {
   display: flex; align-items: center; gap: 10px;
-  background: rgba(255,255,255,.03);
-  border: 1px solid rgba(255,255,255,.07);
-  border-radius: 12px; padding: 9px 12px; cursor: pointer;
-  transition: border-color .14s ease, background .14s ease, transform .14s ease;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r); padding: 8px 12px 8px 8px; cursor: pointer;
+  transition: border-color .14s ease, background .14s ease, transform .14s ease, box-shadow .14s ease;
   position: relative; flex-wrap: wrap;
 }
-.asset-card:hover { border-color: rgba(59,130,246,.5); transform: translateX(2px); }
+.asset-card:hover {
+  border-color: var(--nhl-blue); transform: translateX(2px);
+  box-shadow: 0 8px 20px rgba(0,0,0,.4), var(--nhl-glow);
+}
 .asset-card.in-deal {
-  border-color: var(--accent);
-  background: rgba(59,130,246,.12);
-  box-shadow: 0 0 0 1px var(--accent);
+  border-color: var(--nhl-blue);
+  background: linear-gradient(160deg, rgba(59,130,246,.18), var(--nhl-panel));
+  box-shadow: var(--nhl-glow);
 }
-.asset-card.pick .ac-name { font-weight: 600; }
+.asset-card.pick { border-left-color: var(--gold); }
+.asset-card.pick .ac-name { font-weight: 700; }
+/* big OVR block, kit .pcard-ovr style */
 .ac-ovr {
-  font-size: 17px; font-weight: 800; min-width: 36px; text-align: center;
-  border-radius: 9px; padding: 3px 5px; flex: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 52px; padding: 7px 4px; flex: none;
+  font-family: var(--nhl-cond); font-size: 19px; font-weight: 900; line-height: 1;
+  background: var(--nhl-blue-soft); border-right: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r-sm);
 }
-.ovr-hi { background: rgba(76,175,80,.18); color: #7ee787; }
-.ovr-mid { background: rgba(232,185,60,.16); color: #f0c453; }
-.ovr-lo { background: rgba(231,76,60,.16); color: #f08a80; }
+.ovr-hi { color: var(--green); }
+.ovr-mid { color: var(--gold); }
+.ovr-lo { color: var(--red); }
 .ac-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.ac-name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-name {
+  font-family: var(--nhl-cond);
+  font-size: 15.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .7px; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .ac-sub { font-size: 11.5px; color: var(--dim); }
-.ac-inj { font-size: 10px; font-weight: 800; color: var(--red); flex: none; }
-.ac-level { font-size: 10px; font-weight: 700; color: var(--dim); flex: none; }
+.ac-inj { font-size: 10px; font-weight: 800; letter-spacing: 1px; color: var(--red); flex: none; }
+.ac-level {
+  font-family: var(--nhl-cond);
+  font-size: 10.5px; font-weight: 800; letter-spacing: 1.2px; color: var(--dim); flex: none;
+}
 .p-c { color: var(--gold); font-weight: 800; }
 .ac-check {
-  flex: none; width: 22px; height: 22px; border-radius: 50%;
-  background: var(--accent); color: #fff; font-size: 13px; font-weight: 800;
+  flex: none; width: 22px; height: 22px; border-radius: var(--nhl-r-sm);
+  background: var(--nhl-blue); color: #fff; font-size: 13px; font-weight: 800;
   display: flex; align-items: center; justify-content: center;
 }
 
-/* terms (retention / protection) */
+/* ---------- terms (retention / protection): .nhl-select look, JS-generated markup ---------- */
 .terms-row {
   display: flex; align-items: center; gap: 8px;
   width: 100%; padding: 4px 0 2px 46px;
   font-size: 12px; color: var(--dim);
 }
 .terms-select {
-  background: var(--card2); color: var(--text);
-  border: 1px solid rgba(59,130,246,.4); border-radius: 8px;
-  padding: 5px 9px; font-size: 12px; cursor: pointer;
+  background-color: #0b1220; color: var(--text);
+  border: 1px solid rgba(59,130,246,.4); border-radius: var(--nhl-r);
+  padding: 5px 28px 5px 9px; font-size: 12px; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2393c5fd' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
 }
+.terms-select:focus { outline: none; border-color: var(--nhl-blue); box-shadow: 0 0 0 1px rgba(59,130,246,.55); }
+.terms-select option { background: #0d1424; color: var(--text); }
 .terms-select option:disabled { color: #666; }
 .terms-amt { color: var(--gold); font-size: 11.5px; }
 
-/* ---------- verdict ---------- */
+/* ---------- verdict (broadcast bar) ---------- */
 .verdict {
   display: flex; gap: 16px; align-items: flex-start;
   margin-top: 18px; padding: 16px 18px;
-  background: rgba(255,255,255,.03);
-  border: 1px solid rgba(255,255,255,.09); border-radius: 16px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
 }
 .verdict-badge {
-  flex: none; font-size: 14px; font-weight: 800; letter-spacing: .6px;
-  text-transform: uppercase; border-radius: 11px; padding: 10px 16px;
-  border: 1px solid rgba(255,255,255,.15); color: var(--dim);
-  font-stretch: condensed;
+  flex: none;
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 900; letter-spacing: 1.5px; text-transform: uppercase;
+  border-radius: var(--nhl-r-sm); padding: 9px 18px;
+  border: 1px solid var(--nhl-line); color: var(--dim);
 }
-.verdict-badge.accept { color: #4CAF50; border-color: #4CAF50; background: rgba(76,175,80,.1); }
-.verdict-badge.reject { color: var(--red); border-color: var(--red); background: rgba(231,76,60,.1); }
-.verdict-badge.counter { color: var(--gold); border-color: var(--gold); background: rgba(232,185,60,.1); }
+.verdict-badge.accept { background: rgba(52,211,153,.16); color: #4ade80; border-color: rgba(74,222,128,.4); }
+.verdict-badge.reject { background: rgba(239,68,68,.14); color: #f87171; border-color: rgba(239,68,68,.4); }
+.verdict-badge.counter { background: rgba(251,191,36,.13); color: #fbbf24; border-color: rgba(251,191,36,.4); }
 .verdict-body { flex: 1; min-width: 0; }
 .verdict-reason { font-size: 14px; line-height: 1.5; }
 .verdict-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .vbar-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
-.vbar-label { width: 86px; flex: none; }
-.vbar-track {
-  flex: 1; height: 10px; border-radius: 6px;
-  background: rgba(255,255,255,.06); overflow: hidden;
+.vbar-label {
+  width: 86px; flex: none;
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
 }
-.vbar-fill { height: 100%; border-radius: 6px; transition: width .3s ease; }
-.vbar-fill.give { background: #4CAF50; }
-.vbar-fill.get { background: var(--accent); }
-.vbar-pts { width: 90px; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+.vbar-track {
+  flex: 1; height: 6px; border-radius: 3px;
+  background: rgba(255,255,255,.09); overflow: hidden;
+}
+.vbar-fill { height: 100%; border-radius: 3px; transition: width .3s ease; }
+.vbar-fill.give { background: var(--green); box-shadow: 0 0 6px rgba(74,222,128,.6); }
+.vbar-fill.get { background: var(--nhl-blue); box-shadow: 0 0 6px rgba(59,130,246,.6); }
+.vbar-pts {
+  width: 90px; flex: none; text-align: right;
+  font-family: var(--nhl-cond); font-weight: 800; font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 .verdict-terms {
   margin-top: 10px; font-size: 12.5px; color: var(--dim);
   display: flex; flex-direction: column; gap: 4px; line-height: 1.45;
@@ -163,17 +199,18 @@
 .verdict-terms[hidden] { display: none; }
 
 /* ---------- actions ---------- */
+/* hub .btn-primary is full-width; constrain it for the propose button */
+.btn-primary.btn-propose { width: auto; border-radius: var(--nhl-r); }
 .trade-actions {
   display: flex; align-items: center; justify-content: space-between;
   gap: 14px; margin-top: 16px;
 }
 .trade-actions .prop-note { margin-top: 0; flex: 1; }
 .btn-propose {
-  flex: none; font-size: 15px; font-weight: 800; letter-spacing: .6px;
-  text-transform: uppercase; font-stretch: condensed;
-  padding: 13px 34px;
+  flex: none; font-size: 15px; font-weight: 800; letter-spacing: 1.4px;
+  text-transform: uppercase; padding: 12px 34px;
 }
 .btn-propose:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 .prop-note { font-size: 13px; min-height: 18px; color: var(--dim); }
-.prop-note.ok { color: #4CAF50; }
+.prop-note.ok { color: var(--green); }
 .prop-note.err { color: var(--red); }

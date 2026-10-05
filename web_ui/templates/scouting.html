@@ -16,7 +16,10 @@
 </header>
 
 <main class="scout-main">
-  <h1 class="page-title">Scouting</h1>
+  <div class="bcast-head">
+    <div class="bcast-kicker">Draft &amp; Prospects</div>
+    <h1 class="bcast-title">Scouting</h1>
+  </div>
 
   <section>
     <div class="sec-head">
@@ -46,9 +49,9 @@
     <h2>New Scouting Assignment</h2>
     <p class="modal-sub">Assign a scout to evaluate a draft-eligible prospect.</p>
     <label class="fld-label">Prospect</label>
-    <select id="prospect-sel" class="fld"></select>
+    <select id="prospect-sel" class="fld nhl"></select>
     <label class="fld-label">Scout</label>
-    <select id="scout-sel" class="fld"></select>
+    <select id="scout-sel" class="fld nhl"></select>
     <div class="modal-actions">
       <button class="btn-auto" id="assign-btn">Assign</button>
       <button class="modal-close" id="cancel-btn">Cancel</button>
@@ -62,9 +65,9 @@
     <h2>Assign Regional Beat</h2>
     <p class="modal-sub">Send a scout to cover a region or pro league. The assignment lasts until you change or recall it.</p>
     <label class="fld-label">Scout</label>
-    <select id="beat-scout-sel" class="fld"></select>
+    <select id="beat-scout-sel" class="fld nhl"></select>
     <label class="fld-label">Region / League</label>
-    <select id="beat-region-sel" class="fld"></select>
+    <select id="beat-region-sel" class="fld nhl"></select>
     <div class="modal-actions">
       <button class="btn-auto" id="beat-assign-btn">Assign</button>
       <button class="btn-ghost" id="beat-recall-btn">Recall</button>

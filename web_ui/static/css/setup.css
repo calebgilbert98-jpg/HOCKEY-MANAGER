@@ -1,4 +1,5 @@
-/* Puck Dynasty setup — premium game launcher */
+/* Puck Dynasty setup — NHL 14 broadcast reskin */
+/* Near-black launch screen, condensed broadcast type, angular 4px edges. */
 .setup-wrap {
   min-height: 100vh; display: flex; flex-direction: column; align-items: center;
   padding: 56px 20px 40px; position: relative; overflow: hidden;
@@ -17,21 +18,24 @@
   -webkit-mask-image: radial-gradient(800px 480px at 50% 22%, #000 25%, transparent 75%);
 }
 .setup-hero { text-align: center; margin-bottom: 40px; position: relative; }
+.setup-kicker { margin-bottom: 10px; }
 .setup-crest {
-  width: 84px; height: 84px; margin: 0 auto 18px; border-radius: 22px;
-  background: linear-gradient(135deg, #60a5fa 0%, var(--accent) 45%, var(--accent-deep) 100%);
+  width: 84px; height: 84px; margin: 0 auto 18px; border-radius: var(--nhl-r);
+  background: linear-gradient(135deg, #60a5fa 0%, var(--nhl-blue) 45%, var(--accent-deep) 100%);
   display: flex; align-items: center; justify-content: center; font-size: 44px;
   box-shadow: 0 12px 44px rgba(59,130,246,.5), inset 0 2px 0 rgba(255,255,255,.35);
+  border: 1px solid var(--nhl-line-blue);
   animation: crestFloat 5s ease-in-out infinite;
 }
 @keyframes crestFloat { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
 .setup-hero h1 {
-  font-size: 52px; font-weight: 800; letter-spacing: .5px; margin: 0 0 8px; line-height: 1.05;
-  background: linear-gradient(180deg, #ffffff 30%, #a9c4f5 100%);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  font-family: var(--nhl-cond);
+  font-size: 56px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
+  margin: 0 0 8px; line-height: 1; color: #fff;
+  text-shadow: 0 3px 14px rgba(0,0,0,.5);
 }
 .setup-hero .tagline { color: var(--dim); font-size: 16px; margin: 0; font-weight: 500; letter-spacing: .3px; }
-.setup-hero .tagline b { color: var(--accent); font-weight: 800; }
+.setup-hero .tagline b { color: var(--nhl-blue); font-weight: 800; }
 
 .setup-cols {
   display: flex; gap: 22px; flex-wrap: wrap; justify-content: center;
@@ -40,23 +44,30 @@
 .setup-card {
   background:
     linear-gradient(165deg, rgba(255,255,255,.055) 0%, transparent 42%),
-    linear-gradient(160deg, var(--card2), var(--card) 80%);
+    linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel) 80%);
   border: 1px solid rgba(255,255,255,.09);
   box-shadow: 0 10px 34px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.07);
-  border-radius: 18px; padding: 28px; width: 400px; max-width: 100%;
+  border-radius: var(--nhl-r); padding: 28px; width: 400px; max-width: 100%;
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
-.setup-card:hover { transform: translateY(-3px); border-color: rgba(59,130,246,.35);
-  box-shadow: 0 16px 44px rgba(0,0,0,.55), 0 0 28px rgba(59,130,246,.12); }
-.setup-card h2 { margin: 0 0 6px; font-size: 21px; font-weight: 800; letter-spacing: .2px; }
+.setup-card:hover { transform: translateY(-3px); border-color: var(--nhl-line-blue);
+  box-shadow: 0 16px 44px rgba(0,0,0,.55), var(--nhl-glow); }
+.setup-card h2 {
+  margin: 0 0 6px; font-family: var(--nhl-cond);
+  font-size: 22px; font-weight: 900; letter-spacing: 1.5px; text-transform: uppercase; color: #fff;
+}
 .setup-card .card-sub { color: var(--dim); font-size: 13px; margin: 0 0 20px; line-height: 1.5; }
-.fld { display: block; margin-bottom: 16px; font-size: 12px; color: var(--dim);
-  font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; }
+
+/* forms: kit input look, sharp 4px */
+.fld { display: block; margin-bottom: 16px;
+  font-family: var(--nhl-cond);
+  font-size: 12px; color: var(--dim);
+  font-weight: 800; text-transform: uppercase; letter-spacing: 2px; }
 .fld input, .fld select {
   display: block; width: 100%; margin-top: 8px; padding: 12px 14px;
-  border-radius: 11px; border: 1px solid rgba(255,255,255,.13);
-  background: rgba(255,255,255,.055); color: #fff; font-size: 15px; font-weight: 600;
-  font-family: inherit; letter-spacing: normal; text-transform: none;
+  border-radius: var(--nhl-r); border: 1px solid rgba(255,255,255,.13);
+  background: #0b1220; color: #fff; font-size: 15px; font-weight: 600;
+  font-family: var(--font); letter-spacing: normal; text-transform: none;
   transition: border-color .15s ease, box-shadow .15s ease;
   appearance: none; -webkit-appearance: none;
 }
@@ -65,20 +76,23 @@
   background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px;
   cursor: pointer;
 }
-.fld select option { background: #141b26; color: #fff; }
+.fld select option { background: #0d1424; color: #fff; }
 .fld input:focus, .fld select:focus {
-  outline: none; border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59,130,246,.25);
+  outline: none; border-color: var(--nhl-blue);
+  box-shadow: 0 0 0 1px rgba(59,130,246,.55);
 }
 button.primary {
-  width: 100%; padding: 14px; border: none; border-radius: 12px; margin-top: 4px;
-  background: linear-gradient(135deg, #60a5fa, var(--accent) 55%, var(--accent-dim));
-  color: #fff; font-size: 16px; font-weight: 800; letter-spacing: .3px; cursor: pointer;
-  box-shadow: 0 8px 24px rgba(59,130,246,.4), inset 0 1px 0 rgba(255,255,255,.3);
+  width: 100%; padding: 14px; border: none; border-radius: var(--nhl-r); margin-top: 4px;
+  background: var(--nhl-blue);
+  color: #fff;
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(59,130,246,.4);
   transition: transform .15s ease, box-shadow .15s ease, filter .15s ease;
 }
 button.primary:hover { transform: translateY(-2px); filter: brightness(1.08);
-  box-shadow: 0 12px 32px rgba(59,130,246,.55); }
+  box-shadow: var(--nhl-glow); }
 button.primary:active { transform: translateY(0); }
 
 .save-list { display: flex; flex-direction: column; gap: 10px; max-height: 300px; overflow-y: auto;
@@ -89,11 +103,11 @@ button.primary:active { transform: translateY(0); }
   display: flex; justify-content: space-between; align-items: center; gap: 10px;
   padding: 13px 15px; text-align: left; width: 100%;
   background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.08);
-  border-radius: 11px; color: #fff; cursor: pointer; font-size: 14px; font-weight: 600;
+  border-radius: var(--nhl-r); color: #fff; cursor: pointer; font-size: 14px; font-weight: 600;
   font-family: inherit;
   transition: transform .15s ease, background .15s ease, border-color .15s ease;
 }
-.save-row:hover { background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.45);
+.save-row:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue);
   transform: translateX(4px); }
 .save-row .dim { font-weight: 500; }
 .save-row .save-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
@@ -106,12 +120,12 @@ button.primary:active { transform: translateY(0); }
 .setup-progress { margin-top: 34px; text-align: center; position: relative; }
 .setup-progress.hidden { display: none; }
 .progress-card {
-  background: rgba(10,15,25,.72); border: 1px solid rgba(59,130,246,.3);
-  border-radius: 16px; padding: 30px 44px; backdrop-filter: blur(10px);
-  box-shadow: 0 18px 50px rgba(0,0,0,.55), 0 0 30px rgba(59,130,246,.15);
+  background: rgba(10,15,25,.72); border: 1px solid var(--nhl-line-blue);
+  border-radius: var(--nhl-r); padding: 30px 44px; backdrop-filter: blur(10px);
+  box-shadow: 0 18px 50px rgba(0,0,0,.55), var(--nhl-glow);
 }
 .spinner { width: 46px; height: 46px; margin: 0 auto 16px; border-radius: 50%;
-  border: 4px solid rgba(255,255,255,.1); border-top-color: var(--accent);
+  border: 4px solid rgba(255,255,255,.1); border-top-color: var(--nhl-blue);
   animation: spin 0.85s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 #setup-detail { color: var(--text); font-size: 15px; font-weight: 600; margin: 0; }
@@ -122,8 +136,8 @@ button.primary:active { transform: translateY(0); }
 }
 @media (max-width: 560px) {
   .setup-wrap { padding: 36px 14px 30px; }
-  .setup-hero h1 { font-size: 36px; }
-  .setup-crest { width: 68px; height: 68px; font-size: 34px; border-radius: 18px; }
+  .setup-hero h1 { font-size: 38px; }
+  .setup-crest { width: 68px; height: 68px; font-size: 34px; border-radius: var(--nhl-r); }
   .setup-card { padding: 22px; }
 }
 

@@ -16,9 +16,10 @@
 </header>
 
 <main class="trades-main">
-  <div class="trades-head">
+  <div class="trades-head bcast-head">
     <div>
-      <h1 class="page-title">Trade Center</h1>
+      <div class="bcast-kicker">Puck Dynasty</div>
+      <h1 class="bcast-title">Trade Center</h1>
       <p class="trades-hint">Pick a trade partner below, click players to build the deal, and the AI GM gives a live verdict.</p>
     </div>
     <div class="retention-pill" id="retention-slots" title="NHL clubs may carry at most 3 active retained-salary transactions">Retention: 0/3 slots</div>
@@ -28,14 +29,14 @@
   <section class="partner-section">
     <div class="section-row">
       <div class="panel-label">Trade partner</div>
-      <input type="text" id="team-search" class="team-search" placeholder="Search teams…" aria-label="Search teams">
+      <input type="text" id="team-search" class="team-search nhl-input" placeholder="Search teams…" aria-label="Search teams">
     </div>
     <div class="team-tiles" id="team-tiles"></div>
   </section>
 
   <!-- Deal columns -->
   <div class="trade-cols">
-    <section class="trade-col">
+    <section class="trade-col bpanel">
       <div class="col-head">
         <div class="prop-title">You get <span class="col-val" id="get-val"></span></div>
         <div class="col-sub" id="partner-name">Select a partner team above</div>
@@ -46,7 +47,7 @@
       <div class="asset-list" id="get-picks"><div class="empty-note">—</div></div>
     </section>
 
-    <section class="trade-col">
+    <section class="trade-col bpanel">
       <div class="col-head">
         <div class="prop-title">You give <span class="col-val" id="give-val"></span></div>
         <div class="col-sub" id="my-team-name">Your roster</div>

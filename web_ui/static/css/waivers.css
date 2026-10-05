@@ -1,45 +1,65 @@
-/* Puck Dynasty web waivers styles */
+/* Puck Dynasty — Waiver Wire · NHL 14 broadcast reskin */
+/* Kit components (hub.css) supply tokens; this file styles page-specific selectors. */
+
 .waivers-main { max-width: 900px; margin: 0 auto; padding: 6px 24px 40px; }
-.waivers-main h1 { font-size: 26px; margin-bottom: 6px; }
-.waivers-sub { font-size: 13px; color: var(--dim); margin-bottom: 16px; }
+.waivers-sub { font-size: 13px; color: var(--dim); margin-bottom: 16px; font-weight: 600; }
+
+/* waiver cards: pcard pattern (big OVR block, condensed uppercase name) */
 .wire-list { display: flex; flex-direction: column; gap: 10px; }
 .wire-card {
-  display: flex; align-items: center; gap: 14px;
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 14px 16px;
+  display: flex; align-items: stretch; gap: 0;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r);
+  overflow: hidden;
   transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
 .wire-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 10px 26px rgba(0,0,0,.5);
-  border-color: rgba(59,130,246,.4);
+  border-color: var(--nhl-blue);
+  box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
 }
 .w-ov {
-  width: 46px; height: 46px; border-radius: 10px; flex: none;
+  width: 64px; min-height: 66px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  font-size: 19px; font-weight: 800; color: #fff;
+  font-family: var(--nhl-cond);
+  font-size: 30px; font-weight: 900; color: #fff;
   background: var(--c, #666);
-  box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  border-right: 1px solid var(--nhl-line);
 }
-.w-info { flex: 1; min-width: 0; }
-.w-name { font-size: 15px; font-weight: 700; }
-.w-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
-.w-clock {
-  font-size: 12px; font-weight: 700; color: var(--gold);
+.w-info { flex: 1; min-width: 0; padding: 12px 14px; }
+.w-name {
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff; line-height: 1.15;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.w-sub { font-size: 12px; color: var(--dim); margin-top: 3px; }
+.wire-card .w-clock, .w-clock {
+  align-self: center; flex: none; margin-right: 10px;
+  font-family: var(--nhl-cond);
+  font-size: 13px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--gold);
   background: rgba(232,185,60,.1); border: 1px solid rgba(232,185,60,.3);
-  border-radius: 8px; padding: 5px 10px; white-space: nowrap;
+  border-radius: var(--nhl-r-sm); padding: 6px 10px; white-space: nowrap;
 }
 .btn-claim {
-  flex: none; padding: 9px 18px; border-radius: 9px; border: none;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #fff; font-size: 13.5px; font-weight: 700; cursor: pointer;
+  flex: none; align-self: center; margin-right: 14px;
+  padding: 10px 20px; border-radius: var(--nhl-r); border: none;
+  background: var(--nhl-blue);
+  color: #fff;
+  font-family: var(--nhl-cond);
+  font-size: 13px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase;
+  cursor: pointer;
   transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
-.btn-claim:hover { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(59,130,246,.45); }
+.btn-claim:hover:not(:disabled) { transform: translateY(-2px); box-shadow: var(--nhl-glow); }
 .btn-claim:disabled { opacity: .55; cursor: default; transform: none; box-shadow: none; }
 .wire-empty {
-  text-align: center; color: var(--dim); font-size: 14px;
+  text-align: center; color: var(--dimmer);
+  font-family: var(--nhl-cond);
+  font-size: 15px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
   padding: 40px 20px; border: 1px dashed rgba(255,255,255,.12);
-  border-radius: 12px;
+  border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
 }

@@ -1,150 +1,173 @@
-/* Puck Dynasty — game-style line editor (overhaul 2026-10-04) */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty — line editor, NHL 14 broadcast reskin (2026-10-05).
+   Uses ONLY the NHL 14 BROADCAST KIT tokens/components from hub.css
+   (--nhl-bg, --nhl-panel, --nhl-line, --nhl-blue, --nhl-cond, --nhl-r,
+   --nhl-r-sm, --nhl-glow, .bcast-head, .bpanel, .fpills, .nhl-input). */
+
 .hidden { display: none !important; }
 
 .le-main { max-width: 1280px; margin: 0 auto; padding: 6px 24px 48px; }
 
+/* .bcast-head (kit) provides the header band styling; keep flex layout here */
 .le-head {
   display: flex; justify-content: space-between; align-items: flex-start;
-  gap: 16px; flex-wrap: wrap; margin-bottom: 18px;
+  gap: 16px; flex-wrap: wrap;
 }
-.le-note { color: var(--dim); font-size: 13.5px; margin: 6px 0 0; max-width: 560px; }
+.le-note { color: var(--dim); font-size: 13.5px; margin: 8px 0 0; max-width: 560px; }
 .le-note.err { color: var(--red); font-weight: 600; }
 .le-note.ok { color: var(--green); font-weight: 600; }
 
 .le-toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .btn-primary {
-  padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer;
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: #fff; font-size: 14px; font-weight: 800; letter-spacing: .4px;
+  width: auto; border-radius: var(--nhl-r);
+  padding: 10px 22px; border: none; cursor: pointer;
+  background: linear-gradient(135deg, #60a5fa, var(--nhl-blue) 55%, var(--accent-dim));
+  color: #fff;
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase;
   box-shadow: 0 4px 16px rgba(59,130,246,.35);
   transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
 }
 .btn-primary:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 22px rgba(59,130,246,.5); }
 .btn-primary:disabled { opacity: .4; cursor: not-allowed; box-shadow: none; }
 .btn-ghost {
-  padding: 10px 16px; border-radius: 10px; cursor: pointer;
+  padding: 10px 16px; border-radius: var(--nhl-r); cursor: pointer;
   border: 1px solid rgba(255,255,255,.15); background: none; color: var(--text);
-  font-size: 13.5px; font-weight: 600;
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
 }
-.btn-ghost:hover { background: rgba(255,255,255,.06); border-color: rgba(59,130,246,.5); }
+.btn-ghost:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue); }
 
 /* ---- two-panel layout ---- */
 .le-grid { display: grid; grid-template-columns: 310px 1fr; gap: 20px; align-items: start; }
 @media (max-width: 900px) { .le-grid { grid-template-columns: 1fr; } }
 
-/* ---- roster panel ---- */
-.le-roster {
-  background: linear-gradient(165deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.07); border-radius: 16px;
-  padding: 16px; position: sticky; top: 12px;
-  box-shadow: var(--shadow-tile);
-  transition: border-color .15s ease, box-shadow .15s ease;
-}
-.le-roster.drop-target { border-color: var(--accent); box-shadow: var(--ring); }
+/* ---- roster panel (kit .bpanel class added in HTML for styling) ---- */
+.le-roster { position: sticky; top: 12px; }
+.le-roster.drop-target { border-color: var(--nhl-blue); box-shadow: var(--ring); }
 .le-roster-tools { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
-#roster-search {
-  width: 100%; padding: 10px 12px; border-radius: 10px; font-size: 13.5px;
-  background: rgba(0,0,0,.3); color: var(--text);
-  border: 1px solid rgba(255,255,255,.12);
-}
-#roster-search:focus { outline: none; border-color: var(--accent); }
-#roster-search::placeholder { color: var(--dimmer); }
+/* .nhl-input (kit) styles #roster-search; .fpills (kit) styles the filter buttons */
 .le-filters { display: flex; gap: 6px; }
-.le-filter {
-  flex: 1; padding: 7px 0; border-radius: 8px; cursor: pointer;
-  background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1);
-  color: var(--dim); font-size: 12.5px; font-weight: 800;
+.le-roster-count {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; letter-spacing: 1.8px; text-transform: uppercase;
+  color: var(--dimmer); margin-bottom: 8px;
 }
-.le-filter.on, .le-filter:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
-.le-roster-count { font-size: 12px; color: var(--dimmer); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 1px; }
 .le-roster-list {
   max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
   padding-right: 4px;
 }
 .le-roster-hint { font-size: 11.5px; color: var(--dimmer); margin-top: 10px; text-align: center; }
 
-/* player card */
+/* ---- player card: kit .pcard pattern (JS-generated markup) ---- */
 .le-pcard {
   display: flex; align-items: center; gap: 10px;
-  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.07);
-  border-radius: 11px; padding: 9px 11px; cursor: grab;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r); padding: 9px 12px 9px 10px; cursor: grab;
   transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
   user-select: none;
 }
-.le-pcard:hover { transform: translateX(3px); border-color: rgba(59,130,246,.5); }
+.le-pcard:hover {
+  transform: translateX(3px); border-color: var(--nhl-blue);
+  box-shadow: 0 8px 20px rgba(0,0,0,.45), var(--nhl-glow);
+}
 .le-pcard:active { cursor: grabbing; }
 .le-pcard.dragging { opacity: .45; }
-.le-pcard.selected { border-color: var(--accent); box-shadow: var(--ring); }
+.le-pcard.selected { border-color: var(--nhl-blue); box-shadow: var(--nhl-glow); }
 .le-pcard .ovr {
-  min-width: 34px; text-align: center; font-weight: 900; font-size: 14px;
-  padding: 4px 6px; border-radius: 8px; background: rgba(255,255,255,.05);
+  min-width: 38px; text-align: center;
+  font-family: var(--nhl-cond); font-weight: 900; font-size: 17px;
+  padding: 5px 4px; border-radius: var(--nhl-r-sm);
+  background: var(--nhl-blue-soft); border: 1px solid var(--nhl-line-blue);
 }
 .ovr.ovr-hi { color: var(--green); text-shadow: 0 0 10px rgba(52,211,153,.5); }
 .ovr.ovr-mid { color: var(--gold); }
 .ovr.ovr-lo { color: var(--red); }
 .le-pcard .nm { flex: 1; min-width: 0; }
-.le-pcard .nm .n { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.le-pcard .nm .n {
+  font-family: var(--nhl-cond);
+  font-weight: 800; font-size: 14.5px; text-transform: uppercase;
+  letter-spacing: .7px; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .le-pcard .nm .s { font-size: 11px; color: var(--dim); }
+/* kit .pos-badge treatment (JS-generated markup) */
 .le-pcard .pos {
-  font-size: 11px; font-weight: 800; padding: 3px 7px; border-radius: 6px;
-  background: var(--accent-soft); color: #bcd2ff; letter-spacing: .5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; padding: 2px 8px;
+  font-size: 11px; font-weight: 800; letter-spacing: 1.2px;
+  background: var(--nhl-blue-soft); color: #93c5fd;
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r-sm);
 }
 .le-pcard .dressed {
-  font-size: 10px; font-weight: 800; color: var(--accent);
-  border: 1px solid rgba(59,130,246,.5); border-radius: 6px; padding: 2px 6px;
-  white-space: nowrap;
+  font-size: 10px; font-weight: 800; letter-spacing: 1px; color: var(--nhl-blue);
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r-sm);
+  padding: 2px 6px; white-space: nowrap;
 }
 
-/* ---- ice / units ---- */
+/* ---- ice / units (JS-generated; broadcast panel treatment) ---- */
 .le-unit {
-  background: linear-gradient(165deg, rgba(255,255,255,.045) 0%, transparent 45%),
-              linear-gradient(160deg, var(--card2), var(--card) 85%);
-  border: 1px solid rgba(255,255,255,.07); border-radius: 16px;
-  padding: 18px 20px; margin-bottom: 16px;
-  box-shadow: 0 4px 18px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05);
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 16px 18px; margin-bottom: 16px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
 }
 .le-unit-label {
-  font-family: var(--font-display, inherit);
-  font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 2px;
-  color: var(--accent); margin-bottom: 12px;
+  font-family: var(--nhl-cond);
+  font-size: 13px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2.2px; color: var(--nhl-blue); margin-bottom: 12px;
+  display: flex; align-items: center; gap: 10px;
+}
+.le-unit-label::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
 }
 .le-unit-row { display: flex; gap: 12px; }
+@media (max-width: 700px) { .le-unit-row { flex-wrap: wrap; } .le-slot { min-width: 140px; } }
 .le-slot {
-  flex: 1; min-height: 96px; border-radius: 12px; padding: 10px 12px;
-  background: rgba(0,0,0,.25); border: 2px dashed rgba(255,255,255,.14);
+  flex: 1; min-height: 96px; border-radius: var(--nhl-r); padding: 10px 12px;
+  background: rgba(0,0,0,.28); border: 2px dashed rgba(255,255,255,.14);
   transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
   position: relative;
 }
 .le-slot .slot-tag {
-  font-size: 11px; font-weight: 800; letter-spacing: 1.5px; color: var(--dim);
-  text-transform: uppercase; margin-bottom: 6px;
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; letter-spacing: 1.8px;
+  color: var(--dim); text-transform: uppercase; margin-bottom: 6px;
 }
 .le-slot .slot-empty-hint { font-size: 12px; color: var(--dimmer); font-style: italic; }
-.le-slot.drop-ok { border-color: var(--accent); border-style: solid; box-shadow: var(--ring); transform: scale(1.02); }
+.le-slot.drop-ok { border-color: var(--nhl-blue); border-style: solid; box-shadow: var(--ring); transform: scale(1.02); }
 .le-slot.drop-bad { border-color: var(--red); border-style: solid; box-shadow: 0 0 0 1px var(--red), 0 0 18px rgba(239,68,68,.35); }
-.le-slot.selected { border-color: var(--accent); border-style: solid; box-shadow: var(--ring); }
-.le-slot.filled { border-style: solid; border-color: rgba(255,255,255,.12); background: linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,.015)); }
+.le-slot.selected { border-color: var(--nhl-blue); border-style: solid; box-shadow: var(--ring); }
+.le-slot.filled {
+  border-style: solid; border-color: var(--nhl-line);
+  border-left: 3px solid var(--nhl-blue);
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+}
 .le-slot.fit-green { border-color: rgba(52,211,153,.65); box-shadow: 0 0 14px rgba(52,211,153,.18); }
 .le-slot.fit-yellow { border-color: rgba(232,185,60,.65); box-shadow: 0 0 14px rgba(232,185,60,.18); }
 .le-slot.fit-red { border-color: rgba(239,68,68,.65); box-shadow: 0 0 14px rgba(239,68,68,.18); }
 .le-slot .who { cursor: grab; user-select: none; }
 .le-slot .who:active { cursor: grabbing; }
 .le-slot .who.dragging { opacity: .45; }
-.le-slot .who .n { font-weight: 800; font-size: 15px; }
+.le-slot .who .n {
+  font-family: var(--nhl-cond);
+  font-weight: 800; font-size: 15.5px; text-transform: uppercase;
+  letter-spacing: .7px; color: #fff; line-height: 1.15;
+}
 .le-slot .who .s { font-size: 12px; color: var(--dim); margin-top: 2px; }
 .le-slot .who .s .ovr-hi { color: var(--green); font-weight: 800; }
 .le-slot .who .s .ovr-mid { color: var(--gold); font-weight: 800; }
 .le-slot .who .s .ovr-lo { color: var(--red); font-weight: 800; }
 .le-slot .unassign {
   position: absolute; top: 6px; right: 8px; border: none; background: none;
-  color: var(--dimmer); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  color: var(--dimmer); font-size: 14px; cursor: pointer; padding: 2px 6px;
+  border-radius: var(--nhl-r-sm);
 }
 .le-slot .unassign:hover { color: var(--red); background: rgba(239,68,68,.12); }
 
 .le-legend { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); margin-top: 6px; flex-wrap: wrap; }
-.lg { display: inline-block; width: 12px; height: 12px; border-radius: 4px; margin: 0 4px 0 12px; }
+.lg { display: inline-block; width: 12px; height: 12px; border-radius: var(--nhl-r-sm); margin: 0 4px 0 12px; }
 .lg-green { background: rgba(52,211,153,.5); border: 1px solid var(--green); }
 .lg-yellow { background: rgba(232,185,60,.5); border: 1px solid var(--gold); }
 .lg-red { background: rgba(239,68,68,.5); border: 1px solid var(--red); }

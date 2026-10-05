@@ -1,36 +1,68 @@
-/* Puck Dynasty web standings */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty web standings — NHL 14 broadcast skin.
+   Uses the shared broadcast kit tokens/components from hub.css.
+   Table gets the .nhl-table treatment; user-team row gets the .hl highlight. */
 
 .stand-main { max-width: 860px; margin: 0 auto; padding: 6px 24px 40px; }
-.stand-main h1 { font-size: 26px; margin-bottom: 16px; }
 
 .conf-block { margin-bottom: 22px; }
 .conf-title {
-  font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px;
-  color: var(--dim); font-weight: 700; margin-bottom: 8px;
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim); margin-bottom: 8px;
 }
+
+/* broadcast panel around each conference table */
 .stand-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: var(--radius); overflow: hidden;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r); overflow: hidden;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4);
 }
-.stand-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+
+/* broadcast table treatment (mirrors .nhl-table from the kit) */
+.stand-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 .stand-table th {
-  text-align: left; padding: 9px 14px; font-size: 11.5px;
-  text-transform: uppercase; letter-spacing: .8px; color: var(--dim);
-  border-bottom: 1px solid rgba(255,255,255,.07);
+  font-family: var(--nhl-cond);
+  font-size: 11px; font-weight: 800; letter-spacing: 1.8px; text-transform: uppercase;
+  color: var(--dimmer); text-align: left; padding: 10px 14px;
+  border-bottom: 1px solid var(--nhl-line-blue); white-space: nowrap;
 }
-.stand-table td { padding: 9px 14px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.stand-table td { padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,.045); vertical-align: middle; }
 .stand-table tr:last-child td { border-bottom: none; }
 .stand-table tbody tr { transition: background .12s ease; }
-.stand-table tbody tr:hover { background: rgba(255,255,255,.03); }
-.stand-table .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--dim); }
-.stand-table .pts { font-weight: 800; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
-.stand-table .rank { color: var(--dim); width: 30px; }
-.stand-table .tname { font-weight: 600; }
-.stand-table tr.user-team { background: rgba(59,130,246,.12); }
-.stand-table tr.user-team:hover { background: rgba(59,130,246,.18); }
+.stand-table tbody tr:hover { background: rgba(59,130,246,.07); }
+
+/* numbers in condensed broadcast type */
+.stand-table .num {
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 800;
+  text-align: right; color: var(--dim);
+}
+.stand-table .pts {
+  font-family: var(--nhl-cond); font-size: 17px; font-weight: 900;
+  color: #fff; text-align: right;
+}
+.stand-table .rank {
+  font-family: var(--nhl-cond); font-weight: 800;
+  color: var(--dimmer); width: 32px;
+}
+.stand-table .tname { font-weight: 700; letter-spacing: .4px; }
+
+/* user-team highlight — broadcast .hl treatment */
+.stand-table tr.user-team {
+  background: rgba(59,130,246,.1);
+  border-left: 3px solid var(--nhl-blue);
+}
+.stand-table tr.user-team:hover { background: rgba(59,130,246,.16); }
 .stand-table tr.user-team .tname { color: #93c5fd; }
-.stand-table .div-tag { font-size: 11px; color: var(--dim); font-weight: 400; margin-left: 6px; }
-.empty { color: var(--dim); padding: 24px; text-align: center; font-size: 14px; }
+.stand-table .div-tag {
+  font-size: 11px; font-weight: 400; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--dimmer); margin-left: 6px;
+}
+
+/* JS-rendered empty state, broadcast note style */
+.empty {
+  padding: 24px; text-align: center;
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 700; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--dimmer);
+}

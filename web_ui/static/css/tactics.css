@@ -1,37 +1,98 @@
-/* Puck Dynasty web tactics styles */
+/* Puck Dynasty web tactics — NHL 14 broadcast reskin (2026-10-05)
+   Uses the NHL 14 BROADCAST KIT in hub.css. No local colors/fonts. */
 .tactics-main { max-width: 860px; margin: 0 auto; padding: 6px 24px 40px; }
-.tactics-intro { color: var(--dim); font-size: 13px; margin-bottom: 12px; }
-.tactics-tabs { display: flex; gap: 8px; margin-bottom: 18px; }
+.tactics-intro { color: var(--dim); font-size: 13px; margin-bottom: 14px; }
+
+/* view tabs: larger filter pills */
+.tactics-tabs { display: flex; gap: 6px; margin-bottom: 18px; }
 .tactics-tabs button {
-  background: var(--card); border: 1px solid rgba(255,255,255,.08);
-  color: var(--dim); border-radius: 10px; padding: 9px 20px;
-  font-size: 14px; font-weight: 700; cursor: pointer;
+  font-family: var(--nhl-cond);
+  background: transparent; border: 1px solid rgba(255,255,255,.15);
+  color: var(--dim); border-radius: var(--nhl-r-sm);
+  padding: 9px 26px; font-size: 14px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer;
+  transition: all .13s ease;
 }
-.tactics-tabs button.active { background: var(--accent); color: #fff; border-color: transparent; }
+.tactics-tabs button:hover { color: #fff; border-color: rgba(255,255,255,.35); }
+.tactics-tabs button.active {
+  background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff;
+  box-shadow: 0 3px 12px rgba(59,130,246,.4);
+}
 .hidden { display: none !important; }
-.tactic-group { margin-bottom: 20px; }
-.tactic-group h3 { margin: 0 0 2px; font-size: 15px; }
-.tactic-group .dim { font-size: 12px; color: var(--dim); margin: 0 0 8px; }
-.pill-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* tactic pickers: broadcast panels (functionality untouched) */
+.tactic-group {
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 16px 18px; margin-bottom: 12px;
+}
+.tactic-group h3 {
+  font-family: var(--nhl-cond);
+  margin: 0 0 2px; font-size: 17px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 1.2px; color: #fff;
+}
+.tactic-group .dim { font-size: 12px; color: var(--dim); margin: 0 0 10px; }
+
+/* option pills: angular filter-pill look (matches kit .fpills) */
+.pill-row { display: flex; gap: 6px; flex-wrap: wrap; }
 .pill-row button {
-  background: var(--card); border: 1px solid rgba(255,255,255,.12);
-  color: var(--dim); border-radius: 999px; padding: 8px 18px;
-  font-size: 13px; font-weight: 700; cursor: pointer;
+  font-family: var(--nhl-cond);
+  background: transparent; border: 1px solid rgba(255,255,255,.15);
+  color: var(--dim); border-radius: var(--nhl-r-sm);
+  padding: 6px 16px; font-size: 12.5px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer;
+  transition: all .13s ease;
 }
-.pill-row button.active { background: var(--accent); color: #fff; border-color: transparent; }
+.pill-row button:hover { color: #fff; border-color: rgba(255,255,255,.35); }
+.pill-row button.active {
+  background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff;
+  box-shadow: 0 3px 12px rgba(59,130,246,.4);
+}
+
+/* impact readout: broadcast panel */
 .impact-card {
-  background: var(--card); border: 1px solid rgba(255,255,255,.06);
-  border-radius: 12px; padding: 18px; margin-top: 8px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 18px; margin-top: 8px;
+  box-shadow: 0 4px 18px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.04);
 }
-.impact-card h3 { margin: 0 0 10px; font-size: 15px; }
+.impact-card h3 {
+  font-family: var(--nhl-cond);
+  margin: 0 0 12px; font-size: 15px; font-weight: 800;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--dim);
+  display: flex; align-items: center; gap: 10px;
+}
+.impact-card h3::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
+}
 .impact-line { font-size: 13px; color: var(--dim); margin-bottom: 6px; line-height: 1.45; }
 .dim { color: var(--dim); }
 .dim.small { font-size: 11px; }
-#view-practice h3 { font-size: 17px; margin-bottom: 4px; }
-#view-practice h4 { font-size: 13px; margin: 16px 0 8px; }
-.bag-row { display: flex; gap: 8px; align-items: center; margin: 14px 0 4px; font-size: 13px; font-weight: 700; }
-.btn {
-  border-radius: 8px; padding: 10px 22px; font-size: 14px; font-weight: 700;
-  cursor: pointer; border: none; margin-top: 12px;
+
+/* practice planner */
+#view-practice h3 {
+  font-family: var(--nhl-cond);
+  font-size: 19px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 1.5px; margin-bottom: 4px;
 }
-.btn.primary { background: var(--accent); color: #fff; }
+#view-practice h4 {
+  font-family: var(--nhl-cond);
+  font-size: 13px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 2px; color: var(--dim); margin: 16px 0 8px;
+}
+.bag-row { display: flex; gap: 8px; align-items: center; margin: 14px 0 4px; font-size: 13px; font-weight: 700; }
+.bag-row input[type="checkbox"] { accent-color: var(--nhl-blue); width: 15px; height: 15px; }
+.btn {
+  font-family: var(--nhl-cond);
+  border-radius: var(--nhl-r-sm); padding: 10px 22px;
+  font-size: 14px; font-weight: 800; letter-spacing: 1.5px;
+  text-transform: uppercase; cursor: pointer; border: none; margin-top: 12px;
+}
+.btn.primary {
+  background: linear-gradient(135deg, #60a5fa, var(--nhl-blue) 55%, var(--accent-dim));
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(59,130,246,.4), inset 0 1px 0 rgba(255,255,255,.3);
+  transition: transform .15s ease, filter .15s ease;
+}
+.btn.primary:hover { transform: translateY(-1px); filter: brightness(1.07); }

@@ -1,35 +1,42 @@
-/* Puck Dynasty web camp screen */
-.back { color: var(--dim); text-decoration: none; font-size: 14px; font-weight: 600; }
-.back:hover { color: var(--text); }
+/* Puck Dynasty — Training Camp · NHL 14 broadcast reskin */
+/* Kit components (hub.css) supply tokens; this file styles page-specific selectors. */
 
 .camp-main { max-width: 860px; margin: 0 auto; padding: 6px 24px 40px; }
-.camp-main h1 { font-size: 26px; margin-bottom: 8px; }
-.camp-note { font-size: 13.5px; color: var(--dim); margin-bottom: 22px; line-height: 1.55; }
+.camp-note { font-size: 13.5px; color: var(--dim); margin-bottom: 22px; line-height: 1.55; font-weight: 600; }
 
 .timeline { position: relative; padding-left: 34px; }
 .timeline::before {
   content: ''; position: absolute; left: 9px; top: 6px; bottom: 6px; width: 2px;
-  background: linear-gradient(180deg, var(--accent), rgba(59,130,246,.15));
+  background: linear-gradient(180deg, var(--nhl-blue), rgba(59,130,246,.15));
   border-radius: 1px;
 }
 .tl-item { position: relative; margin-bottom: 18px; }
 .tl-item::before {
   content: ''; position: absolute; left: -31px; top: 14px;
-  width: 12px; height: 12px; border-radius: 50%;
-  background: var(--accent); box-shadow: 0 0 0 4px rgba(59,130,246,.18);
+  width: 12px; height: 12px; border-radius: 2px;
+  background: var(--nhl-blue); box-shadow: var(--nhl-glow);
 }
 .tl-card {
-  background: linear-gradient(150deg, var(--card2), var(--card));
-  border: 1px solid rgba(255,255,255,.06); border-radius: 12px;
-  padding: 14px 18px; transition: transform .14s ease, box-shadow .14s ease;
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 14px 18px; transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
 }
-.tl-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
-.tl-date { font-size: 11.5px; font-weight: 800; letter-spacing: 1.2px; text-transform: uppercase; color: #93c5fd; margin-bottom: 4px; }
+.tl-card:hover { transform: translateY(-2px); border-color: var(--nhl-line-blue); box-shadow: 0 8px 20px rgba(0,0,0,.45); }
+.tl-date {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; letter-spacing: 2.5px;
+  text-transform: uppercase; color: var(--nhl-blue); margin-bottom: 4px;
+}
 .tl-story { font-size: 14.5px; line-height: 1.6; color: var(--text); }
 
 .empty {
-  background: rgba(255,255,255,.03); border: 1px dashed rgba(255,255,255,.12);
-  border-radius: 12px; padding: 34px; text-align: center;
+  padding: 28px 20px; text-align: center;
+  border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  background: rgba(255,255,255,.015);
 }
-.empty-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; }
+.empty-title {
+  font-family: var(--nhl-cond);
+  font-size: 17px; font-weight: 800; letter-spacing: 2px;
+  text-transform: uppercase; color: var(--dim); margin-bottom: 8px;
+}
 .empty-sub { font-size: 13.5px; color: var(--dim); line-height: 1.6; max-width: 480px; margin: 0 auto; }
