@@ -4613,6 +4613,11 @@ class GameSim:
         # Calculate block probability with Stage 4 enhancements
         blocker_skill = (best_blocker.defensive_awareness + best_blocker.checking + best_blocker.anticipation + best_blocker.positioning) / 4
         shooter_skill = (shooter.shooting_accuracy + shooter.shooting_power) / 2
+        # Positional familiarity: out-of-position shooters are less effective
+        try:
+            shooter_skill *= self._familiarity_factor(shooter, attacking_team)
+        except Exception:
+            pass
         
         block_chance = base_block_chance * (blocker_skill / max(shooter_skill, 1))
         # Archetype tendency: defensive defensemen and grinders sell out to
@@ -4928,6 +4933,11 @@ class GameSim:
     def _check_shot_miss(self, shooter, quality, distance):
         """Check if shot misses the net entirely."""
         accuracy = (shooter.shooting_accuracy + shooter.composure) / 2
+        # Positional familiarity: out-of-position shooters are less accurate
+        try:
+            accuracy *= self._familiarity_factor(shooter, attacking_team)
+        except Exception:
+            pass
         
         # Base miss chance
         base_miss = 0.15
@@ -6200,6 +6210,11 @@ class GameSim:
     def _calculate_faceoff_skill(self, player, faceoff_zone, team):
         """Calculate faceoff skill with zone and situation modifiers."""
         base_skill = player.faceoffs * 1.0
+        # Positional familiarity: a winger taking the draw is at a disadvantage
+        try:
+            base_skill *= self._familiarity_factor(player, team)
+        except Exception:
+            pass
 
         # A fresh timeout steadies the draw unit: one-shot bonus.
         try:
@@ -8374,6 +8389,57 @@ class GameSim:
         """A 10-minute misconduct benches the player: he sits while the
         team dresses a substitute at full strength."""
         return player in [e['player'] for e in self._misconduct_bench]
+
+    def _familiarity_factor(self, player, team):
+        """Performance multiplier for a player in their current lineup slot.
+
+        Wires position_training into sim event resolution: a defenseman
+        playing LW performs worse than at LD. Returns 1.0 if the player
+        is in their natural position or the slot can't be determined.
+        """
+        try:
+            from position_training import performance_modifier
+            lineup = getattr(team, 'lineup', None) or {}
+            # Find which slot this player occupies
+            slot_pos = None
+            pid = getattr(player, 'id', None)
+            for slot, p in lineup.items():
+                if p is None:
+                    continue
+                # Handle both Player objects and nested lists
+                if getattr(p, 'id', None) == pid:
+                    slot_pos = self._slot_to_position(str(slot))
+                    break
+                if isinstance(p, (list, tuple)):
+                    for sub in p:
+                        if getattr(sub, 'id', None) == pid:
+                            slot_pos = self._slot_to_position(str(slot))
+                            break
+                    if slot_pos:
+                        break
+            if not slot_pos:
+                return 1.0
+            return performance_modifier(player, slot_pos)
+        except Exception:
+            return 1.0
+
+    def _slot_to_position(self, slot):
+        """Map lineup slot (F1_LW, D2_R, G1) to position (LW, RD, G)."""
+        s = str(slot).upper()
+        # Flat keys: F1_LW -> LW, D2_R -> RD, G1 -> G
+        if '_' in s:
+            parts = s.split('_')
+            if len(parts) == 2:
+                prefix, pos = parts
+                if prefix.startswith('F'):
+                    return pos  # LW, C, RW
+                if prefix.startswith('D'):
+                    return ('L' if pos == 'L' else 'R') + 'D'  # LD, RD
+        # Already a position
+        if s in ('LW', 'C', 'RW', 'LD', 'RD', 'G'):
+            return s
+        # Nested keys: Forwards, Defense, Goalies -> use primary
+        return None
 
     def _get_on_ice(self, team):
         """Returns the list of players currently on the ice for a team, based on lines."""
