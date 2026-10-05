@@ -1070,7 +1070,10 @@ class GameSaveManager:
                         'marquee': bool(game.get('marquee')) if isinstance(game, dict) else False,
                         'hype_tags': list(game.get('hype_tags') or []) if isinstance(game, dict) else [],
                     })
-                except (AttributeError, TypeError, IndexError):
+                except (AttributeError, TypeError, IndexError) as e:
+                    # Log skipped games instead of silently dropping them;
+                    # a schedule round-trip must not lose games.
+                    print(f"WARNING: Skipping unschedulable game during save: {game!r} ({e})")
                     continue
             
             return schedule_data
@@ -2727,7 +2730,13 @@ class GameSaveManager:
                                 _restored['marquee'] = True
                             _restored['hype_tags'] = list(game_data.get('hype_tags') or [])
                         schedule.append(_restored)
-                except:
+                    else:
+                        # Teams not found by name -- log instead of silently dropping
+                        print(f"WARNING: Skipping schedule restore, team not found: "
+                              f"{game_data.get('away_team')} @ {game_data.get('home_team')} "
+                              f"on {game_data.get('date')}")
+                except Exception as e:
+                    print(f"WARNING: Skipping schedule entry on restore error: {game_data!r} ({e})")
                     continue
             
             self.game_manager.league.schedule = schedule
