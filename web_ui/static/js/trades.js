@@ -208,10 +208,24 @@ const tbState = {
   givePicks: new Set(),
   wantPids: new Set(),
   wantPicks: new Set(),
+  retention: {},      // pid -> pct (25/50) retained on players we trade away
+  protection: {},     // pickId -> 'top-3'|'top-10'|'lottery' on picks we trade away
+  slotsUsed: 0,       // retention slots already used by our club (from server)
+  slotsMax: 3,
+  protectionOptions: [], // [{code, label}] from the engine via /api/trades/assets
   verdict: null,     // last /api/trades/evaluate payload
   evalTimer: null,
   resultTimer: null,
 };
+
+/* Fallback protection options if the assets payload lacks them (same
+   codes the engine uses — trade_engine.protection_label). */
+const PROT_FALLBACK = [
+  {code: 'top-3', label: 'Top-3 protected'},
+  {code: 'top-10', label: 'Top-10 protected'},
+  {code: 'lottery', label: 'Lottery protected'},
+];
+const RETENTION_PCTS = [0, 25, 50]; // engine max is 50%
 
 const tbEl = id => document.getElementById(id);
 
@@ -266,8 +280,46 @@ async function tbLoadMyAssets() {
     const a = await tbFetchAssets(id);
     tbState.userPlayers = a.players || [];
     tbState.userPicks = a.picks || [];
+    tbState.slotsUsed = a.retention_slots_used || 0;
+    tbState.slotsMax = a.retention_slots_max || 3;
+    tbState.protectionOptions = (a.protection_options && a.protection_options.length)
+      ? a.protection_options : PROT_FALLBACK;
+    tbPruneTerms();
     tbRenderGive();
+    tbUpdateSlots();
   } catch (e) { console.error(e); }
+}
+
+/* Drop retention/protection terms for assets no longer in the deal. */
+function tbPruneTerms() {
+  for (const k of Object.keys(tbState.retention)) {
+    if (!tbState.givePids.has(k)) delete tbState.retention[k];
+  }
+  for (const k of Object.keys(tbState.protection)) {
+    if (!tbState.givePicks.has(k)) delete tbState.protection[k];
+  }
+}
+
+/* Retention slots left for NEW terms (ledger use + this deal's terms). */
+function tbSlotsRemaining() {
+  const fresh = Object.values(tbState.retention).filter(v => v > 0).length;
+  return tbState.slotsMax - tbState.slotsUsed - fresh;
+}
+
+function tbUpdateSlots() {
+  const el = tbEl('tb-retention-slots');
+  if (!el) return;
+  const fresh = Object.values(tbState.retention).filter(v => v > 0).length;
+  const used = tbState.slotsUsed + fresh;
+  el.textContent = 'Retention: ' + used + '/' + tbState.slotsMax + ' slots';
+  el.classList.toggle('full', used >= tbState.slotsMax);
+}
+
+function tbFlashNote(msg) {
+  const note = tbEl('tb-note');
+  if (!note) return;
+  note.textContent = msg;
+  note.className = 'prop-note err';
 }
 
 async function tbOnPartnerChange() {
@@ -294,6 +346,8 @@ async function tbOnPartnerChange() {
 
 function tbRow(asset, kind, side, checked) {
   // asset: player dict or pick dict; kind 'player'|'pick'
+  const wrap = document.createElement('div');
+  wrap.className = 'tb-asset';
   const el = document.createElement('label');
   const id = String(asset.id);
   el.className = 'player-row' + (kind === 'pick' ? ' tb-pick-row' : '')
@@ -310,7 +364,96 @@ function tbRow(asset, kind, side, checked) {
        ${asset.level ? '<span class="tb-level">' + esc(asset.level) + '</span>' : ''}`;
   el.innerHTML = `<input type="checkbox" ${dataAttr}="${esc(id)}" data-side="${side}" data-kind="${kind}"${checked ? ' checked' : ''}>${info}`;
   el.querySelector('input').addEventListener('change', tbOnToggle);
-  return el;
+  wrap.appendChild(el);
+  // Deal terms: retention (players) / protection (picks) on assets WE give.
+  if (side === 'give' && checked) wrap.appendChild(tbTermsRow(asset, kind));
+  return wrap;
+}
+
+/* Terms selector under a checked give-side asset. */
+function tbTermsRow(asset, kind) {
+  const id = String(asset.id);
+  const div = document.createElement('div');
+  div.className = 'tb-terms';
+  if (kind === 'player') {
+    const cur = tbState.retention[id] || 0;
+    const noSlots = tbSlotsRemaining() <= 0 && cur === 0;
+    const capHit = asset.cap_hit || asset.salary || 0;
+    const sel = document.createElement('select');
+    sel.className = 'tb-ret-select';
+    sel.dataset.retPid = id;
+    sel.title = noSlots
+      ? 'No retention slots left (max ' + tbState.slotsMax + ' per club)'
+      : 'Salary your club keeps on this player (NHL max 50%)';
+    for (const pct of RETENTION_PCTS) {
+      const o = document.createElement('option');
+      o.value = String(pct);
+      o.textContent = pct + '%';
+      if (pct === cur) o.selected = true;
+      if (pct > 0 && noSlots) o.disabled = true; // clamp: never exceed slots
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', tbOnRetentionChange);
+    const lbl = document.createElement('span');
+    lbl.className = 'tb-terms-label';
+    lbl.textContent = 'Retain salary';
+    const amt = document.createElement('span');
+    amt.className = 'tb-ret-amt';
+    amt.textContent = cur > 0 ? 'you keep ' + fmtSalary(Math.round(capHit * cur / 100)) : '';
+    div.append(lbl, sel, amt);
+  } else {
+    const cur = tbState.protection[id] || '';
+    const sel = document.createElement('select');
+    sel.className = 'tb-prot-select';
+    sel.dataset.protPick = id;
+    sel.title = 'Protection on this pick (NHL: top-3 / top-10 / lottery)';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = 'No protection';
+    if (!cur) none.selected = true;
+    sel.appendChild(none);
+    for (const opt of tbState.protectionOptions) {
+      const o = document.createElement('option');
+      o.value = opt.code;
+      o.textContent = opt.label;
+      if (opt.code === cur) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.addEventListener('change', tbOnProtectionChange);
+    const lbl = document.createElement('span');
+    lbl.className = 'tb-terms-label';
+    lbl.textContent = 'Pick protection';
+    div.append(lbl, sel);
+  }
+  return div;
+}
+
+function tbOnRetentionChange(ev) {
+  const pid = ev.target.dataset.retPid;
+  const pct = parseInt(ev.target.value, 10) || 0;
+  const prev = tbState.retention[pid] || 0;
+  if (pct === 0) delete tbState.retention[pid];
+  else tbState.retention[pid] = pct;
+  if (tbSlotsRemaining() < 0) {
+    // Clamp: never exceed the slot limit — revert the change.
+    if (prev === 0) delete tbState.retention[pid];
+    else tbState.retention[pid] = prev;
+    ev.target.value = String(prev);
+    tbFlashNote('Retention slot limit reached (' + tbState.slotsMax +
+      ' per club) — remove a term to add another.');
+    return;
+  }
+  tbUpdateSlots();
+  tbRenderGive(); // refresh other selects' disabled state + previews
+  tbScheduleEvaluate();
+}
+
+function tbOnProtectionChange(ev) {
+  const pid = ev.target.dataset.protPick;
+  const code = ev.target.value || '';
+  if (!code) delete tbState.protection[pid];
+  else tbState.protection[pid] = code;
+  tbScheduleEvaluate();
 }
 
 function tbRenderList(elId, items, kind, side, selSet) {
@@ -348,7 +491,11 @@ function tbOnToggle(ev) {
   }[ev.target.dataset.side + ':' + ev.target.dataset.kind];
   if (!set) return;
   ev.target.checked ? set.add(id) : set.delete(id);
-  ev.target.closest('.player-row').classList.toggle('checked', ev.target.checked);
+  tbPruneTerms(); // drop retention/protection on removed assets
+  // Re-render the affected column so terms selectors appear/disappear.
+  if (ev.target.dataset.side === 'give') tbRenderGive();
+  else tbRenderGet();
+  tbUpdateSlots();
   tbScheduleEvaluate();
 }
 
@@ -365,6 +512,8 @@ function tbResetVerdict(msg) {
   tbEl('tb-bars').innerHTML = '';
   tbEl('tb-give-val').textContent = '';
   tbEl('tb-get-val').textContent = '';
+  const termsEl = tbEl('tb-terms');
+  if (termsEl) { termsEl.innerHTML = ''; termsEl.hidden = true; }
   tbEl('tb-propose').disabled = true;
 }
 
@@ -375,6 +524,11 @@ async function tbEvaluate() {
     give_picks: [...tbState.givePicks].join(','),
     want_pids: [...tbState.wantPids].join(','),
     want_picks: [...tbState.wantPicks].join(','),
+    // Gap 2: deal terms ride along so the live verdict reflects them.
+    retention: Object.entries(tbState.retention)
+      .filter(([, v]) => v > 0).map(([k, v]) => k + ':' + v).join(','),
+    protection: Object.entries(tbState.protection)
+      .map(([k, v]) => k + ':' + v).join(','),
   });
   if (!tbState.partnerId) { tbResetVerdict(); return; }
   tbEl('tb-badge').textContent = '…';
@@ -409,10 +563,30 @@ function tbRenderVerdict(d) {
       <span class="tb-bar-pts">${pv} pts</span></div>
     ${d.label ? `<div class="tb-bar-row"><span class="tb-bar-label">Valuation</span><span>${esc(d.label)}</span></div>` : ''}`;
 
-  // Propose is only enabled when the REAL AI verdict says accept.
-  tbEl('tb-propose').disabled = v !== 'accept';
+  // Propose is only enabled when the REAL AI verdict says accept AND
+  // every retention term passed the engine's server-side dry run.
+  const retBad = (d.retention_errors && d.retention_errors.length) ||
+    d.retention_valid === false;
+  tbEl('tb-propose').disabled = v !== 'accept' || !!retBad;
   tbEl('tb-note').textContent = '';
   tbEl('tb-note').className = 'prop-note';
+
+  // Gap 2: render the deal's terms under the verdict (retention kept,
+  // pick protection, protection value estimate, retention errors).
+  const termsEl = tbEl('tb-terms');
+  if (termsEl) {
+    const bits = [];
+    if (d.terms_note) bits.push(d.terms_note);
+    if (d.protection_adjustment > 0) {
+      bits.push('Pick protection discounts your offer by ≈' +
+        d.protection_adjustment + ' pts to the receiving GM (estimate).');
+    }
+    if (d.retention_errors && d.retention_errors.length) {
+      bits.push('⚠ Retention problem: ' + d.retention_errors.join(' '));
+    }
+    termsEl.innerHTML = bits.map(b => '<div>' + esc(b) + '</div>').join('');
+    termsEl.hidden = !bits.length;
+  }
 }
 
 async function tbPropose() {
@@ -432,6 +606,8 @@ async function tbPropose() {
         give_picks: [...tbState.givePicks],
         want_pids: [...tbState.wantPids],
         want_picks: [...tbState.wantPicks],
+        retention: tbState.retention,       // {pid: pct} — server re-validates
+        pick_protection: tbState.protection, // {pickId: code} — stamped at execution
       }),
     });
     const data = await res.json();
@@ -474,6 +650,8 @@ async function tbPollResult() {
           // clear the builder; refresh asset lists
           tbState.givePids.clear(); tbState.givePicks.clear();
           tbState.wantPids.clear(); tbState.wantPicks.clear();
+          tbState.retention = {};
+          tbState.protection = {};
           await tbLoadMyAssets();
           tbOnPartnerChange();
         } else {
@@ -504,3 +682,11 @@ document.addEventListener('keydown', e => {
 });
 tbEl('tb-partner-select').addEventListener('change', tbOnPartnerChange);
 tbEl('tb-propose').addEventListener('click', tbPropose);
+
+// Shared heartbeat: tells the game the tab is still open (every 30s).
+// If the tab goes silent the game shuts itself down cleanly.
+(function () {
+  const beat = () => fetch('/api/heartbeat', {method: 'POST'}).catch(() => {});
+  beat();
+  setInterval(beat, 30000);
+})();

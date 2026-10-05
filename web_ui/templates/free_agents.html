@@ -77,6 +77,38 @@
   </div>
 </div>
 
+<!-- v3 multi-day negotiation modal (in-page; never a desktop window) -->
+<div class="cm-overlay" id="neg-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" aria-labelledby="neg-title">
+    <div class="cm-head">
+      <div>
+        <div class="cm-title" id="neg-title">Contract negotiation</div>
+        <div class="cm-player" id="neg-player">—</div>
+      </div>
+      <button class="cm-close" id="neg-close" aria-label="Close">✕</button>
+    </div>
+    <div class="cm-ask" id="neg-ask">—</div>
+    <div class="neg-thread" id="neg-thread"></div>
+    <div class="cm-field" id="neg-counter-fields" hidden>
+      <label for="neg-years">Your counter — term <span class="cm-val" id="neg-years-val">—</span></label>
+      <input type="range" id="neg-years" min="1" max="7" step="1" value="4">
+      <label for="neg-aav" style="margin-top:10px">Your counter — AAV <span class="cm-val" id="neg-aav-val">—</span></label>
+      <div class="cm-stepper">
+        <button class="cm-step" id="neg-aav-down" aria-label="Decrease AAV">−</button>
+        <input type="text" id="neg-aav" inputmode="numeric" value="">
+        <button class="cm-step" id="neg-aav-up" aria-label="Increase AAV">+</button>
+      </div>
+      <div class="cm-hint">Server re-validates terms (league min/max, term, cap) before sending.</div>
+    </div>
+    <div class="cm-note" id="neg-note"></div>
+    <div class="cm-actions">
+      <button class="cm-cancel" id="neg-walk">Walk away</button>
+      <button class="cm-cancel" id="neg-counter">Counter</button>
+      <button class="cm-submit" id="neg-accept">Accept</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/free_agents.js"></script>
 </body>
 </html>

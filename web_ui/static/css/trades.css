@@ -186,3 +186,28 @@
 }
 .tb-actions .prop-note { margin-top: 0; flex: 1; }
 #tb-propose:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+
+/* ---- Gap 2: salary retention + pick protection controls ---- */
+.tb-asset { margin-bottom: 2px; }
+.tb-terms {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px 9px 44px;
+  font-size: 12px; color: var(--dim);
+}
+.tb-terms-label { font-size: 11.5px; }
+.tb-ret-select, .tb-prot-select {
+  background: var(--card2); color: var(--text);
+  border: 1px solid rgba(59,130,246,.4); border-radius: 8px;
+  padding: 4px 8px; font-size: 12px; cursor: pointer;
+}
+.tb-ret-select:disabled { opacity: .45; cursor: not-allowed; }
+.tb-ret-select option:disabled { color: #666; }
+.tb-ret-amt { color: var(--gold); font-size: 11.5px; }
+.tb-slots { font-size: 11.5px; color: var(--dim); margin: 2px 0 8px; }
+.tb-slots.full { color: var(--gold); font-weight: 700; }
+.tb-terms-note {
+  margin-top: 10px; font-size: 12.5px; color: var(--dim);
+  display: flex; flex-direction: column; gap: 4px;
+  line-height: 1.45;
+}
+.tb-terms-note[hidden] { display: none; }

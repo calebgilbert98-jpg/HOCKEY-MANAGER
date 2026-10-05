@@ -100,6 +100,12 @@ def api_trades_propose():
     handler re-validates with the REAL ai_consider_trade() before calling
     the real trade_engine.execute_trade(); it never executes a deal the
     AI rejects.
+
+    Gap 2: optional "retention" ({pid: pct}) and "pick_protection"
+    ({pick id: code}) terms. Hard server-side validation here (the UI
+    also clamps — never trust it): pct must be 1-50, codes must be the
+    engine's real set, and retention is dry-run through the engine's own
+    _retention_check (slot limit, two-club/75-day rules).
     """
     data = request.get_json(force=True, silent=True) or {}
 
@@ -114,6 +120,46 @@ def api_trades_propose():
             return jsonify({"ok": False, "error": "missing target_team_id"}), 400
         if not give_pids and not give_picks and not want_pids and not want_picks:
             return jsonify({"ok": False, "error": "empty proposal"}), 400
+
+        # -- Gap 2: retention + pick protection (server-side validation) --
+        raw_retention = data.get("retention") or {}
+        raw_protection = data.get("pick_protection") or {}
+        if not isinstance(raw_retention, dict):
+            raw_retention = {}
+        if not isinstance(raw_protection, dict):
+            raw_protection = {}
+        for _k, _v in raw_retention.items():
+            try:
+                _pct = float(_v)
+            except Exception:
+                return jsonify({"ok": False,
+                                "error": f"retention on {_k} is not a number"}), 400
+            if not (0 < _pct <= 50):
+                return jsonify({"ok": False,
+                                "error": f"retention on {_k} must be 1-50% "
+                                         f"(got {_pct:g}%)"}), 400
+        for _k, _v in raw_protection.items():
+            if str(_v) not in PROTECTION_CODES:
+                return jsonify({"ok": False,
+                                "error": f"unknown pick protection code: "
+                                         f"{_v!r} (use one of "
+                                         f"{', '.join(PROTECTION_CODES)})"}), 400
+        retention_terms = parse_retention_terms(raw_retention, set(give_pids))
+        protection_terms = parse_protection_terms(raw_protection, set(give_picks))
+        # Dry-run retention through the engine's real rules (slot limit,
+        # two-club/75-day CBA rules). Engine re-checks at execution too.
+        live = _live()
+        if live is not None and retention_terms:
+            user_team = _safe(lambda: live.user_team)
+            if user_team is not None:
+                _gplayers, _ = _resolve_assets(user_team, give_pids, [])
+                _ok, _errs = validate_retention_terms(
+                    user_team, _gplayers, retention_terms)
+                if not _ok:
+                    return jsonify({"ok": False,
+                                    "error": "retention invalid: "
+                                             + "; ".join(_errs)}), 400
+
         ok = enqueue_command(
             "execute_trade",
             target_team_id=str(team_id),
@@ -121,6 +167,8 @@ def api_trades_propose():
             give_picks=give_picks,
             want_pids=want_pids,
             want_picks=want_picks,
+            retention=retention_terms,
+            pick_protection=protection_terms,
         )
         return jsonify({"ok": ok, "queued": "execute_trade", "team": team_id})
 
@@ -256,11 +304,17 @@ def api_trades_assets():
     if team is None:
         return jsonify({"error": "unknown team"}), 404
     players, picks = _team_trade_lists(team)
+    slots = retention_slots_summary(team)
     return jsonify({
         "team": _team_name(team),
-        "players": [{**to_web_player(p),
-                     "level": lvl} for p, lvl in players],
+        "players": [{**to_web_player(p), "level": lvl,
+                     "cap_hit": _player_cap_hit(p)}
+                    for p, lvl in players],
         "picks": [_to_web_pick(pk) for pk in picks],
+        # Gap 2: retention slot meter + the engine's real protection codes.
+        "retention_slots_used": slots["used"],
+        "retention_slots_max": slots["max"],
+        "protection_options": protection_options(),
     })
 
 
@@ -269,8 +323,13 @@ def api_trades_evaluate():
     """Read-only REAL AI verdict on a hypothetical deal.
 
     Query params: give_pids, give_picks, want_pids, want_picks (comma ids),
-    target_team_id. No state mutation: only calls trade_engine's
-    read-only ai_consider_trade() + evaluate_trade().
+    target_team_id. Gap 2 additions: retention ("pid:pct,pid:pct") and
+    protection ("pickid:code,pickid:code") — retention is passed to the
+    real ai_consider_trade() (its cap check is retention-aware) and both
+    term sets are echoed back for the UI.
+    No state mutation: only calls trade_engine's read-only
+    ai_consider_trade() + evaluate_trade(). Protection is never stamped
+    on live picks here (that happens only at execution, in the bridge).
     """
     live = _live()
 
@@ -306,6 +365,21 @@ def api_trades_evaluate():
     give_assets = give_players + give_pick_objs
     want_assets = want_players + want_pick_objs
 
+    # Gap 2: parse + sanitize the deal terms (retention pct, protection
+    # codes) and dry-run retention against the real engine rules. Picks
+    # are NOT mutated here — protection stamps happen at execution only.
+    retention_terms = parse_retention_terms(
+        dict(_pair_csv(request.args.get("retention", ""))),
+        {str(getattr(p, "id", "")) for p in give_players})
+    protection_terms = parse_protection_terms(
+        dict(_pair_csv(request.args.get("protection", ""))),
+        {str(getattr(pk, "id", "")) for pk in give_pick_objs})
+    ret_ok, ret_errors = validate_retention_terms(
+        user_team, give_players, retention_terms)
+    prot_adj = protection_value_adjustment(give_pick_objs, protection_terms, te)
+    terms_note = deal_terms_note(give_players, give_pick_objs,
+                                 retention_terms, protection_terms)
+
     if not give_assets and not want_assets:
         return jsonify({"verdict": "reject",
                         "reason": "There's nothing on the table yet.",
@@ -324,8 +398,18 @@ def api_trades_evaluate():
     label = _safe(lambda: ev.label, "Incomplete") or "Incomplete"
 
     # REAL AI verdict — read-only; ai_consider_trade never mutates.
-    resp = _safe(lambda: te.ai_consider_trade(
-        partner, give_assets, want_assets, user_team=user_team))
+    # Retention is passed through: the AI's cap check prices the reduced
+    # incoming hit exactly like a real GM pricing retained money.
+    def _verdict_call():
+        try:
+            return te.ai_consider_trade(
+                partner, give_assets, want_assets, user_team=user_team,
+                retention=retention_terms)
+        except TypeError:
+            # Older ai_consider_trade without the retention kwarg.
+            return te.ai_consider_trade(
+                partner, give_assets, want_assets, user_team=user_team)
+    resp = _safe(_verdict_call)
     verdict = _safe(lambda: resp.decision, "reject") or "reject"
     reason = _safe(lambda: resp.message, "") or ""
 
@@ -339,6 +423,13 @@ def api_trades_evaluate():
         "label": label,
         "give_count": len(give_assets),
         "get_count": len(want_assets),
+        # Gap 2: deal terms reflected in the verdict.
+        "retention_terms": retention_terms,    # {pid: pct}
+        "protection_terms": protection_terms,  # {pick id: code}
+        "retention_valid": ret_ok,
+        "retention_errors": ret_errors,
+        "protection_adjustment": prot_adj,     # heuristic pts (display)
+        "terms_note": terms_note,
     })
 
 
@@ -348,3 +439,217 @@ def api_trades_result():
     live = _live()
     result = _safe(lambda: getattr(live, "_web_trade_result", None)) if live else None
     return jsonify({"result": result})
+
+
+# ======================================================================
+# Gap 2: salary retention + pick protection in the trade builder.
+# (Appended 2026-10-04; v2 routes above untouched except additive edits.)
+#
+# Wire format (matches the desktop flow in trade_negotiation.py):
+#   retention:      {player id (str): pct} — salary the user's club keeps
+#                   on players it trades away. Engine: 1-50% per deal,
+#                   max 3 active slots per club (trade_engine.MAX_*
+#                   constants). Passed to ai_consider_trade() (its cap
+#                   check is retention-aware) and execute_trade().
+#   pick_protection:{pick id (str): code} — the engine's REAL protection
+#                   codes are "top-3" | "top-10" | "lottery" (see
+#                   trade_engine.protection_label). Applied at execution
+#                   by stamping pick.protection/is_conditional/condition,
+#                   exactly like trade_negotiation._neg_terms(stamp=True).
+# ======================================================================
+
+# Engine's real protection codes — never invent others.
+PROTECTION_CODES = ("top-3", "top-10", "lottery")
+
+# Retention pct choices offered in the UI (engine max is 50).
+RETENTION_OPTIONS = (0, 25, 50)
+
+# Protection valuation haircut for the verdict display. The ENGINE does
+# not price protection (pick_trade_value ignores it; the desktop flow
+# doesn't adjust either), so this is a documented UI heuristic: a
+# protected pick may roll to next year, making it worth less to the
+# receiving GM. The AI's accept/reject decision itself is unchanged.
+PROTECTION_HAIRCUT = {"top-3": 0.15, "top-10": 0.25, "lottery": 0.35}
+
+
+def _player_cap_hit(p):
+    """Engine-consistent cap hit: contract salary minus retained amount."""
+    hit = _safe(lambda: int(getattr(getattr(p, "contract", None),
+                                   "salary", 0) or 0), 0)
+    if not hit:
+        hit = _safe(lambda: int(getattr(p, "salary", 0) or 0), 0)
+    hit -= _safe(lambda: int(getattr(p, "retained_amount", 0) or 0), 0)
+    return max(0, hit)
+
+
+def _fmt_money(n):
+    try:
+        n = int(n)
+    except Exception:
+        return "$0"
+    if n >= 1_000_000:
+        return f"${n / 1_000_000:.2f}M"
+    if n >= 1_000:
+        return f"${round(n / 1_000)}K"
+    return f"${n}"
+
+
+def retention_slots_summary(team):
+    """{used, max} retention slots for a club. _safe()-wrapped."""
+    te = _trade_engine()
+    used = _safe(lambda: int(te.retention_slots_used(team)), 0) if te else 0
+    mx = _safe(lambda: int(te.MAX_RETENTION_SLOTS), 3) if te else 3
+    return {"used": max(0, used), "max": max(1, mx)}
+
+
+def protection_options():
+    """[{code, label}] using the engine's real protection_label()."""
+    te = _trade_engine()
+    out = []
+    for code in PROTECTION_CODES:
+        label = _safe(lambda c=code: te.protection_label(c), "") if te else ""
+        out.append({"code": code, "label": label or code})
+    return out
+
+
+def parse_retention_terms(raw, valid_pids=None):
+    """Sanitize retention terms -> {str pid: float pct}.
+
+    Keeps only terms for assets the user is actually trading away
+    (valid_pids) with 0 < pct <= engine MAX_RETENTION_PCT. Anything
+    else is dropped (the propose endpoint hard-rejects bad input
+    before this is reached).
+    """
+    te = _trade_engine()
+    cap = _safe(lambda: float(te.MAX_RETENTION_PCT), 50.0) if te else 50.0
+    out = {}
+    items = raw.items() if isinstance(raw, dict) else []
+    for k, v in items:
+        pid = str(k)
+        if valid_pids is not None and pid not in {str(x) for x in valid_pids}:
+            continue
+        try:
+            pct = float(v)
+        except Exception:
+            continue
+        if 0 < pct <= cap:
+            out[pid] = pct
+    return out
+
+
+def parse_protection_terms(raw, valid_pick_ids=None):
+    """Sanitize pick protection -> {str pick id: code}.
+
+    Keeps only the engine's real codes for picks the user is actually
+    trading away.
+    """
+    out = {}
+    items = raw.items() if isinstance(raw, dict) else []
+    for k, v in items:
+        kid = str(k)
+        if valid_pick_ids is not None and \
+                kid not in {str(x) for x in valid_pick_ids}:
+            continue
+        code = str(v or "").strip()
+        if code in PROTECTION_CODES:
+            out[kid] = code
+    return out
+
+
+def validate_retention_terms(user_team, give_players, retention_terms):
+    """Dry-run every retention term against the real engine rules.
+
+    Uses trade_engine.apply_retention_dry_run (the same _retention_check
+    execute_trade preflights): 1-50%, 3-slot club limit (counting the
+    other proposed terms in this deal via `extra`), 15% aggregate is
+    checked at execution, two-club/75-day rules included.
+    Returns (ok, [error strings]). _safe()-wrapped reads only.
+    """
+    te = _trade_engine()
+    if not retention_terms:
+        return True, []
+    if te is None or user_team is None:
+        return False, ["Trade engine unavailable for retention check."]
+    by_id = {}
+    for p in give_players or []:
+        by_id[str(_safe(lambda: getattr(p, "id", ""), ""))] = p
+    errors = []
+    for pid, pct in retention_terms.items():
+        player = by_id.get(str(pid))
+        if player is None:
+            errors.append(f"Retention target {pid} is not in the deal.")
+            continue
+        others = {k: v for k, v in retention_terms.items()
+                  if str(k) != str(pid)}
+        ok, msg = _safe(
+            lambda: te.apply_retention_dry_run(user_team, player, pct,
+                                               extra=others),
+            (False, "retention check failed"))
+        if not ok:
+            name = _safe(lambda: getattr(player, "full_name", pid), pid)
+            errors.append(f"{name}: {msg}")
+    return (len(errors) == 0), errors
+
+
+def protection_value_adjustment(give_pick_objs, protection_terms, te=None):
+    """Heuristic point discount for protected outgoing picks (display).
+
+    Documented estimate only — the engine's pick_trade_value does not
+    price protection. Returned so the verdict panel can show the user
+    what the protection likely costs their offer.
+    """
+    te = te or _trade_engine()
+    if not protection_terms or te is None:
+        return 0
+    adj = 0
+    for pk in give_pick_objs or []:
+        code = (protection_terms or {}).get(
+            str(_safe(lambda: getattr(pk, "id", ""), "")))
+        haircut = PROTECTION_HAIRCUT.get(code)
+        if not haircut:
+            continue
+        val = _safe(lambda: te.pick_trade_value(pk), 0) or 0
+        adj += int(round(val * haircut))
+    return adj
+
+
+def deal_terms_note(give_players, give_pick_objs, retention_terms,
+                    protection_terms):
+    """Human-readable summary of the deal's retention/protection terms."""
+    te = _trade_engine()
+    bits = []
+    for p in give_players or []:
+        pct = (retention_terms or {}).get(
+            str(_safe(lambda: getattr(p, "id", ""), "")))
+        if pct:
+            name = _safe(lambda: getattr(p, "full_name", "?"), "?")
+            amt = int(round(_player_cap_hit(p)
+                            * min(float(pct), 50.0) / 100.0))
+            bits.append(f"you retain {float(pct):g}% "
+                        f"({_fmt_money(amt)}) on {name}")
+    for pk in give_pick_objs or []:
+        code = (protection_terms or {}).get(
+            str(_safe(lambda: getattr(pk, "id", ""), "")))
+        if code:
+            label = _safe(lambda: te.protection_label(code), code) \
+                if te else code
+            desc = _safe(lambda: getattr(pk, "description",
+                                         "pick"), "pick")
+            bits.append(f"{desc} is {str(label).lower()}")
+    if not bits:
+        return ""
+    return "Deal terms: " + "; ".join(bits) + "."
+
+
+def _pair_csv(raw):
+    """Parse 'a:1,b:2' query param -> [(a, 1), (b, 2)] (values stay str)."""
+    out = []
+    for chunk in str(raw or "").split(","):
+        chunk = chunk.strip()
+        if ":" not in chunk:
+            continue
+        k, v = chunk.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k:
+            out.append((k, v))
+    return out

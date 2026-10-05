@@ -311,3 +311,370 @@ def api_contracts_extend_real():
     queued = enqueue_command("extend_contract_real",
                              player_id=str(pid), years=years, aav=aav)
     return jsonify({"ok": bool(queued), "queued": "extend_contract_real"})
+
+
+# ------------------------------------------------------------------
+# v3 multi-day negotiation: the agent's counter arrives as an inbox
+# message (action_type="contract_counter", main.py:22421). The web
+# mirrors it into app._web_negotiations so an in-page modal can show
+# the offer thread and let the user Accept / Counter / Walk away
+# without touching the desktop inbox window. All state mutations run
+# on the main thread via bridge command ops; every call is
+# _safe-wrapped and uses real game methods only.
+# ------------------------------------------------------------------
+
+_NEG_STATUSES = ("awaiting_agent", "countered", "accepted", "refused",
+                 "walked")
+
+
+def _negotiations(app):
+    """Server-side negotiation map on the app (mock-safe). Never raises."""
+    try:
+        negs = getattr(app, "_web_negotiations", None)
+        if not isinstance(negs, dict):
+            negs = {}
+            app._web_negotiations = negs
+        return negs
+    except Exception:
+        return {}
+
+
+def _pending_counter_message(app, pid):
+    """Latest unanswered contract_counter inbox message for a player
+    (messages append chronologically, so last match wins). Never raises."""
+    try:
+        inbox = getattr(getattr(app, "user_team", None), "inbox", None)
+        msgs = list(getattr(inbox, "messages", None) or [])
+        pid_s = str(pid)
+        best = None
+        for m in msgs:
+            try:
+                if getattr(m, "action_type", "") != "contract_counter":
+                    continue
+                if getattr(m, "action_done", False):
+                    continue
+                data = getattr(m, "action_data", None) or {}
+                if str(data.get("player_id", "")) != pid_s:
+                    continue
+                best = m
+            except Exception:
+                continue
+        return best
+    except Exception:
+        return None
+
+
+def _find_neg_person(app, pid, kind):
+    """Player by id: roster for extensions, free-agent pool for signings.
+    Never raises."""
+    try:
+        if kind == "extend":
+            pool = list(getattr(getattr(app, "user_team", None),
+                                "roster", None) or [])
+        else:
+            league = getattr(getattr(app, "game_manager", None),
+                             "league", None)
+            pool = list(getattr(league, "free_agents", None) or [])
+        for p in pool:
+            if str(_safe(lambda: getattr(p, "id", id(p)), "")) == str(pid):
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _neg_kind_for(app, pid):
+    """sign vs extend for a player: existing negotiation state wins,
+    else derive from where the player lives. Never raises."""
+    try:
+        st = _negotiations(app).get(str(pid))
+        if st and st.get("kind") in ("sign", "extend"):
+            return st["kind"]
+    except Exception:
+        pass
+    try:
+        roster = list(getattr(getattr(app, "user_team", None),
+                              "roster", None) or [])
+        for p in roster:
+            if str(_safe(lambda: getattr(p, "id", id(p)), "")) == str(pid):
+                return "extend"
+    except Exception:
+        pass
+    return "sign"
+
+
+def _apply_offer_verdict(app, st, result):
+    """Map handle_contract_offer's return onto the negotiation state:
+    True -> accepted; "consideration" -> awaiting_agent (the UFA bid
+    period); False -> countered when a fresh contract_counter inbox
+    message exists, refused otherwise."""
+    if result is True:
+        st["status"] = "accepted"
+        return
+    if result == "consideration":
+        st["status"] = "awaiting_agent"
+        st["note"] = ("Qualifying offer: the player fields bids from every "
+                      "club for 3-7 days before deciding.")
+        return
+    counter = _pending_counter_message(app, st.get("player_id"))
+    if counter is not None:
+        data = getattr(counter, "action_data", None) or {}
+        st["agent_ask"] = _safe(lambda: int(data.get("asking_price", 0)
+                                            or 0), 0)
+        st["counter_terms"] = {
+            "years": _safe(lambda: int(data.get("years", 1) or 1), 1),
+            "aav": _safe(lambda: int(data.get("asking_price", 0) or 0), 0),
+        }
+        st["status"] = "countered"
+    else:
+        st["status"] = "refused"
+
+
+def handle_offer_command(app, pid, player, kind, years, aav):
+    """Bridge hook for sign/extend ops. Stages the offer (already done by
+    the caller), runs the real HockeyManagerGUI.handle_contract_offer
+    (main.py:21978, notify="inbox"), and mirrors the verdict into
+    app._web_negotiations. Never raises."""
+    try:
+        pid_s = str(pid)
+        negs = _negotiations(app)
+        st = negs.get(pid_s) or {}
+        name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+        st.update(
+            player_id=pid_s,
+            player_name=st.get("player_name") or name,
+            kind=kind,
+            your_offers=list(st.get("your_offers") or []) + [
+                {"years": int(years), "aav": int(aav)}],
+            agent_ask=st.get("agent_ask"),
+            counter_terms=st.get("counter_terms"),
+            status="awaiting_agent",
+            note="",
+        )
+        negs[pid_s] = st
+    except Exception:
+        return
+    try:
+        result = app.handle_contract_offer(
+            player, extension=(kind == "extend"), notify="inbox")
+    except Exception:
+        return
+    _safe(lambda: _apply_offer_verdict(app, st, result))
+
+
+def handle_negotiation_command(app, cmd):
+    """Dispatch the three v3 negotiation ops (called from thin bridge.py
+    elif lines). All _safe-wrapped, real game methods only. Returns True
+    when the op was handled."""
+    op = cmd.get("op")
+    try:
+        if op == "negotiate_counter":
+            return _negotiate_counter(app, cmd)
+        if op == "negotiate_accept":
+            return _negotiate_accept(app, cmd)
+        if op == "negotiate_walk":
+            return _negotiate_walk(app, cmd)
+    except Exception:
+        pass
+    return False
+
+
+def _negotiate_counter(app, cmd):
+    """New offer into an open negotiation: desktop 'New Offer' semantics
+    (inbox_window._on_contract_counter_new_offer): the pending counter is
+    answered by the fresh offer, which runs the same real offer path and
+    re-stashes the new verdict."""
+    pid = cmd.get("player_id")
+    if not pid:
+        return True
+    pid_s = str(pid)
+    try:
+        years = int(cmd.get("years", 0))
+    except (TypeError, ValueError):
+        years = 0
+    try:
+        aav = int(cmd.get("aav", 0))
+    except (TypeError, ValueError):
+        aav = 0
+    try:
+        kind = _neg_kind_for(app, pid_s)
+        extension = (kind == "extend")
+        player = _find_neg_person(app, pid_s, kind)
+        if player is None or years < 1 or aav <= 0:
+            return True
+        # Re-validate through the game's own gate (the desktop counter
+        # path gates accept too: main.py:22456).
+        ok, reason = _safe(
+            lambda: app._validate_contract_terms(player, aav, years,
+                                                 extension=extension),
+            (False, "Could not validate contract terms."))
+        st = _negotiations(app).get(pid_s)
+        if not ok:
+            if st is not None:
+                st["note"] = str(reason or "")
+                st["status"] = "countered"  # talks stay open
+            return True
+        old = _pending_counter_message(app, pid_s)
+        if old is not None:
+            _safe(lambda: setattr(old, "action_done", True))
+        player.salary = aav
+        player.contract_years = years
+        handle_offer_command(app, pid_s, player, kind, years, aav)
+        return True
+    except Exception:
+        return True
+
+
+def _negotiate_accept(app, cmd):
+    """Accept the agent's counter as-is: the real
+    HockeyManagerGUI.accept_contract_counter (main.py:22456). Extensions
+    sign instantly; UFA counters open a consideration bid window."""
+    pid = cmd.get("player_id")
+    if not pid:
+        return True
+    pid_s = str(pid)
+    try:
+        st = _negotiations(app).get(pid_s)
+        if st is None:
+            return True
+        counter = _pending_counter_message(app, pid_s)
+        if counter is None:
+            return True
+        try:
+            ok = app.accept_contract_counter(counter)
+        except Exception:
+            return True
+        kind = st.get("kind") or _neg_kind_for(app, pid_s)
+        if ok:
+            if kind == "extend":
+                st["status"] = "accepted"
+                st["note"] = ""
+            else:
+                st["status"] = "awaiting_agent"
+                st["note"] = ("Counter accepted — your bid is in; the agent "
+                              "decides after the consideration period.")
+        else:
+            # League-office veto path (desktop _inbox_contract_result
+            # "rejected" with reject_note).
+            st["status"] = "refused"
+            st["note"] = ("The league office rejected the counter terms — "
+                          "his camp must come back with a compliant number.")
+        return True
+    except Exception:
+        return True
+
+
+def _negotiate_walk(app, cmd):
+    """Walk away: the desktop equivalent
+    (inbox_window._on_contract_counter_walkaway) only marks the message
+    done -- nothing happens to the game. We do the same and close the
+    web state."""
+    pid = cmd.get("player_id")
+    if not pid:
+        return True
+    pid_s = str(pid)
+    try:
+        counter = _pending_counter_message(app, pid_s)
+        if counter is not None:
+            _safe(lambda: setattr(counter, "action_done", True))
+        st = _negotiations(app).get(pid_s)
+        if st is not None:
+            st["status"] = "walked"
+        return True
+    except Exception:
+        return True
+
+
+@bp.route("/api/contracts/negotiation")
+def api_contracts_negotiation():
+    """Poll endpoint for the in-page negotiation modal (used by both the
+    contracts and free-agents pages). 200 with the server-side
+    negotiation state, or {"status": "none"} when there is none."""
+    live = _live()
+    if live is None:
+        return jsonify({"status": "none", "error": "no live game"}), 503
+    pid = request.args.get("player_id")
+    if not pid:
+        return jsonify({"status": "none",
+                        "error": "player_id required"}), 400
+    st = _safe(lambda: _negotiations(live).get(str(pid)))
+    if not st:
+        return jsonify({"status": "none"})
+    return jsonify({
+        "player_id": st.get("player_id"),
+        "player_name": st.get("player_name"),
+        "kind": st.get("kind"),
+        "your_offers": st.get("your_offers") or [],
+        "agent_ask": st.get("agent_ask"),
+        "counter_terms": st.get("counter_terms"),
+        "status": st.get("status", "awaiting_agent"),
+        "note": st.get("note", ""),
+    })
+
+
+@bp.route("/api/contracts/negotiate", methods=["POST"])
+def api_contracts_negotiate():
+    """Enqueue a negotiation action on an open counter talk:
+    {"player_id", "action": "counter"|"accept"|"walk", years?, aav?}.
+    Counter terms are re-validated here (game's own gates + the signing
+    window); the main-thread op validates once more before running."""
+    data = request.get_json(force=True, silent=True) or {}
+    pid = data.get("player_id")
+    action = data.get("action")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    st = _safe(lambda: _negotiations(live).get(str(pid)))
+    if not st or st.get("status") != "countered":
+        return jsonify({"ok": False,
+                        "error": "No open negotiation for this player."}), 409
+    if action == "accept":
+        queued = enqueue_command("negotiate_accept", player_id=str(pid))
+    elif action == "walk":
+        queued = enqueue_command("negotiate_walk", player_id=str(pid))
+    elif action == "counter":
+        try:
+            years = int(data.get("years"))
+            aav = int(data.get("aav"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False,
+                            "error": "years and aav must be integers"}), 400
+        kind = st.get("kind") or _neg_kind_for(live, pid)
+        player = _find_neg_person(live, pid, kind)
+        if player is None:
+            return jsonify({"ok": False, "error": "player not found"}), 404
+        ok, msg = _validate_neg_offer(live, player, aav, years, kind)
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), 422
+        queued = enqueue_command("negotiate_counter", player_id=str(pid),
+                                 years=years, aav=aav)
+    else:
+        return jsonify({"ok": False, "error": "unknown action"}), 400
+    return jsonify({"ok": bool(queued), "action": action})
+
+
+def _validate_neg_offer(live, player, aav, years, kind):
+    """Full gate set for a web counter-offer, mirroring the initial
+    offer endpoints: the game's _validate_contract_terms plus the
+    signing/extension window and (UFA sign) roster eligibility."""
+    extension = (kind == "extend")
+    try:
+        if extension:
+            ok, msg = _validate_extension(live, player, aav, years)
+            if not ok:
+                return False, msg
+            return _extension_window(live, player)
+        # sign path: same three gates as api_free_agents_offer
+        from web_ui.screens import free_agents as _fa
+        ok, msg = _fa._validate_offer(live, player, aav, years,
+                                      extension=False)
+        if not ok:
+            return False, msg
+        ok, msg = _fa._window_check(live, player, extension=False)
+        if not ok:
+            return False, msg
+        return _fa._sign_eligibility(live, player)
+    except Exception:
+        return False, "Could not validate counter-offer terms."

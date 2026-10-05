@@ -593,8 +593,17 @@ def _execute_command(app, cmd):
                     # (windows.py): the offer rides on the player object.
                     player.salary = aav
                     player.contract_years = years
-                    app.handle_contract_offer(player, extension=False,
-                                              notify="inbox")
+                    # v3 multi-day negotiation: run the offer through the
+                    # negotiation hook so a counter is stashed on
+                    # app._web_negotiations (in addition to the inbox
+                    # message) for the in-page modal. The hook itself
+                    # calls the real handle_contract_offer(notify="inbox").
+                    try:
+                        from web_ui.screens import contracts as _neg_mod
+                        _neg_mod.handle_offer_command(
+                            app, pid, player, "sign", years, aav)
+                    except Exception:
+                        pass
                     _wc_store(True, "Offer submitted — the response will "
                                     "arrive in your inbox.")
                 elif reason:
@@ -646,12 +655,47 @@ def _execute_command(app, cmd):
                     # Same staging as the desktop extension flow.
                     player.salary = aav
                     player.contract_years = years
-                    app.handle_contract_offer(player, extension=True,
-                                              notify="inbox")
+                    # v3 multi-day negotiation: run the offer through the
+                    # negotiation hook so a counter is stashed on
+                    # app._web_negotiations (in addition to the inbox
+                    # message) for the in-page modal. The hook itself
+                    # calls the real handle_contract_offer(notify="inbox").
+                    try:
+                        from web_ui.screens import contracts as _neg_mod
+                        _neg_mod.handle_offer_command(
+                            app, pid, player, "extend", years, aav)
+                    except Exception:
+                        pass
                     _wc_store(True, "Extension submitted — the response "
                                     "will arrive in your inbox.")
                 elif reason:
                     _wc_store(False, reason)
+            except Exception:
+                pass
+        elif op == "negotiate_counter":
+            # v3 multi-day negotiation: new counter-offer into an open
+            # contract talk. Thin delegation: all logic lives in
+            # web_ui/screens/contracts.py::handle_negotiation_command.
+            try:
+                from web_ui.screens import contracts as _neg_mod
+                _neg_mod.handle_negotiation_command(app, cmd)
+            except Exception:
+                pass
+        elif op == "negotiate_accept":
+            # v3: accept the agent's counter as-is (real
+            # HockeyManagerGUI.accept_contract_counter, main.py:22456).
+            try:
+                from web_ui.screens import contracts as _neg_mod
+                _neg_mod.handle_negotiation_command(app, cmd)
+            except Exception:
+                pass
+        elif op == "negotiate_walk":
+            # v3: walk away (desktop equivalent:
+            # inbox_window._on_contract_counter_walkaway ->
+            # message.action_done = True; nothing happens to the game).
+            try:
+                from web_ui.screens import contracts as _neg_mod
+                _neg_mod.handle_negotiation_command(app, cmd)
             except Exception:
                 pass
         elif op == "add_scouting_assignment_real":
@@ -761,11 +805,76 @@ def _execute_command(app, cmd):
                     _wt_store(False, "Empty proposal.", "")
                     return
 
+                # Gap 2: salary retention + pick protection terms from the
+                # web trade builder (cmd["retention"], cmd["pick_protection"]).
+                # Server-side re-validation (the /api/trades/propose route
+                # already validated; never trust the client twice):
+                #   - pct must be 0 < pct <= MAX_RETENTION_PCT (engine: 50)
+                #   - protection codes limited to the engine's real set
+                #     ("top-3" | "top-10" | "lottery")
+                #   - terms dropped for stale assets (not in this deal)
+                #   - retention dry-run through the engine's own
+                #     apply_retention_dry_run (3-slot club limit counting
+                #     the deal's other terms via `extra`, 75-day
+                #     double-retention clock, two-club rule) — a bad term
+                #     fails here with a clear message, not BLOCKED later.
+                try:
+                    from game_classes import DraftPick as _DP_gap2
+                except Exception:
+                    _DP_gap2 = ()
+                _wt_retention, _wt_protection = {}, {}
+                try:
+                    _give_pids = {str(getattr(_p, "id", ""))
+                                  for _p in give_assets
+                                  if not isinstance(_p, _DP_gap2)}
+                    _give_pickids = {str(getattr(_p, "id", ""))
+                                     for _p in give_assets
+                                     if isinstance(_p, _DP_gap2)}
+                    _raw_ret = cmd.get("retention") or {}
+                    if isinstance(_raw_ret, dict):
+                        for _k, _v in _raw_ret.items():
+                            try:
+                                _pct = float(_v)
+                            except Exception:
+                                continue
+                            if 0 < _pct <= _te.MAX_RETENTION_PCT \
+                                    and str(_k) in _give_pids:
+                                _wt_retention[str(_k)] = _pct
+                    _raw_prot = cmd.get("pick_protection") or {}
+                    if isinstance(_raw_prot, dict):
+                        for _k, _v in _raw_prot.items():
+                            if str(_v) in ("top-3", "top-10", "lottery") \
+                                    and str(_k) in _give_pickids:
+                                _wt_protection[str(_k)] = str(_v)
+                    if _wt_retention:
+                        _by_id = {str(getattr(_p, "id", "")): _p
+                                  for _p in give_assets
+                                  if not isinstance(_p, _DP_gap2)}
+                        for _pid, _pct in _wt_retention.items():
+                            _pl = _by_id.get(_pid)
+                            _extra = {k: v for k, v in _wt_retention.items()
+                                      if k != _pid}
+                            _ok2, _msg2 = _te.apply_retention_dry_run(
+                                user_team, _pl, _pct, extra=_extra)
+                            if not _ok2:
+                                _wt_store(
+                                    False,
+                                    "Retained-salary term on "
+                                    f"{getattr(_pl, 'full_name', _pid)} is "
+                                    f"illegal ({_msg2}).",
+                                    "")
+                                return
+                except Exception:
+                    pass
+
                 # RE-VALIDATE with the real AI before any mutation.
+                # Retention is passed through: the AI's cap check prices
+                # the reduced incoming hit exactly like a real GM pricing
+                # retained money.
                 try:
                     resp = _te.ai_consider_trade(
                         partner, give_assets, want_assets,
-                        user_team=user_team)
+                        user_team=user_team, retention=_wt_retention)
                     verdict = str(getattr(resp, "decision", "") or "")
                     message = str(getattr(resp, "message", "") or "")
                 except Exception:
@@ -782,9 +891,31 @@ def _execute_command(app, cmd):
                 _cur = getattr(gm, "current_date", None)
                 date_str = str(_cur) if _cur else str(_dt.today())
                 _board = getattr(getattr(app, "career", None), "board", None)
+                # Gap 2: stamp pick protections on the live DraftPick objects
+                # BEFORE execution (desktop flow: trade_negotiation
+                # ._neg_terms(stamp=True)). Only reached after the AI
+                # accepted, so a declined deal leaves no flags.
+                for _pk in give_assets:
+                    if not isinstance(_pk, _DP_gap2):
+                        continue
+                    _prot = _wt_protection.get(
+                        str(getattr(_pk, "id", "")))
+                    if _prot:
+                        try:
+                            _pk.protection = _prot
+                            _pk.is_conditional = True
+                            _pk.condition = (
+                                f"{_te.protection_label(_prot)}: if this pick "
+                                f"falls in the protected range, "
+                                f"{getattr(_pk, 'original_team', 'the original club')} "
+                                f"keeps it and the holder receives their "
+                                f"next-year 1st-rounder instead.")
+                        except Exception:
+                            pass
                 trade = _te.execute_trade(
                     user_team, partner, give_assets, want_assets,
-                    date_str, league=league, board=_board)
+                    date_str, league=league, board=_board,
+                    retention=_wt_retention)
                 summary = str(getattr(trade, "summary", "") or "")
                 if summary.startswith("BLOCKED:"):
                     _wt_store(False, summary[8:].strip(), verdict)
