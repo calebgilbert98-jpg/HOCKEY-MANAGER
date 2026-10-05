@@ -656,7 +656,18 @@ class GameManager:
     
     def add_fantasy_draft_inbox_message(self):
         """Add a fantasy draft notification message to the user's inbox"""
+        try:
+            with open("mp_diag.log", "a") as _f:
+                _f.write(f"[DRAFT-EMAIL] called, user_team={self.user_team}, "
+                         f"has_inbox={hasattr(self, 'inbox_messages')}\n")
+        except Exception:
+            pass
         if not self.user_team:
+            try:
+                with open("mp_diag.log", "a") as _f:
+                    _f.write("[DRAFT-EMAIL] ABORT: no user_team\n")
+            except Exception:
+                pass
             return
             
         from game_classes import EmailMessage
