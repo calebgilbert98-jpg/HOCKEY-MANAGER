@@ -99,6 +99,8 @@ class MultiplayerClient:
 
         self.session_id: Optional[str] = None
         self.team_id: Optional[str] = None
+        #: Port of the host we're connected to (for host-migration reuse).
+        self.port: int = 0
         self.game_date: str = "unknown"
         self.managers: List[Dict[str, str]] = []
         #: Full claimable team roster from WELCOME (may be empty on old hosts).
@@ -137,6 +139,10 @@ class MultiplayerClient:
             raise ConnectionError(f"could not reach {host}:{port} ({exc})")
         sock.settimeout(None)
         self._sock = sock
+        try:
+            self.port = int(port)
+        except Exception:
+            pass
         self._running.set()
         self._disconnect_reported = False
         self._recv_thread = threading.Thread(target=self._recv_loop,

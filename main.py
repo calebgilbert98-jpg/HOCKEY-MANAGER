@@ -9258,6 +9258,13 @@ class HockeyManagerGUI(tk.Tk):
                     "Promote this client to host so the session can continue?")
             except Exception:
                 _promote = False
+            # Capture the session port before dropping the client: promotion
+            # must reuse the session port, not silently fall back to default.
+            try:
+                self._mp_last_host_port = int(
+                    getattr(self.mp_client, "port", 0) or 0)
+            except Exception:
+                self._mp_last_host_port = 0
             self.mp_client = None  # stops the poll loop
             if _promote:
                 try:
@@ -9325,12 +9332,8 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 return []
 
-        _port = _p.DEFAULT_PORT
-        try:
-            _old = getattr(self, "mp_client", None)
-            _port = int(getattr(_old, "port", 0) or 0) or _p.DEFAULT_PORT
-        except Exception:
-            pass
+        _port = int(getattr(self, "_mp_last_host_port", 0) or 0) \
+            or _p.DEFAULT_PORT
         _host = _nh.MultiplayerHost(
             _state_provider,
             host_name=f"{getattr(self, 'user_team', None) and getattr(self.user_team, 'team_name', 'Host') or 'Host'} (promoted)",

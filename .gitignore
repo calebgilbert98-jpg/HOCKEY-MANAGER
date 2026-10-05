@@ -57,3 +57,4 @@ test_extract/
 qa_output/
 
 telemetry/games.jsonl
+playthrough_harness*/
