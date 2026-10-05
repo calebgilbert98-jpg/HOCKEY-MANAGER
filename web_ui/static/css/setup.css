@@ -54,6 +54,16 @@
   transition: background .15s ease, border-color .15s ease;
 }
 .fld-row .btn-ghost:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue); }
+/* Standalone ghost buttons (not in .fld-row): explicit dark style so
+   white-on-white can never happen regardless of load order. */
+button.btn-ghost {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.16);
+  border-radius: var(--nhl-r); color: #fff; padding: 12px 18px;
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 700;
+  letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+button.btn-ghost:hover { background: var(--nhl-blue-soft); border-color: var(--nhl-blue); }
 .setup-sect { margin: 18px 0 4px; padding-top: 16px;
   border-top: 1px solid rgba(255,255,255,.07); }
 .setup-sect-h {
