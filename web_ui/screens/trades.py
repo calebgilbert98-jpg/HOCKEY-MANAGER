@@ -815,3 +815,150 @@ def api_trades_negotiations():
     # Most recent first.
     out.sort(key=lambda d: (d.get("created") or ""), reverse=True)
     return jsonify({"negotiations": out})
+
+
+# ======================================================================
+# Batch D: NTC/NMC waiver-consent preflight + completed-trade log.
+#
+# Desktop parity (windows.py:~6212, trade_negotiation flow): before a
+# proposal goes out, both directions get a clause preflight -- the
+# partner's clause players get the same destination-aware check the AI
+# applies on its side, and the user's own clause players get the
+# waive-likelihood heads-up with a per-player ask. Non-blocking: the
+# user can still send, but never blind. The offer-sheet-match
+# 1-year no-trade is a hard block (no consent-ask flow exists for it).
+# ======================================================================
+
+def _preflight_flag(live, te, player, from_team, to_team):
+    """One player's clause preflight: kind/detail + waive likelihood.
+
+    Returns None when no clause bites for this destination. Never raises.
+    """
+    try:
+        league = _safe(lambda: live.game_manager.league)
+        vetoes = te.trade_vetoes(from_team, to_team, [player], league)
+        if not vetoes:
+            return None
+        v = vetoes[0]
+        kind = str(v.get("clause") or "")
+        detail = str(v.get("detail") or "")
+        name = _safe(lambda: getattr(player, "full_name", "?"), "?")
+        # Hard block: offer-sheet match year -- no consent ask possible.
+        if kind == "OFFER-SHEET-NO-TRADE":
+            return {"player_id": str(_safe(lambda: getattr(player, "id", ""), "")),
+                    "name": name, "clause": kind, "detail": detail,
+                    "waive_likely": False,
+                    "waive_note": detail,
+                    "hard_block": True}
+        try:
+            wok, why = te.will_waive_ntc(player, from_team, to_team, league)
+        except Exception:
+            wok, why = False, "consent check unavailable"
+        return {
+            "player_id": str(_safe(lambda: getattr(player, "id", ""), "")),
+            "name": name,
+            "clause": kind,
+            "clause_label": _safe(
+                lambda: te.clause_offer_label(
+                    {"nmc": "nmc", "ntc": "ntc", "M-NTC": "mntc"}.get(
+                        kind, "none")), "none") or kind,
+            "detail": detail,
+            "waive_likely": bool(wok),
+            "waive_note": str(why or ""),
+            "hard_block": False,
+        }
+    except Exception:
+        return None
+
+
+@bp.route("/api/trades/consent_preflight")
+def api_trades_consent_preflight():
+    """NTC/NMC waiver-consent preflight for a proposed deal.
+
+    Query: target_team_id, give_pids (our players), want_pids (their
+    players). Runs trade_engine.trade_vetoes on BOTH directions plus
+    will_waive_ntc per flagged player -- exactly the desktop heads-up
+    (windows.py:~6212). Non-blocking: returns "send_anyway" guidance;
+    the offer-sheet-match year is a hard block instead.
+    """
+    live = _live()
+    te = _trade_engine()
+    if live is None or te is None:
+        return jsonify({"ok": False, "flags": [], "our_flags": [],
+                        "their_flags": [], "hard_block": False,
+                        "error": "no live game or trade engine"}), 503
+
+    def _csv(name):
+        raw = request.args.get(name, "") or ""
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+    gm = _safe(lambda: live.game_manager)
+    user_team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    partner = None
+    target_id = request.args.get("target_team_id", "")
+    league = _safe(lambda: gm.league)
+    teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+    for t in teams:
+        if _team_name(t) == target_id or \
+                str(_safe(lambda: getattr(t, "id", ""), "")) == target_id:
+            partner = t
+            break
+    if user_team is None or partner is None:
+        return jsonify({"ok": False, "flags": [], "our_flags": [],
+                        "their_flags": [], "hard_block": False,
+                        "error": "could not resolve teams"}), 404
+
+    give_players, _ = _resolve_assets(user_team, _csv("give_pids"), [])
+    want_players, _ = _resolve_assets(partner, _csv("want_pids"), [])
+
+    # Our clause players moving out (user answers per player, desktop
+    # per-player ask); their clause players moving in (AI consent, the
+    # refusal kills the deal -- heads-up, not a block).
+    our_flags = [f for f in
+                 (_preflight_flag(live, te, p, user_team, partner)
+                  for p in give_players) if f]
+    their_flags = [f for f in
+                   (_preflight_flag(live, te, p, partner, user_team)
+                    for p in want_players) if f]
+    hard_block = any(f.get("hard_block") for f in our_flags + their_flags)
+    return jsonify({
+        "ok": True,
+        "our_flags": our_flags,      # user's players: ask per player
+        "their_flags": their_flags,  # partner's players: heads-up only
+        "flags": our_flags + their_flags,
+        "hard_block": hard_block,
+        "note": ("Offer-sheet-match players cannot be traded for one year "
+                 "-- no consent ask applies.") if hard_block else "",
+    })
+
+
+@bp.route("/api/trades/completed_log")
+def api_trades_completed_log():
+    """Completed-trade log: gm.trade_history (trade_engine.CompletedTrade
+    records, newest first), plus draft-day deals the desktop also
+    records. Honest when empty -- never fabricated."""
+    live = _live()
+    if live is None:
+        return jsonify({"trades": []})
+    gm = _safe(lambda: live.game_manager)
+    recs = _safe(lambda: list(getattr(gm, "trade_history", None) or []),
+                 []) or []
+    out = []
+    for r in reversed(recs):
+        try:
+            out.append({
+                "date": str(_safe(lambda: getattr(r, "date", ""), "") or ""),
+                "team_a": str(_safe(lambda: getattr(r, "team_a", ""), "") or ""),
+                "team_b": str(_safe(lambda: getattr(r, "team_b", ""), "") or ""),
+                "a_gave": [str(x) for x in
+                            (_safe(lambda: list(getattr(r, "a_gave", None)
+                                                or []), []) or [])],
+                "b_gave": [str(x) for x in
+                            (_safe(lambda: list(getattr(r, "b_gave", None)
+                                                or []), []) or [])],
+                "summary": str(_safe(lambda: getattr(r, "summary", ""), "")
+                               or ""),
+            })
+        except Exception:
+            continue
+    return jsonify({"trades": out})

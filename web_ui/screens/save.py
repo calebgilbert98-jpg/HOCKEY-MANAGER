@@ -182,3 +182,189 @@ def api_save_result():
         "ok": bool(r.get("ok")),
         "message": str(r.get("message") or ""),
     }})
+
+
+# ======================================================================
+# Batch D: Save/Load depth.
+# Desktop parity (save_load_system.py):
+#   - quick-save slots 1-6: QuickSaves/QuickSave_Slot_{i}.hm
+#   - rename / properties / export / import
+#   - autosave config (enabled + frequency)
+# Writes run on the Tk main thread through bridge ops; reads are
+# direct GameSaveManager reads (read-only, no thread affinity).
+# ======================================================================
+
+def _quick_slots(live):
+    """6 quick-save slots with metadata (desktop _get_quick_save_slots).
+    Never raises."""
+    out = []
+    try:
+        from web_ui.bridge import _web_saves_dir as _sdir
+        sm = _save_manager(live)
+        if sm is None:
+            return out
+        qdir = os.path.join(_sdir(sm), "QuickSaves")
+        for i in range(1, 7):
+            fp = os.path.join(qdir, f"QuickSave_Slot_{i}.hm")
+            slot = {"slot": i, "name": f"Quick Save {i}",
+                    "occupied": False, "modified": None,
+                    "team": None, "game_date": None}
+            if os.path.exists(fp):
+                try:
+                    st = os.stat(fp)
+                    import datetime as _dt
+                    mod = _dt.datetime.fromtimestamp(st.st_mtime)
+                    meta = _safe(lambda: sm._load_save_metadata(fp), {}) or {}
+                    slot.update(
+                        occupied=True,
+                        modified=mod.strftime("%Y-%m-%d %H:%M"),
+                        team=str(meta.get("user_team", "Unknown") or "Unknown"),
+                        game_date=str(meta.get("game_date", "") or ""),
+                        size_kb=int(st.st_size // 1024),
+                    )
+                except Exception:
+                    slot["occupied"] = True
+            out.append(slot)
+    except Exception:
+        pass
+    return out
+
+
+@bp.route("/api/save/quick_slots")
+def api_save_quick_slots():
+    live = _live()
+    if live is None:
+        return jsonify({"slots": []})
+    return jsonify({"slots": _quick_slots(live)})
+
+
+@bp.route("/api/save/quicksave", methods=["POST"])
+def api_save_quicksave():
+    """Quick-save into slot 1-6 (desktop Ctrl+S path)."""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        slot = int(data.get("slot", 1))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "slot must be 1-6"}), 400
+    if not 1 <= slot <= 6:
+        return jsonify({"ok": False, "error": "slot must be 1-6"}), 400
+    nonce = _nonce(data)
+    ok = enqueue_command("save_quicksave_web", slot=slot, nonce=nonce)
+    return jsonify({"ok": bool(ok), "nonce": nonce, "slot": slot})
+
+
+@bp.route("/api/save/rename", methods=["POST"])
+def api_save_rename():
+    """Rename a save file (desktop SaveLoadView rename)."""
+    data = request.get_json(force=True, silent=True) or {}
+    sid = str(data.get("save_id") or "")
+    name = str(data.get("name") or "").strip()
+    if not sid or not name:
+        return jsonify({"ok": False, "error": "save_id and name required"}), 400
+    nonce = _nonce(data)
+    ok = enqueue_command("save_rename_web", save_id=sid, name=name,
+                         nonce=nonce)
+    return jsonify({"ok": bool(ok), "nonce": nonce})
+
+
+@bp.route("/api/save/properties")
+def api_save_properties():
+    """Save-file properties: metadata + description + category."""
+    live = _live()
+    sid = (request.args.get("save_id") or "").strip()
+    if live is None or not sid:
+        return jsonify({"ok": False}), 400
+    try:
+        from web_ui.bridge import _web_resolve_save_id, _web_saves_dir
+        sm = _save_manager(live)
+        fp = _web_resolve_save_id(sm, sid)
+        if not fp or not os.path.exists(fp):
+            return jsonify({"ok": False, "error": "not found"}), 404
+        meta = _safe(lambda: sm._load_save_metadata(fp), {}) or {}
+        st = os.stat(fp)
+        import datetime as _dt
+        return jsonify({
+            "ok": True,
+            "filename": os.path.basename(fp),
+            "team": str(meta.get("user_team", "Unknown") or "Unknown"),
+            "game_date": str(meta.get("game_date", "") or ""),
+            "modified": _dt.datetime.fromtimestamp(
+                st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "size_kb": int(st.st_size // 1024),
+            "category": str(meta.get("category", "General") or "General"),
+            "description": str(meta.get("description", "") or ""),
+            "is_autosave": bool(meta.get("is_autosave")),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp.route("/api/save/export")
+def api_save_export():
+    """Download a save file (desktop _export_save copies the .hm)."""
+    from flask import send_file
+    live = _live()
+    sid = (request.args.get("save_id") or "").strip()
+    if live is None or not sid:
+        return jsonify({"ok": False, "error": "save_id required"}), 400
+    try:
+        from web_ui.bridge import _web_resolve_save_id
+        sm = _save_manager(live)
+        fp = _web_resolve_save_id(sm, sid)
+        if not fp or not os.path.exists(fp):
+            return jsonify({"ok": False, "error": "not found"}), 404
+        return send_file(fp, as_attachment=True,
+                         download_name=os.path.basename(fp))
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp.route("/api/save/import", methods=["POST"])
+def api_save_import():
+    """Upload a .hm save into the saves directory (desktop _import_save)."""
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    f = request.files.get("file")
+    if f is None or not f.filename:
+        return jsonify({"ok": False, "error": "no file uploaded"}), 400
+    fname = os.path.basename(f.filename)
+    if not fname.lower().endswith(".hm"):
+        return jsonify({"ok": False,
+                        "error": "only .hm save files can be imported"}), 400
+    # Keep inside the saves dir (never trust the client filename).
+    safe = "".join(c for c in fname if c.isalnum() or c in "._- ")[:80]
+    if not safe:
+        return jsonify({"ok": False, "error": "bad filename"}), 400
+    try:
+        from web_ui.bridge import _web_saves_dir
+        sm = _save_manager(live)
+        if sm is None:
+            return jsonify({"ok": False, "error": "no save manager"}), 503
+        dest = os.path.join(_web_saves_dir(sm), safe)
+        if os.path.exists(dest):
+            return jsonify({"ok": False, "error":
+                            f"{safe} already exists"}), 409
+        f.save(dest)
+        return jsonify({"ok": True, "filename": safe})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@bp.route("/api/save/autosave_config", methods=["POST"])
+def api_save_autosave_config():
+    """Set autosave enabled + frequency (days)."""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        freq = int(data.get("frequency_days", 0))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False,
+                        "error": "frequency_days must be an integer"}), 400
+    enabled = bool(data.get("enabled", True))
+    if freq < 0 or freq > 365:
+        return jsonify({"ok": False,
+                        "error": "frequency_days must be 0-365"}), 400
+    nonce = _nonce(data)
+    ok = enqueue_command("save_autosave_config_web", enabled=enabled,
+                         frequency_days=freq, nonce=nonce)
+    return jsonify({"ok": bool(ok), "nonce": nonce})

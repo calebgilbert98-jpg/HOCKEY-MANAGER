@@ -98,6 +98,11 @@ def api_free_agents_offer():
         aav = int(data.get("aav"))
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "years and aav must be integers"}), 400
+    # Batch D: clause picker + signing-bonus sweetener ride the offer.
+    from web_ui.screens.contracts import _offer_extras as _extras
+    extras, err = _extras(data)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
     live = _live()
     if live is None:
         return jsonify({"ok": False, "error": "no live game"}), 503
@@ -113,9 +118,23 @@ def api_free_agents_offer():
     ok, msg = _sign_eligibility(live, p)
     if not ok:
         return jsonify({"ok": False, "error": msg}), 422
+    if extras["clause"] != "none":
+        try:
+            import trade_engine as _te
+            if not _te.clause_eligible(p):
+                return jsonify({"ok": False, "error":
+                    "Trade protection isn't available for this player "
+                    "(27+ or 7 pro seasons required)."}), 422
+        except Exception:
+            pass
     queued = enqueue_command("sign_free_agent_real",
-                             player_id=str(pid), years=years, aav=aav)
-    return jsonify({"ok": bool(queued), "queued": "sign_free_agent_real"})
+                             player_id=str(pid), years=years, aav=aav,
+                             clause=extras["clause"],
+                             clause_list_size=extras["clause_list_size"],
+                             signing_bonus=extras["signing_bonus"])
+    return jsonify({"ok": bool(queued), "queued": "sign_free_agent_real",
+                    "clause": extras["clause"],
+                    "signing_bonus": extras["signing_bonus"]})
 
 
 # ------------------------------------------------------------------
@@ -564,3 +583,148 @@ def api_free_agents_compare():
         except Exception:
             continue
     return jsonify({"players": out})
+
+
+# ======================================================================
+# Batch D: Free Agency Frenzy hub.
+# Desktop parity (event_day_hubs.py FreeAgencyFrenzy): signing wire
+# (ticker), top-UFA cards, done-deals feed read from the real news
+# log, and a cap snapshot. Reuses the APIs above.
+# ======================================================================
+
+def _frenzy_ufa_list(live):
+    pool = []
+    try:
+        league = _safe(lambda: getattr(getattr(live, "game_manager", None),
+                                      "league", None))
+        pool = list(getattr(league, "free_agents", None) or []) or []
+    except Exception:
+        pass
+    # Draft lock: draft-eligible players aren't signable free agents.
+    try:
+        from draft_generator import player_locked_by_draft as _locked
+        pool = [p for p in pool if not _locked(p)]
+    except Exception:
+        pass
+    return pool
+
+
+def _frenzy_season_line(p):
+    try:
+        gp = int(getattr(p, "games_played", 0) or 0)
+    except Exception:
+        gp = 0
+    if gp <= 0:
+        return "No games played this season"
+    pos = _safe(lambda: getattr(getattr(p, "primary_position", ""),
+                               "value", ""), "")
+    if pos.upper() in ("G", "GOALIE", "GOALTENDER"):
+        w = getattr(p, "wins", 0) or 0
+        sv = getattr(p, "save_percentage", 0) or 0
+        gaa = getattr(p, "goals_against_avg", 0) or 0
+        return f"{gp} GP \u00b7 {w} W \u00b7 {sv:.3f} SV% \u00b7 {gaa:.2f} GAA"
+    g = getattr(p, "goals", 0) or 0
+    a = getattr(p, "assists", 0) or 0
+    pts = getattr(p, "points", g + a) or 0
+    return f"{gp} GP \u00b7 {g} G \u00b7 {a} A \u00b7 {pts} P"
+
+
+def _frenzy_deals(live):
+    """Done deals, read from the live news log -- real signings only
+    (desktop _deals_lines). 'assigned' excluded so AHL assignments
+    don't leak in."""
+    lines = []
+    try:
+        log = list(getattr(live, "news_log", None) or [])
+    except Exception:
+        log = []
+    for item in reversed(log):
+        story = item.get("story", "") if isinstance(item, dict) \
+            else str(item or "")
+        story = str(story or "")
+        low = story.lower()
+        if (("signed" in low or "signing" in low)
+                and "assign" not in low):
+            lines.append(story)
+        if len(lines) >= 12:
+            break
+    return lines or ["No signings yet today."]
+
+
+def _frenzy_cap_snapshot(live):
+    try:
+        gm = _safe(lambda: live.game_manager)
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+        from salary_cap_system import total_cap_charge
+        cap = int(_live_cap(live))
+        charge = int(_safe(lambda: total_cap_charge(team), 0) or 0)
+    except Exception:
+        cap, charge = 104_000_000, 0
+    return {
+        "cap": cap,
+        "committed": charge,
+        "space": cap - charge,
+    }
+
+
+@bp.route("/fa_frenzy")
+def fa_frenzy_page():
+    return render_template("fa_frenzy.html")
+
+
+@bp.route("/api/fa_frenzy")
+def api_fa_frenzy():
+    """Free Agency Frenzy hub payload: signing wire, top-UFA cards,
+    done-deals feed, cap snapshot."""
+    live = _live()
+    if live is None:
+        return jsonify({"active": False, "wire": [], "top_ufas": [],
+                        "deals": [], "cap": {}})
+    fas = _frenzy_ufa_list(live)
+    try:
+        top = sorted(fas, key=lambda p: _safe(
+            lambda: float(p.overall_rating()), 0.0) or 0.0,
+            reverse=True)[:8]
+    except Exception:
+        top = fas[:8]
+    try:
+        from attribute_composites import talent_tier as _tt
+    except Exception:
+        _tt = None
+    cards = []
+    for i, p in enumerate(top, 1):
+        try:
+            ovr = _safe(lambda: float(p.overall_rating()), 0.0) or 0.0
+            d = to_web_player(p)
+            cards.append({
+                "rank": i,
+                "id": d.get("id"),
+                "name": d.get("name") or "?",
+                "position": _web_position(p),
+                "age": d.get("age"),
+                "tier": _safe(lambda: _tt(ovr), "") if _tt else "",
+                "season_line": _frenzy_season_line(p),
+                "ask": _ask_price(p, live),
+                "fa_type": _fa_type(p),
+            })
+        except Exception:
+            continue
+    wire = ["The floodgates are open -- teams are racing to call agents."]
+    if cards:
+        wire.append("Headliners still available:")
+        wire += [f"  {c['rank']}. {c['name']} ({c['position']}, "
+                 f"age {c['age']})  {c['tier']}" for c in cards[:3]]
+    else:
+        wire = ["The market hasn't opened yet."]
+    wire += ["", f"{len(fas)} free agents on the market.",
+             "Signings will stream in here live."]
+    return jsonify({
+        "active": True,
+        "title": "FREE AGENT FRENZY",
+        "tagline": ("The market is open. Every contender is on the phone. "
+                    "Don't get left behind."),
+        "wire": wire,
+        "top_ufas": cards,
+        "deals": _frenzy_deals(live),
+        "cap": _frenzy_cap_snapshot(live),
+    })

@@ -607,3 +607,292 @@ def api_draft_grades():
                 continue
         return jsonify({"source": "final", "year": y, "grades": rows})
     return jsonify({"source": "none", "year": None, "grades": []})
+
+
+# ======================================================================
+# Batch D: draft-day incoming calls.
+# Desktop parity (draft_day_trades.incoming_offer_for_user): when the
+# user's club is on the clock in round 1, the most motivated AI club
+# may call with a trade-up offer. Accept / Decline / Counter.
+# The call is built with the desktop's own helpers (_round1_order,
+# _draft_board, _trade_up_target, _build_trade_up_offer, ai_consider_trade)
+# -- this module only adapts them to the web session's slot model.
+# At most one call per pick; declining never re-rings for that slot.
+# ======================================================================
+
+def _ddt_session(live):
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    return _safe(lambda: getattr(league, "entry_draft_session", None))
+
+
+def _ddt_pending(live):
+    try:
+        p = getattr(live, "_web_ddt_call", None)
+        return p if isinstance(p, dict) else None
+    except Exception:
+        return None
+
+
+def _ddt_store(live, call):
+    try:
+        live._web_ddt_call = call
+    except Exception:
+        pass
+
+
+def _ddt_offered(live):
+    return _safe(lambda: getattr(live, "_web_ddt_offered_pick", None))
+
+
+def _ddt_mark_offered(live, overall):
+    try:
+        live._web_ddt_offered_pick = int(overall)
+    except Exception:
+        pass
+
+
+def _ddt_declined(live):
+    try:
+        d = getattr(live, "_web_ddt_declined", None)
+        if not isinstance(d, set):
+            d = set()
+            live._web_ddt_declined = d
+        return d
+    except Exception:
+        return set()
+
+
+def _ddt_serialize_asset(a):
+    """Draft pick -> JSON. (Draft-day calls only ever move picks.)"""
+    try:
+        from game_classes import DraftPick
+        is_pick = isinstance(a, DraftPick)
+    except Exception:
+        is_pick = False
+    if not is_pick:
+        return None
+    try:
+        import trade_engine as te
+        label = te.asset_label(a)
+    except Exception:
+        label = (f"{getattr(a, 'year', '?')} "
+                 f"round {getattr(a, 'round', '?')} pick")
+    return {
+        "id": str(_safe(lambda: getattr(a, "id", ""), "")),
+        "kind": "pick",
+        "label": str(label),
+        "year": _safe(lambda: int(getattr(a, "year", 0) or 0), 0),
+        "round": _safe(lambda: int(getattr(a, "round", 0) or 0), 0),
+        "overall_pick": _safe(lambda: getattr(a, "overall_pick", None)),
+    }
+
+
+def _ddt_build_call(live):
+    """Build the incoming call for the current pick, or None.
+
+    Reuses draft_day_trades' offer-building + AI-verdict helpers with
+    an adapter over the web session. Never raises."""
+    try:
+        import draft_day_trades as ddt
+        import trade_engine as te
+    except Exception:
+        return None
+    try:
+        import random as _rng
+    except Exception:
+        return None
+    session = _ddt_session(live)
+    if session is None:
+        return None
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    user_team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
+    cur_idx = _safe(lambda: int(getattr(session, "current_pick", 0) or 0), 0)
+    overall = cur_idx + 1
+    # Already rang / already declined for this slot.
+    if _ddt_offered(live) == overall or overall in _ddt_declined(live):
+        return None
+    # Current slot must be round 1 and owned by the user.
+    slots = _safe(lambda: list(getattr(session, "slots", None) or []),
+                  []) or []
+    cur_slot = next((s for s in slots
+                     if int(s.get("overall", 0) or 0) == overall), None)
+    if cur_slot is None or int(cur_slot.get("round", 0) or 0) != 1:
+        return None
+    uname = _safe(lambda: getattr(user_team, "team_name", ""), "")
+    if str(cur_slot.get("owner", "") or "") != uname:
+        return None
+    _ddt_mark_offered(live, overall)
+    if _rng.random() > 0.35:
+        return None
+    order = ddt._round1_order(league, year)
+    board = ddt._draft_board(league)
+    if not order or not board:
+        return None
+    try:
+        ai_manager = _safe(lambda: getattr(live, "ai_manager", None))
+    except Exception:
+        ai_manager = None
+    best = None
+    for o2, t2, pk2 in order:
+        try:
+            if o2 <= overall or ddt._is_human(t2):
+                continue
+            pname = ddt._priority_name(ddt._priority_of(t2, ai_manager))
+            tgt = ddt._trade_up_target(t2, o2, board, pname)
+            if tgt is None:
+                continue
+            t_overall, prosp = tgt
+            if t_overall != overall:
+                continue
+            mine = ddt._owned_picks(t2, year, 1)
+            if not mine:
+                continue
+            offer = ddt._build_trade_up_offer(te, t2, mine[0], user_team,
+                                              year)
+            if offer is None:
+                continue
+            gives, gets = offer
+            try:
+                resp = te.ai_consider_trade(
+                    user_team, list(gives), list(gets), user_team=t2)
+            except Exception:
+                continue
+            if getattr(resp, "decision", "reject") == "reject":
+                continue
+            score = _rng.uniform(0, 1)
+            if best is None or score > best[0]:
+                best = (score, t2, gives, gets, prosp, resp)
+        except Exception:
+            continue
+    if best is None:
+        return None
+    _s, caller, gives, gets, prosp, resp = best
+    # Fold any AI counter into the terms before the user sees them
+    # (desktop parity: the dialog shows exactly what accepting executes).
+    if getattr(resp, "decision", "") == "counter":
+        gives = list(gives) + list(getattr(resp, "want_added", None) or [])
+        gets = list(gets) + list(getattr(resp, "will_add", None) or [])
+    ser_gives = [a for a in (_ddt_serialize_asset(a) for a in gives) if a]
+    ser_gets = [a for a in (_ddt_serialize_asset(a) for a in gets) if a]
+    if not ser_gives or not ser_gets:
+        return None
+    try:
+        why = ddt._call_why_lines(
+            te, caller, prosp, board,
+            ddt._priority_name(ddt._priority_of(caller, ai_manager)))
+    except Exception:
+        why = {}
+    try:
+        import scouting as _scmod
+        tpot = _scmod.consensus_range(prosp)
+    except Exception:
+        tpot = "?"
+    try:
+        v_in = sum(te.asset_value(a) for a in gives)
+        v_out = sum(te.asset_value(a) for a in gets)
+        share = v_in / (v_in + v_out) if (v_in + v_out) > 0 else 0.5
+    except Exception:
+        share = 0.5
+    vlabel = ("Value favors you" if share >= 0.55
+              else "Value favors them" if share <= 0.45
+              else "Roughly fair value")
+    call = {
+        "caller": _safe(lambda: getattr(caller, "team_name", "?"), "?"),
+        "caller_id": str(_safe(lambda: getattr(caller, "id", ""), "")),
+        "overall": overall,
+        "year": year,
+        "why_title": str(why.get("direction_short", "") or ""),
+        "why_bullets": [str(b) for b in (why.get("bullets", None) or [])],
+        "target": {
+            "name": _safe(lambda: getattr(prosp, "full_name", "?"), "?"),
+            "position": ddt._pos_of(prosp),
+            "age": _safe(lambda: int(getattr(prosp, "age", 0) or 0), 0),
+            "potential": str(tpot),
+            "potential_grade": str(
+                _safe(lambda: getattr(prosp, "potential_grade", "?"), "?")),
+        },
+        "you_send": ser_gets,     # gets: the user's pick going out
+        "you_receive": ser_gives,  # gives: the caller's assets coming in
+        "value_label": vlabel,
+        "give_ids": [a["id"] for a in ser_gives if a.get("id")],
+        "get_ids": [a["id"] for a in ser_gets if a.get("id")],
+    }
+    _ddt_store(live, call)
+    return call
+
+
+@bp.route("/api/draft/incoming_call")
+def api_draft_incoming_call():
+    """Poll for an incoming AI trade call while on the clock (round 1).
+    Returns {"call": ...} or {"call": null}. At most one per pick."""
+    live = _live()
+    if live is None:
+        return jsonify({"call": None})
+    call = _ddt_pending(live)
+    if call is None:
+        call = _ddt_build_call(live)
+    return jsonify({"call": call})
+
+
+@bp.route("/api/draft/incoming_call/answer", methods=["POST"])
+def api_draft_incoming_call_answer():
+    """Answer the parked call: {"action": "accept"|"decline"|"counter"}.
+
+    accept -> enqueue "draft_day_trade_accept" (main thread executes the
+    real engine trade + pick-list sync + session order update).
+    decline -> never re-rings for this slot (desktop parity).
+    counter -> deeplink payload for the trade builder, call stays parked.
+    """
+    from flask import request as _rq
+    data = _rq.get_json(force=True, silent=True) or {}
+    action = str(data.get("action") or "").lower()
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    call = _ddt_pending(live)
+    if call is None:
+        return jsonify({"ok": False, "error": "no incoming call"}), 409
+    if action == "decline":
+        _ddt_declined(live).add(int(call.get("overall", 0) or 0))
+        _ddt_store(live, None)
+        return jsonify({"ok": True, "action": "decline"})
+    if action == "counter":
+        # Deeplink into the trade center: their offer as the starting
+        # point, caller as partner.
+        return jsonify({
+            "ok": True, "action": "counter",
+            "deeplink": {
+                "page": "/trades",
+                "target_team_id": call.get("caller"),
+                "want_pids": [], "want_picks": call.get("give_ids") or [],
+                "give_pids": [], "give_picks": call.get("get_ids") or [],
+                "note": (f"Counter {call.get('caller')}: adjust their "
+                         f"trade-up offer for #{call.get('overall')}."),
+            },
+        })
+    if action == "accept":
+        from web_ui.bridge import enqueue_command
+        ok = enqueue_command("draft_day_trade_accept",
+                             caller=str(call.get("caller") or ""),
+                             overall=int(call.get("overall", 0) or 0))
+        return jsonify({"ok": bool(ok), "action": "accept",
+                        "queued": "draft_day_trade_accept"})
+    return jsonify({"ok": False, "error": "unknown action"}), 400
+
+
+@bp.route("/api/draft/incoming_call/result")
+def api_draft_incoming_call_result():
+    """Poll the outcome of an accepted call (stashed by the main-thread
+    op)."""
+    live = _live()
+    r = _safe(lambda: getattr(live, "_web_draft_call_result", None)) \
+        if live is not None else None
+    if not r:
+        return jsonify({"pending": True})
+    return jsonify({"pending": False, "result": {
+        "ok": bool(r.get("ok")),
+        "summary": str(r.get("summary") or ""),
+    }})

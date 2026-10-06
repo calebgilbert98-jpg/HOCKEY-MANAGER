@@ -153,3 +153,43 @@ def api_waivers_eligible():
         except Exception:
             continue
     return jsonify({"players": out})
+
+
+# ======================================================================
+# Batch D minor: waiver priority strip.
+# Desktop parity (waiver_logic.waiver_priority_order): teams in
+# claim priority (lowest points pct first; successful claimants sink
+# to the bottom), the user's rank, and the basis label.
+# ======================================================================
+
+@bp.route("/api/waivers/priority")
+def api_waivers_priority():
+    live = _live()
+    if live is None:
+        return jsonify({"order": [], "my_rank": None, "basis": ""})
+    try:
+        import waiver_logic as _wl
+        gm = _safe(lambda: live.game_manager)
+        league = _safe(lambda: gm.league)
+        today = _safe(lambda: getattr(gm, "current_date", None))
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+        order = _wl.waiver_priority_order(league, today) or []
+        rows = []
+        for i, t in enumerate(order, 1):
+            rows.append({
+                "rank": i,
+                "team": _safe(lambda: getattr(t, "team_name", "?"), "?"),
+                "is_user": bool(team is not None and
+                                _safe(lambda: getattr(t, "team_name", ""),
+                                      "") ==
+                                _safe(lambda: getattr(team, "team_name",
+                                                     ""), "")),
+            })
+        return jsonify({
+            "order": rows,
+            "my_rank": _wl.waiver_priority_rank(league, team, today),
+            "basis": _wl.waiver_priority_basis_label(league, today),
+        })
+    except Exception as e:
+        return jsonify({"order": [], "my_rank": None, "basis": "",
+                        "error": str(e)})
