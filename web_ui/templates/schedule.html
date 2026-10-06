@@ -19,10 +19,37 @@
 
 <main class="sched-main">
   <div class="bcast-head">
-    <div class="bcast-kicker">Fixtures</div>
+    <div class="bcast-kicker">Fixtures &amp; Results</div>
     <h1 class="bcast-title">Schedule</h1>
   </div>
-  <div class="game-list" id="game-list"></div>
+
+  <div class="sched-controls">
+    <div class="sched-tabs" role="tablist">
+      <button class="sched-tab active" id="tab-mine" role="tab">My Team</button>
+      <button class="sched-tab" id="tab-league" role="tab">League</button>
+    </div>
+    <label class="month-filter">Month:
+      <select id="month-select" class="nhl-input">
+        <option value="all">All</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="tbl-wrap">
+    <table class="sched-table" id="sched-table">
+      <thead>
+        <tr>
+          <th data-sort="date" class="sortable">Date <span class="sort-ind"></span></th>
+          <th data-sort="matchup" class="sortable">Matchup <span class="sort-ind"></span></th>
+          <th data-sort="score" class="sortable">Score <span class="sort-ind"></span></th>
+          <th data-sort="status" class="sortable">Status <span class="sort-ind"></span></th>
+          <th class="th-actions">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sched-body"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="sched-empty" hidden>No games match this filter.</div>
 </main>
 
 <script src="/static/js/schedule.js"></script>

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Box Score — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/boxscore.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/schedule">← Schedule</a>
+  <div class="team-sub" id="bs-sub">Box Score</div>
+</header>
+
+<main class="bs-main">
+  <div id="bs-loading" class="bs-loading">Loading box score…</div>
+  <div id="bs-error" class="bs-error" hidden></div>
+
+  <div id="bs-content" hidden>
+    <section class="bs-header bpanel">
+      <div class="bs-teams">
+        <a class="bs-team" id="bs-away-link" href="#">
+          <span class="bs-abbr" id="bs-away-abbr"></span>
+          <span class="bs-name" id="bs-away-name"></span>
+          <span class="bs-score" id="bs-away-score"></span>
+        </a>
+        <span class="bs-at">@</span>
+        <a class="bs-team" id="bs-home-link" href="#">
+          <span class="bs-score" id="bs-home-score"></span>
+          <span class="bs-name" id="bs-home-name"></span>
+          <span class="bs-abbr" id="bs-home-abbr"></span>
+        </a>
+      </div>
+      <div class="bs-meta"><span id="bs-date"></span><span id="bs-note" class="bs-note"></span></div>
+      <div class="bs-stars" id="bs-stars"></div>
+    </section>
+
+    <nav class="bs-tabs" id="bs-tabs">
+      <button class="bs-tab active" data-tab="scoring">Scoring</button>
+      <button class="bs-tab" data-tab="players">Player Stats</button>
+      <button class="bs-tab" data-tab="lines">Lines</button>
+      <button class="bs-tab" data-tab="teams">Team Stats</button>
+    </nav>
+
+    <section class="bs-pane" id="pane-scoring"></section>
+    <section class="bs-pane" id="pane-players" hidden>
+      <div class="bs-team-toggle" id="players-toggle"></div>
+      <div id="players-body"></div>
+    </section>
+    <section class="bs-pane" id="pane-lines" hidden>
+      <div class="bs-team-toggle" id="lines-toggle"></div>
+      <p class="bs-lines-legend">5.0 = average game · 7.0+ = great</p>
+      <div id="lines-body"></div>
+    </section>
+    <section class="bs-pane" id="pane-teams" hidden>
+      <div id="teams-body"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/boxscore.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>
