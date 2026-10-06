@@ -22,28 +22,43 @@
     <h1 class="bcast-title">Save / Load</h1>
   </div>
 
-  <div class="save-panel">
+  <section class="save-panel">
+    <div class="panel-label">Current game</div>
     <div class="save-meta" id="save-meta">
       <div class="save-row"><span>Team</span><b id="save-team">—</b></div>
       <div class="save-row"><span>In-game date</span><b id="save-date">—</b></div>
-      <div class="save-row"><span>Last save</span><b id="save-last">—</b></div>
+      <div class="save-row"><span>Autosave</span><b id="save-auto">—</b></div>
     </div>
-  </div>
+    <div class="save-action-row">
+      <input type="text" id="save-name" class="nhl-input save-name-input"
+             placeholder="Save name (optional — leave blank for auto name)"
+             maxlength="48" aria-label="Save name">
+      <button class="btn-primary" id="btn-save">Save game</button>
+    </div>
+    <p class="save-status" id="save-status"></p>
+  </section>
 
-  <div class="save-tiles">
-    <div class="tile hero accent" id="tile-save" role="button" tabindex="0">
-      <div class="icon">💾</div>
-      <h3>Save Game</h3>
-      <p>Save your current progress</p>
+  <section class="save-panel">
+    <div class="panel-label">Saved games <span class="save-count" id="save-count"></span></div>
+    <div class="save-table-wrap">
+      <table class="save-table" id="save-table">
+        <thead>
+          <tr>
+            <th>Save</th>
+            <th>Team</th>
+            <th>Game date</th>
+            <th>Modified</th>
+            <th>Size</th>
+            <th>Type</th>
+            <th class="col-actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="save-rows">
+          <tr><td colspan="7" class="empty-note">Loading saves…</td></tr>
+        </tbody>
+      </table>
     </div>
-    <div class="tile hero" id="tile-load" role="button" tabindex="0">
-      <div class="icon">📂</div>
-      <h3>Load Game</h3>
-      <p>Load a saved game (discards unsaved progress)</p>
-    </div>
-  </div>
-
-  <p class="save-status" id="save-status"></p>
+  </section>
 </main>
 
 <script src="/static/js/save.js"></script>
