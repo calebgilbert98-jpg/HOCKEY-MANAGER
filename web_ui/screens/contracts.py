@@ -26,7 +26,7 @@ def _web_position(p):
             return label
     except Exception:
         pass
-    return _safe(lambda: str(getattr(p, "position", "?") or "?"), "?")
+    return _safe(lambda: str(getattr(p, "primary_position", "?") or "?"), "?")
 
 
 def _to_web_contract(p):
@@ -59,9 +59,11 @@ def api_contracts():
     live = _live()
     if live is None:
         return jsonify({"contracts": [], "summary": {}})
+    gm = _safe(lambda: live.game_manager)
     from flask import request as _rq
     only_expiring = (_rq.args.get("tab") or "all") == "expiring"
-    team = _safe(lambda: getattr(live, "user_team", None))
+    team = _safe(lambda: getattr(gm, "user_team", None)) or \
+           _safe(lambda: getattr(live, "user_team", None))
     roster = []
     for lst in ("roster", "ahl_roster"):
         roster.extend(_safe(lambda: list(getattr(team, lst, None) or []), []) or [])
@@ -105,7 +107,10 @@ def api_contracts_result():
 def _find_roster_player(live, pid):
     """Roster player by id. Never raises."""
     try:
-        roster = _safe(lambda: list(getattr(live.user_team, "roster", None)
+        gm = _safe(lambda: live.game_manager)
+        _ut = _safe(lambda: getattr(gm, "user_team", None)) or \
+              _safe(lambda: getattr(live, "user_team", None))
+        roster = _safe(lambda: list(getattr(_ut, "roster", None)
                                     or []), []) or []
         for p in roster:
             if str(_safe(lambda: getattr(p, "id", id(p)), "")) == str(pid):
@@ -157,7 +162,8 @@ def _cap_state(live, offer_salary=0, extension=False, current_hit=0):
     try:
         from salary_cap_system import total_cap_charge
         cap = _live_cap(live)
-        team = _safe(lambda: live.user_team)
+        gm = _safe(lambda: live.game_manager)
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         charge = int(_safe(lambda: total_cap_charge(team), 0))
         proj = charge + int(offer_salary or 0)
         if extension:

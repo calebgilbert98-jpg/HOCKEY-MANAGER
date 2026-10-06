@@ -35,7 +35,7 @@ def _find_team(name):
     league = _safe(lambda: getattr(gm, "league", None)) or \
              _safe(lambda: getattr(live, "league", None))
     teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
-    user_team = _safe(lambda: getattr(live, "user_team", None))
+    user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
     if user_team is not None and all(t is not user_team for t in teams):
         teams = [user_team] + teams
     for t in teams:
@@ -51,7 +51,7 @@ def _team_payload(t):
     gm = _safe(lambda: live.game_manager)
     league = _safe(lambda: getattr(gm, "league", None)) or \
              _safe(lambda: getattr(live, "league", None))
-    user_team = _safe(lambda: getattr(live, "user_team", None))
+    user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
 
     name = _safe(lambda: getattr(t, "team_name", "?"), "?")
     w = _safe(lambda: int(getattr(t, "wins", 0) or 0), 0)

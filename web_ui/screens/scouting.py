@@ -55,9 +55,9 @@ def _to_web_report(r):
 
 def get_scouting_state(app):
     """Active assignments, reports, and candidate scouts/prospects."""
-    team = _safe(lambda: app.user_team)
     gm = _safe(lambda: app.game_manager)
-    league = _safe(lambda: app.league) or _safe(lambda: gm.league)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: app.league)
 
     assignments = []
     if app is not None:
@@ -172,8 +172,8 @@ def _scout_module():
 
 def get_scouting_options(app):
     """Regions/leagues + scouts (with current region) for the assign modal."""
-    team = _safe(lambda: app.user_team)
     gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     try:
         _sc = _scout_module()
         regions = list(getattr(_sc, "ALL_SCOUT_REGIONS", []))
@@ -208,8 +208,8 @@ def get_scouting_options(app):
 
 def _find_staff_scout(app, scout_id):
     """(scout, scouting_module, gm) or (None, None, gm) on failure."""
-    team = _safe(lambda: app.user_team)
     gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     try:
         _sc = _scout_module()
     except Exception:
@@ -229,7 +229,8 @@ def _find_staff_scout(app, scout_id):
 def validate_region_assignment(app, scout_id, region):
     """Read-only validation of a region assignment. Returns (ok, message)."""
     scout, _sc, gm = _find_staff_scout(app, scout_id)
-    if gm is None or _safe(lambda: app.user_team) is None:
+    _gm_v = _safe(lambda: app.game_manager)
+    if gm is None or (_safe(lambda: _gm_v.user_team) or _safe(lambda: app.user_team)) is None:
         return False, "No live game."
     if _sc is None:
         return False, "Scouting isn't available."
@@ -267,9 +268,9 @@ def apply_region_assignment(app, scout_id, region):
 def _find_prospect(app, prospect_id):
     """Resolve a draft-eligible prospect by id (league pool, then team)."""
     pid = str(prospect_id or "")
-    league = _safe(lambda: app.league) or \
-        _safe(lambda: app.game_manager.league)
-    team = _safe(lambda: app.user_team)
+    _gm_r = _safe(lambda: app.game_manager)
+    league = _safe(lambda: _gm_r.league) or _safe(lambda: app.league)
+    team = _safe(lambda: _gm_r.user_team) or _safe(lambda: app.user_team)
     pools = []
     if league is not None:
         pools.append(_safe(lambda: list(getattr(league, "draft_prospects", None) or []), []))
@@ -293,7 +294,8 @@ def validate_player_assignment(app, prospect_id, scout_id):
     # Player-targeted assignments only need the team (staff lookup) and
     # the prospect pools — create_scout_assignment writes into
     # app.scouting_assignments, no game_manager required.
-    if _safe(lambda: app.user_team) is None:
+    _gm_p = _safe(lambda: app.game_manager)
+    if (_safe(lambda: _gm_p.user_team) or _safe(lambda: app.user_team)) is None:
         return False, "No live game."
     if scout is None:
         return False, "That scout isn't on your staff."

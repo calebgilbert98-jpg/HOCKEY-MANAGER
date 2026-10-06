@@ -68,7 +68,7 @@ def _health_badges(p):
             badges.append(st)
     except Exception:
         pass
-    if _safe(lambda: bool(getattr(p, "injured", False)), False):
+    if _safe(lambda: bool(getattr(p, "is_injured", False)), False):
         if "IR" not in badges and "LTIR" not in badges:
             badges.append("INJ")
     try:
@@ -106,14 +106,15 @@ def to_roster_player(p):
         "morale_100": _safe(lambda: int(getattr(p, "morale", 0) or 0) * 10, 0),
         "captaincy": _safe(lambda: getattr(p, "captaincy", "") or ""),
         "health": _health_badges(p),
-        "injured": _safe(lambda: bool(getattr(p, "injured", False)), False),
+        "injured": _safe(lambda: bool(getattr(p, "is_injured", False)), False),
         "rights_team": _safe(lambda: getattr(p, "rights_team", "") or ""),
     }
 
 
 def _get_team_lists(live):
     """Return (nhl, ahl, prospects) player lists."""
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return [], [], []
     nhl = _safe(lambda: list(team.roster), []) or []
@@ -168,7 +169,8 @@ def api_cap():
     live = _live()
     if live is None:
         return jsonify({})
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({})
     try:
@@ -264,7 +266,8 @@ def execute_roster_move(app, cmd):
     player_ids = [str(x) for x in cmd.get("player_ids", [])]
     frm = cmd.get("from_roster", "")
     to = cmd.get("to_roster", "")
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return 0, ["no team"]
     src_map = {

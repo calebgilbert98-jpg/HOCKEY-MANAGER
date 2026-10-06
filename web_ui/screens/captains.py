@@ -26,7 +26,8 @@ def _web_candidate(p):
 
 
 def get_captains(app):
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return {"captain": None, "alternates": [], "candidates": []}
     roster = _safe(lambda: list(team.roster), []) or []

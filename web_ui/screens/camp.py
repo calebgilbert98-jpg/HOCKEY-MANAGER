@@ -45,7 +45,7 @@ def get_camp(live):
     gm = _safe(lambda: live.game_manager)
     league = _safe(lambda: gm.league) if gm is not None else None
     stories = _safe(lambda: league.preseason_stories, []) if league else []
-    team = _safe(lambda: live.user_team)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     roster_size = _safe(lambda: len(team.roster or []), 0) if team else 0
     return {
         "camp_window": CAMP_LABEL,

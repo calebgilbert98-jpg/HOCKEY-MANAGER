@@ -59,7 +59,8 @@ def _group_lineup(lineup):
 
 
 def get_lines(app):
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return {"units": [], "roster": []}
     lineup = _safe(lambda: team.lineup, {}) or {}
@@ -197,7 +198,8 @@ def _roster_lookup(team, pid):
 
 def get_editable_lines(app):
     """Current slots + per-slot eligible roster pools for the editor."""
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return {"slots": [], "pools": {}, "slot_kinds": {}}
     lineup = _safe(lambda: team.lineup, {}) or {}
@@ -325,7 +327,8 @@ def api_set_lines():
     live = _live()
     if live is None:
         return jsonify({"ok": False, "error": "No live game."}), 503
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     ok, err, _resolved = validate_lines_payload(team, slot_lines)
     if not ok:
         return jsonify({"ok": False, "error": err}), 400

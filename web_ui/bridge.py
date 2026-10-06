@@ -224,7 +224,7 @@ def to_web_player(p):
             or getattr(getattr(p, "contract", None), "salary", 0)
             or 0)),
         "captaincy": _safe(lambda: getattr(p, "captaincy", "") or ""),
-        "injured": _safe(lambda: bool(getattr(p, "injured", False))),
+        "injured": _safe(lambda: bool(getattr(p, "is_injured", False))),
     }
 
 
@@ -752,8 +752,8 @@ def _ticker_items(app, gm):
 
 def get_hub_state(app):
     """Full hub payload from the live game."""
-    team = _safe(lambda: app.user_team)
     gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     inbox = _safe(lambda: team.inbox) if team else None
 
     cur_date = _safe(lambda: gm.current_date)
@@ -1029,7 +1029,8 @@ def _hub_panels(team, gm):
 
 def get_inbox_messages(app, filter_type="all"):
     """Inbox messages for the web UI, newest first."""
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     inbox = _safe(lambda: team.inbox) if team else None
     if inbox is None:
         return []
@@ -1049,7 +1050,8 @@ def get_inbox_messages(app, filter_type="all"):
 
 def get_roster(app):
     """User team roster for the web UI."""
-    team = _safe(lambda: app.user_team)
+    gm = _safe(lambda: app.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return []
     return [to_web_player(p) for p in _safe(lambda: list(team.roster), []) or []]
@@ -1114,7 +1116,7 @@ def get_continue_state(app):
 def get_schedule(app, limit=40):
     """Upcoming games for the user team, chronological."""
     gm = _safe(lambda: app.game_manager)
-    team = _safe(lambda: app.user_team)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if gm is None or team is None:
         return []
     my_name = _safe(lambda: team.team_name, "")

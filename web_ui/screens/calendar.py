@@ -27,7 +27,7 @@ def _iso(d):
 def _calendar_payload(app):
     """Full schedule -> JSON-safe payload. Never raises."""
     gm = _safe(lambda: app.game_manager)
-    team = _safe(lambda: app.user_team)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     my_name = _safe(lambda: team.team_name, "") if team else ""
 
     today = _safe(lambda: gm.current_date) if gm else None

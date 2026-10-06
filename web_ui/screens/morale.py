@@ -27,7 +27,8 @@ def api_morale():
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no team"}), 503
     roster = _safe(lambda: list(team.roster), []) or []

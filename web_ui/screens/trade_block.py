@@ -138,8 +138,9 @@ def api_trade_block_interest():
             return jsonify({"interest": []})
         market = tm.get_market(league)
         listings = _safe(lambda: list(market.get("listings", []) or []), []) or []
-        my_name = _safe(lambda: getattr(getattr(live, "user_team", None),
-                                        "team_name", ""), "")
+        _gm_u = _safe(lambda: getattr(live, "game_manager", None))
+        _ut = _safe(lambda: getattr(_gm_u, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
+        my_name = _safe(lambda: getattr(_ut, "team_name", ""), "")
         for li in listings:
             try:
                 if not isinstance(li, dict):
@@ -179,8 +180,9 @@ def api_trade_block_others():
     try:
         import trade_market as tm
         league = _league_of(live)
-        my_name = _safe(lambda: getattr(getattr(live, "user_team", None),
-                                        "team_name", ""), "")
+        _gm_u3 = _safe(lambda: getattr(live, "game_manager", None))
+        _ut3 = _safe(lambda: getattr(_gm_u3, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
+        my_name = _safe(lambda: getattr(_ut3, "team_name", ""), "")
         if league is not None:
             market = tm.get_market(league)
             listings = _safe(lambda: list(market.get("listings", []) or []),
@@ -210,8 +212,9 @@ def api_trade_block_others():
     if not out:
         try:
             league = _league_of(live)
-            my_name = _safe(lambda: getattr(getattr(live, "user_team", None),
-                                            "team_name", ""), "")
+            _gm_u2 = _safe(lambda: getattr(live, "game_manager", None))
+            _ut2 = _safe(lambda: getattr(_gm_u2, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
+            my_name = _safe(lambda: getattr(_ut2, "team_name", ""), "")
             for t in (_safe(lambda: list(getattr(league, "teams", None) or []),
                             []) or []):
                 try:

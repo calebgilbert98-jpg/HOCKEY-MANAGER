@@ -198,6 +198,13 @@ async function showSuggest(pid) {
   } catch (e) { console.error(e); }
   document.getElementById('btn-suggest').disabled = false;
 }
+document.getElementById('btn-shop').addEventListener('click', async () => {
+  const ids = [...tbState.selected];
+  if (!ids.length) return alert('Select players first.');
+  // Shop the first selected player (matches per-row Shop behavior)
+  return showShop(ids[0]);
+});
+
 document.getElementById('btn-suggest').addEventListener('click', async () => {
   const ids = [...tbState.selected];
   if (!ids.length) return alert('Select players first.');

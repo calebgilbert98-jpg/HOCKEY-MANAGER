@@ -24,7 +24,8 @@ def _find_staff(sid):
     live = _live()
     if live is None:
         return None
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(getattr(team, "staff", []) or []), []) or []
     for s in staff:
         if str(_safe(lambda: getattr(s, "id", ""), "")) == str(sid):

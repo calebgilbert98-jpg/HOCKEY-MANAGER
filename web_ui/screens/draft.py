@@ -37,8 +37,8 @@ def _prospect_index(league):
 def get_draft_state(app):
     """Serialize the entry draft session for the board."""
     gm = _safe(lambda: app.game_manager)
-    league = _safe(lambda: app.league) or _safe(lambda: gm.league)
-    team = _safe(lambda: app.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: app.league)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if league is None:
         return {"active": False}
 
@@ -65,7 +65,7 @@ def get_draft_state(app):
         return {
             "id": _safe(lambda: str(getattr(p, "id", id(p)))),
             "name": _safe(lambda: getattr(p, "full_name", "?")),
-            "position": _safe(lambda: getattr(p, "position", "?")),
+            "position": _safe(lambda: getattr(p, "primary_position", "?")),
             "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
             "overall": _player_ovr(p),
         }
@@ -128,7 +128,7 @@ def api_draft():
 
 def _draft_session(live):
     gm = _safe(lambda: live.game_manager)
-    league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     return _safe(lambda: getattr(league, "entry_draft_session", None))
 
 
@@ -143,13 +143,13 @@ def _prospect_pos(p):
             return v
     except Exception:
         pass
-    return _safe(lambda: str(getattr(p, "position", "?") or "?"), "?")
+    return _safe(lambda: str(getattr(p, "primary_position", "?") or "?"), "?")
 
 
 def _available_prospects(live):
     """Draftable prospects not yet picked."""
     gm = _safe(lambda: live.game_manager)
-    league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     if league is None:
         return []
     session = _draft_session(live)
@@ -214,7 +214,7 @@ def api_draft_scout_report():
         if p["id"] == pid:
             # Find the real object for attributes
             gm = _safe(lambda: live.game_manager)
-            league = _safe(lambda: live.league) or _safe(lambda: gm.league)
+            league = _safe(lambda: gm.league) or _safe(lambda: live.league)
             for q in (_safe(lambda: list(getattr(league, "draft_prospects", None) or []), []) or []):
                 if str(getattr(q, "id", "")) == pid:
                     target = q

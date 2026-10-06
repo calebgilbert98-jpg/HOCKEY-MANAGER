@@ -50,7 +50,8 @@ def api_staff():
     live = _live()
     if live is None:
         return jsonify({"staff": [], "count": 0})
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(team.staff), []) or [] if team else []
     out = []
     for s in staff:

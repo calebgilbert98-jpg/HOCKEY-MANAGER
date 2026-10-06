@@ -55,7 +55,8 @@ def _player_index(players):
 
 
 def _squads(live):
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return [], []
     roster = _safe(lambda: list(team.roster or []), []) or []

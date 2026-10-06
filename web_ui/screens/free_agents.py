@@ -43,7 +43,7 @@ def _web_position(p):
             return label
     except Exception:
         pass
-    return _safe(lambda: str(getattr(p, "position", "?") or "?"), "?")
+    return _safe(lambda: str(getattr(p, "primary_position", "?") or "?"), "?")
 
 
 def _to_web_fa(p):
@@ -179,7 +179,8 @@ def _ask_price(p, live):
         asking = max(int(asking), 750_000)
         try:
             import trade_engine as _te
-            team = _safe(lambda: live.user_team)
+            gm = _safe(lambda: live.game_manager)
+            team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
             if _te.clause_demand_score(p, team, league) >= 0.65:
                 asking = int(asking * 1.08)
         except Exception:
@@ -222,7 +223,8 @@ def _cap_state(live, offer_salary=0, extension=False, current_hit=0):
     try:
         from salary_cap_system import total_cap_charge
         cap = _live_cap(live)
-        team = _safe(lambda: live.user_team)
+        gm = _safe(lambda: live.game_manager)
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         charge = int(_safe(lambda: total_cap_charge(team), 0))
         proj = charge + int(offer_salary or 0)
         if extension:

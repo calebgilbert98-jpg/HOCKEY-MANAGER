@@ -91,7 +91,8 @@ def api_tactics():
     live = _live()
     if live is None:
         return jsonify({"groups": [], "impact": []})
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"groups": [], "impact": []})
     groups = []
@@ -133,7 +134,8 @@ def api_practice():
     live = _live()
     if live is None:
         return jsonify({})
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     try:
         import dressing_room as _dr
         plan = _dr.ensure_dressing_room_fields(team).get("practice_plan") or {}

@@ -35,7 +35,7 @@ def api_trades_teams():
         return jsonify({"teams": [], "user_team": None, "trade_block_count": 0})
     gm = _safe(lambda: live.game_manager)
     teams = _safe(lambda: list(getattr(getattr(gm, "league", None), "teams", None) or []), []) or []
-    my_name = _safe(lambda: live.user_team.team_name)
+    my_name = _safe(lambda: gm.user_team.team_name) or _safe(lambda: live.user_team.team_name)
 
     # Which teams have players listed in app.trade_block?
     block = _safe(lambda: list(getattr(live, "trade_block", None) or []), []) or []
@@ -81,7 +81,7 @@ def api_trades_roster():
     if target is not None:
         players = [to_web_player(p)
                    for p in _safe(lambda: list(target.roster), []) or []]
-    my = _safe(lambda: live.user_team)
+    my = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     mine = [to_web_player(p)
             for p in _safe(lambda: list(my.roster), []) or []] if my else []
     return jsonify({"team": want, "players": players, "my_roster": mine})
@@ -150,7 +150,8 @@ def api_trades_propose():
         # two-club/75-day CBA rules). Engine re-checks at execution too.
         live = _live()
         if live is not None and retention_terms:
-            user_team = _safe(lambda: live.user_team)
+            _gm2 = _safe(lambda: live.game_manager)
+            user_team = _safe(lambda: _gm2.user_team) or _safe(lambda: live.user_team)
             if user_team is not None:
                 _gplayers, _ = _resolve_assets(user_team, give_pids, [])
                 _ok, _errs = validate_retention_terms(
@@ -351,7 +352,8 @@ def api_trades_evaluate():
             "label": "Demo",
         })
 
-    user_team = _safe(lambda: live.user_team)
+    _gm3 = _safe(lambda: live.game_manager)
+    user_team = _safe(lambda: _gm3.user_team) or _safe(lambda: live.user_team)
     partner = _find_team(live, target_id)
     te = _trade_engine()
     if user_team is None or partner is None or te is None:

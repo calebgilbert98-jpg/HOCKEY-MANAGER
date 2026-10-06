@@ -123,9 +123,10 @@ def _find_player(pid):
     """Search all league teams (roster, ahl_roster, prospects); returns
     (player, team, list_name) or (None, None, None)."""
     live = _live()
-    league = _safe(lambda: getattr(live, "league", None))
+    gm = _safe(lambda: getattr(live, "game_manager", None))
+    league = _safe(lambda: getattr(gm, "league", None)) or _safe(lambda: getattr(live, "league", None))
     teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
-    user_team = _safe(lambda: getattr(live, "user_team", None))
+    user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
     if user_team is not None and all(t is not user_team for t in teams):
         teams = [user_team] + teams
     for team in teams:
@@ -458,37 +459,23 @@ def _build_health(p):
                   0)
         region = None
         conc = False
-        hist = _safe(lambda: list(getattr(p, "injury_history", None) or []),
-                     []) or []
-        if hist:
-            last = hist[-1]
-            if isinstance(last, dict):
-                reg = str(last.get("region", "") or "").strip()
-                if reg and reg != "?":
-                    region = reg
-                conc = bool(last.get("concussion", False))
+        last_inj = _safe(lambda: str(getattr(p, "last_injury", "") or ""), "")
+        if last_inj and last_inj != "None":
+            region = last_inj
+        # concussion flag from injury type text
+        if "concussion" in itype.lower():
+            conc = True
         out["active_injury"] = {
             "type": itype, "games_remaining": n,
             "region": region, "concussion": conc,
         }
-    # history
-    raw = _safe(lambda: getattr(p, "injury_history", None) or [], []) or []
+    # history — built from real Player fields (no injury_history list exists)
     entries = []
-    for e in reversed(raw):
-        if not isinstance(e, dict):
-            continue
-        t = str(e.get("type", "Injury") or "Injury")
-        reg = str(e.get("region", "") or "").strip()
-        try:
-            g = int(e.get("games", 0) or 0)
-        except Exception:
-            g = 0
-        bits = t
-        if reg and reg != "?":
-            bits += f" ({reg})"
-        bits += f" — {g} game{'s' if g != 1 else ''} missed"
-        if bool(e.get("concussion", False)):
-            bits += "  🧠"
+    last_inj = _safe(lambda: str(getattr(p, "last_injury", "") or ""), "")
+    inj_type = _safe(lambda: str(getattr(p, "injury_type", "") or ""), "")
+    if last_inj and last_inj != "None":
+        bits = inj_type if inj_type and inj_type != "None" else "Injury"
+        bits += f" ({last_inj})"
         entries.append(bits)
     out["injury_history"] = entries
     out["career_games_missed"] = _safe(
@@ -642,7 +629,8 @@ def _build_analytics(p, live, team):
     except Exception:
         am = None
     goalie = _is_goalie(p)
-    lens_team = _safe(lambda: getattr(live, "user_team", None)) or team
+    _gm_l = _safe(lambda: getattr(live, "game_manager", None))
+    lens_team = _safe(lambda: getattr(_gm_l, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None)) or team
     date_str = str(_safe(lambda: getattr(live, "current_date", ""), ""))
     lens = None
     try:
@@ -1006,8 +994,9 @@ def api_player(pid):
     if p is None:
         return jsonify({"error": "not found"}), 404
     goalie = _is_goalie(p)
-    user_team = _safe(lambda: getattr(live, "user_team", None))
-    league = _safe(lambda: getattr(live, "league", None))
+    gm = _safe(lambda: getattr(live, "game_manager", None))
+    user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
+    league = _safe(lambda: getattr(gm, "league", None)) or _safe(lambda: getattr(live, "league", None))
     data = {
         "id": str(pid),
         "list": list_name,

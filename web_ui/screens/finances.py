@@ -46,7 +46,8 @@ def api_finances():
     live = _live()
     if live is None:
         return jsonify({"error": "no live game bound", "cap": None})
-    team = _safe(lambda: live.user_team)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no user team"})
 
@@ -104,11 +105,11 @@ def api_finances():
         try:
             hits.append({
                 "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
-                "position": _safe(lambda: getattr(p, "position", "?"), "?"),
+                "position": _safe(lambda: getattr(p, "primary_position", "?"), "?"),
                 "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
                 "overall": _player_ovr(p),
                 "salary": _player_cap_hit(p),
-                "injured": _safe(lambda: bool(getattr(p, "injured", False)), False),
+                "injured": _safe(lambda: bool(getattr(p, "is_injured", False)), False),
             })
         except Exception:
             continue
