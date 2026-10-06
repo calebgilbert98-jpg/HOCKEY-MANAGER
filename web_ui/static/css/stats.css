@@ -57,3 +57,49 @@
 @media (max-width: 900px) {
   .leaders-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- stats tabs ---- */
+.stats-tabs { display: flex; gap: 6px; margin: 4px 0 18px; flex-wrap: wrap; }
+.st-tab {
+  background: #111a2e; border: 1px solid #2a3c5f; color: #8b98b8;
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800; letter-spacing: 1.4px;
+  text-transform: uppercase; padding: 10px 20px; border-radius: 8px; cursor: pointer;
+  transition: background .13s ease, color .13s ease, border-color .13s ease;
+}
+.st-tab:hover { background: #16213a; color: #cdd8ee; }
+.st-tab.active { background: #1d4ed8; border-color: #3b82f6; color: #fff;
+  box-shadow: 0 4px 14px rgba(59,130,246,.35); }
+.stats-pane.hidden { display: none; }
+
+/* ---- AHL standings card ---- */
+.ahl-standings-card { margin-top: 16px; }
+
+/* ---- records tab ---- */
+.records-teams { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+.rec-team { padding-bottom: 6px; }
+.rec-group-h {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800; letter-spacing: 1.6px;
+  text-transform: uppercase; color: #93c5fd; padding: 12px 12px 4px;
+}
+.rec-cat { color: #8b98b8; font-size: 13px; }
+.rec-season { color: #5b6a8c; font-size: 11.5px; }
+.rec-player { text-transform: none; letter-spacing: .3px; }
+.rec-val { font-size: 17px; }
+@media (max-width: 900px) { .records-teams { grid-template-columns: 1fr; } }
+
+/* ---- xG analytics tab ---- */
+.xg-head { margin-bottom: 16px; }
+.xg-duel { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; padding: 14px; }
+.xg-team { background: #0b1220; border-radius: 8px; padding: 16px; text-align: center; }
+.xg-tname {
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 900; letter-spacing: 1.6px;
+  text-transform: uppercase; color: #fff; border-bottom: 3px solid #3b82f6;
+  padding-bottom: 8px; margin-bottom: 10px;
+}
+.xg-xg { font-family: var(--nhl-cond); font-size: 44px; font-weight: 900; color: #fff; line-height: 1; }
+.xg-xg span { font-size: 15px; color: #93c5fd; margin-left: 6px; letter-spacing: 2px; }
+.xg-sub { color: #8b98b8; font-size: 12.5px; margin-top: 6px; letter-spacing: .6px; }
+.xg-report { padding: 14px 16px; color: #dbe4f5; font-size: 14px; line-height: 1.65; white-space: normal; }
+.xg-legend { display: flex; gap: 18px; padding: 8px 14px 12px; color: #8b98b8; font-size: 12px; }
+.xg-legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; }
+#xg-momentum { width: 100%; display: block; border-radius: 6px; margin: 12px 14px 0; max-width: calc(100% - 28px); }

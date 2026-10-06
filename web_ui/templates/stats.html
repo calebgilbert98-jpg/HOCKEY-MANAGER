@@ -20,21 +20,59 @@
 <main class="stats-main">
   <div class="bcast-head">
     <div class="bcast-kicker">League</div>
-    <h1 class="bcast-title">League Leaders</h1>
+    <h1 class="bcast-title">Stats Center</h1>
   </div>
-  <div class="leaders-grid">
-    <section class="bpanel leader-card">
-      <div class="bpanel-h">🏆 Scoring Leaders <span class="panel-note">Top 10</span></div>
-      <table class="leader-table" id="scorers-table"></table>
+  <nav class="stats-tabs" aria-label="Stats sections">
+    <button class="st-tab active" data-tab="nhl">🏆 NHL Leaders</button>
+    <button class="st-tab" data-tab="ahl">🚜 AHL</button>
+    <button class="st-tab" data-tab="records">📜 Records</button>
+    <button class="st-tab" data-tab="xg">📈 xG Analytics</button>
+  </nav>
+
+  <div class="stats-pane" id="pane-nhl">
+    <div class="leaders-grid">
+      <section class="bpanel leader-card">
+        <div class="bpanel-h">🏆 Scoring Leaders <span class="panel-note">Top 10</span></div>
+        <table class="leader-table" id="scorers-table"></table>
+      </section>
+      <section class="bpanel leader-card">
+        <div class="bpanel-h">🥅 Goal Leaders <span class="panel-note">Top 5</span></div>
+        <table class="leader-table" id="goals-table"></table>
+      </section>
+      <section class="bpanel leader-card">
+        <div class="bpanel-h">🧤 Save % Leaders <span class="panel-note" id="goalie-min-note"></span></div>
+        <table class="leader-table" id="goalies-table"></table>
+      </section>
+    </div>
+  </div>
+
+  <div class="stats-pane hidden" id="pane-ahl">
+    <div class="leaders-grid">
+      <section class="bpanel leader-card">
+        <div class="bpanel-h">🏆 AHL Scoring <span class="panel-note">Top 25</span></div>
+        <table class="leader-table" id="ahl-scorers"></table>
+      </section>
+      <section class="bpanel leader-card">
+        <div class="bpanel-h">🧤 AHL Goalies <span class="panel-note">Top 15 · Min 5 GP</span></div>
+        <table class="leader-table" id="ahl-goalies"></table>
+      </section>
+    </div>
+    <section class="bpanel leader-card ahl-standings-card">
+      <div class="bpanel-h">📊 AHL Standings</div>
+      <table class="leader-table" id="ahl-standings"></table>
     </section>
+  </div>
+
+  <div class="stats-pane hidden" id="pane-records">
     <section class="bpanel leader-card">
-      <div class="bpanel-h">🥅 Goal Leaders <span class="panel-note">Top 5</span></div>
-      <table class="leader-table" id="goals-table"></table>
+      <div class="bpanel-h">🏆 Stanley Cup Champions</div>
+      <table class="leader-table" id="champions-table"></table>
     </section>
-    <section class="bpanel leader-card">
-      <div class="bpanel-h">🧤 Save % Leaders <span class="panel-note" id="goalie-min-note"></span></div>
-      <table class="leader-table" id="goalies-table"></table>
-    </section>
+    <div class="records-teams" id="records-teams"></div>
+  </div>
+
+  <div class="stats-pane hidden" id="pane-xg">
+    <div id="xg-body"></div>
   </div>
 </main>
 

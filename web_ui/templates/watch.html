@@ -29,11 +29,34 @@
       <button id="btn-stats" title="Stats overlay" aria-label="Stats overlay">📊</button>
     </div>
   </header>
-  <div class="rink-stage">
+  <nav class="watch-modes" aria-label="Watch modes">
+    <button class="wm-tab active" data-mode="visual" title="Live visualizer">📺 Visualizer</button>
+    <button class="wm-tab" data-mode="text" title="Play-by-play text feed">📝 Text</button>
+    <button class="wm-tab" data-mode="chart" title="Shot chart from the event log">🎯 Shot Chart</button>
+    <button class="wm-tab" data-mode="box" title="Box score — click a player for their profile">📊 Box Score</button>
+  </nav>
+  <div class="rink-stage" id="pane-visual">
     <canvas id="rink"></canvas>
     <div class="stats-overlay hidden" id="stats-overlay" aria-live="polite"></div>
     <div class="event-ticker" id="event-ticker" aria-live="polite"></div>
   </div>
+  <section class="mode-pane hidden" id="pane-text" aria-label="Play-by-play">
+    <div class="text-feed" id="text-feed"></div>
+  </section>
+  <section class="mode-pane hidden" id="pane-chart" aria-label="Shot chart">
+    <div class="chart-layout">
+      <div class="chart-rink-wrap"><canvas id="shotchart"></canvas></div>
+      <aside class="chart-side">
+        <div class="chart-legend" id="chart-legend"></div>
+        <div class="chart-detail" id="chart-detail">
+          <div class="cd-empty">Click any shot marker for the play details.</div>
+        </div>
+      </aside>
+    </div>
+  </section>
+  <section class="mode-pane hidden" id="pane-box" aria-label="Box score">
+    <div class="boxscore" id="boxscore"></div>
+  </section>
   <footer class="watch-statusbar">
     <span class="ws-live" id="ws-live"><span class="ws-dot"></span>LIVE</span>
     <span class="ws-game" id="ws-game">—</span>
@@ -41,6 +64,7 @@
   </footer>
 </div>
 <script src="/static/js/watch.js"></script>
+<script src="/static/js/watch_modes.js"></script>
 <script src="/static/js/nav.js"></script>
 <script src="/static/js/context_menu.js"></script>
 </body>
