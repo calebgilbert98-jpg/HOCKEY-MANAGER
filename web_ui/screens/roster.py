@@ -382,3 +382,116 @@ def api_move_result():
         return jsonify({"moved": 0, "errors": []})
     return jsonify(getattr(live, "_web_roster_move_result",
                            {"moved": 0, "errors": []}))
+
+
+# ------------------------------------------------------------------
+# Jersey numbers (web port of main.py open_jersey_numbers_window /
+# assign_jersey_number). Validation mirrors immortality rules: retired
+# numbers stay retired, goalie numbers stay with goalies, duplicates
+# are blocked across the NHL + AHL rosters (the desktop checks the
+# same shared pool via immortality.number_selectable).
+# ------------------------------------------------------------------
+
+def _jersey_validation(live, team, player, number):
+    """(ok, reason) — desktop rulebook for a jersey number change.
+    Never raises."""
+    try:
+        n = int(number)
+    except (TypeError, ValueError):
+        return False, "Enter a number between 1 and 98."
+    if not (1 <= n <= 98):
+        return False, "Numbers run 1-98."
+    try:
+        import immortality as _im
+        from game_classes import PlayerPosition as _PP
+        goalie = getattr(player, "primary_position", None) == _PP.GOALIE
+        if _im.is_number_retired(team, n) or n in _im.LEAGUE_RETIRED_NUMBERS:
+            return False, f"No. {n} is retired by {getattr(team, 'team_name', 'the club')} — pick another."
+        if not goalie and n in _im.SKATER_BARRED_NUMBERS:
+            return False, f"No. {n} is reserved for goaltenders — pick another."
+        taken = set()
+        for attr in ("roster", "ahl_roster"):
+            for q in (getattr(team, attr, None) or []):
+                if q is player:
+                    continue
+                try:
+                    taken.add(int(getattr(q, "jersey_number", 0) or 0))
+                except Exception:
+                    continue
+        if n in taken:
+            return False, f"No. {n} is already worn on the NHL/AHL roster — pick another."
+        return True, ""
+    except Exception:
+        return False, "Could not validate the number."
+
+
+def _find_team_player(live, pid):
+    """Player by id on the user's NHL or AHL roster. Never raises."""
+    try:
+        gm = _safe(lambda: live.game_manager)
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+        for attr in ("roster", "ahl_roster"):
+            for p in (_safe(lambda: list(getattr(team, attr, None) or []), []) or []):
+                if str(_safe(lambda: getattr(p, "id", ""), "")) == str(pid):
+                    return team, p
+    except Exception:
+        pass
+    return None, None
+
+
+@bp.route("/api/jersey_numbers")
+def api_jersey_numbers():
+    """NHL + AHL roster jersey numbers (for the editor view)."""
+    live = _live()
+    if live is None:
+        return jsonify({"players": []}), 503
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    out = []
+    for attr in ("roster", "ahl_roster"):
+        for p in (_safe(lambda: list(getattr(team, attr, None) or []), []) or []):
+            try:
+                out.append({
+                    "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+                    "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                    "position": _safe(lambda: str(getattr(p, "primary_position", "?")), "?"),
+                    "captaincy": _safe(lambda: getattr(p, "captaincy", "") or ""),
+                    "jersey": _safe(lambda: int(getattr(p, "jersey_number", 0) or 0), 0),
+                    "roster": attr,
+                })
+            except Exception:
+                continue
+    out.sort(key=lambda d: (d.get("jersey") or 99, d.get("name") or ""))
+    return jsonify({"players": out})
+
+
+@bp.route("/api/jersey_numbers/set", methods=["POST"])
+def api_jersey_numbers_set():
+    """Set a player's jersey number. Validated through the desktop
+    rulebook; the mutation runs on the main thread via the command
+    queue."""
+    from flask import request
+    data = request.get_json(force=True, silent=True) or {}
+    pid = data.get("player_id")
+    number = data.get("number")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    team, player = _find_team_player(live, pid)
+    if player is None:
+        return jsonify({"ok": False, "error": "player not found"}), 404
+    cur = _safe(lambda: int(getattr(player, "jersey_number", 0) or 0), 0)
+    try:
+        want = int(number)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Enter a number between 1 and 98."}), 400
+    if want == cur:
+        return jsonify({"ok": True, "unchanged": True, "number": cur})
+    ok, reason = _jersey_validation(live, team, player, want)
+    if not ok:
+        return jsonify({"ok": False, "error": reason}), 422
+    from web_ui.bridge import enqueue_command
+    queued = enqueue_command("set_jersey_number", player_id=str(pid), number=want)
+    return jsonify({"ok": bool(queued), "queued": "set_jersey_number", "number": want})

@@ -58,7 +58,17 @@ function renderStaff(staff, count) {
           <span>Morale <b>${s.morale}</b></span>
           <span>Exp <b>${s.experience}y</b></span>
           <span>Salary <b>${sal}</b></span>
+        </div>
+        <div class="s-actions">
+          <button class="s-btn" data-act="reassign" data-id="${esc(s.id)}" data-name="${esc(s.name)}" data-role="${esc(s.role)}">Reassign Role</button>
+          <button class="s-btn danger" data-act="release" data-id="${esc(s.id)}" data-name="${esc(s.name)}">Release</button>
         </div>`;
+      el.querySelectorAll('.s-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.act === 'release') releaseStaff(btn, btn.dataset.id, btn.dataset.name);
+          else reassignStaff(btn, btn.dataset.id, btn.dataset.name, btn.dataset.role);
+        });
+      });
       grid.appendChild(el);
     }
     g.appendChild(grid);
@@ -69,6 +79,80 @@ function renderStaff(staff, count) {
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function releaseStaff(btn, id, name) {
+  if (!confirm(`Are you sure you want to release ${name}?\nThis ends their contract immediately. Severance is owed on the remaining term.`)) return;
+  btn.disabled = true;
+  try {
+    const r = await postJSON('/api/staff/release', {staff_id: id});
+    if (r.ok) {
+      await loadStaff();
+    } else {
+      alert('Could not release: ' + (r.error || 'unknown error'));
+      btn.disabled = false;
+    }
+  } catch (e) {
+    console.error(e);
+    btn.disabled = false;
+  }
+}
+
+let STAFF_ROLES = null;
+
+async function staffRoles() {
+  if (!STAFF_ROLES) {
+    const res = await fetch('/api/staff/roles');
+    const data = await res.json();
+    STAFF_ROLES = data.roles || [];
+  }
+  return STAFF_ROLES;
+}
+
+async function reassignStaff(btn, id, name, currentRole) {
+  const roles = await staffRoles();
+  const overlay = document.createElement('div');
+  overlay.className = 'cm-overlay';
+  const opts = roles.map(r => `<option value="${esc(r.name)}" ${r.label === currentRole ? 'disabled' : ''}>${esc(r.label)}</option>`).join('');
+  overlay.innerHTML =
+    '<div class="cm-card" role="dialog" aria-modal="true">' +
+    '<div class="cm-head"><div><div class="cm-title">Reassign ' + esc(name) + '</div>' +
+    '<div class="cm-player">Current role: ' + esc(currentRole) + '</div></div>' +
+    '<button class="cm-close" aria-label="Close">✕</button></div>' +
+    '<div class="cm-field"><label>New role</label>' +
+    '<select class="cm-select" id="reassign-role">' + opts + '</select></div>' +
+    '<div class="cm-note" id="reassign-note"></div>' +
+    '<div class="cm-actions"><button class="cm-cancel">Cancel</button>' +
+    '<button class="cm-submit">Confirm Reassignment</button></div></div>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.cm-close').addEventListener('click', close);
+  overlay.querySelector('.cm-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('.cm-submit').addEventListener('click', async () => {
+    const role = overlay.querySelector('#reassign-role').value;
+    const note = overlay.querySelector('#reassign-note');
+    try {
+      const r = await postJSON('/api/staff/reassign', {staff_id: id, role});
+      if (r.ok) {
+        close();
+        await loadStaff();
+      } else {
+        note.textContent = r.error || 'Reassignment failed.';
+      }
+    } catch (e) {
+      note.textContent = 'Request failed.';
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', loadStaff);

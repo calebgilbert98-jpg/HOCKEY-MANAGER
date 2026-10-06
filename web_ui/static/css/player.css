@@ -77,6 +77,13 @@
 }
 .pill.kind-pos { background: rgba(59,130,246,.18); border-color: var(--p-blue); color: #bfdbfe; }
 .pill.kind-injury { border-color: #f85149; color: #f85149; }
+.pill.kind-jersey { background: rgba(59,130,246,.1); }
+.pill.kind-jersey.editable {
+  cursor: pointer;
+  text-decoration: underline dotted rgba(255,255,255,.4);
+  text-underline-offset: 3px;
+}
+.pill.kind-jersey.editable:hover { border-color: var(--p-blue, #3b82f6); }
 .p-strip { font-size: 14px; font-weight: 600; color: #cbd5e1; letter-spacing: .4px; }
 .p-strip.dim { margin-top: 6px; font-size: 12.5px; color: #8b95a7; }
 

@@ -85,6 +85,99 @@ function esc(s) {
 }
 
 loadWire();
+loadEligible();
+
+function loadEligible() {
+  fetch('/api/waivers/eligible')
+    .then(r => r.json())
+    .then(d => renderEligible(d.players || []))
+    .catch(e => console.error(e));
+}
+
+function renderEligible(players) {
+  const list = document.getElementById('eligible-list');
+  list.innerHTML = '';
+  if (!players.length) {
+    const el = document.createElement('div');
+    el.className = 'wire-empty';
+    el.textContent = 'No waiver-eligible players on your roster.';
+    list.appendChild(el);
+    return;
+  }
+  players.sort((a, b) => (b.overall || 0) - (a.overall || 0));
+  for (const p of players) {
+    const el = document.createElement('div');
+    el.className = 'wire-card';
+    const clauseTag = p.nmc_block ? ' <span class="w-clause bad">NMC</span>'
+      : (p.clause === 'NTC' ? ' <span class="w-clause">NTC</span>' : '');
+    const exemptTag = p.waiver_exempt ? ' <span class="w-exempt">exempt — demotes freely</span>' : '';
+    el.innerHTML = `
+      <div class="w-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
+      <div class="w-info">
+        <div class="w-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}${clauseTag}</div>
+        <div class="w-sub">${esc(p.position)} · Age ${p.age} · ${salaryStr(p.salary)}${exemptTag}</div>
+      </div>
+      <button class="btn-waive" data-id="${esc(p.id)}" data-name="${esc(p.name)}" ${p.nmc_block ? 'disabled title="No-movement clause blocks waiver placement"' : ''}>${p.waiver_exempt ? 'Demote' : 'Waive'}</button>`;
+    const btn = el.querySelector('.btn-waive');
+    btn.addEventListener('click', () => placeOnWaivers(btn, p.id, p.name, !!p.waiver_exempt));
+    list.appendChild(el);
+  }
+}
+
+async function placeOnWaivers(btn, playerId, name, exempt) {
+  if (exempt) {
+    // Waiver-exempt players skip the wire: demote straight to the AHL
+    // (same destination as the desktop's waive-and-assign).
+    if (!confirm(`Send ${name} to the AHL? He is waiver-exempt and clears freely.`)) return;
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await fetch('/api/roster/move', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({player_ids: [playerId], from: 'nhl', to: 'ahl'}),
+      });
+      const data = await res.json();
+      if (data.ok !== false) {
+        btn.textContent = 'Sent ✓';
+        loadEligible();
+      } else {
+        btn.textContent = 'Demote';
+        btn.disabled = false;
+        alert('Could not demote: ' + (data.error || 'unknown error'));
+      }
+    } catch (e) {
+      console.error(e);
+      btn.textContent = 'Demote';
+      btn.disabled = false;
+    }
+    return;
+  }
+  if (!confirm(`Place ${name} on waivers? Other teams will have a chance to claim him (2-day wire).`)) return;
+  btn.disabled = true;
+  btn.textContent = 'Waiving…';
+  try {
+    const res = await fetch('/api/waivers/place', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({player_id: playerId}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      btn.textContent = 'On Waivers ✓';
+      loadEligible();
+      loadWire();
+    } else {
+      btn.textContent = 'Waive';
+      btn.disabled = false;
+      alert('Could not place on waivers: ' + (data.error || 'unknown error'));
+    }
+  } catch (e) {
+    console.error(e);
+    btn.textContent = 'Waive';
+    btn.disabled = false;
+  }
+}
 
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 // If the tab goes silent the game shuts itself down cleanly.

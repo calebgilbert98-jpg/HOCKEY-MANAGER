@@ -48,11 +48,47 @@
     }
     if (h.portrait) $('p-portrait-fallback').hidden = true;
     $('p-name').textContent = h.name;
-    $('p-pills').innerHTML = (h.pills || []).map((p) =>
+    let pills = (h.pills || []).map((p) =>
       `<span class="pill kind-${esc(p.kind || '')}"${p.fg ? ` style="color:${esc(p.fg)}"` : ''}>${esc(p.text)}</span>`
     ).join('');
+    if (h.jersey) {
+      const jcls = h.jersey_editable ? 'pill kind-jersey editable' : 'pill kind-jersey';
+      const jtitle = h.jersey_editable ? ' title="Click to change jersey number"' : '';
+      pills = `<span class="${jcls}" id="p-jersey-pill"${jtitle}>#${esc(h.jersey)}</span>` + pills;
+    }
+    $('p-pills').innerHTML = pills;
+    if (h.jersey_editable) {
+      const jp = $('p-jersey-pill');
+      if (jp) jp.addEventListener('click', () => editProfileJersey(h.id, h.name, h.jersey));
+    }
     $('p-strip').textContent = (h.strip || []).join('   •   ');
     $('p-rights-strip').textContent = (h.rights_strip || []).join('   •   ');
+  }
+
+  /* ---- jersey number edit (desktop: open_jersey_numbers_window) ---- */
+  async function editProfileJersey(pid, name, cur) {
+    const raw = prompt(`Enter a new jersey number for ${name} (current #${cur}):\nRetired numbers stay retired; goalie numbers stay with goalies; duplicates blocked.`, String(cur));
+    if (raw === null) return;
+    const n = parseInt(String(raw).trim());
+    if (!n || n < 1 || n > 98) { alert('Numbers run 1-98.'); return; }
+    if (n === cur) return;
+    try {
+      const res = await fetch('/api/jersey_numbers/set', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({player_id: pid, number: n}),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        const full = await fetch('/api/player/' + encodeURIComponent(pid));
+        renderHeader((await full.json()).header);
+      } else {
+        alert('Could not change jersey number: ' + (data.error || 'unknown error'));
+      }
+    } catch (e) {
+      console.error(e);
+      alert('Request failed.');
+    }
   }
 
   /* ---- overview ---- */

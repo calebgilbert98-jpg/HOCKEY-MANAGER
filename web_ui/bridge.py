@@ -1495,6 +1495,10 @@ def _execute_command(app, cmd):
                 except Exception:
                     pass
                 player.on_waivers = True
+                # Desktop (windows.py:14111): players stay on waivers 2 days;
+                # without this the clock starts at 0 and the daily advance
+                # processes claims the same day.
+                player.waiver_days = 2
                 wire = getattr(app, "waiver_list", None)
                 if wire is not None and player not in wire:
                     wire.append(player)
@@ -1507,6 +1511,114 @@ def _execute_command(app, cmd):
                     pass
             except Exception as e:
                 print(f"place_on_waivers failed: {e}")
+        elif op == "execute_buyout":
+            # Buy out a roster player's contract. Web port of
+            # BuyoutCalculatorView._confirm_buyout (windows.py): the buyout
+            # window gate, then the one rulebook mutation
+            # (buyout_window.execute_buyout). One-shot: NMC/NTC players are
+            # blocked here (the AI doesn't ask consent; the desktop
+            # calculator flags the same rule via _candidate_rows).
+            pid = cmd.get("player_id")
+            try:
+                try:
+                    import transaction_windows as _tw
+                    _ok, _why = _tw.check_window(
+                        "buyout", getattr(app, "current_date", None))
+                    if not _ok:
+                        print(f"execute_buyout blocked: {_why}")
+                        return
+                except Exception:
+                    pass
+                gm = getattr(app, "game_manager", None)
+                league = getattr(gm, "league", None) or getattr(app, "league", None)
+                team = getattr(gm, "user_team", None) or getattr(app, "user_team", None)
+                if team is None or league is None:
+                    print("execute_buyout: no team/league")
+                    return
+                roster = list(getattr(team, "roster", []) or [])
+                player = next((p for p in roster
+                               if str(getattr(p, "id", "")) == str(pid)), None)
+                if player is None:
+                    print(f"execute_buyout: player {pid} not on roster")
+                    return
+                c = getattr(player, "contract", None)
+                if bool(getattr(c, "no_movement_clause", False)) or \
+                        bool(getattr(c, "no_trade_clause", False)):
+                    print(f"execute_buyout blocked: {getattr(player, 'full_name', '?')} "
+                          "has NMC/NTC")
+                    return
+                try:
+                    import buyout_window as _bw
+                    total, annual, byears, _rows = _bw.execute_buyout(
+                        league, team, player,
+                        season_year=getattr(league, "season_year", 2026))
+                    print(f"execute_buyout: {getattr(player, 'full_name', '?')} bought out "
+                          f"(${int(total):,} total, ${int(annual):,}/yr x {int(byears)}y)")
+                except Exception as e:
+                    print(f"execute_buyout failed: {e}")
+            except Exception as e:
+                print(f"execute_buyout failed: {e}")
+        elif op == "set_jersey_number":
+            # Change a player's jersey number. Web port of
+            # HockeyManagerGUI.assign_jersey_number (main.py:23002): retired
+            # numbers stay retired, goalie numbers stay with goalies,
+            # duplicates blocked across NHL + AHL rosters. Revalidated on
+            # the main thread (the screen pre-validates too).
+            pid = cmd.get("player_id")
+            try:
+                want = int(cmd.get("number", 0))
+            except (TypeError, ValueError):
+                want = 0
+            try:
+                gm = getattr(app, "game_manager", None)
+                league = getattr(gm, "league", None) or getattr(app, "league", None)
+                team = getattr(gm, "user_team", None) or getattr(app, "user_team", None)
+                if team is None or not pid or not (1 <= want <= 98):
+                    print("set_jersey_number: bad team/id/number")
+                    return
+                player = None
+                for attr in ("roster", "ahl_roster"):
+                    for q in (getattr(team, attr, None) or []):
+                        if str(getattr(q, "id", "")) == str(pid):
+                            player = q
+                            break
+                    if player is not None:
+                        break
+                if player is None:
+                    print(f"set_jersey_number: player {pid} not found")
+                    return
+                cur = int(getattr(player, "jersey_number", 0) or 0)
+                if cur == want:
+                    return
+                try:
+                    import immortality as _im
+                    from game_classes import PlayerPosition as _PP
+                    goalie = getattr(player, "primary_position", None) == _PP.GOALIE
+                    if not _im.number_selectable(team, want, goalie) \
+                            and cur != want:
+                        # number_selectable sees the player's own number as
+                        # taken, but cur != want already ruled that out --
+                        # so this is genuinely unavailable.
+                        tname = getattr(team, "team_name", "the club")
+                        if _im.is_number_retired(team, want) or \
+                                want in _im.LEAGUE_RETIRED_NUMBERS:
+                            print(f"set_jersey_number: No. {want} retired by {tname}")
+                        elif not goalie and want in _im.SKATER_BARRED_NUMBERS:
+                            print(f"set_jersey_number: No. {want} reserved for goaltenders")
+                        else:
+                            print(f"set_jersey_number: No. {want} unavailable")
+                        return
+                except Exception:
+                    pass
+                player.jersey_number = want
+                try:
+                    player.jersey_number_since = int(
+                        getattr(league, "season_year", 2026) or 2026)
+                except Exception:
+                    pass
+                print(f"set_jersey_number: {getattr(player, 'full_name', '?')} -> #{want}")
+            except Exception as e:
+                print(f"set_jersey_number failed: {e}")
         elif op == "set_captains":
             try:
                 team = getattr(app, "user_team", None)
@@ -1707,7 +1819,10 @@ def _execute_command(app, cmd):
                 pass
         elif op == "release_staff":
             # Release a staff member from the user's team.
-            # Mirrors staff_management_window.release_staff_action.
+            # Mirrors staff_management_window.release_selected_staff (which
+            # routes through release_staff_action): severance + trust shock
+            # via process_staff_severance (game_classes.py:4373) -- firing
+            # is never free -- then removal + news.
             try:
                 sid = str(cmd.get("staff_id", ""))
                 gm = getattr(app, "game_manager", None)
@@ -1719,6 +1834,14 @@ def _execute_command(app, cmd):
                 target = next((s for s in staff
                                if str(getattr(s, "id", "")) == sid), None)
                 if target is not None and target in getattr(team, "staff", []):
+                    try:
+                        from game_classes import process_staff_severance
+                        entry = process_staff_severance(team, target)
+                        if entry:
+                            print(f"release_staff: severance ${int(entry.get('amount', 0)):,} "
+                                  f"for {getattr(target, 'full_name', 'staff member')}")
+                    except Exception:
+                        pass
                     team.staff.remove(target)
                     try:
                         _news = getattr(app, "add_news", None)
@@ -1731,6 +1854,46 @@ def _execute_command(app, cmd):
                     print(f"release_staff: staff {sid} not found")
             except Exception as e:
                 print(f"release_staff failed: {e}")
+        elif op == "reassign_staff":
+            # Reassign a staff member to a new role. Web port of
+            # staff_management_window.reassign_single_staff: every role is
+            # reassignable; the unique-role guard (GM / Head Coach) runs
+            # here too, revalidated on the main thread.
+            try:
+                from game_classes import Staff as _Staff, StaffRole as _SR
+                sid = str(cmd.get("staff_id", ""))
+                role_name = str(cmd.get("role", ""))
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) or getattr(app, "user_team", None)
+                if team is None or not sid or not role_name:
+                    print("reassign_staff: no team, id or role")
+                    return
+                try:
+                    new_role = _SR[role_name]
+                except Exception:
+                    print(f"reassign_staff: unknown role {role_name}")
+                    return
+                staff = list(getattr(team, "staff", []) or [])
+                target = next((s for s in staff
+                               if str(getattr(s, "id", "")) == sid), None)
+                if target is None:
+                    print(f"reassign_staff: staff {sid} not found")
+                    return
+                if getattr(target, "role", None) == new_role:
+                    print("reassign_staff: already in that role")
+                    return
+                if _Staff.is_unique_role(new_role):
+                    conflict = [s for s in staff
+                                if getattr(s, "role", None) == new_role
+                                and s is not target]
+                    if conflict:
+                        print(f"reassign_staff: team already has a "
+                              f"{new_role.value}: {getattr(conflict[0], 'full_name', '?')}")
+                        return
+                target.role = new_role
+                print(f"reassign_staff: {getattr(target, 'full_name', '?')} -> {new_role.value}")
+            except Exception as e:
+                print(f"reassign_staff failed: {e}")
         elif op == "draft_pick":
             # User drafts a prospect: record via the live session.
             try:
@@ -2132,6 +2295,20 @@ def _execute_command(app, cmd):
                 _neg_mod.handle_negotiation_command(app, cmd)
             except Exception:
                 pass
+        elif op == "present_offer_sheet":
+            # Offer sheet presentation: thin delegation -- the full
+            # desktop flow (OfferSheetWindow._present_offer_sheet) lives in
+            # web_ui/screens/offer_sheets.py.
+            try:
+                from web_ui.screens import offer_sheets as _os_mod
+                _os_mod.handle_present_offer_sheet_command(app, cmd)
+            except Exception as _e:
+                try:
+                    app._web_offer_sheet_result = {
+                        "marker": "present_offer_sheet", "ok": False,
+                        "summary": f"Offer sheet failed: {_e}"}
+                except Exception:
+                    pass
         elif op == "add_scouting_assignment_real":
             # Web region assignment (replaces the v1 desktop fallback):
             # scout -> region on game_manager.scout_region_assignments

@@ -143,3 +143,120 @@ def api_finances():
             "remaining": budget_remaining,
         },
     })
+
+
+# ------------------------------------------------------------------
+# Buyout calculator (web port of BuyoutCalculatorView in windows.py).
+# Uses the real buyout math (windows.buyout_schedule) and the real
+# mutation (buyout_window.execute_buyout) via a bridge command.
+# ------------------------------------------------------------------
+
+def _buyout_schedule(p):
+    """(total, annual, byears, rows) via the game's real NHL buyout math.
+    Never raises."""
+    try:
+        from windows import buyout_schedule
+        return buyout_schedule(p)
+    except Exception:
+        return 0, 0, 0, []
+
+
+def _buyout_candidate_row(p):
+    c = _safe(lambda: getattr(p, "contract", None))
+    if c is None:
+        return None
+    salary = _safe(lambda: int(getattr(c, "salary", 0) or 0), 0)
+    years = _safe(lambda: int(getattr(c, "years_remaining", 0) or 0), 0)
+    if salary <= 0 or years <= 0:
+        return None
+    total, annual, byears, rows = _buyout_schedule(p)
+    if not rows:
+        return None
+    return {
+        "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+        "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+        "position": _safe(lambda: str(getattr(p, "primary_position", "?")), "?"),
+        "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+        "cap_hit": salary,
+        "years_left": years,
+        "buyout_cost": int(total),
+        "annual_dead": int(annual),
+        "dead_years": int(byears),
+        "schedule": [
+            {"year": int(i), "cap_hit": int(hit), "savings": int(savings)}
+            for (i, hit, savings) in rows
+        ],
+        "nmc": _safe(lambda: bool(getattr(c, "no_movement_clause", False)), False),
+        "ntc": _safe(lambda: bool(getattr(c, "no_trade_clause", False)), False),
+    }
+
+
+@bp.route("/api/finances/buyouts")
+def api_finances_buyouts():
+    """Buyout calculator payload: candidates (real buyout math) + active
+    buyout cap hits + the window gate."""
+    live = _live()
+    if live is None:
+        return jsonify({"candidates": [], "error": "no live game"}), 503
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    if team is None:
+        return jsonify({"candidates": [], "error": "no user team"}), 503
+    roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or []
+    candidates = []
+    for p in roster:
+        try:
+            row = _buyout_candidate_row(p)
+            if row:
+                candidates.append(row)
+        except Exception:
+            continue
+    candidates.sort(key=lambda r: r["cap_hit"], reverse=True)
+    try:
+        import transaction_windows as _tw
+        win_ok, win_msg = _tw.check_window(
+            "buyout", _safe(lambda: getattr(live, "current_date", None)))
+    except Exception:
+        win_ok, win_msg = True, ""
+    hits = _safe(lambda: dict(getattr(team, "buyout_cap_hits", None) or {}), {}) or {}
+    return jsonify({
+        "candidates": candidates,
+        "active_buyouts": [{"year": int(y), "hit": int(v)}
+                           for y, v in sorted(hits.items())],
+        "window": {"ok": bool(win_ok), "reason": win_msg or ""},
+    })
+
+
+@bp.route("/api/finances/buyouts/execute", methods=["POST"])
+def api_finances_buyouts_execute():
+    """Queue a buyout of a roster player. Server validates the buyout
+    window; the main-thread op revalidates and runs the real engine."""
+    from flask import request
+    data = request.get_json(force=True, silent=True) or {}
+    pid = data.get("player_id")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    try:
+        import transaction_windows as _tw
+        ok, why = _tw.check_window(
+            "buyout", _safe(lambda: getattr(live, "current_date", None)))
+        if not ok:
+            return jsonify({"ok": False, "error": why}), 422
+    except Exception:
+        pass
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or [] \
+        if team else []
+    player = next((p for p in roster
+                   if str(_safe(lambda: getattr(p, "id", ""), "")) == str(pid)),
+                  None)
+    if player is None:
+        return jsonify({"ok": False, "error": "player not on roster"}), 404
+    if _buyout_candidate_row(player) is None:
+        return jsonify({"ok": False, "error": "nothing to buy out (no remaining term)"}), 422
+    queued = enqueue_command("execute_buyout", player_id=str(pid))
+    return jsonify({"ok": bool(queued), "queued": "execute_buyout"})

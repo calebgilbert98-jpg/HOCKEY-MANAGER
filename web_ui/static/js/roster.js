@@ -147,7 +147,7 @@ function renderTable() {
       : '';
     return `<tr data-id="${esc(p.id)}" class="${p.injured ? 'injured' : ''}">
       <td><input type="checkbox" class="row-sel" data-id="${esc(p.id)}" ${checked}></td>
-      <td>${esc(p.jersey)}</td>
+      <td class="jersey-cell" data-id="${esc(p.id)}" data-jersey="${esc(p.jersey)}" data-name="${esc(p.name)}" title="Click to change jersey number">#${esc(p.jersey)}</td>
       <td class="p-name clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile" data-id="${esc(p.id)}">${face}<span>${esc(p.name)}${cap}</span></td>
       <td>${esc(p.position)}</td>
       <td>${p.age}</td>
@@ -170,7 +170,43 @@ function renderTable() {
     td.addEventListener('click', () => openProfile(td.dataset.id));
     td.addEventListener('contextmenu', e => { e.preventDefault(); openCtxMenu(e, td.dataset.id); });
   });
+  body.querySelectorAll('.jersey-cell').forEach(td => {
+    td.addEventListener('click', e => {
+      e.stopPropagation();
+      editJerseyNumber(td);
+    });
+  });
   renderSummary();
+}
+
+async function editJerseyNumber(td) {
+  const pid = td.dataset.id;
+  const name = td.dataset.name || 'player';
+  const cur = parseInt(td.dataset.jersey) || 0;
+  const raw = prompt(`Enter a new jersey number for ${name} (current #${cur}):\nRetired numbers stay retired; goalie numbers stay with goalies; duplicates blocked.`, String(cur));
+  if (raw === null) return;
+  const n = parseInt(String(raw).trim());
+  if (!n || n < 1 || n > 98) { alert('Numbers run 1-98.'); return; }
+  if (n === cur) return;
+  td.textContent = '…';
+  try {
+    const res = await fetch('/api/jersey_numbers/set', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({player_id: pid, number: n}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      loadTab();  // refresh the table from live state
+    } else {
+      alert('Could not change jersey number: ' + (data.error || 'unknown error'));
+      td.textContent = '#' + cur;
+    }
+  } catch (e) {
+    console.error(e);
+    alert('Request failed.');
+    td.textContent = '#' + cur;
+  }
 }
 
 function renderSummary() {

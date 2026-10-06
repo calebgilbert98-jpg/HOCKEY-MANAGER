@@ -142,6 +142,121 @@
     }
   }
 
+  /* Buyout calculator ------------------------------------------------- */
+  var BO_CANDIDATES = [];
+  var BO_SELECTED = null;
+
+  function boMoney(v) {
+    v = Math.round(Number(v) || 0);
+    return "$" + v.toLocaleString("en-US");
+  }
+
+  function loadBuyouts() {
+    fetch("/api/finances/buyouts")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        BO_CANDIDATES = d.candidates || [];
+        renderBuyoutList();
+        var w = d.window || {};
+        var note = document.getElementById("buyout-window-note");
+        note.textContent = w.ok ? "(window open: Jun 15–30)" :
+          (w.reason ? "(" + w.reason + ")" : "");
+        var act = document.getElementById("buyout-active");
+        var rows = d.active_buyouts || [];
+        act.innerHTML = rows.length
+          ? rows.map(function (r) { return "<span>" + r.year + ": " + boMoney(r.hit) + "</span>"; }).join(" · ")
+          : "No active buyouts.";
+      })
+      .catch(function () { /* calculator is optional */ });
+  }
+
+  function renderBuyoutList() {
+    var list = document.getElementById("buyout-list");
+    list.innerHTML = "";
+    if (!BO_CANDIDATES.length) {
+      list.innerHTML = "<p class='fin-note'>No buyout candidates (no remaining term on the roster).</p>";
+      return;
+    }
+    BO_CANDIDATES.forEach(function (c) {
+      var el = document.createElement("div");
+      el.className = "buyout-row" + (BO_SELECTED && BO_SELECTED.id === c.id ? " sel" : "");
+      var warn = (c.nmc || c.ntc) ? " <span class='buyout-block' title='NMC/NTC blocks buyouts without consent'>" + (c.nmc ? "NMC" : "NTC") + "</span>" : "";
+      el.innerHTML = "<div class='buyout-name'>" + esc(c.name) + warn + "</div>" +
+        "<div class='buyout-sub'>" + esc(c.position) + " · Age " + c.age + " · " +
+        boMoney(c.cap_hit) + "/yr × " + c.years_left + " left</div>";
+      el.addEventListener("click", function () {
+        BO_SELECTED = c;
+        renderBuyoutList();
+        renderBuyoutDetail();
+      });
+      list.appendChild(el);
+    });
+  }
+
+  function renderBuyoutDetail() {
+    var det = document.getElementById("buyout-detail");
+    var c = BO_SELECTED;
+    if (!c) {
+      det.innerHTML = "<p class='fin-note'>Select a player to see their buyout breakdown.</p>";
+      return;
+    }
+    var blocked = (c.nmc || c.ntc);
+    var sched = (c.schedule || []).map(function (r) {
+      var txt = r.savings >= 0
+        ? "saves " + boMoney(r.savings)
+        : "dead money " + boMoney(-r.savings);
+      return "<div class='buyout-sched-row'>Year " + r.year + ": " + boMoney(r.cap_hit) + " cap hit — " + txt + "</div>";
+    }).join("");
+    det.innerHTML =
+      "<div class='buyout-name big'>" + esc(c.name) + "</div>" +
+      "<div class='buyout-sub'>Age " + c.age + " · " + esc(c.position) + " · " +
+      boMoney(c.cap_hit) + "/yr × " + c.years_left + " yr</div>" +
+      "<div class='buyout-total'>Buyout cost: " + boMoney(c.buyout_cost) + "</div>" +
+      "<div class='buyout-sub'>Cap hit: " + boMoney(c.annual_dead) + "/yr for " + c.dead_years + " years</div>" +
+      "<div class='buyout-sched'>" + sched + "</div>" +
+      (blocked
+        ? "<p class='buyout-block-note'>⚠️ " + (c.nmc ? "No-movement" : "No-trade") +
+          " clause — buyout blocked without the player's consent.</p>"
+        : "<button class='btn danger' id='buyout-exec'>Execute Buyout</button>") +
+      "<div class='buyout-result' id='buyout-result'></div>";
+    if (!blocked) {
+      document.getElementById("buyout-exec").addEventListener("click", executeBuyout);
+    }
+  }
+
+  function executeBuyout() {
+    var c = BO_SELECTED;
+    if (!c) return;
+    if (!confirm("Buy out " + c.name + "? He becomes a free agent. Cost: " + boMoney(c.buyout_cost) +
+        " spread as " + boMoney(c.annual_dead) + "/yr over " + c.dead_years + " years.")) return;
+    document.getElementById("buyout-result").textContent = "Processing…";
+    fetch("/api/finances/buyouts/execute", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({player_id: c.id})
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        document.getElementById("buyout-result").textContent =
+          d.ok ? "✔ Buyout executed — " + c.name + " is now a free agent." : "✘ " + (d.error || "Buyout failed.");
+        if (d.ok) {
+          BO_SELECTED = null;
+          loadBuyouts();
+        }
+      })
+      .catch(function () {
+        document.getElementById("buyout-result").textContent = "✘ Request failed.";
+      });
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>\"]/g, function (c) {
+      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;"}[c];
+    });
+  }
+
+  loadBuyouts();
+
   fetch("/api/finances")
     .then(function (r) { return r.json(); })
     .then(function (d) {

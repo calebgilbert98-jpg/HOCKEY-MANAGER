@@ -70,5 +70,78 @@ def api_staff_release():
     sid = data.get("staff_id")
     if not sid:
         return jsonify({"ok": False, "error": "staff_id required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    staff = _safe(lambda: list(getattr(team, "staff", None) or []), []) or [] \
+        if team else []
+    if not any(str(_safe(lambda: getattr(s, "id", ""), "")) == str(sid)
+               for s in staff):
+        return jsonify({"ok": False, "error": "staff not found"}), 404
     ok = enqueue_command("release_staff", staff_id=str(sid))
     return jsonify({"ok": ok, "queued": "release_staff"})
+
+
+def _staff_roles():
+    """All reassignable roles: (enum_name, display_value). Never raises."""
+    try:
+        from game_classes import StaffRole
+        return [(r.name, r.value) for r in StaffRole]
+    except Exception:
+        return []
+
+
+@bp.route("/api/staff/roles")
+def api_staff_roles():
+    """List of roles for the reassign dialog."""
+    return jsonify({"roles": [{"name": n, "label": v}
+                              for (n, v) in _staff_roles()]})
+
+
+@bp.route("/api/staff/reassign", methods=["POST"])
+def api_staff_reassign():
+    """Reassign a staff member to a new role. Server validates the role
+    and the unique-role guard (GM / Head Coach); the main-thread op
+    applies it."""
+    from flask import request
+    data = request.get_json(force=True, silent=True) or {}
+    sid = data.get("staff_id")
+    role_name = data.get("role")
+    if not sid or not role_name:
+        return jsonify({"ok": False,
+                        "error": "staff_id and role required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    try:
+        from game_classes import StaffRole, Staff
+        new_role = StaffRole[str(role_name)]
+    except Exception:
+        return jsonify({"ok": False,
+                        "error": f"unknown role: {role_name}"}), 422
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    staff = _safe(lambda: list(getattr(team, "staff", None) or []), []) or [] \
+        if team else []
+    target = next((s for s in staff
+                   if str(_safe(lambda: getattr(s, "id", ""), "")) == str(sid)),
+                  None)
+    if target is None:
+        return jsonify({"ok": False, "error": "staff not found"}), 404
+    if _safe(lambda: getattr(target, "role", None)) == new_role:
+        return jsonify({"ok": False,
+                        "error": "already in that role"}), 422
+    if _safe(lambda: Staff.is_unique_role(new_role), False):
+        conflict = [s for s in staff
+                    if s is not target
+                    and _safe(lambda: getattr(s, "role", None)) == new_role]
+        if conflict:
+            cname = _safe(lambda: getattr(conflict[0], "full_name", "?"), "?")
+            return jsonify({"ok": False,
+                            "error": f"Team already has a {new_role.value}: "
+                                     f"{cname}. Reassign or release them first."}), 422
+    queued = enqueue_command("reassign_staff", staff_id=str(sid),
+                             role=str(role_name))
+    return jsonify({"ok": bool(queued), "queued": "reassign_staff"})

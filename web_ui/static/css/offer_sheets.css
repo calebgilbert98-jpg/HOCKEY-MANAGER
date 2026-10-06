@@ -1,0 +1,27 @@
+/* Puck Dynasty — Offer Sheets · NHL 14 broadcast reskin */
+.os-main { max-width: 1080px; margin: 0 auto; padding: 6px 24px 40px; }
+.os-sub { color: var(--dim); font-size: 13.5px; margin-bottom: 18px; font-weight: 600; }
+.os-status { padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: var(--dim); }
+.os-grid { display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+@media (max-width: 860px) { .os-grid { grid-template-columns: 1fr; } }
+.os-list-panel .bpanel-h, .os-build-panel .bpanel-h { font-size: 15px; }
+.os-list { display: flex; flex-direction: column; gap: 8px; max-height: 560px; overflow-y: auto; }
+.os-row { border: 1px solid rgba(255,255,255,.1); border-radius: var(--nhl-r-sm); padding: 10px 14px; cursor: pointer; transition: all .12s ease; }
+.os-row:hover { border-color: rgba(255,255,255,.3); }
+.os-row.sel { border-color: var(--nhl-blue); box-shadow: 0 0 0 1px var(--nhl-blue); }
+.os-name { font-weight: 800; font-size: 14.5px; }
+.os-sub { color: var(--dim); font-size: 12.5px; margin-top: 2px; }
+.os-market { color: var(--gold, #e8b34b); font-size: 12.5px; margin-top: 4px; }
+.os-empty { padding: 28px 20px; text-align: center; color: var(--dimmer); font-size: 14px; }
+.os-detail { white-space: pre-line; font-size: 13px; color: var(--dim); margin-bottom: 16px; line-height: 1.55; }
+.os-label { display: flex; justify-content: space-between; font-size: 13px; font-weight: 700; margin: 12px 0 4px; }
+.os-val { color: var(--gold, #e8b34b); }
+.os-build-panel input[type="range"] { width: 100%; accent-color: var(--nhl-blue); }
+.os-sec-h { font-size: 12.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 16px 0 6px; }
+.os-comp-label { font-weight: 800; font-size: 13.5px; margin-bottom: 4px; }
+.os-line { font-size: 13px; padding: 3px 0; }
+.os-line.ok { color: var(--text); }
+.os-line.bad { color: #e07a7a; }
+.os-interest { font-size: 13px; font-style: italic; color: var(--gold, #e8b34b); margin-top: 10px; }
+.os-actions { margin-top: 16px; }
+.os-result { margin-top: 10px; font-size: 14px; font-weight: 700; line-height: 1.5; }

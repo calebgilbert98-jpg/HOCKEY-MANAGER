@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offer Sheets — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/offer_sheets.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="os-count"></div>
+</header>
+
+<main class="os-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Signing Desk</div>
+    <h1 class="bcast-title">Offer Sheets</h1>
+  </div>
+  <p class="os-sub">Sign a rival club's unsigned RFA. If they don't match, he signs with you — but you owe real compensation picks.</p>
+  <div class="os-status bpanel" id="os-status">Loading…</div>
+
+  <div class="os-grid">
+    <section class="bpanel os-list-panel">
+      <div class="bpanel-h">Unsigned RFAs on rival clubs</div>
+      <div class="os-list" id="os-list"></div>
+    </section>
+
+    <section class="bpanel os-build-panel">
+      <div class="bpanel-h">Build the offer</div>
+      <div class="os-detail" id="os-detail">Select a player on the left.</div>
+
+      <label class="os-label" for="os-aav">Average annual value <span class="os-val" id="os-aav-val">$4.0M</span></label>
+      <input type="range" id="os-aav" min="1" max="12" step="0.1" value="4">
+
+      <label class="os-label" for="os-years">Term <span class="os-val" id="os-years-val">4 yrs</span></label>
+      <input type="range" id="os-years" min="1" max="5" step="1" value="4">
+
+      <div class="os-sec-h">Compensation if unmatched</div>
+      <div class="os-comp" id="os-comp">—</div>
+
+      <div class="os-sec-h">Checks</div>
+      <div class="os-checks" id="os-checks">—</div>
+
+      <div class="os-interest" id="os-interest"></div>
+
+      <div class="os-actions">
+        <button class="btn primary" id="os-present" disabled>Present Offer Sheet</button>
+      </div>
+      <div class="os-result" id="os-result"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/offer_sheets.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

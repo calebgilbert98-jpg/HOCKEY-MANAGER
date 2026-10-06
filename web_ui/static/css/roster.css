@@ -230,3 +230,13 @@
   background: #0a0f1c;
 }
 tr.injured .p-portrait { filter: grayscale(0.6); }
+
+/* ---------- jersey number click-to-edit ---------- */
+.jersey-cell {
+  cursor: pointer;
+  font-family: var(--nhl-cond);
+  font-weight: 800;
+  text-decoration: underline dotted rgba(255,255,255,.3);
+  text-underline-offset: 3px;
+}
+.jersey-cell:hover { color: var(--nhl-blue); text-decoration-color: var(--nhl-blue); }

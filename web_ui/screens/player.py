@@ -203,7 +203,7 @@ def _history_season_label(season):
 # section builders — each returns JSON-safe data or {"unavailable": ...}
 # ======================================================================
 
-def _build_header(p, team):
+def _build_header(p, team, user_team=None):
     import game_classes as _gc
     try:
         import condition_ui as _cu
@@ -290,6 +290,15 @@ def _build_header(p, team):
     pos_u = pos_str.upper()
     pos_class = "G" if "GOALIE" in pos_u else (
         "D" if "DEFENSE" in pos_u else "F")
+    jersey = _safe(lambda: int(getattr(p, "jersey_number", 0) or 0), 0)
+    # Editable only for players on the user's own club (NHL + AHL share
+    # the number pool) -- desktop assign_jersey_number only touches
+    # user_team rosters too.
+    jersey_editable = _safe(
+        lambda: any(p is q
+                    for attr in ("roster", "ahl_roster")
+                    for q in (getattr(user_team, attr, None) or [])),
+        False)
     return {
         "id": pid,
         "portrait": player_portrait(pid),
@@ -301,6 +310,8 @@ def _build_header(p, team):
         "pills": pills,
         "strip": strip,
         "rights_strip": rights_bits,
+        "jersey": jersey,
+        "jersey_editable": jersey_editable,
     }
 
 
@@ -1006,7 +1017,7 @@ def api_player(pid):
                                    "") or "Free Agent")),
         "goalie": goalie,
     }
-    data["header"] = _build_header(p, team)
+    data["header"] = _build_header(p, team, user_team=user_team)
     data["overview"] = _build_overview(p, team)
     data["health"] = _build_health(p)
     data["personality"] = _build_personality(p, team)
