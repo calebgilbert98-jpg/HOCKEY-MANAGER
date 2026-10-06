@@ -23,7 +23,7 @@
     const bg = fillStyle || barColor(v);
     const style = ` style="width:${v}%;background:${bg};"`;
     return `<div class="attr-row"><span class="an" title="${esc(label)}">${esc(label)}</span>` +
-      `<span class="ab"><span class="fill${cls}"${style}></span></span>` +
+      `<span class="ab"><span class="fill"${style}></span></span>` +
       `<span class="av">${v}</span></div>`;
   }
 
