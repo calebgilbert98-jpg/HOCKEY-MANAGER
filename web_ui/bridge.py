@@ -828,6 +828,28 @@ def _ticker_items(app, gm):
     return [{"kind": i["kind"], "text": i["text"]} for i in items[:24]]
 
 
+def _hub_auto_advance_settings():
+    """Auto-advance defaults from the game's settings module (Batch D).
+
+    Desktop parity (main.py:8639 800ms/tick loop): the loop stops on
+    game day / blockers / new action-needed messages. The desktop
+    setting simulation.auto_continue_non_game_days seeds the toggle.
+    """
+    out = {"enabled_default": False, "tick_ms": 800,
+           "always_show_daily_results": True}
+    try:
+        import settings_window as _sw
+        s = _sw.load_settings() or {}
+        sim = s.get("simulation", {}) or {}
+        out["enabled_default"] = bool(
+            sim.get("auto_continue_non_game_days", False))
+        out["always_show_daily_results"] = bool(
+            sim.get("always_show_daily_results", True))
+    except Exception:
+        pass
+    return out
+
+
 def get_hub_state(app):
     """Full hub payload from the live game."""
     gm = _safe(lambda: app.game_manager)
@@ -908,15 +930,27 @@ def get_hub_state(app):
     # Scrolling news ticker: recent league scores + news log
     ticker = _ticker_items(app, gm)
 
+    # Batch D: hub header pills (date + streak). The streak comes from
+    # the form panel below; computed once here so the header never
+    # disagrees with the card.
+    panels = _hub_panels(team, gm)
+    streak_txt = ""
+    try:
+        streak_txt = (panels.get("form") or {}).get("streak", "") or ""
+    except Exception:
+        streak_txt = ""
+
     return {
         "team": {**t, "points": pts},
         "team_colors": _team_colors_dict(team),
         "date": date_str,
+        "header": {"date": date_str, "streak": streak_txt},
         "inbox": {"unread": unread, "action_needed": action_needed},
         "next_game": next_game,
         "recent_inbox": recent,
         "stat_strip": stat_strip,
         "ticker": ticker,
+        "auto_advance": _hub_auto_advance_settings(),
         "tiles": [
             {"id": "continue", "title": "Continue", "subtitle": "Advance the day",
              "size": "hero", "icon": "▶", "accent": True},
@@ -943,7 +977,7 @@ def get_hub_state(app):
             {"id": "tactics", "title": "Tactics", "subtitle": "Systems & practice",
              "size": "small", "icon": "♟️"},
         ],
-        "panels": _hub_panels(team, gm),
+        "panels": panels,
     }
 
 
@@ -1094,15 +1128,288 @@ def _hub_panels(team, gm):
         except Exception:
             pass
 
-        return {
+        panels = {
             "division": my_div,
             "standings": div_rows,
             "leaders": leaders,
             "form": {"last5": last5, "streak": streak_txt},
             "next_game": next_game,
         }
+        # Batch D: the remaining dashboard_home.py cards (additive).
+        panels.update(_hub_panels_extra(team, gm, sched, today, me_name))
+        return panels
     except Exception:
         return {}
+
+
+def _hub_morale_label(m):
+    """Desktop dashboard_home.morale_label fallback (0-100 bands)."""
+    try:
+        from career import morale_label as _ml
+        return _ml(int(m))
+    except Exception:
+        pass
+    m = int(m)
+    if m >= 85:
+        return "Superb"
+    if m >= 65:
+        return "Good"
+    if m >= 45:
+        return "Okay"
+    if m >= 25:
+        return "Poor"
+    return "Abysmal"
+
+
+def _hub_panels_extra(team, gm, sched, today, me_name):
+    """Batch D: the dashboard_home.py cards the web was missing --
+    schedule (Upcoming/Results scopes), injuries, morale, prospects,
+    milestones, iconic games, and an expanded inbox-recent list.
+    All reads defensive; returns {} on any failure."""
+    try:
+        league = _safe(lambda: gm.league)
+        if league is None or team is None:
+            return {}
+        out = {}
+
+        # --- Schedule card (scope dropdown: Upcoming / Results) ---
+        upcoming, results = [], []
+        for g in sched or []:
+            try:
+                if not isinstance(g, dict):
+                    continue
+                hn = _team_name(g.get("home_team"))
+                an = _team_name(g.get("away_team"))
+                if me_name not in (hn, an):
+                    continue
+                d = g.get("date")
+                ds = (d.strftime("%a %b %d")
+                      if hasattr(d, "strftime") else str(d or ""))
+                opp = an if hn == me_name else hn
+                where = "vs" if hn == me_name else "at"
+                if g.get("home_score") is None:
+                    upcoming.append({
+                        "date": ds, "opp": opp,
+                        "opp_abbr": TEAM_ABBR.get(opp, opp[:3].upper()),
+                        "where": where,
+                    })
+                else:
+                    hs = int(g.get("home_score") or 0)
+                    aws = int(g.get("away_score") or 0)
+                    mine = hs if hn == me_name else aws
+                    theirs = aws if hn == me_name else hs
+                    wl = ("W" if mine > theirs
+                          else "OTL" if abs(mine - theirs) == 1
+                          else "L")
+                    results.append({
+                        "date": ds, "opp": opp,
+                        "opp_abbr": TEAM_ABBR.get(opp, opp[:3].upper()),
+                        "where": where, "score": f"{mine}-{theirs}",
+                        "result": wl,
+                    })
+            except Exception:
+                continue
+        upcoming.sort(key=lambda r: r["date"])
+        out["schedule"] = {
+            "scopes": ["Upcoming", "Results"],
+            "upcoming": upcoming[:5],
+            "results": results[-5:][::-1] if results else [],
+        }
+
+        # --- Injuries card ---
+        injured = []
+        for p in _safe(lambda: list(team.roster), []) or []:
+            try:
+                inj = getattr(p, "injury", None)
+                if inj:
+                    desc = (getattr(inj, "description", None)
+                            or getattr(inj, "injury_type", "Injured"))
+                    games = getattr(
+                        inj, "games_remaining",
+                        getattr(inj, "days_remaining", "?"))
+                    injured.append({
+                        "id": str(_safe(lambda: getattr(p, "id", ""),
+                                       "")),
+                        "name": _safe(lambda: getattr(p, "full_name",
+                                                     "?"), "?"),
+                        "desc": str(desc),
+                        "out": str(games),
+                    })
+                elif getattr(p, "is_injured", False):
+                    injured.append({
+                        "id": str(_safe(lambda: getattr(p, "id", ""),
+                                       "")),
+                        "name": _safe(lambda: getattr(p, "full_name",
+                                                     "?"), "?"),
+                        "desc": "Injured", "out": "?",
+                    })
+            except Exception:
+                continue
+        out["injuries"] = {"players": injured[:5],
+                           "count": len(injured)}
+
+        # --- Morale card ---
+        roster = _safe(lambda: list(team.roster), []) or []
+        mors = [_safe(lambda: float(getattr(p, "morale", 70) or 70), 70.0)
+                for p in roster]
+        if mors:
+            avg = sum(mors) / len(mors)
+            bands = {}
+            for m in mors:
+                b = _hub_morale_label(m)
+                bands[b] = bands.get(b, 0) + 1
+            out["morale"] = {
+                "average": round(avg, 1),
+                "label": _hub_morale_label(avg),
+                "bands": [{"band": b,
+                           "count": bands.get(b, 0)}
+                          for b in ("Superb", "Good", "Okay", "Poor",
+                                    "Abysmal") if bands.get(b)],
+            }
+        else:
+            out["morale"] = {"average": 0, "label": "—", "bands": []}
+
+        # --- Prospects card ---
+        pool = (list(_safe(lambda: getattr(team, "prospects", None)
+                           or [], [])) or []
+                + list(_safe(lambda: getattr(team, "ahl_roster", None)
+                             or [], [])) or [])
+        ladder = ["F", "D", "C-", "C", "C+", "B-", "B", "B+", "A-",
+                  "A", "A+"]
+
+        def _pot_rank(p):
+            g = str(_safe(lambda: getattr(p, "potential_grade", "C"),
+                          "C") or "C").strip().upper()
+            return ladder.index(g) if g in ladder else 4
+
+        scored = []
+        for p in pool:
+            try:
+                scored.append((_pot_rank(p),
+                              _safe(lambda: float(p.overall_rating()),
+                                    0.0) or 0.0, p))
+            except Exception:
+                continue
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        try:
+            from attribute_composites import talent_tier_for_player as _ttfp
+        except Exception:
+            _ttfp = None
+        pros = []
+        for _, _, p in scored[:5]:
+            pros.append({
+                "id": str(_safe(lambda: getattr(p, "id", ""), "")),
+                "name": _safe(lambda: getattr(p, "full_name", "?"),
+                              "?"),
+                "position": _clean_position(
+                    _safe(lambda: getattr(p, "primary_position", "?"),
+                          "?")),
+                "age": _safe(lambda: int(getattr(p, "age", 0) or 0),
+                             0),
+                "tier": _safe(lambda: _ttfp(p), "") if _ttfp else "",
+                "potential": str(_safe(
+                    lambda: getattr(p, "potential_grade", "?"), "?")),
+            })
+        out["prospects"] = {"players": pros}
+
+        # --- Milestones card ---
+        hits = []
+        for p in roster:
+            try:
+                pos = str(getattr(p, "primary_position", "") or "")
+                if "GOALIE" in pos.upper():
+                    continue
+                name = _safe(lambda: getattr(p, "full_name", "?"), "?")
+                pid = str(_safe(lambda: getattr(p, "id", ""), ""))
+                pts = (_safe(lambda: int(getattr(p, "goals", 0) or 0),
+                             0)
+                       + _safe(lambda: int(getattr(p, "assists", 0)
+                                          or 0), 0))
+                for m in (25, 50, 75, 100):
+                    if pts < m <= pts + 8:
+                        hits.append((m - pts, pid, name,
+                                     f"{m - pts} PTS from {m}"))
+                cg = _safe(lambda: int(getattr(p, "career_games", 0)
+                                       or 0), 0)
+                for m in (500, 1000, 1500):
+                    if cg < m <= cg + 10:
+                        hits.append((m - cg, pid, name,
+                                     f"{m - cg} GP from {m} career"))
+            except Exception:
+                continue
+        hits.sort(key=lambda h: h[0])
+        out["milestones"] = {
+            "items": [{"player_id": h[1], "name": h[2], "text": h[3]}
+                      for h in hits[:6]],
+        }
+
+        # --- Iconic games card ---
+        entries = [e for e in
+                   (_safe(lambda: list(getattr(
+                       team, "iconic_games", None) or []), []) or [])
+                   if isinstance(e, dict)]
+        entries.sort(key=lambda e: (not bool(e.get("starred")),
+                                    str(e.get("date", ""))))
+        out["iconic_games"] = {
+            "entries": [{
+                "id": str(e.get("id", "")),
+                "headline": str(e.get("headline",
+                                      "Unforgettable night") or ""),
+                "date": str(e.get("date", "") or ""),
+                "score": str(e.get("score", "") or ""),
+                "playoff": bool(e.get("playoff")),
+                "starred": bool(e.get("starred")),
+            } for e in entries[:6]],
+            "more": max(0, len(entries) - 6),
+        }
+
+        # --- Inbox-recent card (expanded: 5, clickable ids) ---
+        inbox = _safe(lambda: team.inbox)
+        msgs = _safe(lambda: list(inbox.messages), []) or [] \
+            if inbox else []
+        recent = []
+        for m in msgs[:5]:
+            try:
+                recent.append({
+                    "id": str(_safe(lambda: getattr(m, "id", ""), "")),
+                    "subject": _safe(lambda: getattr(m, "subject",
+                                                    ""), ""),
+                    "sender": _safe(lambda: getattr(m, "sender", ""),
+                                    ""),
+                    "is_read": bool(_safe(
+                        lambda: getattr(m, "is_read", True), True)),
+                    "urgent": bool(_safe(
+                        lambda: getattr(m, "is_urgent", False), False)),
+                    "action": bool(_safe(
+                        lambda: getattr(m, "requires_response", False),
+                        False)),
+                })
+            except Exception:
+                continue
+        out["inbox_recent"] = {
+            "messages": recent,
+            "unread": _safe(lambda: int(getattr(inbox, "unread_count",
+                                                0) or 0), 0),
+        }
+        return out
+    except Exception:
+        return {}
+
+
+def _iconic_toggle_handler(live, entry_id):
+    """Toggle an iconic-game memory's star (desktop toggle_star)."""
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    if team is None:
+        return {"ok": False, "error": "no user team"}
+    try:
+        from iconic_games import toggle_star
+        state = toggle_star(team, str(entry_id or ""))
+    except Exception:
+        state = None
+    if state is None:
+        return {"ok": False, "error": "memory not found"}
+    return {"ok": True, "starred": bool(state)}
 
 
 def get_inbox_messages(app, filter_type="all"):
@@ -5179,6 +5486,20 @@ def _execute_command(app, cmd):
                     # (windows.py): the offer rides on the player object.
                     player.salary = aav
                     player.contract_years = years
+                    # Batch D: clause picker + signing-bonus sweetener ride
+                    # as staged single-use attributes, exactly like the
+                    # desktop submit_offer. handle_contract_offer prices
+                    # the clause via trade_engine and lands it on the deal
+                    # via apply_clause_to_contract.
+                    try:
+                        player.offered_clause_kind = str(
+                            cmd.get("clause") or "none")
+                        player.offered_clause_list_size = int(
+                            cmd.get("clause_list_size") or 10)
+                        player.offered_signing_bonus = int(
+                            cmd.get("signing_bonus") or 0)
+                    except Exception:
+                        pass
                     # v3 multi-day negotiation: run the offer through the
                     # negotiation hook so a counter is stashed on
                     # app._web_negotiations (in addition to the inbox
@@ -5241,6 +5562,17 @@ def _execute_command(app, cmd):
                     # Same staging as the desktop extension flow.
                     player.salary = aav
                     player.contract_years = years
+                    # Batch D: clause picker + signing-bonus sweetener
+                    # (desktop submit_offer parity).
+                    try:
+                        player.offered_clause_kind = str(
+                            cmd.get("clause") or "none")
+                        player.offered_clause_list_size = int(
+                            cmd.get("clause_list_size") or 10)
+                        player.offered_signing_bonus = int(
+                            cmd.get("signing_bonus") or 0)
+                    except Exception:
+                        pass
                     # v3 multi-day negotiation: run the offer through the
                     # negotiation hook so a counter is stashed on
                     # app._web_negotiations (in addition to the inbox
@@ -5736,6 +6068,367 @@ def _execute_command(app, cmd):
                     inbox.delete_message(mid)
                 except Exception:
                     pass
+        # ----------------------------------------------------------
+        # Batch D ops (additive): draft-day calls, ELC offers, inbox
+        # gaps, save/load depth. All _safe-wrapped, real game paths.
+        # ----------------------------------------------------------
+        elif op == "draft_day_trade_accept":
+            # User accepted an incoming draft-day call: execute the real
+            # engine trade between the caller and the user club, sync
+            # pick lists into get_draft_order(), move the session slot
+            # owners, and record the deal (draft_day_trades._negotiate
+            # parity). Outcome stashed for
+            # GET /api/draft/incoming_call/result polling.
+            def _ddt_store(ok, summary):
+                try:
+                    app._web_draft_call_result = {
+                        "marker": "draft_day_trade_accept",
+                        "ok": bool(ok), "summary": str(summary or ""),
+                    }
+                except Exception:
+                    pass
+
+            try:
+                call = getattr(app, "_web_ddt_call", None)
+                if not isinstance(call, dict):
+                    _ddt_store(False, "No incoming call is parked.")
+                else:
+                    import trade_engine as _te
+                    import draft_day_trades as _ddt
+                    gm = getattr(app, "game_manager", None)
+                    league = (getattr(gm, "league", None)
+                              or getattr(app, "league", None))
+                    user_team = getattr(app, "user_team", None)
+                    caller = next(
+                        (t for t in (getattr(league, "teams", None) or [])
+                         if str(getattr(t, "team_name", ""))
+                         == str(call.get("caller") or "")),
+                        None)
+                    if caller is None or user_team is None:
+                        _ddt_store(False, "Could not resolve the clubs.")
+                    else:
+                        # Resolve pick ids -> live DraftPick objects.
+                        def _find_pick(pid):
+                            for t in (getattr(league, "teams", None)
+                                      or []):
+                                try:
+                                    for pk in (t.draft_picks or {}).values():
+                                        for pko in (pk if isinstance(
+                                                pk, list) else [pk]):
+                                            if str(getattr(
+                                                    pko, "id", "")) == \
+                                                    str(pid):
+                                                return pko
+                                except Exception:
+                                    continue
+                            return None
+
+                        caller_gives = [
+                            p for p in
+                            (_find_pick(i)
+                             for i in (call.get("give_ids") or []))
+                            if p is not None]
+                        user_gives = [
+                            p for p in
+                            (_find_pick(i)
+                             for i in (call.get("get_ids") or []))
+                            if p is not None]
+                        if not caller_gives or not user_gives:
+                            _ddt_store(False, "The picks are no longer "
+                                              "available.")
+                        else:
+                            done = _te.execute_trade(
+                                caller, user_team, caller_gives,
+                                user_gives,
+                                str(getattr(app, "current_date", "")
+                                    or ""), league=league)
+                            if str(getattr(done, "summary", "")
+                                   ).startswith("BLOCKED:"):
+                                _ddt_store(False, getattr(
+                                    done, "summary", "Trade blocked."))
+                            else:
+                                _ddt._sync_pick_lists(
+                                    caller, user_team, caller_gives,
+                                    user_gives)
+                                # Move the session slot owners so the
+                                # board reflects the deal.
+                                try:
+                                    sess = getattr(
+                                        league,
+                                        "entry_draft_session", None)
+                                    slots = list(getattr(
+                                        sess, "slots", None) or [])
+                                    swaps = {}
+                                    for pk in caller_gives:
+                                        op = getattr(pk, "overall_pick",
+                                                     None)
+                                        if op:
+                                            swaps[int(op)] = caller.team_name
+                                    for pk in user_gives:
+                                        op = getattr(pk, "overall_pick",
+                                                     None)
+                                        if op:
+                                            swaps[int(op)] = \
+                                                user_team.team_name
+                                    for s in slots:
+                                        o = int(s.get("overall", 0)
+                                                or 0)
+                                        if o in swaps:
+                                            s["owner"] = swaps[o]
+                                except Exception:
+                                    pass
+                                try:
+                                    _ddt._record_deal(
+                                        league, app,
+                                        f"{caller.team_name} moves up to "
+                                        f"#{call.get('overall')} in a "
+                                        f"deal with {user_team.team_name}.")
+                                except Exception:
+                                    pass
+                                try:
+                                    app._web_ddt_call = None
+                                except Exception:
+                                    pass
+                                _ddt_store(True, getattr(
+                                    done, "summary",
+                                    "Draft-day trade completed."))
+            except Exception:
+                pass
+        elif op == "elc_offer":
+            # Entry-level contract offer: the real handle_elc_offer
+            # (main.py:23809) -- band validation, prospect handshake,
+            # canonical ELC path. Outcome stashed for
+            # GET /api/contracts/result polling.
+            def _elc_store(ok, summary):
+                try:
+                    app._web_contract_result = {
+                        "marker": "elc_offer",
+                        "ok": bool(ok), "summary": str(summary or ""),
+                    }
+                except Exception:
+                    pass
+
+            try:
+                pid = cmd.get("player_id")
+                salary = int(cmd.get("salary", 0) or 0)
+                sb = int(cmd.get("signing_bonus", 0) or 0)
+                pb = int(cmd.get("performance_bonus", 0) or 0)
+                gm = getattr(app, "game_manager", None)
+                team = getattr(app, "user_team", None)
+                tname = getattr(team, "team_name", "")
+                player = None
+                for p in (getattr(team, "prospects", None) or []):
+                    if str(getattr(p, "id", id(p))) == str(pid):
+                        player = p
+                        break
+                if player is None:
+                    _elc_store(False, "Prospect not found.")
+                else:
+                    res = app.handle_elc_offer(player, salary, sb, pb)
+                    verdict = (res or {}).get("verdict", "")
+                    note = (res or {}).get("note", "")
+                    if verdict == "accepted":
+                        _elc_store(True,
+                                   f"Signed: ${salary:,}/yr x "
+                                   f"{cmd.get('years', 3)} yrs "
+                                   f"(+${sb:,} SB, +${pb:,}/yr perf).")
+                    elif verdict == "counter":
+                        c = (res or {}).get("counter") or {}
+                        _elc_store(False,
+                                   f"Agent counters: ${c.get('salary', 0):,}"
+                                   f"/yr + ${c.get('signing_bonus', 0):,} "
+                                   f"SB + ${c.get('performance_bonus', 0):,}"
+                                   f"/yr perf. Adjust and re-offer.")
+                    else:
+                        _elc_store(False, note or "Offer rejected.")
+            except Exception:
+                pass
+        elif op == "inbox_mark_all_read":
+            # Desktop _mark_all_read parity.
+            try:
+                team = getattr(app, "user_team", None)
+                inbox = getattr(team, "inbox", None)
+                if inbox is not None:
+                    inbox.mark_all_read()
+            except Exception:
+                pass
+        elif op == "inbox_flag":
+            # Save / Important flagging (desktop _toggle_save_current /
+            # _mark_current_important). value=None toggles.
+            try:
+                mid = cmd.get("message_id")
+                flag = cmd.get("flag")
+                team = getattr(app, "user_team", None)
+                inbox = getattr(team, "inbox", None)
+                if inbox is not None and mid:
+                    for m in list(getattr(inbox, "messages", None) or []):
+                        if str(getattr(m, "id", "")) == str(mid):
+                            v = cmd.get("value")
+                            if flag == "saved":
+                                cur = bool(getattr(m, "is_saved", False))
+                                m.is_saved = (not cur) if v is None \
+                                    else bool(v)
+                            elif flag == "important":
+                                cur = bool(getattr(m, "is_important",
+                                                   False))
+                                m.is_important = (not cur) if v is None \
+                                    else bool(v)
+                            break
+            except Exception:
+                pass
+        elif op == "inbox_read":
+            # Mark one message read/unread.
+            try:
+                mid = cmd.get("message_id")
+                team = getattr(app, "user_team", None)
+                inbox = getattr(team, "inbox", None)
+                if inbox is not None and mid:
+                    if bool(cmd.get("read", True)):
+                        inbox.mark_message_read(mid)
+                    else:
+                        for m in list(getattr(inbox, "messages", None)
+                                      or []):
+                            if str(getattr(m, "id", "")) == str(mid):
+                                m.is_read = False
+                                try:
+                                    m.date_read = None
+                                except Exception:
+                                    pass
+                                break
+            except Exception:
+                pass
+        elif op == "inbox_send":
+            # Desktop _MessageEditor Send parity: build a real
+            # EmailMessage and append it to the inbox; a reply marks the
+            # original read and clears its response requirement.
+            try:
+                from game_classes import EmailMessage
+                team = getattr(app, "user_team", None)
+                inbox = getattr(team, "inbox", None)
+                if inbox is None:
+                    return
+                today = getattr(app, "current_date", None)
+                msg = EmailMessage(
+                    sender="You (GM)",
+                    sender_type="System",
+                    subject=str(cmd.get("subject") or "(no subject)"),
+                    content=str(cmd.get("body") or ""),
+                    category=str(cmd.get("category") or "General"),
+                )
+                try:
+                    if today is not None and hasattr(today, "isoformat"):
+                        msg.date_sent = today
+                        msg.game_date_sent = today
+                except Exception:
+                    pass
+                try:
+                    msg.is_read = True
+                except Exception:
+                    pass
+                inbox.add_message(msg)
+                if str(cmd.get("mode") or "") == "reply":
+                    orig_id = str(cmd.get("message_id") or "")
+                    for m in list(getattr(inbox, "messages", None) or []):
+                        if str(getattr(m, "id", "")) == orig_id:
+                            try:
+                                m.requires_response = False
+                            except Exception:
+                                pass
+                            try:
+                                inbox.mark_message_read(m.id)
+                            except Exception:
+                                pass
+                            break
+            except Exception:
+                pass
+        elif op == "save_quicksave_web":
+            # Quick-save slot 1-6 (desktop _quick_save_to_slot parity):
+            # QuickSaves/QuickSave_Slot_{i}.hm via save_enhanced_game.
+            try:
+                _nonce = cmd.get("nonce") or ""
+                slot = max(1, min(6, int(cmd.get("slot", 1) or 1)))
+                _sm = _web_save_manager(app)
+                if _sm is None:
+                    _web_save_store(app, _nonce, False,
+                                    "Save system unavailable.")
+                else:
+                    import os as _os
+                    qdir = _os.path.join(_web_saves_dir(_sm),
+                                         "QuickSaves")
+                    _os.makedirs(qdir, exist_ok=True)
+                    slot_name = f"QuickSave_Slot_{slot}"
+                    fp = _os.path.join(qdir, slot_name + ".hm")
+                    with _web_suppress_tk_popups():
+                        _ok = bool(_sm.save_enhanced_game(
+                            slot_name + ".hm", True,
+                            {"description": f"Quick Save Slot {slot}",
+                             "category": "QuickSaves",
+                             "include_stats": True,
+                             "screenshot": False,
+                             "slot_number": slot},
+                            fp))
+                    _web_save_store(app, _nonce, _ok,
+                                    f"Quick-saved to slot {slot}."
+                                    if _ok else "Quick-save failed.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Quick-save failed: {_e}")
+        elif op == "save_rename_web":
+            # Rename a save file (path-traversal guarded).
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _sm = _web_save_manager(app)
+                _path = _web_resolve_save_id(_sm, cmd.get("save_id"))
+                if not _path:
+                    _web_save_store(app, _nonce, False,
+                                    "Unknown save file.")
+                else:
+                    import os as _os
+                    import re as _re
+                    name = _re.sub(r"[^\w\s\-]", "",
+                                   str(cmd.get("name") or "")).strip()
+                    name = _re.sub(r"\s+", "_", name).strip("_")[:48]
+                    if not name.lower().endswith(".hm"):
+                        name += ".hm"
+                    dest = _os.path.join(_os.path.dirname(_path), name)
+                    if not dest.startswith(_web_saves_dir(_sm)
+                                           + _os.sep):
+                        _web_save_store(app, _nonce, False,
+                                        "Invalid name.")
+                    elif _os.path.exists(dest):
+                        _web_save_store(app, _nonce, False,
+                                        f"{name} already exists.")
+                    else:
+                        _os.rename(_path, dest)
+                        _web_save_store(app, _nonce, True,
+                                        f"Renamed to {name}.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Rename failed: {_e}")
+        elif op == "save_autosave_config_web":
+            # Autosave config (desktop SaveLoadView autosave tab).
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _sm = _web_save_manager(app)
+                if _sm is None:
+                    _web_save_store(app, _nonce, False,
+                                    "Save system unavailable.")
+                else:
+                    try:
+                        _sm.autosave_enabled = bool(
+                            cmd.get("enabled", True))
+                    except Exception:
+                        pass
+                    try:
+                        _sm.autosave_frequency = max(
+                            0, int(cmd.get("frequency_days", 0) or 0))
+                    except Exception:
+                        pass
+                    _web_save_store(app, _nonce, True,
+                                    "Autosave settings updated.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Autosave config failed: {_e}")
     except Exception:
         pass
 
@@ -5830,6 +6523,14 @@ def create_app(game_app=None):
         "mp_toggle_ready", "mp_apply_snapshot", "mp_promote",
         "mark_read", "delete_message", "save_game_web",
     })
+    @app.route("/api/hub/iconic_toggle", methods=["POST"])
+    def hub_iconic_toggle():
+        live = _live()
+        if live is None:
+            return jsonify({"ok": False}), 503
+        data = request.get_json(force=True, silent=True) or {}
+        res = _iconic_toggle_handler(live, data.get("entry_id"))
+        return jsonify(res), (200 if res.get("ok") else 404)
 
     @app.route("/api/command", methods=["POST"])
     def command():

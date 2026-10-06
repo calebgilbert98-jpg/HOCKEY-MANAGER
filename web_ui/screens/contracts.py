@@ -297,14 +297,22 @@ def api_contracts_extension_terms():
 
 @bp.route("/api/contracts/extend_real", methods=["POST"])
 def api_contracts_extend_real():
-    """Queue a real contract extension (years + AAV). Validated twice:
-    here through the game's _validate_contract_terms + the extension
-    window, and again on the main thread before
-    HockeyManagerGUI.handle_contract_offer(extension=True) runs."""
+    """Queue a real contract extension (years + AAV). Optional
+    "clause" (none|nmc|ntc|mntc), "clause_list_size" and
+    "signing_bonus" ride the payload: staged like the desktop
+    submit_offer (offered_clause_kind / offered_clause_list_size) so
+    the clause is priced by trade_engine and lands on the deal via
+    apply_clause_to_contract. Validated twice: here through the game's
+    _validate_contract_terms + the extension window, and again on the
+    main thread before HockeyManagerGUI.handle_contract_offer
+    (extension=True) runs."""
     data = request.get_json(force=True, silent=True) or {}
     pid = data.get("player_id")
     if not pid:
         return jsonify({"ok": False, "error": "player_id required"}), 400
+    extras, err = _offer_extras(data)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
     try:
         years = int(data.get("years"))
         aav = int(data.get("aav"))
@@ -322,9 +330,23 @@ def api_contracts_extend_real():
     ok, msg = _extension_window(live, p)
     if not ok:
         return jsonify({"ok": False, "error": msg}), 422
+    if extras["clause"] != "none":
+        try:
+            import trade_engine as _te
+            if not _te.clause_eligible(p):
+                return jsonify({"ok": False, "error":
+                    "Trade protection isn't available for this player "
+                    "(27+ or 7 pro seasons required)."}), 422
+        except Exception:
+            pass
     queued = enqueue_command("extend_contract_real",
-                             player_id=str(pid), years=years, aav=aav)
-    return jsonify({"ok": bool(queued), "queued": "extend_contract_real"})
+                             player_id=str(pid), years=years, aav=aav,
+                             clause=extras["clause"],
+                             clause_list_size=extras["clause_list_size"],
+                             signing_bonus=extras["signing_bonus"])
+    return jsonify({"ok": bool(queued), "queued": "extend_contract_real",
+                    "clause": extras["clause"],
+                    "signing_bonus": extras["signing_bonus"]})
 
 
 # ------------------------------------------------------------------
@@ -533,6 +555,15 @@ def _negotiate_counter(app, cmd):
             _safe(lambda: setattr(old, "action_done", True))
         player.salary = aav
         player.contract_years = years
+        # Batch D: clause + signing bonus ride counters too.
+        extras, _err = _offer_extras(cmd)
+        if extras:
+            try:
+                player.offered_clause_kind = extras["clause"]
+                player.offered_clause_list_size = extras["clause_list_size"]
+                player.offered_signing_bonus = extras["signing_bonus"]
+            except Exception:
+                pass
         handle_offer_command(app, pid_s, player, kind, years, aav)
         return True
     except Exception:
@@ -655,6 +686,9 @@ def api_contracts_negotiate():
         except (TypeError, ValueError):
             return jsonify({"ok": False,
                             "error": "years and aav must be integers"}), 400
+        extras, err = _offer_extras(data)
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
         kind = st.get("kind") or _neg_kind_for(live, pid)
         player = _find_neg_person(live, pid, kind)
         if player is None:
@@ -663,7 +697,10 @@ def api_contracts_negotiate():
         if not ok:
             return jsonify({"ok": False, "error": msg}), 422
         queued = enqueue_command("negotiate_counter", player_id=str(pid),
-                                 years=years, aav=aav)
+                                 years=years, aav=aav,
+                                 clause=extras["clause"],
+                                 clause_list_size=extras["clause_list_size"],
+                                 signing_bonus=extras["signing_bonus"])
     else:
         return jsonify({"ok": False, "error": "unknown action"}), 400
     return jsonify({"ok": bool(queued), "action": action})
@@ -699,3 +736,337 @@ def api_contracts_auto_negotiate():
     import web_ui.bridge as _b
     _b.enqueue_command("auto_negotiate_extensions")
     return jsonify({"ok": True})
+
+
+# ======================================================================
+# Batch D: contract clauses + signing-bonus sweetener + comparables,
+# and the ELC (entry-level contract) flow.
+#
+# Desktop parity (ContractNegotiationView, windows.py):
+#   - clause picker: the four engine clause kinds via
+#     trade_engine.clause_annual_value (the salary-reduction lever --
+#     an offered clause raises the *effective* offer in
+#     handle_contract_offer, and lands on the deal via
+#     apply_clause_to_contract). Staged on the player as
+#     offered_clause_kind / offered_clause_list_size, exactly like the
+#     desktop submit_offer.
+#   - signing-bonus sweetener: a field on the offer (staged as
+#     offered_signing_bonus); on ELC offers it is real money inside
+#     the CBA 10%-of-base band. On standard offers the desktop stages
+#     only the clause (the bonus rides the MP payload), so the web
+#     shows it in the effective-offer preview for parity.
+#   - comparables: same-position, +-4 OVR contracts league-wide
+#     (windows.py _comparables).
+#   - ELC mode (main.py:23809 handle_elc_offer): unsigned rights-held
+#     prospects get a band-validated offer (floor/ceil, 10% signing
+#     bonus, $1M/yr perf bonus cap, term locked by signing age) via
+#     salary_cap_system.elc_band -- no `?elc=1` dead ends.
+# ======================================================================
+
+def _find_any_player(live, pid):
+    """Roster + free-agent pool + unsigned prospects by id. Never raises."""
+    pid_s = str(pid)
+    pools = []
+    try:
+        gm = _safe(lambda: live.game_manager)
+        team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+        league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+        pools.append(list(getattr(team, "roster", None) or []))
+        pools.append(list(getattr(league, "free_agents", None) or []))
+        pools.append(list(getattr(team, "prospects", None) or []))
+    except Exception:
+        pass
+    for pool in pools:
+        for p in pool:
+            try:
+                if str(_safe(lambda: getattr(p, "id", id(p)), "")) == pid_s:
+                    return p
+            except Exception:
+                continue
+    return None
+
+
+def _clause_info(live, p):
+    """Clause picker data for one player. Desktop parity
+    (windows.py:_refresh_clause_hint, trade_engine). Never raises."""
+    out = {"eligible": False, "eligibility_note": "", "demand": 0.0,
+           "options": []}
+    try:
+        import trade_engine as te
+    except Exception:
+        out["eligibility_note"] = "Trade engine unavailable."
+        return out
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    eligible = bool(_safe(lambda: te.clause_eligible(p), False))
+    out["eligible"] = eligible
+    if not eligible:
+        out["eligibility_note"] = ("Trade protection isn't available here "
+                                   "-- the NHL only allows it for players "
+                                   "27+ or with 7 pro seasons.")
+    demand = float(_safe(lambda: te.clause_demand_score(p, team, league),
+                         0.0) or 0.0)
+    out["demand"] = round(demand, 2)
+    for kind in ("none", "nmc", "ntc", "mntc"):
+        label = _safe(lambda k=kind: te.clause_offer_label(k, 10), kind)
+        val = int(_safe(lambda k=kind: te.clause_annual_value(p, k), 0) or 0)
+        out["options"].append({
+            "kind": kind, "label": str(label or kind),
+            "annual_value": val,      # salary-reduction lever ($/yr)
+            "default_list_size": 10,  # M-NTC team-list size
+        })
+    if demand >= 0.65:
+        out["hint"] = ("His camp is pushing hard for trade protection -- "
+                       "expect to pay more without it.")
+    elif demand >= 0.35:
+        out["hint"] = "Trade protection would sweeten your offer."
+    else:
+        out["hint"] = ""
+    return out
+
+
+@bp.route("/api/contracts/clause_options")
+def api_contracts_clause_options():
+    """NTC/NMC clause picker data: eligibility, demand, per-kind annual
+    value (the salary-reduction lever via trade_engine.clause_annual_value)
+    and labels."""
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    p = _find_any_player(live, request.args.get("player_id"))
+    if p is None:
+        return jsonify({"ok": False, "error": "player not found"}), 404
+    info = _clause_info(live, p)
+    info["ok"] = True
+    info["player"] = _safe(lambda: getattr(p, "full_name", "?"), "?")
+    return jsonify(info)
+
+
+@bp.route("/api/contracts/comparables")
+def api_contracts_comparables():
+    """Comparable contracts: same position, +-4 OVR, league-wide rosters
+    (windows.py _comparables). Talent tier shown, never raw numbers the
+    desktop hides."""
+    live = _live()
+    if live is None:
+        return jsonify({"comparables": []})
+    p = _find_any_player(live, request.args.get("player_id"))
+    if p is None:
+        return jsonify({"comparables": []})
+    try:
+        my_ovr = float(p.overall_rating())
+    except Exception:
+        my_ovr = 75.0
+    my_pos = _safe(lambda: getattr(getattr(p, "primary_position", ""),
+                                   "value", ""), "")
+    try:
+        from attribute_composites import talent_tier as _tt
+    except Exception:
+        _tt = None
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+    comps = []
+    for t in teams:
+        for q in _safe(lambda: list(getattr(t, "roster", None) or []),
+                       []) or []:
+            try:
+                if q is p:
+                    continue
+                ovr = float(q.overall_rating())
+                if abs(ovr - my_ovr) > 4:
+                    continue
+                qpos = _safe(lambda: getattr(
+                    getattr(q, "primary_position", ""), "value", ""), "")
+                if qpos != my_pos:
+                    continue
+                qc = _safe(lambda: getattr(q, "contract", None))
+                sal = int(_safe(lambda: getattr(qc, "salary", 0)
+                                or getattr(q, "salary", 0) or 0, 0) or 0)
+                yrs = int(_safe(lambda: getattr(qc, "years_remaining", 0)
+                                or getattr(q, "contract_years", 0) or 0,
+                                0) or 0)
+                comps.append({
+                    "name": _safe(lambda: getattr(q, "full_name", "?"), "?"),
+                    "team": _safe(lambda: getattr(t, "team_name", ""), ""),
+                    "position": qpos,
+                    "overall": round(ovr, 1),
+                    "tier": _safe(lambda: _tt(ovr), "") if _tt else "",
+                    "salary": sal,
+                    "years_remaining": yrs,
+                    "ovr_gap": round(abs(ovr - my_ovr), 1),
+                })
+            except Exception:
+                continue
+    comps.sort(key=lambda c: (c["ovr_gap"], -c["salary"]))
+    return jsonify({"comparables": comps[:5]})
+
+
+def _offer_extras(data):
+    """Parse optional clause + signing-bonus fields from an offer
+    payload. Returns (extras dict, error). Never raises."""
+    extras = {}
+    clause = str(data.get("clause") or "none").strip().lower()
+    if clause not in ("none", "nmc", "ntc", "mntc"):
+        return None, f"unknown clause kind: {clause!r}"
+    try:
+        list_size = int(data.get("clause_list_size") or 10)
+    except (TypeError, ValueError):
+        list_size = 10
+    list_size = max(1, min(31, list_size))
+    try:
+        sb = int(data.get("signing_bonus") or 0)
+    except (TypeError, ValueError):
+        return None, "signing_bonus must be a number"
+    if sb < 0:
+        return None, "signing_bonus cannot be negative"
+    extras["clause"] = clause
+    extras["clause_list_size"] = list_size
+    extras["signing_bonus"] = sb
+    return extras, ""
+
+
+# ------------------------------------------------------------------
+# ELC flow: entry-level contract with an unsigned rights-held prospect.
+# Band validation + bonus fields, desktop parity (main.py:23809
+# handle_elc_offer, salary_cap_system.elc_band).
+# ------------------------------------------------------------------
+
+def _elc_eligible_prospect(live, pid):
+    """Unsigned rights-held prospect of the user's team (the exact guard
+    handle_elc_offer enforces). Never raises."""
+    pid_s = str(pid)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    tname = _safe(lambda: getattr(team, "team_name", ""), "")
+    pool = _safe(lambda: list(getattr(team, "prospects", None) or []),
+                 []) or []
+    for p in pool:
+        try:
+            if str(_safe(lambda: getattr(p, "id", id(p)), "")) != pid_s:
+                continue
+            if getattr(p, "contract", None) is not None:
+                return None
+            if (getattr(p, "rights_team", "") or "") != tname:
+                return None
+            return p
+        except Exception:
+            continue
+    return None
+
+
+def _elc_band_info(live, p):
+    """ELC band via salary_cap_system.elc_band (signing-age on Sept 15).
+    Returns dict with floor/ceiling/years/bonus caps, or error. Never
+    raises."""
+    try:
+        import salary_cap_system as _scs
+        league = _safe(lambda: getattr(getattr(live, "game_manager", None),
+                                      "league", None))
+        season = _safe(lambda: getattr(league, "season_year", None))
+        age = int(_safe(lambda: getattr(p, "age", 20), 20) or 20)
+        floor, ceil, years = _scs.elc_band(age, season)
+        max_sb_pct = float(_safe(lambda: _scs.ELC_SIGNING_BONUS_PCT, 0.10)
+                           or 0.10)
+        max_pb = int(_safe(lambda: _scs.ELC_PERF_BONUS_MAX, 1_000_000)
+                     or 1_000_000)
+        max_comp = int(_safe(
+            lambda: _scs.elc_max_annual_comp(season), ceil) or ceil)
+        ask = _safe(lambda: _scs.elc_prospect_ask(p, season), {}) or {}
+        return {
+            "ok": years > 0,
+            "floor": int(floor), "ceiling": int(ceil), "years": int(years),
+            "signing_bonus_max_pct": max_sb_pct,
+            "perf_bonus_max": max_pb,
+            "max_annual_comp": max_comp,
+            "agent_ask": {
+                "salary": int(ask.get("salary", 0) or 0),
+                "years": int(ask.get("years", years) or years),
+                "signing_bonus": int(ask.get("signing_bonus", 0) or 0),
+                "performance_bonus": int(ask.get("performance_bonus", 0)
+                                         or 0),
+                "flavor": str(ask.get("flavor", "") or ""),
+            } if isinstance(ask, dict) else {},
+            "error": "" if years > 0 else
+                ("Not ELC-eligible at 25+: sign him to a standard contract "
+                 "instead."),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"ELC band unavailable: {e}"}
+
+
+@bp.route("/api/contracts/elc_terms")
+def api_contracts_elc_terms():
+    """ELC terms for an unsigned prospect: band (floor/ceiling/years),
+    bonus caps, and the agent's ask -- desktop parity with
+    _refresh_elc_context (windows.py)."""
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    p = _elc_eligible_prospect(live, request.args.get("player_id"))
+    if p is None:
+        return jsonify({"ok": False, "error":
+            "Not your unsigned rights-held prospect."}), 404
+    band = _elc_band_info(live, p)
+    band["ok"] = bool(band.get("ok"))
+    band["player"] = {
+        "id": str(_safe(lambda: getattr(p, "id", ""), "")),
+        "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+        "position": _web_position(p),
+        "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
+        "overall": _safe(lambda: float(p.overall_rating()), 0.0),
+        "potential": str(_safe(lambda: getattr(p, "potential_grade",
+                                              "?"), "?")),
+    }
+    return jsonify(band)
+
+
+@bp.route("/api/contracts/elc_offer", methods=["POST"])
+def api_contracts_elc_offer():
+    """Queue an ELC offer (salary + signing_bonus + performance_bonus).
+    Server-side band validation mirrors handle_elc_offer; the
+    main-thread op runs the real handshake."""
+    data = request.get_json(force=True, silent=True) or {}
+    pid = data.get("player_id")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    try:
+        salary = int(data.get("salary"))
+        sb = int(data.get("signing_bonus") or 0)
+        pb = int(data.get("performance_bonus") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False,
+                        "error": "salary/signing_bonus/performance_bonus "
+                                 "must be integers"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "no live game"}), 503
+    p = _elc_eligible_prospect(live, pid)
+    if p is None:
+        return jsonify({"ok": False,
+                        "error": "Not your unsigned rights-held prospect."}), 404
+    band = _elc_band_info(live, p)
+    if not band.get("ok"):
+        return jsonify({"ok": False,
+                        "error": band.get("error") or "ELC ineligible"}), 422
+    floor, ceil = band["floor"], band["ceiling"]
+    if not (floor <= salary <= ceil):
+        return jsonify({"ok": False, "error":
+            f"ELC base must sit inside ${floor:,} - ${ceil:,}/yr."}), 422
+    max_sb = int(round(salary * band["signing_bonus_max_pct"]))
+    if not (0 <= sb <= max_sb):
+        return jsonify({"ok": False, "error":
+            f"Signing bonus capped at 10% of base (${max_sb:,}/yr)."}), 422
+    if not (0 <= pb <= band["perf_bonus_max"]):
+        return jsonify({"ok": False, "error":
+            f"Performance bonus capped at ${band['perf_bonus_max']:,}/yr."}), 422
+    if salary + sb > band["max_annual_comp"]:
+        return jsonify({"ok": False, "error":
+            "Base + signing bonus exceeds the ELC max annual compensation."}), 422
+    queued = enqueue_command("elc_offer", player_id=str(pid),
+                             salary=salary, signing_bonus=sb,
+                             performance_bonus=pb,
+                             years=band["years"])
+    return jsonify({"ok": bool(queued), "queued": "elc_offer",
+                    "years": band["years"]})
