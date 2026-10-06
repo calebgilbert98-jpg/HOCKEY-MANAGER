@@ -71,6 +71,16 @@ class TradeNegotiation:
             v = kw.get(k)
             kw[k] = {str(_k): _v for _k, _v in (v or {}).items()} \
                 if isinstance(v, dict) else {}
+        # default_factory fields have no class attribute, so the getattr
+        # fallback below would leave them None for saves missing the keys
+        # (old saves predate some of them) -- None then crashes downstream
+        # (history.append, asset_summary iteration, counter stamping).
+        # Normalize to real empties instead.
+        for k in ("user_assets", "partner_assets", "history"):
+            v = kw.get(k)
+            kw[k] = list(v) if isinstance(v, list) else []
+        if not kw.get("id"):
+            kw["id"] = str(uuid.uuid4())
         return cls(**{f: kw.get(f, getattr(cls, f, None))
                       for f in ("id", "partner_team_name", "direction", "status",
                                 "rounds", "patience", "user_assets", "partner_assets",

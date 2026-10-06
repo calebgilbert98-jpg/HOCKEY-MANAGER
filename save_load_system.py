@@ -1414,7 +1414,14 @@ class GameSaveManager:
                                            and _inner is not _mgr)
                                 else _mgr)
                     if _true_gm is not _mgr:
-                        for _attr in ('user_team', 'league', 'current_date'):
+                        # trade_negotiations: a restore through a GUI-bound
+                        # manager (SaveLoadView path, pre-fix) lands the
+                        # dataclasses on the wrapper; carry them to the real
+                        # game manager so the negotiation machinery (which
+                        # only reads game_manager.trade_negotiations) sees
+                        # them. Skipped when the wrapper IS the manager.
+                        for _attr in ('user_team', 'league', 'current_date',
+                                      'trade_negotiations'):
                             _v = getattr(_mgr, _attr, None)
                             if _v is not None:
                                 try:
@@ -3051,7 +3058,17 @@ class SaveLoadView(ctk.CTkFrame):
         self.configure(fg_color=BG)
         self.mode = mode  # 'save' or 'load'
         self.on_done = on_done
-        self.save_manager = GameSaveManager(self.app)
+        # Bind the game manager, NOT the GUI app: GameSaveManager
+        # serializes game_manager.* state (trade_negotiations,
+        # deadline_clock, contract_negotiations, ...). The GUI only
+        # carries mirrors of league/user_team/current_date, so binding it
+        # silently wrote degraded saves -- e.g. 'trade_negotiations' was
+        # always [] because the GUI never has that attribute, which is why
+        # live negotiations never survived a manual save. Same convention
+        # as setup_autosave in main.py (enforced by qa_save_crash).
+        _gm = getattr(self.app, 'game_manager', None)
+        self.save_manager = GameSaveManager(
+            _gm if _gm is not None else self.app)
         self.save_completed = False  # Flag for exit handling
         self.loaded_file_path = None  # For load mode integration
         self.was_cancelled = False  # Track if dialog was cancelled
