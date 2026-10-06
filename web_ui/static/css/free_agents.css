@@ -287,3 +287,18 @@
 .cmp-table tbody tr:last-child td { border-bottom: none; }
 .cmp-table .num, .cmp-table td b { font-family: var(--nhl-cond); font-weight: 800; font-size: 15px; }
 .dim { color: var(--dim); }
+
+/* Batch B: staff-hire negotiation modal bits */
+.cm-years { display: flex; gap: 6px; }
+.cm-years button {
+  padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14);
+  color: var(--dim); font-weight: 800; font-size: 13px;
+}
+.cm-years button.on { color: #fff; border-color: var(--nhl-blue); background: var(--nhl-blue-soft); }
+.cm-input {
+  width: 100%; background: #0b1220; color: var(--text);
+  border: 1px solid rgba(255,255,255,.12); border-radius: var(--nhl-r);
+  padding: 9px 12px; font-size: 14px; font-weight: 700;
+}
+.cm-submit:disabled, .cm-cancel:disabled { opacity: .45; cursor: default; }

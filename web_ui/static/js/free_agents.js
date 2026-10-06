@@ -635,17 +635,117 @@ function renderStaff(staff) {
 }
 document.getElementById('staff-q').addEventListener('input', () => loadStaff());
 document.getElementById('staff-dept').addEventListener('change', () => loadStaff());
+
+/* ---- Batch B: hiring negotiation chain (StaffContractView parity) ----
+   Market ask + budget banner, contract-length picker, free dollar entry,
+   live acceptance-chance estimate, offer -> roll -> sign (or decline)
+   with a real confirmation instead of prompt()/alert(). */
+let HIRE = {sid: '', name: '', years: 3};
+
 document.getElementById('staff-list').addEventListener('click', async e => {
   const b = e.target.closest('[data-hire]');
   if (!b) return;
-  const salary = prompt(`Offer annual salary for ${b.dataset.nm} (e.g. 150000):`, '150000');
-  if (!salary) return;
-  await fetch('/api/free_agents/staff/hire', { method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ staff_id: b.dataset.hire, salary: parseInt(salary) || 0, years: 3 }) });
-  alert('Hire offer queued.');
-  setTimeout(loadStaff, 800);
+  await openHireModal(b.dataset.hire, b.dataset.nm);
 });
+
+async function openHireModal(sid, name) {
+  HIRE = {sid, name, years: 3};
+  const overlay = document.createElement('div');
+  overlay.className = 'cm-overlay';
+  overlay.id = 'hire-overlay';
+  overlay.innerHTML =
+    '<div class="cm-card" role="dialog" aria-modal="true">' +
+    '<div class="cm-head"><div><div class="cm-title">Hire ' + esc(name) + '</div>' +
+    '<div class="cm-player" id="hire-ask">Loading market ask…</div></div>' +
+    '<button class="cm-close" aria-label="Close">✕</button></div>' +
+    '<div class="cm-note" id="hire-budget"></div>' +
+    '<div class="cm-note" id="hire-conflict" style="color:#F44336"></div>' +
+    '<div class="cm-field"><label>Contract length (years)</label>' +
+    '<div class="cm-years" id="hire-years">' +
+    [1, 2, 3, 4, 5].map(y =>
+      `<button data-y="${y}" class="${y === 3 ? 'on' : ''}">${y}</button>`).join('') +
+    '</div></div>' +
+    '<div class="cm-field"><label>Salary offer ($ / year)</label>' +
+    '<input class="cm-input" id="hire-salary" inputmode="numeric" placeholder="e.g. 150000"></div>' +
+    '<div class="cm-note" id="hire-chance"></div>' +
+    '<div class="cm-note" id="hire-result"></div>' +
+    '<div class="cm-actions"><button class="cm-cancel">Cancel</button>' +
+    '<button class="cm-submit">Make Offer</button></div></div>';
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.cm-close').addEventListener('click', close);
+  overlay.querySelector('.cm-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e2 => { if (e2.target === overlay) close(); });
+  overlay.querySelector('#hire-years').addEventListener('click', e2 => {
+    const b2 = e2.target.closest('button[data-y]');
+    if (!b2) return;
+    HIRE.years = parseInt(b2.dataset.y, 10);
+    overlay.querySelectorAll('#hire-years button').forEach(x =>
+      x.classList.toggle('on', x === b2));
+  });
+  const salInput = overlay.querySelector('#hire-salary');
+  const paint = async () => {
+    const offer = parseInt((salInput.value || '').replace(/[$,\s]/g, ''), 10) || 0;
+    try {
+      const res = await fetch('/api/free_agents/staff/' + encodeURIComponent(HIRE.sid) +
+        '/offer-preview' + (offer ? '?salary=' + offer : ''));
+      const d = await res.json();
+      if (d.error) {
+        overlay.querySelector('#hire-ask').textContent = d.error;
+        overlay.querySelector('.cm-submit').disabled = true;
+        return;
+      }
+      overlay.querySelector('#hire-ask').textContent =
+        `Market ask: $${Number(d.market_ask).toLocaleString()}/yr · ${esc(d.role || '')}`;
+      overlay.querySelector('#hire-budget').textContent =
+        d.budget_remaining != null
+          ? `Club staff budget available: $${Number(d.budget_remaining).toLocaleString()}/yr.`
+          : '';
+      overlay.querySelector('#hire-conflict').textContent = d.conflict || '';
+      overlay.querySelector('.cm-submit').disabled = !!d.conflict;
+      if (d.chance != null) {
+        const c = d.chance;
+        const color = c >= 0.75 ? '#4CAF50' : c >= 0.45 ? '#FFC107' : '#F44336';
+        overlay.querySelector('#hire-chance').innerHTML =
+          `Estimated acceptance chance: <strong style="color:${color}">${Math.round(c * 100)}%</strong>`;
+      } else {
+        overlay.querySelector('#hire-chance').textContent = 'Enter an offer to see his likely response.';
+      }
+    } catch (err) { /* preview stays stale */ }
+  };
+  salInput.addEventListener('input', () => { clearTimeout(window._hireT); window._hireT = setTimeout(paint, 350); });
+  await paint();
+  overlay.querySelector('.cm-submit').addEventListener('click', async () => {
+    const offer = parseInt((salInput.value || '').replace(/[$,\s]/g, ''), 10) || 0;
+    const resultEl = overlay.querySelector('#hire-result');
+    const submitBtn = overlay.querySelector('.cm-submit');
+    if (!offer) { resultEl.textContent = 'Enter an offer amount.'; return; }
+    submitBtn.disabled = true;
+    resultEl.textContent = 'Making offer…';
+    try {
+      const res = await fetch('/api/free_agents/staff/hire', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({staff_id: HIRE.sid, salary: offer, years: HIRE.years}),
+      });
+      const d = await res.json();
+      if (!d.ok) { resultEl.textContent = 'Could not send: ' + (d.error || 'unknown'); submitBtn.disabled = false; return; }
+      setTimeout(async () => {
+        try {
+          const rr = await fetch('/api/staff/hire-result');
+          const rd = await rr.json();
+          const r = rd.result;
+          if (r && r.kind === 'hire_staff') {
+            resultEl.innerHTML = r.ok
+              ? `<strong style="color:${r.accepted ? '#4CAF50' : '#FFC107'}">${esc(r.text || '')}</strong>`
+              : `<strong style="color:#F44336">${esc(r.error || 'failed')}</strong>`;
+            if (r.accepted) setTimeout(() => { close(); loadStaff(); }, 1400);
+            else submitBtn.disabled = false;
+          } else { resultEl.textContent = 'Offer sent — result pending.'; submitBtn.disabled = false; }
+        } catch (e2) { resultEl.textContent = 'Offer sent — result pending.'; submitBtn.disabled = false; }
+      }, 1200);
+    } catch (e3) { resultEl.textContent = 'Request failed.'; submitBtn.disabled = false; }
+  });
+}
 
 /* ---------- Market Overview tab ---------- */
 async function loadMarket() {

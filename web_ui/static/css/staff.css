@@ -136,3 +136,70 @@
 }
 .cm-submit:disabled { opacity: .45; cursor: default; }
 .cm-submit:hover:not(:disabled) { box-shadow: var(--nhl-glow); }
+
+/* ---- Batch B: detail tabs, negotiation, org chart, report ---- */
+.staff-tabs, .sd-tabs { display: flex; gap: 6px; margin: 14px 0 18px; flex-wrap: wrap; }
+.staff-tabs button, .sd-tabs button {
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 800; letter-spacing: 1.2px;
+  text-transform: uppercase; color: #c9d4e3; background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.12); border-radius: var(--nhl-r-sm);
+  padding: 9px 18px; cursor: pointer;
+}
+.staff-tabs button.active, .sd-tabs button.active {
+  color: #fff; border-color: var(--nhl-blue); background: rgba(59,130,246,.14);
+}
+.hidden { display: none !important; }
+.sd-actions { margin: 12px 0 4px; }
+.sd-card {
+  background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.09);
+  border-radius: var(--nhl-r); padding: 16px 18px; margin-bottom: 14px;
+}
+.sd-card h3 { margin: 0 0 10px; font-family: var(--nhl-cond); letter-spacing: 1.2px;
+  text-transform: uppercase; color: #fff; font-size: 15px; }
+.attr-row { display: flex; gap: 12px; align-items: center; padding: 5px 0; font-size: 13px; }
+.attr-row span { width: 210px; color: #c9d4e3; }
+.attr-row strong { width: 36px; text-align: right; color: #fff; }
+.mini-bar { flex: 1; height: 6px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; }
+.mini-bar .mini-fill { height: 100%; border-radius: 3px; display: block; }
+.track-row { display: flex; gap: 10px; padding: 6px 0; font-size: 13px; }
+.track-mark { font-weight: 800; width: 18px; }
+.track-hit { color: #4CAF50; } .track-miss { color: #F44336; } .track-pending { color: #8b98ab; }
+.sd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sd-table th { text-align: left; padding: 8px 10px; color: #8b98ab; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .8px; border-bottom: 1px solid rgba(255,255,255,.12); }
+.sd-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.06); color: #e6ecf5; }
+.gold-row td { color: #ffd54f; }
+.big-stat { font-size: 20px; font-family: var(--nhl-cond); color: #fff; margin-bottom: 8px; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.62); z-index: 60;
+  display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; }
+.modal-backdrop.hidden { display: none; }
+.modal-card { width: min(560px, 100%); max-height: 86vh; overflow-y: auto;
+  background: #10141c; border: 1px solid rgba(59,130,246,.4); border-radius: var(--nhl-r);
+  padding: 22px 24px; }
+.modal-card h3 { margin: 0 0 4px; font-family: var(--nhl-cond); letter-spacing: 1.2px;
+  text-transform: uppercase; color: #fff; }
+.pill-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 12px; }
+.pill-row button { font-size: 13px; padding: 7px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14);
+  color: #c9d4e3; cursor: pointer; }
+.pill-row button.active { color: #fff; border-color: var(--nhl-blue); background: rgba(59,130,246,.2); }
+.fld-label { display: block; font-size: 12px; color: #8b98ab; margin: 10px 0 4px; }
+.advice-result { margin-top: 12px; font-size: 13.5px; line-height: 1.5; min-height: 20px; }
+.org-level { margin-bottom: 18px; }
+.org-level-title { font-family: var(--nhl-cond); font-size: 15px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase; color: #fff; margin-bottom: 8px; }
+.org-branches { display: flex; gap: 14px; flex-wrap: wrap; }
+.org-branch { background: rgba(255,255,255,.03); border: 1px solid rgba(255,255,255,.09);
+  border-radius: var(--nhl-r); padding: 12px 14px; min-width: 220px; }
+.org-role { font-size: 12px; color: #8b98ab; text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+.org-person { padding: 6px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.org-person:first-of-type { border-top: none; }
+.report-summary { display: flex; gap: 22px; margin: 0 0 18px; flex-wrap: wrap; }
+.ov-stat { display: flex; flex-direction: column; }
+.ov-stat strong { font-size: 22px; color: #fff; font-family: var(--nhl-cond); }
+.ov-stat span { font-size: 12px; color: #8b98ab; }
+.report-rows { display: flex; flex-direction: column; gap: 2px; }
+.report-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 4px;
+  border-bottom: 1px solid rgba(255,255,255,.06); font-size: 13px; }
+.sec-title { font-family: var(--nhl-cond); letter-spacing: 1.2px; text-transform: uppercase;
+  color: #fff; margin: 6px 0 14px; }
