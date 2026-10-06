@@ -31,7 +31,9 @@ def _find_team(name):
     if live is None:
         return None
     name = unquote(name).strip().lower()
-    league = _safe(lambda: getattr(live, "league", None))
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: getattr(gm, "league", None)) or \
+             _safe(lambda: getattr(live, "league", None))
     teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
     user_team = _safe(lambda: getattr(live, "user_team", None))
     if user_team is not None and all(t is not user_team for t in teams):
@@ -46,7 +48,9 @@ def _find_team(name):
 def _team_payload(t):
     from web_ui.bridge import to_web_player, player_portrait, _safe as _bsafe
     live = _live()
-    league = _safe(lambda: getattr(live, "league", None))
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: getattr(gm, "league", None)) or \
+             _safe(lambda: getattr(live, "league", None))
     user_team = _safe(lambda: getattr(live, "user_team", None))
 
     name = _safe(lambda: getattr(t, "team_name", "?"), "?")
