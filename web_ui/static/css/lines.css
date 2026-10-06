@@ -53,17 +53,17 @@
   color: var(--dimmer); margin-bottom: 8px;
 }
 .le-roster-list {
-  max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  max-height: 62vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
   padding-right: 4px;
 }
 .le-roster-hint { font-size: 11.5px; color: var(--dimmer); margin-top: 10px; text-align: center; }
 
 /* ---- player card: kit .pcard pattern (JS-generated markup) ---- */
 .le-pcard {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 14px;
   background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
   border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
-  border-radius: var(--nhl-r); padding: 9px 12px 9px 10px; cursor: grab;
+  border-radius: var(--nhl-r); padding: 12px 14px 14px 12px; cursor: grab;
   transition: transform .12s ease, border-color .12s ease, box-shadow .12s ease;
   user-select: none;
 }
@@ -86,11 +86,11 @@
 .le-pcard .nm { flex: 1; min-width: 0; }
 .le-pcard .nm .n {
   font-family: var(--nhl-cond);
-  font-weight: 800; font-size: 14.5px; text-transform: uppercase;
-  letter-spacing: .7px; color: #fff;
+  font-weight: 800; font-size: 15px; text-transform: uppercase;
+  letter-spacing: .8px; color: #fff; line-height: 1.25;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.le-pcard .nm .s { font-size: 11px; color: var(--dim); }
+.le-pcard .nm .s { font-size: 11.5px; color: var(--dim); margin-top: 2px; }
 /* kit .pos-badge treatment (JS-generated markup) */
 .le-pcard .pos {
   display: inline-flex; align-items: center; justify-content: center;
@@ -178,7 +178,7 @@
 
 /* ---------- player portraits ---------- */
 .le-face {
-  width: 32px; height: 32px; flex: 0 0 32px;
+  width: 40px; height: 40px; flex: 0 0 40px;
   border-radius: 50%; object-fit: cover; object-position: top center;
   border: 2px solid rgba(59, 130, 246, 0.55);
   box-shadow: 0 0 0 1px #0a0f1c;
