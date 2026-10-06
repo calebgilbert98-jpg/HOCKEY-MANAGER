@@ -737,6 +737,9 @@ class GameSaveManager:
                 # GM name + profile. Missing = old save -> defaults.
                 'gm_name': getattr(team, 'gm_name', 'General Manager') or 'General Manager',
                 'gm_profile': _safe_asdict(getattr(team, 'gm_profile', None)),
+                # MP GM persistence: who runs this club. Missing = old save.
+                'mp_gm_token': getattr(team, 'mp_gm_token', '') or '',
+                'mp_gm_name': getattr(team, 'mp_gm_name', '') or '',
             }
             
             return team_data
@@ -1038,6 +1041,20 @@ class GameSaveManager:
                     elif isinstance(game, (tuple, list)) and len(game) >= 3:
                         game_date, home_team, away_team = game[0], game[1], game[2]
                         if home_team == 'NHL_EVENT':
+                            # NHL special events (All-Star, draft, etc.): serialize
+                            # the event metadata so they survive the round-trip.
+                            # away_team slot holds the metadata dict.
+                            meta = away_team if isinstance(away_team, dict) else {}
+                            schedule_data.append({
+                                'date': game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date),
+                                'home_team': 'NHL_EVENT',
+                                'away_team': 'NHL_EVENT',
+                                'league': '',
+                                'event_type': meta.get('type'),
+                                'event_title': meta.get('title'),
+                                'event_description': meta.get('description'),
+                                'nhl_event': True,
+                            })
                             continue
                         league = getattr(home_team, 'league_name', '')
                         league = {'National Hockey League': 'NHL',
@@ -1069,8 +1086,15 @@ class GameSaveManager:
                         'round_key': game.get('round_key') if isinstance(game, dict) else None,
                         'marquee': bool(game.get('marquee')) if isinstance(game, dict) else False,
                         'hype_tags': list(game.get('hype_tags') or []) if isinstance(game, dict) else [],
+                        # Played flag: must survive the round-trip or reloaded
+                        # schedules forget which games were already played
+                        # (46 played playoff games lost it in sweep Run 11).
+                        'played': bool(game.get('played')) if isinstance(game, dict) else False,
                     })
-                except (AttributeError, TypeError, IndexError):
+                except (AttributeError, TypeError, IndexError) as e:
+                    # Log skipped games instead of silently dropping them;
+                    # a schedule round-trip must not lose games.
+                    print(f"WARNING: Skipping unschedulable game during save: {game!r} ({e})")
                     continue
             
             return schedule_data
@@ -2479,6 +2503,9 @@ class GameSaveManager:
                                     (team_data.get('analytics_games', None) or [])][-10:]
             # GM name + profile. Absent in old saves -> defaults.
             team.gm_name = team_data.get('gm_name', None) or 'General Manager'
+            # MP GM persistence. Absent in old saves -> unreserved.
+            team.mp_gm_token = team_data.get('mp_gm_token', '') or ''
+            team.mp_gm_name = team_data.get('mp_gm_name', '') or ''
             _gp = team_data.get('gm_profile', None)
             if isinstance(_gp, dict) and _gp:
                 try:
@@ -2684,7 +2711,19 @@ class GameSaveManager:
             for game_data in schedule_data:
                 try:
                     game_date = datetime.fromisoformat(game_data['date']).date()
-                    
+
+                    # NHL special events: restore as (date, 'NHL_EVENT', meta) tuples
+                    if game_data.get('nhl_event') or game_data.get('home_team') == 'NHL_EVENT':
+                        meta = {}
+                        if game_data.get('event_type'):
+                            meta['type'] = game_data['event_type']
+                        if game_data.get('event_title'):
+                            meta['title'] = game_data['event_title']
+                        if game_data.get('event_description'):
+                            meta['description'] = game_data['event_description']
+                        schedule.append((game_date, 'NHL_EVENT', meta))
+                        continue
+
                     # Find teams by name
                     home_team = None
                     away_team = None
@@ -2711,6 +2750,10 @@ class GameSaveManager:
                         # no stats), not treat them as real games.
                         if game_data.get('preseason'):
                             _restored['preseason'] = True
+                        # Played-flag round-trip (sweep Run 11): a reloaded
+                        # schedule must remember which games were played.
+                        if game_data.get('played'):
+                            _restored['played'] = True
                         # BUG-002 fix (2026-10-03): playoff stamps round-trip.
                         if game_data.get('playoff'):
                             _restored['playoff'] = True
@@ -2727,7 +2770,13 @@ class GameSaveManager:
                                 _restored['marquee'] = True
                             _restored['hype_tags'] = list(game_data.get('hype_tags') or [])
                         schedule.append(_restored)
-                except:
+                    else:
+                        # Teams not found by name -- log instead of silently dropping
+                        print(f"WARNING: Skipping schedule restore, team not found: "
+                              f"{game_data.get('away_team')} @ {game_data.get('home_team')} "
+                              f"on {game_data.get('date')}")
+                except Exception as e:
+                    print(f"WARNING: Skipping schedule entry on restore error: {game_data!r} ({e})")
                     continue
             
             self.game_manager.league.schedule = schedule

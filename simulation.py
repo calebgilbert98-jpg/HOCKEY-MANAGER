@@ -450,6 +450,25 @@ def get_scoring_multiplier() -> float:
     return cache["value"]
 
 
+class _AutoRegisterGameStats(dict):
+    """game_stats dict that auto-registers missing player ids.
+
+    Any sim event that selects a player object not on either roster at
+    game start (stale reference, mid-game roster change) gets a template
+    stat entry on first access instead of raising KeyError. The 'player'
+    key is None for auto-registered entries; callers with the player
+    object should use _ensure_player_registered() to populate it.
+    """
+    def __init__(self, template_factory):
+        super().__init__()
+        self._template_factory = template_factory
+
+    def __missing__(self, key):
+        entry = self._template_factory()
+        self[key] = entry
+        return entry
+
+
 class GameSim:
     """
     Manages the state and logic for simulating a single hockey game.
@@ -770,7 +789,9 @@ class GameSim:
         self.real_time_adjustments = {}  # Analytics-driven coaching adjustments
         
         # Enhanced stats tracking for Stages 1, 2 & 3
-        self.game_stats = {p.id: {
+        self.game_stats = _AutoRegisterGameStats(
+            lambda: __import__('copy').deepcopy(self._game_stat_template))
+        self.game_stats.update({p.id: {
             'g': 0, 'a': 0, 'player': p,
             # Shot tracking (Stage 1)
             'shots_on_goal': 0,
@@ -923,8 +944,17 @@ class GameSim:
             'development_tracking_points': 0,
             'ml_model_updates': 0,
             'prediction_error_rate': 0.0
-        } for p in home_team.roster + away_team.roster}
+        } for p in home_team.roster + away_team.roster})
         
+        # Template for on-demand registration. Created from the first
+        # rostered player's entry; _ensure_player_registered and the
+        # _AutoRegisterGameStats.__missing__ hook deep-copy it.
+        import copy as _copy
+        self._game_stat_template = _copy.deepcopy(next(iter(self.game_stats.values())))
+        self._game_stat_template['player'] = None
+        # Rebind the auto-register factory now that the template exists
+        # (the lambda above captured self, so it resolves lazily -- no-op)
+
         # Initialize fatigue for all players
         for player in home_team.roster + away_team.roster:
             self.player_fatigue[player.id] = 100  # Start at 100% energy
@@ -1915,9 +1945,10 @@ class GameSim:
         self.game_stats[player_id]['performance_trajectory'] = trajectory
         self.game_stats[player_id]['career_projection_confidence'] = confidence
         
-        # Update team predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['development_projections'] += 1
+        # Update team predictions (skip if team unresolvable)
+        team_name = self._get_player_team_name(player)
+        if team_name is not None:
+            self.team_stats[team_name]['development_projections'] += 1
         
         return trajectory, confidence
 
@@ -1946,9 +1977,10 @@ class GameSim:
         # Update player stats
         self.game_stats[player_id]['injury_risk_score'] = total_risk
         
-        # Update team injury predictions
-        team_name = self._get_player_team(player).team_name
-        self.team_stats[team_name]['injury_predictions'] += 1
+        # Update team injury predictions (skip if team unresolvable)
+        team_name = self._get_player_team_name(player)
+        if team_name is not None:
+            self.team_stats[team_name]['injury_predictions'] += 1
         
         # Add to ML training data
         model_data = self.ml_models['injury_prediction']
@@ -2067,7 +2099,8 @@ class GameSim:
     
     def _get_player_team_name(self, player):
         """Helper method to get team name for a player."""
-        return self._get_player_team(player).team_name
+        team = self._get_player_team(player)
+        return team.team_name if team is not None else None
 
     def _update_ml_predictions(self):
         """Stage 10: Periodic ML updates during gameplay."""
@@ -6072,6 +6105,12 @@ class GameSim:
                          if p.primary_position != PlayerPosition.GOALIE]
         away_fallback = [p for p in self._get_on_ice(self.away_team)
                          if p.primary_position != PlayerPosition.GOALIE]
+        # Degenerate case: no skaters on ice for a side (shouldn't happen,
+        # but must not crash the sim). Keep current possession.
+        if not home_centers and not home_fallback:
+            return self.possession_team or self.home_team
+        if not away_centers and not away_fallback:
+            return self.possession_team or self.home_team
         home_player = random.choice(home_centers) if home_centers else random.choice(home_fallback)
         away_player = random.choice(away_centers) if away_centers else random.choice(away_fallback)
         
@@ -6246,6 +6285,10 @@ class GameSim:
 
     def _update_faceoff_stats(self, home_player, away_player, winner_player, outcome):
         """Update faceoff statistics for both players."""
+        # Ensure both participants are registered (they were selected for
+        # the event, so they must have stat entries)
+        self._ensure_player_registered(home_player)
+        self._ensure_player_registered(away_player)
         # Update basic faceoff stats
         self.game_stats[home_player.id]['faceoffs_taken'] += 1
         self.game_stats[away_player.id]['faceoffs_taken'] += 1
@@ -9349,6 +9392,8 @@ class GameSim:
         # Trait: Enforcer aura - teammates hit harder when enforcer is on ice
         try:
             hitting_team = self._get_player_team(hitting_player)
+            if hitting_team is None:
+                raise ValueError("skip: hitting team unresolvable")
             on_ice = self._on_ice_skaters(hitting_team)
             for teammate in on_ice:
                 if teammate.id != hitting_player.id:
@@ -9539,9 +9584,10 @@ class GameSim:
         if target_player.id in self.game_stats:
             self.game_stats[target_player.id]['hits_taken'] += 1
         
-        # Update team stats
-        hitting_team_name = hitting_team.team_name
-        target_team_name = target_team.team_name
+        # Update team stats (team may be None if player truly on neither
+        # roster; skip team update then, individual stats already recorded)
+        hitting_team_name = hitting_team.team_name if hitting_team else None
+        target_team_name = target_team.team_name if target_team else None
         
         if hitting_team_name in self.team_stats:
             self.team_stats[hitting_team_name]['hits'] += 1
@@ -9671,11 +9717,15 @@ class GameSim:
         """
         Stage 4: Handle detailed turnover tracking and resolution.
         """
+        # Register both participants: they were selected for this event,
+        # so they must have stat entries and resolvable teams.
+        self._ensure_player_registered(player_losing_puck)
+        self._ensure_player_registered(player_gaining_puck)
         losing_team = self._get_player_team(player_losing_puck)
         gaining_team = self._get_player_team(player_gaining_puck)
-        
+
         # Record turnover stats
-        if player_losing_puck.id in self.game_stats:
+        if True:  # both players now guaranteed registered above
             if turnover_type in [TurnoverType.GIVEAWAY, TurnoverType.UNFORCED_ERROR]:
                 # Trait: Playmakers commit fewer giveaways (10% reduction)
                 try:
@@ -9690,16 +9740,18 @@ class GameSim:
                     self.game_stats[player_losing_puck.id]['giveaways'] += 1
                     self.game_stats[player_losing_puck.id]['turnovers_committed'] += 1
         
-        if player_gaining_puck.id in self.game_stats:
+        if True:  # guaranteed registered above
             if turnover_type in [TurnoverType.TAKEAWAY, TurnoverType.FORCED_ERROR, TurnoverType.STRIP, TurnoverType.INTERCEPTION]:
                 self.game_stats[player_gaining_puck.id]['takeaways'] += 1
                 self.game_stats[player_gaining_puck.id]['turnovers_forced'] += 1
                 self.game_stats[player_gaining_puck.id]['defensive_plays'] += 1
         
-        # Update team stats
-        losing_team_name = losing_team.team_name
-        gaining_team_name = gaining_team.team_name
-        
+        # Update team stats (team may be None only if the player is truly
+        # on neither roster even by id -- skip team stats then, but never
+        # crash; possession still transfers to the gaining player object)
+        losing_team_name = losing_team.team_name if losing_team else None
+        gaining_team_name = gaining_team.team_name if gaining_team else None
+
         if losing_team_name in self.team_stats:
             if turnover_type in [TurnoverType.GIVEAWAY, TurnoverType.UNFORCED_ERROR]:
                 self.team_stats[losing_team_name]['giveaways'] += 1
@@ -9710,18 +9762,25 @@ class GameSim:
                 self.team_stats[gaining_team_name]['takeaways'] += 1
                 self.team_stats[gaining_team_name]['turnovers_forced'] += 1
         
-        # Change possession
-        self.possession_team = gaining_team
+        # Change possession (fall back to opponent of losing team if
+        # gaining team unresolvable, else keep current possession)
+        if gaining_team is not None:
+            self.possession_team = gaining_team
+        elif losing_team is not None:
+            self.possession_team = (self.away_team if losing_team is self.home_team
+                                   else self.home_team)
         self.possession_player = player_gaining_puck
 
         # Positional: puck jumps to the thief, teams transition
+        # Use possession_team (guaranteed set above) not gaining_team
+        # (which may be None if the interceptor's team was unresolvable)
         self._ppos_ensure()
         self.puck_pos = self._ppos_get(player_gaining_puck)[:]
-        self._shape_positions(gaining_team, self.puck_pos)
+        self._shape_positions(self.possession_team, self.puck_pos)
         self._emit_skate()
 
         # Zone state follows the new attacking team (see _refresh_zone_state)
-        self._refresh_zone_state(gaining_team)
+        self._refresh_zone_state(self.possession_team)
 
         # Log event
         self._log_event(f"{turnover_type.value.title()}: {player_gaining_puck.full_name} strips puck from {player_losing_puck.full_name}", "TURNOVER")
@@ -9768,7 +9827,12 @@ class GameSim:
                 self.game_stats[defending_player.id]['blocked_shots_by'] += 1
         
         # Update team defensive stats
+        self._ensure_player_registered(defending_player)
         defending_team = self._get_player_team(defending_player)
+        if defending_team is None:
+            # Player truly not on either roster; player stats above are
+            # recorded, so just skip the team-level update.
+            return
         team_name = defending_team.team_name
         
         if team_name in self.team_stats:
@@ -9802,12 +9866,30 @@ class GameSim:
 
     def _get_player_team(self, player):
         """Helper method to determine which team a player belongs to."""
-        if player in self.home_team.roster:
-            return self.home_team
-        elif player in self.away_team.roster:
-            return self.away_team
-        else:
-            return None
+        # Compare by id, not object identity: the sim may hold a different
+        # object instance than the roster list (e.g. after serialization).
+        pid = player.id
+        for p in self.home_team.roster:
+            if p.id == pid:
+                return self.home_team
+        for p in self.away_team.roster:
+            if p.id == pid:
+                return self.away_team
+        return None
+
+    def _ensure_player_registered(self, player):
+        """Register a player in game_stats if not already present.
+
+        Players selected for sim events (faceoffs, shot blocks, turnovers)
+        must have a game_stats entry. If the player wasn't on either roster
+        at game start, create their entry on demand from the template
+        rather than crashing on the missing key.
+        """
+        if player.id not in self.game_stats:
+            import copy as _copy
+            entry = _copy.deepcopy(self._game_stat_template)
+            entry['player'] = player
+            self.game_stats[player.id] = entry
 
     # ===== STAGE 5: GOALTENDING EXCELLENCE =====
     

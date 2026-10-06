@@ -3845,6 +3845,14 @@ class Team:
     # never manage a team a real person is running. Old-save safe: read
     # only via getattr(..., False) / is_human_managed().
     is_human_managed: bool = False
+    # Multiplayer GM persistence: stable identity of the human GM who runs
+    # this club. Stamped when a manager claims the team; saved/loaded with
+    # the team so the reservation survives host restarts. A returning GM
+    # gets their team back on rejoin even if the host reloaded from a save,
+    # and nobody else can squat the reserved club. Cleared when the GM
+    # claims a different team (or the host releases it).
+    mp_gm_token: str = ""
+    mp_gm_name: str = ""
     salary_cap: int = 104000000  # 2026-27 NHL cap (modern day)
     # Annual hockey-ops staff payroll budget (league-wide rule, market-tiered;
     # see default_staff_budget). Hiring is blocked when it would exceed this.

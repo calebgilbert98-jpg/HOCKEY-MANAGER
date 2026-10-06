@@ -48,6 +48,38 @@ class ConnectionError(Exception):
     """Raised when the client cannot reach / handshake with a host."""
 
 
+def get_machine_token() -> str:
+    """This machine's stable multiplayer identity, persisted across sessions.
+
+    Used as the GM token: the host stamps it on claimed teams and saves it,
+    so the GM's seat survives host restarts and they reclaim their club on
+    rejoin. Also used by a host to stamp its own team.
+    """
+    try:
+        import os
+        _dir = os.path.join(os.path.expanduser("~"), ".puck-dynasty")
+        os.makedirs(_dir, exist_ok=True)
+        _path = os.path.join(_dir, "mp_client_token")
+        try:
+            with open(_path, "r") as fh:
+                _tok = (fh.read() or "").strip()
+            if _tok:
+                return _tok
+        except OSError:
+            pass
+        import uuid as _uuid
+        _tok = _uuid.uuid4().hex
+        try:
+            with open(_path, "w") as fh:
+                fh.write(_tok)
+        except OSError:
+            pass
+        return _tok
+    except Exception:
+        import uuid as _uuid
+        return _uuid.uuid4().hex
+
+
 class MultiplayerClient:
     """Connection to a multiplayer host. UI-agnostic; see module docstring."""
 
@@ -67,6 +99,8 @@ class MultiplayerClient:
 
         self.session_id: Optional[str] = None
         self.team_id: Optional[str] = None
+        #: Port of the host we're connected to (for host-migration reuse).
+        self.port: int = 0
         self.game_date: str = "unknown"
         self.managers: List[Dict[str, str]] = []
         #: Full claimable team roster from WELCOME (may be empty on old hosts).
@@ -77,6 +111,15 @@ class MultiplayerClient:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _rejoin_token() -> str:
+        """Stable client identity for rejoin, persisted across sessions.
+
+        Stored in the user's saves dir so a dropped client is recognized
+        when it reconnects and gets its team claim restored by the host.
+        """
+        return get_machine_token()
 
     def connect(self, host: str, port: int,
                 timeout: float = CONNECT_TIMEOUT) -> Dict:
@@ -96,6 +139,10 @@ class MultiplayerClient:
             raise ConnectionError(f"could not reach {host}:{port} ({exc})")
         sock.settimeout(None)
         self._sock = sock
+        try:
+            self.port = int(port)
+        except Exception:
+            pass
         self._running.set()
         self._disconnect_reported = False
         self._recv_thread = threading.Thread(target=self._recv_loop,
@@ -103,7 +150,8 @@ class MultiplayerClient:
                                              daemon=True)
         self._recv_thread.start()
         self._send_raw(P.encode_message(P.HELLO, self._next_seq(),
-                                        P.hello(self.name, PROTOCOL_VERSION)))
+                                        P.hello(self.name, PROTOCOL_VERSION,
+                                                self._rejoin_token())))
         deadline = time.time() + WELCOME_TIMEOUT
         while time.time() < deadline:
             for kind, payload in self._drain_nowait():
@@ -331,11 +379,30 @@ class MultiplayerClient:
             }))
         elif mtype == P.DRAFT_CLOCK:
             self.events.put(("draft_clock", {
+                "board": msg.get("board", []) or [],
                 "clock_id": msg.get("clock_id", ""),
                 "team_id": msg.get("team_id", ""),
                 "overall": msg.get("overall", 0),
                 "round_num": msg.get("round_num", 0),
                 "prospects": msg.get("prospects", []) or [],
+            }))
+        elif mtype == P.FANTASY_DRAFT_CLOCK:
+            self.events.put(("fantasy_draft_clock", {
+                "board": msg.get("board", []) or [],
+                "clock_id": msg.get("clock_id", ""),
+                "team_id": msg.get("team_id", ""),
+                "overall": msg.get("overall", 0),
+                "round_num": msg.get("round_num", 0),
+                "available_ids": msg.get("available_ids", []) or [],
+                "shortlist": msg.get("shortlist", []) or [],
+            }))
+        elif mtype == P.DRAFT_UPDATE:
+            self.events.put(("draft_update", {
+                "draft": msg.get("draft", ""),
+                "overall": msg.get("overall", 0),
+                "round_num": msg.get("round_num", 0),
+                "team_id": msg.get("team_id", ""),
+                "player_name": msg.get("player_name", ""),
             }))
         elif mtype == P.ACTION_ACK:
             seq = msg.get("action_seq")

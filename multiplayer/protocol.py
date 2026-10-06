@@ -120,6 +120,17 @@ DRAFT_CLOCK = "draft_clock"        # host -> client   {clock_id, team_id,
                                    #  overall, round_num, prospects:
                                    #  [{id, name, pos, ranking}]}
 
+# Message types: live draft-pick notification for spectators.
+DRAFT_UPDATE = "draft_update"    # host -> all    {draft: "entry"|"fantasy",
+                                 #  overall, round_num, team_id,
+                                 #  player_name}
+
+# Message types: fantasy-draft pick clock for a client's team.
+FANTASY_DRAFT_CLOCK = "fantasy_draft_clock"  # host -> client {clock_id,
+                                   #  team_id, overall, round_num,
+                                   #  available_ids: [id], shortlist:
+                                   #  [{id, name, pos, ovr}]}
+
 # Message types: utility
 CHAT = "chat"
 PING = "ping"
@@ -135,6 +146,8 @@ ALL_TYPES = {
     TRADE_OFFER, TRADE_RESPONSE,
     NTC_WAIVER_REQUEST, NTC_WAIVER_ANSWER,
     DRAFT_CLOCK,
+    FANTASY_DRAFT_CLOCK,
+    DRAFT_UPDATE,
     CHAT, PING, PONG, ERROR, GOODBYE,
 }
 
@@ -167,6 +180,8 @@ SUPPORTED_ACTIONS = {
                        # host-side (NTC_WAIVER_REQUEST, context="waivers")
     "call_up",          # params: {team_id, player_id}
     "claim_waivers",    # params: {team_id, player_id}
+    "place_on_waivers", # params: {team_id, player_id} -- expose to the wire
+                        # (2-day window, claimed at noon in priority order)
     "buyout_player",    # params: {team_id, player_id}
     "extend_contract",  # params: {team_id, player_id, salary, years,
                         #          clause?: none|ntc|nmc|mntc, clause_teams?: int}
@@ -177,12 +192,33 @@ SUPPORTED_ACTIONS = {
     "hire_staff",       # params: {team_id, staff_id, role, salary, years, assignment: nhl|ahl}
     "fire_staff",       # params: {team_id, staff_id}
     "assign_scout",     # params: {team_id, scout_id, region}
-    "set_practice",     # params: {team_id, focus, intensity}
+    "set_practice",
+    "start_practice_plan",  # params: {team_id, player_id, practice_type,
+                           #          intensity, total_sessions}
+    "offer_sheet",        # params: {team_id, player_id, aav, years}
+    "request_save",       # params: {team_id} -- client asks host to save     # params: {team_id, focus, intensity}
     "practice_session", # params: {team_id, player_id, practice_type, intensity, duration, trainer_quality}
     "team_talk",        # params: {team_id, tone, situation, speaker?}
     "press_conference", # params: {team_id, stance, topic?}
     "draft_pick",       # params: {team_id, player_id} (entry draft, on the clock)
     "return_to_junior", # params: {team_id, player_id}
+    "fantasy_draft_pick",  # params: {team_id, clock_id, player_id}
+    "answer_ai_offer",  # params: {team_id, negotiation_id,
+                        #          decision: accept|decline} -- AI's inbox offer
+    # July offseason decisions (host-authoritative; each human club's
+    # inbox carries its own message; the host marks it done so the sync
+    # retires the buttons -- no silent RFA-rights loss for clients).
+    "rfa_qualify",        # params: {team_id, message_id, player_id,
+                          #          qualify: bool}
+    "staff_renew",        # params: {team_id, message_id, staff_id,
+                          #          years: 1|2|3|null}
+    "offer_sheet_match",  # params: {team_id, message_id, match: bool}
+    "offer_sheet_trade_alt",  # params: {team_id, message_id, accept: bool}
+    "arbitration_walkaway",   # params: {team_id, message_id, walk_away: bool}
+    # Manager-hub decisions (host-authoritative; team-scoped effects).
+    "coach_checkin",    # params: {team_id, fields: {...}}
+    "emergency_fill",   # params: {team_id} -- summon league fill-ins
+    "owner_meeting",    # params: {team_id} -- patience request + morale
 }
 
 
@@ -281,8 +317,13 @@ class MessageReader:
 # Message constructors (keeps call sites honest about required fields)
 # ---------------------------------------------------------------------------
 
-def hello(name: str, version: int) -> Dict[str, Any]:
-    return {"type": HELLO, "name": name, "version": version}
+def hello(name: str, version: int,
+          rejoin_token: str = "") -> Dict[str, Any]:
+    """HELLO payload. ``rejoin_token`` is the client's stable identity
+    (persisted locally across sessions); a host that remembers it
+    restores the client's team claim instead of requiring a re-claim."""
+    return {"type": HELLO, "name": name, "version": version,
+            "rejoin_token": rejoin_token or ""}
 
 
 def welcome(session_id: str, game_date: str, teams_taken: Dict[str, str],
@@ -353,10 +394,23 @@ def ntc_waiver_request_msg(waiver_id: str, player_id: str, player_name: str,
 
 def draft_clock_msg(clock_id: str, team_id: str, overall: int,
                     round_num: int,
-                    prospects: List[Dict[str, Any]]) -> Dict[str, Any]:
+                    prospects: List[Dict[str, Any]],
+                    board: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {"type": DRAFT_CLOCK, "clock_id": clock_id, "team_id": team_id,
             "overall": overall, "round_num": round_num,
-            "prospects": prospects}
+            "prospects": prospects, "board": board or []}
+
+
+def fantasy_draft_clock_msg(clock_id: str, team_id: str, overall: int,
+                            round_num: int,
+                            available_ids: List[str],
+                            shortlist: List[Dict[str, Any]],
+                            board: List[Dict[str, Any]] = None
+                            ) -> Dict[str, Any]:
+    return {"type": FANTASY_DRAFT_CLOCK, "clock_id": clock_id,
+            "team_id": team_id, "overall": overall, "round_num": round_num,
+            "available_ids": available_ids, "shortlist": shortlist,
+            "board": board or []}
 
 
 def error_msg(message: str) -> Dict[str, Any]:

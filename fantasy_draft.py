@@ -1183,6 +1183,8 @@ class FantasyDraftView(tk.Frame):
             self._show_unavailable_panel(self._draft_unavailable)
             return
 
+        # Draft starts PAUSED -- the user resumes from the lobby when ready.
+        self.draft_paused = True
         self.user_team = game_manager.user_team
 
         # Ensure user team is set - if not, use the first team in the draft
@@ -1689,6 +1691,41 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                                 style='TButton')
         begin_button.pack()
         
+    def toggle_draft_pause(self):
+        """Toggle the draft between paused and running."""
+        self.draft_paused = not self.draft_paused
+        try:
+            self.pause_button.config(
+                text="⏸ Pause Draft" if not self.draft_paused else "▶ Resume Draft")
+        except Exception:
+            pass
+        if not self.draft_paused:
+            # Resuming: kick the auto-draft chain back off.
+            try:
+                dm = self.draft_manager
+                if not dm.is_draft_complete():
+                    dm.auto_draft_in_flight = True
+                    self.after(500, self.continue_auto_draft)
+            except Exception:
+                pass
+
+    def open_staff_from_draft(self):
+        """Open the staff view (coaching philosophy etc.) from the draft screen."""
+        try:
+            app = getattr(self, 'app', None)
+            if app is not None and hasattr(app, 'open_staff_management_window'):
+                app.open_staff_management_window()
+            elif app is not None and hasattr(app, 'show_screen'):
+                from staff_management_window import StaffManagementView
+                app.show_screen("staff_management", "Staff",
+                                StaffManagementView)
+        except Exception as e:
+            try:
+                from tkinter import messagebox
+                messagebox.showerror("Error", f"Could not open staff view: {e}")
+            except Exception:
+                pass
+
     def show_main_draft_interface(self, parent):
         """Show the main draft interface with tabs"""
         # Create notebook for tabs
@@ -1766,6 +1803,28 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         
         # Mark draft as started
         self.draft_manager.draft_started = True
+
+        # MULTIPLAYER: register the live draft with the host app so
+        # client-claimed clubs can pick on the clock.
+        try:
+            _app = getattr(self, "app", None)
+            _begin = getattr(_app, "_mp_fantasy_draft_begin", None)
+            if callable(_begin):
+                _begin(self.draft_manager)
+            try:
+                _app._mp_fantasy_view = self
+            except Exception:
+                pass
+            _host = getattr(_app, "mp_host", None)
+            if _host is not None:
+                try:
+                    _host.broadcast_chat(
+                        "Fantasy draft is underway -- claimed clubs pick "
+                        "live on the clock.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # --- MULTIPLAYER/CHECKPOINTS: per-round draft checkpoints ---
         # Wraps make_pick ONCE so every pick site (human + all AI callers)
@@ -2367,7 +2426,19 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         # Sim rest of draft button
         self.integrated_sim_rest_button = ttk.Button(btn_container, text="Sim Rest of Draft", 
                                                    command=self.sim_rest_of_draft, style='Accent.TButton')
-        self.integrated_sim_rest_button.pack(side=tk.LEFT, ipady=8, ipadx=8)
+        self.integrated_sim_rest_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
+
+        # Pause/Resume button (draft starts paused)
+        self.pause_button = ttk.Button(btn_container, text="▶ Resume Draft",
+                                       command=self.toggle_draft_pause,
+                                       style='Accent.TButton')
+        self.pause_button.pack(side=tk.LEFT, padx=(0, 8), ipady=8, ipadx=8)
+
+        # View Staff button (coaching philosophy, etc.)
+        self.view_staff_button = ttk.Button(btn_container, text="View Staff",
+                                            command=self.open_staff_from_draft,
+                                            style='TButton')
+        self.view_staff_button.pack(side=tk.LEFT, ipady=8, ipadx=8)
         
         # Force update to ensure visibility
         button_frame.update_idletasks()
@@ -4185,6 +4256,22 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
 
     def _sim_rest_of_draft_confirmed(self):
         """Run the rest-of-draft sim after the user confirmed."""
+        # MULTIPLAYER: a client may be on the clock right now. Cancel it
+        # so their late answer can't land mid-sim and corrupt the order.
+        try:
+            _app = getattr(self, "app", None)
+            _st = getattr(_app, "_mp_fantasy_clock", None)
+            if isinstance(_st, dict) and not _st.get("done"):
+                _st["done"] = True
+            if _app is not None and getattr(_app, "mp_host", None) \
+                    is not None:
+                try:
+                    _app.mp_host.broadcast_chat(
+                        "Host is simulating the rest of the fantasy draft.")
+                except Exception:
+                    pass
+        except Exception:
+            pass
         current_pick = self.draft_manager.get_current_pick()
         remaining_picks = (len(self.draft_manager.draft_picks)
                            - self.draft_manager.current_pick)
@@ -4222,27 +4309,55 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
             progress_var.set(f"Pick #{current_pick.overall_pick}: {current_pick.team.team_name} ({percentage}%)")
             progress_window.update()
         
-            # AI selection logic with team needs
+            # Smart selection: team-aware valuation (positional need
+            # from picks already made, age/contract value, cap pressure).
+            # In multiplayer the host's smart choice keeps every club's
+            # auto-drafted roster logical.
             available_players = self.draft_manager.get_available_players()
             if not available_players:
                 break
-            
-            team_needs = self.analyze_team_needs(current_pick.team)
-            suitable_players = self.filter_by_team_needs(available_players, team_needs)
-        
-            if not suitable_players:
-                suitable_players = available_players[:20]  # Fallback to best available
-            
-            # Weight selection towards top players with some randomness
-            top_candidates = suitable_players[:10]
-            weights = [10, 8, 6, 5, 4, 3, 2, 2, 1, 1][:len(top_candidates)]
-            ai_pick = random.choices(top_candidates, weights=weights, k=1)[0]
-        
+            try:
+                _app = getattr(self, "app", None)
+                _smart = getattr(_app, "_mp_fantasy_smart_choice", None)
+                ai_pick = (_smart(self.draft_manager, current_pick.team,
+                                  available_players)
+                           if callable(_smart) else None)
+            except Exception:
+                ai_pick = None
+            if ai_pick is None:
+                team_needs = self.analyze_team_needs(current_pick.team)
+                suitable_players = self.filter_by_team_needs(
+                    available_players, team_needs)
+                if not suitable_players:
+                    suitable_players = available_players[:20]
+                top_candidates = suitable_players[:10]
+                weights = [10, 8, 6, 5, 4, 3, 2, 2, 1,
+                           1][:len(top_candidates)]
+                ai_pick = random.choices(
+                    top_candidates, weights=weights, k=1)[0]
+
             success = self.draft_manager.make_pick(ai_pick)
             if success:
                 # Roster assignment (23-man NHL cap) on the manager.
                 self.draft_manager.assign_drafted_player(
                     current_pick.team, ai_pick)
+                # MULTIPLAYER: spectators see each pick live.
+                try:
+                    _app2 = getattr(self, "app", None)
+                    _host = (getattr(_app2, "mp_host", None)
+                             if _app2 is not None else None)
+                    if _host is not None:
+                        _host.broadcast_draft_update(
+                            "fantasy",
+                            int(getattr(current_pick, "overall_pick", 0)
+                                or 0),
+                            int(getattr(current_pick, "round_num", 0)
+                                or 0),
+                            str(getattr(current_pick.team, "team_name", "")
+                                or ""),
+                            str(getattr(ai_pick, "full_name", "?") or "?"))
+                except Exception:
+                    pass
             else:
                 print(f"ERROR: Failed to make pick for {current_pick.team.team_name}")
                 break
@@ -4394,12 +4509,36 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
         rebuilt view resumes it from the flag -- no silent stall.
         """
         dm = self.draft_manager
+        # Paused: do not advance. The user resumes from the lobby.
+        if getattr(self, 'draft_paused', False):
+            dm.auto_draft_in_flight = False
+            return
         if dm.is_draft_complete():
             dm.auto_draft_in_flight = False
             self.complete_draft()
             return
             
         current_pick = dm.get_current_pick()
+        # MULTIPLAYER: a client-claimed club picks live on a 60s clock.
+        # The host sends the clock and pauses; the fantasy_draft_pick
+        # action (or the expiry auto-pick) resumes the draft.
+        try:
+            _app = getattr(self, "app", None)
+            _need = getattr(_app, "_mp_fantasy_draft_pick_needed", None)
+            if callable(_need) and current_pick is not None:
+                try:
+                    _app._mp_fantasy_view = self
+                except Exception:
+                    pass
+                if _need(dm, current_pick):
+                    dm.auto_draft_in_flight = False
+                    try:
+                        self.update_display()
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass
         if current_pick and current_pick.team != self.user_team:
             # AI makes pick
             available_players = dm.get_available_players()
@@ -4433,8 +4572,17 @@ Your team: {self.user_team.team_name if self.user_team else 'Not set'}
                         
     def complete_draft(self):
         """Handle draft completion"""
-        messagebox.showinfo("Draft Complete", 
+        messagebox.showinfo("Draft Complete",
                           "The fantasy draft is complete! All players have been redistributed among teams.")
+        # MULTIPLAYER: the rosters just changed wholesale -- push a full
+        # sync so every client converges on the drafted rosters.
+        try:
+            _app = getattr(self, "app", None)
+            _host = getattr(_app, "mp_host", None)
+            if _host is not None:
+                _host.broadcast_state("fantasy draft complete")
+        except Exception:
+            pass
         
         # Mark fantasy draft as completed in game manager
         if hasattr(self.game_manager, 'pending_fantasy_draft'):

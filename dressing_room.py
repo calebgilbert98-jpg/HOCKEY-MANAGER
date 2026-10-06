@@ -2407,6 +2407,25 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             speaker = self._speaker_var.get()
         except Exception:
             tone, speaker = "calm", "coach"
+        # MULTIPLAYER: route to the host; the canonical room state lives
+        # there. Local give_talk would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route
+            _ctx = self._talk_context("pregame")
+            if _route(self.app, "team_talk", {
+                    "tone": tone, "situation": "pregame",
+                    "speaker": speaker,
+                    "score_state": _ctx.get("score_state", "tied"),
+                    "rival": bool(_ctx.get("rival", False)),
+                    "streak": int(_ctx.get("streak", 0) or 0)}):
+                self._show_outcome(
+                    self.talk_result,
+                    {"outcome": "sent",
+                     "note": "the host applies it; watch for the result."})
+                self.refresh()
+                return
+        except Exception:
+            pass
         outcome = give_talk(team, tone, self._talk_context("pregame"),
                             speaker=speaker, day_key=self._day_key())
         self._show_outcome(self.talk_result, outcome)
@@ -2421,6 +2440,24 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
             speaker = self._ispeaker_var.get()
         except Exception:
             tone, speaker = "calm", "coach"
+        # MULTIPLAYER: route to the host (see _give_pregame_talk).
+        try:
+            from windows import _mp_route as _route
+            _ctx = self._talk_context("intermission")
+            if _route(self.app, "team_talk", {
+                    "tone": tone, "situation": "intermission",
+                    "speaker": speaker,
+                    "score_state": _ctx.get("score_state", "tied"),
+                    "rival": bool(_ctx.get("rival", False)),
+                    "streak": int(_ctx.get("streak", 0) or 0)}):
+                self._show_outcome(
+                    self.italk_result,
+                    {"outcome": "sent",
+                     "note": "the host applies it; watch for the result."})
+                self.refresh()
+                return
+        except Exception:
+            pass
         outcome = give_talk(team, tone, self._talk_context("intermission"),
                             speaker=speaker, day_key=self._day_key())
         self._show_outcome(self.italk_result, outcome)
@@ -2429,8 +2466,16 @@ class DressingRoomView(__import__("customtkinter").CTkFrame):
     def _show_outcome(self, label, outcome):
         ct = self._ct
         colors = {"landed": ct["GREEN"], "steady": ct["TEXT"],
-                  "flat": ct["GOLD"], "backfired": ct["RED"]}
+                  "flat": ct["GOLD"], "backfired": ct["RED"],
+                  "sent": ct["TEXT"]}
         try:
+            if outcome.get("outcome") == "sent":
+                # Multiplayer: routed to the host; the real outcome lands
+                # via sync. Show the pending state honestly.
+                label.configure(
+                    text=f"Talk sent -- {outcome.get('note', '')}",
+                    text_color=colors["sent"])
+                return
             label.configure(
                 text=f"{outcome['tone'].title()} talk {outcome['outcome']}: "
                      f"{outcome['note']}",

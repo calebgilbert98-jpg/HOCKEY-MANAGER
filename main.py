@@ -369,9 +369,13 @@ class GameManager:
             debug_print("DEBUG: Game settings applied successfully")
             
             # Handle fantasy draft if enabled
-            if settings.get('fantasy_draft', False):
-                print("Fantasy draft enabled - starting interactive fantasy draft...")
-                self.start_interactive_fantasy_draft()
+            _fd = settings.get('fantasy_draft', False)
+            if _fd:
+                print("Fantasy draft enabled - will start after game loads...")
+                # Set the flag now; the GUI starts the draft once fully loaded
+                # (the inbox isn't ready during apply_startup_settings).
+                self.pending_fantasy_draft = True
+                self._fantasy_draft_deferred = True
             
             # Generate league schedule
             print("Generating league schedule...")
@@ -2914,6 +2918,24 @@ class HockeyManagerGUI(tk.Tk):
             self.setup_autosave()  # Set up autosave system
             self.setup_close_protocol()  # Set up save prompt on close
             self.update_all_views()
+        elif self.mp_client is not None or self.mp_host is not None:
+            # Multiplayer: the team arrives via the host snapshot
+            # (_apply_multiplayer_snapshot), never via a picker. Showing
+            # the single-player team dialog here is a dead end. The
+            # dashboard is built by _apply_multiplayer_snapshot once the
+            # team is known -- building it now (no team, empty league)
+            # crashes and leaves broken views.
+            print("Multiplayer mode -- team comes from the host snapshot; "
+                  "skipping team selection dialog.")
+            self._mp_dashboard_pending = True
+            self.deiconify()
+            try:
+                tk.Label(self, text="Syncing with host...",
+                         font=("Segoe UI", 16),
+                         fg="#e8e8e8", bg="#14161b").pack(expand=True)
+            except Exception:
+                pass
+            self.update()
         else:
             # For now, skip launcher integration and use simple team selection
             # The launcher system needs to be redesigned for proper integration
@@ -4017,6 +4039,7 @@ class HockeyManagerGUI(tk.Tk):
             "Trade Block": self.open_trade_block_window,
             "Waivers": self.open_waivers_window,
             "GM Options": self.open_gm_options_window,
+            "Fantasy Draft": self.open_fantasy_draft_window,
         })
 
         # Finances (budgets, payroll, extensions)
@@ -8616,19 +8639,19 @@ class HockeyManagerGUI(tk.Tk):
             and getattr(self, 'mp_host', None) is None
 
     def _mp_client_block(self, what):
-        """Phase-1 honesty guard for MP clients.
+        """Honesty guard for MP clients.
 
         Returns True when running as a multiplayer client: the caller must
         abort WITHOUT mutating local state (the next STATE_SYNC would wipe
-        it silently). Shows a notice explaining client sync is coming.
+        it silently). Shows a notice explaining the action needs the host.
         Non-client modes return False (proceed normally).
         """
         if not self._mp_client_mode():
             return False
         try:
             self._mp_toast(
-                f"Multiplayer: {what} isn't synced to the host yet — "
-                "client management support is coming in the next update.")
+                f"Multiplayer: {what} needs the host — "
+                "ask the host to do it, or use the routed action.")
         except Exception:
             pass
         return True
@@ -8892,6 +8915,17 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_client_ready = not self._mp_client_ready
             self._mp_toast(f"Could not reach host: {e}")
         self._mp_refresh_continue_ui()
+
+    def _mp_request_host_save(self):
+        """Client asks the host to save the game now."""
+        client = getattr(self, "mp_client", None)
+        if client is None:
+            return
+        try:
+            client.send_action("request_save", {})
+            self._mp_toast("Save requested -- the host will confirm.")
+        except Exception as e:
+            self._mp_toast(f"Could not reach host: {e}")
 
     def _mp_evaluate_advance_gate(self, why=""):
         """Broadcast ADVANCE_STATUS; fire the day's advance when all active
@@ -9192,10 +9226,27 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_resolve_ntc_answer(payload)
         elif kind == "team_claimed":
             team = self._mp_find_team(payload.get("team_id", ""))
+            _gtok = str(payload.get("gm_token", "") or "")
+            _gname = str(payload.get("name", "?") or "?")
             if team is not None:
                 # A real person runs this club now: the AI must leave it
                 # alone (parity with the local user's is_user_team).
                 team.is_human_managed = True
+                # GM persistence: stamp who runs this club. Saved with the
+                # team so the seat survives host restarts -- the GM gets
+                # their club back on rejoin.
+                if _gtok:
+                    try:
+                        _lg = getattr(self, "league", None)
+                        for _t in (getattr(_lg, "teams", None) or []):
+                            if (_t is not team and
+                                    getattr(_t, "mp_gm_token", "") == _gtok):
+                                _t.mp_gm_token = ""
+                                _t.mp_gm_name = ""
+                    except Exception:
+                        pass
+                    team.mp_gm_token = _gtok
+                    team.mp_gm_name = _gname
             self._mp_toast(
                 f"{payload.get('name', '?')} "
                 f"claimed {payload.get('team_id', '')}")
@@ -9244,6 +9295,10 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_answer_ntc_request(payload)
         elif kind == "draft_clock":
             self._mp_show_draft_clock(payload)
+        elif kind == "fantasy_draft_clock":
+            self._mp_show_fantasy_clock(payload)
+        elif kind == "draft_update":
+            self._mp_on_draft_update(payload)
         elif kind == "action_ack":
             self._mp_toast(f"Accepted: {payload.get('action', '')} "
                             f"({payload.get('result', '')})")
@@ -9257,15 +9312,213 @@ class HockeyManagerGUI(tk.Tk):
         elif kind == "error":
             self._mp_toast(f"Host: {payload.get('message', '')}")
         elif kind == "disconnected":
-            from popup_system import messagebox
+            # Non-modal (screen-shift rule): no blocking question. A
+            # dismissible card offers promotion; the last-synced state
+            # stays browsable either way.
             try:
-                messagebox.showerror(
-                    "Disconnected",
-                    f"Lost connection to the host ({payload.get('reason', '')}).\n"
-                    "Your last synced state was kept as a fallback checkpoint.")
+                self._mp_last_host_port = int(
+                    getattr(self.mp_client, "port", 0) or 0)
+            except Exception:
+                self._mp_last_host_port = 0
+            _reason = payload.get("reason", "")
+            self.mp_client = None  # stops the poll loop
+            try:
+                self._mp_show_promote_card(_reason)
             except Exception:
                 pass
-            self.mp_client = None  # stops the poll loop
+
+    def _mp_show_promote_card(self, reason):
+        """Non-modal disconnect card: offer host promotion without
+        blocking. The last-synced state stays browsable."""
+        try:
+            card = tk.Toplevel(self)
+        except Exception:
+            return
+        card.title("Disconnected")
+        card.geometry("440x220")
+        # Non-modal: no grab, no topmost seizure -- dismissible, and the
+        # main window stays usable.
+        tk.Label(
+            card, text="Lost connection to the host",
+            font=("Segoe UI", 12, "bold")).pack(pady=(14, 4))
+        tk.Label(
+            card,
+            text=f"{reason}\n\nYour last synced state was kept as a "
+                 f"fallback checkpoint.\nPromote this client to host so "
+                 f"the session can continue?",
+            font=("Segoe UI", 10), wraplength=400,
+            justify="left").pack(padx=16, pady=(0, 12))
+
+        def _promote():
+            try:
+                card.destroy()
+            except Exception:
+                pass
+            try:
+                self._mp_promote_to_host()
+            except Exception as e:
+                try:
+                    from popup_system import messagebox
+                    messagebox.showerror(
+                        "Promote Failed",
+                        f"Couldn't take over as host:\n{e}")
+                except Exception:
+                    pass
+
+        def _dismiss():
+            try:
+                card.destroy()
+            except Exception:
+                pass
+
+        row = tk.Frame(card)
+        row.pack(pady=(0, 14))
+        tk.Button(row, text="Promote to host",
+                  font=("Segoe UI", 10, "bold"),
+                  command=_promote).pack(side="left", padx=8)
+        tk.Button(row, text="Stay offline",
+                  font=("Segoe UI", 10),
+                  command=_dismiss).pack(side="left", padx=8)
+    def _mp_promote_to_host(self):
+        """Take over as host from the client's last synced checkpoint.
+
+        Loads saves/checkpoints/client_last_sync.hm into the full game
+        state, then starts a MultiplayerHost on the same port so the
+        session continues. The promoting client becomes the host and keeps
+        managing their claimed team locally.
+        """
+        import os
+        import gzip
+        import pickle
+        from multiplayer import net_host as _nh
+        from multiplayer import protocol as _p
+        _ckpt = os.path.join("saves", "checkpoints", "client_last_sync.hm")
+        if not os.path.exists(_ckpt):
+            raise FileNotFoundError(
+                "No fallback checkpoint found (client_last_sync.hm).")
+        # Load the synced state into the app (same path as Load Game).
+        _ok = False
+        try:
+            _ok = bool(self.save_manager.load_game(_ckpt))
+        except Exception:
+            _ok = False
+        if not _ok:
+            # Fall back to raw state restore if the manager path fails.
+            with gzip.open(_ckpt, "rb") as _fh:
+                _data = pickle.load(_fh)
+            try:
+                self.save_manager.restore_game_data(_data)
+                _ok = True
+            except Exception:
+                _ok = False
+        if not _ok:
+            raise RuntimeError("Couldn't load the fallback checkpoint.")
+        try:
+            self.refresh_all_views()
+        except Exception:
+            pass
+        _save_mgr = self.save_manager
+        _gm = getattr(self, "game_manager", None)
+
+        def _state_provider():
+            _blob = gzip.compress(pickle.dumps(
+                _save_mgr.create_save_data(),
+                protocol=pickle.HIGHEST_PROTOCOL))
+            return _blob, str(getattr(self, "current_date", "")), "host-sync"
+
+        def _get_teams():
+            try:
+                return [{"id": t.team_name, "name": t.team_name,
+                         "reserved_by": getattr(t, "mp_gm_name", "") or ""}
+                        for t in _gm.league.teams]
+            except Exception:
+                return []
+
+        _port = int(getattr(self, "_mp_last_host_port", 0) or 0) \
+            or _p.DEFAULT_PORT
+        _host = _nh.MultiplayerHost(
+            _state_provider,
+            host_name=f"{getattr(self, 'user_team', None) and getattr(self.user_team, 'team_name', 'Host') or 'Host'} (promoted)",
+            port=_port, get_teams=_get_teams)
+        _host.start()
+        self.mp_host = _host
+        self._mp_seed_host_reservations(_host)
+        try:
+            self.after(250, self._poll_multiplayer)
+        except Exception:
+            pass
+        try:
+            from popup_system import messagebox as _mb
+            _mb.showinfo(
+                "Hosting",
+                f"You are now the host (port {_port}).\n"
+                "Other managers can reconnect to continue the session.")
+        except Exception:
+            pass
+
+    def _mp_seed_host_reservations(self, host):
+        """Seed a new host's GM reservations from the league's save data.
+
+        Teams whose saves carry an mp_gm_token are reserved for that GM:
+        they auto-reclaim on rejoin and nobody else can squat them. Also
+        stamps the host's own club with this machine's identity so the
+        host's seat persists too.
+        """
+        try:
+            _lg = getattr(self, "league", None)
+            _res, _names = {}, {}
+            for _t in (getattr(_lg, "teams", None) or []):
+                _tok = getattr(_t, "mp_gm_token", "") or ""
+                if _tok:
+                    _res[_tok] = getattr(_t, "team_name", "")
+                    _nm = getattr(_t, "mp_gm_name", "") or ""
+                    if _nm:
+                        _names[_tok] = _nm
+            try:
+                host.seed_reservations(_res, _names)
+            except Exception:
+                pass
+            # The host's own seat: stamp this machine's identity on the
+            # local club so it persists like any other GM's.
+            try:
+                from multiplayer.net_client import get_machine_token as _gmt
+                _mine = _gmt()
+                _ut = getattr(self, "user_team", None)
+                if _mine and _ut is not None:
+                    _ut.mp_gm_token = _mine
+                    _ut.is_human_managed = True
+                    try:
+                        _prof = getattr(self, "gm_profile", None) or {}
+                        _nm = (_prof.get("name", "")
+                               if isinstance(_prof, dict) else "")
+                        if _nm:
+                            _ut.mp_gm_name = str(_nm)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _mp_host_release_team(self, team_id):
+        """Host-side: release a GM's reservation on a team (e.g. the GM is
+        gone for good). Clears the save-stamped identity and the host's
+        reservation so anyone can claim the club. The team's progress is
+        untouched -- only the seat is freed."""
+        try:
+            team = self._mp_find_team(team_id)
+            if team is not None:
+                team.mp_gm_token = ""
+                team.mp_gm_name = ""
+            _host = getattr(self, "mp_host", None)
+            if _host is not None:
+                try:
+                    _host.drop_reservation(team_id)
+                except Exception:
+                    pass
+            return True
+        except Exception:
+            return False
 
     def _mp_find_team(self, team_id):
         try:
@@ -9312,7 +9565,21 @@ class HockeyManagerGUI(tk.Tk):
                       "send_to_minors", "call_up", "claim_waivers",
                       "buyout_player", "extend_contract", "hire_staff",
                       "fire_staff", "assign_scout", "set_practice",
-                      "team_talk", "press_conference", "draft_pick"):
+                      "team_talk", "press_conference", "draft_pick",
+                      # Adversarial sweep 2026-10-05: these were in
+                      # SUPPORTED_ACTIONS with working handlers + UI
+                      # routes, but this gate dropped them as
+                      # "unsupported". ntc_waiver_answer / trade_response
+                      # stay out: they ride dedicated message types.
+                      "set_captaincy", "set_trade_block",
+                      "return_to_junior", "practice_session",
+                      "start_practice_plan", "offer_sheet",
+                      "request_save", "place_on_waivers",
+                      "answer_ai_offer", "rfa_qualify", "staff_renew",
+                      "offer_sheet_match", "offer_sheet_trade_alt",
+                      "arbitration_walkaway", "coach_checkin",
+                      "emergency_fill", "owner_meeting",
+                      "fantasy_draft_pick"):
             # Phase 2: authoritative host execution of the full management
             # surface. Each handler validates every param against the
             # canonical Team objects and returns (True, summary) or
@@ -9332,12 +9599,26 @@ class HockeyManagerGUI(tk.Tk):
             "call_up": self._mp_call_up,
             "return_to_junior": self._mp_return_to_junior,
             "claim_waivers": self._mp_claim_waivers,
+            "place_on_waivers": self._mp_place_on_waivers,
+            "answer_ai_offer": self._mp_answer_ai_offer,
+            "rfa_qualify": self._mp_rfa_qualify,
+            "staff_renew": self._mp_staff_renew,
+            "offer_sheet_match": self._mp_offer_sheet_match,
+            "offer_sheet_trade_alt": self._mp_offer_sheet_trade_alt,
+            "arbitration_walkaway": self._mp_arbitration_walkaway,
+            "coach_checkin": self._mp_coach_checkin,
+            "emergency_fill": self._mp_emergency_fill,
+            "owner_meeting": self._mp_owner_meeting,
+            "fantasy_draft_pick": self._mp_fantasy_draft_pick,
             "buyout_player": self._mp_buyout_player,
             "extend_contract": self._mp_extend_contract,
             "hire_staff": self._mp_hire_staff,
             "fire_staff": self._mp_fire_staff,
             "assign_scout": self._mp_assign_scout,
             "set_practice": self._mp_set_practice,
+            "start_practice_plan": self._mp_start_practice_plan,
+            "offer_sheet": self._mp_offer_sheet,
+            "request_save": self._mp_request_save,
             "practice_session": self._mp_practice_session,
             "team_talk": self._mp_team_talk,
             "press_conference": self._mp_press_conference,
@@ -9469,6 +9750,7 @@ class HockeyManagerGUI(tk.Tk):
         team.lineup = flatten_lineup(nested)
         return True, "Lines saved."
 
+    @staticmethod
     @staticmethod
     def _mp_is_goalie(player):
         pos = getattr(player, "primary_position", "")
@@ -9736,6 +10018,32 @@ class HockeyManagerGUI(tk.Tk):
     def _mp_sign_free_agent(self, params, team, manager):
         """Sign a free agent: same contract mutation the FA view applies
         (salary / years / signing bonus / NTC flag on the live contract)."""
+        # ELC branch: the client is signing an unsigned rights-held prospect.
+        # Route through the same negotiated ELC path as single-player, with
+        # the acting manager's team (not the host's user_team).
+        if params.get("elc"):
+            _pid = str(params.get("player_id", ""))
+            _prospect = None
+            try:
+                for _p in getattr(team, "prospects", []) or []:
+                    if str(getattr(_p, "id", "")) == _pid:
+                        _prospect = _p
+                        break
+            except Exception:
+                pass
+            if _prospect is None:
+                return False, "That prospect isn't in your system."
+            try:
+                _res = self.handle_elc_offer(
+                    _prospect, params.get("salary", 0),
+                    params.get("signing_bonus", 0),
+                    params.get("performance_bonus", 0), team=team)
+            except Exception as e:
+                return False, f"ELC signing failed: {e}"
+            _v = (_res or {}).get("verdict")
+            if _v == "accepted":
+                return True, f"Signed {_prospect.full_name} to an ELC."
+            return False, (_res or {}).get("note") or f"ELC offer {_v}."
         player = self._mp_find_free_agent(params.get("player_id", ""))
         if player is None:
             return False, "That player is no longer a free agent."
@@ -9996,11 +10304,12 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return True, f"{player.full_name} placed on waivers."
 
-    def _mp_begin_consent_flow(self, team, player, manager):
-        """Host-side NMC consent for a demotion: stash the intent, ask the
-        client's player via NTC_WAIVER_REQUEST (context="waivers").
-        Returns (True, status, no-broadcast) -- the demotion itself runs
-        when the answer comes back in _mp_resolve_ntc_answer."""
+    def _mp_begin_consent_flow(self, team, player, manager, kind="demote"):
+        """Host-side NMC consent: stash the intent, ask the client's player
+        via NTC_WAIVER_REQUEST (context="waivers"). kind="demote" runs the
+        waiver-assignment on grant; kind="expose" only exposes him to the
+        wire. Returns (True, status, no-broadcast) -- the mutation itself
+        runs when the answer comes back in _mp_resolve_ntc_answer."""
         import uuid as _uuid
         waiver_id = _uuid.uuid4().hex[:10]
         session_id = self._mp_peer_session_for_team(team.team_name)
@@ -10012,7 +10321,7 @@ class HockeyManagerGUI(tk.Tk):
         except Exception:
             detail = "no-movement clause"
         self._mp_pending_ntc[waiver_id] = {
-            "kind": "demote",
+            "kind": kind,
             "team_id": team.team_name,
             "manager": manager,
             "player_id": str(getattr(player, "id", "")),
@@ -10181,6 +10490,402 @@ class HockeyManagerGUI(tk.Tk):
             pass
         return True, (f"Claim submitted for {player.full_name} -- processed "
                       f"at noon in waiver priority order.")
+
+    def _mp_place_on_waivers(self, params, team, manager):
+        """Expose a player to the waiver wire: mirrors
+        WaiversView._place_on_waivers_after_consent (2-day window, claimed
+        at noon in priority order). An NMC blocks exposure without the
+        player's consent -- the host asks via NTC_WAIVER_REQUEST
+        (context="waivers"), exactly like send_to_minors. The client's
+        word is never trusted."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        if getattr(player, "on_waivers", False):
+            return False, f"{player.full_name} is already on waivers."
+        # Waiver window, same as single-player (transaction_windows.py).
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "waiver_place", getattr(self, "current_date", None))
+            if not _ok:
+                return False, f"Waivers are closed ({_why})."
+        except Exception:
+            pass
+        try:
+            import trade_engine as te
+            kind, _detail = te.clause_of(player) or (None, "")
+        except Exception:
+            kind = None
+        if kind == "NMC":
+            return self._mp_begin_consent_flow(team, player, manager,
+                                              kind="expose")
+        return self._mp_apply_waiver_exposure(team, player)
+
+    def _mp_apply_waiver_exposure(self, team, player):
+        """The actual wire exposure (runs after any NMC consent)."""
+        try:
+            player.on_waivers = True
+            player.waiver_days = 2
+            _wl = getattr(self, "waiver_list", None)
+            if isinstance(_wl, list) and player not in _wl:
+                _wl.append(player)
+            self.add_news(f"{player.full_name} placed on waivers "
+                          f"by {team.team_name}.")
+        except Exception as e:
+            return False, f"Waiver placement failed: {e}"
+        return True, (f"{player.full_name} placed on waivers -- exposed "
+                      f"for 2 days.")
+
+    # -- July offseason decisions (host side) -------------------------------
+    # Each human club's inbox carries its own decision message; the host
+    # applies the decision to the ACTING team (never user_team) and marks
+    # the message done in that team's inbox, so the next STATE_SYNC
+    # retires the buttons on the client's screen. A client whose local
+    # action_done was wiped by a sync simply sees the true state.
+
+    def _mp_swapped_user_team(self, team):
+        """Context manager: run a block with the acting team as user_team
+        (for machinery that addresses app.user_team), then restore."""
+        import contextlib as _cl
+
+        @ _cl.contextmanager
+        def _ctx():
+            _orig_ut = getattr(self, "user_team", None)
+            _gm = getattr(self, "game_manager", None)
+            _orig_gm_ut = getattr(_gm, "user_team", None) \
+                if _gm is not None else None
+            try:
+                self.user_team = team
+                if _gm is not None:
+                    _gm.user_team = team
+                yield
+            finally:
+                self.user_team = _orig_ut
+                if _gm is not None:
+                    _gm.user_team = _orig_gm_ut
+        return _ctx()
+
+    def _mp_mark_inbox_decision(self, team, message_id, key, value,
+                                done_key=None):
+        """Record one inbox decision on the team's canonical message:
+        decided[key] = value; action_done when every card is decided.
+        Returns the message or None."""
+        try:
+            inbox = getattr(team, "inbox", None)
+            msgs = getattr(inbox, "messages", None) or []
+            msg = next((m for m in msgs
+                        if str(getattr(m, "id", "")) == str(message_id)),
+                       None)
+            if msg is None:
+                return None
+            data = getattr(msg, "action_data", None) or {}
+            decided = data.get("decided", {}) or {}
+            decided[str(key)] = value
+            data["decided"] = decided
+            msg.action_data = data
+            cards = data.get(done_key or "cards", []) or []
+            if cards and len(decided) >= len(cards):
+                msg.action_done = True
+            return msg
+        except Exception:
+            return None
+
+    def _mp_rfa_qualify(self, params, team, manager):
+        """Extend or decline a qualifying offer for one RFA."""
+        import rfa_system as _rfa
+        pid = str(params.get("player_id", "") or "")
+        qualify = bool(params.get("qualify", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_qualifying_decision(
+                    self, self.league, team, pid, qualify)
+            except Exception as e:
+                return False, f"Qualifying decision failed: {e}"
+        self._mp_mark_inbox_decision(team, params.get("message_id", ""),
+                                     pid, qualify)
+        ok = bool((res or {}).get("ok", True))
+        return (True, "Qualifying offer extended." if qualify else
+                "Player non-tendered.") if ok else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_staff_renew(self, params, team, manager):
+        """Re-sign an expired staffer (years 1/2/3) or let him walk."""
+        import staff_renewals as _sr
+        sid = str(params.get("staff_id", "") or "")
+        years = params.get("years", None)
+        try:
+            years = int(years) if years is not None else None
+        except (TypeError, ValueError):
+            years = None
+        # Ownership: the staffer must belong to the acting club.
+        try:
+            _ids = {str(getattr(s, "id", ""))
+                    for s in (getattr(team, "staff", None) or [])}
+            if sid not in _ids:
+                return False, "That staffer isn't on your club."
+        except Exception:
+            pass
+        try:
+            ok, lines = _sr.apply_renewal_decision(
+                self.league, sid, years)
+        except Exception as e:
+            return False, f"Renewal failed: {e}"
+        self._mp_mark_inbox_decision(team, params.get("message_id", ""),
+                                     sid, years, done_key="offers")
+        for _ln in lines or []:
+            try:
+                _emo = "✍️ " if years else "🚶 "
+                self.add_news(_emo + str(_ln))
+            except Exception:
+                pass
+        return (True, "Staffer re-signed." if years else
+                "Staffer walks to the pool.") if ok else \
+            (False, "Renewal failed.")
+
+    def _mp_offer_sheet_match(self, params, team, manager):
+        """Match an offer sheet or take the pick compensation."""
+        import rfa_system as _rfa
+        match = bool(params.get("match", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_offer_sheet_match(
+                    self, self.league,
+                    (params.get("player_id")
+                     or (getattr(self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")), "action_data",
+                         None) or {}).get("player_id")),
+                    match)
+            except Exception as e:
+                return False, f"Offer-sheet decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Offer sheet matched." if match else
+                "Took the compensation.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_offer_sheet_trade_alt(self, params, team, manager):
+        """Accept the sign-and-trade package or take the picks."""
+        import rfa_system as _rfa
+        accept = bool(params.get("accept", False))
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_offer_sheet_trade_alt(
+                    self, self.league,
+                    (params.get("player_id")
+                     or (getattr(self._mp_find_inbox_msg(
+                         team, params.get("message_id", "")), "action_data",
+                         None) or {}).get("player_id")),
+                    accept)
+            except Exception as e:
+                return False, f"Trade-alternative decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Sign-and-trade accepted." if accept else
+                "Took the compensation.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_arbitration_walkaway(self, params, team, manager):
+        """Walk away from an arbitration award (48h) or accept it."""
+        import rfa_system as _rfa
+        walk_away = bool(params.get("walk_away", False))
+        msg = self._mp_find_inbox_msg(team, params.get("message_id", ""))
+        data = (getattr(msg, "action_data", None) or {}) if msg else {}
+        pid = params.get("player_id") or data.get("player_id")
+        if not walk_away:
+            # Accept: sign at the awarded terms (mirrors the SP path,
+            # which mutates the acting club's player, not user_team's).
+            try:
+                aav = int(data.get("award_aav", 0) or 0)
+                term = int(data.get("term_years", 1) or 1)
+                person = next(
+                    (p for p in (getattr(team, "roster", None) or [])
+                     if str(getattr(p, "id", "")) == str(pid)), None)
+                if person is not None:
+                    c = getattr(person, "contract", None)
+                    if c is not None:
+                        c.salary = aav
+                        c.years_remaining = term
+            except Exception:
+                pass
+        with self._mp_swapped_user_team(team):
+            try:
+                res = _rfa.apply_walk_away(
+                    self, self.league, team, pid, walk_away)
+            except Exception as e:
+                return False, f"Arbitration decision failed: {e}"
+        if (res or {}).get("ok"):
+            self._mp_force_inbox_done(team, params.get("message_id", ""))
+        return (True, "Walked away from the award." if walk_away else
+                "Award accepted.") if (res or {}).get("ok") else \
+            (False, str((res or {}).get("reason", "decision failed")))
+
+    def _mp_find_inbox_msg(self, team, message_id):
+        """Find a message by id in the team's canonical inbox."""
+        try:
+            msgs = getattr(getattr(team, "inbox", None),
+                           "messages", None) or []
+            return next((m for m in msgs
+                         if str(getattr(m, "id", ""))
+                         == str(message_id or "")), None)
+        except Exception:
+            return None
+
+    def _mp_force_inbox_done(self, team, message_id):
+        """Mark a single-decision inbox message done (offer sheets,
+        trade alts, arbitration -- one answer closes the message)."""
+        try:
+            msg = self._mp_find_inbox_msg(team, message_id)
+            if msg is not None:
+                msg.action_done = True
+        except Exception:
+            pass
+
+    def _mp_coach_checkin(self, params, team, manager):
+        """Complete a quarterly coach check-in: same complete_checkin()
+        the conversation UI calls -- trust deltas land on the canonical
+        mandate history."""
+        try:
+            import coach_checkins as _cc
+        except Exception:
+            return False, "Coach check-ins aren't available."
+        fields = params.get("fields", None)
+        if not isinstance(fields, dict):
+            return False, "Malformed check-in."
+        # Plain-data only: notes/framing strings, no live objects.
+        _clean = {}
+        for k in ("notes", "expectation_framing", "room_framing",
+                  "rookie_framing", "tactics_framing"):
+            v = fields.get(k)
+            if isinstance(v, str):
+                _clean[k] = v[:2000]
+            elif isinstance(v, list):
+                _clean[k] = [str(x)[:500] for x in v[:50]]
+        try:
+            _entry = _cc.complete_checkin(
+                team, _clean, apply_trust=True, per_beat_applied=True)
+        except Exception as e:
+            return False, f"Check-in failed: {e}"
+        return True, "Check-in recorded."
+
+    def _mp_emergency_fill(self, params, team, manager):
+        """Summon emergency fill-ins: the host computes the shortfall on
+        canonical state and assigns league fillers (same as SP)."""
+        try:
+            import roster_limits as _rl
+        except Exception:
+            return False, "Roster limits aren't available."
+        try:
+            sk, go = _rl.lineup_shortfall(team)
+        except Exception:
+            sk, go = 0, 0
+        if sk <= 0 and go <= 0:
+            return True, "No fill-ins needed -- you can dress a legal lineup."
+        try:
+            summoned = _rl.summon_emergency_fillers(team)
+        except Exception as e:
+            return False, f"Summon failed: {e}"
+        n = len(summoned or [])
+        return True, (f"League office assigned {n} emergency fill-in(s) "
+                      f"so you can ice a legal lineup.")
+
+    def _mp_owner_meeting(self, params, team, manager):
+        """Request an owner meeting: the room settles (morale +2) when
+        patience is granted. The board roll only runs for the host's own
+        club -- in MP the board is the host save's single shared board
+        and client boards aren't advanced; clients get the team-scoped
+        morale effect with honest messaging."""
+        try:
+            _is_host_team = team is getattr(self, "user_team", None)
+        except Exception:
+            _is_host_team = False
+        if _is_host_team:
+            try:
+                board = self.career.board
+                today = ""
+                try:
+                    today = self.current_date.isoformat()
+                except Exception:
+                    pass
+                granted, headline, body = board.request_patience(today)
+            except Exception as e:
+                return False, f"Owner meeting failed: {e}"
+        else:
+            granted, headline = True, "The room settles"
+            body = ("Your owner hears you out. (League boards are the "
+                    "host's in multiplayer -- your club's morale still "
+                    "responds to the meeting.)")
+        if granted:
+            try:
+                for p in (getattr(team, "roster", None) or []):
+                    m = getattr(p, "morale", 70) or 70
+                    p.morale = min(100, m + 2)
+            except Exception:
+                pass
+        return True, f"{headline}: {body}"
+
+    def _mp_answer_ai_offer(self, params, team, manager):
+        """Answer an AI club's inbox trade offer: accept executes the deal,
+        decline walks away. Runs the canonical negotiation machinery with
+        the acting team swapped in as user_team (so inbox delivery and
+        message-done marking address the right club), then restores. The
+        trade deadline is enforced -- no post-deadline accepts."""
+        import trade_negotiation as tn
+        neg_id = str(params.get("negotiation_id", "") or "")
+        decision = str(params.get("decision", "") or "")
+        if decision not in ("accept", "decline"):
+            return False, "Unknown decision."
+        neg = tn.get_negotiation(self, neg_id)
+        if neg is None or not neg.is_open:
+            return False, "That offer is no longer on the table."
+        partner = tn.find_team(self, neg.partner_team_name)
+        if partner is None:
+            return False, "The other club is gone."
+        # Ownership: the accepting team must hold the user side's assets.
+        try:
+            user_objs, missing_u = tn.resolve_assets(self, neg.user_assets)
+        except Exception:
+            user_objs, missing_u = [], ["?"]
+        if missing_u:
+            return False, "An asset changed clubs -- the offer is stale."
+        try:
+            import trade_engine as _te
+            _roster_ids = {str(getattr(p, "id", ""))
+                           for p in (getattr(team, "roster", None) or [])}
+            _asset_ids = {str(getattr(a, "id", "")) for a in user_objs
+                          if not _te._is_pick(a)}
+            if not _asset_ids <= _roster_ids:
+                return False, "That offer wasn't made to your club."
+        except Exception:
+            pass
+        if decision == "accept":
+            try:
+                import trade_engine as te
+                if not te.trades_allowed(
+                        str(getattr(self, "current_date", "")),
+                        getattr(self, "league", None)):
+                    return False, "The trade deadline has passed."
+            except Exception:
+                pass
+        _orig_ut = getattr(self, "user_team", None)
+        _gm = getattr(self, "game_manager", None)
+        _orig_gm_ut = getattr(_gm, "user_team", None) if _gm else None
+        try:
+            self.user_team = team
+            if _gm is not None:
+                _gm.user_team = team
+            if decision == "accept":
+                ok = tn.accept_negotiation(self, neg.id)
+            else:
+                ok = tn.decline_negotiation(self, neg.id)
+        finally:
+            self.user_team = _orig_ut
+            if _gm is not None:
+                _gm.user_team = _orig_gm_ut
+        if decision == "decline":
+            return True, "Walked away from the offer."
+        return (True, "Deal accepted.") if ok else \
+            (False, "The deal fell through -- see your inbox.")
 
     def _mp_buyout_player(self, params, team, manager):
         """Buy out a contract: same cap-hit schedule the buyout view
@@ -10639,9 +11344,198 @@ class HockeyManagerGUI(tk.Tk):
 
     # -- dressing-room actions (host side) --------------------------------
 
+    def _mp_start_practice_plan(self, params, team, manager):
+        """Start a multi-day practice plan: mirrors the practice view's
+        schedule_practice call against the canonical state."""
+        player = self._mp_team_player(team, params.get("player_id", ""))
+        if player is None:
+            return False, "That player isn't on your club."
+        try:
+            from enhanced_practice_system import (
+                PracticeType, PracticeIntensity)
+            ptype = PracticeType(params.get("practice_type", ""))
+            intensity = PracticeIntensity(params.get("intensity", ""))
+            total = int(params.get("total_sessions", 0))
+        except (ValueError, TypeError):
+            return False, "Invalid practice plan parameters."
+        if total <= 0:
+            return False, "Practice plan needs at least one session."
+        try:
+            engine = getattr(self, "practice_engine", None)
+            if engine is None:
+                # Fall back to a fresh engine (takes no constructor args;
+                # histories are module-level shared state).
+                from enhanced_practice_system import PracticeEngine
+                engine = PracticeEngine()
+            result = engine.schedule_practice(player, ptype, intensity, total)
+        except Exception as e:
+            return False, f"Practice scheduling failed: {e}"
+        if getattr(result, "success", False):
+            return True, f"Practice plan started for {player.full_name}."
+        return False, getattr(result, "message", "Schedule failed.")
+
+    def _mp_offer_sheet(self, params, team, manager):
+        """Present an offer sheet to an RFA: mirrors the offer-sheet UI's
+        _present_offer_sheet flow against the canonical state. The host
+        runs window/compensation/cap/willingness/match checks and executes
+        the same rfa_system helpers single-player uses."""
+        try:
+            import rfa_system as _rfa
+        except Exception:
+            return False, "Offer sheets aren't available."
+        # Find the RFA player: search all teams' RFAs for the ID.
+        _pid = str(params.get("player_id", ""))
+        player, original_team = None, None
+        try:
+            for _t in getattr(getattr(self, "league", None), "teams", []) or []:
+                for _p in getattr(_t, "roster", []) or []:
+                    if str(getattr(_p, "id", "")) == _pid:
+                        # RFA = restricted: has contract, team holds rights
+                        _c = getattr(_p, "contract", None)
+                        if _c is not None and getattr(
+                                _c, "restricted", False):
+                            player, original_team = _p, _t
+                            break
+                if player is not None:
+                    break
+        except Exception:
+            pass
+        if player is None:
+            return False, "That player isn't an RFA."
+        if original_team is team:
+            return False, "You can't offer-sheet your own player."
+        try:
+            aav = int(params.get("aav", 0))
+            years = int(params.get("years", 0))
+        except (TypeError, ValueError):
+            return False, "Invalid offer sheet terms."
+        if aav <= 0 or years <= 0:
+            return False, "Offer sheet needs a positive AAV and term."
+        league = getattr(self, "league", None)
+        # 1. Window.
+        try:
+            import transaction_windows as _tw
+            _ok, _why = _tw.check_window(
+                "offer_sheet", getattr(self, "current_date", None))
+            if not _ok:
+                return False, _why
+        except Exception:
+            pass
+        # 2. Compensation + own picks (same fallback the engine uses:
+        # walk forward through the club's own upcoming picks).
+        label, picks = _rfa.offer_sheet_compensation(aav)
+        try:
+            _yr = int(getattr(league, "season_year", 2026) or 2026) + 1
+            _missing = []
+            _used = set()
+            for _rnd in picks or []:
+                _found = None
+                for _yy in range(_yr, _yr + 7):
+                    _cand = _rfa.own_pick_available(team, _yy, _rnd)
+                    if _cand is not None and id(_cand) not in _used:
+                        _found = _cand
+                        _used.add(id(_cand))
+                        break
+                if _found is None:
+                    _missing.append(_rnd)
+            if _missing:
+                return False, (
+                    f"You don't hold your own picks for the required "
+                    f"compensation ({label}).")
+        except Exception:
+            pass
+        # 3. Cap + roster room.
+        try:
+            from salary_cap_system import cap_breakdown as _cb
+            _space = int(_cb(team).get("space", 0) or 0)
+        except Exception:
+            _space = 0
+        if _space < aav:
+            return False, f"Not enough cap space: ${_space:,} vs ${aav:,}/yr."
+        if len(getattr(team, "roster", []) or []) >= 23:
+            return False, "Your NHL roster is full (23/23)."
+        # 4. Player willingness.
+        try:
+            import player_decision as _pd
+            willing, _appeal, reasons = _pd.player_accepts_offer_sheet(
+                player, team, aav, years, original_team,
+                league=league, app=self, rng=getattr(self, "_rng", None))
+        except Exception:
+            willing, reasons = True, []
+        if not willing:
+            _why_txt = f" {reasons[0]}" if reasons else ""
+            return False, f"{player.full_name} won't sign.{_why_txt}"
+        # 5. Match or decline -- the same ai_match_decision July uses.
+        try:
+            if _rfa.ai_match_decision(original_team, player, aav, label):
+                mres = _rfa.apply_offer_sheet_matched(
+                    league, team, original_team, player, aav, years, app=self)
+                return True, (f"{original_team.team_name} matched. "
+                              f"He stays.")
+            res = _rfa.execute_offer_sheet(
+                league, team, original_team, player, aav, years,
+                app=self, rng=getattr(self, "_rng", None))
+        except Exception as e:
+            return False, f"Offer sheet failed: {e}"
+        if not res.get("ok"):
+            return False, f"The sheet failed: {res.get('reason', 'unknown')}."
+        try:
+            self.add_news(res.get("story", ""))
+        except Exception:
+            pass
+        return True, f"He's yours! {label} goes to {original_team.team_name}."
+
+    def _mp_request_save(self, params, team, manager):
+        """A client asked the host to save: save canonically and broadcast
+        a checkpoint notice so everyone knows the save landed."""
+        try:
+            _label = f"Save requested by {manager}"
+            self.save_manager.save_game()
+            try:
+                _host = getattr(self, "mp_host", None)
+                if _host is not None:
+                    _host.notify_checkpoint(
+                        _label, str(getattr(self, "current_date", "")))
+            except Exception:
+                pass
+            return True, "Game saved."
+        except Exception as e:
+            return False, f"Save failed: {e}"
+
     def _mp_team_talk(self, params, team, manager):
         """Deliver a team talk: the same give_talk() the coach's whiteboard
-        uses -- same tones, same momentum queue, same outcome tiers."""
+        uses -- same tones, same momentum queue, same outcome tiers.
+
+        Two shapes: tone-based {tone, situation, speaker, ...} (dressing
+        room whiteboard) and option-based {option: {...}, context: {...}}
+        (manager-hub / inbox bundle talks via mc.apply_team_talk)."""
+        # Option-based branch (manager hub + inbox bundle).
+        if isinstance(params.get("option"), dict):
+            try:
+                import manager_career as _mc
+            except Exception:
+                return False, "Dressing room isn't available."
+            _opt = dict(params.get("option") or {})
+            _ctx = dict(params.get("talk_context") or {})
+            # Sanity bounds: the option rides from the client's snapshot;
+            # clamp to the ranges the SP UI can produce.
+            try:
+                _opt["boost"] = max(0.5, min(2.0,
+                                            float(_opt.get("boost", 1.0))))
+            except (TypeError, ValueError):
+                _opt["boost"] = 1.0
+            try:
+                _opt["morale"] = max(-5, min(5,
+                                             int(_opt.get("morale", 0))))
+            except (TypeError, ValueError):
+                _opt["morale"] = 0
+            if _opt.get("fit") not in ("good", "risky", "neutral"):
+                _opt["fit"] = "neutral"
+            try:
+                reaction, boost = _mc.apply_team_talk(team, _opt, _ctx)
+            except Exception as e:
+                return False, f"Team talk failed: {e}"
+            return True, str(reaction or "The room heard you.")
         try:
             import dressing_room as _dr
         except Exception:
@@ -10677,7 +11571,50 @@ class HockeyManagerGUI(tk.Tk):
 
     def _mp_press_conference(self, params, team, manager):
         """Answer the press: the same cascade_on_press() the podium UI
-        triggers -- stance maps straight onto the response choice."""
+        triggers -- stance maps straight onto the response choice.
+
+        Second shape: {answers: [...], kind} for the inbox bundle pressers.
+        Applies the same team-scoped effects (roster morale, fan sentiment)
+        _career_apply_press_answers computes. The board effect is skipped:
+        in MP the board is the host save's single shared board and client
+        boards aren't advanced -- applying a client's presser to it would
+        move the host's standing."""
+        # Inbox-bundle answer branch.
+        if isinstance(params.get("answers"), list):
+            _answers = [a for a in (params.get("answers") or [])
+                        if isinstance(a, dict)][:8]
+            _kind = str(params.get("kind", "presser") or "presser")[:24]
+            _tm = sum(int(a.get("morale_effect", 0) or 0) for a in _answers)
+            _tf = sum(int(a.get("fan_effect", 0) or 0) for a in _answers)
+            try:
+                if _tm:
+                    for p in (getattr(team, "roster", None) or []):
+                        m = getattr(p, "morale", 70) or 70
+                        p.morale = max(1, min(100,
+                                             m + (5 if _tm > 0 else -5)))
+                if _tf:
+                    from fan_sentiment import nudge_fan_sentiment
+                    nudge_fan_sentiment(
+                        team, _tf * 2.5,
+                        reason=f"presser ({_kind}): {_tf:+d}",
+                        current_date=getattr(self, "current_date", None))
+                _summary = (f"{_kind}: " + "; ".join(
+                    str(a.get("label", "")) for a in _answers))
+                try:
+                    _car = getattr(self, "career", None)
+                    _ph = getattr(_car, "press_history", None)
+                    if isinstance(_ph, list):
+                        _ph.append({
+                            "date": getattr(
+                                getattr(self, "current_date", None),
+                                "isoformat", lambda: "")(),
+                            "type": _kind,
+                            "summary": f"[{team.team_name}] {_summary}"})
+                except Exception:
+                    pass
+            except Exception as e:
+                return False, f"Press conference failed: {e}"
+            return True, f"Presser answered ({_kind})."
         try:
             import dressing_room as _dr
         except Exception:
@@ -10713,6 +11650,15 @@ class HockeyManagerGUI(tk.Tk):
             return False, "Unknown partner team."
         if partner is team:
             return False, "You can't trade with yourself."
+        # Event boundary: the trade freeze / deadline applies to MP
+        # proposals exactly like the SP trade UI (te.trades_allowed).
+        try:
+            if not te.trades_allowed(str(getattr(self, "current_date", "")),
+                                     getattr(self, "league", None)):
+                return False, ("Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
         offer = params.get("offer") or {}
         if not isinstance(offer, dict):
             return False, "Malformed offer."
@@ -10847,6 +11793,9 @@ class HockeyManagerGUI(tk.Tk):
         if pend.get("kind", "trade") == "demote":
             self._mp_resolve_demote_answer(pend, waiver_id, choice)
             return
+        if pend.get("kind") == "expose":
+            self._mp_resolve_expose_answer(pend, waiver_id, choice)
+            return
         proposal = pend["proposal"]
         vetoes = pend["vetoes"]
         if pend["veto_idx"] >= len(vetoes):
@@ -10964,6 +11913,64 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 self.mp_host.broadcast_chat(
                     f"Demotion failed after the waiver was granted: "
+                    f"{detail}")
+            except Exception:
+                pass
+
+    def _mp_resolve_expose_answer(self, pend, waiver_id, choice):
+        """Resolve a wire-exposure NMC consent: "ask" rolls the player's
+        decision (context="waivers", like single-player); anything else
+        keeps him off the wire. The exposure itself only ever runs here,
+        on the host, after a granted answer."""
+        import trade_engine as te
+        self._mp_pending_ntc.pop(waiver_id, None)
+        team = self._mp_find_team(pend.get("team_id", ""))
+        name = pend.get("player_name", "The player")
+        if team is None:
+            return
+        player = self._mp_team_player(team, pend.get("player_id", ""))
+        if player is None:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} moved clubs while his waiver answer was "
+                    f"pending -- exposure cancelled.")
+            except Exception:
+                pass
+            return
+        if choice != "ask":
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} stays off the wire "
+                    f"({pend.get('manager', 'his GM')} didn't ask him to "
+                    f"waive his {pend.get('clause', 'no-movement clause')}).")
+            except Exception:
+                pass
+            return
+        try:
+            league = getattr(self, "league", None)
+            granted, why = te.will_waive_ntc(player, team, None, league,
+                                             context="waivers")
+        except Exception as e:
+            granted, why = False, str(e)
+        if not granted:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"{name} refused to waive his "
+                    f"{pend.get('clause', 'no-movement clause')} ({why}) -- "
+                    f"he stays off the wire.")
+            except Exception:
+                pass
+            return
+        try:
+            self.mp_host.broadcast_chat(
+                f"{name} agreed to be exposed on waivers ({why}).")
+        except Exception:
+            pass
+        ok, detail = self._mp_apply_waiver_exposure(team, player)
+        if not ok:
+            try:
+                self.mp_host.broadcast_chat(
+                    f"Exposure failed after the waiver was granted: "
                     f"{detail}")
             except Exception:
                 pass
@@ -11211,6 +12218,16 @@ class HockeyManagerGUI(tk.Tk):
         """Run a fully-cleared proposal through the canonical trade
         engine: clause preflight, cap validation, retention, asset moves."""
         import trade_engine as te
+        # Event boundary: a deal proposed before the freeze but accepted
+        # after it must still die here -- same as the SP deadline center.
+        try:
+            if not te.trades_allowed(str(getattr(self, "current_date", "")),
+                                     getattr(self, "league", None)):
+                self._mp_clear_proposal_waivers(proposal)
+                return False, ("Trading is frozen right now "
+                               "(trade freeze / deadline).")
+        except Exception:
+            pass
         team = self._mp_find_team(proposal["proposer_team_id"])
         partner = self._mp_find_team(proposal["partner_team_id"])
         if team is None or partner is None:
@@ -11342,7 +12359,7 @@ class HockeyManagerGUI(tk.Tk):
 
     # -- entry-draft pick clock (host side) --------------------------------
 
-    def _mp_open_draft_clock(self, team, round_num, overall):
+    def _mp_open_draft_clock(self, team, round_num, overall, board=None):
         """Put a claimed team on the draft clock: notify its manager with
         a shortlist; their draft_pick action answers. 60s, then BPA."""
         import time as _time
@@ -11376,7 +12393,7 @@ class HockeyManagerGUI(tk.Tk):
             try:
                 self.mp_host.send_draft_clock(
                     session_id, clock_id, team.team_name, overall,
-                    round_num, wire)
+                    round_num, wire, board)
             except Exception as e:
                 print(f"draft clock send failed: {e}")
         try:
@@ -11385,6 +12402,306 @@ class HockeyManagerGUI(tk.Tk):
                 f"waiting on their GM.")
         except Exception:
             pass
+
+    # -- multiplayer fantasy draft --------------------------------------
+    # The fantasy draft runs on the host; each client-claimed club picks
+    # live on a 60s clock (same pattern as the entry draft). The view
+    # calls _mp_fantasy_draft_begin/_mp_fantasy_draft_pick_needed; the
+    # fantasy_draft_pick action answers; expiry auto-picks BPA.
+
+    def _mp_fantasy_draft_begin(self, draft_manager):
+        """Register the active fantasy draft manager for MP picks."""
+        self._mp_fantasy_dm = draft_manager
+        self._mp_fantasy_clock = None
+
+    def _mp_fantasy_draft_pick_needed(self, draft_manager, pick):
+        """The draft view calls this when the current pick belongs to a
+        client-claimed club. Sends the clock; returns True when the draft
+        must pause for the client's answer (or the host's timeout)."""
+        team = getattr(pick, "team", None)
+        if team is None:
+            return False
+        try:
+            import game_classes as _gc
+            _human = bool(_gc.is_human_managed(team))
+            _own = team is getattr(self, "user_team", None)
+        except Exception:
+            return False
+        if not _human or _own:
+            return False
+        session_id = self._mp_peer_session_for_team(
+            getattr(team, "team_name", ""))
+        if not session_id:
+            return False
+        import time as _time
+        import uuid as _uuid
+        clock_id = _uuid.uuid4().hex[:10]
+        try:
+            available = draft_manager.get_available_players() or []
+        except Exception:
+            available = []
+        # Wire payload: full available-id list (client resolves against
+        # its snapshot) + a top-40 shortlist with details for quick picks.
+        try:
+            _ranked = sorted(
+                available,
+                key=lambda p: float(
+                    getattr(p, "overall_rating", lambda: 50)() or 50),
+                reverse=True)
+        except Exception:
+            _ranked = list(available)
+        available_ids = [str(getattr(p, "id", "")) for p in _ranked]
+        shortlist = []
+        for p in _ranked[:40]:
+            try:
+                shortlist.append({
+                    "id": str(getattr(p, "id", "")),
+                    "name": getattr(p, "full_name", "?"),
+                    "pos": str(getattr(
+                        getattr(p, "primary_position", None),
+                        "value", "?")),
+                    "ovr": int(float(
+                        getattr(p, "overall_rating",
+                                lambda: 50)() or 50))})
+            except Exception:
+                continue
+        self._mp_fantasy_dm = draft_manager
+        # Draft board so far: every committed pick, for the client's
+        # "My Picks" / "All Picks" tabs.
+        _board = []
+        try:
+            for _dp in (getattr(draft_manager, "draft_picks", None) or []):
+                _pl = getattr(_dp, "player", None)
+                if _pl is None:
+                    continue
+                _board.append({
+                    "overall": int(getattr(_dp, "overall_pick", 0) or 0),
+                    "round_num": int(getattr(_dp, "round_num", 0) or 0),
+                    "team_id": str(getattr(
+                        getattr(_dp, "team", None), "team_name", "") or ""),
+                    "player_name": str(
+                        getattr(_pl, "full_name", "?") or "?"),
+                    "player_id": str(getattr(_pl, "id", "") or ""),
+                })
+        except Exception:
+            _board = []
+        self._mp_fantasy_clock = {
+            "clock_id": clock_id,
+            "team_name": getattr(team, "team_name", ""),
+            "overall": int(getattr(pick, "overall_pick", 0) or 0),
+            "round_num": int(getattr(pick, "round_num", 0) or 0),
+            "deadline": _time.time() + 60,
+            "done": False,
+        }
+        try:
+            self.mp_host.send_fantasy_draft_clock(
+                session_id, clock_id, getattr(team, "team_name", ""),
+                int(getattr(pick, "overall_pick", 0) or 0),
+                int(getattr(pick, "round_num", 0) or 0),
+                available_ids, shortlist, _board)
+        except Exception as e:
+            print(f"fantasy draft clock send failed: {e}")
+            self._mp_fantasy_clock = None
+            return False
+        try:
+            self._mp_toast(
+                f"{getattr(team, 'team_name', '?')} on the fantasy clock "
+                f"(pick #{getattr(pick, 'overall_pick', '?')}) -- waiting "
+                f"on their GM.")
+        except Exception:
+            pass
+        # Schedule the expiry auto-pick on the host's UI thread.
+        try:
+            self.after(61000, self._mp_fantasy_clock_expire)
+        except Exception:
+            pass
+        return True
+
+    def _mp_fantasy_clock_expire(self):
+        """60s elapsed without an answer: BPA auto-pick, draft continues."""
+        st = getattr(self, "_mp_fantasy_clock", None)
+        if not st or st.get("done"):
+            return
+        dm = getattr(self, "_mp_fantasy_dm", None)
+        if dm is None:
+            return
+        try:
+            import time as _time
+            if _time.time() < float(st.get("deadline", 0) or 0):
+                return  # answered just in time; the pick continues it
+        except Exception:
+            pass
+        st["done"] = True
+        self._mp_fantasy_auto_pick(dm, reason="clock expired")
+
+    def _mp_fantasy_auto_pick(self, dm, reason=""):
+        """Smart auto-pick for a client club (timeout or unreachable).
+
+        Uses the draft manager's team-aware valuation -- positional needs
+        from the picks already made, age/contract value, cap pressure --
+        not raw BPA, so the auto-drafted roster looks like a real GM
+        built it."""
+        try:
+            import random as _r
+            pick = dm.get_current_pick()
+            if pick is None:
+                return None
+            available = dm.get_available_players() or []
+            if not available:
+                return None
+            choice = self._mp_fantasy_smart_choice(dm, pick.team, available)
+            if choice is None:
+                return None
+            if dm.make_pick(choice):
+                try:
+                    dm.assign_drafted_player(pick.team, choice)
+                except Exception:
+                    pass
+                try:
+                    self._mp_toast(
+                        f"{getattr(pick.team, 'team_name', '?')} auto-pick: "
+                        f"{getattr(choice, 'full_name', '?')} ({reason}).")
+                except Exception:
+                    pass
+                try:
+                    if getattr(self, "mp_host", None) is not None:
+                        _ov = getattr(pick, "overall_pick", 0) or 0
+                        self.mp_host.broadcast_draft_update(
+                            "fantasy", int(_ov), int(getattr(
+                                pick, "round_num", 0) or 0),
+                            str(getattr(pick.team, "team_name", "") or ""),
+                            str(getattr(choice, "full_name", "?") or "?"))
+                except Exception:
+                    pass
+                view = getattr(self, "_mp_fantasy_view", None)
+                if view is not None:
+                    try:
+                        view.after(400, view.continue_auto_draft)
+                    except Exception:
+                        pass
+                return choice
+            return None
+        except Exception as e:
+            print(f"fantasy auto-pick failed: {e}")
+            return None
+
+    def _mp_fantasy_smart_choice(self, dm, team, available):
+        """Pick the best-valued available player for `team`.
+
+        Team-aware: positional need from picks already made, youth
+        preference, contract value, and cap pressure all feed the
+        draft manager's valuation. A little randomness among the top
+        candidates keeps drafts from being deterministic."""
+        try:
+            import random as _r
+            _round = 1
+            try:
+                _cur = dm.get_current_pick()
+                _round = int(getattr(_cur, "round_num", 1) or 1)
+            except Exception:
+                pass
+            _scored = []
+            for _p in available:
+                try:
+                    _v = float(dm.calculate_player_draft_value(
+                        _p, team, _round))
+                except Exception:
+                    try:
+                        _v = float(_p.overall_rating())
+                    except Exception:
+                        _v = 50.0
+                _scored.append((_v, _p))
+            if not _scored:
+                return None
+            _scored.sort(key=lambda t: t[0], reverse=True)
+            _top = [p for _, p in _scored[:5]]
+            return _r.choice(_top) if _top else None
+        except Exception:
+            return None
+
+    def _mp_on_draft_update(self, payload):
+        """Spectator feed: a draft pick was committed on the host.
+        Toast it and refresh an open draft view so remote managers and
+        spectators see progress without waiting for a full STATE_SYNC."""
+        try:
+            _draft = str(payload.get("draft", "") or "")
+            _ov = payload.get("overall", 0)
+            _team = str(payload.get("team_id", "") or "?")
+            _player = str(payload.get("player_name", "") or "?")
+            self._mp_toast(
+                f"Draft pick #{_ov}: {_team} selects {_player}.")
+            if _draft == "fantasy":
+                view = getattr(self, "_mp_fantasy_view", None)
+                if view is not None:
+                    try:
+                        view.after(200, view.continue_auto_draft)
+                    except Exception:
+                        pass
+            elif _draft == "entry":
+                try:
+                    self.update_all_views()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _mp_fantasy_draft_pick(self, params, team, manager):
+        """Client's live fantasy-draft pick: validate the clock, the turn,
+        and availability, then commit and resume the draft."""
+        import uuid as _uuid  # noqa (kept for symmetry; unused)
+        dm = getattr(self, "_mp_fantasy_dm", None)
+        st = getattr(self, "_mp_fantasy_clock", None)
+        if dm is None or st is None or st.get("done"):
+            return False, "No fantasy pick is waiting on you."
+        if str(params.get("clock_id", "") or "") != str(
+                st.get("clock_id", "")):
+            return False, "Stale draft clock."
+        if getattr(team, "team_name", "") != st.get("team_name", ""):
+            return False, "It's not your club's pick."
+        pick = dm.get_current_pick()
+        if pick is None or getattr(
+                getattr(pick, "team", None), "team_name", "") != \
+                st.get("team_name", ""):
+            return False, "The draft moved on."
+        pid = str(params.get("player_id", "") or "")
+        try:
+            available = {str(getattr(p, "id", "")): p
+                         for p in (dm.get_available_players() or [])}
+        except Exception:
+            available = {}
+        player = available.get(pid)
+        if player is None:
+            return False, "That player is already drafted."
+        st["done"] = True
+        try:
+            ok = dm.make_pick(player)
+        except Exception as e:
+            return False, f"Pick failed: {e}"
+        if not ok:
+            return False, "Pick didn't commit."
+        try:
+            dm.assign_drafted_player(pick.team, player)
+        except Exception:
+            pass
+        try:
+            if getattr(self, "mp_host", None) is not None:
+                self.mp_host.broadcast_draft_update(
+                    "fantasy", int(st.get("overall", 0) or 0),
+                    int(dm.get_current_round() or 0) if hasattr(
+                        dm, "get_current_round") else 0,
+                    str(getattr(getattr(pick, "team", None),
+                                "team_name", "") or ""),
+                    str(getattr(player, "full_name", "?") or "?"))
+        except Exception:
+            pass
+        view = getattr(self, "_mp_fantasy_view", None)
+        if view is not None:
+            try:
+                view.after(200, view.continue_auto_draft)
+            except Exception:
+                pass
+        return True, (f"Drafted {getattr(player, 'full_name', '?')} "
+                      f"(#{st.get('overall', '?')}).")
 
     def _mp_draft_pick(self, params, team, manager):
         """Answer the draft clock: validate the prospect is still
@@ -11400,6 +12717,11 @@ class HockeyManagerGUI(tk.Tk):
                 and params.get("clock_id") != st.get("clock_id"):
             return False, "That clock expired -- wait for the next one.", \
                 True
+        # Double-submit guard: the first registered pick is final. A
+        # retry/dupe arriving after the pick is locked must not overwrite
+        # it (adversarial sweep 2026-10-05).
+        if st.get("pick_id"):
+            return False, "Your pick is already registered.", True
         prospect = None
         try:
             for p in getattr(getattr(self, "league", None),
@@ -11573,12 +12895,18 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = pickle.loads(gzip.decompress(save_bytes))
         except Exception as e:
-            print(f"Snapshot decode failed (non-fatal): {e}")
+            print(f"Snapshot decode failed: {e}")
+            self._mp_snapshot_failed(f"Could not decode the host's game "
+                                     f"state ({e}). Make sure both sides run "
+                                     f"the same build.")
             return
         try:
             self.save_manager._restore_game_state(data)
         except Exception as e:
-            print(f"Snapshot restore failed (non-fatal): {e}")
+            print(f"Snapshot restore failed: {e}")
+            self._mp_snapshot_failed(f"Could not load the host's game "
+                                     f"state ({e}). Make sure both sides run "
+                                     f"the same build.")
             return
         try:
             # Re-sync GUI mirrors that __init__ seeded from defaults.
@@ -11586,6 +12914,10 @@ class HockeyManagerGUI(tk.Tk):
             if hasattr(self.game_manager, 'current_date'):
                 self.current_date = self.game_manager.current_date
             # Clients view the league through THEIR claimed team.
+            # Teamless joiners are spectators: they browse the league
+            # through the host's club but every management action is
+            # refused (see _mp_route).
+            self._mp_spectator = False
             if self.mp_client is not None and getattr(self.mp_client, 'team_id', None):
                 claimed = self._mp_find_team(self.mp_client.team_id)
                 if claimed is not None:
@@ -11593,6 +12925,24 @@ class HockeyManagerGUI(tk.Tk):
                     self.user_team = claimed
             elif hasattr(self.game_manager, 'user_team'):
                 self.user_team = self.game_manager.user_team
+                if self.mp_client is not None:
+                    self._mp_spectator = True
+                    try:
+                        self._mp_toast(
+                            "Spectating -- management actions are disabled.")
+                    except Exception:
+                        pass
+            if getattr(self, "_mp_dashboard_pending", False):
+                self._mp_dashboard_pending = False
+                try:
+                    for _w in self.winfo_children():
+                        _w.destroy()
+                except Exception:
+                    pass
+                self._finalize_phase2_initialization()
+                self._create_main_dashboard()
+                self._apply_phase3_optimizations()
+                self.setup_close_protocol()
             self._update_team_colors()
             self.update_all_views()
             if label:
@@ -11600,6 +12950,19 @@ class HockeyManagerGUI(tk.Tk):
             self._mp_toast(f"Synced: {label}")
         except Exception as e:
             print(f"Snapshot view refresh failed (non-fatal): {e}")
+
+    def _mp_snapshot_failed(self, message):
+        """A host snapshot that won't load is fatal for a client -- say so
+        loudly instead of leaving a black/broken window."""
+        try:
+            from tkinter import messagebox
+            messagebox.showerror("Could not join", message)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def _mp_toast(self, text):
         """Small auto-dismissing notification (main thread only)."""
@@ -11621,8 +12984,11 @@ class HockeyManagerGUI(tk.Tk):
     # -- client-side multiplayer dialogs ------------------------------------
 
     def _mp_show_trade_offer(self, payload):
-        """Incoming human-to-human trade offer: Accept / Reject."""
-        from popup_system import messagebox
+        """Incoming human-to-human trade offer: Accept / Reject.
+
+        Non-modal (screen-shift rule): a dismissible card, not a blocking
+        question. The offer stays answerable until the card is closed --
+        the rest of the app stays usable."""
         offer_id = payload.get("offer_id", "")
         from_team = payload.get("from_team", "?")
         manager = payload.get("manager", "?")
@@ -11657,21 +13023,49 @@ class HockeyManagerGUI(tk.Tk):
         for kid, prot in (offer.get("pick_protection") or {}).items():
             lines.append(f"    (protection: {prot})")
         try:
-            accept = messagebox.askyesno(
-                "Trade offer", "\n".join(lines) +
-                "\n\nAccept this trade?")
+            card = tk.Toplevel(self)
         except Exception:
-            accept = False
-        if self.mp_client is None:
             return
-        try:
-            self.mp_client.send_trade_response(
-                offer_id, "accept" if accept else "reject")
-        except Exception as e:
-            self._mp_toast(f"Trade answer failed: {e}")
-            return
-        self._mp_toast("Trade accepted -- waiting on the league office."
-                       if accept else "Trade offer rejected.")
+        card.title(f"Trade offer from {from_team}")
+        card.geometry("480x520")
+        # Non-modal: no grab, no topmost seizure.
+        tk.Label(card, text=f"Trade offer from {manager} ({from_team})",
+                 font=("Segoe UI", 12, "bold")).pack(pady=(12, 6))
+        body = tk.Text(card, font=("Segoe UI", 10), height=18, wrap="word")
+        body.pack(fill="both", expand=True, padx=12, pady=(0, 10))
+        body.insert("1.0", "\n".join(lines))
+        body.configure(state="disabled")
+        answered = {"done": False}
+
+        def _answer(decision):
+            if answered["done"]:
+                return
+            answered["done"] = True
+            try:
+                card.destroy()
+            except Exception:
+                pass
+            if self.mp_client is None:
+                return
+            try:
+                self.mp_client.send_trade_response(offer_id, decision)
+            except Exception as e:
+                self._mp_toast(f"Trade answer failed: {e}")
+                return
+            self._mp_toast(
+                "Trade accepted -- waiting on the league office."
+                if decision == "accept" else "Trade offer rejected.")
+
+        row = tk.Frame(card)
+        row.pack(pady=(0, 12))
+        tk.Button(row, text="Accept",
+                  font=("Segoe UI", 10, "bold"),
+                  command=lambda: _answer("accept")).pack(
+                      side="left", padx=8)
+        tk.Button(row, text="Reject",
+                  font=("Segoe UI", 10),
+                  command=lambda: _answer("reject")).pack(
+                      side="left", padx=8)
 
     def _mp_answer_ntc_request(self, payload):
         """No-trade/no-movement waiver prompt: same choices as single-player
@@ -11711,80 +13105,569 @@ class HockeyManagerGUI(tk.Tk):
         except Exception as e:
             self._mp_toast(f"Waiver answer failed: {e}")
 
-    def _mp_show_draft_clock(self, payload):
-        """You're on the clock: pick a prospect (60s, then auto-pick)."""
-        clock_id = payload.get("clock_id", "")
-        overall = payload.get("overall", 0)
-        round_num = payload.get("round_num", 0)
-        prospects = payload.get("prospects") or []
-        if not prospects:
-            return
+    # -- MP draft-clock pick UI (Eastside standard, shared) -------------------
+
+    _MP_PICK_POS_GROUPS = {
+        "All": None,
+        "Forwards": {"C", "LW", "RW"},
+        "Defense": {"LD", "RD", "D"},
+        "Goalies": {"G"},
+    }
+
+    def _mp_pick_player_pos(self, player):
+        try:
+            return str(getattr(
+                getattr(player, "primary_position", None), "value", "?"))
+        except Exception:
+            return "?"
+
+    def _mp_pick_player_ovr(self, player, ctx=None):
+        try:
+            if ctx is not None:
+                from player_views import column_sort
+                v = column_sort("ovr", player, ctx)
+                if v is not None:
+                    return int(float(v))
+        except Exception:
+            pass
+        try:
+            return int(float(
+                getattr(player, "overall_rating", lambda: 50)() or 50))
+        except Exception:
+            return 50
+
+    def _mp_pick_player_age(self, player):
+        try:
+            return int(getattr(player, "age", 0) or 0)
+        except Exception:
+            return 0
+
+    def _mp_draft_pick_window(self, *, title, players, board, my_team_id,
+                              clock_id, action_name, answer_attr,
+                              expire_toast, draft_button_text,
+                              extra_columns=()):
+        """Shared Eastside-style pick UI for MP draft clocks.
+
+        Tab 1 "Available": ViewsFiltersPanel (view buttons + FilterBar
+        search/attribute filters) + position-group row + sortable
+        Treeview; double-click or "View Card" opens the player card.
+        Tab 2 "My Picks": this client's drafted players from the board.
+        Tab 3 "All Picks": every committed pick, team by team.
+
+        Non-modal (no grab_set). 60s countdown preserved; answering
+        sets the <answer_attr> guard dict like the legacy windows.
+        """
+        import tkinter.ttk as ttk
+        board = board or []
         win = tk.Toplevel(self)
-        win.title(f"Draft pick #{overall} -- you're on the clock")
-        win.geometry("520x560")
-        win.attributes("-topmost", True)
-        tk.Label(win, text=f"Pick #{overall} (Round {round_num}) -- "
-                           f"your selection",
-                 font=("Segoe UI", 12, "bold")).pack(pady=(10, 4))
-        self._mp_draft_answer = {"clock_id": clock_id, "answered": False}
-        state = {"left": 60}
+        win.title(title)
+        win.geometry("900x700")
+        try:
+            win.attributes("-topmost", True)
+        except Exception:
+            pass
+
+        setattr(self, answer_attr,
+                {"clock_id": clock_id, "answered": False})
+        state = {"left": 60, "players": list(players or []),
+                 "pos_group": "All", "sort": ("ovr", True)}
+
+        # Filter context for PlayerFilter.matches.
+        try:
+            from player_views import ViewContext
+            _fctx = ViewContext(app=self, mode="full")
+        except Exception:
+            _fctx = None
+
+        # -- header ------------------------------------------------------
+        header = tk.Frame(win)
+        header.pack(fill="x", padx=12, pady=(10, 4))
+        tk.Label(header, text=title,
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        clock_var = tk.StringVar(value="Clock: 60s")
+        tk.Label(header, textvariable=clock_var,
+                 font=("Segoe UI", 11, "bold"),
+                 fg="#e8b93c").pack(side="right")
 
         def _countdown():
             try:
                 if not win.winfo_exists():
                     return
-                if self._mp_draft_answer.get("answered"):
+                if getattr(self, answer_attr, {}).get("answered"):
                     return
                 state["left"] -= 1
                 clock_var.set(f"Clock: {max(state['left'], 0)}s")
                 if state["left"] <= 0:
-                    win.destroy()
-                    self._mp_toast("Draft clock expired -- auto-pick.")
+                    try:
+                        win.destroy()
+                    except Exception:
+                        pass
+                    self._mp_toast(expire_toast)
                     return
                 win.after(1000, _countdown)
             except Exception:
                 pass
 
-        clock_var = tk.StringVar(value="Clock: 60s")
-        tk.Label(win, textvariable=clock_var,
-                 font=("Segoe UI", 11)).pack(pady=(0, 6))
-        frame = tk.Frame(win)
-        frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        lb = tk.Listbox(frame, font=("Segoe UI", 11), height=18)
-        lb.pack(side="left", fill="both", expand=True)
-        sb = tk.Scrollbar(frame, orient="vertical", command=lb.yview)
-        sb.pack(side="right", fill="y")
-        lb.configure(yscrollcommand=sb.set)
-        for p in prospects:
-            lb.insert("end", f"#{p.get('ranking', '?')} "
-                             f"{p.get('name', '?')} ({p.get('pos', '?')})")
+        # -- tabs ---------------------------------------------------------
+        nb = ttk.Notebook(win)
+        nb.pack(fill="both", expand=True, padx=12, pady=(4, 8))
+
+        tab_avail = tk.Frame(nb)
+        tab_mine = tk.Frame(nb)
+        tab_all = tk.Frame(nb)
+        nb.add(tab_avail, text="Available")
+        nb.add(tab_mine, text="My Picks")
+        nb.add(tab_all, text="All Picks")
+
+        # -- Tab 1: Available ---------------------------------------------
+        try:
+            from player_view_ui import ViewsFiltersPanel
+            panel = ViewsFiltersPanel(
+                tab_avail, default_label="All",
+                on_view_change=lambda name: _apply_view(name),
+                on_filter_change=lambda: _refill())
+            panel.pack(fill="x", padx=4, pady=(4, 0))
+        except Exception:
+            panel = None
+
+        # Position-group row (All / Forwards / Defense / Goalies).
+        pg_row = tk.Frame(tab_avail)
+        pg_row.pack(fill="x", padx=8, pady=(4, 2))
+        tk.Label(pg_row, text="Position:",
+                 font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
+        pg_vars = {}
+        pg_buttons = {}
+
+        def _set_pos_group(name):
+            state["pos_group"] = name
+            for n, b in pg_buttons.items():
+                try:
+                    b.configure(
+                        relief="sunken" if n == name else "raised")
+                except Exception:
+                    pass
+            _refill()
+
+        for _gname in ("All", "Forwards", "Defense", "Goalies"):
+            _b = tk.Button(pg_row, text=_gname,
+                           font=("Segoe UI", 9),
+                           command=lambda n=_gname: _set_pos_group(n))
+            _b.pack(side="left", padx=2)
+            pg_buttons[_gname] = _b
+        # state["pos_group"] already defaults to "All"; the first real
+        # refill happens after the tree exists (see _refill() below).
+        try:
+            pg_buttons["All"].configure(relief="sunken")
+        except Exception:
+            pass
+
+        _base_cols = (["ovr", "name", "pos", "age"]
+                      + list(extra_columns or ()))
+        state["cols"] = list(_base_cols)
+        tree = ttk.Treeview(tab_avail, columns=state["cols"],
+                            show="headings", height=18)
+        _tsb = ttk.Scrollbar(tab_avail, orient="vertical",
+                             command=tree.yview)
+        tree.configure(yscrollcommand=_tsb.set)
+        tree.pack(side="left", fill="both", expand=True,
+                  padx=(8, 0), pady=(0, 4))
+        _tsb.pack(side="left", fill="y", padx=(0, 8), pady=(0, 4))
+
+        def _col_header(key):
+            try:
+                from player_views import COLUMN_DEFS
+                _d = COLUMN_DEFS.get(key)
+                if _d is not None:
+                    return _d.header
+            except Exception:
+                pass
+            return {"ovr": "OVR", "name": "Name", "pos": "Pos",
+                    "age": "Age", "rank": "Rank", "pot": "Pot"}.get(
+                        key, key)
+
+        def _col_width(key):
+            try:
+                from player_views import COLUMN_DEFS
+                _d = COLUMN_DEFS.get(key)
+                if _d is not None:
+                    return _d.width
+            except Exception:
+                pass
+            return {"ovr": 60, "name": 260, "pos": 60, "age": 60,
+                    "rank": 70, "pot": 60}.get(key, 80)
+
+        def _cell_raw(p, key):
+            # Raw (sortable) value for any column key.
+            try:
+                if key == "ovr":
+                    return self._mp_pick_player_ovr(p, _fctx)
+                if key == "name":
+                    return getattr(p, "full_name", "") or ""
+                if key == "pos":
+                    return self._mp_pick_player_pos(p)
+                if key == "age":
+                    return self._mp_pick_player_age(p)
+                if key == "rank":
+                    return int(getattr(p, "draft_ranking", 0) or 0) \
+                        or None
+                if key == "pot":
+                    return str(getattr(p, "potential_grade", "?")
+                               or "?")
+                if _fctx is not None:
+                    from player_views import column_sort
+                    return column_sort(key, p, _fctx)
+            except Exception:
+                pass
+            return None
+
+        def _cell_text(p, key):
+            _v = _cell_raw(p, key)
+            if _v is None:
+                return "--"
+            try:
+                from player_views import _fmt_val
+                return _fmt_val(_v)
+            except Exception:
+                return str(_v)
+
+        def _rebuild_columns():
+            _cols = state["cols"]
+            tree.configure(columns=_cols)
+            for _c in _cols:
+                tree.heading(_c, text=_col_header(_c),
+                             command=lambda c=_c: _sort_by(c))
+                tree.column(_c, width=_col_width(_c),
+                            anchor="w" if _c == "name" else "center")
+
+        def _apply_view(view_name):
+            # Eastside column views: rebuild the table for the picked
+            # view. "All" (the default) restores the draft base columns.
+            try:
+                if not view_name or view_name == "All":
+                    _cols = list(_base_cols)
+                else:
+                    from player_views import get_view_columns
+                    _cols = list(
+                        get_view_columns(view_name) or []) or list(
+                            _base_cols)
+                    if "name" not in _cols:
+                        _cols.insert(0, "name")
+                state["cols"] = _cols
+                state["sort"] = (_cols[0], True)
+                _rebuild_columns()
+                _refill()
+            except Exception:
+                pass
+
+        def _sort_by(col):
+            _key, _rev = state["sort"]
+            _rev = (not _rev) if _key == col else True
+            state["sort"] = (col, _rev)
+            _refill()
+
+        _rebuild_columns()
+
+        def _filtered_players():
+            _out = []
+            try:
+                _pf = panel.get_filter() if panel is not None else None
+            except Exception:
+                _pf = None
+            _grp = self._MP_PICK_POS_GROUPS.get(state["pos_group"])
+            for p in state["players"]:
+                try:
+                    if _grp is not None and \
+                            self._mp_pick_player_pos(p) not in _grp:
+                        continue
+                    if _pf is not None and not _pf.is_empty() \
+                            and _fctx is not None \
+                            and not _pf.matches(p, _fctx):
+                        continue
+                except Exception:
+                    continue
+                _out.append(p)
+            _key, _rev = state["sort"]
+            _num, _txt, _miss = [], [], []
+            for p in _out:
+                try:
+                    _v = _cell_raw(p, _key)
+                except Exception:
+                    _v = None
+                _nm = getattr(p, "full_name", "") or ""
+                if _v is None:
+                    _miss.append(p)
+                elif isinstance(_v, (int, float)):
+                    _num.append((_v, _nm.lower(), p))
+                else:
+                    _txt.append((str(_v).lower(), _nm.lower(), p))
+            _num.sort(key=lambda r: (r[0], r[1]), reverse=_rev)
+            _txt.sort(key=lambda r: (r[0], r[1]), reverse=_rev)
+            return [p for _, _, p in _num] + \
+                [p for _, _, p in _txt] + _miss
+
+        state["shown"] = []
+
+        def _refill():
+            try:
+                if not win.winfo_exists():
+                    return
+                for _iid in tree.get_children():
+                    tree.delete(_iid)
+                state["shown"] = _filtered_players()
+                _cols = state["cols"]
+                for p in state["shown"]:
+                    try:
+                        tree.insert(
+                            "", "end",
+                            values=[_cell_text(p, _c) for _c in _cols])
+                    except Exception:
+                        pass
+                try:
+                    if panel is not None:
+                        panel.set_count(len(state["shown"]),
+                                        len(state["players"]))
+                except Exception:
+                    pass
+                _kids = tree.get_children()
+                if _kids:
+                    tree.selection_set(_kids[0])
+            except Exception:
+                pass
+
+        def _selected_player():
+            try:
+                _sel = tree.selection()
+                if not _sel:
+                    return None
+                _idx = tree.index(_sel[0])
+                _shown = state.get("shown") or []
+                if 0 <= _idx < len(_shown):
+                    return _shown[_idx]
+            except Exception:
+                pass
+            return None
+
+        def _view_card(_event=None):
+            p = _selected_player()
+            if p is None:
+                return
+            try:
+                self.open_player_profile(p)
+            except Exception as e:
+                try:
+                    self._mp_toast(f"Couldn't open player card: {e}")
+                except Exception:
+                    pass
+
+        try:
+            tree.bind("<Double-1>", _view_card)
+        except Exception:
+            pass
+
+        btn_row = tk.Frame(tab_avail)
+        btn_row.pack(fill="x", padx=8, pady=(0, 10))
+        tk.Button(btn_row, text="View Card",
+                  font=("Segoe UI", 10),
+                  command=_view_card).pack(side="left", padx=(0, 8))
 
         def _draft_selected():
-            try:
-                sel = lb.curselection()
-            except Exception:
-                sel = ()
-            if not sel:
+            p = _selected_player()
+            if p is None:
                 return
-            p = prospects[sel[0]]
-            if self._mp_draft_answer.get("answered"):
+            if getattr(self, answer_attr, {}).get("answered"):
                 return
-            self._mp_draft_answer["answered"] = True
+            getattr(self, answer_attr)["answered"] = True
             try:
-                self.mp_client.send_action("draft_pick", {
+                self.mp_client.send_action(action_name, {
                     "clock_id": clock_id,
-                    "player_id": p.get("id", "")})
+                    "player_id": str(getattr(p, "id", ""))})
             except Exception as e:
                 self._mp_toast(f"Draft pick failed: {e}")
                 return
-            win.destroy()
-            self._mp_toast(f"Drafted {p.get('name', '?')}.")
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            self._mp_toast(
+                f"Drafted {getattr(p, 'full_name', '?')}.")
 
-        tk.Button(win, text="DRAFT SELECTED PROSPECT",
-                  font=("Segoe UI", 11, "bold"),
-                  command=_draft_selected).pack(pady=(0, 10))
+        tk.Button(btn_row, text=draft_button_text,
+                  font=("Segoe UI", 10, "bold"),
+                  command=_draft_selected).pack(side="left")
+
+        # -- Tab 2: My Picks ----------------------------------------------
+        _mine_cols = ("overall", "round", "player")
+        _mine_tree = ttk.Treeview(tab_mine, columns=_mine_cols,
+                                  show="headings", height=20)
+        for _c, _h, _w in (("overall", "#", 60), ("round", "Rd", 60),
+                           ("player", "Player", 400)):
+            _mine_tree.heading(_c, text=_h)
+            _mine_tree.column(_c, width=_w,
+                              anchor="w" if _c == "player" else "center")
+        _mine_tree.pack(fill="both", expand=True, padx=8, pady=8)
+        _n_mine = 0
+        for _b in sorted(board, key=lambda d: int(d.get("overall", 0)
+                                                  or 0)):
+            try:
+                if str(_b.get("team_id", "")) != str(my_team_id or ""):
+                    continue
+                _mine_tree.insert("", "end", values=(
+                    _b.get("overall", ""), _b.get("round_num", ""),
+                    _b.get("player_name", "?")))
+                _n_mine += 1
+            except Exception:
+                pass
+        if _n_mine == 0:
+            _mine_tree.insert("", "end", values=("", "", "No picks yet"))
+
+        # -- Tab 3: All Picks ----------------------------------------------
+        _all_cols = ("overall", "round", "team", "player")
+        _all_tree = ttk.Treeview(tab_all, columns=_all_cols,
+                                 show="headings", height=20)
+        for _c, _h, _w in (("overall", "#", 60), ("round", "Rd", 60),
+                           ("team", "Team", 200),
+                           ("player", "Player", 300)):
+            _all_tree.heading(_c, text=_h)
+            _all_tree.column(_c, width=_w,
+                              anchor="w" if _c in ("team", "player")
+                              else "center")
+        _all_tree.pack(fill="both", expand=True, padx=8, pady=8)
+        try:
+            _all_tree.tag_configure(
+                "teamlink", foreground="#4a9eff",
+                font=("Segoe UI", 10, "underline"))
+        except Exception:
+            pass
+        for _b in sorted(board, key=lambda d: int(d.get("overall", 0)
+                                                  or 0)):
+            try:
+                _iid = _all_tree.insert("", "end", values=(
+                    _b.get("overall", ""), _b.get("round_num", ""),
+                    _b.get("team_id", "?"), _b.get("player_name", "?")),
+                    tags=("teamlink",))
+            except Exception:
+                pass
+        if not board:
+            _all_tree.insert("", "end",
+                             values=("", "", "", "No picks yet"))
+
+        def _open_team_from_row(event):
+            # Click a team name -> that club's overview (read-only for
+            # other clubs, per open_team_overview).
+            try:
+                _row = _all_tree.identify_row(event.y)
+                _col = _all_tree.identify_column(event.x)
+                if not _row or _col != "#3":
+                    return
+                _vals = _all_tree.item(_row, "values") or ()
+                _tname = str(_vals[2]) if len(_vals) > 2 else ""
+                if not _tname:
+                    return
+                _team = None
+                for _t in (getattr(getattr(self, "league", None),
+                                   "teams", None) or []):
+                    if str(getattr(_t, "team_name", "")) == _tname:
+                        _team = _t
+                        break
+                if _team is not None:
+                    self.open_team_overview(_team)
+            except Exception:
+                pass
+
+        try:
+            _all_tree.bind("<Button-1>", _open_team_from_row)
+        except Exception:
+            pass
+
+        _refill()
         win.after(1000, _countdown)
+        return win
 
+    def _mp_show_draft_clock(self, payload):
+        """You're on the clock: pick a prospect (60s, then auto-pick).
+
+        Eastside-standard UI: filterable/sortable available list with
+        player cards, plus My Picks / All Picks tabs from the board.
+        """
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        prospects = payload.get("prospects") or []
+        board = payload.get("board") or []
+        team_id = payload.get("team_id", "")
+        if not prospects:
+            return
+        # Resolve prospect dicts -> snapshot Player objects so the
+        # filter/card machinery works on real data.
+        try:
+            _by_id = {}
+            _lg = getattr(self, "league", None)
+            for _p in (getattr(_lg, "draft_prospects", None) or []):
+                _by_id[str(getattr(_p, "id", ""))] = _p
+        except Exception:
+            _by_id = {}
+        players = []
+        for _pd in prospects:
+            _p = _by_id.get(str(_pd.get("id", "")))
+            if _p is not None:
+                players.append(_p)
+        if not players:
+            return
+        self._mp_draft_pick_window(
+            title=f"Draft pick #{overall} -- you're on the clock",
+            players=players, board=board, my_team_id=team_id,
+            clock_id=clock_id, action_name="draft_pick",
+            answer_attr="_mp_draft_answer",
+            expire_toast="Draft clock expired -- auto-pick.",
+            draft_button_text="DRAFT SELECTED PROSPECT",
+            extra_columns=("rank", "pot"))
+
+    def _mp_show_fantasy_clock(self, payload):
+        """Fantasy draft: you're on the clock (60s, then auto-pick).
+
+        Eastside-standard UI: filterable/sortable available list with
+        player cards, plus My Picks / All Picks tabs from the board.
+        The host sends the available player ids; this client resolves
+        them against its snapshot for full Player objects.
+        """
+        clock_id = payload.get("clock_id", "")
+        overall = payload.get("overall", 0)
+        round_num = payload.get("round_num", 0)
+        available_ids = payload.get("available_ids", []) or []
+        shortlist = payload.get("shortlist", []) or []
+        board = payload.get("board") or []
+        team_id = payload.get("team_id", "")
+        if not available_ids:
+            return
+        # Resolve ids -> snapshot Player objects (kept as objects so
+        # filters, sorting, and player cards work on real data).
+        try:
+            _all = []
+            _lg = getattr(self, "league", None)
+            for _t in (getattr(_lg, "teams", None) or []):
+                for _attr in ("roster", "ahl_roster", "prospects"):
+                    _all.extend(getattr(_t, _attr, None) or [])
+            _all.extend(getattr(_lg, "free_agents", None) or [])
+            _by_id = {str(getattr(p, "id", "")): p for p in _all}
+        except Exception:
+            _by_id = {}
+        players = [_by_id[str(_pid)] for _pid in available_ids
+                   if str(_pid) in _by_id]
+        if not players and shortlist:
+            # Shortlist-only fallback: dicts can't drive filters/cards,
+            # so there is nothing useful to show.
+            return
+        if not players:
+            return
+        self._mp_draft_pick_window(
+            title=f"Fantasy pick #{overall} (Round {round_num}) -- "
+                  f"your selection",
+            players=players, board=board, my_team_id=team_id,
+            clock_id=clock_id, action_name="fantasy_draft_pick",
+            answer_attr="_mp_fantasy_answer",
+            expire_toast="Fantasy clock expired -- auto-pick.",
+            draft_button_text="DRAFT SELECTED PLAYER",
+            extra_columns=())
     def _check_season_complete(self):
         """Check if the regular season is complete by counting games played."""
         def _gp(stats):
@@ -18041,15 +19924,31 @@ class HockeyManagerGUI(tk.Tk):
         # Age players and reset stats
         self.league.end_of_season()
 
-        # D5 follow-up: the contract tick above held the user's expired
-        # staff for renewal instead of releasing them. Their offer
-        # arrives as one interactive inbox message (never a popout).
-        # Decline/ignore walks them to the free-agent pool.
+        # D5 follow-up: the contract tick above held expired staff for
+        # renewal instead of releasing them. Their offer arrives as one
+        # interactive inbox message (never a popout). Decline/ignore
+        # walks them to the free-agent pool.
+        # MP: every human-managed club gets its own message; clients
+        # answer via the routed staff_renew action.
         try:
             import staff_renewals as _srq
-            _uq = getattr(self, "user_team", None)
-            if _uq is not None:
-                _srq.queue_user_renewal_message(self.league, _uq, self)
+            _human = []
+            try:
+                from game_classes import is_human_managed as _ihm
+                for _t in (getattr(self.league, "teams", None) or []):
+                    try:
+                        if _ihm(_t):
+                            _human.append(_t)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            if not _human:
+                _uq = getattr(self, "user_team", None)
+                if _uq is not None:
+                    _human = [_uq]
+            for _hq in _human:
+                _srq.queue_user_renewal_message(self.league, _hq, self)
         except Exception:
             pass
 
@@ -18985,6 +20884,28 @@ class HockeyManagerGUI(tk.Tk):
     def open_draft_window(self):
         return self.show_screen('draft', 'NHL Draft', DraftView)
 
+    def open_team_overview(self, team):
+        """Click a team name anywhere -> see that club.
+
+        Your own club opens the normal home screen. Any other club
+        opens the read-only TeamOverviewView (record, roster, numbers;
+        player names still open cards) -- no management actions, since
+        you're not their staff."""
+        try:
+            from windows import TeamOverviewView
+            _mine = getattr(self, "user_team", None)
+            if team is not None and team is _mine:
+                try:
+                    self.show_home()
+                except Exception:
+                    pass
+                return
+            _name = getattr(team, "team_name", "?") or "?"
+            self.show_screen(f"team_{_name}", _name, TeamOverviewView,
+                             team=team)
+        except Exception as e:
+            print(f"open_team_overview failed (non-fatal): {e}")
+
     def open_schedule_window(self):
         return self.show_screen('schedule', 'Schedule', ScheduleView)
 
@@ -19565,14 +21486,25 @@ class HockeyManagerGUI(tk.Tk):
 
     def open_inbox_window(self, focus_message_id=None):
         """Show the inbox as a full-screen view (EHM-style), not a popup."""
-        from inbox_window import InboxView
-        view = self.show_screen('inbox', 'Inbox', InboxView)
-        if focus_message_id:
+        try:
+            from inbox_window import InboxView
+            view = self.show_screen('inbox', 'Inbox', InboxView)
+            if focus_message_id:
+                try:
+                    view.focus_message(focus_message_id)
+                except Exception:
+                    pass
+            return view
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             try:
-                view.focus_message(focus_message_id)
+                from tkinter import messagebox
+                messagebox.showerror("Inbox",
+                                     f"Could not open the inbox:\n{e}")
             except Exception:
                 pass
-        return view
+            return None
 
     def close_inbox_screen(self):
         """Leave the full-screen inbox and restore the dashboard."""
@@ -19641,6 +21573,24 @@ class HockeyManagerGUI(tk.Tk):
         """Send an email message to the user's inbox."""
         self.user_team.inbox.add_message(message)
         self.update_inbox_notification()
+
+    def send_email_to_team(self, team, message):
+        """Send an email message to a specific club's inbox.
+
+        Multiplayer: the July pass (and other per-team flows) must reach
+        the right GM's inbox, not the host's. Single-player falls back to
+        the user's inbox."""
+        try:
+            inbox = getattr(team, "inbox", None)
+            if inbox is not None:
+                inbox.add_message(message)
+        except Exception:
+            pass
+        try:
+            if team is getattr(self, "user_team", None):
+                self.update_inbox_notification()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Football Manager-style career systems
@@ -20199,6 +22149,22 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             ans = data["presser"][q_index]["answers"][ans_index]
+            # MULTIPLAYER: route the answer's effects to the host; the
+            # bundle records the pending choice.
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _a = {k: ans.get(k) for k in
+                      ("label", "morale_effect", "board_effect",
+                       "fan_effect") if isinstance(ans, dict)}
+                if _route(self, "press_conference",
+                          {"answers": [_a], "kind": "pre-match"}):
+                    answered = data.get("presser_answered") or []
+                    if 0 <= q_index < len(answered):
+                        answered[q_index] = True
+                    reaction = ans.get("reaction", "")
+                    data.setdefault("presser_reactions", {})[q_index] = \
+                        reaction
+                    return reaction or "Answer sent -- host applies it."
             self._career_apply_press_answers([ans], "pre-match")
             answered = data.get("presser_answered") or []
             if 0 <= q_index < len(answered):
@@ -20234,6 +22200,26 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             opt = data["talk_options"][opt_index]
+            # MULTIPLAYER: route the option to the host (canonical room
+            # state); the bundle records the pending choice.
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _o = {k: opt.get(k) for k in
+                      ("label", "text", "boost", "morale", "fit")
+                      if isinstance(opt, dict)}
+                _c = {}
+                try:
+                    _t = (data.get("talk_context") or {}).get("today")
+                    _c["today"] = _t.isoformat() \
+                        if hasattr(_t, "isoformat") else str(_t)
+                except Exception:
+                    pass
+                if _route(self, "team_talk",
+                          {"option": _o, "talk_context": _c}):
+                    data["talk_chosen"] = opt_index
+                    data["talk_boost"] = 1.0
+                    data["talk_reaction"] = "Talk sent -- host applies it."
+                    return "Talk sent -- the host applies it."
             reaction, boost = manager_career.apply_team_talk(
                 self.user_team, opt, data.get("talk_context") or {})
             data["talk_chosen"] = opt_index
@@ -20292,6 +22278,24 @@ class HockeyManagerGUI(tk.Tk):
         try:
             data = message.action_data or {}
             ans = data["questions"][q_index]["answers"][ans_index]
+            # MULTIPLAYER: route the answer's effects to the host (see
+            # _answer_bundle_presser).
+            if self._mp_client_mode():
+                from windows import _mp_route as _route
+                _a = {k: ans.get(k) for k in
+                      ("label", "morale_effect", "board_effect",
+                       "fan_effect") if isinstance(ans, dict)}
+                if _route(self, "press_conference",
+                          {"answers": [_a],
+                           "kind": str(data.get("kind", "post-match"))}):
+                    answered = data.get("answered") or []
+                    if 0 <= q_index < len(answered):
+                        answered[q_index] = True
+                    if answered and all(answered):
+                        message.action_done = True
+                    reaction = ans.get("reaction", "")
+                    data.setdefault("reactions", {})[q_index] = reaction
+                    return reaction or "Answer sent -- host applies it."
             self._career_apply_press_answers([ans], data.get("kind", "post-match"))
             answered = data.get("answered") or []
             if 0 <= q_index < len(answered):
@@ -20906,6 +22910,26 @@ class HockeyManagerGUI(tk.Tk):
         way (clean-shutdown bookkeeping runs first so the launcher does
         not mistake this for a crash).
         """
+        # Tear down multiplayer first: open sockets keep the process
+        # alive in the background even after the windows are gone.
+        try:
+            _h = getattr(self, "mp_host", None)
+            if _h is not None:
+                try:
+                    _h.stop()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            _c = getattr(self, "mp_client", None)
+            if _c is not None:
+                try:
+                    _c.disconnect()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         try:
             self.destroy()
         except Exception:
@@ -21459,6 +23483,12 @@ class HockeyManagerGUI(tk.Tk):
         return None
 
     def send_to_ahl(self, player):
+        # MP: route to host; the host applies waivers/NMC/rules canonically.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "send_to_minors",
+                      {"player_id": str(getattr(player, "id", ""))}):
+                return
         # R1 (roster limits): the club must always be able to dress 18+2.
         # A demotion that breaks the dressed minimum is refused up front.
         try:
@@ -21620,6 +23650,12 @@ class HockeyManagerGUI(tk.Tk):
         self.update_all_views()
 
     def call_up_to_nhl(self, player):
+        # MP: route to host; the host applies the paper-transaction rule.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "call_up",
+                      {"player_id": str(getattr(player, "id", ""))}):
+                return
         # New-CBA paper-transaction rule: a freshly assigned player must
         # play at least one AHL game before he can be recalled.
         try:
@@ -21820,7 +23856,7 @@ class HockeyManagerGUI(tk.Tk):
                          is_elc=is_elc)
 
     def handle_elc_offer(self, player, salary, signing_bonus=0,
-                         performance_bonus=0):
+                         performance_bonus=0, team=None):
         """Negotiated ELC signing with an unsigned rights-held prospect.
 
         Validates the ELC band (base inside [floor, ceiling], signing
@@ -21834,7 +23870,10 @@ class HockeyManagerGUI(tk.Tk):
         """
         import salary_cap_system as _scs
         league = getattr(self, 'league', None)
-        team = getattr(self, 'user_team', None)
+        # MP: the host passes the acting manager's team; single-player and
+        # the host's own UI leave it None and use user_team as before.
+        if team is None:
+            team = getattr(self, 'user_team', None)
         try:
             season = getattr(league, 'season_year', None)
         except Exception:
@@ -22487,6 +24526,17 @@ class HockeyManagerGUI(tk.Tk):
     def accept_contract_counter(self, message):
         """Inbox action: accept the agent's counter-offer as-is."""
         data = message.action_data or {}
+        # MP: route to host instead of mutating the snapshot.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _pid = str(getattr(self._find_inbox_player(data), "id", ""))
+            if _route(self, "extend_contract", {
+                    "player_id": _pid,
+                    "salary": data.get("asking_price", 0),
+                    "years": data.get("years", 1),
+            }):
+                message.action_done = True
+                return True
         person = self._find_inbox_player(data)
         if person is None:
             message.action_done = True
@@ -22556,6 +24606,24 @@ class HockeyManagerGUI(tk.Tk):
     # ----- RFA inbox actions (rfa_system) -----
     def apply_rfa_qualifying_decision(self, message, player_id, qualify):
         """Inbox action: extend or decline a qualifying offer for one RFA."""
+        # MP: route to the host (authoritative); the host marks the
+        # canonical message done so the sync retires the buttons.
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "rfa_qualify", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "player_id": str(player_id),
+                    "qualify": bool(qualify)}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(player_id)] = bool(qualify)
+                data["decided"] = decided
+                message.action_data = data
+                cards = data.get("cards", []) or []
+                if len(decided) >= len(cards):
+                    message.action_done = True
+                return True
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_qualifying_decision(
@@ -22581,6 +24649,16 @@ class HockeyManagerGUI(tk.Tk):
         like the RFA actions -- this does NOT re-check the calendar gate
         in transaction_windows (the user may resolve it after July 1).
         """
+        # MP: route to host (buyout_player protocol action exists).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            _data = getattr(message, "action_data", None) or {}
+            _person = self._find_inbox_player(_data)
+            if _route(self, "buyout_player", {
+                    "player_id": str(getattr(_person, "id", "")),
+            }):
+                message.action_done = True
+                return True
         import buyout_window as _bw
         data = message.action_data or {}
         ok = False
@@ -22639,6 +24717,23 @@ class HockeyManagerGUI(tk.Tk):
         is never caught short mid-decision; a walked head coach triggers
         the in-house promote fallback, exactly like the automatic path.
         """
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "staff_renew", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "staff_id": str(staff_id),
+                    "years": years}):
+                data = message.action_data or {}
+                decided = data.get("decided", {}) or {}
+                decided[str(staff_id)] = years
+                data["decided"] = decided
+                message.action_data = data
+                offers = data.get("offers", []) or []
+                if len(decided) >= len(offers):
+                    message.action_done = True
+                return True
+            return False
         import staff_renewals as _sr
         data = message.action_data or {}
         try:
@@ -22667,6 +24762,15 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_offer_sheet_match_decision(self, message, match):
         """Inbox action: match an offer sheet or take the pick compensation."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_match", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "match": bool(match)}):
+                message.action_done = True
+                return True
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_offer_sheet_match(
@@ -22682,6 +24786,15 @@ class HockeyManagerGUI(tk.Tk):
     def apply_offer_sheet_trade_alt_decision(self, message, accept):
         """Inbox action: accept the sign-and-trade package or take the
         pick compensation on a declined offer sheet."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "offer_sheet_trade_alt", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "accept": bool(accept)}):
+                message.action_done = True
+                return True
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         res = _rfa.apply_offer_sheet_trade_alt(
@@ -22696,6 +24809,15 @@ class HockeyManagerGUI(tk.Tk):
 
     def apply_arbitration_walkaway_decision(self, message, walk_away):
         """Inbox action: walk away from an arbitration award (48h window)."""
+        # MP: route to the host (authoritative).
+        if self._mp_client_mode():
+            from windows import _mp_route as _route
+            if _route(self, "arbitration_walkaway", {
+                    "message_id": str(getattr(message, "id", "")),
+                    "walk_away": bool(walk_away)}):
+                message.action_done = True
+                return True
+            return False
         import rfa_system as _rfa
         data = message.action_data or {}
         aav = int(data.get("award_aav", 0) or 0)
@@ -23150,7 +25272,10 @@ class CleanEditLinesView(ctk.CTkFrame):
         self.lineup = getattr(self.app.user_team, "lineup", None)
         if not self.lineup:
             self.lineup = best_lines(self.app.user_team)
-        self.app.user_team.lineup = self.lineup
+        # MP: don't write back to the snapshot on view open; the host
+        # owns the canonical lineup.
+        if not getattr(self.app, "_mp_client_mode", lambda: False)():
+            self.app.user_team.lineup = self.lineup
 
         # Get players organized by position
         self.forwards = [p for p in self.app.user_team.roster
@@ -25106,6 +27231,19 @@ class CleanEditLinesView(ctk.CTkFrame):
         """Save the current lineup and close the window"""
         # Extract player selections and save to lineup
         self.save_lineup_from_interface()
+        # MP: route to host instead of writing the snapshot.
+        try:
+            _res = self._mp_send_lines()
+            if _res:
+                if _res is True:
+                    messagebox.showinfo(
+                        "Lines Sent",
+                        "Your lineup was sent to the host and applies on "
+                        "the next sync.")
+                self.destroy()
+                return
+        except Exception:
+            pass
         self.app.user_team.lineup = self.lineup
         messagebox.showinfo("Saved", "Your lines have been saved!")
         self.destroy()
@@ -26101,6 +28239,19 @@ class TradeBlockWindow(tk.Frame):
     def add_selected_to_block(self):
         # Convert selected IDs to player objects
         selected_players = [p for p in self.parent.user_team.roster if p.id in self.selected_items]
+        # MP: route to host; the host mutates the canonical block and the
+        # next sync refreshes. Don't touch the snapshot locally.
+        if _mp_is_client(self.parent):
+            _new_ids = [str(getattr(p, "id", ""))
+                        for p in getattr(self.parent, "trade_block", [])]
+            _new_ids += [str(getattr(p, "id", ""))
+                         for p in selected_players
+                         if str(getattr(p, "id", "")) not in _new_ids]
+            _mp_route(self.parent, "set_trade_block",
+                      {"player_ids": _new_ids})
+            self.selected_items.clear()
+            self._populate_tree()
+            return
         for player in selected_players:
             if player not in self.parent.trade_block:
                 self.parent.trade_block.append(player)
@@ -26111,16 +28262,20 @@ class TradeBlockWindow(tk.Frame):
     def remove_selected_from_block(self):
         # Convert selected IDs to player objects
         selected_players = [p for p in self.parent.user_team.roster if p.id in self.selected_items]
+        # MP: route to host; don't mutate the snapshot locally.
+        if _mp_is_client(self.parent):
+            _remove = {str(getattr(p, "id", "")) for p in selected_players}
+            _new_ids = [str(getattr(p, "id", ""))
+                        for p in getattr(self.parent, "trade_block", [])
+                        if str(getattr(p, "id", "")) not in _remove]
+            _mp_route(self.parent, "set_trade_block",
+                      {"player_ids": _new_ids})
+            self.selected_items.clear()
+            self._populate_tree()
+            return
         for player in selected_players:
             if player in self.parent.trade_block:
                 self.parent.trade_block.remove(player)
-        # MP client: keep the host's league-level block in sync --
-        # send the list that was actually mutated.
-        if _mp_is_client(self.parent):
-            _mp_route(self.parent, "set_trade_block",
-                      {"player_ids":
-                       [str(getattr(p, "id", ""))
-                        for p in getattr(self.parent, "trade_block", [])]})
         self.selected_items.clear()
         self._populate_tree()
         self.parent.update_all_views()

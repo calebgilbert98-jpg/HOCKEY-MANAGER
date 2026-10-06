@@ -533,25 +533,50 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                 pass
 
     def _host_multiplayer(self):
-        """Host flow: display name + port, then normal new-game setup."""
+        """Host flow: display name + port + game settings, then start."""
         dlg = InGamePopup(self)
         dlg.title("Host Multiplayer Game")
-        dlg.geometry("400x300")
+        dlg.geometry("400x440")
         dlg.transient(self)
         dlg.grab_set()
+        # Dark card (#14161b) needs explicit light styling (see join dialog).
+        _fg, _bg = "#e8e8e8", "#14161b"
+        _efg, _ebg = "#ffffff", "#2a2e38"
         tk.Label(dlg, text="HOST MULTIPLAYER GAME",
-                 font=AppFonts.H2).pack(pady=(16, 8))
-        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:", fg=_fg, bg=_bg).pack(pady=(4, 0))
         name_var = tk.StringVar(
             value=self.gm_profile['name'].get().strip() or "Host")
-        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=name_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Port:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         port_var = tk.StringVar(value="27107")
-        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+        tk.Entry(dlg, textvariable=port_var, width=10,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
         tk.Label(dlg,
                  text="Friends join over your Radmin VPN network\n"
                       "using your Radmin IP address.",
-                 fg="gray").pack(pady=10)
+                 fg="#9aa0aa", bg=_bg).pack(pady=10)
+        # Game settings live here so the host's choices stay as set --
+        # the Multiplayer tab has no other path to them. Local vars are
+        # pushed into setup_options explicitly on CONTINUE (the popup
+        # card's variable sync proved unreliable).
+        tk.Label(dlg, text="Game settings:", fg=_fg, bg=_bg,
+                 font=("Segoe UI", 10, "bold")).pack(pady=(4, 2))
+        _fd_var = tk.BooleanVar(
+            value=bool(self.setup_options['fantasy_draft'].get()))
+        _sc_var = tk.BooleanVar(
+            value=bool(self.setup_options['salary_cap'].get()))
+        tk.Checkbutton(dlg, text="Fantasy Draft",
+                       variable=_fd_var,
+                       fg=_fg, bg=_bg, selectcolor=_ebg,
+                       activebackground=_bg,
+                       activeforeground=_fg).pack(anchor="w", padx=60)
+        tk.Checkbutton(dlg, text="Salary Cap",
+                       variable=_sc_var,
+                       fg=_fg, bg=_bg, selectcolor=_ebg,
+                       activebackground=_bg,
+                       activeforeground=_fg).pack(anchor="w", padx=60)
 
         def _go():
             try:
@@ -559,6 +584,10 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             except ValueError:
                 messagebox.showwarning("Port", "Port must be a number.")
                 return
+            # Explicitly persist the dialog's settings.
+            # Explicitly persist the dialog's settings.
+            self.setup_options['fantasy_draft'].set(bool(_fd_var.get()))
+            self.setup_options['salary_cap'].set(bool(_sc_var.get()))
             self._mp_mode = "host"
             self._mp_config = {"name": name_var.get().strip() or "Host",
                                "port": port}
@@ -593,7 +622,8 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
 
             def _get_teams():
                 try:
-                    return [{"id": t.team_name, "name": t.team_name}
+                    return [{"id": t.team_name, "name": t.team_name,
+                             "reserved_by": getattr(t, "mp_gm_name", "") or ""}
                             for t in gm.league.teams]
                 except Exception:
                     return []
@@ -602,6 +632,16 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                                    port=port, get_teams=_get_teams)
             host.start()
             app.mp_host = host
+            try:
+                _htm = getattr(app, "user_team", None)
+                if _htm is not None:
+                    host.host_team_id = _htm.team_name
+            except Exception:
+                pass
+            try:
+                app._mp_seed_host_reservations(host)
+            except Exception:
+                pass
             # The host manages the team picked in the launcher, locally.
             cpm.checkpoint("Game started")
             host.notify_checkpoint("Game started", str(app.current_date))
@@ -662,21 +702,29 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         """Join flow: connect dialog, then lobby."""
         dlg = InGamePopup(self)
         dlg.title("Join Multiplayer Game")
-        dlg.geometry("400x320")
+        dlg.geometry("400x340")
         dlg.transient(self)
         dlg.grab_set()
+        # The popup card is dark (#14161b) -- plain tk widgets default to
+        # black text, which is invisible on it. Style everything explicitly.
+        _fg, _bg = "#e8e8e8", "#14161b"
+        _efg, _ebg = "#ffffff", "#2a2e38"
         tk.Label(dlg, text="JOIN MULTIPLAYER GAME",
-                 font=AppFonts.H2).pack(pady=(16, 8))
-        tk.Label(dlg, text="Display name:").pack(pady=(4, 0))
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(16, 8))
+        tk.Label(dlg, text="Display name:", fg=_fg, bg=_bg).pack(pady=(4, 0))
         name_var = tk.StringVar(
             value=self.gm_profile['name'].get().strip() or "Guest")
-        tk.Entry(dlg, textvariable=name_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Host IP (host's Radmin VPN IP):").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=name_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Host IP (host's Radmin VPN IP):",
+                 fg=_fg, bg=_bg).pack(pady=(8, 0))
         host_var = tk.StringVar(value="")
-        tk.Entry(dlg, textvariable=host_var, width=30).pack(pady=4)
-        tk.Label(dlg, text="Port:").pack(pady=(8, 0))
+        tk.Entry(dlg, textvariable=host_var, width=30,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
+        tk.Label(dlg, text="Port:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         port_var = tk.StringVar(value="27107")
-        tk.Entry(dlg, textvariable=port_var, width=10).pack(pady=4)
+        tk.Entry(dlg, textvariable=port_var, width=10,
+                 fg=_efg, bg=_ebg, insertbackground=_efg).pack(pady=4)
 
         def _go():
             try:
@@ -703,10 +751,12 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         from multiplayer.net_client import MultiplayerClient
         wait = InGamePopup(self)
         wait.title("Connecting")
-        wait.geometry("280x100")
+        wait.geometry("300x110")
         wait.transient(self)
-        tk.Label(wait, text=f"Connecting to {cfg['host']}:{cfg['port']}..."
-                 ).pack(pady=30)
+        tk.Label(wait,
+                 text=f"Connecting to {cfg['host']}:{cfg['port']}...",
+                 fg="#e8e8e8", bg="#14161b",
+                 font=("Segoe UI", 10)).pack(pady=30)
 
         def _work():
             client = MultiplayerClient(cfg["name"])
@@ -744,22 +794,27 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         lobby.title("Multiplayer Lobby")
         lobby.geometry("460x520")
         self._mp_lobby = lobby
+        _fg, _bg = "#e8e8e8", "#14161b"
         tk.Label(lobby, text="MULTIPLAYER LOBBY",
-                 font=AppFonts.H2).pack(pady=(12, 4))
-        status = tk.Label(lobby, text="Connected. Claim a team!")
+                 font=AppFonts.H2, fg=_fg, bg=_bg).pack(pady=(12, 4))
+        status = tk.Label(lobby, text="Connected. Claim a team!",
+                          fg=_fg, bg=_bg)
         status.pack()
-        tk.Label(lobby, text="Managers:").pack(pady=(8, 0))
+        tk.Label(lobby, text="Managers:", fg=_fg, bg=_bg).pack(pady=(8, 0))
         mgr_var = tk.StringVar(value=[])
-        tk.Listbox(lobby, listvariable=mgr_var, height=5).pack(
+        tk.Listbox(lobby, listvariable=mgr_var, height=5,
+                   fg="#ffffff", bg="#2a2e38",
+                   selectbackground="#1f6feb").pack(
             fill="x", padx=16, pady=4)
 
-        teams_frame = tk.Frame(lobby)
+        teams_frame = tk.Frame(lobby, bg=_bg)
         teams_frame.pack(fill="both", expand=True, padx=16, pady=6)
-        tk.Label(teams_frame, text="Claim your team:").pack(anchor="w")
-        canvas = tk.Canvas(teams_frame)
+        tk.Label(teams_frame, text="Claim your team:",
+                 fg=_fg, bg=_bg).pack(anchor="w")
+        canvas = tk.Canvas(teams_frame, bg=_bg, highlightthickness=0)
         scrollbar = tk.Scrollbar(teams_frame, orient="vertical",
                                  command=canvas.yview)
-        btn_frame = tk.Frame(canvas)
+        btn_frame = tk.Frame(canvas, bg="#14161b")
         btn_frame.bind("<Configure>",
                        lambda e: canvas.configure(
                            scrollregion=canvas.bbox("all")))
@@ -790,6 +845,14 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
             team_buttons[tid] = btn
         _refresh_teams()
 
+        def _spectate():
+            # Watch without managing: no team claim, no ready gate.
+            client.team_id = None
+            status.config(text="Spectating. Waiting for host to start...")
+
+        _ThemedButton(lobby, text="Watch as spectator", style="secondary",
+                      command=_spectate).pack(pady=(6, 10))
+
         def _poll():
             try:
                 if not lobby.winfo_exists():
@@ -803,9 +866,10 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
                                      for m in managers])
                         _refresh_teams()
                     elif kind == "team_claimed":
-                        taken[payload.get("team_id", "")] = payload.get(
-                            "name", "")
-                        if payload.get("name", "") == client.name:
+                        _who = payload.get("manager_name",
+                                           payload.get("name", ""))
+                        taken[payload.get("team_id", "")] = _who
+                        if _who == client.name:
                             status.config(
                                 text=f"Claimed {payload.get('team_id', '')}. "
                                      "Waiting for host to start...")
@@ -857,15 +921,17 @@ class EnhancedPuckDynastyLauncher(tk.Tk):
         try:
             from main import GameManager, HockeyManagerGUI
             gm = GameManager()
-            self.withdraw()
             app = HockeyManagerGUI(gm, mp_client=client)
             # Clients never checkpoint locally; the host owns the ring.
             app._apply_multiplayer_snapshot(save_bytes, label or "Joined game")
-            app.mainloop()
+            # The game is up -- retire the launcher entirely. Withdrawing
+            # left a ghost home window alongside the game; destroying is
+            # clean (a failed build below still deiconifies on error).
             try:
                 self.destroy()
             except Exception:
                 pass
+            app.mainloop()
         except Exception as e:
             messagebox.showerror("Join failed",
                                  f"Could not build the game:\n{e}")
@@ -2293,6 +2359,10 @@ This profile will influence player relationships, media interactions, and trade 
             if getattr(self, '_mp_mode', None) == 'host':
                 print("Wiring multiplayer host...")
                 self._wire_multiplayer_host(app, gm)
+
+            # Fantasy draft: the pending flag is set in apply_startup_settings.
+            # The user opens it via Transactions -> Fantasy Draft (or the inbox
+            # email). No timer needed -- the menu entry is the reliable path.
             
             # Don't destroy the old launcher yet - it can cause Tk root issues
             # Just ensure the new app is in front

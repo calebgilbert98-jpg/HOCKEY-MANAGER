@@ -108,7 +108,11 @@ def queue_user_renewal_message(league, user_team, app):
                          "team_id": getattr(user_team, "id", None)},
         )
         try:
-            app.send_email_to_user(msg)
+            _sender = getattr(app, "send_email_to_team", None)
+            if callable(_sender):
+                _sender(user_team, msg)
+            else:
+                app.send_email_to_user(msg)
         except Exception:
             return 0
         return n

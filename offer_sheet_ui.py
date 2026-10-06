@@ -601,8 +601,6 @@ class OfferSheetWindow(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _present_offer_sheet(self):
-        if self.app._mp_client_block("offer sheets"):
-            return
         if self._selected is None:
             messagebox.showinfo("Offer Sheets", "Select a player first.")
             return
@@ -656,6 +654,19 @@ class OfferSheetWindow(ctk.CTkFrame):
                 "Your NHL roster is full (23/23). Move someone out before "
                 "signing him.")
             return
+        # MP: route to the host; the host runs the full check chain
+        # (window, compensation, cap, willingness, match) against the
+        # canonical state. Result via ACTION_ACK/REJECT + STATE_SYNC.
+        try:
+            from windows import _mp_route as _route
+            if _route(self.app, "offer_sheet", {
+                    "player_id": str(getattr(p, "id", "")),
+                    "aav": aav,
+                    "years": years,
+            }):
+                return
+        except Exception:
+            pass
         # 4. The player must agree to sign.
         try:
             import player_decision as _pd

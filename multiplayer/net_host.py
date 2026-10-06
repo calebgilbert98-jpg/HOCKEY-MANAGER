@@ -59,7 +59,7 @@ StateProvider = Callable[[], Tuple[bytes, str, str]]
 class _Peer:
     __slots__ = ("sock", "addr", "reader", "session_id", "name",
                  "team_id", "seq", "last_seen", "send_lock",
-                 "handshake_done", "alive")
+                 "handshake_done", "alive", "rejoin_token")
 
     def __init__(self, sock: socket.socket, addr):
         self.sock = sock
@@ -68,6 +68,7 @@ class _Peer:
         self.session_id = uuid.uuid4().hex[:12]
         self.name = "?"
         self.team_id: Optional[str] = None
+        self.rejoin_token: str = ""
         self.seq = 0
         self.last_seen = time.time()
         self.send_lock = threading.Lock()
@@ -94,6 +95,12 @@ class MultiplayerHost:
         self._listener: Optional[socket.socket] = None
         self._threads: List[threading.Thread] = []
         self._last_game_date = "unknown"
+        # Once start_game() fires, the lobby is over: late joiners get the
+        # live state immediately instead of waiting for another start.
+        self._game_started = False
+        # The host's own club (managed locally, not as a peer). Clients
+        # may not claim it -- set by the game layer after host start.
+        self.host_team_id: Optional[str] = None
         # EHM-style advance sync: session_ids of client managers who have
         # readied for the day's advance. Reset every day. Only peers with
         # a claimed team count as active (spectators never block).
@@ -101,6 +108,14 @@ class MultiplayerHost:
         # into the all_ready() / broadcast calls below.
         self._ready: Dict[str, str] = {}
         self._ready_lock = threading.Lock()
+        # Rejoin: stable client token -> team_id. Survives disconnects;
+        # a returning client with a known token gets its team back
+        # without re-claiming (and without losing it to someone else).
+        # Seeded from save data on host start so reservations survive
+        # host restarts (see seed_reservations).
+        self._rejoin: Dict[str, str] = {}
+        self._rejoin_names: Dict[str, str] = {}
+        self._rejoin_lock = threading.Lock()
         # Async snapshot state: only one serialization worker runs at a
         # time; extra requests coalesce into _snapshot_pending (latest wins).
         self._snapshot_lock = threading.Lock()
@@ -164,6 +179,50 @@ class MultiplayerHost:
         with self._peers_lock:
             return [p.team_id for p in self._peers.values()
                     if p.handshake_done and p.team_id]
+
+    def seed_reservations(self, reservations: Dict[str, str],
+                          names: Optional[Dict[str, str]] = None) -> None:
+        """Seed token -> team_id reservations from save data.
+
+        Call right after host start: teams whose saves carry an mp_gm_token
+        are reserved for that GM. A returning GM auto-reclaims on HELLO;
+        anyone else is refused the reserved club.
+        """
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in (reservations or {}).items():
+                    if _tok and _team:
+                        self._rejoin[_tok] = _team
+                for _tok, _name in (names or {}).items():
+                    if _tok and _name:
+                        self._rejoin_names[_tok] = _name
+        except Exception:
+            pass
+
+    def drop_reservation(self, team_id: str) -> bool:
+        """Release a team's GM reservation (host-side). Returns True when
+        one was held. The team becomes claimable by anyone."""
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in list(self._rejoin.items()):
+                    if _team == team_id:
+                        del self._rejoin[_tok]
+                        self._rejoin_names.pop(_tok, None)
+                        return True
+        except Exception:
+            pass
+        return False
+
+    def reservation_holder(self, team_id: str) -> Optional[str]:
+        """Display name holding the reservation on team_id, if any."""
+        try:
+            with self._rejoin_lock:
+                for _tok, _team in self._rejoin.items():
+                    if _team == team_id:
+                        return self._rejoin_names.get(_tok)
+        except Exception:
+            pass
+        return None
 
     def get_lobby(self) -> List[Dict[str, str]]:
         with self._peers_lock:
@@ -260,6 +319,7 @@ class MultiplayerHost:
 
     def start_game(self) -> None:
         """Leave the lobby: tell clients the game is starting, then sync state."""
+        self._game_started = True
         self._broadcast(P.START_GAME, {"type": P.START_GAME})
         self.broadcast_state_async("Game started")
 
@@ -343,6 +403,14 @@ class MultiplayerHost:
     def broadcast_chat(self, text: str) -> None:
         self._broadcast(P.CHAT, P.chat_msg(self.host_name, text))
 
+    def broadcast_draft_update(self, draft: str, overall: int,
+                               round_num: int, team_id: str,
+                               player_name: str) -> None:
+        """Lightweight pick notice so spectators see draft progress."""
+        self._broadcast(P.DRAFT_UPDATE, {
+            "draft": draft, "overall": overall, "round_num": round_num,
+            "team_id": team_id, "player_name": player_name})
+
     def find_peer_by_team(self, team_id: str) -> Optional["_Peer"]:
         """The connected client managing ``team_id``, if any."""
         with self._peers_lock:
@@ -376,13 +444,27 @@ class MultiplayerHost:
 
     def send_draft_clock(self, session_id: str, clock_id: str, team_id: str,
                          overall: int, round_num: int,
-                         prospects: list) -> bool:
+                         prospects: list, board: list = None) -> bool:
         """Put a client's team on the draft clock for one pick."""
         peer = self._find_peer(session_id)
         if peer is None:
             return False
         return self._send(peer, P.DRAFT_CLOCK, P.draft_clock_msg(
-            clock_id, team_id, overall, round_num, prospects))
+            clock_id, team_id, overall, round_num, prospects, board))
+
+    def send_fantasy_draft_clock(self, session_id: str, clock_id: str,
+                                 team_id: str, overall: int, round_num: int,
+                                 available_ids: list,
+                                 shortlist: list,
+                                 board: list = None) -> bool:
+        """Put a client's team on the fantasy-draft clock for one pick."""
+        peer = self._find_peer(session_id)
+        if peer is None:
+            return False
+        return self._send(peer, P.FANTASY_DRAFT_CLOCK,
+                           P.fantasy_draft_clock_msg(
+                               clock_id, team_id, overall, round_num,
+                               available_ids, shortlist, board))
 
     def resolve_action(self, client_id: str, msg_seq: int, ok: bool,
                        detail: str = "", broadcast: bool = True) -> None:
@@ -533,6 +615,20 @@ class MultiplayerHost:
             i += 1
         peer.name = name
         peer.handshake_done = True
+        # Rejoin: stash the token on the peer, then check for a remembered
+        # team. A returning client gets its claim restored immediately.
+        try:
+            peer.rejoin_token = str(msg.get("rejoin_token", "") or "")
+        except Exception:
+            peer.rejoin_token = ""
+        _restored_team = None
+        try:
+            _tok = getattr(peer, "rejoin_token", "") or ""
+            if _tok:
+                with self._rejoin_lock:
+                    _restored_team = self._rejoin.get(_tok)
+        except Exception:
+            pass
         try:
             teams = self._get_teams() if self._get_teams else []
         except Exception:
@@ -542,6 +638,33 @@ class MultiplayerHost:
                              self._teams_taken(), teams))
         self._send(peer, P.LOBBY_STATE,
                    P.lobby_state(self.get_lobby()))
+        # Late join: the game is already underway -- don't park them in
+        # the lobby waiting for a start that already happened. Sync the
+        # live state straight away (the client builds its game from it).
+        if self._game_started:
+            try:
+                self._send_state_to(peer, "Joined game in progress")
+            except Exception:
+                pass
+        # Rejoin restore: if this token owned a team and nobody took it
+        # while they were gone, hand it straight back.
+        try:
+            if _restored_team:
+                _taken_now = self._teams_taken()
+                if _restored_team not in _taken_now:
+                    peer.team_id = _restored_team
+                    self._broadcast(P.TEAM_CLAIMED,
+                                   P.team_claimed(_restored_team, peer.name))
+                    self._broadcast(P.LOBBY_STATE,
+                                   P.lobby_state(self.get_lobby()))
+                    self.events.put(
+                        ("team_claimed",
+                         {"session_id": peer.session_id, "name": name,
+                          "team_id": _restored_team, "rejoin": True,
+                          "gm_token": _tok}))
+                    self.events.put(("advance_changed", {}))
+        except Exception:
+            pass
         self.events.put(("manager_joined",
                          {"session_id": peer.session_id, "name": name}))
 
@@ -572,12 +695,27 @@ class MultiplayerHost:
             self._send(peer, P.ERROR, P.error_msg(
                 f"{team_id} is already managed by {taken[team_id]}"))
             return
+        _tok = getattr(peer, "rejoin_token", "") or ""
+        # Good-faith multiplayer (Chris, 2026-10-05): no persistent
+        # reservation refusals. Anyone may claim any club that isn't held
+        # by a currently-connected peer. Returning GMs still get their
+        # seat back automatically via the rejoin token (see _on_hello).
         peer.team_id = team_id
+        # Remember for rejoin: this token owns this team until explicitly
+        # released (drop_reservation) or the GM claims a different club.
+        try:
+            if _tok:
+                with self._rejoin_lock:
+                    self._rejoin[_tok] = team_id
+                    self._rejoin_names[_tok] = peer.name
+        except Exception:
+            pass
         self._broadcast(P.TEAM_CLAIMED, P.team_claimed(team_id, peer.name))
         self._broadcast(P.LOBBY_STATE, P.lobby_state(self.get_lobby()))
         self.events.put(("team_claimed",
                          {"session_id": peer.session_id,
-                          "name": peer.name, "team_id": team_id}))
+                          "name": peer.name, "team_id": team_id,
+                          "gm_token": _tok}))
         # A newly active manager joins the advance gate for this cycle.
         self.events.put(("advance_changed", {}))
 
@@ -618,8 +756,11 @@ class MultiplayerHost:
 
     def _teams_taken(self) -> Dict[str, str]:
         with self._peers_lock:
-            return {p.team_id: p.name for p in self._peers.values()
-                    if p.team_id}
+            taken = {p.team_id: p.name for p in self._peers.values()
+                     if p.team_id}
+        if self.host_team_id:
+            taken.setdefault(self.host_team_id, self.host_name)
+        return taken
 
     def _find_peer(self, session_id: str) -> Optional[_Peer]:
         with self._peers_lock:

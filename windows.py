@@ -44,6 +44,15 @@ def _mp_route(app, action, params, on_sent=None):
         client = getattr(app, "mp_client", None)
         if client is None:
             return False
+        if getattr(app, "_mp_spectator", False):
+            try:
+                messagebox.showinfo(
+                    "Spectating",
+                    "You're watching as a spectator -- claim a team to "
+                    "manage.")
+            except Exception:
+                pass
+            return True
         p = dict(params or {})
         team = getattr(app, "user_team", None)
         p.setdefault("team_id",
@@ -2376,6 +2385,15 @@ class RosterView(ctk.CTkFrame):
                     "(18 skaters + 2 goalies) -- no emergency fill-ins "
                     "needed.")
                 return
+            # MULTIPLAYER: route to the host; the canonical roster lives
+            # there. Local summoning would diverge the snapshot.
+            if _mp_is_client(self.app):
+                if _mp_route(self.app, "emergency_fill", {}):
+                    try:
+                        self.update_all_views()
+                    except Exception:
+                        pass
+                    return
             summoned = _rl.summon_emergency_fillers(team)
             if summoned:
                 need = []
@@ -6941,12 +6959,30 @@ class ScoutingView(ctk.CTkFrame):
         self._refresh_scouts()
 
     def _clear_region(self):
+        # MP: route the region clear to the host.
         if self.selected_scout:
+            try:
+                from windows import _mp_route as _route
+            except ImportError:
+                _route = None
+            if _route is not None and _route(
+                    self.app, "assign_scout", {
+                        "scout_id": str(getattr(
+                            self.selected_scout, "id", "")),
+                        "region": None,
+                    }):
+                self.region_var.set("")
+                self._refresh_scouts()
+                return
             self.scmod.set_scout_region(self._gm, self.selected_scout, None)
             self.region_var.set("")
             self._refresh_scouts()
 
     def _hire_scout(self):
+        # MP: the quick-hire generates a staffer locally, which can't route;
+        # use the staff market UI (hire_staff) instead.
+        if self.app._mp_client_block("quick scout hire"):
+            return
         from game_classes import Staff, StaffRole
         import random as _r
         names = [("Jim", "Gregory"), ("Marie", "Labelle"), ("Ken", "Holland"),
@@ -8248,6 +8284,9 @@ class DraftView(ctk.CTkFrame):
 
     # ------------------------------------------------------------------
     def start_draft(self):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("draft setup"):
+            return
         # Re-entry guard: __init__ starts the draft, so an explicit second
         # call (as the runtime QA once did) must not rebuild the order,
         # re-roll the 32 team boards, or re-drive the market -- a rebuild
@@ -9193,8 +9232,29 @@ class DraftView(ctk.CTkFrame):
                 self.clock_label.configure(
                     text=f"{team_on_clock.team_name} (GM deciding...)")
                 try:
+                    _board = []
+                    try:
+                        for _i in range(int(getattr(
+                                self, "current_pick", 0) or 0)):
+                            _r, _t, _dp = self.draft_order[_i]
+                            _pl = getattr(_dp, "player", None) \
+                                if _dp is not None else None
+                            if _pl is None:
+                                continue
+                            _board.append({
+                                "overall": _i + 1,
+                                "round_num": int(_r or 0),
+                                "team_id": str(getattr(
+                                    _t, "team_name", "") or ""),
+                                "player_name": str(getattr(
+                                    _pl, "full_name", "?") or "?"),
+                                "player_id": str(
+                                    getattr(_pl, "id", "") or ""),
+                            })
+                    except Exception:
+                        _board = []
                     self.app._mp_open_draft_clock(
-                        team_on_clock, round_num, overall)
+                        team_on_clock, round_num, overall, _board)
                 except Exception as e:
                     print(f"draft clock failed (non-fatal): {e}")
                 try:
@@ -9547,6 +9607,9 @@ class DraftView(ctk.CTkFrame):
             return False
 
     def execute_pick(self, team, player, reach=False, steal=False):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("draft picks"):
+            return
         # BUG-2 fix: transactional commit -- the overall pick number is the
         # idempotency key. A repeat call for an already-committed overall
         # (stale re-entry, double event) is rejected, never double-applied.
@@ -9606,6 +9669,16 @@ class DraftView(ctk.CTkFrame):
         try:
             self.app.league.draft_prospects.remove(player)
         except ValueError:
+            pass
+        # MP: spectators see the pick live, not just on STATE_SYNC.
+        try:
+            _host = getattr(self.app, "mp_host", None)
+            if _host is not None:
+                _host.broadcast_draft_update(
+                    "entry", int(overall), int(round_num),
+                    str(getattr(team, "team_name", "") or ""),
+                    str(getattr(player, "full_name", "?") or "?"))
+        except Exception:
             pass
         try:
             pos = player.primary_position.value
@@ -9905,6 +9978,9 @@ class DraftView(ctk.CTkFrame):
                        command=_propose).pack(pady=10)
 
     def _swap_pick_owner(self, draft_pick, new_team):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("pick swaps"):
+            return
         """Point a draft pick (and its draft-order slot) at a new owner."""
         try:
             draft_pick.current_team = new_team.team_name
@@ -9988,6 +10064,9 @@ class DraftView(ctk.CTkFrame):
 
     def _execute_pick_swap(self, partner_idx, user_pick, partner_pick,
                            want_added, will_add):
+        # MP: draft mutations are host-only; clients pick via DRAFT_CLOCK.
+        if self.app._mp_client_block("pick swaps"):
+            return
         user_team = self.app.user_team
         # Gating Phase 3 (A1/A3): the on-clock slot is re-read live. If a
         # mid-draft trade or a clock auto-pick moved/spent it while the
@@ -10647,6 +10726,9 @@ class ScheduleView(ctk.CTkFrame):
         self.update_views()
 
     def _launch_game_viewer(self, game_data, commit=True):
+        # MP: game simulation is host-only.
+        if self.app._mp_client_block("game simulation"):
+            return
         """Launch the game viewer for a specific game.
 
         Args:
@@ -10732,6 +10814,9 @@ class ScheduleView(ctk.CTkFrame):
         }
 
     def _simulate_game(self, game_data):
+        # MP: game simulation is host-only.
+        if self.app._mp_client_block("game simulation"):
+            return
         """Simulate a game and store the results."""
         try:
             from simulation import GameSim
@@ -13589,8 +13674,6 @@ class ContractNegotiationView(ctk.CTkFrame):
         self._refresh_history()
 
     def submit_offer(self):
-        if self.app._mp_client_block("free-agent signings"):
-            return
         if self.is_elc:
             self._submit_elc_offer()
             return
@@ -13608,6 +13691,23 @@ class ContractNegotiationView(ctk.CTkFrame):
         if years < 1 or years > max_years:
             self.banner_var.set(
                 f"Contract length must be between 1 and {max_years} years.")
+            return
+        # MP: route to the host instead of mutating local state. The host
+        # runs the same validation + signing path; the result comes back
+        # via ACTION_ACK/REJECT and the next STATE_SYNC refreshes the view.
+        try:
+            _sb = int(str(self.signing_var.get()).replace(",", "") or 0)
+        except (ValueError, AttributeError):
+            _sb = 0
+        if _mp_route(self.app, "sign_free_agent", {
+                "player_id": str(getattr(p, "id", "")),
+                "salary": salary,
+                "years": years,
+                "signing_bonus": _sb,
+                "ntc": self._clause_key() != "none",
+                "clause_kind": self._clause_key(),
+                "clause_list_size": int(self.clause_size_var.get() or 10),
+        }):
             return
         # Same signing path as the original popup: stage the offer on the
         # player object, then run the central handler (inbox routing).
@@ -13668,6 +13768,18 @@ class ContractNegotiationView(ctk.CTkFrame):
             self.banner_var.set("Enter valid numbers for salary and bonuses.")
             return
         years = int(self.years_var.get() or 0)
+        # MP: route the ELC offer to the host; the host runs the same
+        # band validation + prospect handshake against the canonical state.
+        if _mp_route(self.app, "sign_free_agent", {
+                "player_id": str(getattr(p, "id", "")),
+                "salary": salary,
+                "years": years,
+                "signing_bonus": sb,
+                "performance_bonus": pb,
+                "elc": True,
+        }):
+            self._record_offer(salary, years, "sent to host")
+            return
         res = self.app.handle_elc_offer(p, salary, sb, pb)
         verdict = res.get("verdict")
         if verdict == "accepted":
@@ -13960,6 +14072,29 @@ class WaiversView(ctk.CTkFrame):
     
     def place_on_waivers(self, item=None):
         """Place the selected player on waivers."""
+        # MULTIPLAYER: route to the host up front. The host owns the
+        # canonical wire and runs the NMC consent itself (NTC_WAIVER_REQUEST,
+        # like send_to_minors) -- the client's local consent roll is never
+        # trusted. Works for NMC and non-NMC players alike.
+        if _mp_is_client(self.app):
+            _pid = None
+            try:
+                _it = item
+                if not _it:
+                    _sel = self.eligible_tree.selection()
+                    _it = _sel[0] if _sel else None
+                if _it:
+                    _pid = int(self.eligible_tree.item(_it, "tags")[0])
+            except Exception:
+                _pid = None
+            if _pid and _mp_route(self.app, "place_on_waivers",
+                                 {"player_id": str(_pid)}):
+                try:
+                    self.populate_eligible_players()
+                    self.populate_waiver_wire()
+                except Exception:
+                    pass
+                return
         # Waiver window (the wire doesn't run in the June dead month).
         # One rulebook in transaction_windows.py.
         try:
@@ -14106,6 +14241,17 @@ class WaiversView(ctk.CTkFrame):
                               f"{_waive_warn}",
                               confirm_text="Place on Waivers")
         if confirm:
+            # MULTIPLAYER: route to the host; the canonical waiver wire
+            # lives there. On route, the host validates + applies and the
+            # next STATE_SYNC refreshes the views.
+            if _mp_route(self.app, "place_on_waivers", {
+                    "player_id": str(getattr(player, "id", ""))}):
+                try:
+                    self.populate_eligible_players()
+                    self.populate_waiver_wire()
+                except Exception:
+                    pass
+                return
             # Add to waiver list
             player.on_waivers = True
             player.waiver_days = 2  # Players stay on waivers for 2 days
@@ -14850,8 +14996,6 @@ class ExtensionNegotiationView(ctk.CTkFrame):
     
     def submit_offer(self):
         """Submit contract offer to the player."""
-        if self.app._mp_client_block("contract extensions"):
-            return
         try:
             # Parse salary with commas
             salary_str = self.salary_var.get().replace(',', '')
@@ -14881,6 +15025,17 @@ class ExtensionNegotiationView(ctk.CTkFrame):
 
             if bonus < 0:
                 self._say("Signing bonus cannot be negative.")
+                return
+
+            # MP: route to the host; the host validates and applies
+            # against the canonical state. Result via ACK/REJECT + sync.
+            if _mp_route(self.app, "extend_contract", {
+                    "player_id": str(getattr(self.player, "id", "")),
+                    "salary": salary,
+                    "years": years,
+                    "signing_bonus": bonus,
+                    "clause": "ntc" if self.ntc_var.get() else "none",
+            }):
                 return
 
             # Calculate likelihood of acceptance
@@ -14966,7 +15121,14 @@ class ExtensionNegotiationView(ctk.CTkFrame):
         self._counter_panel = None
 
     def _accept_counter(self, counter_years, counter_salary, bonus):
-        if self.app._mp_client_block("contract extensions"):
+        # MP: the counter acceptance is a fresh extension offer to the host.
+        if _mp_route(self.app, "extend_contract", {
+                "player_id": str(getattr(self.player, "id", "")),
+                "salary": counter_salary,
+                "years": counter_years,
+                "signing_bonus": bonus,
+                "clause": "ntc" if self.ntc_var.get() else "none",
+        }):
             return
         self.player.contract.salary = counter_salary
         self.player.contract.years_remaining = counter_years
@@ -17858,3 +18020,115 @@ class GameDetailWindow(InGamePopup):
                 self._line(self.body,
                            f"{medals[i]}  {name} ({tname}) — {rating}/10",
                            secondary=True)
+
+
+class TeamOverviewView(ctk.CTkFrame):
+    """Read-only overview of another club (Eastside-style team info).
+
+    What you see when you click a team name for a club you don't run:
+    identity, record, roster, and key numbers -- but no management
+    actions. Player names are clickable (player cards); the roster is
+    otherwise read-only.
+    """
+
+    def __init__(self, parent, app=None, team=None):
+        from ctk_theme import (
+            init_ctk_theme, heading, body, TEAL, BG, PANEL, CARD, BORDER,
+            TEXT, TEXT_DIM, GOLD,
+        )
+        init_ctk_theme()
+        ctk.CTkFrame.__init__(self, parent)
+        self.app = app if app is not None else parent
+        self.team = team
+        self._close_screen = None
+        self.configure(fg_color=BG)
+        self._ct = dict(TEAL=TEAL, BG=BG, PANEL=PANEL, CARD=CARD,
+                        BORDER=BORDER, TEXT=TEXT, TEXT_DIM=TEXT_DIM,
+                        GOLD=GOLD)
+        self._heading = heading
+        self._body = body
+        if team is None:
+            self._body(self, "No team selected.", size=12)
+            return
+        self._build()
+
+    def _build(self):
+        t = self.team
+        app = self.app
+        # Header
+        self._heading(
+            self,
+            f"{getattr(t, 'city', '')} {getattr(t, 'team_name', '')}",
+            size=20).pack(anchor="w", padx=16, pady=(14, 2))
+        # Record line
+        try:
+            st = (getattr(getattr(app, "league", None), "standings", None)
+                  or {}).get(getattr(t, "team_name", ""), {}) or {}
+            _w = st.get("W", 0)
+            _l = st.get("L", 0)
+            _o = st.get("OTL", 0)
+            _p = st.get("Points", 0)
+            record = f"{_w}-{_l}-{_o}  ({_p} pts)"
+        except Exception:
+            record = "--"
+        div = getattr(t, "division", "") or ""
+        conf = getattr(t, "conference", "") or ""
+        self._body(self, f"{record}" + (f"  |  {div}" if div else "")
+                   + (f"  |  {conf}" if conf else ""),
+                   size=12).pack(anchor="w", padx=16, pady=(0, 10))
+        # Stat strip
+        try:
+            roster = list(getattr(t, "roster", None) or [])
+            avg = (sum(p.overall_rating() for p in roster)
+                   / max(len(roster), 1)) if roster else 0
+        except Exception:
+            roster, avg = [], 0
+        strip = ctk.CTkFrame(self, fg_color=self._ct["CARD"])
+        strip.pack(fill="x", padx=16, pady=(0, 12))
+        for label, val in (("TEAM AVG", f"{avg:.1f}" if avg else "--"),
+                           ("ROSTER", str(len(roster)))):
+            cell = ctk.CTkFrame(strip, fg_color="transparent")
+            cell.pack(side="left", padx=18, pady=10)
+            self._body(cell, label, size=10).pack(anchor="w")
+            self._heading(cell, val, size=16).pack(anchor="w")
+        # Roster table (read-only; names open player cards)
+        self._heading(self, "Roster", size=14).pack(
+            anchor="w", padx=16, pady=(0, 6))
+        cols = ("Name", "Pos", "Age", "OVR")
+        tree = ttk.Treeview(self, columns=cols, show="headings", height=18)
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=140 if c == "Name" else 70,
+                        anchor="w" if c == "Name" else "center")
+        tree.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._pmap = {}
+        try:
+            _rows = sorted(
+                roster,
+                key=lambda p: float(
+                    getattr(p, "overall_rating", lambda: 0)() or 0),
+                reverse=True)
+        except Exception:
+            _rows = list(roster)
+        for p in _rows:
+            try:
+                _pos = str(getattr(
+                    getattr(p, "primary_position", None), "value", "?"))
+                _iid = tree.insert("", "end", values=(
+                    getattr(p, "full_name", "?"), _pos,
+                    getattr(p, "age", "?"),
+                    int(float(getattr(p, "overall_rating",
+                                      lambda: 0)() or 0))))
+                self._pmap[_iid] = p
+            except Exception:
+                continue
+        tree.bind("<Double-1>", self._on_double)
+
+    def _on_double(self, event):
+        try:
+            iid = event.widget.identify_row(event.y)
+            p = self._pmap.get(iid)
+            if p is not None:
+                self.app.open_player_profile(p)
+        except Exception:
+            pass

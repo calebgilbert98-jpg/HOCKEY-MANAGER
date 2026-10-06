@@ -1274,6 +1274,19 @@ class InboxView(ctk.CTkFrame):
         neg = self._trade_neg_from_message(message)
         if neg is None:
             return
+        # MULTIPLAYER: the negotiation lives on the host. Route the
+        # answer; the host executes against canonical state and the next
+        # sync refreshes. Local accept would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route
+            if _route(self.app, "answer_ai_offer",
+                      {"negotiation_id": str(getattr(neg, "id", "")),
+                       "decision": "accept"}):
+                message.action_done = True
+                self._refresh_inbox()
+                return
+        except Exception:
+            pass
         try:
             tn.accept_negotiation(self.app, neg.id)
         except Exception as e:
@@ -1287,6 +1300,18 @@ class InboxView(ctk.CTkFrame):
         neg = self._trade_neg_from_message(message)
         if neg is None:
             return
+        # MULTIPLAYER: route the walk-away so the host closes the
+        # negotiation; a local decline would be wiped by the next sync.
+        try:
+            from windows import _mp_route as _route
+            if _route(self.app, "answer_ai_offer",
+                      {"negotiation_id": str(getattr(neg, "id", "")),
+                       "decision": "decline"}):
+                message.action_done = True
+                self._refresh_inbox()
+                return
+        except Exception:
+            pass
         try:
             tn.decline_negotiation(self.app, neg.id)
         except Exception as e:
@@ -1909,6 +1934,34 @@ class InboxView(ctk.CTkFrame):
 
         # Refresh per-filter unread badges
         self._update_filter_badges()
+
+    def _update_filter_badges(self):
+        """Append unread counts to the filter pills (e.g. 'Unread (3)').
+
+        Missing method that broke the inbox open path -- every pill shows
+        its live count; failures degrade to plain labels, never a crash.
+        """
+        try:
+            msgs = list(getattr(self.inbox, "messages", []) or [])
+        except Exception:
+            msgs = []
+        try:
+            unread = [m for m in msgs if not getattr(m, "read", True)]
+            urgent = [m for m in unread
+                      if getattr(m, "urgent", False)]
+            saved = [m for m in msgs if getattr(m, "saved", False)]
+            counts = {"all": len(unread), "unread": len(unread),
+                      "urgent": len(urgent), "saved": len(saved)}
+        except Exception:
+            counts = {}
+        _labels = dict(self._FILTERS)
+        for ftype, btn in getattr(self, "_filter_buttons", {}).items():
+            try:
+                base = _labels.get(ftype, ftype)
+                n = counts.get(ftype, 0)
+                btn.configure(text=f"{base} ({n})" if n else base)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Season Story view (Muck 2026-10-02)

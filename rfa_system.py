@@ -783,11 +783,11 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
         "offer_sheets": 0, "arbitration_filings": 0, "arbitration_awards": [],
         "user_rfas": [],
     }
-    user_team = None
+    human_teams = []
     ai_teams = []
     for team in getattr(league, "teams", []) or []:
         if _is_user_team(team):
-            user_team = team
+            human_teams.append(team)
         else:
             ai_teams.append(team)
 
@@ -1157,27 +1157,30 @@ def process_rfa_offseason(league, app=None, rng=None) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # --- 7. User team: queue qualifying decisions ----------------------------
-    if user_team is not None and app is not None:
-        cards = []
-        for player in list(getattr(user_team, "roster", []) or []):
-            if not is_rfa(player):
-                continue
-            prior = int(getattr(getattr(player, "contract", None),
-                                "salary", 0) or 0)
-            qo = qualifying_offer_amount(prior)
-            cards.append({
-                "player_id": getattr(player, "id", None),
-                "name": getattr(player, "full_name",
-                                getattr(player, "name", "Unknown")),
-                "prior_salary": prior,
-                "qo_amount": qo,
-                "age": _age(player),
-            })
-            summary["user_rfas"].append(getattr(player, "full_name",
-                                               getattr(player, "name", "?")))
-        if cards:
-            _queue_rfa_decisions(app, user_team, cards)
+    # --- 7. Human teams: queue qualifying decisions ---------------------------
+    # Every human-managed club (host + MP clients) gets its own inbox
+    # message; MP clients answer via the routed rfa_qualify action.
+    if app is not None:
+        for _htm in human_teams:
+            cards = []
+            for player in list(getattr(_htm, "roster", []) or []):
+                if not is_rfa(player):
+                    continue
+                prior = int(getattr(getattr(player, "contract", None),
+                                    "salary", 0) or 0)
+                qo = qualifying_offer_amount(prior)
+                cards.append({
+                    "player_id": getattr(player, "id", None),
+                    "name": getattr(player, "full_name",
+                                    getattr(player, "name", "Unknown")),
+                    "prior_salary": prior,
+                    "qo_amount": qo,
+                    "age": _age(player),
+                })
+                summary["user_rfas"].append(getattr(
+                    player, "full_name", getattr(player, "name", "?")))
+            if cards:
+                _queue_rfa_decisions(app, _htm, cards)
 
     return summary
 
@@ -1296,7 +1299,11 @@ def _queue_offer_sheet_match(app, league, offering_team, original_team,
         },
     )
     try:
-        app.send_email_to_user(msg)
+        _sender = getattr(app, "send_email_to_team", None)
+        if callable(_sender):
+            _sender(original_team, msg)
+        else:
+            app.send_email_to_user(msg)
     except Exception:
         pass
 
@@ -1337,7 +1344,11 @@ def _queue_rfa_decisions(app, team, cards: List[dict]) -> None:
                      "cap_space": int(room)},
     )
     try:
-        app.send_email_to_user(msg)
+        _sender = getattr(app, "send_email_to_team", None)
+        if callable(_sender):
+            _sender(team, msg)
+        else:
+            app.send_email_to_user(msg)
     except Exception:
         pass
 
@@ -1912,7 +1923,11 @@ def _queue_offer_sheet_trade_alt(app, league, offering_team, original_team,
         },
     )
     try:
-        app.send_email_to_user(msg)
+        _sender = getattr(app, "send_email_to_team", None)
+        if callable(_sender):
+            _sender(original_team, msg)
+        else:
+            app.send_email_to_user(msg)
     except Exception:
         pass
 
@@ -2308,7 +2323,11 @@ def _queue_walk_away_choice(app, league, team, player,
                      "term_years": int(award.get("term_years", 1) or 1)},
     )
     try:
-        app.send_email_to_user(msg)
+        _sender = getattr(app, "send_email_to_team", None)
+        if callable(_sender):
+            _sender(team, msg)
+        else:
+            app.send_email_to_user(msg)
     except Exception:
         pass
 

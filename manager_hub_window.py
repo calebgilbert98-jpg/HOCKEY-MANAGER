@@ -102,6 +102,29 @@ class ManagerHubView(ctk.CTkFrame):
         self.patience_label.pack(anchor="w", pady=(5, 2))
 
         def _request_patience():
+            # MULTIPLAYER: route to the host; the board and roster morale
+            # are canonical there. Local application would diverge.
+            try:
+                from windows import _mp_route as _route, \
+                    _mp_is_client as _is_client
+                if _is_client(self.app):
+                    def _met(_msg=""):
+                        try:
+                            messagebox.showinfo(
+                                "Owner meeting",
+                                str(_msg) or "Meeting requested -- the host "
+                                "applies it.")
+                        except Exception:
+                            pass
+                        try:
+                            self._refresh_board()
+                        except Exception:
+                            pass
+                    if _route(self.app, "owner_meeting", {},
+                              on_sent=_met):
+                        return
+            except Exception:
+                pass
             board = self.career.board
             today = ""
             try:
@@ -744,6 +767,31 @@ class TeamTalkView(ctk.CTkFrame):
         _ctx = dict(self.context or {})
         if "today" not in _ctx:
             _ctx["today"] = getattr(self.app, "current_date", None)
+        # MULTIPLAYER: route the option to the host; the canonical room
+        # state lives there. Local apply would diverge the snapshot.
+        try:
+            from windows import _mp_route as _route
+            _opt = {k: option.get(k) for k in
+                    ("label", "text", "boost", "morale", "fit")
+                    if isinstance(option, dict)}
+            _c = {}
+            try:
+                _t = _ctx.get("today")
+                _c["today"] = _t.isoformat() if hasattr(_t, "isoformat") \
+                    else str(_t)
+            except Exception:
+                pass
+            if _route(self.app, "team_talk",
+                      {"option": _opt, "talk_context": _c}):
+                messagebox.showinfo(
+                    "Dressing Room",
+                    "Talk sent -- the host applies it; watch for the "
+                    "result.", parent=self)
+                self.result = (option, "sent", 1.0)
+                self._finish()
+                return
+        except Exception:
+            pass
         reaction, boost = mc.apply_team_talk(self.team, option, _ctx)
         messagebox.showinfo("Dressing Room", reaction, parent=self)
         self.result = (option, reaction, boost)
