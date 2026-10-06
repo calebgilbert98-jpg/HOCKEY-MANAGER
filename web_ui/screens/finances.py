@@ -26,6 +26,12 @@ def _load_salary_cap_helpers():
         return None
 
 
+def _pos_str(p):
+    """Clean position string: PlayerPosition enum -> 'RW', plain str passes through."""
+    pos = _safe(lambda: getattr(p, "primary_position", "?"), "?")
+    return str(getattr(pos, "value", pos))
+
+
 def _player_cap_hit(p):
     """Best-effort per-player cap hit: contract AAV first, then .salary."""
     hit = _safe(lambda: int(getattr(getattr(p, "contract", None), "salary", 0) or 0)
@@ -105,7 +111,7 @@ def api_finances():
         try:
             hits.append({
                 "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
-                "position": _safe(lambda: getattr(p, "primary_position", "?"), "?"),
+                "position": _pos_str(p),
                 "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
                 "overall": _player_ovr(p),
                 "salary": _player_cap_hit(p),
@@ -175,7 +181,7 @@ def _buyout_candidate_row(p):
     return {
         "id": _safe(lambda: str(getattr(p, "id", id(p)))),
         "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
-        "position": _safe(lambda: str(getattr(p, "primary_position", "?")), "?"),
+        "position": _pos_str(p),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
         "cap_hit": salary,
         "years_left": years,
