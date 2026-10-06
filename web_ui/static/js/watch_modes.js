@@ -115,6 +115,12 @@
       if (evs.length === lastTextCount && !force) return;
       lastTextCount = evs.length;
       var interesting = evs.filter(function (e) { return e.type !== 'skate'; });
+      // Detail mode "key" (Batch E): text feed shows only the big moments.
+      if (window.PD_DETAIL === 'key') {
+        interesting = interesting.filter(function (e) {
+          return /goal|penalty|fight|milestone|period_(start|end)|game_(start|end)|goalie_pulled/.test(e.type || '');
+        });
+      }
       var nearBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
       feed.innerHTML = interesting.map(function (e) {
         return '<div class="tl-row tl-' + esc(e.type) + '">' + eventLine(e) + '</div>';
@@ -279,7 +285,175 @@
     ctx.strokeStyle = '#c8102e'; ctx.lineWidth = 1.5; ctx.stroke();
   }
 
-  /* ---------- box score ---------- */
+  /* ---------- box score (full depth: Batch E) ---------- */
+  function playerCell(r) {
+    return '<span class="clickable-text" data-href="/player/' + esc(r.id) + '">' +
+           esc(r.name) + '</span>';
+  }
+
+  /* Shared renderer: the live boxscore and the replay history payload
+     share the same shape (skaters/goalies/scoring/lines/team_stats/stars). */
+  function boxscoreHTML(data) {
+    var hs = data.score.home, as = data.score.away;
+    var per = data.period ? ' <span class="bs-per">P' + esc(data.period) + '</span>'
+                          : (data.date ? ' <span class="bs-per">' + esc(data.date) + '</span>' : '');
+    var note = '';
+    if (data.shootout) note = ' <span class="bs-per">SO</span>';
+    else if (data.overtime) note = ' <span class="bs-per">OT</span>';
+    var html = '<div class="bs-head">' + esc(data.away_abbr) + ' ' + as + ' @ ' +
+               esc(data.home_abbr) + ' ' + hs + per + note + '</div>';
+    // 3 stars
+    if (data.stars && data.stars.length) {
+      var medals = ['1st', '2nd', '3rd'];
+      html += '<div class="bs-stars">' + data.stars.map(function (s, i) {
+        return '<span class="bs-star' + (i === 0 ? ' first' : '') + '">★ ' +
+               esc(medals[i]) + ': ' + esc(s.name) +
+               (s.team_name ? ' (' + esc(s.team_name) + ')' : '') + '</span>';
+      }).join('') + '</div>';
+    }
+    // tabs
+    html += '<div class="bs-tabs">' +
+      ['scoring', 'players', 'lines', 'teams'].map(function (t, i) {
+        var labels = { scoring: 'Scoring Summary', players: 'Player Stats', lines: 'Lines', teams: 'Team Stats' };
+        return '<button class="bs-tab' + (i === 0 ? ' active' : '') + '" data-bstab="' + t + '">' + labels[t] + '</button>';
+      }).join('') + '</div>';
+    html += '<div class="bs-pane" data-bspane="scoring">' + scoringHTML(data) + '</div>';
+    html += '<div class="bs-pane hidden" data-bspane="players">' + playersHTML(data) + '</div>';
+    html += '<div class="bs-pane hidden" data-bspane="lines">' + linesHTML(data) + '</div>';
+    html += '<div class="bs-pane hidden" data-bspane="teams">' + teamsHTML(data) + '</div>';
+    return html;
+  }
+
+  function scoringHTML(data) {
+    var list = data.scoring || [];
+    if (!list.length) return '<div class="tl-empty">No scoring data yet.</div>';
+    var lastP = null, html = '';
+    list.forEach(function (g) {
+      if (g.period !== lastP) {
+        lastP = g.period;
+        html += '<div class="bs-team">' + periodLabel(g.period) + '</div>';
+      }
+      var assists = (g.assists || []).join(', ');
+      var sub = esc(g.clock || '');
+      if (g.strength && g.strength !== 'EV') sub += ' · ' + esc(g.strength);
+      if (g.goal_type) sub += ' · ' + esc(g.goal_type);
+      if (g.empty_net) sub += ' · EN';
+      html += '<div class="bs-goal"><div><b>' + esc(g.scorer) + '</b>' +
+              (assists ? ' <span class="tl-dim">(' + esc(assists) + ')</span>' : ' <span class="tl-dim">(unassisted)</span>') +
+              '<div class="tl-dim">' + sub + '</div></div>' +
+              '<div class="bs-goal-score">' + esc(g.running || '') + '</div></div>';
+    });
+    return html;
+  }
+
+  function periodLabel(p) {
+    p = Number(p) || 1;
+    if (p <= 3) return 'Period ' + p;
+    if (p === 4) return 'Overtime';
+    return 'Shootout';
+  }
+
+  function playersHTML(data) {
+    var html = '';
+    [1, 0].forEach(function (ti) {
+      var tname = ti === 0 ? data.home : data.away;
+      var rows = (data.skaters || []).filter(function (r) { return r.team === ti; });
+      var gs = (data.goalies || []).filter(function (r) { return r.team === ti; });
+      html += '<div class="bs-team">' + esc(tname) + '</div>';
+      html += '<table class="bs-table"><thead><tr><th>#</th><th>Player</th><th>Pos</th>' +
+              '<th class="num">G</th><th class="num">A</th><th class="num">P</th>' +
+              '<th class="num">SOG</th><th class="num">Hits</th>' +
+              '<th class="num">Blk</th><th class="num">FO</th></tr></thead><tbody>' +
+        rows.map(function (r) {
+          return '<tr><td class="num">' + esc(r.jersey) + '</td>' +
+            '<td>' + playerCell(r) + '</td><td>' + esc(r.pos || '') + '</td>' +
+            '<td class="num">' + r.g + '</td><td class="num">' + r.a + '</td>' +
+            '<td class="num bs-pts">' + r.pts + '</td><td class="num">' + r.sog + '</td>' +
+            '<td class="num">' + r.hits + '</td><td class="num">' + (r.blk || 0) + '</td>' +
+            '<td class="num">' + esc(r.fo || '0-0') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+      if (gs.length) {
+        html += '<table class="bs-table"><thead><tr><th>#</th><th>Goalie</th>' +
+                '<th class="num">SA</th><th class="num">SV</th><th class="num">GA</th>' +
+                '<th class="num">SV%</th></tr></thead><tbody>' +
+          gs.map(function (r) {
+            return '<tr><td class="num">' + esc(r.jersey) + '</td>' +
+              '<td>' + playerCell(r) + '</td>' +
+              '<td class="num">' + r.sa + '</td><td class="num">' + r.saves + '</td>' +
+              '<td class="num">' + r.ga + '</td><td class="num">' + Number(r.sv_pct || 0).toFixed(3) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      }
+    });
+    return html;
+  }
+
+  function linesHTML(data) {
+    var lines = data.lines || {};
+    var html = '<div class="tl-dim" style="margin:6px 2px">5.0 = average game · 7.0+ = great · Key Stats shows what drove each grade.</div>';
+    var any = false;
+    [0, 1].forEach(function (ti) {
+      var tname = ti === 0 ? data.home : data.away;
+      var units = lines[String(ti)] || [];
+      if (!units.length) return;
+      any = true;
+      html += '<div class="bs-team">' + esc(tname) + '</div>';
+      units.forEach(function (L) {
+        var rc = L.rating == null ? '' : (L.rating >= 7 ? 'g' : (L.rating >= 5.5 ? 'y' : 'r'));
+        html += '<div class="bs-line-head"><span>' + esc(L.label) + '</span>' +
+                '<span class="bs-grade ' + rc + '">Rating ' +
+                (L.rating == null ? '—' : L.rating.toFixed(1)) + '</span></div>';
+        html += '<table class="bs-table"><thead><tr><th>Player</th><th>Pos</th>' +
+                '<th class="num">G</th><th class="num">A</th><th class="num">P</th>' +
+                '<th class="num">Grade</th><th>Key Stats</th></tr></thead><tbody>' +
+          (L.players || []).map(function (pl) {
+            var gc = pl.grade == null ? '' : (pl.grade >= 7 ? 'g' : (pl.grade >= 5.5 ? 'y' : 'r'));
+            return '<tr><td>' + esc(pl.name) + '</td><td>' + esc(pl.pos || '') + '</td>' +
+              '<td class="num">' + pl.g + '</td><td class="num">' + pl.a + '</td>' +
+              '<td class="num">' + pl.p + '</td>' +
+              '<td class="num bs-grade ' + gc + '">' + (pl.grade == null ? '—' : pl.grade.toFixed(1)) + '</td>' +
+              '<td class="tl-dim">' + esc(pl.why || '') + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      });
+    });
+    if (!any) html += '<div class="tl-empty">Line data unavailable for this game.</div>';
+    return html;
+  }
+
+  function teamsHTML(data) {
+    var ts = data.team_stats || {};
+    var rows = [
+      ['Goals', 'goals'], ['Shots on Goal', 'shots'], ['Saves', 'saves'],
+      ['Hits', 'hits'], ['Blocked Shots', 'blocks'], ['Faceoffs Won', 'fo_won'],
+      ['Takeaways', 'takeaways'], ['Giveaways', 'giveaways'],
+    ];
+    var html = '<table class="bs-table"><thead><tr><th></th><th class="num">' +
+               esc(data.away_abbr) + '</th><th class="num">' + esc(data.home_abbr) +
+               '</th></tr></thead><tbody>' +
+      rows.map(function (r) {
+        var a = (ts['1'] || {})[r[1]], h = (ts['0'] || {})[r[1]];
+        return '<tr><td>' + r[0] + '</td><td class="num">' + (a == null ? '—' : a) +
+               '</td><td class="num">' + (h == null ? '—' : h) + '</td></tr>';
+      }).join('');
+    var pa = (ts['1'] || {}).pp, ph = (ts['0'] || {}).pp;
+    if (pa != null || ph != null) {
+      html += '<tr><td>Power Play</td><td class="num">' + esc(pa || '—') +
+              '</td><td class="num">' + esc(ph || '—') + '</td></tr>';
+    }
+    return html + '</tbody></table>';
+  }
+
+  function wireBoxTabs(root) {
+    var tabs = root.querySelectorAll('.bs-tab');
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        tabs.forEach(function (x) { x.classList.toggle('active', x === t); });
+        root.querySelectorAll('.bs-pane').forEach(function (p) {
+          p.classList.toggle('hidden', p.dataset.bspane !== t.dataset.bstab);
+        });
+      });
+    });
+  }
+
   function renderBox() {
     var el = document.getElementById('boxscore');
     fetch('/api/watch/boxscore').then(function (r) { return r.json(); }).then(function (data) {
@@ -287,42 +461,13 @@
         el.innerHTML = '<div class="tl-empty">No live game right now — box score needs a live sim.</div>';
         return;
       }
-      var hs = data.score.home, as = data.score.away;
-      var html = '<div class="bs-head">' + esc(data.away_abbr) + ' ' + as + ' @ ' +
-                 esc(data.home_abbr) + ' ' + hs +
-                 ' <span class="bs-per">P' + esc(data.period) + '</span></div>';
-      [1, 0].forEach(function (ti) {
-        var tname = ti === 0 ? data.home : data.away;
-        var rows = data.skaters.filter(function (r) { return r.team === ti; });
-        var gs = data.goalies.filter(function (r) { return r.team === ti; });
-        html += '<div class="bs-team">' + esc(tname) + '</div>';
-        html += '<table class="bs-table"><thead><tr><th>#</th><th>Player</th>' +
-                '<th class="num">G</th><th class="num">A</th><th class="num">P</th>' +
-                '<th class="num">SOG</th><th class="num">Hits</th></tr></thead><tbody>' +
-          rows.map(function (r) {
-            return '<tr><td class="num">' + esc(r.jersey) + '</td>' +
-              '<td><span class="clickable-text" data-href="/player/' + esc(r.id) + '">' +
-              esc(r.name) + '</span></td>' +
-              '<td class="num">' + r.g + '</td><td class="num">' + r.a + '</td>' +
-              '<td class="num bs-pts">' + r.pts + '</td><td class="num">' + r.sog + '</td>' +
-              '<td class="num">' + r.hits + '</td></tr>';
-          }).join('') + '</tbody></table>';
-        if (gs.length) {
-          html += '<table class="bs-table"><thead><tr><th>#</th><th>Goalie</th>' +
-                  '<th class="num">SA</th><th class="num">SV</th><th class="num">GA</th>' +
-                  '<th class="num">SV%</th></tr></thead><tbody>' +
-            gs.map(function (r) {
-              return '<tr><td class="num">' + esc(r.jersey) + '</td>' +
-                '<td><span class="clickable-text" data-href="/player/' + esc(r.id) + '">' +
-                esc(r.name) + '</span></td>' +
-                '<td class="num">' + r.sa + '</td><td class="num">' + r.saves + '</td>' +
-                '<td class="num">' + r.ga + '</td><td class="num">' + r.sv_pct.toFixed(3) + '</td></tr>';
-            }).join('') + '</tbody></table>';
-        }
-      });
-      el.innerHTML = html;
+      el.innerHTML = boxscoreHTML(data);
+      wireBoxTabs(el);
     }).catch(function () {
       el.innerHTML = '<div class="tl-empty">Could not load the box score.</div>';
     });
   }
+
+  // Exported for the replay page.
+  window.PDBoxscore = { html: boxscoreHTML, wireTabs: wireBoxTabs };
 })();

@@ -269,15 +269,108 @@ document.getElementById('th-hero').addEventListener('keydown', (e) => {
 });
 
 async function continueFlow() {
+  // Multiplayer (Batch E): the Continue button becomes the EHM ready
+  // vote. Clients vote; the host votes too (the day advances only when
+  // every manager is ready). Spectators can't advance.
+  let mpRole = 'none';
+  try {
+    const mp = await (await fetch('/api/mp/state')).json();
+    mpRole = mp.role || 'none';
+    if (mpRole === 'spectator') {
+      mpToast('Spectating — management actions are disabled.');
+      return;
+    }
+    if (mpRole === 'client') {
+      await mpToggleReady();
+      return;
+    }
+  } catch (e) { /* fall through to single-player flow */ }
   let st;
   try {
     st = await (await fetch('/api/continue_state')).json();
   } catch (e) { return; }
   if (!st.blocked) {
+    // Host mode: the click is a ready vote, not an instant advance.
+    if (mpRole === 'host') { advanceDay(st); return; }
     if (confirm('Advance the day?')) advanceDay(st);
     return;
   }
   showBlockerModal(st.blockers);
+}
+
+/* ---------- multiplayer ready gate (Batch E) ---------- */
+async function mpToggleReady() {
+  const title = document.querySelector('.th-hero-title');
+  const prev = title ? title.textContent : '';
+  if (title) title.textContent = '…';
+  try {
+    const r = await fetch('/api/mp/ready', {method: 'POST'});
+    const d = await r.json();
+    if (!d.ok) { if (title) title.textContent = prev; return; }
+    const nonce = d.nonce;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(res => setTimeout(res, 500));
+      const r2 = await fetch('/api/mp/result?nonce=' + encodeURIComponent(nonce));
+      const d2 = await r2.json();
+      if (d2.pending) continue;
+      const res = d2.result || {};
+      if (res.blocked) {
+        showBlockerModal(res.blockers || []);
+      } else if (!res.ok) {
+        mpToast(res.message || 'Vote failed.');
+      }
+      break;
+    }
+  } catch (e) {}
+  mpRefreshHero();
+}
+
+/* Repaint the hero button for the MP ready state (polled).
+   Uses the non-draining /api/mp/state so trade-offer events stay in
+   the inbox for the MP bar's /api/mp/game poll. */
+let mpHeroTimer = null;
+async function mpRefreshHero() {
+  try {
+    const mp = await (await fetch('/api/mp/state')).json();
+    if (!mp || mp.role === 'none') return false;
+    const adv = mp.advance || {};
+    const title = document.querySelector('.th-hero-title');
+    const next = document.getElementById('th-next');
+    const counts = adv.needed_count
+      ? ' (' + (adv.ready_count || 0) + '/' + adv.needed_count + ')' : '';
+    if (mp.role === 'host') {
+      const me = adv.me_ready ? '✓ READY — CLICK TO UNREADY' : 'READY? (CLICK WHEN DONE FOR TODAY)';
+      if (title) title.textContent = (adv.me_ready ? '✓ READY' : 'READY?') + counts;
+      if (next) {
+        const waiting = (adv.waiting || []).join(', ');
+        next.textContent = adv.all_ready ? 'Everyone is ready — advancing…'
+          : waiting ? 'Waiting on: ' + waiting : 'Click when done for today';
+      }
+      void me;
+    } else if (mp.role === 'client') {
+      if (title) title.textContent = (adv.me_ready ? '✓ READY' : 'READY?') + counts;
+      if (next) {
+        const waiting = (adv.waiting || []).join(', ');
+        next.textContent = adv.all_ready ? 'Everyone is ready — host advances…'
+          : waiting ? 'Waiting on: ' + waiting : 'Vote to advance the day';
+      }
+    } else {
+      if (title) title.textContent = 'SPECTATING';
+      if (next) next.textContent = 'Watch the league unfold — no management actions';
+    }
+    return true;
+  } catch (e) { return false; }
+}
+
+function mpToast(msg) {
+  try {
+    const t = document.createElement('div');
+    t.className = 'mp-toast';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => t.classList.add('show'), 30);
+    setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 400); }, 3200);
+  } catch (e) {}
 }
 
 async function advanceDay(st) {
@@ -492,6 +585,13 @@ document.getElementById('btn-exit')?.addEventListener('click', exitGame);
 document.getElementById('menu-exit')?.addEventListener('click', exitGame);
 
 loadState();
+
+// Multiplayer hero repaint (Batch E): only polls when an MP game is active.
+mpRefreshHero().then(function (active) {
+  if (active && !mpHeroTimer) {
+    mpHeroTimer = setInterval(mpRefreshHero, 3000);
+  }
+});
 
 // Delegated clicks for at-a-glance panels: any .clickable with data-href navigates.
 document.addEventListener('click', (e) => {

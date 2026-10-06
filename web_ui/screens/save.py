@@ -169,6 +169,32 @@ def api_save_delete():
     return jsonify({"ok": bool(ok), "nonce": nonce})
 
 
+# ======================================================================
+# Batch E (2026-10-06): multiplayer client snapshot load.
+#
+# A joining client has no game yet -- it holds only a MultiplayerClient
+# connection from the setup page. When the host starts the league,
+# POST /api/mp/apply_snapshot {save_b64} builds the full local game
+# from the host's snapshot bytes on the Tk main thread (the same
+# restore path the desktop client's _apply_multiplayer_snapshot uses),
+# points user_team at the claimed club (or flags spectator mode), and
+# attaches the client so day-advance syncs keep flowing.
+# Poll the outcome with GET /api/save/result?nonce=.
+# ======================================================================
+@bp.route("/api/mp/apply_snapshot", methods=["POST"])
+def api_mp_apply_snapshot():
+    """Build the client's local game from the host's snapshot bytes."""
+    data = request.get_json(force=True, silent=True) or {}
+    nonce = _nonce(data)
+    save_b64 = str(data.get("save_b64") or "")
+    if not save_b64:
+        return jsonify({"ok": False, "error": "save_b64 required"}), 400
+    ok = enqueue_command("mp_apply_snapshot", save_b64=save_b64,
+                         label=str(data.get("label") or "Joined game"),
+                         nonce=nonce)
+    return jsonify({"ok": bool(ok), "nonce": nonce})
+
+
 @bp.route("/api/save/result")
 def api_save_result():
     """Poll the outcome of a queued save/load/delete (?nonce=)."""

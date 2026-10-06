@@ -12144,6 +12144,25 @@ class HockeyManagerGUI(tk.Tk):
                           in_players, out_picks, in_picks):
         """The proposal targets the host's own club: ask the host with the
         same prompt the trade screen uses (waivers first, then accept)."""
+        # Web UI (Batch E, 2026-10-06): no blocking Tk dialogs on the web
+        # host -- the web layer sets _mp_web_host_offers (a dict) and the
+        # offer surfaces in /api/mp/game for an in-page Accept/Reject.
+        # Desktop path below is untouched.
+        _web_offers = getattr(self, "_mp_web_host_offers", None)
+        if isinstance(_web_offers, dict):
+            try:
+                import uuid as _uuid
+                _oid = _uuid.uuid4().hex[:10]
+                _web_offers[_oid] = {
+                    "proposal": proposal,
+                    "offer_id": _oid,
+                }
+                return (True,
+                        f"Offer sent to {getattr(partner, 'team_name', 'you')} "
+                        f"-- awaiting their answer.",
+                        False)
+            except Exception:
+                pass
         import trade_engine as te
         from popup_system import messagebox
         league = getattr(self, "league", None)

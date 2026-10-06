@@ -548,6 +548,20 @@ async function propose() {
   btn.disabled = true;
   btn.textContent = 'Proposing…';
   const note = el('trade-note');
+  // Multiplayer (Batch E): if the partner club is run by a human, the
+  // offer goes to them live through the MP layer instead of the AI
+  // negotiation path.
+  try {
+    const mh = await (await fetch('/api/mp/humans')).json();
+    const humans = mh.ok ? (mh.humans || []) : [];
+    const isHuman = humans.some(h =>
+      h.name === state.partnerName || h.abbr === state.partnerId ||
+      h.name === state.partnerId);
+    if (isHuman) {
+      await mpPropose(note, btn);
+      return;
+    }
+  } catch (e) { /* fall through to the AI path */ }
   try {
     const res = await fetch('/api/trades/propose', {
       method: 'POST',
@@ -574,6 +588,70 @@ async function propose() {
       btn.disabled = false;
       btn.textContent = 'Propose trade';
     }
+  } catch (e) {
+    note.textContent = 'Failed: ' + e.message;
+    note.className = 'prop-note err';
+    btn.disabled = false;
+    btn.textContent = 'Propose trade';
+  }
+}
+
+/* ---------- multiplayer human-to-human propose (Batch E) ---------- */
+async function mpPropose(note, btn) {
+  try {
+    const res = await fetch('/api/mp/trade/propose', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        partner_team_id: state.partnerName || state.partnerId,
+        give_pids: [...state.givePids],
+        give_picks: [...state.givePicks],
+        want_pids: [...state.wantPids],
+        want_picks: [...state.wantPicks],
+        retention: state.retention,
+        pick_protection: state.protection,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      note.textContent = 'Failed: ' + (data.error || 'could not send offer');
+      note.className = 'prop-note err';
+      btn.disabled = false;
+      btn.textContent = 'Propose trade';
+      return;
+    }
+    if (data.via === 'host') {
+      // Client machine: the host routes the offer to the human GM.
+      // The accept/reject lands via the MP event feed.
+      note.textContent = 'Offer sent — the other (human) GM gets it live. Their answer appears in the multiplayer feed.';
+      note.className = 'prop-note ok';
+      btn.textContent = 'Propose trade';
+      return;
+    }
+    // Host machine: the real _mp_propose_trade ran on the main thread.
+    note.textContent = 'Routing the offer…';
+    const nonce = data.nonce;
+    const timer = setInterval(async () => {
+      try {
+        const r2 = await fetch('/api/mp/result?nonce=' + encodeURIComponent(nonce));
+        const d2 = await r2.json();
+        if (d2.pending) return;
+        clearInterval(timer);
+        const rr = d2.result || {};
+        if (rr.ok) {
+          note.textContent = 'Done: ' + (rr.message || 'offer routed.');
+          note.className = 'prop-note ok';
+          state.givePids.clear(); state.givePicks.clear();
+          state.wantPids.clear(); state.wantPicks.clear();
+          renderGive(); renderGet(); renderDeal(); updateVerdict();
+        } else {
+          note.textContent = 'Failed: ' + (rr.message || 'offer rejected');
+          note.className = 'prop-note err';
+        }
+        btn.disabled = false;
+        btn.textContent = 'Propose trade';
+      } catch (e) {}
+    }, 800);
   } catch (e) {
     note.textContent = 'Failed: ' + e.message;
     note.className = 'prop-note err';
