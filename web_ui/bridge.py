@@ -259,6 +259,8 @@ def to_web_player(p):
             or 0)),
         "captaincy": _safe(lambda: getattr(p, "captaincy", "") or ""),
         "injured": _safe(lambda: bool(getattr(p, "is_injured", False))),
+        "morale": _safe(lambda: int(getattr(p, "morale", 70) or 70)),
+        "condition": _safe(lambda: int(getattr(p, "condition", 100) or 100)),
     }
 
 

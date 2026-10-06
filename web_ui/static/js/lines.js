@@ -74,6 +74,49 @@ function ovrBand(ovr) {
   ovr = Number(ovr || 0);
   return ovr >= 82 ? 'ovr-hi' : ovr >= 72 ? 'ovr-mid' : 'ovr-lo';
 }
+/* Per-unit quality: average OVR of filled slots + fit breakdown.
+ * Powers the NHL-14-style line rating badge in each unit header. */
+function unitStats(slots, slotMap) {
+  let sum = 0, filled = 0, green = 0, yellow = 0, red = 0;
+  for (const slot of slots) {
+    const p = slotMap[slot];
+    if (!p) continue;
+    filled++;
+    sum += Number(p.overall || 0);
+    const f = fitClass(p, slot);
+    if (f === 'fit-green') green++;
+    else if (f === 'fit-yellow') yellow++;
+    else if (f === 'fit-red') red++;
+  }
+  return {
+    filled, total: slots.length,
+    avg: filled ? Math.round(sum / filled) : null,
+    green, yellow, red,
+  };
+}
+function moraleBand(m) {
+  m = Number(m || 70);
+  return m >= 70 ? 'mor-hi' : m >= 50 ? 'mor-mid' : 'mor-lo';
+}
+/* Badges shared by roster cards and slot chips: INJ / C / A / FATIGUED. */
+function badgeHtml(p) {
+  let h = '';
+  const cap = String(p.captaincy || '').toUpperCase();
+  if (cap === 'C' || cap === 'A') h += '<span class="cap-badge" title="Team captaincy">' + esc(cap) + '</span>';
+  if (p.injured) h += '<span class="inj-badge" title="Injured">INJ</span>';
+  else if (Number(p.condition || 100) < 80) h += '<span class="fat-badge" title="Low condition">TIRED</span>';
+  return h;
+}
+/* Swap every slot of unit A with the matching slot of unit B
+ * (LW1<->LW2, C1<->C2, ...). Works for ES and ST unit shapes. */
+function swapUnitPlayers(slotsA, slotsB, slotMap) {
+  for (let i = 0; i < Math.min(slotsA.length, slotsB.length); i++) {
+    const a = slotsA[i], b = slotsB[i];
+    const tmp = slotMap[a] || null;
+    slotMap[a] = slotMap[b] || null;
+    slotMap[b] = tmp;
+  }
+}
 
 /* ---------------- state ---------------- */
 const S = {
@@ -162,7 +205,7 @@ function renderRoster() {
 function rosterCard(p) {
   const pid = String(p.id);
   const el = document.createElement('div');
-  el.className = 'le-pcard';
+  el.className = 'le-pcard' + (p.injured ? ' is-injured' : '');
   el.draggable = true;
   el.dataset.id = pid;
   const dressed = slotOf(pid);
@@ -170,13 +213,16 @@ function rosterCard(p) {
   const face = p.portrait
     ? '<img class="le-face" src="' + esc(p.portrait) + '" alt="" loading="lazy" onerror="this.remove()">'
     : '';
+  const mor = Math.max(0, Math.min(100, Number(p.morale == null ? 70 : p.morale)));
   el.innerHTML =
     '<span class="ovr ' + ovrBand(p.overall) + '">' + esc(p.overall) + '</span>' +
     face +
     '<span class="nm clickable-text" data-href="/player/' + esc(pid) + '" title="Open player profile"><span class="n">' + esc(p.name) + '</span>' +
     '<span class="s">Age ' + esc(p.age) + '</span></span>' +
+    badgeHtml(p) +
     '<span class="pos">' + esc(p.position) + '</span>' +
-    (dressed ? '<span class="dressed">' + esc(dressed) + '</span>' : '');
+    (dressed ? '<span class="dressed">' + esc(dressed) + '</span>' : '') +
+    '<span class="morale-bar" title="Morale ' + mor + '"><span class="' + moraleBand(mor) + '" style="width:' + mor + '%"></span></span>';
   el.addEventListener('dragstart', (e) => {
     justDragged = true;
     setTimeout(() => { justDragged = false; }, 150);
@@ -208,19 +254,69 @@ function renderUnits() {
     h.style.cssText = 'font-size:15px;margin:22px 0 12px;';
     h.textContent = g.title.toUpperCase();
     sec.appendChild(h);
-    for (const u of g.units) {
+    g.units.forEach((u, ui) => {
       const div = document.createElement('div');
       div.className = 'le-unit';
       const lab = document.createElement('div');
       lab.className = 'le-unit-label';
-      lab.textContent = u.label;
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = u.label;
+      lab.appendChild(nameSpan);
+      // NHL-14-style line rating: average OVR of dressed players.
+      const st = unitStats(u.slots, S.slots);
+      if (st.avg != null) {
+        const badge = document.createElement('span');
+        badge.className = 'unit-ovr ' + ovrBand(st.avg);
+        badge.title = st.filled + '/' + st.total + ' slots filled · ' +
+          st.green + ' natural, ' + st.yellow + ' playable, ' + st.red + ' out of position';
+        badge.textContent = st.avg + ' OVR';
+        lab.appendChild(badge);
+        if (st.filled < st.total) {
+          const inc = document.createElement('span');
+          inc.className = 'unit-incomplete';
+          inc.textContent = st.filled + '/' + st.total;
+          lab.appendChild(inc);
+        }
+      }
+      // Swap with adjacent unit (lines/pairings only).
+      if (g.units.length > 1) {
+        const swapWrap = document.createElement('span');
+        swapWrap.className = 'unit-swap';
+        if (ui > 0) {
+          const up = document.createElement('button');
+          up.className = 'swap-btn';
+          up.title = 'Swap with ' + g.units[ui - 1].label;
+          up.textContent = '▲';
+          up.addEventListener('click', (e) => {
+            e.stopPropagation();
+            swapUnitPlayers(g.units[ui - 1].slots, u.slots, S.slots);
+            S.sel = null; markDirty(); renderAll();
+            note(g.units[ui - 1].label + ' ⇄ ' + u.label + ' swapped.', '');
+          });
+          swapWrap.appendChild(up);
+        }
+        if (ui < g.units.length - 1) {
+          const dn = document.createElement('button');
+          dn.className = 'swap-btn';
+          dn.title = 'Swap with ' + g.units[ui + 1].label;
+          dn.textContent = '▼';
+          dn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            swapUnitPlayers(u.slots, g.units[ui + 1].slots, S.slots);
+            S.sel = null; markDirty(); renderAll();
+            note(u.label + ' ⇄ ' + g.units[ui + 1].label + ' swapped.', '');
+          });
+          swapWrap.appendChild(dn);
+        }
+        lab.appendChild(swapWrap);
+      }
       const row = document.createElement('div');
       row.className = 'le-unit-row';
       for (const slot of u.slots) row.appendChild(slotEl(slot));
       div.appendChild(lab);
       div.appendChild(row);
       sec.appendChild(div);
-    }
+    });
     host.appendChild(sec);
   }
 }
@@ -245,6 +341,7 @@ function slotEl(slot) {
     who.innerHTML =
       wface +
       '<div class="n clickable-text" data-href="/player/' + esc(String(p.id)) + '" title="Open player profile">' + esc(p.name) + '</div>' +
+      badgeHtml(p) +
       '<div class="s"><span class="' + ovrBand(p.overall) + '">' + esc(p.overall) + ' OVR</span> · ' +
       esc(p.position) + ' · Age ' + esc(p.age) + '</div>';
     who.addEventListener('dragstart', (e) => {
@@ -349,7 +446,8 @@ function handleDrop(payload, targetSlot) {
   renderAll();
   const fit = fitClass(p, targetSlot);
   const fitNote = fit === 'fit-red' ? ' — out of position!' : fit === 'fit-yellow' ? ' — playable out of position.' : '.';
-  note(p.name + ' → ' + targetSlot + fitNote, fit === 'fit-red' ? 'err' : '');
+  const injNote = p.injured ? ' ⚠️ ' + p.name.split(' ').slice(-1)[0] + ' is INJURED.' : '';
+  note(p.name + ' → ' + targetSlot + fitNote + injNote, (fit === 'fit-red' || p.injured) ? 'err' : '');
 }
 function unassignAll() {
   for (const slot of LINE_SLOTS) S.slots[slot] = null;
@@ -588,13 +686,49 @@ function stUnitOf(slot) {
 function stRenderUnits() {
   const host = $('st-units');
   host.innerHTML = '';
-  for (const u of ST_UNITS) {
+  // Swappable pairs: PP1<->PP2, PK1<->PK2.
+  const swapPairs = [[0, 1], [2, 3]];
+  ST_UNITS.forEach((u, ui) => {
     const sec = document.createElement('section');
     const div = document.createElement('div');
     div.className = 'le-unit';
     const lab = document.createElement('div');
     lab.className = 'le-unit-label';
-    lab.textContent = u.label;
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = u.label;
+    lab.appendChild(nameSpan);
+    const st = unitStats(u.slots, STS.slots);
+    if (st.avg != null) {
+      const badge = document.createElement('span');
+      badge.className = 'unit-ovr ' + ovrBand(st.avg);
+      badge.title = st.filled + '/' + st.total + ' slots filled';
+      badge.textContent = st.avg + ' OVR';
+      lab.appendChild(badge);
+      if (st.filled < st.total) {
+        const inc = document.createElement('span');
+        inc.className = 'unit-incomplete';
+        inc.textContent = st.filled + '/' + st.total;
+        lab.appendChild(inc);
+      }
+    }
+    const pair = swapPairs.find((pr) => pr.includes(ui));
+    if (pair) {
+      const other = pair[0] === ui ? pair[1] : pair[0];
+      const swapWrap = document.createElement('span');
+      swapWrap.className = 'unit-swap';
+      const btn = document.createElement('button');
+      btn.className = 'swap-btn';
+      btn.title = 'Swap with ' + ST_UNITS[other].label.split(' — ')[0];
+      btn.textContent = '⇄';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        swapUnitPlayers(ST_UNITS[other].slots, u.slots, STS.slots);
+        STS.sel = null; stMarkDirty(); stRenderAll();
+        note(ST_UNITS[other].label.split(' — ')[0] + ' ⇄ ' + u.label.split(' — ')[0] + ' swapped.', '');
+      });
+      swapWrap.appendChild(btn);
+      lab.appendChild(swapWrap);
+    }
     const row = document.createElement('div');
     row.className = 'le-unit-row';
     for (const slot of u.slots) row.appendChild(stSlotEl(slot));
@@ -602,7 +736,7 @@ function stRenderUnits() {
     div.appendChild(row);
     sec.appendChild(div);
     host.appendChild(sec);
-  }
+  });
 }
 function stSlotEl(slot) {
   const p = STS.slots[slot];
@@ -625,6 +759,7 @@ function stSlotEl(slot) {
     who.innerHTML =
       wface +
       '<div class="n clickable-text" data-href="/player/' + esc(String(p.id)) + '" title="Open player profile">' + esc(p.name) + '</div>' +
+      badgeHtml(p) +
       '<div class="s"><span class="' + ovrBand(p.overall) + '">' + esc(p.overall) + ' OVR</span> · ' +
       esc(p.position) + ' · Age ' + esc(p.age) + '</div>';
     who.addEventListener('dragstart', (e) => {
