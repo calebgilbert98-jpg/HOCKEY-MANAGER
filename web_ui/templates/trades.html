@@ -22,7 +22,7 @@
     <div>
       <div class="bcast-kicker">Puck Dynasty</div>
       <h1 class="bcast-title">Trade Center</h1>
-      <p class="trades-hint">Pick a trade partner below, click players to build the deal, and the AI GM gives a live verdict.</p>
+      <p class="trades-hint">Pick a trade partner below, click players to build the deal — the verdict is the AI GM's likely reaction. Proposing sends an offer; their answer (accept, counter, reject) arrives in your inbox within 1-3 days.</p>
     </div>
     <div class="retention-pill" id="retention-slots" title="NHL clubs may carry at most 3 active retained-salary transactions">Retention: 0/3 slots</div>
   </div>
@@ -91,6 +91,13 @@
     <div class="prop-note" id="trade-note"></div>
     <button class="btn-primary btn-propose" id="btn-propose" disabled>Propose trade</button>
   </div>
+
+  <!-- Open negotiations: async trade talks (desktop parity) -->
+  <section class="neg-section bpanel" id="neg-section" hidden>
+    <div class="panel-label">Open negotiations</div>
+    <div class="neg-hint">Offers you sent are with the other GM — they answer in 1-3 days via your inbox. Counters addressed to you can be accepted or declined from the inbox, or countered again with the builder above.</div>
+    <div id="neg-list"></div>
+  </section>
 </main>
 
 <script src="/static/js/trades.js"></script>

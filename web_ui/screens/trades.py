@@ -97,9 +97,12 @@ def api_trades_propose():
 
     v2 trade-builder payload (target_team_id, give_pids, give_picks,
     want_pids, want_picks) -> queues "execute_trade". The Tk-thread
-    handler re-validates with the REAL ai_consider_trade() before calling
-    the real trade_engine.execute_trade(); it never executes a deal the
-    AI rejects.
+    handler resolves the assets, validates retention/protection terms,
+    and SENDS the offer through trade_negotiation.send_offer(): a
+    pending negotiation with response_due = today + 1-3 days. The AI
+    GM's answer (accept / counter / reject) arrives via the inbox on
+    day advance -- instantly only on the deadline-day rush (desktop
+    parity).
 
     Gap 2: optional "retention" ({pid: pct}) and "pick_protection"
     ({pick id: code}) terms. Hard server-side validation here (the UI
@@ -655,3 +658,85 @@ def _pair_csv(raw):
         if k:
             out.append((k, v))
     return out
+
+
+# ======================================================================
+# Async trade negotiations (desktop parity, trade_negotiation.py).
+#
+# Proposing a trade (bridge op "execute_trade") now SENDS an offer:
+# a pending TradeNegotiation with response_due = today + 1-3 days.
+# The AI GM's answer (accept / counter / reject) arrives via the
+# inbox when process_due_negotiations runs on day advance
+# (main.simulate_day) -- instantly only on the deadline-day rush.
+# This endpoint exposes the open negotiation threads (history +
+# current terms) for the Trade Center's "Open negotiations" panel;
+# answering happens from the inbox (inbox_trade_accept/decline, wired
+# in bridge.py) or via a counter from this screen
+# ("trade_counter_negotiation" command).
+# ======================================================================
+
+@bp.route("/api/trades/negotiations")
+def api_trades_negotiations():
+    """Open trade negotiation threads for the user team."""
+    live = _live()
+    if live is None:
+        return jsonify({"negotiations": []})
+    gm = _safe(lambda: live.game_manager)
+    store = _safe(lambda: list(getattr(gm, "trade_negotiations", None) or []),
+                  []) or []
+    try:
+        import trade_negotiation as tn
+    except Exception:
+        tn = None
+    out = []
+    for n in store:
+        try:
+            if tn is not None and isinstance(n, tn.TradeNegotiation):
+                is_open = n.is_open
+            else:
+                is_open = str(getattr(n, "status", "")) in (
+                    "awaiting_ai", "awaiting_user")
+            if not is_open:
+                continue
+            due = getattr(n, "response_due", None)
+            created = getattr(n, "created", None)
+            if tn is not None and isinstance(n, tn.TradeNegotiation):
+                you_send = tn.asset_summary(
+                    n.user_assets, n.retention, n.pick_protection)
+                you_get = tn.asset_summary(n.partner_assets)
+            else:
+                you_send = ", ".join(
+                    str(a.get("name", "?")) for a in
+                    (getattr(n, "user_assets", None) or [])
+                    if isinstance(a, dict)) or "?"
+                you_get = ", ".join(
+                    str(a.get("name", "?")) for a in
+                    (getattr(n, "partner_assets", None) or [])
+                    if isinstance(a, dict)) or "?"
+            out.append({
+                "id": str(getattr(n, "id", "")),
+                "partner": str(getattr(n, "partner_team_name", "?")),
+                "direction": str(getattr(n, "direction", "")),
+                "status": str(getattr(n, "status", "")),
+                "rounds": int(getattr(n, "rounds", 0) or 0),
+                "patience": round(float(getattr(n, "patience", 1.0) or 1.0), 2),
+                "response_due": (due.isoformat() if hasattr(due, "isoformat")
+                                 else None),
+                "created": (created.isoformat()
+                            if hasattr(created, "isoformat") else None),
+                "you_send": you_send,
+                "you_get": you_get,
+                "last_message": str(getattr(n, "last_message", "") or ""),
+                "history": [
+                    {"date": str(h.get("date", "")),
+                     "by": str(h.get("by", "")),
+                     "summary": str(h.get("summary", ""))}
+                    for h in (getattr(n, "history", None) or [])
+                    if isinstance(h, dict)
+                ],
+            })
+        except Exception:
+            continue
+    # Most recent first.
+    out.sort(key=lambda d: (d.get("created") or ""), reverse=True)
+    return jsonify({"negotiations": out})

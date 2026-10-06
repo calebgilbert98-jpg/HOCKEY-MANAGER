@@ -186,3 +186,9 @@
 }
 .le-slot .who { display: flex; align-items: center; gap: 8px; }
 .le-slot .who .le-face { width: 28px; height: 28px; flex-basis: 28px; }
+
+/* Special-teams tab (2026-10-05): tab bar + shared roster panel layout. */
+.le-tabs { display: flex; gap: 8px; margin: 4px 0 16px; }
+.le-tabs .le-filter { cursor: pointer; }
+.le-tabwrap { min-width: 0; }
+.st-head { margin-bottom: 12px; }

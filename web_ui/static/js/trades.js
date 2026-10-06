@@ -445,7 +445,7 @@ function renderVerdict(d) {
   const badge = el('verdict-badge');
   const v = String(d.verdict || 'reject').toLowerCase();
   badge.className = 'verdict-badge ' + (v === 'accept' ? 'accept' : v === 'counter' ? 'counter' : 'reject');
-  badge.textContent = v === 'accept' ? 'GM accepts' : v === 'counter' ? 'GM counters' : 'GM rejects';
+  badge.textContent = v === 'accept' ? 'Likely: accepts' : v === 'counter' ? 'Likely: counters' : 'Likely: rejects';
   el('verdict-reason').textContent = d.reason || '';
 
   const gv = d.give_value || 0, pv = d.get_value || 0;
@@ -461,10 +461,15 @@ function renderVerdict(d) {
       <span class="vbar-pts">${pv} pts</span></div>
     ${d.label ? `<div class="vbar-row"><span class="vbar-label">Valuation</span><span>${esc(d.label)}</span></div>` : ''}`;
 
-  // Propose only when the REAL AI verdict says accept and retention passed.
+  // Propose when the deal is non-empty and retention terms pass.
+  // The verdict below is the AI's LIKELY reaction (advisory): the real
+  // answer arrives 1-3 sim days later via the inbox (accept / counter /
+  // reject), exactly like the desktop Trade Center.
   const retBad = (d.retention_errors && d.retention_errors.length) ||
     d.retention_valid === false;
-  el('btn-propose').disabled = v !== 'accept' || !!retBad;
+  const hasAssets = state.givePids.size + state.givePicks.size +
+    state.wantPids.size + state.wantPicks.size > 0;
+  el('btn-propose').disabled = !hasAssets || !!retBad;
   el('trade-note').textContent = '';
   el('trade-note').className = 'prop-note';
 
@@ -484,9 +489,8 @@ function renderVerdict(d) {
 
 /* ---------- propose ---------- */
 async function propose() {
-  const v = state.verdict;
-  if (!v || String(v.verdict).toLowerCase() !== 'accept') return;
   const btn = el('btn-propose');
+  if (btn.disabled) return;
   btn.disabled = true;
   btn.textContent = 'Proposing…';
   const note = el('trade-note');
@@ -506,7 +510,7 @@ async function propose() {
     });
     const data = await res.json();
     if (data.ok) {
-      note.textContent = 'Trade queued — executing on the game thread. Watching for the result…';
+      note.textContent = 'Offer sent — the other GM answers in 1-3 days via your inbox. Watching for the result…';
       note.className = 'prop-note';
       pollResult();
     } else {
@@ -535,20 +539,28 @@ async function pollResult() {
       const res = await fetch('/api/trades/result');
       const data = await res.json();
       const r = data.result;
-      if (r && r.marker === 'execute_trade') {
+      if (r && (r.marker === 'execute_trade' || r.marker === 'trade_counter_negotiation')) {
         clearInterval(state.resultTimer);
         state.resultTimer = null;
         if (r.ok) {
-          note.textContent = 'Trade completed: ' + (r.summary || 'done.');
-          note.className = 'prop-note ok';
+          if (r.pending) {
+            // Async negotiation: the offer/counter sits with the other GM.
+            note.textContent = (r.marker === 'trade_counter_negotiation' ? 'Counter sent: ' : 'Offer sent: ') +
+              (r.summary || 'awaiting the GM\u2019s answer.') + ' Track it below in Open negotiations.';
+            note.className = 'prop-note ok';
+          } else {
+            note.textContent = 'Done: ' + (r.summary || 'resolved — check your inbox.');
+            note.className = 'prop-note ok';
+          }
           state.givePids.clear(); state.givePicks.clear();
           state.wantPids.clear(); state.wantPicks.clear();
           state.retention = {};
           state.protection = {};
           await loadMyAssets();
           selectPartner(state.partnerId, state.partnerName);
+          loadNegotiations();
         } else {
-          note.textContent = 'Trade blocked: ' + (r.summary || 'the GM rejected it at execution.');
+          note.textContent = 'Trade blocked: ' + (r.summary || 'the proposal could not be sent.');
           note.className = 'prop-note err';
           btn.disabled = false;
           btn.textContent = 'Propose trade';
@@ -557,7 +569,7 @@ async function pollResult() {
       } else if (tries > 60) {
         clearInterval(state.resultTimer);
         state.resultTimer = null;
-        note.textContent = 'No execution result yet — check the game / inbox.';
+        note.textContent = 'No result yet — check the game / inbox.';
         btn.disabled = false;
         btn.textContent = 'Propose trade';
       }
@@ -565,11 +577,95 @@ async function pollResult() {
   }, 1000);
 }
 
+/* ---------- open negotiations (async trade talks) ---------- */
+function statusLabel(n) {
+  if (n.status === 'awaiting_ai') return 'With ' + n.partner + '’s GM — answer due ' + (n.response_due || 'soon');
+  if (n.status === 'awaiting_user') return 'Their move — check your inbox to answer';
+  return n.status;
+}
+async function loadNegotiations() {
+  const host = el('neg-list');
+  const sec = el('neg-section');
+  try {
+    const res = await fetch('/api/trades/negotiations');
+    const data = await res.json();
+    const negs = data.negotiations || [];
+    sec.hidden = negs.length === 0;
+    host.innerHTML = '';
+    for (const n of negs) {
+      const card = document.createElement('div');
+      card.className = 'neg-card';
+      const hist = (n.history || []).map(h =>
+        '<div class="neg-hist-row"><span class="neg-hist-date">' + esc(h.date) + '</span>' +
+        '<span class="neg-hist-by by-' + esc(h.by) + '">' + esc(h.by === 'user' ? 'You' : h.by === 'ai' ? n.partner + ' GM' : 'League') + '</span>' +
+        '<span class="neg-hist-sum">' + esc(h.summary) + '</span></div>').join('');
+      card.innerHTML =
+        '<div class="neg-head"><span class="neg-partner">' + esc(n.partner) + '</span>' +
+        '<span class="neg-status st-' + esc(n.status) + '">' + esc(statusLabel(n)) + '</span></div>' +
+        '<div class="neg-terms"><div><span class="neg-k">You send:</span> ' + esc(n.you_send) + '</div>' +
+        '<div><span class="neg-k">You get:</span> ' + esc(n.you_get) + '</div></div>' +
+        (n.last_message ? '<div class="neg-last">' + esc(n.last_message) + '</div>' : '') +
+        '<div class="neg-hist">' + hist + '</div>' +
+        '<div class="neg-actions">' +
+        '<a class="btn-ghost" href="/inbox">Open inbox to answer</a>' +
+        (n.status === 'awaiting_user'
+          ? '<button class="btn-ghost" data-counter="' + esc(n.id) + '">Counter with current builder terms</button>'
+          : '') +
+        '</div>';
+      host.appendChild(card);
+    }
+    host.querySelectorAll('button[data-counter]').forEach(b =>
+      b.addEventListener('click', () => counterNegotiation(b.dataset.counter)));
+  } catch (e) { /* negotiations panel is non-critical */ }
+}
+/* Answer an AI counter with the current builder terms (desktop parity:
+ * trade_negotiation.send_counter — the thread stays open, patience decays,
+ * the AI answers again in 1-3 days via the inbox). */
+async function counterNegotiation(negId) {
+  const note = el('trade-note');
+  const hasAssets = state.givePids.size + state.givePicks.size +
+    state.wantPids.size + state.wantPicks.size > 0;
+  if (!hasAssets) {
+    note.textContent = 'Build your counter in the deal columns above first, then press this button again.';
+    note.className = 'prop-note err';
+    return;
+  }
+  note.textContent = 'Sending counter…';
+  note.className = 'prop-note';
+  try {
+    const res = await fetch('/api/command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        op: 'trade_counter_negotiation',
+        negotiation_id: negId,
+        give_pids: [...state.givePids],
+        give_picks: [...state.givePicks],
+        want_pids: [...state.wantPids],
+        want_picks: [...state.wantPicks],
+        retention: state.retention,
+        pick_protection: state.protection,
+      }),
+    });
+    const data = await res.json();
+    if (data.ok) { pollResult(); }
+    else {
+      note.textContent = 'Counter failed: ' + (data.error || 'could not send');
+      note.className = 'prop-note err';
+    }
+  } catch (e) {
+    note.textContent = 'Counter failed: ' + e.message;
+    note.className = 'prop-note err';
+  }
+}
+
 /* ---------- init ---------- */
 el('team-search').addEventListener('input', e => renderTeams(e.target.value));
 el('btn-propose').addEventListener('click', propose);
 
 loadTeams().then(preselectFromURL);
+loadNegotiations();
+setInterval(loadNegotiations, 30000); // keep the thread view fresh
 
 /* Pre-selection from context menus: /trades?team=<name>&player=<id> */
 async function preselectFromURL() {

@@ -230,7 +230,28 @@ def get_editable_lines(app):
         pos, num = _slot_parts(slot)
         slots.append({"slot": slot, "pos": pos, "line": num,
                       "player": wp})
-    return {"slots": slots, "pools": pools, "slot_kinds": kinds}
+    out = {"slots": slots, "pools": pools, "slot_kinds": kinds}
+    # Special-teams state for the second editor tab (PP1/PP2/PK1/PK2).
+    st_slots, st_pools, st_kinds = [], {}, {}
+    for slot in ST_SLOTS:
+        st_kinds[slot] = "skater"
+        st_pools[slot] = skaters
+        cur = _safe(lambda: _st_current_player(lineup, slot))
+        wp = None
+        if cur is not None:
+            try:
+                wp = {"id": str(getattr(cur, "id", "")),
+                      "name": getattr(cur, "full_name", "?")}
+            except Exception:
+                wp = None
+        unit = ST_SLOT_UNIT.get(slot, "")
+        tail = slot.split("_", 1)[1] if "_" in slot else ""
+        st_slots.append({"slot": slot, "unit": unit, "pos": tail,
+                         "player": wp})
+    out["st_slots"] = st_slots
+    out["st_pools"] = st_pools
+    out["st_slot_kinds"] = st_kinds
+    return out
 
 
 def validate_lines_payload(team, slot_lines):
@@ -308,6 +329,166 @@ def apply_lines_payload(team, resolved):
     except Exception as e:
         return False, f"Could not save lines: {e}."
     return True, "Lines saved."
+
+
+# ----------------------------------------------------------------------
+# Special-teams editor (PP1/PP2/PK1/PK2)
+#
+# The sim reads team.lineup nested keys
+#   {"PP1": {"Forwards": [LW, C, RW], "Defense": [LD, RD]},
+#    "PK1": {"Forwards": [LW, RW],    "Defense": [LD, RD]}, ...}
+# exactly like the desktop CleanEditLinesView and
+# simulation._ensure_default_lineup write them: PP = 3F+2D (5 skaters),
+# PK = 2F+2D (4 skaters). The web editor uses per-position slot labels
+# (PP1_LW, PP1_C, ..., PK1_RW, ...) and converts to that nested shape.
+# ----------------------------------------------------------------------
+
+ST_UNITS = {
+    "PP1": ["PP1_LW", "PP1_C", "PP1_RW", "PP1_LD", "PP1_RD"],
+    "PP2": ["PP2_LW", "PP2_C", "PP2_RW", "PP2_LD", "PP2_RD"],
+    "PK1": ["PK1_LW", "PK1_RW", "PK1_LD", "PK1_RD"],
+    "PK2": ["PK2_LW", "PK2_RW", "PK2_LD", "PK2_RD"],
+}
+ST_SLOTS = [s for slots in ST_UNITS.values() for s in slots]
+ST_SLOT_UNIT = {s: u for u, slots in ST_UNITS.items() for s in slots}
+_ST_POS_ORDER = {"LW": 0, "C": 1, "RW": 2, "LD": 0, "RD": 1}
+
+
+def _st_slot_pos(slot):
+    """'PP1_LW' -> 'LW'."""
+    parts = str(slot or "").split("_", 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
+def _st_current_player(lineup, slot):
+    """Player object currently on a special-teams slot."""
+    try:
+        unit = ST_SLOT_UNIT.get(slot)
+        if not unit or not isinstance(lineup, dict):
+            return None
+        udata = lineup.get(unit) or {}
+        if not isinstance(udata, dict):
+            return None
+        fwd = udata.get("Forwards") or []
+        dfn = udata.get("Defense") or []
+        pos = _st_slot_pos(slot)
+        if pos == "LW":
+            return fwd[0] if len(fwd) > 0 else None
+        if pos == "C":
+            return fwd[1] if len(fwd) > 1 else None
+        if pos == "RW":
+            # PP forwards read [LW, C, RW]; PK forwards read [LW, RW].
+            idx = 2 if unit.startswith("PP") else 1
+            return fwd[idx] if len(fwd) > idx else None
+        if pos == "LD":
+            return dfn[0] if len(dfn) > 0 else None
+        if pos == "RD":
+            return dfn[1] if len(dfn) > 1 else None
+    except Exception:
+        return None
+    return None
+
+
+def validate_st_payload(team, st_lines):
+    """Read-only validation of {st_slot: player_id}.
+
+    Returns (ok, error, resolved) where resolved = {slot: player|None}.
+    Rules: known slots only, every id on the club, skaters only (no
+    goalies), no player on two special-teams jobs anywhere, and each
+    unit is either fully filled (PP: 5, PK: 4) or fully empty -- a
+    cleared unit falls back to the sim's default special-teams units.
+    """
+    if team is None:
+        return False, "No live game.", None
+    if not isinstance(st_lines, dict):
+        return False, "Missing special-teams payload.", None
+    resolved, seen = {}, {}
+    for slot, pid in st_lines.items():
+        if slot not in ST_SLOTS:
+            return False, f"Unknown slot: {slot}.", None
+        pid = "" if pid in (None, "None") else str(pid).strip()
+        if not pid:
+            resolved[slot] = None
+            continue
+        p = _roster_lookup(team, pid)
+        if p is None:
+            return False, "A selected player isn't on your club.", None
+        name = _safe(lambda: getattr(p, "full_name", "A player"), "A player")
+        if pid in seen:
+            return False, (f"{name} is already on {seen[pid]} -- "
+                           "one player, one special-teams job."), None
+        if _is_goalie_obj(p):
+            return False, (f"{name} is a goalie -- "
+                           "skaters only on special teams."), None
+        seen[pid] = ST_SLOT_UNIT.get(slot, slot)
+        resolved[slot] = p
+    for slot in ST_SLOTS:
+        resolved.setdefault(slot, None)
+    for unit, slots in ST_UNITS.items():
+        filled = sum(1 for s in slots if resolved.get(s) is not None)
+        if 0 < filled < len(slots):
+            return False, (f"{unit} is incomplete ({filled}/{len(slots)} "
+                           f"filled) -- fill every spot or clear the unit."), None
+    return True, "", resolved
+
+
+def apply_st_payload(team, resolved):
+    """REAL special-teams application: nested PP/PK units on team.lineup.
+
+    Merges the four units into the existing lineup dict (even-strength
+    keys ride along untouched), then quick_sim.flatten_lineup rebuilds
+    the flat ES keys the sim reads. A cleared unit is removed so the
+    sim falls back to its default special-teams deployment. Returns
+    (ok, message).
+    """
+    if team is None:
+        return False, "No live game."
+    try:
+        from quick_sim import flatten_lineup
+    except Exception:
+        return False, "Lineup machinery unavailable."
+    try:
+        nested = dict(getattr(team, "lineup", None) or {})
+    except Exception:
+        nested = {}
+    for unit, slots in ST_UNITS.items():
+        fwd = sorted([s for s in slots if _st_slot_pos(s) in ("LW", "C", "RW")],
+                     key=lambda s: _ST_POS_ORDER[_st_slot_pos(s)])
+        dfn = sorted([s for s in slots if _st_slot_pos(s) in ("LD", "RD")],
+                     key=lambda s: _ST_POS_ORDER[_st_slot_pos(s)])
+        fw = [resolved.get(s) for s in fwd]
+        df = [resolved.get(s) for s in dfn]
+        if all(p is None for p in fw + df):
+            # Cleared: drop the key so the sim falls back to default units
+            # (deployment_policy._unit_players treats missing slots as
+            # absent; _ensure_default_lineup rebuilds them for fresh games).
+            nested.pop(unit, None)
+        else:
+            nested[unit] = {"Forwards": fw, "Defense": df}
+    try:
+        team.lineup = flatten_lineup(nested)
+    except Exception as e:
+        return False, f"Could not save special teams: {e}."
+    return True, "Special teams saved."
+
+
+@bp.route("/api/lines/set_st", methods=["POST"])
+def api_set_st_lines():
+    """Validate and queue a special-teams change. Body: {"st": {slot: id}}."""
+    data = request.get_json(force=True, silent=True) or {}
+    st_lines = data.get("st") if isinstance(data.get("st"), dict) else data
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "No live game."}), 503
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    ok, err, _resolved = validate_st_payload(team, st_lines)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
+    clean = {s: ("" if st_lines.get(s) in (None, "None") else str(st_lines.get(s) or ""))
+             for s in ST_SLOTS if s in st_lines}
+    enqueued = enqueue_command("set_st_lines_real", st=clean)
+    return jsonify({"ok": enqueued})
 
 
 @bp.route("/api/lines/editable")

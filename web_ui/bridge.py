@@ -1402,6 +1402,98 @@ def _find_inbox_message(app, message_id):
     return inbox, None
 
 
+def _wt_resolve_trade_assets(team, pid_set, pick_set):
+    """Resolve trade-builder asset id sets -> live objects (players+picks)."""
+    players, picks = [], []
+    for _attr in ("roster", "ahl_roster", "prospects"):
+        for _p in (getattr(team, _attr, None) or []):
+            if str(getattr(_p, "id", "")) in pid_set:
+                players.append(_p)
+    _by_year = getattr(team, "draft_picks", None) or {}
+    for _pk_list in _by_year.values():
+        for _pk in (_pk_list or []):
+            if str(getattr(_pk, "id", "")) in pick_set:
+                picks.append(_pk)
+    return players + picks
+
+
+def _wt_find_partner(league, target_id):
+    """Find the partner team (abbr, name, team_name, 'City Name')."""
+    target_id = str(target_id or "").strip().lower()
+    for _t in (getattr(league, "teams", None) or []):
+        _nm = str(getattr(_t, "team_name", "") or "")
+        _cands = {
+            str(getattr(_t, "abbreviation", "") or "").lower(),
+            _nm.lower(),
+            f"{getattr(_t, 'city', '')} {_nm}".strip().lower(),
+        }
+        if target_id and target_id in _cands:
+            return _t
+    return None
+
+
+def _wt_parse_terms(cmd, user_team, give_assets, te):
+    """Gap 2 terms: validate retention/pick-protection like the propose
+    path. Returns (retention, protection, error) -- error is "" when OK."""
+    try:
+        from game_classes import DraftPick as _DP
+    except Exception:
+        _DP = ()
+    retention, protection = {}, {}
+    try:
+        _give_pids = {str(getattr(_p, "id", ""))
+                      for _p in give_assets if not isinstance(_p, _DP)}
+        _give_pickids = {str(getattr(_p, "id", ""))
+                         for _p in give_assets if isinstance(_p, _DP)}
+        _raw_ret = cmd.get("retention") or {}
+        if isinstance(_raw_ret, dict):
+            for _k, _v in _raw_ret.items():
+                try:
+                    _pct = float(_v)
+                except Exception:
+                    continue
+                if 0 < _pct <= te.MAX_RETENTION_PCT \
+                        and str(_k) in _give_pids:
+                    retention[str(_k)] = _pct
+        _raw_prot = cmd.get("pick_protection") or {}
+        if isinstance(_raw_prot, dict):
+            for _k, _v in _raw_prot.items():
+                if str(_v) in ("top-3", "top-10", "lottery") \
+                        and str(_k) in _give_pickids:
+                    protection[str(_k)] = str(_v)
+        if retention:
+            _by_id = {str(getattr(_p, "id", "")): _p
+                      for _p in give_assets if not isinstance(_p, _DP)}
+            for _pid, _pct in retention.items():
+                _pl = _by_id.get(_pid)
+                _extra = {k: v for k, v in retention.items()
+                          if k != _pid}
+                _ok2, _msg2 = te.apply_retention_dry_run(
+                    user_team, _pl, _pct, extra=_extra)
+                if not _ok2:
+                    return {}, {}, (
+                        "Retained-salary term on "
+                        f"{getattr(_pl, 'full_name', _pid)} is "
+                        f"illegal ({_msg2}).")
+    except Exception:
+        pass
+    return retention, protection, ""
+
+
+# ------------------------------------------------------------------
+# Batch D (2026-10-05): development & practice port.
+# Pure-logic ports of the desktop systems:
+#   - player_development_window_professional.py ("Assign Training Program")
+#   - enhanced_practice_system.py PracticeEngine (per-player drills)
+#   - auto_resolve.auto_run_practice ("Coach Runs Practice" heuristic)
+#   - position_training.py (positional familiarity)
+#   - offseason_programs.py (summer programs, Jun-Aug gate)
+#   - coach_checkins.py (quarterly check-in trust effects)
+# Every op stashes its outcome on app._web_dev_result for GET polling.
+# ------------------------------------------------------------------
+_BATCHD_ENGINE = None
+
+
 def _execute_command(app, cmd):
     """Run one queued command on the main thread. Never raises."""
     try:
@@ -2343,23 +2435,46 @@ def _execute_command(app, cmd):
                     apply_lines_payload(team, resolved)
             except Exception:
                 pass
+        elif op == "set_st_lines_real":
+            # Web special-teams editor (PP1/PP2/PK1/PK2): re-validate
+            # server-side, then apply the nested PP/PK units onto
+            # team.lineup through the real machinery
+            # (quick_sim.flatten_lineup, same as the desktop editor).
+            try:
+                from web_ui.screens.lines import (validate_st_payload,
+                                                  apply_st_payload)
+                team = getattr(app, "user_team", None)
+                st_lines = cmd.get("st") or {}
+                ok, err, resolved = validate_st_payload(team, st_lines)
+                if ok and resolved is not None:
+                    apply_st_payload(team, resolved)
+            except Exception:
+                pass
         elif op == "execute_trade":
-            # Web trade builder (v2 modal): re-validate with the REAL AI
-            # verdict, then call the REAL trade_engine.execute_trade().
-            # Never executes a deal the AI rejects. Stashes the outcome on
-            # app._web_trade_result for GET /api/trades/result polling.
+            # Web trade builder (v2 modal): resolves assets, validates
+            # retention/protection terms, then SENDS the offer through the
+            # REAL async negotiation machinery (trade_negotiation.
+            # send_offer) -- the AI GM answers in 1-3 sim days via the
+            # inbox, instantly only on the deadline-day rush. Nothing
+            # executes here. Outcome is stashed on app._web_trade_result
+            # for GET /api/trades/result polling.
             try:
                 import trade_engine as _te
             except Exception:
                 _te = None
 
-            def _wt_store(ok, summary, verdict=""):
+            def _wt_store(ok, summary, verdict="", pending=False,
+                          negotiation_id=""):
                 try:
                     app._web_trade_result = {
                         "marker": "execute_trade",
                         "ok": bool(ok),
                         "summary": str(summary or ""),
                         "verdict": str(verdict or ""),
+                        # Async negotiation (desktop parity): a proposal is
+                        # pending until the AI GM answers in 1-3 sim days.
+                        "pending": bool(pending),
+                        "negotiation_id": str(negotiation_id or ""),
                     }
                 except Exception:
                     pass
@@ -2375,18 +2490,7 @@ def _execute_command(app, cmd):
                           or getattr(app, "league", None))
 
                 # Find the partner team (abbr, name, team_name, "City Name").
-                target_id = str(cmd.get("target_team_id") or "").strip().lower()
-                partner = None
-                for _t in (getattr(league, "teams", None) or []):
-                    _nm = str(getattr(_t, "team_name", "") or "")
-                    _cands = {
-                        str(getattr(_t, "abbreviation", "") or "").lower(),
-                        _nm.lower(),
-                        f"{getattr(_t, 'city', '')} {_nm}".strip().lower(),
-                    }
-                    if target_id and target_id in _cands:
-                        partner = _t
-                        break
+                partner = _wt_find_partner(league, cmd.get("target_team_id"))
                 if user_team is None or partner is None:
                     _wt_store(False, "Could not resolve teams.", "")
                     return
@@ -2396,22 +2500,10 @@ def _execute_command(app, cmd):
                 _pick_want = {str(x) for x in (cmd.get("give_picks") or [])}
                 _pid_get = {str(x) for x in (cmd.get("want_pids") or [])}
                 _pick_get = {str(x) for x in (cmd.get("want_picks") or [])}
-
-                def _resolve(team, pid_set, pick_set):
-                    _players, _picks = [], []
-                    for _attr in ("roster", "ahl_roster", "prospects"):
-                        for _p in (getattr(team, _attr, None) or []):
-                            if str(getattr(_p, "id", "")) in pid_set:
-                                _players.append(_p)
-                    _by_year = getattr(team, "draft_picks", None) or {}
-                    for _pk_list in _by_year.values():
-                        for _pk in (_pk_list or []):
-                            if str(getattr(_pk, "id", "")) in pick_set:
-                                _picks.append(_pk)
-                    return _players + _picks
-
-                give_assets = _resolve(user_team, _pid_want, _pick_want)
-                want_assets = _resolve(partner, _pid_get, _pick_get)
+                give_assets = _wt_resolve_trade_assets(
+                    user_team, _pid_want, _pick_want)
+                want_assets = _wt_resolve_trade_assets(
+                    partner, _pid_get, _pick_get)
                 if not give_assets and not want_assets:
                     _wt_store(False, "Empty proposal.", "")
                     return
@@ -2429,115 +2521,123 @@ def _execute_command(app, cmd):
                 #     the deal's other terms via `extra`, 75-day
                 #     double-retention clock, two-club rule) — a bad term
                 #     fails here with a clear message, not BLOCKED later.
+                _wt_retention, _wt_protection, _wt_err = _wt_parse_terms(
+                    cmd, user_team, give_assets, _te)
+                if _wt_err:
+                    _wt_store(False, _wt_err, "")
+                    return
+
+                # ASYNC negotiation (desktop parity, trade_negotiation.py):
+                # a proposal is SENT, never executed instantly. send_offer
+                # creates a pending TradeNegotiation with response_due =
+                # today + 1-3 days and drops an "offer sent" inbox message;
+                # the AI GM's answer (accept / counter / reject) arrives
+                # via the inbox when process_due_negotiations runs on day
+                # advance (main.simulate_day). Instant execution survives
+                # only on the deadline-day rush: send_offer answers on the
+                # spot there (its own is_deadline_rush/is_cap_crunch_rush
+                # check), exactly like the desktop.
                 try:
-                    from game_classes import DraftPick as _DP_gap2
+                    import trade_negotiation as _tn
                 except Exception:
-                    _DP_gap2 = ()
-                _wt_retention, _wt_protection = {}, {}
+                    _tn = None
+                if _tn is None:
+                    _wt_store(False, "Negotiation machinery unavailable.",
+                              "")
+                    return
                 try:
-                    _give_pids = {str(getattr(_p, "id", ""))
-                                  for _p in give_assets
-                                  if not isinstance(_p, _DP_gap2)}
-                    _give_pickids = {str(getattr(_p, "id", ""))
-                                     for _p in give_assets
-                                     if isinstance(_p, _DP_gap2)}
-                    _raw_ret = cmd.get("retention") or {}
-                    if isinstance(_raw_ret, dict):
-                        for _k, _v in _raw_ret.items():
-                            try:
-                                _pct = float(_v)
-                            except Exception:
-                                continue
-                            if 0 < _pct <= _te.MAX_RETENTION_PCT \
-                                    and str(_k) in _give_pids:
-                                _wt_retention[str(_k)] = _pct
-                    _raw_prot = cmd.get("pick_protection") or {}
-                    if isinstance(_raw_prot, dict):
-                        for _k, _v in _raw_prot.items():
-                            if str(_v) in ("top-3", "top-10", "lottery") \
-                                    and str(_k) in _give_pickids:
-                                _wt_protection[str(_k)] = str(_v)
-                    if _wt_retention:
-                        _by_id = {str(getattr(_p, "id", "")): _p
-                                  for _p in give_assets
-                                  if not isinstance(_p, _DP_gap2)}
-                        for _pid, _pct in _wt_retention.items():
-                            _pl = _by_id.get(_pid)
-                            _extra = {k: v for k, v in _wt_retention.items()
-                                      if k != _pid}
-                            _ok2, _msg2 = _te.apply_retention_dry_run(
-                                user_team, _pl, _pct, extra=_extra)
-                            if not _ok2:
-                                _wt_store(
-                                    False,
-                                    "Retained-salary term on "
-                                    f"{getattr(_pl, 'full_name', _pid)} is "
-                                    f"illegal ({_msg2}).",
-                                    "")
-                                return
+                    neg = _tn.send_offer(
+                        app, partner, give_assets, want_assets,
+                        retention=_wt_retention,
+                        pick_protection=_wt_protection)
+                except Exception as _e:
+                    _wt_store(False, f"Could not send offer: {_e}", "")
+                    return
+                _pname = str(getattr(partner, "team_name", None)
+                             or "the other club")
+                _neg_id = str(getattr(neg, "id", "") or "")
+                if getattr(neg, "status", "") == "awaiting_ai" and \
+                        getattr(neg, "response_due", None) is not None:
+                    _wt_store(True,
+                              f"Offer sent to {_pname}. Their GM needs "
+                              f"1-3 days -- the answer lands in your "
+                              f"inbox (accept, counter, or reject).",
+                              "pending", True, _neg_id)
+                else:
+                    # Rush path (deadline day / cap crunch): the AI
+                    # already answered on the spot -- check the inbox.
+                    _wt_store(True,
+                              f"Deadline-day rush: {_pname}'s GM answered "
+                              f"instantly -- check your inbox.",
+                              "instant", False, _neg_id)
+            except Exception:
+                pass
+        elif op == "trade_counter_negotiation":
+            # User answers an AI counter with adjusted trade-builder terms.
+            # Desktop parity: trade_negotiation.send_counter -- the
+            # negotiation stays open (patience decays), the AI answers in
+            # 1-3 sim days via the inbox. Outcome is stashed for
+            # GET /api/trades/result polling (marker differs so the UI
+            # can tell it apart from a fresh proposal).
+            try:
+                import trade_engine as _te2
+            except Exception:
+                _te2 = None
+
+            def _wtc_store(ok, summary):
+                try:
+                    app._web_trade_result = {
+                        "marker": "trade_counter_negotiation",
+                        "ok": bool(ok),
+                        "summary": str(summary or ""),
+                        "pending": bool(ok),
+                    }
                 except Exception:
                     pass
 
-                # RE-VALIDATE with the real AI before any mutation.
-                # Retention is passed through: the AI's cap check prices
-                # the reduced incoming hit exactly like a real GM pricing
-                # retained money.
-                try:
-                    resp = _te.ai_consider_trade(
-                        partner, give_assets, want_assets,
-                        user_team=user_team, retention=_wt_retention)
-                    verdict = str(getattr(resp, "decision", "") or "")
-                    message = str(getattr(resp, "message", "") or "")
-                except Exception:
-                    _wt_store(False, "AI evaluation failed.", "")
-                    return
-                if verdict != "accept":
-                    _wt_store(False,
-                              f"GM rejected the deal: {message}", verdict)
-                    return
-
-                # Real execution on the Tk main thread (same call the
-                # desktop flow uses via trade_negotiation._complete).
-                from datetime import date as _dt
-                _cur = getattr(gm, "current_date", None)
-                date_str = str(_cur) if _cur else str(_dt.today())
-                _board = getattr(getattr(app, "career", None), "board", None)
-                # Gap 2: stamp pick protections on the live DraftPick objects
-                # BEFORE execution (desktop flow: trade_negotiation
-                # ._neg_terms(stamp=True)). Only reached after the AI
-                # accepted, so a declined deal leaves no flags.
-                for _pk in give_assets:
-                    if not isinstance(_pk, _DP_gap2):
-                        continue
-                    _prot = _wt_protection.get(
-                        str(getattr(_pk, "id", "")))
-                    if _prot:
-                        try:
-                            _pk.protection = _prot
-                            _pk.is_conditional = True
-                            _pk.condition = (
-                                f"{_te.protection_label(_prot)}: if this pick "
-                                f"falls in the protected range, "
-                                f"{getattr(_pk, 'original_team', 'the original club')} "
-                                f"keeps it and the holder receives their "
-                                f"next-year 1st-rounder instead.")
-                        except Exception:
-                            pass
-                trade = _te.execute_trade(
-                    user_team, partner, give_assets, want_assets,
-                    date_str, league=league, board=_board,
-                    retention=_wt_retention)
-                summary = str(getattr(trade, "summary", "") or "")
-                if summary.startswith("BLOCKED:"):
-                    _wt_store(False, summary[8:].strip(), verdict)
-                    return
-                try:
-                    if not hasattr(gm, "trade_history"):
-                        gm.trade_history = []
-                    gm.trade_history.append(trade)
-                except Exception:
-                    pass
-                _wt_store(True, summary or "Trade completed.", verdict)
+            try:
+                import trade_negotiation as _tn2
+            except Exception:
+                _tn2 = None
+            try:
+                if _tn2 is None or _te2 is None:
+                    _wtc_store(False, "Negotiation machinery unavailable.")
+                else:
+                    neg = _tn2.get_negotiation(app, cmd.get("negotiation_id"))
+                    if neg is None or not neg.is_open:
+                        _wtc_store(False,
+                                   "That negotiation is no longer open.")
+                    else:
+                        user_team = getattr(app, "user_team", None)
+                        partner = _tn2.find_team(app, neg.partner_team_name)
+                        if user_team is None or partner is None:
+                            _wtc_store(False, "Could not resolve teams.")
+                        else:
+                            give_assets = _wt_resolve_trade_assets(
+                                user_team,
+                                {str(x) for x in (cmd.get("give_pids") or [])},
+                                {str(x) for x in (cmd.get("give_picks") or [])})
+                            want_assets = _wt_resolve_trade_assets(
+                                partner,
+                                {str(x) for x in (cmd.get("want_pids") or [])},
+                                {str(x) for x in (cmd.get("want_picks") or [])})
+                            if not give_assets and not want_assets:
+                                _wtc_store(False, "Empty counter-offer.")
+                            else:
+                                _ret, _prot, _err = _wt_parse_terms(
+                                    cmd, user_team, give_assets, _te2)
+                                if _err:
+                                    _wtc_store(False, _err)
+                                else:
+                                    _tn2.send_counter(
+                                        app, neg, give_assets, want_assets,
+                                        retention=_ret,
+                                        pick_protection=_prot)
+                                    _wtc_store(
+                                        True,
+                                        f"Counter sent to "
+                                        f"{neg.partner_team_name} -- they "
+                                        f"answer in 1-3 days via your inbox.")
             except Exception:
                 pass
         elif op == "inbox_trade_accept":

@@ -246,3 +246,23 @@
 .deal-chip .dc-ret { color: var(--gold); }
 .deal-chip .dc-x { color: var(--dim); font-size: 13px; margin-left: 4px; }
 .deal-chip:hover .dc-x { color: var(--red); }
+
+/* Open negotiations panel (async trade talks, 2026-10-05). */
+.neg-section { margin-top: 18px; padding: 16px 18px; }
+.neg-hint { color: #9aa3b2; font-size: 13px; margin: 6px 0 12px; }
+.neg-card { border: 1px solid #26262b; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; background: #16161a; }
+.neg-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.neg-partner { font-weight: 700; font-size: 15px; }
+.neg-status { font-size: 12px; color: #9aa3b2; }
+.neg-status.st-awaiting_user { color: #f5c518; font-weight: 600; }
+.neg-terms { font-size: 13px; display: grid; gap: 4px; margin-bottom: 8px; }
+.neg-k { color: #9aa3b2; }
+.neg-last { font-size: 13px; font-style: italic; color: #c7cdd8; margin-bottom: 8px; }
+.neg-hist { border-top: 1px solid #26262b; padding-top: 8px; display: grid; gap: 6px; margin-bottom: 10px; }
+.neg-hist-row { display: flex; gap: 10px; font-size: 12.5px; }
+.neg-hist-date { color: #6b7280; white-space: nowrap; }
+.neg-hist-by { font-weight: 600; white-space: nowrap; min-width: 90px; }
+.neg-hist-by.by-user { color: #3B82F6; }
+.neg-hist-by.by-ai { color: #f5c518; }
+.neg-hist-by.by-system { color: #6b7280; }
+.neg-actions { display: flex; gap: 8px; align-items: center; }
