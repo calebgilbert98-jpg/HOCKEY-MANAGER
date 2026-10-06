@@ -23,18 +23,21 @@
       <span class="sb-team away" id="sb-away-abbr">···</span>
     </div>
     <div class="watch-controls">
-      <button id="btn-pause" title="Pause / resume" aria-label="Pause or resume">⏸</button>
+      <button id="btn-pause" title="Pause / resume (Space)" aria-label="Pause or resume">⏸</button>
       <button id="btn-speed" title="Playback speed" aria-label="Playback speed">1×</button>
+      <button id="btn-cam" title="Follow cam (C for full rink)" aria-label="Camera mode">🎥</button>
+      <button id="btn-stats" title="Stats overlay" aria-label="Stats overlay">📊</button>
     </div>
   </header>
   <div class="rink-stage">
     <canvas id="rink"></canvas>
+    <div class="stats-overlay hidden" id="stats-overlay" aria-live="polite"></div>
     <div class="event-ticker" id="event-ticker" aria-live="polite"></div>
   </div>
   <footer class="watch-statusbar">
     <span class="ws-live" id="ws-live"><span class="ws-dot"></span>LIVE</span>
     <span class="ws-game" id="ws-game">—</span>
-    <span class="ws-hint">Click a player to follow · Space pauses</span>
+    <span class="ws-hint">Click player to follow · Hover for name · C toggles camera · Space pauses</span>
   </footer>
 </div>
 <script src="/static/js/watch.js"></script>

@@ -1,7 +1,8 @@
-/* Puck Dynasty web visualizer — broadcast dark-rink canvas renderer.
+/* Puck Dynasty web visualizer — MODERN BROADCAST renderer.
  *
- * Dark "night game on TV" ice, jersey-numbered skater dots with trails,
- * puck with glow, broadcast scorebug, animated event banners, event ticker.
+ * NHL 2024/25 broadcast look: smooth follow-cam tracking the puck,
+ * directional skater indicators, shot markers, stats overlay, hover labels,
+ * goal zoom punch-ins, enhanced ice art.
  *
  * SSE contract (unchanged, from web_ui/screens/watch.py):
  *   meta      {home, away, home_abbr, away_abbr}
@@ -20,7 +21,7 @@ const ctx = canvas.getContext('2d');
 const RL = 200, RW = 85;
 let scale = 4, ox = 0, oy = 0, dpr = 1;
 
-/* NHL primary colors by abbreviation (scorebug pills + skater dots). */
+/* NHL primary colors by abbreviation. */
 const NHL_COLORS = {
   ANA: '#B9975B', ARI: '#8C2633', BOS: '#FFB81C', BUF: '#002654', CGY: '#C8102E',
   CAR: '#CC0000', CHI: '#CF0A2C', COL: '#6F263D', CBJ: '#002654', DAL: '#006847',
@@ -36,11 +37,15 @@ function teamColor(abbr, idx) {
   return NHL_COLORS[String(abbr || '').toUpperCase()] || FALLBACK[idx % 2];
 }
 function readableText(hex) {
-  // white text unless the bg is very light (e.g. BOS gold, PIT gold)
   const h = hex.replace('#', '');
   const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
   const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
   return lum > 0.62 ? '#101418' : '#ffffff';
+}
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a.toFixed(3) + ')';
 }
 
 /* ---------------- state ---------------- */
@@ -48,17 +53,71 @@ let cur = null, prev = null, prevT = 0, curT = 0;
 let paused = false, speed = 1;
 let homeAbbr = '', awayAbbr = '';
 let homeColor = FALLBACK[0], awayColor = FALLBACK[1];
-let followName = null;
+let followName = null, hoverName = null;
 
 const puckTrail = [];
-const skaterTrails = new Map();   // name -> [{x,y}]
-const effects = [];               // {kind,x,y,born,life}
+const skaterTrails = new Map();   // key -> [{x,y}]
+const skaterVel = new Map();      // key -> {dx,dy} smoothed velocity (rink ft/frame)
+const effects = [];               // {kind,x,y,born,life,seed}
+const shotMarkers = [];           // {x,y,team,born} — goal/save locations
 const bannerQueue = [];
 let activeBanner = null;
 let flashUntil = 0, flashRGB = '255,215,0';
 
+// client-tracked game stats (from highlight events)
+const stats = {
+  goals: [0, 0], hits: [0, 0], penalties: [0, 0], fights: 0,
+};
+
+/* ---------------- broadcast camera ---------------- */
+const cam = { cx: 100, cy: 42.5, zoom: 1 };       // current (eased)
+const camTarget = { cx: 100, cy: 42.5, zoom: 1 }; // desired
+let camMode = 'follow';                            // 'follow' | 'full'
+let punchUntil = 0, punchZoom = 1, punchX = 100, punchY = 42.5;
+
+function updateCamera(now, dt) {
+  // desired target
+  if (punchUntil > now) {
+    camTarget.cx = punchX; camTarget.cy = punchY; camTarget.zoom = punchZoom;
+  } else if (camMode === 'follow' && cur && cur.type === 'skate' && cur.puck) {
+    camTarget.cx = cur.puck.x; camTarget.cy = cur.puck.y; camTarget.zoom = 1.55;
+  } else {
+    camTarget.cx = 100; camTarget.cy = 42.5; camTarget.zoom = 1;
+  }
+  // ease toward target (frame-rate independent)
+  const k = Math.min(1, dt * 3.2);
+  cam.cx += (camTarget.cx - cam.cx) * k;
+  cam.cy += (camTarget.cy - cam.cy) * k;
+  cam.zoom += (camTarget.zoom - cam.zoom) * Math.min(1, dt * 2.6);
+  // keep camera inside rink bounds (with zoom-aware margin)
+  const hw = (RL / 2) / cam.zoom, hh = (RW / 2) / cam.zoom;
+  cam.cx = Math.max(100 - hw + 8, Math.min(100 + hw - 8, cam.cx));
+  cam.cy = Math.max(42.5 - hh + 6, Math.min(42.5 + hh - 6, cam.cy));
+}
+
+// base mapping: rink coords -> device px at zoom=1, no camera offset
 const X = x => ox + x * scale;
 const Y = y => oy + y * scale;
+// camera transform: apply before drawing world
+function applyCamera() {
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-X(cam.cx), -Y(cam.cy));
+}
+// screen (device px) -> rink coords (for hit testing)
+function rinkFromScreen(sx, sy) {
+  const bx = (sx - canvas.width / 2) / cam.zoom + X(cam.cx);
+  const by = (sy - canvas.height / 2) / cam.zoom + Y(cam.cy);
+  return { x: (bx - ox) / scale, y: (by - oy) / scale };
+}
+// rink coords -> screen device px (for DOM overlays)
+function screenFromRink(x, y) {
+  const bx = X(x), by = Y(y);
+  return {
+    x: canvas.width / 2 + (bx - X(cam.cx)) * cam.zoom,
+    y: canvas.height / 2 + (by - Y(cam.cy)) * cam.zoom,
+  };
+}
 
 function resize() {
   const stage = canvas.parentElement;
@@ -75,7 +134,7 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
-/* ---------------- dark rink art (cached) ---------------- */
+/* ---------------- enhanced rink art (cached) ---------------- */
 let rinkCache = null, rinkCacheKey = '';
 function drawRink() {
   const key = canvas.width + 'x' + canvas.height;
@@ -99,102 +158,147 @@ function paintRink(c) {
     c.closePath();
   };
 
-  // arena surround: near-black navy
-  c.fillStyle = '#05080f';
+  // arena surround: near-black navy with vignette
+  const vg = c.createRadialGradient(W / 2, H / 2, H * 0.2, W / 2, H / 2, Math.max(W, H) * 0.75);
+  vg.addColorStop(0, '#0a101d');
+  vg.addColorStop(1, '#030509');
+  c.fillStyle = vg;
   c.fillRect(0, 0, W, H);
 
-  // dark ice: radial-ish gradient, lighter at center
+  // ice: layered radial gradient — brighter center, cool edges
   const g = c.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, Math.max(W, H) * 0.7);
-  g.addColorStop(0, '#182844');
-  g.addColorStop(0.55, '#101b31');
-  g.addColorStop(1, '#0a1322');
+  g.addColorStop(0, '#1d2f52');
+  g.addColorStop(0.45, '#142441');
+  g.addColorStop(0.8, '#0c1628');
+  g.addColorStop(1, '#080f1d');
   c.fillStyle = g;
   R(Xc(-2), Yc(-2), (RL + 4) * scale, (RW + 4) * scale, 20 * scale); c.fill();
 
-  // subtle skate-scratch sheen
-  c.strokeStyle = 'rgba(140,170,220,0.05)'; c.lineWidth = 1;
-  for (let i = 0; i < 40; i++) {
+  // ice sheen: diagonal light streaks (arena lighting)
+  const sheen = c.createLinearGradient(0, 0, W, H);
+  sheen.addColorStop(0, 'rgba(150,190,255,0.045)');
+  sheen.addColorStop(0.5, 'rgba(150,190,255,0)');
+  sheen.addColorStop(1, 'rgba(150,190,255,0.03)');
+  c.fillStyle = sheen;
+  R(Xc(-2), Yc(-2), (RL + 4) * scale, (RW + 4) * scale, 20 * scale); c.fill();
+
+  // skate scratches: more numerous, varied
+  c.lineWidth = 1;
+  for (let i = 0; i < 90; i++) {
     const y0 = Yc(3 + ((i * 37) % 79));
     const x0 = Xc(4 + ((i * 53) % 192));
+    const len = (8 + ((i * 29) % 22)) * scale / 4;
+    c.strokeStyle = 'rgba(140,170,220,' + (0.03 + ((i * 13) % 5) * 0.012).toFixed(3) + ')';
     c.beginPath(); c.moveTo(x0, y0);
-    c.lineTo(x0 + 16 * scale / 4, y0 + 4 * scale / 4); c.stroke();
+    c.lineTo(x0 + len, y0 + len * 0.25); c.stroke();
   }
 
   const lw = Math.max(1.5, scale * 0.55);
-  const RED = '#e5484d', BLUE = '#3f8cff';
+  const RED = '#f0433a', BLUE = '#4d9fff';
 
-  // boards: dark steel frame with light top edge
+  // boards: dark steel with glass reflection hint on top edge
   c.lineWidth = Math.max(6, scale * 1.6);
-  c.strokeStyle = '#233654';
+  c.strokeStyle = '#1e2f4d';
   R(Xc(0), Yc(0), RL * scale, RW * scale, 18 * scale); c.stroke();
   c.lineWidth = Math.max(1.5, scale * 0.28);
-  c.strokeStyle = 'rgba(160,195,245,0.5)';
+  const glass = c.createLinearGradient(Xc(0), Yc(-2), Xc(0), Yc(6));
+  glass.addColorStop(0, 'rgba(170,205,255,0.55)');
+  glass.addColorStop(1, 'rgba(170,205,255,0.08)');
+  c.strokeStyle = glass;
   R(Xc(0), Yc(0), RL * scale, RW * scale, 18 * scale); c.stroke();
 
-  // center red line
-  c.strokeStyle = RED; c.lineWidth = lw * 1.4;
+  // center red line (with white edge)
+  c.strokeStyle = 'rgba(240,244,250,0.25)'; c.lineWidth = lw * 1.9;
   c.beginPath(); c.moveTo(Xc(100), Yc(2)); c.lineTo(Xc(100), Yc(83)); c.stroke();
-  // blue lines
+  c.strokeStyle = RED; c.lineWidth = lw * 1.2;
+  c.beginPath(); c.moveTo(Xc(100), Yc(2)); c.lineTo(Xc(100), Yc(83)); c.stroke();
+
+  // blue lines: brighter, with subtle glow
+  c.shadowColor = 'rgba(77,159,255,0.5)'; c.shadowBlur = 6;
   c.strokeStyle = BLUE; c.lineWidth = lw * 2.6;
   for (const bx of [75, 125]) {
     c.beginPath(); c.moveTo(Xc(bx), Yc(2)); c.lineTo(Xc(bx), Yc(83)); c.stroke();
   }
+  c.shadowBlur = 0;
+
   // goal lines
   c.strokeStyle = RED; c.lineWidth = lw * 0.9;
   for (const gx of [11, 189]) {
     c.beginPath(); c.moveTo(Xc(gx), Yc(4)); c.lineTo(Xc(gx), Yc(81)); c.stroke();
   }
 
-  // center-ice circle + dot
-  c.strokeStyle = 'rgba(63,140,255,0.75)'; c.lineWidth = lw;
+  // center-ice: double ring + dot (broadcast style)
+  c.strokeStyle = 'rgba(77,159,255,0.85)'; c.lineWidth = lw;
   c.beginPath(); c.arc(Xc(100), Yc(42.5), 15 * scale / 4, 0, Math.PI * 2); c.stroke();
+  c.strokeStyle = 'rgba(77,159,255,0.35)'; c.lineWidth = lw * 0.6;
+  c.beginPath(); c.arc(Xc(100), Yc(42.5), 13 * scale / 4, 0, Math.PI * 2); c.stroke();
   c.fillStyle = BLUE;
-  c.beginPath(); c.arc(Xc(100), Yc(42.5), 1.4 * scale / 4, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(Xc(100), Yc(42.5), 1.6 * scale / 4, 0, Math.PI * 2); c.fill();
 
-  // end-zone faceoff circles: dot + ring + hash marks
+  // end-zone faceoff circles with proper hash marks
   for (const gx of [11, 189]) {
     const sgn = gx < 100 ? 1 : -1;
     for (const dy of [20.5, 64.5]) {
       const ex = Xc(gx + 20 * sgn), ey = Yc(dy);
-      c.strokeStyle = 'rgba(229,72,77,0.8)'; c.lineWidth = lw * 0.9;
+      // outer ring
+      c.strokeStyle = 'rgba(240,67,58,0.85)'; c.lineWidth = lw * 0.9;
       c.beginPath(); c.arc(ex, ey, 15 * scale / 4, 0, Math.PI * 2); c.stroke();
+      // center dot
       c.fillStyle = RED;
-      c.beginPath(); c.arc(ex, ey, 1.6 * scale / 4, 0, Math.PI * 2); c.fill();
-      // hash ticks
-      c.strokeStyle = 'rgba(229,72,77,0.65)'; c.lineWidth = lw * 0.7;
-      for (const sx of [-1, 1]) {
-        const hx = ex + sx * 5.5 * scale / 4;
-        c.beginPath(); c.moveTo(hx - 1.6 * scale / 4, ey); c.lineTo(hx + 1.6 * scale / 4, ey); c.stroke();
+      c.beginPath(); c.arc(ex, ey, 1.7 * scale / 4, 0, Math.PI * 2); c.fill();
+      // L-shaped hash marks (4 per circle, broadcast style)
+      c.strokeStyle = 'rgba(240,67,58,0.7)'; c.lineWidth = lw * 0.75;
+      const hr = 15 * scale / 4, hl = 4 * scale / 4;
+      for (const a of [Math.PI * 0.32, Math.PI * 0.68, Math.PI * 1.32, Math.PI * 1.68]) {
+        const hx = ex + Math.cos(a) * hr, hy = ey + Math.sin(a) * hr;
+        const tx = Math.cos(a + Math.PI / 2), ty = Math.sin(a + Math.PI / 2);
+        c.beginPath();
+        c.moveTo(hx - tx * hl, hy - ty * hl);
+        c.lineTo(hx + tx * hl, hy + ty * hl);
+        c.stroke();
       }
     }
   }
   // neutral-zone dots
-  c.fillStyle = 'rgba(229,72,77,0.85)';
+  c.fillStyle = 'rgba(240,67,58,0.9)';
   for (const [dx, dy] of [[80, 20.5], [80, 64.5], [120, 20.5], [120, 64.5]]) {
-    c.beginPath(); c.arc(Xc(dx), Yc(dy), 1.2 * scale / 4, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(Xc(dx), Yc(dy), 1.3 * scale / 4, 0, Math.PI * 2); c.fill();
   }
 
-  // creases (translucent ice blue) + nets
+  // creases: ice-blue fill with white edge
   for (const gx of [11, 189]) {
     const dir = gx < 100 ? 1 : -1;
-    c.fillStyle = 'rgba(120,170,240,0.16)';
-    c.beginPath();
-    c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, dir > 0 ? -Math.PI / 2 : Math.PI / 2, dir > 0 ? Math.PI / 2 : Math.PI * 1.5);
-    c.closePath(); c.fill();
-    c.strokeStyle = 'rgba(229,72,77,0.7)'; c.lineWidth = lw * 0.7;
-    c.beginPath();
-    c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, dir > 0 ? -Math.PI / 2 : Math.PI / 2, dir > 0 ? Math.PI / 2 : Math.PI * 1.5);
-    c.stroke();
-    // net frame
-    c.strokeStyle = '#f0f4fa'; c.lineWidth = Math.max(2, lw);
+    const a0 = dir > 0 ? -Math.PI / 2 : Math.PI / 2;
+    const a1 = dir > 0 ? Math.PI / 2 : Math.PI * 1.5;
+    const cg = c.createRadialGradient(Xc(gx), Yc(42.5), 1, Xc(gx), Yc(42.5), 6 * scale / 4);
+    cg.addColorStop(0, 'rgba(140,190,250,0.28)');
+    cg.addColorStop(1, 'rgba(140,190,250,0.10)');
+    c.fillStyle = cg;
+    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, a0, a1); c.closePath(); c.fill();
+    c.strokeStyle = 'rgba(240,244,250,0.55)'; c.lineWidth = lw * 0.7;
+    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, a0, a1); c.stroke();
+
+    // net: white frame + mesh hint
+    c.strokeStyle = 'rgba(200,215,235,0.25)'; c.lineWidth = 1;
+    for (let ny = 39; ny <= 46; ny += 1.4) {
+      c.beginPath();
+      c.moveTo(Xc(gx), Yc(ny)); c.lineTo(Xc(gx + dir * 3.2), Yc(ny));
+      c.stroke();
+    }
+    c.strokeStyle = '#eef3fb'; c.lineWidth = Math.max(2.2, lw);
     c.beginPath();
     c.moveTo(Xc(gx), Yc(38.5)); c.lineTo(Xc(gx + dir * 3.2), Yc(38.5));
     c.lineTo(Xc(gx + dir * 3.2), Yc(46.5)); c.lineTo(Xc(gx), Yc(46.5));
     c.stroke();
+    // red goal line accent on posts
+    c.strokeStyle = RED; c.lineWidth = Math.max(1.5, lw * 0.7);
+    c.beginPath();
+    c.moveTo(Xc(gx), Yc(38.5)); c.lineTo(Xc(gx), Yc(46.5));
+    c.stroke();
   }
 
   // trapezoid
-  c.strokeStyle = 'rgba(229,72,77,0.35)'; c.lineWidth = lw * 0.7;
+  c.strokeStyle = 'rgba(240,67,58,0.4)'; c.lineWidth = lw * 0.7;
   for (const gx of [11, 189]) {
     const dir = gx < 100 ? 1 : -1;
     c.beginPath();
@@ -207,23 +311,43 @@ function paintRink(c) {
 /* ---------------- skaters ---------------- */
 function skaterColor(team) { return team === 0 ? homeColor : awayColor; }
 
+function skaterKey(team, name, x, y) {
+  return team + '|' + (name || Math.round(x) + ',' + Math.round(y));
+}
+
 function drawSkater(x, y, team, opts) {
   opts = opts || {};
   const px = X(x), py = Y(y);
-  const r = (opts.goalie ? 15 : 13) * scale / 4;
+  const r = (opts.goalie ? 16 : 13.5) * scale / 4;
   const col = skaterColor(team);
-  const key = opts.name || (team + ':' + Math.round(x) + ':' + Math.round(y));
+  const key = opts.key || skaterKey(team, opts.name, x, y);
 
-  // motion trail
+  // --- velocity tracking for facing indicator ---
+  let vel = skaterVel.get(key);
+  if (!vel) { vel = { dx: 0, dy: 0 }; skaterVel.set(key, vel); }
+  // previous drawn position stored on the trail head
   let tr = skaterTrails.get(key);
   if (!tr) { tr = []; skaterTrails.set(key, tr); }
+  const lastPt = tr.length ? tr[tr.length - 1] : null;
+  if (lastPt) {
+    const idx = 1 / Math.max(1, scale); // normalize-ish
+    vel.dx = vel.dx * 0.82 + (px - lastPt.x) * 0.18;
+    vel.dy = vel.dy * 0.82 + (py - lastPt.y) * 0.18;
+  }
   tr.push({ x: px, y: py });
-  if (tr.length > 7) tr.shift();
-  for (let i = 0; i < tr.length; i++) {
-    const a = (i / tr.length) * 0.22;
+  if (tr.length > 8) tr.shift();
+
+  const spd = Math.hypot(vel.dx, vel.dy);
+  const moving = spd > 0.6;
+
+  // motion trail (longer when fast)
+  const trailLen = tr.length;
+  for (let i = 0; i < trailLen; i++) {
+    const f = i / trailLen;
+    const a = f * (moving ? 0.30 : 0.16);
     ctx.fillStyle = hexA(col, a);
     ctx.beginPath();
-    ctx.arc(tr[i].x, tr[i].y, r * (0.35 + 0.65 * i / tr.length), 0, Math.PI * 2);
+    ctx.arc(tr[i].x, tr[i].y, r * (0.3 + 0.7 * f), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -231,87 +355,159 @@ function drawSkater(x, y, team, opts) {
   ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.beginPath(); ctx.arc(px + r * 0.22, py + r * 0.3, r, 0, Math.PI * 2); ctx.fill();
 
-  // body
-  ctx.fillStyle = col;
+  // body with subtle vertical shading
+  const bodyG = ctx.createRadialGradient(px - r * 0.3, py - r * 0.35, r * 0.1, px, py, r);
+  bodyG.addColorStop(0, hexA(col, 1));
+  bodyG.addColorStop(1, shade(col, -28));
+  ctx.fillStyle = bodyG;
   ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
   ctx.lineWidth = Math.max(2, r * 0.22);
   ctx.strokeStyle = '#f2f6fc';
   ctx.stroke();
 
+  // facing indicator: small wedge in movement direction
+  if (moving && !opts.goalie) {
+    const ang = Math.atan2(vel.dy, vel.dx);
+    const wr = r * 0.52;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(ang);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(r + wr * 0.9, 0);
+    ctx.lineTo(r - wr * 0.2, -wr * 0.55);
+    ctx.lineTo(r - wr * 0.2, wr * 0.55);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
   // jersey number
   const num = opts.jersey != null && opts.jersey !== '' ? String(opts.jersey) : '';
+  ctx.fillStyle = readableText(col);
+  ctx.font = '800 ' + Math.round(r * 1.02) + 'px "Arial Narrow", Arial, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   if (num) {
-    ctx.fillStyle = readableText(col);
-    ctx.font = '800 ' + Math.round(r * 1.05) + 'px "Arial Narrow", Arial, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(num.length > 2 ? num.slice(0, 2) : num, px, py + r * 0.06);
   } else if (opts.goalie) {
-    ctx.fillStyle = readableText(col);
-    ctx.font = '800 ' + Math.round(r * 0.95) + 'px "Arial Narrow", Arial, sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('G', px, py + r * 0.06);
   }
 
-  // puck-carrier ring + name tag
+  // puck-carrier ring
   if (opts.hasPuck) {
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(px, py, r + 5, 0, Math.PI * 2); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,215,0,0.85)'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.arc(px, py, r + 8, 0, Math.PI * 2); ctx.stroke();
-    if (opts.name) drawNameTag(px, py - r - 12, opts.name);
+    drawNameTag(px, py - r - 14, opts.name, col);
   }
-  // followed player
-  if (followName && opts.name === followName) {
-    ctx.strokeStyle = '#7dd3fc'; ctx.lineWidth = 2;
-    ctx.setLineDash([5, 4]);
+  // followed / hovered player
+  const tagged = (followName && opts.name === followName) ||
+                 (hoverName && opts.name === hoverName && opts.name !== followName);
+  if (tagged) {
+    const isFollow = followName && opts.name === followName;
+    ctx.strokeStyle = isFollow ? '#7dd3fc' : 'rgba(255,255,255,0.65)';
+    ctx.lineWidth = 2;
+    if (isFollow) ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.arc(px, py, r + 11, 0, Math.PI * 2); ctx.stroke();
     ctx.setLineDash([]);
-    if (opts.name) drawNameTag(px, py - r - 12, opts.name);
+    drawNameTag(px, py - r - 14, opts.name, col);
   }
 }
 
-function drawNameTag(px, py, name) {
+function shade(hex, amt) {
+  const h = hex.replace('#', '');
+  let r = parseInt(h.slice(0, 2), 16) + amt;
+  let g = parseInt(h.slice(2, 4), 16) + amt;
+  let b = parseInt(h.slice(4, 6), 16) + amt;
+  r = Math.max(0, Math.min(255, r)); g = Math.max(0, Math.min(255, g)); b = Math.max(0, Math.min(255, b));
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function drawNameTag(px, py, name, teamCol) {
+  if (!name) return;
   ctx.font = '700 12px "Arial Narrow", Arial, sans-serif';
-  const w = ctx.measureText(name).width + 14;
-  ctx.fillStyle = 'rgba(5,8,15,0.88)';
+  const w = ctx.measureText(name).width + 16;
   const bx = px - w / 2, by = py - 10;
+  ctx.fillStyle = 'rgba(4,7,14,0.92)';
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(bx, by, w, 20, 4); else ctx.rect(bx, by, w, 20);
   ctx.fill();
+  if (teamCol) {
+    ctx.fillStyle = teamCol;
+    ctx.fillRect(bx, by, 3, 20);
+  }
   ctx.fillStyle = '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(name, px, by + 10);
-}
-
-function hexA(hex, a) {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return 'rgba(' + r + ',' + g + ',' + b + ',' + a.toFixed(3) + ')';
+  ctx.fillText(name, px + 1.5, by + 10);
 }
 
 /* ---------------- puck ---------------- */
+let puckSpeedSm = 0;
 function drawPuck(x, y) {
   const px = X(x), py = Y(y);
+  const last = puckTrail.length ? puckTrail[puckTrail.length - 1] : null;
+  const inst = last ? Math.hypot(px - last.x, py - last.y) : 0;
+  puckSpeedSm = puckSpeedSm * 0.85 + inst * 0.15;
+
   puckTrail.push({ x: px, y: py });
-  if (puckTrail.length > 12) puckTrail.shift();
+  const maxTrail = 8 + Math.min(10, Math.round(puckSpeedSm * 1.2));
+  while (puckTrail.length > maxTrail) puckTrail.shift();
   for (let i = 0; i < puckTrail.length; i++) {
-    const t = puckTrail[i], a = (i / puckTrail.length) * 0.3;
+    const t = puckTrail[i], f = i / puckTrail.length;
+    const a = f * (0.18 + Math.min(0.25, puckSpeedSm * 0.02));
     ctx.fillStyle = 'rgba(180,200,235,' + a.toFixed(3) + ')';
     ctx.beginPath();
-    ctx.arc(t.x, t.y, (1 + (i / puckTrail.length) * 2.4) * scale / 4, 0, Math.PI * 2);
+    ctx.arc(t.x, t.y, (1 + f * 2.6) * scale / 4, 0, Math.PI * 2);
     ctx.fill();
   }
-  const r = 4.2 * scale / 4;
-  // glow
-  const glow = ctx.createRadialGradient(px, py, 0, px, py, r * 3.4);
-  glow.addColorStop(0, 'rgba(160,200,255,0.5)');
-  glow.addColorStop(1, 'rgba(160,200,255,0)');
+  const r = 4.4 * scale / 4;
+  // glow scales with speed
+  const glowR = r * (3.2 + Math.min(2.5, puckSpeedSm * 0.25));
+  const glow = ctx.createRadialGradient(px, py, 0, px, py, glowR);
+  glow.addColorStop(0, 'rgba(170,210,255,0.55)');
+  glow.addColorStop(1, 'rgba(170,210,255,0)');
   ctx.fillStyle = glow;
-  ctx.beginPath(); ctx.arc(px, py, r * 3.4, 0, Math.PI * 2); ctx.fill();
-  // black puck, white ring so it reads on dark ice
+  ctx.beginPath(); ctx.arc(px, py, glowR, 0, Math.PI * 2); ctx.fill();
+  // puck with highlight
   ctx.fillStyle = '#0b0d12';
   ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
   ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(240,244,250,0.9)';
   ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath(); ctx.arc(px - r * 0.3, py - r * 0.3, r * 0.28, 0, Math.PI * 2); ctx.fill();
+}
+
+/* ---------------- shot markers ---------------- */
+function drawShotMarkers(now) {
+  for (let i = shotMarkers.length - 1; i >= 0; i--) {
+    const m = shotMarkers[i];
+    const age = (now - m.born) / 1000;
+    if (age > 25) { shotMarkers.splice(i, 1); continue; }
+    const fade = age < 20 ? 1 : 1 - (age - 20) / 5;
+    const px = X(m.x), py = Y(m.y);
+    const col = m.team === 0 ? homeColor : awayColor;
+    ctx.save();
+    ctx.globalAlpha = fade * 0.9;
+    ctx.strokeStyle = m.scored ? '#ffd700' : col;
+    ctx.lineWidth = 2.5;
+    const s = 7 * scale / 4;
+    if (m.scored) {
+      // star burst for goals
+      ctx.beginPath();
+      for (let k = 0; k < 8; k++) {
+        const a = k * Math.PI / 4;
+        const rr = k % 2 ? s * 0.45 : s;
+        ctx.lineTo(px + Math.cos(a) * rr, py + Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.stroke();
+    } else {
+      // X for saves
+      ctx.beginPath();
+      ctx.moveTo(px - s * 0.6, py - s * 0.6); ctx.lineTo(px + s * 0.6, py + s * 0.6);
+      ctx.moveTo(px + s * 0.6, py - s * 0.6); ctx.lineTo(px - s * 0.6, py + s * 0.6);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 }
 
 /* ---------------- effects ---------------- */
@@ -325,22 +521,22 @@ function drawEffects(now) {
       ctx.strokeStyle = 'rgba(255,200,80,' + ((1 - t) * 0.9).toFixed(3) + ')';
       ctx.lineWidth = 3 * (1 - t) + 1;
       ctx.beginPath(); ctx.arc(px, py, (4 + t * 30) * scale / 4, 0, Math.PI * 2); ctx.stroke();
-      // sparks
-      for (let s = 0; s < 8; s++) {
-        const ang = (s / 8) * Math.PI * 2 + e.seed;
-        const d = (6 + t * 34) * scale / 4;
+      for (let s = 0; s < 10; s++) {
+        const ang = (s / 10) * Math.PI * 2 + e.seed;
+        const d = (6 + t * 38) * scale / 4;
         ctx.fillStyle = 'rgba(255,210,120,' + ((1 - t) * 0.85).toFixed(3) + ')';
         ctx.beginPath();
         ctx.arc(px + Math.cos(ang) * d, py + Math.sin(ang) * d, 2.2 * scale / 4, 0, Math.PI * 2);
         ctx.fill();
       }
     } else if (e.kind === 'goalring') {
-      ctx.strokeStyle = 'rgba(255,215,0,' + (1 - t).toFixed(3) + ')';
+      const w1 = (1 - t);
+      ctx.strokeStyle = 'rgba(255,215,0,' + w1.toFixed(3) + ')';
       ctx.lineWidth = 5;
-      ctx.beginPath(); ctx.arc(px, py, (6 + t * 70) * scale / 4, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = 'rgba(255,255,255,' + ((1 - t) * 0.8).toFixed(3) + ')';
+      ctx.beginPath(); ctx.arc(px, py, (6 + t * 80) * scale / 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,' + (w1 * 0.8).toFixed(3) + ')';
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(px, py, (3 + t * 44) * scale / 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, py, (3 + t * 50) * scale / 4, 0, Math.PI * 2); ctx.stroke();
     } else if (e.kind === 'saveflash') {
       ctx.strokeStyle = 'rgba(125,211,252,' + ((1 - t) * 0.9).toFixed(3) + ')';
       ctx.lineWidth = 3;
@@ -348,13 +544,13 @@ function drawEffects(now) {
     }
   }
   if (now < flashUntil) {
-    const a = ((flashUntil - now) / 650 * 0.2).toFixed(3);
+    const a = ((flashUntil - now) / 650 * 0.22).toFixed(3);
     ctx.fillStyle = 'rgba(' + flashRGB + ',' + a + ')';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 }
 
-/* ---------------- banners (center screen) ---------------- */
+/* ---------------- banners ---------------- */
 function queueBanner(text, sub, kind) {
   bannerQueue.push({ text, sub: sub || '', kind: kind || 'info', born: 0 });
 }
@@ -366,20 +562,22 @@ function drawBanner(now) {
   }
   const b = activeBanner;
   const age = (now - b.born) / 1000;
-  const HOLD = b.kind === 'goal' ? 3.2 : 2.2;
+  const HOLD = b.kind === 'goal' ? 3.4 : 2.2;
   if (age > HOLD + 0.45) { activeBanner = null; return; }
 
-  // animate: scale in (0-0.25s), hold, fade out (last 0.45s)
-  const inT = Math.min(1, age / 0.25);
+  // slide down + scale in, hold, fade out
+  const inT = Math.min(1, age / 0.3);
   const outA = age > HOLD ? Math.max(0, 1 - (age - HOLD) / 0.45) : 1;
-  const pop = 0.82 + 0.18 * (1 - Math.pow(1 - inT, 3));
+  const ease = 1 - Math.pow(1 - inT, 3);
+  const slideY = (1 - ease) * -70;
+  const pop = 0.85 + 0.15 * ease;
   const alpha = Math.min(inT, outA);
 
   const isGoal = b.kind === 'goal';
-  const fs = Math.round(canvas.width * (isGoal ? 0.075 : 0.048));
+  const fs = Math.round(canvas.width * (isGoal ? 0.072 : 0.046));
   ctx.save();
   ctx.globalAlpha = Math.max(0, alpha);
-  ctx.translate(canvas.width / 2, canvas.height * 0.38);
+  ctx.translate(canvas.width / 2, canvas.height * 0.34 + slideY);
   ctx.scale(pop, pop);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
@@ -387,24 +585,28 @@ function drawBanner(now) {
   const tw = ctx.measureText(b.text).width;
   const padX = fs * 0.9, bw = tw + padX * 2, bh = fs * 1.5;
 
-  // backdrop bar
-  ctx.fillStyle = 'rgba(4,7,14,0.88)';
+  // backdrop with accent edge
+  ctx.fillStyle = 'rgba(4,7,14,0.9)';
   ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(-bw / 2, -bh / 2, bw, bh, 8); else ctx.rect(-bw / 2, -bh / 2, bw, bh);
+  if (ctx.roundRect) ctx.roundRect(-bw / 2, -bh / 2, bw, bh, 10); else ctx.rect(-bw / 2, -bh / 2, bw, bh);
   ctx.fill();
+  const accent = isGoal ? '#ffd700' : b.kind === 'penalty' ? '#f59e0b' : '#3b82f6';
   ctx.lineWidth = 3;
-  ctx.strokeStyle = isGoal ? '#ffd700' : b.kind === 'penalty' ? '#f59e0b' : '#3b82f6';
+  ctx.strokeStyle = accent;
   ctx.stroke();
+  // top accent bar
+  ctx.fillStyle = accent;
+  ctx.fillRect(-bw / 2 + 10, -bh / 2, bw - 20, 3);
 
   ctx.fillStyle = isGoal ? '#ffd700' : '#ffffff';
-  ctx.shadowColor = isGoal ? 'rgba(255,215,0,0.6)' : 'rgba(80,140,255,0.5)';
-  ctx.shadowBlur = 18;
+  ctx.shadowColor = isGoal ? 'rgba(255,215,0,0.65)' : 'rgba(80,140,255,0.5)';
+  ctx.shadowBlur = 20;
   ctx.fillText(b.text, 0, b.sub ? -fs * 0.22 : 0);
   ctx.shadowBlur = 0;
   if (b.sub) {
-    ctx.font = '700 ' + Math.round(fs * 0.42) + 'px "Arial Narrow", Arial, sans-serif';
+    ctx.font = '700 ' + Math.round(fs * 0.4) + 'px "Arial Narrow", Arial, sans-serif';
     ctx.fillStyle = '#dbe6fa';
-    ctx.fillText(b.sub.slice(0, 72), 0, fs * 0.42);
+    ctx.fillText(b.sub.slice(0, 76), 0, fs * 0.42);
   }
   ctx.restore();
 }
@@ -412,22 +614,22 @@ function drawBanner(now) {
 /* ---------------- ticker ---------------- */
 function tick(msg, cls) {
   const box = document.getElementById('event-ticker');
+  if (!box) return;
   const div = document.createElement('div');
   div.className = 'ticker-item' + (cls ? ' ' + cls : '');
   div.textContent = msg;
   box.prepend(div);
   while (box.children.length > 4) box.lastChild.remove();
-  setTimeout(() => { if (div.parentNode) div.remove(); }, 7000);
+  setTimeout(() => { if (div.parentNode) div.remove(); }, 8000);
 }
 
 /* ---------------- scorebug / status ---------------- */
 function setScorebug(snap) {
-  if (snap.home_abbr && snap.home_abbr !== homeAbbr && homeAbbr) {
-    // abbr changed mid-stream; ignore (shouldn't happen)
-  }
   if (snap.score) {
     document.getElementById('sb-home').textContent = snap.score.home;
     document.getElementById('sb-away').textContent = snap.score.away;
+    stats.goals = [snap.score.home, snap.score.away];
+    renderStatsOverlay();
   }
   if (snap.period != null) {
     const p = document.getElementById('sb-period');
@@ -443,50 +645,93 @@ function applyTeamMeta(home, away, habbr, aabbr) {
   he.textContent = habbr || 'HOME'; ae.textContent = aabbr || 'AWAY';
   he.style.background = homeColor; he.style.color = readableText(homeColor);
   ae.style.background = awayColor; ae.style.color = readableText(awayColor);
+  // team color edge on scorebug
+  document.getElementById('scorebug').style.setProperty('--home-col', homeColor);
+  document.getElementById('scorebug').style.setProperty('--away-col', awayColor);
   document.getElementById('ws-game').textContent =
     (away || 'Away') + ' at ' + (home || 'Home');
+  renderStatsOverlay();
+}
+
+/* ---------------- stats overlay ---------------- */
+let statsVisible = false;
+function renderStatsOverlay() {
+  const ov = document.getElementById('stats-overlay');
+  if (!ov) return;
+  ov.classList.toggle('hidden', !statsVisible);
+  if (!statsVisible) return;
+  const row = (label, h, a) =>
+    '<div class="st-row"><span class="st-label">' + label + '</span>' +
+    '<span class="st-val">' + h + '</span><span class="st-val">' + a + '</span></div>';
+  ov.innerHTML =
+    '<div class="st-head"><span></span><span>' + esc(homeAbbr || 'HOME') + '</span><span>' + esc(awayAbbr || 'AWAY') + '</span></div>' +
+    row('Goals', stats.goals[0], stats.goals[1]) +
+    row('Hits', stats.hits[0], stats.hits[1]) +
+    row('Penalties', stats.penalties[0], stats.penalties[1]) +
+    row('Fights', stats.fights, '—');
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
 /* ---------------- frame ---------------- */
 function lerp(a, b, t) { return a + (b - a) * t; }
+let lastFrameT = 0;
+
+function drawWorld(now, tc) {
+  const A = prev || cur, B = cur;
+  if (!B || B.type !== 'skate') return;
+  const n = Math.min(A.skaters ? A.skaters.length : 0, B.skaters.length);
+  for (let i = 0; i < n; i++) {
+    const a = A.skaters[i], b = B.skaters[i];
+    const x = lerp(a.x, b.x, tc), y = lerp(a.y, b.y, tc);
+    const hasPuck = B.possession === b.team &&
+      Math.hypot(B.puck.x - b.x, B.puck.y - b.y) < 4;
+    drawSkater(x, y, b.team, {
+      name: b.name, jersey: b.jersey, hasPuck: hasPuck, goalie: false,
+      key: b.team + '|' + (b.name || i),
+    });
+  }
+  for (const gl of (B.goalies || [])) {
+    drawSkater(gl.x, gl.y, gl.team, {
+      name: gl.name, jersey: gl.jersey, hasPuck: false, goalie: true,
+      key: gl.team + '|G|' + (gl.name || ''),
+    });
+  }
+  drawPuck(lerp(A.puck.x, B.puck.x, tc), lerp(A.puck.y, B.puck.y, tc));
+}
 
 function frame(now) {
   requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - lastFrameT) / 1000 || 0.016);
+  lastFrameT = now;
+
+  updateCamera(now, paused ? 0 : dt);
+
+  ctx.save();
+  applyCamera();
   drawRink();
+  drawShotMarkers(now);
   if (!paused && cur) {
     const span = Math.max(1, curT - prevT);
     const t = Math.min(1.15, Math.max(0, (now - prevT) / span));
-    const tc = Math.min(1, t);
-    const A = prev || cur, B = cur;
-    if (B.type === 'skate') {
-      const n = Math.min(A.skaters ? A.skaters.length : 0, B.skaters.length);
-      for (let i = 0; i < n; i++) {
-        const a = A.skaters[i], b = B.skaters[i];
-        const x = lerp(a.x, b.x, tc), y = lerp(a.y, b.y, tc);
-        const hasPuck = B.possession === b.team &&
-          Math.hypot(B.puck.x - b.x, B.puck.y - b.y) < 4;
-        drawSkater(x, y, b.team, {
-          name: b.name, jersey: b.jersey, hasPuck: hasPuck, goalie: false,
-        });
-      }
-      for (const gl of (B.goalies || [])) {
-        drawSkater(gl.x, gl.y, gl.team, {
-          name: gl.name, jersey: gl.jersey, hasPuck: false, goalie: true,
-        });
-      }
-      drawPuck(lerp(A.puck.x, B.puck.x, tc), lerp(A.puck.y, B.puck.y, tc));
-    }
+    drawWorld(now, Math.min(1, t));
   } else if (cur && cur.type === 'skate') {
-    // paused: draw last frame statically (no trail growth)
+    // paused: static frame (no trail growth)
     const B = cur;
-    for (const s of B.skaters) drawSkater(s.x, s.y, s.team, { name: s.name, jersey: s.jersey });
-    for (const gl of (B.goalies || [])) drawSkater(gl.x, gl.y, gl.team, { name: gl.name, jersey: gl.jersey, goalie: true });
-    const px = X(B.puck.x), py = Y(B.puck.y), r = 4.2 * scale / 4;
+    for (const s of B.skaters)
+      drawSkater(s.x, s.y, s.team, { name: s.name, jersey: s.jersey, key: s.team + '|' + (s.name || '') });
+    for (const gl of (B.goalies || []))
+      drawSkater(gl.x, gl.y, gl.team, { name: gl.name, jersey: gl.jersey, goalie: true, key: gl.team + '|G|' + (gl.name || '') });
+    const px = X(B.puck.x), py = Y(B.puck.y), r = 4.4 * scale / 4;
     ctx.fillStyle = '#0b0d12';
     ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = 1.6; ctx.strokeStyle = 'rgba(240,244,250,0.9)'; ctx.stroke();
   }
   drawEffects(now);
+  ctx.restore(); // back to screen space
+
   drawBanner(now);
 }
 
@@ -497,6 +742,14 @@ function connectStream() {
   es = new EventSource('/api/watch/stream?speed=' + speed);
   es.onmessage = handleMessage;
   es.onerror = () => tick('Stream interrupted — reconnecting…');
+}
+
+function goalPunch(teamIdx, now) {
+  // camera punch-in on the net that was scored on
+  punchX = teamIdx === 0 ? 189 : 11;
+  punchY = 42.5;
+  punchZoom = 2.4;
+  punchUntil = now + 1600;
 }
 
 function handleMessage(e) {
@@ -513,28 +766,38 @@ function handleMessage(e) {
   if (msg.type === 'highlight') {
     setScorebug(msg);
     const k = msg.kind;
+    const px = cur && cur.puck ? cur.puck.x : 100;
+    const py = cur && cur.puck ? cur.puck.y : 42.5;
     if (k === 'goal') {
       const gx = msg.team === 0 ? 189 : 11;
-      effects.push({ kind: 'goalring', x: gx, y: 42.5, born: now, life: 1.5, seed: Math.random() * 6 });
+      effects.push({ kind: 'goalring', x: gx, y: 42.5, born: now, life: 1.6, seed: Math.random() * 6 });
+      shotMarkers.push({ x: px, y: py, team: msg.team, scored: true, born: now });
       flashUntil = now + 650; flashRGB = '255,215,0';
-      // split "GOAL! Name (TEAM)" into banner + sub
+      goalPunch(msg.team, now);
       const m = /^GOAL!\s*(.*?)\s*(\(.*\))?$/.exec(msg.text || '');
       queueBanner('GOAL!', m ? m[1] : '', 'goal');
       tick(msg.text, 'goal');
     } else if (k === 'save' || k === 'big_save') {
-      if (cur && cur.puck) effects.push({ kind: 'saveflash', x: cur.puck.x, y: cur.puck.y, born: now, life: 0.8, seed: 0 });
-      queueBanner('SAVE', msg.text, 'info');
+      effects.push({ kind: 'saveflash', x: px, y: py, born: now, life: 0.8, seed: 0 });
+      shotMarkers.push({ x: px, y: py, team: msg.team, scored: false, born: now });
+      queueBanner(k === 'big_save' ? 'BIG SAVE' : 'SAVE', msg.text, 'info');
       tick(msg.text);
     } else if (k === 'hit') {
-      if (cur && cur.puck) effects.push({ kind: 'burst', x: cur.puck.x, y: cur.puck.y, born: now, life: 0.7, seed: Math.random() * 6 });
+      stats.hits[msg.team === 0 ? 0 : 1]++;
+      effects.push({ kind: 'burst', x: px, y: py, born: now, life: 0.7, seed: Math.random() * 6 });
       tick(msg.text);
+      renderStatsOverlay();
     } else if (k === 'fight') {
-      if (cur && cur.puck) effects.push({ kind: 'burst', x: cur.puck.x, y: cur.puck.y, born: now, life: 1.0, seed: Math.random() * 6 });
+      stats.fights++;
+      effects.push({ kind: 'burst', x: px, y: py, born: now, life: 1.0, seed: Math.random() * 6 });
       queueBanner('FIGHT!', '', 'penalty');
       tick(msg.text, 'penalty');
+      renderStatsOverlay();
     } else if (k === 'penalty') {
+      stats.penalties[msg.team === 0 ? 0 : 1]++;
       queueBanner('PENALTY', msg.text, 'penalty');
       tick(msg.text, 'penalty');
+      renderStatsOverlay();
     } else if (k === 'period_start') {
       queueBanner(msg.text.toUpperCase(), '', 'info');
       tick(msg.text);
@@ -569,6 +832,8 @@ function handleMessage(e) {
 /* ---------------- controls ---------------- */
 const btnPause = document.getElementById('btn-pause');
 const btnSpeed = document.getElementById('btn-speed');
+const btnCam = document.getElementById('btn-cam');
+const btnStats = document.getElementById('btn-stats');
 function setPaused(p) {
   paused = p;
   btnPause.textContent = paused ? '▶' : '⏸';
@@ -580,27 +845,70 @@ btnSpeed.addEventListener('click', () => {
   btnSpeed.textContent = speed + '×';
   connectStream();
 });
+function setCamMode(m) {
+  camMode = m;
+  btnCam.textContent = camMode === 'follow' ? '🎥' : '🏟';
+  btnCam.title = camMode === 'follow' ? 'Follow cam (click for full rink)' : 'Full rink (click for follow cam)';
+  btnCam.classList.toggle('active', camMode === 'follow');
+}
+btnCam.addEventListener('click', () => setCamMode(camMode === 'follow' ? 'full' : 'follow'));
+btnStats.addEventListener('click', () => {
+  statsVisible = !statsVisible;
+  btnStats.classList.toggle('active', statsVisible);
+  renderStatsOverlay();
+});
 document.addEventListener('keydown', e => {
   if (e.code === 'Space' && e.target === document.body) {
     e.preventDefault();
     setPaused(!paused);
   }
+  if ((e.key === 'c' || e.key === 'C') && e.target === document.body) {
+    setCamMode(camMode === 'follow' ? 'full' : 'follow');
+  }
 });
-// click a skater to follow (name tag + ring); click ice to clear
+
+// click a skater to follow; click ice to clear
 canvas.addEventListener('click', e => {
   if (!cur || !cur.skaters) return;
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * dpr, my = (e.clientY - rect.top) * dpr;
-  let best = null, bestD = 30 * dpr;
+  const rp = rinkFromScreen(mx, my);
+  let best = null, bestD = 4; // rink feet
   const all = cur.skaters.concat(cur.goalies || []);
   for (const s of all) {
-    const d = Math.hypot(X(s.x) - mx, Y(s.y) - my);
+    const d = Math.hypot(s.x - rp.x, s.y - rp.y);
     if (d < bestD) { bestD = d; best = s; }
   }
   followName = best && best.name ? best.name : null;
   if (followName) tick('Following ' + followName);
 });
 
+// hover: nearest player name tag
+let hoverRaf = 0;
+canvas.addEventListener('mousemove', e => {
+  if (hoverRaf) return;
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    if (!cur || !cur.skaters) { hoverName = null; return; }
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * dpr, my = (e.clientY - rect.top) * dpr;
+    const rp = rinkFromScreen(mx, my);
+    let best = null, bestD = 3.2;
+    const all = cur.skaters.concat(cur.goalies || []);
+    for (const s of all) {
+      const d = Math.hypot(s.x - rp.x, s.y - rp.y);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    const nh = best && best.name ? best.name : null;
+    if (nh !== hoverName) {
+      hoverName = nh;
+      canvas.style.cursor = nh ? 'pointer' : 'default';
+    }
+  });
+});
+canvas.addEventListener('mouseleave', () => { hoverName = null; });
+
+setCamMode('follow');
 resize();
 connectStream();
 requestAnimationFrame(frame);

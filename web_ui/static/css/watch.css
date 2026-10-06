@@ -86,3 +86,29 @@ html, body { height: 100%; margin: 0; }
 .ws-live.final .ws-dot { background: #6b7280; box-shadow: none; animation: none; }
 .ws-game { color: #cdd8ee; font-weight: 700; }
 .ws-hint { margin-left: auto; color: #5b6a8c; }
+
+/* ---- stats overlay: top-right over the rink ---- */
+.stats-overlay {
+  position: absolute; top: 14px; right: 14px; min-width: 230px;
+  background: rgba(6,10,20,.92); border: 1px solid #2a3c5f; border-radius: 8px;
+  padding: 10px 14px; font-family: var(--nhl-cond, "Arial Narrow", sans-serif);
+  box-shadow: 0 4px 18px rgba(0,0,0,.55); z-index: 5;
+}
+.stats-overlay.hidden { display: none; }
+.st-head, .st-row {
+  display: grid; grid-template-columns: 1fr 52px 52px; gap: 6px;
+  padding: 3px 0; font-size: 13px; letter-spacing: .6px;
+}
+.st-head { font-weight: 900; color: #93c5fd; text-transform: uppercase; font-size: 11px;
+  border-bottom: 1px solid #2a3c5f; margin-bottom: 4px; padding-bottom: 6px; }
+.st-head span:nth-child(n+2), .st-val { text-align: right; }
+.st-label { color: #8b98b8; text-transform: uppercase; font-size: 11.5px; }
+.st-val { font-weight: 800; color: #fff; font-variant-numeric: tabular-nums; }
+
+/* ---- scorebug team-color edges ---- */
+.scorebug { position: relative; overflow: hidden; }
+.scorebug::before, .scorebug::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 4px;
+}
+.scorebug::before { left: 0; background: var(--away-col, #b91c1c); }
+.scorebug::after { right: 0; background: var(--home-col, #1d4ed8); }
