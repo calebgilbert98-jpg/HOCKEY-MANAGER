@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coach Check-In — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/coach_checkin.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="ci-sub"></div>
+</header>
+
+<main class="ci-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Quarterly Temperature Check</div>
+    <h1 class="bcast-title" id="ci-title">Coach Check-In</h1>
+  </div>
+
+  <div class="ci-layout" id="ci-layout" hidden>
+    <div class="ci-convo">
+      <div class="ci-transcript" id="ci-transcript"></div>
+      <div class="ci-beats" id="ci-beats"></div>
+      <div class="ci-finish" id="ci-finish" hidden>
+        <div class="ci-note" id="ci-summary"></div>
+        <button class="btn-primary btn-big" id="ci-wrap-btn">Wrap Up the Check-In</button>
+      </div>
+      <div class="dev-result" id="ci-result" hidden></div>
+    </div>
+    <aside class="ci-side">
+      <div class="ci-side-title">The check-in so far</div>
+      <div class="ci-trust">Coach trust <span id="ci-trust">—</span></div>
+      <div id="ci-beat-rows"></div>
+      <div class="ci-side-note">Leave any time — the check-in waits for you here. Nothing here blocks the day.</div>
+    </aside>
+  </div>
+
+  <div class="empty" id="ci-empty" hidden>No check-in is due right now. The next one is armed after games ~20, ~40 and ~60.</div>
+</main>
+
+<script src="/static/js/coach_checkin.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

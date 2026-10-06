@@ -108,3 +108,89 @@
   border: 1px dashed rgba(255,255,255,.12); border-radius: var(--nhl-r);
   background: rgba(255,255,255,.015);
 }
+
+/* ---------- Batch D (2026-10-05): assignment + practice + positional + offseason ---------- */
+.dev-panel {
+  background: linear-gradient(160deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r);
+  padding: 18px 20px;
+}
+.dev-form-row {
+  display: flex; flex-wrap: wrap; gap: 18px; align-items: center;
+  margin-bottom: 14px;
+}
+.dev-form-row:last-child { margin-bottom: 0; }
+.dev-panel label {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim); display: flex; flex-direction: column; gap: 6px;
+}
+.dev-panel select, .dev-panel input[type="number"] {
+  background: rgba(0,0,0,.35); color: var(--text);
+  border: 1px solid rgba(255,255,255,.16); border-radius: var(--nhl-r-sm);
+  padding: 8px 12px; font-size: 14px; font-family: var(--font, inherit);
+  min-width: 180px;
+}
+.dev-panel select:disabled { opacity: .45; }
+.dev-label {
+  font-family: var(--nhl-cond);
+  font-size: 12px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--dim);
+}
+.dev-radio-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 6px; flex: 1;
+}
+.dev-radio-row { display: flex; gap: 18px; }
+.dev-radio {
+  display: flex !important; flex-direction: row !important; align-items: center; gap: 8px;
+  font-family: var(--font, inherit) !important; font-size: 14px !important;
+  font-weight: 500 !important; letter-spacing: 0 !important; text-transform: none !important;
+  color: var(--text) !important; cursor: pointer;
+}
+.dev-radio input { accent-color: var(--nhl-blue); }
+.dev-actions { gap: 12px; }
+.dev-note { font-size: 13px; color: var(--dim); line-height: 1.5; }
+.dev-result {
+  margin-top: 12px; padding: 10px 14px; border-radius: var(--nhl-r-sm);
+  font-size: 14px; font-weight: 600; line-height: 1.5;
+}
+.dev-result.good { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.4); color: #86efac; }
+.dev-result.bad { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.4); color: #fca5a5; }
+.btn-danger {
+  padding: 10px 18px; border-radius: var(--radius-sm); cursor: pointer;
+  background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.45); color: #fca5a5;
+  font-size: 13.5px; font-weight: 700;
+}
+.btn-danger:hover { background: rgba(239,68,68,.22); }
+.btn-accent {
+  padding: 10px 18px; border-radius: var(--radius-sm); border: none; cursor: pointer;
+  background: linear-gradient(135deg, #60a5fa, #3B82F6);
+  color: #fff; font-size: 13.5px; font-weight: 800;
+  box-shadow: 0 4px 14px rgba(59,130,246,.4);
+}
+.btn-accent:hover { filter: brightness(1.08); }
+.btn-sm { padding: 5px 12px; font-size: 12px; margin-top: 10px; }
+.dev-panel .btn-primary { width: auto; padding: 10px 20px; font-size: 13.5px; }
+.dev-panel .btn-ghost { padding: 10px 18px; font-size: 13.5px; }
+
+/* positional familiarity bars */
+.fam-list { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 320px; }
+.fam-row {
+  display: flex !important; flex-direction: row !important; align-items: center; gap: 12px;
+  cursor: pointer;
+}
+.fam-row input { accent-color: var(--nhl-blue); }
+.fam-pos {
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 800;
+  width: 34px; color: #fff; letter-spacing: 1px;
+}
+.fam-bar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; }
+.fam-bar span { display: block; height: 100%; background: linear-gradient(90deg, #3B82F6, #60a5fa); border-radius: 4px; }
+.fam-val { font-family: var(--nhl-cond); font-size: 15px; font-weight: 800; color: #93c5fd; width: 40px; text-align: right; }
+.fam-target {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800; letter-spacing: 1.5px;
+  color: var(--gold, #e8b93c); background: rgba(232,185,60,.12);
+  border: 1px solid rgba(232,185,60,.3); border-radius: var(--nhl-r-sm); padding: 2px 8px;
+}

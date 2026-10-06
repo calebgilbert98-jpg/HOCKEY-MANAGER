@@ -1494,6 +1494,292 @@ def _wt_parse_terms(cmd, user_team, give_assets, te):
 _BATCHD_ENGINE = None
 
 
+def _batchd_engine():
+    """Shared PracticeEngine (histories are module-level anyway)."""
+    global _BATCHD_ENGINE
+    if _BATCHD_ENGINE is None:
+        from enhanced_practice_system import PracticeEngine
+        _BATCHD_ENGINE = PracticeEngine()
+    return _BATCHD_ENGINE
+
+
+def _batchd_gm_team(app):
+    try:
+        gm = getattr(app, "game_manager", None)
+        team = (getattr(gm, "user_team", None)
+                or getattr(app, "user_team", None))
+        return gm, team
+    except Exception:
+        return None, None
+
+
+def _batchd_squads(team):
+    """(roster, ahl, prospects) lists, defensive."""
+    try:
+        roster = list(getattr(team, "roster", None) or [])
+    except Exception:
+        roster = []
+    try:
+        ahl = list(getattr(team, "ahl_roster", None) or [])
+    except Exception:
+        ahl = []
+    try:
+        prospects = list(getattr(team, "prospects", None) or [])
+    except Exception:
+        prospects = []
+    return roster, ahl, prospects
+
+
+def _batchd_find_player(team, pid):
+    """Player + squad label by id across the user's squads. Never raises."""
+    try:
+        for label, lst in (("NHL", _safe(lambda: list(getattr(team, "roster", None) or []) or [])),
+                           ("AHL", _safe(lambda: list(getattr(team, "ahl_roster", None) or []) or [])),
+                           ("Prospects", _safe(lambda: list(getattr(team, "prospects", None) or []) or []))):
+            for p in lst or []:
+                try:
+                    if str(getattr(p, "id", None)) == str(pid):
+                        return p, label
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return None, None
+
+
+def _batchd_player_team(app, team, player):
+    """The club whose coaching staff runs the drill: the player's own
+    club when findable, else the user's team (desktop parity with
+    HockeyManagerGUI._process_training_programs)."""
+    try:
+        gm = getattr(app, "game_manager", None)
+        league = getattr(gm, "league", None) or getattr(app, "league", None)
+        for t in list(getattr(league, "teams", None) or []):
+            try:
+                for lst in (getattr(t, "roster", None),
+                            getattr(t, "ahl_roster", None),
+                            getattr(t, "prospects", None)):
+                    if player in (lst or []):
+                        return t
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return team
+
+
+def _batchd_store(app, marker, nonce, ok, summary, extra=None):
+    rec = {"marker": marker, "nonce": nonce, "ok": bool(ok),
+           "summary": str(summary or "")}
+    if extra:
+        rec.update(extra)
+    try:
+        app._web_dev_result = rec
+    except Exception:
+        pass
+
+
+def _batchd_coaching_quality(team):
+    """Teaching quality for positional training: the head coach's
+    teaching attributes via coach_practice, else the flat 50 default."""
+    try:
+        import coach_practice as _cp
+        hc = _cp.head_coach_of(team)
+        if hc is not None:
+            vals = []
+            for a in ("technical_coaching", "tactical_knowledge",
+                      "player_development"):
+                try:
+                    v = getattr(hc, a, None)
+                    if v is not None:
+                        vals.append(float(v))
+                except Exception:
+                    continue
+            if vals:
+                return max(1.0, min(100.0, sum(vals) / len(vals)))
+    except Exception:
+        pass
+    return 50.0
+
+
+def _batchd_coach_runs_practice(app, team, nonce):
+    """Port of auto_resolve.auto_run_practice (2026-10-04).
+
+    Same drill-pick heuristic (weakest role-relevant attribute) and same
+    intensity rules (young + fresh = harder; old/tired = lighter), run
+    through the real PracticeEngine with the club's coaching staff.
+    """
+    from enhanced_practice_system import PracticeType, PracticeIntensity
+    engine = _batchd_engine()
+
+    def _attr(p, name, default=50):
+        try:
+            return float(getattr(p, name, default) or default)
+        except Exception:
+            return float(default)
+
+    def _pos(p):
+        try:
+            return str(getattr(p, "primary_position", "")).lower()
+        except Exception:
+            return ""
+
+    def _is_goalie(p):
+        pos = _pos(p)
+        return "goalie" in pos or "goaltender" in pos or pos.strip() == "g"
+
+    def _is_center(p):
+        pos = _pos(p)
+        return "center" in pos or pos.strip() == "c"
+
+    def _is_defense(p):
+        pos = _pos(p)
+        return ("defens" in pos or pos.strip() == "d"
+                or pos.strip() in ("ld", "rd"))
+
+    roster, _ahl, _pr = _batchd_squads(team)
+    roster = [p for p in roster if not getattr(p, "is_injured", False)]
+    if not roster:
+        _batchd_store(app, "coach_runs_practice", nonce, False,
+                      "No healthy players available.")
+        return
+
+    sessions = 0
+    details = []
+    for p in roster:
+        try:
+            age = int(getattr(p, "age", 25) or 25)
+        except Exception:
+            age = 25
+        try:
+            fatigue = float(
+                engine.get_player_history(getattr(p, "id")).current_fatigue)
+        except Exception:
+            fatigue = 0.0
+        if not fatigue:
+            fatigue = _attr(p, "fatigue", 0)
+
+        # Pick drill type by biggest weakness in role-relevant attributes
+        if _is_goalie(p):
+            cands = [
+                (PracticeType.DEFENSE, _attr(p, "positioning", 50)),
+                (PracticeType.CONDITIONING, _attr(p, "agility", 50)),
+                (PracticeType.HOCKEY_IQ, _attr(p, "rebound_control", 50)),
+            ]
+        elif _is_defense(p):
+            cands = [
+                (PracticeType.DEFENSE, _attr(p, "defensive_awareness", 50)),
+                (PracticeType.CHECKING, _attr(p, "checking", 50)),
+                (PracticeType.PASSING, _attr(p, "passing", 50)),
+                (PracticeType.SKATING, _attr(p, "skating", 50)),
+            ]
+        else:  # Forwards
+            cands = [
+                (PracticeType.SHOOTING, _attr(p, "shooting", 50)),
+                (PracticeType.SKATING, _attr(p, "skating", 50)),
+                (PracticeType.PASSING, _attr(p, "passing", 50)),
+            ]
+            if _is_center(p):
+                cands.append(
+                    (PracticeType.FACEOFFS, _attr(p, "faceoffs", 50)))
+        # Veterans: maintenance focus overrides development
+        if age >= 32:
+            cands = [
+                (PracticeType.CONDITIONING, _attr(p, "conditioning", 50)),
+                (PracticeType.HOCKEY_IQ,
+                 _attr(p, "offensive_awareness", 50)),
+            ] + cands
+        # Pick the weakest attribute's drill
+        cands.sort(key=lambda x: x[1])
+        drill = cands[0][0]
+
+        # Pick intensity: young + fresh = harder; old/tired = lighter
+        if fatigue > 70:
+            intensity = PracticeIntensity.LIGHT
+        elif age >= 34 or fatigue > 50:
+            intensity = PracticeIntensity.MODERATE
+        elif age <= 24 and fatigue < 30:
+            intensity = PracticeIntensity.INTENSE
+        else:
+            intensity = PracticeIntensity.MODERATE
+
+        try:
+            can, _why = engine.can_practice(p, drill, intensity)
+            if not can:
+                # Fall back to light if the chosen intensity isn't allowed
+                intensity = PracticeIntensity.LIGHT
+                can, _why = engine.can_practice(p, drill, intensity)
+            if can:
+                engine.execute_practice(p, drill, intensity, team=team)
+                sessions += 1
+                details.append({
+                    "player": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                    "drill": drill.value,
+                    "intensity": intensity.value,
+                })
+        except Exception:
+            continue
+
+    if sessions == 0:
+        _batchd_store(app, "coach_runs_practice", nonce, False,
+                      "No practice sessions could be run "
+                      "(fatigue or injuries).")
+        return
+    _batchd_store(app, "coach_runs_practice", nonce, True,
+                  f"Coach ran practice: {sessions} session(s) assigned "
+                  f"(weakness-targeted drills, fatigue-aware intensity).",
+                  {"sessions": details})
+
+
+def _batchd_checkin_coach(app, team):
+    """The team's head coach (same fallbacks as desktop CheckinView)."""
+    try:
+        import coach_checkins as _ckm
+        fn = getattr(_ckm, "get_head_coach", None)
+        if callable(fn):
+            coach = fn(team)
+            if coach is not None:
+                return coach
+    except Exception:
+        pass
+    try:
+        return (getattr(team, "staff", None) or [None])[0]
+    except Exception:
+        return None
+
+
+def _batchd_checkin_draft(team):
+    """Resume-or-fresh draft, keyed to the pending quarter (desktop parity)."""
+    try:
+        import coach_checkins as _ckm
+        pending_q = None
+        try:
+            pending_q = _ckm.get_pending_quarter(team)
+        except Exception:
+            pass
+        d = getattr(team, "checkin_draft", None)
+        if isinstance(d, dict) and d.get("quarter") == pending_q \
+                and pending_q is not None:
+            return d
+        gp = 0
+        try:
+            gp = _ckm.team_games_played(team)
+        except Exception:
+            pass
+        d = {"quarter": pending_q, "game": gp, "stage": "opening",
+             "chosen": [], "topics": [], "deltas": {}, "notes": [],
+             "done": False}
+        try:
+            team.checkin_draft = d
+        except Exception:
+            pass
+        return d
+    except Exception:
+        return {"quarter": None, "game": 0, "stage": "opening",
+                "chosen": [], "topics": [], "deltas": {}, "notes": [],
+                "done": False}
+
+
 def _execute_command(app, cmd):
     """Run one queued command on the main thread. Never raises."""
     try:
@@ -2208,6 +2494,437 @@ def _execute_command(app, cmd):
                     fields["practice_plan"] = plan
             except Exception:
                 pass
+        elif op == "assign_training_program":
+            # Web port of player_development_window_professional
+            # ._assign_training_confirmed: records the program (persisted
+            # via game_manager.training_programs, mirrored into
+            # ACTIVE_TRAINING_PROGRAMS) and runs a real first session.
+            _marker = "assign_training_program"
+            _nonce = cmd.get("nonce")
+            try:
+                from enhanced_practice_system import (
+                    FOCUS_TO_PRACTICE_TYPE, INTENSITY_LABEL_TO_ENUM,
+                    ACTIVE_TRAINING_PROGRAMS)
+                from datetime import date
+                pid = cmd.get("player_id")
+                focus = cmd.get("focus") or ""
+                intensity_label = cmd.get("intensity") or "Standard"
+                gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                elif focus not in FOCUS_TO_PRACTICE_TYPE:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  f"Unknown focus: {focus}")
+                elif intensity_label not in INTENSITY_LABEL_TO_ENUM:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  f"Unknown intensity: {intensity_label}")
+                else:
+                    ptype = FOCUS_TO_PRACTICE_TYPE[focus]
+                    pint = INTENSITY_LABEL_TO_ENUM[intensity_label]
+                    engine = _batchd_engine()
+                    can, why = engine.can_practice(player, ptype, pint)
+                    if not can:
+                        _batchd_store(app, _marker, _nonce, False, why)
+                    else:
+                        game_date = (getattr(app, "current_date", None)
+                                     or date.today())
+                        prog = {
+                            "focus": focus,
+                            "intensity": intensity_label,
+                            "assigned": game_date,
+                            "player_name": getattr(player, "full_name", "?"),
+                        }
+                        pkey = getattr(player, "id", str(pid))
+                        ACTIVE_TRAINING_PROGRAMS[pkey] = prog
+                        if gm is not None:
+                            if not getattr(gm, "training_programs", None):
+                                gm.training_programs = {}
+                            gm.training_programs[pkey] = prog
+                        # First session runs immediately, desktop parity:
+                        # _assign_training_confirmed uses the legacy flat
+                        # trainer (60 min, quality 12); the weekly tick in
+                        # _process_training_programs runs the coaching-aware
+                        # version with the player's own staff.
+                        session = engine.execute_practice(
+                            player, ptype, pint, 60, 12)
+                        _batchd_store(
+                            app, _marker, _nonce, True,
+                            f"{getattr(player, 'full_name', 'Player')} assigned "
+                            f"to {focus} ({intensity_label}). First session: "
+                            f"+{session.skill_gain:.2f} skill, "
+                            f"+{session.fatigue_cost}% fatigue.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "cancel_training_program":
+            _marker = "cancel_training_program"
+            _nonce = cmd.get("nonce")
+            try:
+                from enhanced_practice_system import ACTIVE_TRAINING_PROGRAMS
+                pid = cmd.get("player_id")
+                gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                pkey = (getattr(player, "id", None) if player is not None
+                        else None)
+                removed = False
+                for key in (pkey, str(pid)):
+                    if key is None:
+                        continue
+                    if key in ACTIVE_TRAINING_PROGRAMS:
+                        ACTIVE_TRAINING_PROGRAMS.pop(key, None)
+                        removed = True
+                    if gm is not None and getattr(gm, "training_programs",
+                                                 None) \
+                            and key in gm.training_programs:
+                        gm.training_programs.pop(key, None)
+                        removed = True
+                name = (getattr(player, "full_name", "?")
+                        if player is not None else "?")
+                _batchd_store(app, _marker, _nonce, True,
+                              f"{name}'s training program "
+                              f"{'cancelled' if removed else 'was not active'}.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "run_practice_session":
+            # Web port of PracticeCenterView._run_single_session: one real
+            # per-player drill through the engine with coaching staff.
+            _marker = "run_practice_session"
+            _nonce = cmd.get("nonce")
+            try:
+                from enhanced_practice_system import (
+                    PracticeType, PracticeIntensity)
+                pid = cmd.get("player_id")
+                drill = PracticeType(str(cmd.get("drill") or "skating"))
+                pint = PracticeIntensity(str(cmd.get("intensity")
+                                             or "moderate"))
+                gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                else:
+                    engine = _batchd_engine()
+                    can, why = engine.can_practice(player, drill, pint)
+                    if not can:
+                        _batchd_store(app, _marker, _nonce, False, why)
+                    else:
+                        coach_team = _batchd_player_team(app, team, player)
+                        session = engine.execute_practice(
+                            player, drill, pint, 60, 10, team=coach_team)
+                        gains = ""
+                        try:
+                            bd = getattr(session, "breakdown", None) or {}
+                            coach = bd.get("coach_name") or ""
+                            gains = (f" ({coach} ran it)"
+                                     if coach else "")
+                        except Exception:
+                            pass
+                        _batchd_store(
+                            app, _marker, _nonce, True,
+                            f"{getattr(player, 'full_name', 'Player')}: "
+                            f"{drill.value.replace('_', ' ').title()} "
+                            f"({pint.value}) complete{gains}. "
+                            f"+{session.skill_gain:.2f} skill, "
+                            f"+{session.fatigue_cost}% fatigue.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "schedule_practice":
+            # Web port of PracticeCenterView._start_practice_schedule.
+            _marker = "schedule_practice"
+            _nonce = cmd.get("nonce")
+            try:
+                from enhanced_practice_system import (
+                    PracticeType, PracticeIntensity)
+                pid = cmd.get("player_id")
+                drill = PracticeType(str(cmd.get("drill") or "skating"))
+                pint = PracticeIntensity(str(cmd.get("intensity")
+                                             or "moderate"))
+                try:
+                    total = int(cmd.get("sessions", 12))
+                except (TypeError, ValueError):
+                    total = 12
+                total = max(1, min(84, total))
+                _gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                else:
+                    result = _batchd_engine().schedule_practice(
+                        player, drill, pint, total)
+                    _batchd_store(app, _marker, _nonce, result.success,
+                                  result.message)
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "stop_practice_schedule":
+            _marker = "stop_practice_schedule"
+            _nonce = cmd.get("nonce")
+            try:
+                pid = cmd.get("player_id")
+                _gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                else:
+                    _batchd_engine().stop_practice_schedule(player)
+                    _batchd_store(app, _marker, _nonce, True,
+                                  f"{getattr(player, 'full_name', 'Player')}'s "
+                                  f"practice schedule stopped.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "coach_runs_practice":
+            # "Coach Runs Practice" button (desktop PracticeCenterView):
+            # weakness-targeted drills + fatigue-aware intensity for the
+            # whole roster through the real engine.
+            _nonce = cmd.get("nonce")
+            try:
+                _gm, team = _batchd_gm_team(app)
+                if team is None:
+                    _batchd_store(app, "coach_runs_practice", _nonce, False,
+                                  "No team loaded.")
+                else:
+                    _batchd_coach_runs_practice(app, team, _nonce)
+            except Exception as e:
+                _batchd_store(app, "coach_runs_practice", _nonce, False,
+                              str(e))
+        elif op == "assign_position_training":
+            # Positional training wired to the real familiarity engine
+            # (position_training.py): one real session toward the target
+            # position, persisted on player.position_familiarity.
+            _marker = "assign_position_training"
+            _nonce = cmd.get("nonce")
+            try:
+                import position_training as _pt
+                pid = cmd.get("player_id")
+                target = str(cmd.get("target") or "").upper()
+                _gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                elif target not in _pt.eligible_training_positions(player):
+                    _batchd_store(app, _marker, _nonce, False,
+                                  f"{target} is not a trainable position for "
+                                  f"this player.")
+                else:
+                    old_fam = _pt.get_familiarity(player, target)
+                    cq = _batchd_coaching_quality(team)
+                    new_fam, gain = _pt.train_position(player, target, cq)
+                    try:
+                        player.position_training_target = target
+                    except Exception:
+                        pass
+                    _batchd_store(
+                        app, _marker, _nonce, True,
+                        f"{getattr(player, 'full_name', 'Player')}: {target} "
+                        f"familiarity {old_fam:.0f} → {new_fam:.0f} "
+                        f"(+{gain:.1f} this session).",
+                        {"target": target, "old_familiarity": round(old_fam, 1),
+                         "new_familiarity": round(new_fam, 1),
+                         "gain": round(gain, 2)})
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "assign_offseason_program":
+            # Web port of offseason_programs: gated to Jun-Aug (desktop
+            # parity via is_offseason).
+            _marker = "assign_offseason_program"
+            _nonce = cmd.get("nonce")
+            try:
+                import offseason_programs as _osp
+                from datetime import date
+                pid = cmd.get("player_id")
+                focus = cmd.get("focus") or ""
+                intensity = cmd.get("intensity") or "Standard"
+                _gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                else:
+                    game_date = (getattr(app, "current_date", None)
+                                 or date.today())
+                    if not _osp.is_offseason(game_date):
+                        _batchd_store(
+                            app, _marker, _nonce, False,
+                            "Offseason programs can only be assigned "
+                            "June–August. Assign one focus per player for "
+                            "the summer, then watch camp reports in "
+                            "September.")
+                    else:
+                        ok, msg = _osp.assign_offseason_program(
+                            player, focus, intensity, on_date=game_date)
+                        _batchd_store(app, _marker, _nonce, ok, msg)
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "clear_offseason_program":
+            _marker = "clear_offseason_program"
+            _nonce = cmd.get("nonce")
+            try:
+                import offseason_programs as _osp
+                pid = cmd.get("player_id")
+                _gm, team = _batchd_gm_team(app)
+                player, _squad = _batchd_find_player(team, pid)
+                if player is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "Player not found on your squads.")
+                else:
+                    _osp.clear_offseason_program(player)
+                    _batchd_store(app, _marker, _nonce, True,
+                                  f"{getattr(player, 'full_name', 'Player')}'s "
+                                  f"summer program cleared.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "coach_checkin_beat":
+            # Web port of CheckinView._apply_beat: the real situational
+            # trust delta from coach_checkins.py, applied live to the
+            # coach's gm_trust and recorded on team.checkin_draft.
+            _marker = "coach_checkin_beat"
+            _nonce = cmd.get("nonce")
+            try:
+                import coach_checkins as _ckm
+                from web_ui.screens import coach_checkin as _cks
+                beat = str(cmd.get("beat") or "")
+                framing = str(cmd.get("framing") or "")
+                _gm, team = _batchd_gm_team(app)
+                if team is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "No team loaded.")
+                else:
+                    fn_name = {
+                        "expectations": "checkin_expectation_delta",
+                        "room": "checkin_room_delta",
+                        "rookies": "checkin_rookie_delta",
+                        "tactics": "checkin_tactics_delta",
+                    }.get(beat)
+                    if fn_name is None:
+                        _batchd_store(app, _marker, _nonce, False,
+                                      f"Unknown beat: {beat}")
+                    else:
+                        coach = _batchd_checkin_coach(app, team)
+                        if coach is None:
+                            _batchd_store(app, _marker, _nonce, False,
+                                          "No head coach found.")
+                        else:
+                            delta, tone, note = getattr(
+                                _ckm, fn_name)(team, coach, framing)
+                            try:
+                                cur = float(getattr(coach, "gm_trust", 70)
+                                            or 70)
+                                coach.gm_trust = max(
+                                    0.0, min(100.0, cur + delta))
+                            except Exception:
+                                pass
+                            # Same situational read as the desktop view for
+                            # the GM's spoken line.
+                            _sit = {}
+                            try:
+                                if beat == "room":
+                                    _sit["messy"] = bool(
+                                        (_ckm.room_state(team) or {}).get(
+                                            "messy"))
+                                elif beat == "rookies":
+                                    _sit["honored"] = bool(
+                                        _ckm.rookie_stance_honored(team)[0])
+                                elif beat == "tactics":
+                                    _sit["working"] = bool(
+                                        _ckm.tactics_working(team)[0])
+                            except Exception:
+                                pass
+                            gm_line = _cks.gm_line_for(beat, framing, _sit)
+                            draft = _batchd_checkin_draft(team)
+                            rec = {
+                                "beat": beat, "framing": framing,
+                                "delta": delta, "tone": tone, "note": note,
+                                "gm_line": gm_line,
+                                "coach_line": _cks.checkin_line(
+                                    tone, coach,
+                                    seed=len(draft.get("chosen", []))),
+                            }
+                            try:
+                                draft["chosen"].append(rec)
+                                draft["deltas"][beat] = delta
+                                for t in ("expectations", "room", "rookies",
+                                          "tactics"):
+                                    if t == beat and t not in draft["topics"]:
+                                        draft["topics"].append(t)
+                                if note and note not in draft["notes"]:
+                                    draft["notes"].append(note)
+                                team.checkin_draft = draft
+                            except Exception:
+                                pass
+                            _batchd_store(
+                                app, _marker, _nonce, True, note,
+                                {"beat": beat, "framing": framing,
+                                 "delta": delta, "tone": tone,
+                                 "trust": round(float(getattr(
+                                     coach, "gm_trust", 70) or 70), 1),
+                                 "coach_line": rec["coach_line"],
+                                 "gm_line": gm_line})
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
+        elif op == "coach_checkin_finish":
+            # Web port of CheckinView._finish: complete_checkin persists
+            # the entry on the mandate history and clears the pending
+            # flag (per-beat deltas already applied live).
+            _marker = "coach_checkin_finish"
+            _nonce = cmd.get("nonce")
+            try:
+                import coach_checkins as _ckm
+                _gm, team = _batchd_gm_team(app)
+                if team is None:
+                    _batchd_store(app, _marker, _nonce, False,
+                                  "No team loaded.")
+                else:
+                    draft = _batchd_checkin_draft(team)
+                    mandate = {}
+                    try:
+                        mandate = _ckm.get_active_mandate(team) or {}
+                    except Exception:
+                        pass
+                    fields = {
+                        "season": mandate.get("season"),
+                        "quarter": draft.get("quarter"),
+                        "topics": list(draft.get("topics", [])),
+                        "deltas": dict(draft.get("deltas", {})),
+                        "notes": list(draft.get("notes", [])),
+                    }
+                    for rec in draft.get("chosen", []):
+                        beat, framing = rec.get("beat"), rec.get("framing")
+                        if beat == "expectations":
+                            fields["expectation_framing"] = framing
+                        elif beat == "room":
+                            fields["room_framing"] = framing
+                        elif beat == "rookies":
+                            fields["rookie_framing"] = framing
+                        elif beat == "tactics":
+                            fields["tactics_framing"] = framing
+                    entry = _ckm.complete_checkin(
+                        team, fields, apply_trust=True,
+                        per_beat_applied=True)
+                    if entry is None:
+                        _batchd_store(
+                            app, _marker, _nonce, False,
+                            "Check-in could not be saved -- no active "
+                            "season mandate. Nothing was recorded.")
+                    else:
+                        try:
+                            if hasattr(team, "checkin_draft"):
+                                delattr(team, "checkin_draft")
+                        except Exception:
+                            pass
+                        total = sum(int(v)
+                                    for v in draft.get("deltas", {}).values()
+                                    if isinstance(v, (int, float)))
+                        sign = "+" if total >= 0 else ""
+                        _batchd_store(
+                            app, _marker, _nonce, True,
+                            f"Check-in wrapped up. Net coach trust "
+                            f"{sign}{total}. Recorded in the season "
+                            f"mandate history.")
+            except Exception as e:
+                _batchd_store(app, _marker, _nonce, False, str(e))
         elif op == "roster_move":
             # Move players between rosters with CBA validation.
             # Mirrors RosterView.move_player logic (windows.py).

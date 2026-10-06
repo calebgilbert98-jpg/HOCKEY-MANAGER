@@ -26,7 +26,116 @@
   <section>
     <h2>Active Training Programs</h2>
     <div class="prog-grid" id="prog-grid"></div>
-    <div class="empty" id="prog-empty" hidden>No active training programs. Assign players in the Development Center on desktop.</div>
+    <div class="empty" id="prog-empty" hidden>No active training programs. Assign one below.</div>
+  </section>
+
+  <section>
+    <h2>Assign Training Program <span class="sub">per-player focus + intensity</span></h2>
+    <div class="dev-panel">
+      <div class="dev-form-row">
+        <label>Player
+          <select id="assign-player"></select>
+        </label>
+      </div>
+      <div class="dev-form-row">
+        <span class="dev-label">Training Focus</span>
+        <div class="dev-radio-grid" id="assign-focus"></div>
+      </div>
+      <div class="dev-form-row">
+        <span class="dev-label">Intensity</span>
+        <div class="dev-radio-row" id="assign-intensity"></div>
+      </div>
+      <div class="dev-form-row dev-actions">
+        <button class="btn-primary" id="assign-btn">Assign Training Program</button>
+        <span class="dev-note" id="assign-note"></span>
+      </div>
+      <div class="dev-result" id="assign-result" hidden></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Practice Center <span class="sub">per-player drills</span></h2>
+    <div class="dev-panel">
+      <div class="dev-form-row">
+        <label>Player
+          <select id="prac-player"></select>
+        </label>
+        <label>Drill
+          <select id="prac-drill"></select>
+        </label>
+        <label>Intensity
+          <select id="prac-intensity"></select>
+        </label>
+      </div>
+      <div class="dev-form-row">
+        <span class="dev-label">Trains</span>
+        <span class="dev-note" id="prac-trains"></span>
+      </div>
+      <div class="dev-form-row">
+        <span class="dev-label">Cost</span>
+        <span class="dev-note" id="prac-cost"></span>
+      </div>
+      <div class="dev-form-row">
+        <label>Sessions per week
+          <input id="sched-per-week" type="number" min="1" max="7" value="3">
+        </label>
+        <label>Weeks
+          <input id="sched-weeks" type="number" min="1" max="12" value="4">
+        </label>
+      </div>
+      <div class="dev-form-row dev-actions">
+        <button class="btn-primary" id="prac-run-btn">Run Single Session</button>
+        <button class="btn-ghost" id="prac-sched-btn">Start Schedule</button>
+        <button class="btn-danger" id="prac-stop-btn">Stop Schedule</button>
+        <button class="btn-accent" id="coach-runs-btn">Coach Runs Practice</button>
+      </div>
+      <div class="dev-note" id="prac-current" style="margin-bottom:8px"></div>
+      <div class="dev-result" id="prac-result" hidden></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Positional Training <span class="sub">train a new position</span></h2>
+    <div class="dev-panel">
+      <div class="dev-form-row">
+        <label>Player
+          <select id="pos-player"></select>
+        </label>
+      </div>
+      <div class="dev-form-row">
+        <span class="dev-label">Familiarity</span>
+        <div class="fam-list" id="pos-fam"></div>
+      </div>
+      <div class="dev-form-row dev-actions">
+        <button class="btn-primary" id="pos-train-btn">Run Training Session</button>
+        <span class="dev-note" id="pos-note">Young, high-IQ players learn fastest. Diminishing returns near 100.</span>
+      </div>
+      <div class="dev-result" id="pos-result" hidden></div>
+    </div>
+  </section>
+
+  <section id="offseason-section">
+    <h2>Offseason Programs <span class="sub">summer focuses</span></h2>
+    <div class="dev-panel" id="offseason-panel">
+      <div class="dev-form-row">
+        <label>Player
+          <select id="off-player"></select>
+        </label>
+        <label>Focus
+          <select id="off-focus"></select>
+        </label>
+        <label>Intensity
+          <select id="off-intensity"></select>
+        </label>
+      </div>
+      <div class="dev-form-row dev-actions">
+        <button class="btn-primary" id="off-assign-btn">Assign Summer Program</button>
+        <button class="btn-danger" id="off-clear-btn">Clear Program</button>
+        <span class="dev-note" id="off-note"></span>
+      </div>
+      <div class="dev-result" id="off-result" hidden></div>
+    </div>
+    <div class="empty" id="offseason-locked" hidden>Offseason programs unlock June–August. Assign one focus per player for the summer; weekly development runs July–August and shows up in camp reports.</div>
   </section>
 
   <section>
