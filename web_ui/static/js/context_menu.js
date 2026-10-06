@@ -125,6 +125,10 @@
         action: function () { window.location.href = '/player/' + encodeURIComponent(pid); },
       },
       {
+        label: 'Compare', hint: 'Side-by-side with others',
+        action: function () { window.location.href = '/compare?p1=' + encodeURIComponent(pid); },
+      },
+      {
         label: 'Propose Trade', hint: 'Open trade center',
         action: function () { window.location.href = '/trades?player=' + encodeURIComponent(pid); },
       },

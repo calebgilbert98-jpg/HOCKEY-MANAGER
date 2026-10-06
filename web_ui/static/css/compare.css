@@ -1,0 +1,188 @@
+/* Compare Players — NHL 14 broadcast aesthetic.
+   Dark navy, deep blue accents, condensed uppercase headers. No teal. */
+:root {
+  --c-blue: #3B82F6;
+  --c-blue-deep: #1e3a8a;
+  --c-panel: #0f1622;
+  --c-panel2: #141c2c;
+  --c-line: rgba(148, 163, 184, .16);
+  --c-text: #e8edf4;
+  --c-dim: #93a0b4;
+  --c-green: #4CAF50;
+  --c-red: #F44336;
+}
+
+.cmp-main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 22px 28px 60px;
+}
+
+/* ---------- header + slots ---------- */
+.cmp-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.bcast-kicker {
+  font-size: 11px;
+  letter-spacing: .28em;
+  text-transform: uppercase;
+  color: var(--c-blue);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.cmp-title {
+  font-family: 'Oswald', 'Arial Narrow', sans-serif;
+  font-size: 34px;
+  letter-spacing: .06em;
+  margin: 0;
+  color: var(--c-text);
+}
+.cmp-sub { color: var(--c-dim); font-size: 13px; margin: 6px 0 0; }
+
+.cmp-slots { display: flex; gap: 10px; }
+.cmp-slot {
+  width: 150px;
+  min-height: 86px;
+  border: 1px dashed rgba(148, 163, 184, .35);
+  border-radius: 6px;
+  background: rgba(15, 22, 34, .7);
+  color: var(--c-dim);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 8px;
+  transition: border-color .15s, background .15s;
+}
+.cmp-slot:hover { border-color: var(--c-blue); background: rgba(59, 130, 246, .08); }
+.cmp-slot.filled { border-style: solid; border-color: var(--c-line); cursor: default; }
+.cmp-slot.filled:hover { border-color: var(--c-blue); }
+.cmp-slot img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid var(--c-blue); }
+.cmp-slot .s-name { color: var(--c-text); font-weight: 700; font-size: 12px; text-align: center; }
+.cmp-slot .s-team { font-size: 10px; }
+.cmp-slot .s-x {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--c-red);
+  background: none; border: none; cursor: pointer;
+  text-transform: uppercase; letter-spacing: .08em;
+}
+
+/* ---------- search ---------- */
+.cmp-search-wrap { position: relative; max-width: 520px; margin-bottom: 18px; }
+#cmp-search {
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 15px;
+  color: var(--c-text);
+  background: #0b1220;
+  border: 1px solid var(--c-blue);
+  border-radius: 6px;
+  outline: none;
+}
+.cmp-results {
+  position: absolute; top: 100%; left: 0; right: 0;
+  z-index: 50;
+  background: #0d1526;
+  border: 1px solid var(--c-line);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .6);
+}
+.cmp-result {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; cursor: pointer;
+  border-bottom: 1px solid rgba(148, 163, 184, .08);
+}
+.cmp-result:hover { background: rgba(59, 130, 246, .12); }
+.cmp-result img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
+.cmp-result .r-name { color: var(--c-text); font-weight: 600; font-size: 14px; }
+.cmp-result .r-meta { color: var(--c-dim); font-size: 12px; margin-left: auto; }
+.cmp-result .r-ovr { color: var(--c-blue); font-weight: 700; font-size: 13px; }
+
+/* ---------- table ---------- */
+.cmp-empty { color: var(--c-dim); text-align: center; padding: 60px 0; font-size: 15px; }
+.cmp-table-wrap { overflow-x: auto; border: 1px solid var(--c-line); border-radius: 8px; }
+.cmp-table { width: 100%; border-collapse: collapse; background: var(--c-panel); min-width: 640px; }
+.cmp-table thead th {
+  position: sticky; top: 0; z-index: 5;
+  background: #0d1526;
+  padding: 14px 12px;
+  border-bottom: 2px solid var(--c-blue);
+  vertical-align: top;
+  min-width: 150px;
+}
+.cmp-table thead th.rowlabel { min-width: 170px; text-align: left; }
+.cmp-phead img {
+  width: 72px; height: 72px; border-radius: 50%; object-fit: cover;
+  border: 3px solid var(--c-blue);
+  box-shadow: 0 0 18px rgba(59, 130, 246, .35);
+  background: #0a0f1a;
+}
+.cmp-phead .ph-name { margin-top: 8px; font-size: 16px; font-weight: 700; color: var(--c-text); }
+.cmp-phead .ph-name a { color: inherit; text-decoration: none; }
+.cmp-phead .ph-name a:hover { color: var(--c-blue); }
+.cmp-phead .ph-meta { font-size: 11px; color: var(--c-dim); text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+.cmp-phead .ph-ovr {
+  display: inline-block; margin-top: 6px;
+  font-size: 13px; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--c-blue), var(--c-blue-deep));
+  padding: 2px 12px; border-radius: 12px;
+}
+
+.cmp-table tbody td, .cmp-table tbody th {
+  padding: 7px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, .08);
+  font-size: 14px;
+  text-align: center;
+  color: var(--c-text);
+}
+.cmp-table tbody th.rowlabel {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .1em;
+  color: var(--c-dim);
+  font-weight: 600;
+  background: rgba(13, 21, 38, .6);
+  white-space: nowrap;
+}
+.cmp-section td, .cmp-section th {
+  background: rgba(59, 130, 246, .08) !important;
+  font-size: 12px !important;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--c-blue) !important;
+  font-weight: 700 !important;
+  padding: 10px 12px !important;
+}
+.cmp-table td.win {
+  background: rgba(76, 175, 80, .14);
+  box-shadow: inset 0 0 0 1px rgba(76, 175, 80, .45);
+  font-weight: 700;
+  color: #c8f0c9;
+}
+.cmp-table td.lose { color: #e8a09a; }
+
+.attr-cell { display: flex; align-items: center; gap: 8px; justify-content: center; }
+.attr-bar { width: 90px; height: 8px; background: rgba(148, 163, 184, .15); border-radius: 4px; overflow: hidden; flex: none; }
+.attr-bar .fill { display: block; height: 100%; border-radius: 4px; }
+.attr-val { min-width: 30px; text-align: right; font-weight: 600; }
+
+@media (max-width: 800px) {
+  .cmp-main { padding: 14px 12px 40px; }
+  .cmp-slot { width: 120px; }
+  .attr-bar { width: 56px; }
+}
