@@ -81,3 +81,115 @@ def api_calendar():
     if live is None:
         return jsonify({"today": "", "team": "", "games": []})
     return jsonify(_calendar_payload(live))
+
+
+# ------------------------------------------------------------------
+# Batch C (League) minor: event markers + deadline-day actions
+# (~200 lines desktop: trade deadline, draft day, season start/end,
+# plus a deadline-day action hook into the Deadline Center).
+# ------------------------------------------------------------------
+
+def _calendar_events(live):
+    """League event markers: trade deadline, entry draft, season bounds.
+
+    Never raises; dates are ISO strings.
+    """
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league)
+    events = []
+    if league is None:
+        return events
+
+    # Trade deadline (derived from the schedule, same as the center).
+    try:
+        from trade_deadline_manager import trade_deadline_date
+        dd = trade_deadline_date(league)
+        if dd:
+            events.append({
+                "date": dd.isoformat(),
+                "kind": "deadline",
+                "label": "Trade Deadline (3 PM ET)",
+                "action": "/deadline",
+                "action_label": "Open Deadline Center",
+            })
+    except Exception:
+        pass
+
+    # Entry draft day.
+    try:
+        session = _safe(lambda: getattr(league, "entry_draft_session", None))
+        dyear = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
+        if not dyear:
+            dyear = _safe(lambda: int(getattr(league, "season_year", 0) or 0),
+                          0) + 1
+        if dyear:
+            # Draft is late June; the desktop war room keys off the
+            # session year.
+            events.append({
+                "date": f"{dyear}-06-28",
+                "kind": "draft",
+                "label": f"{dyear} Entry Draft",
+                "action": "/draft",
+                "action_label": "Open Draft Day Central",
+            })
+    except Exception:
+        pass
+
+    # Season bounds from the schedule.
+    try:
+        sched = _safe(lambda: list(getattr(league, "schedule", None)
+                                   or []), []) or []
+        dates = []
+        for g in sched:
+            try:
+                if not isinstance(g, dict) or g.get("preseason"):
+                    continue
+                d = g.get("date")
+                iso = _iso(d)
+                if iso:
+                    dates.append(iso)
+            except Exception:
+                continue
+        dates.sort()
+        if dates:
+            events.append({"date": dates[0], "kind": "season",
+                           "label": "Opening Night"})
+            if dates[-1] != dates[0]:
+                events.append({"date": dates[-1], "kind": "season",
+                               "label": "Regular Season Ends"})
+    except Exception:
+        pass
+    return events
+
+
+@bp.route("/api/calendar/events")
+def api_calendar_events():
+    """Event markers + deadline-day state for the calendar page."""
+    live = _live()
+    if live is None:
+        return jsonify({"events": [], "deadline": None})
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league) if gm else None
+    deadline = None
+    if league is not None:
+        try:
+            from trade_deadline_manager import trade_deadline_date
+            dd = trade_deadline_date(league)
+            today = _safe(lambda: gm.current_date)
+            try:
+                today = today.date() if isinstance(today, datetime) \
+                    else today
+            except Exception:
+                today = None
+            if dd:
+                days_left = (dd - today).days if today else None
+                deadline = {
+                    "date": dd.isoformat(),
+                    "label": dd.strftime("%B %d, %Y"),
+                    "days_left": days_left,
+                    "is_today": bool(today and dd == today),
+                    "passed": bool(days_left is not None and days_left < 0),
+                }
+        except Exception:
+            pass
+    return jsonify({"events": _calendar_events(live), "deadline": deadline})

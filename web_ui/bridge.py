@@ -3271,6 +3271,159 @@ def _execute_command(app, cmd):
                                     session.record_pick(overall, owner, pid)
             except Exception:
                 pass
+        elif op == "draft_trade_pick":
+            # Batch C (League): trade-this-pick from the web war room.
+            # Mirrors windows.py DraftView._execute_pick_swap: AI verdict
+            # via trade_engine.ai_consider_trade, slot-owner swap on
+            # accept, counter details stashed for the client on accept-of-
+            # counter. Outcome -> app._web_draft_trade_result.
+            try:
+                import trade_engine as te
+                import draft_night as dn
+                league = getattr(getattr(app, "game_manager", None),
+                                 "league", None)
+                if league is None:
+                    league = getattr(app, "league", None)
+                user_team = getattr(app, "user_team", None)
+                session = getattr(league, "entry_draft_session", None) \
+                    if league is not None else None
+                partner_name = str(cmd.get("partner") or "")
+                partner_overall = int(cmd.get("partner_overall") or 0)
+                result = {"ok": False, "error": "draft not active"}
+                if (league is not None and user_team is not None
+                        and session is not None and partner_name
+                        and partner_overall):
+                    slots = list(getattr(session, "slots", None) or [])
+                    cur = int(getattr(session, "current_pick", 0) or 0)
+                    overall = cur + 1
+                    user_name = getattr(user_team, "team_name", "")
+                    my_slot = next(
+                        (s for s in slots
+                         if int(s.get("overall", 0) or 0) == overall), None)
+                    tgt_slot = next(
+                        (s for s in slots
+                         if int(s.get("overall", 0) or 0) == partner_overall),
+                        None)
+                    if my_slot is None or my_slot.get("owner") != user_name:
+                        result = {"ok": False,
+                                  "error": "Pick is no longer on the clock."}
+                    elif tgt_slot is None or \
+                            tgt_slot.get("owner") != partner_name:
+                        result = {"ok": False,
+                                  "error": "Partner pick no longer available."}
+                    elif any(int(p.get("overall", 0) or 0) == overall
+                             for p in list(getattr(session, "picks", None)
+                                            or [])):
+                        result = {"ok": False,
+                                  "error": "Pick was just made \u2014 no trade."}
+                    else:
+                        partner = next(
+                            (t for t in list(getattr(league, "teams", None)
+                                             or [])
+                             if getattr(t, "team_name", "") == partner_name),
+                            None)
+                        if partner is None:
+                            result = {"ok": False,
+                                      "error": "Partner team not found."}
+                        else:
+                            # DraftPick objects for the engine (desktop
+                            # passes the real picks); fall back to slot
+                            # dicts with a value shim if unavailable.
+                            my_dp = my_slot.get("pick")
+                            tgt_dp = tgt_slot.get("pick")
+
+                            class _SlotPick:
+                                def __init__(self, slot):
+                                    self._slot = slot
+                                    self.current_team = slot.get("owner")
+
+                            if my_dp is None:
+                                my_dp = _SlotPick(my_slot)
+                            if tgt_dp is None:
+                                tgt_dp = _SlotPick(tgt_slot)
+                            resp = te.ai_consider_trade(
+                                partner, [my_dp], [tgt_dp],
+                                user_team=user_team)
+                            decision = getattr(resp, "decision", "reject")
+                            if decision == "reject":
+                                result = {"ok": False, "error": "rejected",
+                                          "message": getattr(
+                                              resp, "message", "")}
+                            elif decision == "counter":
+                                extra = list(getattr(resp, "want_added", [])
+                                             or []) + list(
+                                    getattr(resp, "will_add", []) or [])
+                                result = {
+                                    "ok": False, "counter": True,
+                                    "message": getattr(resp, "message", ""),
+                                    "want_added": [te.asset_label(a)
+                                                   for a in getattr(
+                                                       resp, "want_added", [])
+                                                   or []],
+                                    "will_add": [te.asset_label(a)
+                                                 for a in getattr(
+                                                     resp, "will_add", [])
+                                                 or []],
+                                    # Enough for the client to re-propose
+                                    # with the counter accepted.
+                                    "partner": partner_name,
+                                    "partner_overall": partner_overall,
+                                }
+                            else:
+                                # Accept: swap slot owners (the durable
+                                # journal, like _sync_session_owners).
+                                my_slot["owner"] = partner_name
+                                tgt_slot["owner"] = user_name
+                                for dp, nm in ((my_dp, partner_name),
+                                               (tgt_dp, user_name)):
+                                    try:
+                                        dp.current_team = nm
+                                    except Exception:
+                                        pass
+                                gm = getattr(app, "game_manager", None)
+                                summary = (
+                                    f"{user_name} acquires pick "
+                                    f"#{partner_overall} from "
+                                    f"{partner_name} (gives #{overall}).")
+                                if gm is not None:
+                                    if not hasattr(gm, "trade_history"):
+                                        gm.trade_history = []
+                                    try:
+                                        gm.trade_history.append(
+                                            te.CompletedTrade(
+                                                str(getattr(
+                                                    gm, "current_date", "")),
+                                                user_name, partner_name,
+                                                [f"#{overall} pick"],
+                                                [f"#{partner_overall} pick"],
+                                                summary))
+                                    except Exception:
+                                        pass
+                                try:
+                                    deals = getattr(
+                                        league, "draft_day_deals", None)
+                                    if deals is None:
+                                        league.draft_day_deals = []
+                                        deals = league.draft_day_deals
+                                    deals.append("DRAFT TRADE: " + summary)
+                                except Exception:
+                                    pass
+                                try:
+                                    app.add_news_story(
+                                        "DRAFT TRADE: " + summary)
+                                except Exception:
+                                    pass
+                                result = {"ok": True, "summary": summary}
+                try:
+                    app._web_draft_trade_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_draft_trade_result = {
+                        "ok": False, "error": str(e)}
+                except Exception:
+                    pass
         elif op == "auto_negotiate_extensions":
             # Mirror of main.py auto_negotiate_extensions: run
             # handle_contract_offer for every expiring player/staff, then
