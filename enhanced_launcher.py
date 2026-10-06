@@ -2360,17 +2360,9 @@ This profile will influence player relationships, media interactions, and trade 
                 print("Wiring multiplayer host...")
                 self._wire_multiplayer_host(app, gm)
 
-            # Start a deferred fantasy draft once the GUI is fully up.
-            # (The inbox isn't ready during apply_startup_settings, so the
-            # draft flag is set there and fired here.)
-            if getattr(gm, '_fantasy_draft_deferred', False):
-                def _fire_draft():
-                    try:
-                        gm._fantasy_draft_deferred = False
-                        gm.start_interactive_fantasy_draft()
-                    except Exception as e:
-                        print(f"Deferred fantasy draft failed: {e}")
-                app.after(2500, _fire_draft)
+            # Fantasy draft: the pending flag is set in apply_startup_settings.
+            # The user opens it via Transactions -> Fantasy Draft (or the inbox
+            # email). No timer needed -- the menu entry is the reliable path.
             
             # Don't destroy the old launcher yet - it can cause Tk root issues
             # Just ensure the new app is in front

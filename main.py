@@ -4011,6 +4011,7 @@ class HockeyManagerGUI(tk.Tk):
             "Trade Block": self.open_trade_block_window,
             "Waivers": self.open_waivers_window,
             "GM Options": self.open_gm_options_window,
+            "Fantasy Draft": self.open_fantasy_draft_window,
         })
 
         # Finances (budgets, payroll, extensions)
