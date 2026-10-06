@@ -1,6 +1,87 @@
 /* Puck Dynasty web schedule styles — NHL 14 broadcast skin.
    Game rows reskinned as broadcast panels; dates in condensed type. */
 
+.sched-main { max-width: 1020px; margin: 0 auto; padding: 6px 24px 40px; }
+
+/* ---------- controls: tabs + month filter ---------- */
+.sched-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.sched-tabs { display: flex; gap: 8px; }
+.sched-tab {
+  background: var(--nhl-panel); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase;
+  padding: 8px 18px; cursor: pointer;
+}
+.sched-tab:hover { color: #fff; border-color: var(--nhl-blue); }
+.sched-tab.active { background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff; }
+.month-filter {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim);
+}
+.nhl-input, select.nhl-input {
+  background: var(--nhl-panel); color: var(--text, #f4f6fb);
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 7px 10px; font-size: 13px;
+}
+
+/* ---------- schedule table ---------- */
+.tbl-wrap { overflow-x: auto; border-radius: var(--nhl-r); }
+.sched-table {
+  width: 100%; border-collapse: collapse; font-size: 14px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line);
+}
+.sched-table th {
+  text-align: left; padding: 10px 14px;
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.6px; text-transform: uppercase; color: var(--dim);
+  border-bottom: 1px solid var(--nhl-line-blue); white-space: nowrap;
+}
+.sched-table th.sortable { cursor: pointer; user-select: none; }
+.sched-table th.sortable:hover { color: var(--nhl-blue); }
+.sort-ind { color: var(--nhl-blue); }
+.sched-table td { padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,.05); }
+.sched-table tbody tr:hover td { background: rgba(59,130,246,.07); }
+.sched-table tbody tr.row-today td { background: rgba(59,130,246,.10); }
+.c-date {
+  font-family: var(--nhl-cond); font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; color: var(--dim); white-space: nowrap;
+}
+.c-match { font-weight: 600; }
+.s-at { color: var(--dimmer); margin: 0 6px; font-size: 12px; }
+.c-score { font-weight: 800; white-space: nowrap; }
+.s-note { color: var(--gold, #e8b93c); font-size: 11px; font-weight: 800; }
+.s-dash { color: var(--dimmer); }
+.s-tag {
+  font-size: 10px; font-weight: 800; letter-spacing: 1px;
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r-sm);
+  padding: 2px 7px; color: var(--dim); text-transform: uppercase;
+}
+.st { font-size: 12px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+.st-final { color: var(--green, #34d399); }
+.st-today { color: var(--nhl-blue); }
+.st-sched { color: var(--dimmer); }
+.plink { color: var(--text, #f4f6fb); text-decoration: none; font-weight: 700; }
+.plink:hover { color: var(--nhl-blue); text-decoration: underline; }
+
+.sched-action {
+  display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: .6px;
+  color: var(--nhl-blue); text-decoration: none; white-space: nowrap;
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r-sm);
+  padding: 5px 12px; background: transparent; cursor: pointer;
+  font-family: var(--font, 'Segoe UI', system-ui, sans-serif);
+}
+.sched-action:hover { background: var(--nhl-blue-soft); }
+.sched-action.primary { background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff; }
+.sched-action.btn { font-size: 12px; }
+.th-actions { text-align: right; }
+.c-actions { text-align: right; }
+
 .sched-main { max-width: 760px; margin: 0 auto; padding: 6px 24px 40px; }
 .game-list { display: flex; flex-direction: column; gap: 8px; }
 .game-row {
