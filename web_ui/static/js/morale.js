@@ -567,7 +567,11 @@ async function renderCoachCarousel() {
       <div class="coach-style">${esc(c.style)} ${c.axis ? `(${esc(c.axis)})` : ''}</div>
       <div class="coach-meta">GM trust: ${c.gm_trust}/100${c.shelf_weeks ? ` · message age ${c.shelf_weeks} wks` : ''}</div>` :
       '<div class="dim">No head coach. The carousel is your friend — pick below.</div>';
-    hot.innerHTML = d.hot_seat ? `<div class="repeat-warn">🔥 ${esc(JSON.stringify(d.hot_seat))}</div>` : '';
+    hot.innerHTML = d.hot_seat ? `<div class="repeat-warn">🔥 <strong>Hot seat:</strong>
+      trust ${d.hot_seat.trust}/100 vs board expectation "${esc(d.hot_seat.expectation || '')}"
+      (pace ${d.hot_seat.pace}, expected ${d.hot_seat.expected}).
+      ${d.hot_seat.reprieve_p != null ? `Reprieve odds if he pleads his case: ${Math.round(d.hot_seat.reprieve_p * 100)}%.` : ''}
+      ${d.hot_seat.pitch ? `<div class="dim">His pitch: "${esc(d.hot_seat.pitch)}"</div>` : ''}</div>` : '';
     const archIcon = {retread: '♻️', specialist: '📋', 'fresh blood': '🌱'};
     list.innerHTML = (d.candidates || []).length ? (d.candidates || []).map(x => `
       <div class="candidate-row">

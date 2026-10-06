@@ -440,9 +440,18 @@ def _org_chart_payload(team):
     def has_role(s, *names):
         return str(getattr(getattr(s, "role", None), "name", "")) in names
 
+    def nhl_first(members):
+        """Vacant chairs first, then NHL-assigned, then AHL/farm staff."""
+        return sorted(
+            members,
+            key=lambda m: 0 if str(_safe(
+                lambda: getattr(m, "assignment", ""), "") or "").lower()
+            != "ahl" else 1)
+
     tree = []
     mgmt = cats.get("Management", [])
-    gm_s = next((s for s in mgmt if has_role(s, "GENERAL_MANAGER")), None)
+    gm_s = next((s for s in nhl_first(mgmt)
+                 if has_role(s, "GENERAL_MANAGER")), None)
     agms = [s for s in mgmt if s is not gm_s]
     tree.append({"level": "Management", "reports": [
         {"role": "General Manager",
@@ -450,7 +459,8 @@ def _org_chart_payload(team):
         {"role": "Assistant General Manager",
          "people": [_web_staff_entry(s) for s in agms]}]})
     coaches = cats.get("Coaching", [])
-    hc = next((s for s in coaches if has_role(s, "HEAD_COACH")), None)
+    hc = next((s for s in nhl_first(coaches)
+               if has_role(s, "HEAD_COACH")), None)
     assistants = [s for s in coaches
                   if has_role(s, "ASSISTANT_COACH", "ASSOCIATE_COACH")]
     specialists = [s for s in coaches

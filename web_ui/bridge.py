@@ -71,6 +71,21 @@ def _safe(fn, default=None):
         return default
 
 
+def _staff_role_str(s):
+    """Staff role as a display string, enum-aware.
+
+    StaffRole is a plain Enum: str(role) is "StaffRole.HEAD_COACH", so a
+    naive `"head coach" in str(role).lower()` never matches on current
+    saves (legacy plain-string roles are the only ones it catches).
+    Reading .value first ("Head Coach") fixes the lookup everywhere.
+    """
+    try:
+        return str(getattr(getattr(s, "role", None), "value",
+                           getattr(s, "role", "") or ""))
+    except Exception:
+        return ""
+
+
 def _overall(p):
     """Get player overall: tries overall_rating() method first (game_classes),
     then overall attribute, then 0."""
@@ -3230,7 +3245,7 @@ def _execute_command(app, cmd):
                 elif mode == "takeover":
                     coach = None
                     for s in list(getattr(team, "staff", None) or []):
-                        if "head coach" in str(getattr(s, "role", "")).lower():
+                        if "head coach" in _staff_role_str(s).lower():
                             coach = s
                             break
                     if coach is not None:
@@ -3280,7 +3295,7 @@ def _execute_command(app, cmd):
                 # Find head coach
                 coach = None
                 for s in list(getattr(team, "staff", None) or []):
-                    if "head coach" in str(getattr(s, "role", "")).lower():
+                    if "head coach" in _staff_role_str(s).lower():
                         coach = s
                         break
                 roster = list(getattr(team, "roster", None) or [])

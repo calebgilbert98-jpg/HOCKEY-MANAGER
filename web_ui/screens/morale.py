@@ -7,7 +7,7 @@ Speech, Practice, Back Room, Advise Coach, Line Control).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, enqueue_command
+from web_ui.bridge import _safe, _staff_role_str, enqueue_command
 
 bp = Blueprint("morale", __name__)
 
@@ -63,7 +63,7 @@ def api_morale():
             # Find head coach from staff
             staff = _safe(lambda: list(getattr(team, "staff", [])), []) or []
             for s in staff:
-                if "head coach" in str(_safe(lambda: getattr(s, "role", ""), "")).lower():
+                if "head coach" in _staff_role_str(s).lower():
                     coach = s
                     break
         except Exception:
@@ -618,7 +618,7 @@ def api_advice_types():
     coach = None
     for s in list(getattr(team, "staff", None) or []):
         try:
-            if "head coach" in str(getattr(s, "role", "")).lower():
+            if "head coach" in _staff_role_str(s).lower():
                 coach = s
                 break
         except Exception:
@@ -671,7 +671,7 @@ def api_rivalries():
             coach = None
             for s in list(getattr(team, "staff", None) or []):
                 try:
-                    if "head coach" in str(getattr(s, "role", "")).lower():
+                    if "head coach" in _staff_role_str(s).lower():
                         coach = s
                         break
                 except Exception:
@@ -822,9 +822,12 @@ def api_coach_candidates():
     except Exception:
         candidates = []
     try:
+        # Read-only: surface the hot-seat state the weekly tick already
+        # computed. Never run coach_hot_seat_check() from a GET -- it can
+        # apply trust drift (a write).
         if _dr is not None:
-            hot = _dr.coach_hot_seat_check(
-                team, date_str="", league=league)
+            dr = _dr.ensure_dressing_room_fields(team)
+            hot = dr.get("coach_hot_seat")
     except Exception:
         hot = None
     return jsonify({"current": current, "candidates": candidates,
