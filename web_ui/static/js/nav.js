@@ -1,5 +1,13 @@
 /* Puck Dynasty global nav behavior: dropdown toggles + current-page highlight. */
 (function () {
+  /* Tell the backend the window is closing so the game process exits
+     instead of lingering in Task Manager (2026-10-06). The server waits
+     ~12s before exiting, so plain page navigations are unaffected. */
+  window.addEventListener('beforeunload', function () {
+    try { navigator.sendBeacon('/api/shutdown'); } catch (e) {}
+  });
+})();
+(function () {
   /* Multiplayer bar (Batch E): load the MP layer on every page. It
      self-activates only when a multiplayer game is live. */
   try {

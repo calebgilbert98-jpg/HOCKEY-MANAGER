@@ -34,6 +34,7 @@ _watch_mode = 'quick'
 _last_heartbeat = 0.0      # last time the browser tab pinged
 _heartbeat_seen = False   # True once the tab has checked in at least once
 _shutting_down = False
+_shutdown_requested_at = 0.0  # when /api/shutdown was hit (window closed)
 
 
 def set_app(game_app):
@@ -54,11 +55,38 @@ def note_heartbeat():
     _heartbeat_seen = True
 
 
-def heartbeat_expired(timeout_s=150):
+def heartbeat_expired(timeout_s=60):
     """True if the browser tab has gone silent (closed/crashed)."""
     import time
     return (_heartbeat_seen and not _shutting_down
             and time.time() - _last_heartbeat > timeout_s)
+
+
+def note_shutdown_request():
+    """Browser window is closing (beforeunload beacon)."""
+    global _shutdown_requested_at
+    import time
+    _shutdown_requested_at = time.time()
+
+
+def should_exit_now():
+    """True when the process should terminate immediately.
+
+    Either the browser window closed (grace period elapsed with no new
+    heartbeat, so it wasn't just a page navigation) or the tab has been
+    silent past the heartbeat timeout (crash/kill).
+    """
+    import time
+    if _shutting_down:
+        return False
+    now = time.time()
+    # Window closed: 12s grace for navigation, then exit.
+    if _shutdown_requested_at > 0 and now - _last_heartbeat > 12:
+        return True
+    # Tab silent (crash/kill): heartbeat timeout.
+    if heartbeat_expired():
+        return True
+    return False
 
 
 # ------------------------------------------------------------------
@@ -1628,13 +1656,18 @@ def drain_commands(app, root):
         _pump_mp_web(live)
     except Exception:
         pass
-    # Browser tab gone silent? Shut the game down cleanly so no ghost
-    # process lingers (the Sept-2026 exit-hang lesson, web edition).
-    if _web_app_ref is not None and heartbeat_expired():
+    # Browser tab gone silent or window closed? Kill the process so no
+    # ghost lingers in Task Manager (2026-10-06: quit()/destroy() alone
+    # left the process alive). os._exit is deliberate — nothing else
+    # reliably terminates the Flask/Tk hybrid. Fires during setup too
+    # (_web_app_ref is None until the career is created).
+    if _heartbeat_seen and should_exit_now():
+        import os as _os
         try:
             _shutdown(root)
         except Exception:
             pass
+        _os._exit(0)
         return
     try:
         root.after(250, lambda: drain_commands(app, root))
@@ -6559,6 +6592,13 @@ def create_app(game_app=None):
     @app.route("/api/heartbeat", methods=["POST"])
     def heartbeat():
         note_heartbeat()
+        return jsonify({"ok": True})
+
+    @app.route("/api/shutdown", methods=["POST"])
+    def shutdown_request():
+        # Browser window is closing — the game should exit, not linger.
+        # (The 12s grace in should_exit_now covers page navigations.)
+        note_shutdown_request()
         return jsonify({"ok": True})
 
     @app.route("/api/watch_mode", methods=["GET", "POST"])
