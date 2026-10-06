@@ -1415,6 +1415,12 @@ def get_inbox_messages(app, filter_type="all"):
                 if _safe(lambda: m.requires_response, False)]
     elif filter_type == "saved":
         msgs = [m for m in msgs if _safe(lambda: m.is_saved, False)]
+    # Batch D: the 6 desktop category pills (inbox_window.py _FILTERS).
+    elif filter_type in ("Trade", "Scouting", "Contracts", "Injuries",
+                         "Media", "League"):
+        msgs = [m for m in msgs
+                if _safe(lambda: getattr(m, "category", "General"),
+                         "General") == filter_type]
     out = []
     for m in msgs:
         try:

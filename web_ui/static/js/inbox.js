@@ -1,19 +1,115 @@
 /* Puck Dynasty web inbox — Gmail-style rows (matches the 2026-10-04 redesign)
-   Batch A (2026-10-05): all 11 v0.18.4 interactive action types ported. */
+   Batch A (2026-10-05): all 11 v0.18.4 interactive action types ported.
+   Batch D: 6 category pills with live counts, Story view, search,
+   Compose/Reply/Forward editor, Mark All Read, Save/Important flagging. */
 let currentFilter = 'all';
 let messages = [];
 let openId = null;
 let openMsg = null;
+let searchQuery = '';
+let filterPills = [];
+
+/* Category pills with live counts (desktop _FILTERS). */
+async function loadFilters() {
+  const host = document.getElementById('filters');
+  try {
+    const res = await fetch('/api/inbox/filters');
+    const d = await res.json();
+    filterPills = d.filters || [];
+  } catch (e) {
+    filterPills = [
+      {label: 'All', key: 'all'}, {label: 'Unread', key: 'unread'},
+      {label: '📖 Story', key: 'story'},
+    ];
+  }
+  host.innerHTML = '';
+  for (const p of filterPills) {
+    const b = document.createElement('button');
+    b.dataset.f = p.key;
+    b.textContent = p.label + (p.count !== null && p.count !== undefined ? ' (' + p.count + ')' : '');
+    if (p.key === currentFilter) b.classList.add('active');
+    b.addEventListener('click', () => {
+      if (p.key === 'story') { loadStory(); }
+      else { searchQuery = ''; document.getElementById('inbox-search').value = ''; loadInbox(p.key); }
+      host.querySelectorAll('button').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    });
+    host.appendChild(b);
+  }
+}
 
 async function loadInbox(filter = 'all') {
   currentFilter = filter;
   document.querySelectorAll('#filters button').forEach(b =>
     b.classList.toggle('active', b.dataset.f === filter));
   try {
-    const res = await fetch('/api/inbox?filter=' + encodeURIComponent(filter));
-    messages = await res.json();
+    if (searchQuery) {
+      const res = await fetch('/api/inbox/search?q=' + encodeURIComponent(searchQuery));
+      const d = await res.json();
+      messages = d.messages || [];
+      document.getElementById('inbox-count').textContent =
+        messages.length + ' result' + (messages.length === 1 ? '' : 's') +
+        ' for "' + searchQuery + '"';
+    } else {
+      const res = await fetch('/api/inbox?filter=' + encodeURIComponent(filter));
+      messages = await res.json();
+      document.getElementById('inbox-count').textContent =
+        messages.length + ' message' + (messages.length === 1 ? '' : 's');
+    }
     renderList();
   } catch (e) { console.error(e); }
+}
+
+/* Story view: developing storylines + chronological feed (desktop Story). */
+async function loadStory() {
+  currentFilter = 'story';
+  document.querySelectorAll('#filters button').forEach(b =>
+    b.classList.toggle('active', b.dataset.f === 'story'));
+  const list = document.getElementById('msg-list');
+  document.getElementById('inbox-count').textContent = 'Season story';
+  list.innerHTML = '<div class="empty">Loading the season story…</div>';
+  try {
+    const res = await fetch('/api/inbox/story');
+    const d = await res.json();
+    list.innerHTML = '';
+    if ((d.developing || []).length) {
+      const h = document.createElement('div');
+      h.className = 'story-h';
+      h.textContent = 'Developing storylines';
+      list.appendChild(h);
+      for (const s of d.developing) {
+        const el = document.createElement('div');
+        el.className = 'story-card';
+        el.innerHTML =
+          '<div class="story-top"><span class="story-icon">' + esc(s.icon || '📰') + '</span>' +
+          '<span class="story-title">' + esc(s.title) + '</span></div>' +
+          '<div class="story-text">' + esc(s.summary || '') + '</div>';
+        list.appendChild(el);
+      }
+    }
+    const h2 = document.createElement('div');
+    h2.className = 'story-h';
+    h2.textContent = 'Story feed';
+    list.appendChild(h2);
+    for (const m of (d.feed || [])) {
+      messages.push(m);
+      const row = document.createElement('div');
+      row.className = 'story-feed-row' + (m.is_read ? '' : ' unread');
+      row.innerHTML =
+        '<div class="msg-sender">' + esc(m.sender) + '</div>' +
+        '<div class="msg-subj">' + esc(m.subject) +
+        (m.snippet ? ' <span class="msg-snip">— ' + esc(m.snippet) + '</span>' : '') + '</div>' +
+        '<div class="msg-date">' + esc(m.date) + '</div>';
+      row.addEventListener('click', () => openReader(m));
+      list.appendChild(row);
+    }
+    if (!(d.feed || []).length && !(d.developing || []).length) {
+      list.innerHTML += '<div class="empty">No storylines yet — check back as the season develops.</div>';
+    }
+  } catch (e) {
+    console.error(e);
+    list.innerHTML = '<div class="empty">Could not load the season story.</div>';
+  }
 }
 
 function indicator(m) {
@@ -26,8 +122,6 @@ function indicator(m) {
 
 function renderList() {
   const list = document.getElementById('msg-list');
-  document.getElementById('inbox-count').textContent =
-    messages.length + ' message' + (messages.length === 1 ? '' : 's');
   list.innerHTML = '';
   if (!messages.length) {
     list.innerHTML = '<div class="empty">Nothing here. Enjoy the quiet.</div>';
@@ -44,13 +138,50 @@ function renderList() {
         <div class="msg-sender">${esc(m.sender)}</div>
         <div class="msg-subj">${esc(m.subject)}${m.snippet ? ' <span class="msg-snip">— ' + esc(m.snippet) + '</span>' : ''}</div>
       </div>
+      <div class="msg-flags">
+        <button class="flag-btn ${m.is_saved ? 'on' : ''}" data-flag="saved" title="Save">★</button>
+        <button class="flag-btn ${m.is_important ? 'on' : ''}" data-flag="important" title="Important">❗</button>
+      </div>
       <div class="msg-right">
         <div class="msg-date">${esc(m.date)}</div>
         ${needsAction ? '<span class="pill">Action needed</span>' : ''}
       </div>`;
-    row.addEventListener('click', () => openReader(m));
+    row.addEventListener('click', (e) => {
+      const fb = e.target.closest('.flag-btn');
+      if (fb) { e.stopPropagation(); toggleFlag(m, fb.dataset.flag); return; }
+      openReader(m);
+    });
     list.appendChild(row);
   }
+}
+
+/* Save / Important flagging (desktop _toggle_save / importance). */
+async function toggleFlag(m, flag) {
+  try {
+    const res = await fetch('/api/inbox/flag', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message_id: m.id, flag}),
+    });
+    const d = await res.json();
+    if (d.ok) {
+      if (flag === 'saved') m.is_saved = !m.is_saved;
+      if (flag === 'important') m.is_important = !m.is_important;
+      renderList();
+      if (openMsg && String(openMsg.id) === String(m.id)) {
+        openMsg.is_saved = m.is_saved;
+        openMsg.is_important = m.is_important;
+        paintReaderFlags();
+      }
+    }
+  } catch (e) { console.error(e); }
+}
+
+function paintReaderFlags() {
+  const m = openMsg;
+  if (!m) return;
+  document.getElementById('r-flag').textContent = m.is_saved ? 'Unsave' : 'Save';
+  document.getElementById('r-important').textContent = m.is_important ? 'Unmark important' : 'Mark important';
 }
 
 function esc(s) {
@@ -412,6 +543,7 @@ async function openReader(m) {
   document.getElementById('r-subject').textContent = m.subject;
   document.getElementById('r-category').textContent = m.category;
   document.getElementById('r-read').textContent = m.is_read ? 'Mark as unread' : 'Mark as read';
+  paintReaderFlags();
   renderReaderBody();
   document.getElementById('reader').hidden = false;
 }
@@ -501,10 +633,117 @@ document.getElementById('r-delete').addEventListener('click', async () => {
   closeReader();
   setTimeout(() => loadInbox(currentFilter), 400);
 });
-document.querySelectorAll('#filters button').forEach(b =>
-  b.addEventListener('click', () => loadInbox(b.dataset.f)));
+document.getElementById('r-flag').addEventListener('click', async () => {
+  if (openMsg) await toggleFlag(openMsg, 'saved');
+});
+document.getElementById('r-important').addEventListener('click', async () => {
+  if (openMsg) await toggleFlag(openMsg, 'important');
+});
+document.getElementById('r-reply').addEventListener('click', () => {
+  if (openMsg) openCompose('reply', openMsg.id);
+});
+document.getElementById('r-forward').addEventListener('click', () => {
+  if (openMsg) openCompose('forward', openMsg.id);
+});
 
+/* ------------------------------------------------------------------
+   Compose / Reply / Forward editor (desktop _MessageEditor parity).
+   Prefill comes from /api/inbox/compose_prefill; send goes to
+   /api/inbox/send. Reply marks the original read + clears the
+   action-needed flag (backend handles this).
+   ------------------------------------------------------------------ */
+let composeMode = 'compose';
+let composeMid = null;
+
+async function openCompose(mode, messageId) {
+  composeMode = mode;
+  composeMid = messageId || null;
+  const titles = {compose: 'Compose message', reply: 'Reply to message', forward: 'Forward message'};
+  document.getElementById('compose-title').textContent = titles[mode] || titles.compose;
+  document.getElementById('compose-note').textContent = '';
+  try {
+    const q = new URLSearchParams({mode});
+    if (messageId) q.set('message_id', messageId);
+    const res = await fetch('/api/inbox/compose_prefill?' + q.toString());
+    const d = await res.json();
+    document.getElementById('compose-to').value = d.to || '';
+    document.getElementById('compose-subject').value = d.subject || '';
+    document.getElementById('compose-body').value = d.body || '';
+    const cat = document.getElementById('compose-category');
+    cat.value = d.category || 'General';
+  } catch (e) { console.error(e); }
+  document.getElementById('compose-modal').hidden = false;
+  document.getElementById('compose-body').focus();
+}
+
+function closeCompose() {
+  document.getElementById('compose-modal').hidden = true;
+  composeMode = 'compose';
+  composeMid = null;
+}
+
+document.getElementById('btn-compose').addEventListener('click', () => openCompose('compose', null));
+document.getElementById('compose-close').addEventListener('click', closeCompose);
+document.getElementById('compose-cancel').addEventListener('click', closeCompose);
+document.getElementById('compose-modal').addEventListener('click', (e) => {
+  if (e.target.id === 'compose-modal') closeCompose();
+});
+document.getElementById('compose-send').addEventListener('click', async () => {
+  const note = document.getElementById('compose-note');
+  const btn = document.getElementById('compose-send');
+  btn.disabled = true;
+  note.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/inbox/send', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        to: document.getElementById('compose-to').value,
+        subject: document.getElementById('compose-subject').value,
+        body: document.getElementById('compose-body').value,
+        category: document.getElementById('compose-category').value,
+        mode: composeMode,
+        message_id: composeMid,
+      }),
+    });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || 'send failed');
+    note.textContent = 'Sent ✓';
+    // The send is a queued command: let the game drain, then refresh.
+    setTimeout(() => {
+      closeCompose();
+      loadFilters();
+      loadInbox(currentFilter === 'story' ? 'all' : currentFilter);
+    }, 900);
+  } catch (e) {
+    note.textContent = 'Send failed: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* Mark all read (desktop _mark_all_read). */
+document.getElementById('btn-mark-all').addEventListener('click', async () => {
+  try {
+    await fetch('/api/inbox/mark_all_read', {method: 'POST'});
+    setTimeout(() => { loadFilters(); loadInbox(currentFilter === 'story' ? 'all' : currentFilter); }, 800);
+  } catch (e) { console.error(e); }
+});
+
+/* Search (debounced). */
+let searchTimer = null;
+document.getElementById('inbox-search').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    searchQuery = e.target.value.trim();
+    loadInbox('all');
+    document.querySelectorAll('#filters button').forEach(x => x.classList.remove('active'));
+  }, 350);
+});
+
+loadFilters();
 loadInbox('all');
+
 
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 // If the tab goes silent the game shuts itself down cleanly.

@@ -287,3 +287,21 @@
 .cmp-table tbody tr:last-child td { border-bottom: none; }
 .cmp-table .num, .cmp-table td b { font-family: var(--nhl-cond); font-weight: 800; font-size: 15px; }
 .dim { color: var(--dim); }
+
+/* Batch D: clause picker + signing bonus in the offer modal */
+.cm-select, .cm-input {
+  width: 100%; background: #1b2334; color: #f2f5fa;
+  border: 1px solid #2a3550; border-radius: 6px;
+  padding: 8px 10px; font-size: 14px;
+}
+
+/* Batch D: FA Frenzy event banner */
+.frenzy-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(90deg, #1a2f5c, #141a26);
+  border: 1px solid #3B82F6; border-radius: 10px;
+  padding: 12px 16px; margin: 12px 0; text-decoration: none;
+}
+.frenzy-banner-kicker { font-size: 11px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.06em; }
+.frenzy-banner-title { font-size: 15px; font-weight: 700; color: #f2f5fa; flex: 1; }
+.frenzy-banner-cta { font-size: 13px; color: #3B82F6; font-weight: 600; }

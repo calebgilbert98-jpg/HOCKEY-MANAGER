@@ -18,12 +18,7 @@
     "theme": "Dark (Current)",
     "font_size": "Medium (Current)",
     "auto_close_settings": true,
-    "remember_window_positions": true,
-    "lines_view": {
-      "show_ratings": true,
-      "show_icetime": false,
-      "show_chemistry": true
-    }
+    "remember_window_positions": true
   },
   "simulation": {
     "simulation_speed": "Fast (Current)",
@@ -36,7 +31,7 @@
   },
   "notifications": {
     "email_notifications": {
-      "Trade Offers": true,
+      "Trade Offers": false,
       "Contract Expiring Soon": true,
       "Injury Reports": false,
       "Player Milestones": false,
@@ -45,5 +40,8 @@
     },
     "enable_sounds": true,
     "sound_volume": "Medium"
+  },
+  "career": {
+    "gm_can_be_sacked": true
   }
 }

@@ -193,3 +193,41 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
 });
+
+/* ==================================================================
+ * Batch D: waiver priority strip (desktop waiver priority order).
+ * ================================================================== */
+async function loadPriority() {
+  const strip = document.getElementById('priority-strip');
+  if (!strip) return;
+  try {
+    const res = await fetch('/api/waivers/priority');
+    const d = await res.json();
+    const teams = d.order || [];
+    strip.innerHTML = (teams.length
+      ? teams.map((t) =>
+          '<span class="prio-team' + (t.is_user ? ' me' : '') + '" title="' + esc(t.team) + '">' +
+          '<span class="prio-rank">' + t.rank + '</span> ' +
+          '<span class="clickable-text" data-href="/team/' + encodeURIComponent(t.team) + '" title="Open team overview">' + esc(t.team) + '</span>' +
+          '</span>').join('<span class="prio-sep">→</span>')
+      : '<div class="empty-note">Priority order unavailable.</div>') +
+      (d.basis ? '<div class="prio-basis">' + esc(d.basis) +
+        (d.my_rank ? ' · your claim rank: #' + d.my_rank : '') + '</div>' : '');
+  } catch (e) {
+    strip.innerHTML = '<div class="empty-note">Could not load priority order.</div>';
+  }
+}
+
+// Clickable team abbreviations navigate.
+document.addEventListener('click', (e) => {
+  if (e.target.closest('button, a, input, select')) return;
+  const t = e.target.closest('.clickable-text[data-href]');
+  if (t) window.location.href = t.dataset.href;
+});
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+loadPriority();

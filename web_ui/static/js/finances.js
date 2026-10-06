@@ -278,3 +278,312 @@
   beat();
   setInterval(beat, 30000);
 })();
+
+/* ==================================================================
+ * Batch D: FinancesWindow parity tabs — Projections, Reports,
+ * Management, Contracts, Cap Position (+ AHL payroll).
+ * The existing cap dashboard above stays the default tab.
+ * ================================================================== */
+(function () {
+  "use strict";
+
+  function money(v) {
+    v = Number(v) || 0;
+    var neg = v < 0;
+    var a = Math.abs(v);
+    var s;
+    if (a >= 1e6) s = "$" + (a / 1e6).toFixed(1) + "M";
+    else if (a >= 1e3) s = "$" + Math.round(a / 1e3) + "K";
+    else s = "$" + Math.round(a);
+    return (neg ? "-" : "") + s;
+  }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+      return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c];
+    });
+  }
+  var STATUS_CLS = {
+    "signed": "st-signed", "extension_candidate": "st-ext",
+    "expiring": "st-exp", "ufa": "st-ufa", "rfa": "st-rfa",
+    "entry-level": "st-elc", "long-term": "st-lt", "overpaid": "st-over"
+  };
+
+  /* ---- tab switching ---- */
+  var LOADED = {};
+  document.getElementById("fin-tabs").addEventListener("click", function (e) {
+    var b = e.target.closest(".fin-tab");
+    if (!b) return;
+    document.querySelectorAll("#fin-tabs .fin-tab").forEach(function (t) {
+      t.classList.remove("active");
+    });
+    b.classList.add("active");
+    document.querySelectorAll(".fin-tab-panel").forEach(function (p) {
+      p.hidden = true;
+    });
+    document.getElementById("fin-tab-" + b.dataset.tab).hidden = false;
+    var tab = b.dataset.tab;
+    if (!LOADED[tab]) {
+      LOADED[tab] = true;
+      if (tab === "projections") loadProjections();
+      if (tab === "reports") loadReports();
+      if (tab === "management") loadManagement();
+      if (tab === "contracts") loadContracts();
+      if (tab === "cap") loadCapPosition();
+    }
+  });
+
+  /* ---- Projections: year picker + committed vs expiring ---- */
+  async function loadProjections() {
+    var sel = document.getElementById("proj-year");
+    try {
+      // Prime the picker from the current projection payload (season).
+      var r0 = await fetch("/api/finances/projections");
+      var d0 = await r0.json();
+      var season = d0.season || new Date().getFullYear();
+      sel.innerHTML = "";
+      for (var y = season; y <= season + 7; y++) {
+        var o = document.createElement("option");
+        o.value = y; o.textContent = y + "-" + String(y + 1).slice(2);
+        sel.appendChild(o);
+      }
+      sel.value = String(season);
+      sel.addEventListener("change", refreshProjections);
+      await refreshProjections();
+    } catch (e) { console.error(e); }
+  }
+  async function refreshProjections() {
+    var year = document.getElementById("proj-year").value;
+    try {
+      var res = await fetch("/api/finances/projections?year=" + encodeURIComponent(year));
+      var d = await res.json();
+      document.getElementById("proj-committed").textContent = money(d.committed_payroll);
+      document.getElementById("proj-cap").textContent = money(d.projected_cap);
+      var sp = document.getElementById("proj-space");
+      sp.textContent = (d.projected_space < 0 ? "" : "+") + money(d.projected_space);
+      sp.className = "fin-value big " + (d.projected_space < 0 ? "over" : "comfortable");
+      document.getElementById("proj-expiring-count").textContent =
+        "(" + (d.expiring_count || 0) + " expiring before then)";
+      var tb = document.getElementById("proj-expiring");
+      tb.innerHTML = "";
+      for (var i = 0; i < (d.expiring || []).length; i++) {
+        var p = d.expiring[i];
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + (p.id
+            ? '<span class="clickable-text" data-href="/player/' + esc(p.id) + '">' + esc(p.name) + "</span>"
+            : esc(p.name)) + "</td>" +
+          "<td>" + esc(p.position) + "</td>" +
+          "<td>" + esc(p.age) + "</td>" +
+          "<td><span class=\"st-badge " + (STATUS_CLS[p.status] || "") + "\">" + esc(p.status) + "</span></td>" +
+          "<td class=\"num\">" + money(p.salary) + "</td>" +
+          "<td class=\"num\">" + money(p.estimated_ask) + "</td>";
+        tb.appendChild(tr);
+      }
+      if (!(d.expiring || []).length)
+        tb.innerHTML = '<tr><td colspan="6" class="empty-note">Everyone is signed through ' + esc(year) + ".</td></tr>";
+    } catch (e) { console.error(e); }
+  }
+
+  /* ---- Reports: the 5 desktop financial reports ---- */
+  async function loadReports() {
+    var sel = document.getElementById("report-select");
+    try {
+      var res = await fetch("/api/finances/reports");
+      var d = await res.json();
+      sel.innerHTML = "";
+      (d.reports || []).forEach(function (r) {
+        var o = document.createElement("option");
+        o.value = r.key; o.textContent = r.label;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", refreshReport);
+      await refreshReport();
+    } catch (e) { console.error(e); }
+  }
+  async function refreshReport() {
+    var key = document.getElementById("report-select").value;
+    var host = document.getElementById("report-body");
+    host.innerHTML = '<div class="empty-note">Loading report…</div>';
+    try {
+      var res = await fetch("/api/finances/reports?report=" + encodeURIComponent(key));
+      var d = await res.json();
+      host.innerHTML = renderReport(d.data || {});
+    } catch (e) {
+      host.innerHTML = '<div class="empty-note">Could not load the report.</div>';
+    }
+  }
+  function renderReport(data) {
+    // Generic renderer: title + optional summary rows + table + notes.
+    var html = "";
+    if (data.title) html += '<div class="bpanel-sub-h">' + esc(data.title) + "</div>";
+    if (data.summary && data.summary.length) {
+      html += '<div class="rep-summary">';
+      data.summary.forEach(function (s) {
+        html += '<div class="bd-row"><span>' + esc(s[0]) + '</span><span class="num">' +
+          (typeof s[1] === "number" ? money(s[1]) : esc(s[1])) + "</span></div>";
+      });
+      html += "</div>";
+    }
+    if (data.columns && data.rows) {
+      html += '<table class="fin-table"><thead><tr>' +
+        data.columns.map(function (c) {
+          return "<th" + (c.num ? ' class="num"' : "") + ">" + esc(c.label || c) + "</th>";
+        }).join("") + "</tr></thead><tbody>";
+      data.rows.forEach(function (r) {
+        html += "<tr>" + r.map(function (cell, i) {
+          var num = data.columns[i] && data.columns[i].num;
+          return '<td class="' + (num ? "num" : "") + '">' +
+            (num && typeof cell === "number" ? money(cell) : esc(cell)) + "</td>";
+        }).join("") + "</tr>";
+      });
+      html += "</tbody></table>";
+    }
+    if (data.notes && data.notes.length) {
+      html += '<div class="rep-notes">' + data.notes.map(function (n) {
+        return "<div>• " + esc(n) + "</div>";
+      }).join("") + "</div>";
+    }
+    return html || '<div class="empty-note">This report returned no data.</div>';
+  }
+
+  /* ---- Management: recommendations + quick actions ---- */
+  async function loadManagement() {
+    var host = document.getElementById("mgmt-list");
+    host.innerHTML = '<div class="empty-note">Loading recommendations…</div>';
+    try {
+      var res = await fetch("/api/finances/management");
+      var d = await res.json();
+      host.innerHTML = "";
+      var head = document.createElement("div");
+      head.className = "fin-hero-mini";
+      head.innerHTML =
+        '<div class="fin-number"><span class="fin-label">Payroll</span><span class="fin-value">' + money(d.payroll) + '</span></div>' +
+        '<div class="fin-number"><span class="fin-label">Utilization</span><span class="fin-value">' + esc(d.utilization_pct) + '%</span></div>' +
+        '<div class="fin-number"><span class="fin-label">Cap space</span><span class="fin-value big">' + (d.space < 0 ? "" : "+") + money(d.space) + "</span></div>";
+      host.appendChild(head);
+      (d.recommendations || []).forEach(function (r) {
+        var el = document.createElement("div");
+        el.className = "rec-row lvl-" + esc(r.level || "info");
+        el.innerHTML = '<span class="rec-dot"></span><span>' + esc(r.text) + "</span>";
+        host.appendChild(el);
+      });
+      var actWrap = document.createElement("div");
+      actWrap.className = "mgmt-actions";
+      (d.quick_actions || []).forEach(function (a) {
+        var b = document.createElement("button");
+        b.className = "btn-ghost";
+        b.textContent = a.label;
+        b.disabled = !a.enabled;
+        b.addEventListener("click", function () {
+          if (a.route) { window.location.href = a.route; return; }
+          b.disabled = true;
+          fetch("/api/command", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({op: a.op})
+          }).then(function (r) { return r.json(); })
+            .then(function (dd) {
+              alert(dd.ok ? "Queued: " + a.label : "Could not queue the action.");
+            }).catch(function () {
+              alert("Could not queue the action.");
+            }).finally(function () { b.disabled = !a.enabled; });
+        });
+        actWrap.appendChild(b);
+      });
+      host.appendChild(actWrap);
+    } catch (e) {
+      host.innerHTML = '<div class="empty-note">Could not load recommendations.</div>';
+    }
+  }
+
+  /* ---- Contracts: filters + status labels + clause badges ---- */
+  var CTR = {pos: "", status: "", q: ""};
+  async function loadContracts() {
+    document.getElementById("ctr-pos").addEventListener("change", function (e) {
+      CTR.pos = e.target.value; refreshContracts();
+    });
+    document.getElementById("ctr-status").addEventListener("change", function (e) {
+      CTR.status = e.target.value; refreshContracts();
+    });
+    document.getElementById("ctr-q").addEventListener("input", function (e) {
+      CTR.q = e.target.value; refreshContracts();
+    });
+    await refreshContracts();
+  }
+  async function refreshContracts() {
+    var params = new URLSearchParams();
+    if (CTR.pos) params.set("pos", CTR.pos);
+    if (CTR.status) params.set("filter", CTR.status);
+    if (CTR.q) params.set("q", CTR.q);
+    var tb = document.getElementById("ctr-rows");
+    try {
+      var res = await fetch("/api/finances/contracts?" + params.toString());
+      var d = await res.json();
+      // Populate the status filter once from the backend's filter list.
+      var sel = document.getElementById("ctr-status");
+      if (!sel.options.length || sel.options.length === 1) {
+        sel.innerHTML = '<option value="">All</option>' +
+          (d.filters || []).filter(function (f) { return f !== "all"; }).map(function (f) {
+            return '<option value="' + esc(f) + '">' + esc(f) + "</option>";
+          }).join("");
+        sel.value = CTR.status;
+      }
+      tb.innerHTML = "";
+      for (var i = 0; i < (d.contracts || []).length; i++) {
+        var c = d.contracts[i];
+        var badges = "";
+        if (c.no_trade) badges += ' <span class="st-badge st-ntc">NTC</span>';
+        if (c.no_movement) badges += ' <span class="st-badge st-nmc">NMC</span>';
+        if (c.two_way) badges += ' <span class="st-badge st-2w">2-way</span>';
+        var tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + (c.id
+            ? '<span class="clickable-text" data-href="/player/' + esc(c.id) + '">' + esc(c.name) + "</span>" + badges
+            : esc(c.name) + badges) + "</td>" +
+          "<td>" + esc(c.position) + "</td>" +
+          "<td>" + esc(c.age) + "</td>" +
+          "<td><span class=\"st-badge " + (STATUS_CLS[c.status] || "") + "\">" + esc(c.status) + "</span></td>" +
+          "<td class=\"num\">" + money(c.salary) + "</td>" +
+          "<td class=\"num\">" + esc(c.years_left) + "</td>" +
+          "<td class=\"num\">" + money(c.estimated_ask) + "</td>";
+        tb.appendChild(tr);
+      }
+      if (!(d.contracts || []).length)
+        tb.innerHTML = '<tr><td colspan="7" class="empty-note">No contracts match these filters.</td></tr>';
+    } catch (e) { console.error(e); }
+  }
+
+  /* ---- Cap position breakdown + AHL payroll ---- */
+  async function loadCapPosition() {
+    try {
+      var res = await fetch("/api/finances/cap_position");
+      var d = await res.json();
+      var host = document.getElementById("cap-breakdown");
+      host.innerHTML = "";
+      var posd = d.position_breakdown || {};
+      Object.keys(posd).forEach(function (k) {
+        var v = posd[k] || {};
+        var el = document.createElement("div");
+        el.className = "bd-row";
+        el.innerHTML = "<span>" + esc(k) + " (" + esc(v.count) + " players)</span>" +
+          '<span class="num">' + money(v.total) +
+          ' <small class="fin-note">avg ' + money(v.avg) + "</small></span>";
+        host.appendChild(el);
+      });
+      var ahl = d.ahl || {};
+      document.getElementById("cap-ahl").innerHTML =
+        '<div class="bd-row"><span>AHL roster size</span><span class="num">' + esc(ahl.count) + " players</span></div>" +
+        '<div class="bd-row"><span>AHL payroll</span><span class="num">' + money(ahl.payroll) + "</span></div>" +
+        '<div class="bd-row"><span>Bury threshold</span><span class="num">' + money(ahl.bury_threshold) + "</span></div>" +
+        '<div class="bd-row"><span>Buried salary (counts vs cap)</span><span class="num">' + money(ahl.buried_salary) + "</span></div>";
+    } catch (e) { console.error(e); }
+  }
+
+  // Clickable player names navigate (shared pattern; the base finances
+  // IIFE does not own these rows).
+  document.addEventListener("click", function (e) {
+    if (e.target.closest("button, a, input, select")) return;
+    var t = e.target.closest(".clickable-text[data-href]");
+    if (t) window.location.href = t.dataset.href;
+  });
+})();

@@ -96,43 +96,55 @@ function renderWire(data) {
   const feed = document.getElementById('wire-feed');
   document.getElementById('wire-empty').hidden = items.length > 0;
   feed.innerHTML = '';
-  let lastGroup = null;
-  for (const item of items) {
-    if (MC.wireFilter !== 'All' && item.category !== MC.wireFilter) continue;
-    const groupKey = item.date_label || 'Unknown date';
-    if (groupKey !== lastGroup) {
-      const h = document.createElement('div');
-      h.className = 'news-day';
-      h.innerHTML = `<span>📆</span> ${esc(groupKey)}`;
-      feed.appendChild(h);
-      lastGroup = groupKey;
-    }
-    const el = document.createElement('article');
-    el.className = 'news-item';
-    el.style.borderLeftColor = catColor(item.category);
+  const filtered = items.filter(it => MC.wireFilter === 'All' || it.category === MC.wireFilter);
+  if (!filtered.length) {
+    feed.innerHTML = items.length > 0
+      ? '<div class="filter-note">No stories in this category yet.</div>' : '';
+    return;
+  }
+  // Batch D: two-pane reader — headline list on the left, full story on
+  // the right (desktop media-window parity).
+  const wrap = document.createElement('div');
+  wrap.className = 'news-twopane';
+  const listEl = document.createElement('div');
+  listEl.className = 'news-list';
+  const readerEl = document.createElement('article');
+  readerEl.className = 'news-reader';
+  wrap.appendChild(listEl);
+  wrap.appendChild(readerEl);
+  feed.appendChild(wrap);
+
+  const paint = (sel) => {
+    const item = filtered[sel];
+    readerEl.style.borderLeftColor = catColor(item.category);
     const teams = (item.teams || []).map(t =>
       `<a class="team-chip" href="${esc(t.url)}">${esc(t.name)}</a>`).join('');
-    el.innerHTML = `
+    readerEl.innerHTML = `
       <div class="news-item-head">
         <span class="cat-tag" style="background:${catColor(item.category)}22;color:${catColor(item.category)};border-color:${catColor(item.category)}55">${esc(item.category)}</span>
         <span class="news-date">${esc(item.date_label || '')}</span>
       </div>
       <p>${esc(item.story)}</p>
-      <div class="news-detail" hidden>
+      <div class="news-detail">
         ${teams ? `<div class="news-teams"><span class="detail-k">Teams</span>${teams}</div>` : ''}
         <div class="news-full-date"><span class="detail-k">Filed</span> ${esc(item.date_label || 'Unknown date')}</div>
       </div>`;
-    el.addEventListener('click', e => {
-      if (e.target.closest('a')) return; // team links navigate, don't toggle
-      const d = el.querySelector('.news-detail');
-      d.hidden = !d.hidden;
-      el.classList.toggle('expanded', !d.hidden);
-    });
-    feed.appendChild(el);
-  }
-  if (feed.children.length === 0 && items.length > 0) {
-    feed.innerHTML = '<div class="filter-note">No stories in this category yet.</div>';
-  }
+    listEl.querySelectorAll('.news-list-row').forEach((r, i) =>
+      r.classList.toggle('active', i === sel));
+  };
+
+  filtered.forEach((item, i) => {
+    const r = document.createElement('button');
+    r.className = 'news-list-row';
+    const head = String(item.story || '').split('\n')[0].slice(0, 110);
+    r.innerHTML = `
+      <span class="cat-dot" style="background:${catColor(item.category)}"></span>
+      <span class="news-list-text">${esc(head)}</span>
+      <span class="news-list-date">${esc(item.date_label || '')}</span>`;
+    r.addEventListener('click', () => paint(i));
+    listEl.appendChild(r);
+  });
+  paint(0);
 }
 
 document.addEventListener('click', e => {

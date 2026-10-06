@@ -76,6 +76,20 @@ async function loadSaves() {
       delBtn.textContent = 'Delete';
       delBtn.addEventListener('click', () => doDelete(s));
       actions.append(loadBtn, delBtn);
+      // Batch D: rename / properties / export per save.
+      const renBtn = document.createElement('button');
+      renBtn.className = 'btn-ghost';
+      renBtn.textContent = 'Rename';
+      renBtn.addEventListener('click', () => doRename(s));
+      const propBtn = document.createElement('button');
+      propBtn.className = 'btn-ghost';
+      propBtn.textContent = 'Properties';
+      propBtn.addEventListener('click', () => doProperties(s));
+      const expBtn = document.createElement('button');
+      expBtn.className = 'btn-ghost';
+      expBtn.textContent = 'Export';
+      expBtn.addEventListener('click', () => doExport(s));
+      actions.append(renBtn, propBtn, expBtn);
       tbody.appendChild(tr);
     }
   } catch (e) {
@@ -174,3 +188,178 @@ loadSaves();
   beat();
   setInterval(beat, 30000);
 })();
+
+/* ==================================================================
+ * Batch D: quick-save slots, rename, properties, export/import,
+ * autosave config, Ctrl+S. Mirrors save_load_system.py quick slots,
+ * rename_save, autosave options, and save-file export.
+ * ================================================================== */
+
+async function loadQuickSlots() {
+  const grid = el('qs-grid');
+  try {
+    const res = await fetch('/api/save/quick_slots');
+    const d = await res.json();
+    grid.innerHTML = '';
+    for (const s of (d.slots || [])) {
+      const card = document.createElement('div');
+      card.className = 'qs-card' + (s.exists ? '' : ' empty');
+      card.innerHTML =
+        '<div class="qs-slot">Slot ' + s.slot + '</div>' +
+        (s.exists
+          ? '<div class="qs-name">' + esc(s.name) + '</div>' +
+            '<div class="qs-meta">' + esc(s.game_date || '') + '<br>' + esc(s.modified || '') + '</div>'
+          : '<div class="qs-meta">Empty</div>') +
+        '<button class="btn-primary btn-sm" data-slot="' + s.slot + '">' +
+        (s.exists ? 'Overwrite quick-save' : 'Quick-save here') + '</button>';
+      card.querySelector('button').addEventListener('click', () => doQuickSave(s.slot));
+      grid.appendChild(card);
+    }
+  } catch (e) {
+    grid.innerHTML = '<div class="empty-note">Could not load quick-save slots.</div>';
+  }
+}
+
+async function doQuickSave(slot) {
+  status('Quick-saving to slot ' + slot + '…');
+  try {
+    const res = await fetch('/api/save/quicksave', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({slot, nonce: newNonce()}),
+    });
+    const d = await res.json();
+    if (!d.ok) { status('Could not queue the quick-save.', 'err'); return; }
+    const r = await pollResult(d.nonce, 'check slot ' + slot + ' below.');
+    status(r.message, r.ok ? 'ok' : 'err');
+    if (r.ok) { loadQuickSlots(); loadSaves(); loadMeta(); }
+  } catch (e) {
+    status('Quick-save failed: ' + e.message, 'err');
+  }
+}
+
+async function doRename(s) {
+  const name = prompt('Rename save "' + s.filename + '":', s.filename.replace(/\.hm$/, ''));
+  if (!name || !name.trim()) return;
+  status('Renaming…');
+  try {
+    const res = await fetch('/api/save/rename', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({save_id: s.id, new_name: name.trim(), nonce: newNonce()}),
+    });
+    const d = await res.json();
+    if (!d.ok) { status('Could not queue the rename.', 'err'); return; }
+    const r = await pollResult(d.nonce, 'check the list below.');
+    status(r.message, r.ok ? 'ok' : 'err');
+    if (r.ok) loadSaves();
+  } catch (e) {
+    status('Rename failed: ' + e.message, 'err');
+  }
+}
+
+async function doProperties(s) {
+  const body = el('props-body');
+  body.innerHTML = 'Loading…';
+  el('props-modal').hidden = false;
+  try {
+    const res = await fetch('/api/save/properties?save_id=' + encodeURIComponent(s.id));
+    const p = await res.json();
+    const row = (k, v) => '<div class="save-row"><span>' + esc(k) + '</span><b>' + esc(v) + '</b></div>';
+    body.innerHTML =
+      row('Filename', p.filename || s.filename) +
+      row('Team', p.team || s.team || '—') +
+      row('Game date', p.game_date || s.game_date || '—') +
+      row('Season', p.season || '—') +
+      row('Modified', p.modified || s.modified || '—') +
+      row('Size', (p.size_kb >= 1024 ? (p.size_kb / 1024).toFixed(1) + ' MB' : (p.size_kb || s.size_kb) + ' KB')) +
+      row('Type', p.is_autosave ? 'Autosave' : 'Manual') +
+      (p.description ? row('Description', p.description) : '');
+  } catch (e) {
+    body.innerHTML = '<div class="empty-note">Could not load properties.</div>';
+  }
+}
+el('props-close').addEventListener('click', () => { el('props-modal').hidden = true; });
+el('props-ok').addEventListener('click', () => { el('props-modal').hidden = true; });
+
+function doExport(s) {
+  window.location.href = '/api/save/export?save_id=' + encodeURIComponent(s.id);
+}
+
+el('btn-import').addEventListener('click', async () => {
+  const file = el('import-file').files[0];
+  const note = el('import-status');
+  if (!file) { note.textContent = 'Choose a .hm file first.'; return; }
+  note.textContent = 'Importing…';
+  try {
+    const res = await fetch('/api/save/import?name=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream'},
+      body: file,
+    });
+    const d = await res.json();
+    note.textContent = d.message || (d.ok ? 'Imported.' : 'Import failed.');
+    if (d.ok) loadSaves();
+  } catch (e) {
+    note.textContent = 'Import failed: ' + e.message;
+  }
+});
+
+async function loadAutosaveConfig() {
+  try {
+    const res = await fetch('/api/save/list');
+    const d = await res.json();
+    const auto = d.autosave || {};
+    el('auto-enabled').textContent = auto.enabled ? 'On' : 'Off';
+    el('auto-freq').value = String(auto.frequency_days || 7);
+  } catch (e) { console.error(e); }
+}
+el('btn-autosave-save').addEventListener('click', async () => {
+  const note = el('autosave-status');
+  note.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/save/autosave_config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        enabled: true,
+        frequency_days: parseInt(el('auto-freq').value, 10) || 7,
+        nonce: newNonce(),
+      }),
+    });
+    const d = await res.json();
+    if (!d.ok) { note.textContent = 'Could not save.'; return; }
+    const r = await pollResult(d.nonce, 'check the autosave line above.');
+    note.textContent = r.message || (r.ok ? 'Saved.' : 'Failed.');
+    if (r.ok) { loadAutosaveConfig(); loadSaves(); }
+  } catch (e) {
+    note.textContent = 'Save failed: ' + e.message;
+  }
+});
+
+/* Ctrl+S quicksave anywhere on the page (desktop save_load_system.py:3214). */
+document.addEventListener('keydown', async (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    status('Quick-saving…');
+    try {
+      const res = await fetch('/api/save/quick_slots');
+      const d = await res.json();
+      const slots = d.slots || [];
+      // Use the newest occupied slot, else the first empty one.
+      let slot = slots.find(s => !s.exists);
+      const occupied = slots.filter(s => s.exists);
+      if (occupied.length) {
+        occupied.sort((a, b) => String(b.modified).localeCompare(String(a.modified)));
+        slot = occupied[0];
+      }
+      if (!slot) { status('No quick-save slots available.', 'err'); return; }
+      await doQuickSave(slot.slot);
+    } catch (err) {
+      status('Quick-save failed: ' + err.message, 'err');
+    }
+  }
+});
+
+loadQuickSlots();
+loadAutosaveConfig();

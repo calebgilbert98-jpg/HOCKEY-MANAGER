@@ -64,3 +64,20 @@
   .save-action-row { flex-direction: column; }
   .save-action-row .btn-primary { width: 100%; }
 }
+
+/* Batch D: quick-save slots / autosave / import */
+.qs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.qs-card {
+  background: #1b2334; border: 1px solid #2a3550; border-radius: 8px;
+  padding: 12px; display: flex; flex-direction: column; gap: 6px;
+}
+.qs-card.empty { opacity: 0.75; }
+.qs-slot { font-size: 11px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.06em; }
+.qs-name { font-size: 14px; font-weight: 700; color: #f2f5fa; word-break: break-word; }
+.qs-meta { font-size: 12px; color: #9aa0aa; }
+.btn-sm { padding: 7px 10px; font-size: 12px; }
+.save-two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+@media (max-width: 800px) { .save-two { grid-template-columns: 1fr; } }
+.save-col .save-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 13px; color: #9aa0aa; }
+.save-col .save-row b { color: #f2f5fa; }
+.save-hint { font-size: 13px; color: #9aa0aa; margin: 0 0 10px; }

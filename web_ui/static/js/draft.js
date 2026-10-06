@@ -384,3 +384,131 @@ function renderGrades(head, host, data) {
     host.appendChild(detail);
   });
 }
+
+/* ==================================================================
+ * Batch D: draft-day incoming calls.
+ * Desktop parity (draft_day_trades.incoming_offer_for_user): when the
+ * user's club is on the clock in round 1, an AI club may call with a
+ * trade-up offer. Accept / Decline / Counter. At most one call per pick.
+ * ================================================================== */
+const CallModal = {
+  call: null,
+  pollTimer: null,
+
+  /* Poll while the draft page is open; the server only ever returns a
+   * call when the user's club is on the clock in round 1. */
+  startPolling() {
+    this.stopPolling();
+    this.pollTimer = setInterval(() => this.poll(), 5000);
+    this.poll();
+  },
+  stopPolling() {
+    if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
+  },
+
+  async poll() {
+    if (this.call) return; // one parked call at a time
+    try {
+      const res = await fetch('/api/draft/incoming_call');
+      const d = await res.json();
+      if (d && d.call) this.show(d.call);
+    } catch (e) { /* polling is non-critical */ }
+  },
+
+  show(call) {
+    this.call = call;
+    let overlay = document.getElementById('call-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'call-overlay';
+      overlay.className = 'call-overlay';
+      document.body.appendChild(overlay);
+    }
+    const t = call.target || {};
+    const assetList = (arr) => (arr || []).map(a =>
+      '<div class="call-asset">• ' + esc(a.label || '?') + '</div>').join('');
+    overlay.innerHTML =
+      '<div class="call-card" role="dialog" aria-modal="true" aria-label="Incoming call">' +
+      '<div class="call-kicker">📞 Incoming call</div>' +
+      '<div class="call-caller">' + esc(call.caller) +
+      (call.why_title ? ' <span class="call-why">' + esc(call.why_title) + '</span>' : '') + '</div>' +
+      (call.why_bullets && call.why_bullets.length
+        ? '<div class="call-sec">Why they\u2019re calling</div><div class="call-bullets">' +
+          call.why_bullets.map(b => '<div>• ' + esc(b) + '</div>').join('') + '</div>' : '') +
+      '<div class="call-sec">Their target</div>' +
+      '<div class="call-target"><b>' + esc(t.name || '?') + '</b> · ' + esc(t.position || '') +
+      ' · Age ' + esc(t.age) +
+      (t.potential ? ' · <span class="call-pot">Consensus potential: ' + esc(t.potential) + '</span>' : '') + '</div>' +
+      '<div class="call-deal-cols">' +
+      '<div class="call-deal"><div class="call-sec">You send</div>' + assetList(call.you_send) + '</div>' +
+      '<div class="call-deal"><div class="call-sec">You receive</div>' + assetList(call.you_receive) + '</div>' +
+      '</div>' +
+      (call.value_label ? '<div class="call-value">' + esc(call.value_label) + '</div>' : '') +
+      '<div class="call-actions">' +
+      '<button class="btn-ghost" id="call-decline">Decline</button>' +
+      '<button class="btn-ghost" id="call-counter">Counter</button>' +
+      '<button class="btn-primary" id="call-accept">Accept</button>' +
+      '</div>' +
+      '<div class="call-note" id="call-note"></div>' +
+      '</div>';
+    overlay.querySelector('#call-decline').addEventListener('click', () => this.answer('decline'));
+    overlay.querySelector('#call-counter').addEventListener('click', () => this.answer('counter'));
+    overlay.querySelector('#call-accept').addEventListener('click', () => this.answer('accept'));
+  },
+
+  async answer(action) {
+    const note = document.getElementById('call-note');
+    if (note) note.textContent = action === 'accept' ? 'Executing the trade…' : '…';
+    try {
+      const res = await fetch('/api/draft/incoming_call/answer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action}),
+      });
+      const d = await res.json();
+      if (!d.ok) {
+        if (note) note.textContent = 'Failed: ' + (d.error || 'unknown error');
+        return;
+      }
+      if (action === 'decline') { this.dismiss(); loadDraft(); return; }
+      if (action === 'counter') {
+        // Deeplink into the Trade Center with their offer preloaded.
+        const dl = d.deeplink || {};
+        const q = new URLSearchParams({
+          team: dl.target_team_id || '',
+          give_picks: (dl.give_picks || []).join(','),
+          want_picks: (dl.want_picks || []).join(','),
+        });
+        sessionStorage.setItem('pd_trade_counter', JSON.stringify(dl));
+        window.location.href = '/trades?' + q.toString();
+        return;
+      }
+      // accept: wait for the main-thread op, then refresh the board.
+      for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 500));
+        try {
+          const rr = await fetch('/api/draft/incoming_call/result');
+          const dd = await rr.json();
+          if (dd && !dd.pending) {
+            if (note) note.textContent = dd.result.ok ? dd.result.summary : 'Trade failed: ' + dd.result.summary;
+            if (dd.result.ok) {
+              setTimeout(() => { this.dismiss(); loadDraft(); }, 1800);
+            }
+            return;
+          }
+        } catch (e) {}
+      }
+      if (note) note.textContent = 'No result yet — check the board / trade feed.';
+    } catch (e) {
+      if (note) note.textContent = 'Network error.';
+    }
+  },
+
+  dismiss() {
+    this.call = null;
+    const overlay = document.getElementById('call-overlay');
+    if (overlay) overlay.remove();
+  },
+};
+
+CallModal.startPolling();

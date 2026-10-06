@@ -24,6 +24,13 @@
   </div>
   <p class="fa-sub">Sign players to fill roster holes. UFAs sign outright; RFAs may require offer-sheet compensation.</p>
 
+  <!-- Batch D: FA Frenzy event banner (desktop event-day hub; not a nav item) -->
+  <a class="frenzy-banner" id="frenzy-banner" href="/fa_frenzy" hidden>
+    <span class="frenzy-banner-kicker">📡 Event day</span>
+    <span class="frenzy-banner-title">FREE AGENT FRENZY — the market is open</span>
+    <span class="frenzy-banner-cta">Open the hub →</span>
+  </a>
+
   <div class="fa-filters">
     <div class="fa-pos-group" id="pos-filter" role="group" aria-label="Position filter">
       <button class="fa-pill active" data-pos="ALL">All</button>
@@ -125,6 +132,21 @@
         <button class="cm-step" id="offer-aav-up" aria-label="Increase AAV">+</button>
       </div>
       <div class="cm-hint" id="offer-aav-hint">—</div>
+    </div>
+    <!-- Batch D: clause picker + signing-bonus sweetener -->
+    <div class="cm-field" id="offer-clause-field">
+      <label for="offer-clause">Trade protection <span class="cm-val" id="offer-clause-val"></span></label>
+      <select id="offer-clause" class="cm-select"></select>
+      <div class="cm-hint" id="offer-clause-hint">—</div>
+      <div class="cm-field" id="offer-clause-size-field" hidden style="margin-top:6px">
+        <label for="offer-clause-size">No-trade list size <span class="cm-val" id="offer-clause-size-val">10 teams</span></label>
+        <input type="range" id="offer-clause-size" min="1" max="31" step="1" value="10">
+      </div>
+    </div>
+    <div class="cm-field" id="offer-bonus-field">
+      <label for="offer-signing-bonus">Signing bonus <span class="cm-val" id="offer-signing-bonus-val">—</span></label>
+      <input type="text" id="offer-signing-bonus" inputmode="numeric" value="0" class="cm-input">
+      <div class="cm-hint">Sweetens the offer for the player.</div>
     </div>
     <div class="cm-cap" id="offer-cap">—</div>
     <div class="cm-note" id="offer-note"></div>

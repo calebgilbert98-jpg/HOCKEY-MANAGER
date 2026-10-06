@@ -63,6 +63,12 @@ def free_agents_page():
     return render_template("free_agents.html")
 
 
+@bp.route("/fa_frenzy")
+def fa_frenzy_page():
+    """Batch D: Free Agent Frenzy event-day hub (event_day_hubs.py:691)."""
+    return render_template("fa_frenzy.html")
+
+
 @bp.route("/api/free_agents")
 def api_free_agents():
     live = _live()

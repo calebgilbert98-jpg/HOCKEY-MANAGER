@@ -59,6 +59,31 @@
       </div>
       <div class="cm-hint" id="ext-aav-hint">—</div>
     </div>
+    <!-- Batch D: clause picker + signing-bonus sweetener (desktop ContractNegotiationView parity) -->
+    <div class="cm-field" id="ext-clause-field">
+      <label for="ext-clause">Trade protection <span class="cm-val" id="ext-clause-val"></span></label>
+      <select id="ext-clause" class="cm-select"></select>
+      <div class="cm-hint" id="ext-clause-hint">—</div>
+      <div class="cm-field" id="ext-clause-size-field" hidden style="margin-top:6px">
+        <label for="ext-clause-size">No-trade list size <span class="cm-val" id="ext-clause-size-val">10 teams</span></label>
+        <input type="range" id="ext-clause-size" min="1" max="31" step="1" value="10">
+      </div>
+    </div>
+    <div class="cm-field" id="ext-bonus-field">
+      <label for="ext-signing-bonus">Signing bonus <span class="cm-val" id="ext-signing-bonus-val">—</span></label>
+      <input type="text" id="ext-signing-bonus" inputmode="numeric" value="0" class="cm-input">
+      <div class="cm-hint" id="ext-signing-bonus-hint">Sweetens the offer for the player.</div>
+    </div>
+    <!-- ELC-only: performance bonus (hidden unless ?elc=1) -->
+    <div class="cm-field" id="ext-perf-field" hidden>
+      <label for="ext-perf-bonus">Performance bonus <span class="cm-val" id="ext-perf-bonus-val">—</span></label>
+      <input type="text" id="ext-perf-bonus" inputmode="numeric" value="0" class="cm-input">
+      <div class="cm-hint" id="ext-perf-bonus-hint">—</div>
+    </div>
+    <div class="cm-field" id="ext-comps-field">
+      <div class="panel-label">Comparable contracts</div>
+      <div id="ext-comps"><div class="cm-hint">Loading…</div></div>
+    </div>
     <div class="cm-cap" id="ext-cap">—</div>
     <div class="cm-note" id="ext-note"></div>
     <div class="cm-actions">

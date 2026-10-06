@@ -113,6 +113,19 @@ function renderHub(s) {
   renderPanels(s.panels || {});
   renderStrip(s.stat_strip || {});
   renderTicker(s.ticker || []);
+  renderDateStreakPills(s);
+}
+
+/* Batch D: header date + streak pills. */
+function renderDateStreakPills(s) {
+  const d = document.getElementById('th-date-pill');
+  if (d) d.textContent = '📅 ' + (s.date || '—');
+  const st = document.getElementById('th-streak-pill');
+  if (st) {
+    const p = s.panels || {};
+    const streak = (p.form && p.form.streak) || (s.stat_strip && s.stat_strip.streak) || '—';
+    st.textContent = '🔥 ' + streak;
+  }
 }
 
 function fmtCap(n) {
@@ -235,7 +248,226 @@ function renderPanels(p) {
   document.getElementById('panel-form-body').innerHTML = `
     <div class="th-streak">STREAK <b>${esc(f.streak || '—')}</b></div>
     <div class="th-form-list">${games || '<div class="th-empty">No games yet</div>'}</div>`;
+
+  renderNewPanels(p);
 }
+
+/* ==================================================================
+ * Batch D: the dashboard_home.py cards the web was missing — schedule
+ * (Upcoming/Results scopes), injuries, morale, prospects, milestones,
+ * iconic games, inbox-recent. Player/team names link somewhere real.
+ * ================================================================== */
+function renderNewPanels(p) {
+  // --- Schedule (scope dropdown) ---
+  const sc = p.schedule || {};
+  const scopeSel = document.getElementById('panel-sched-scope');
+  const schedBody = document.getElementById('panel-sched-body');
+  const paintSched = () => {
+    const scope = scopeSel.value;
+    const rows = (scope === 'results' ? sc.results : sc.upcoming) || [];
+    schedBody.innerHTML = rows.length ? rows.map(r => `
+      <div class="th-sched-row">
+        <span class="th-sched-date">${esc(r.date)}</span>
+        <span class="th-sched-opp">${esc(r.where)} ${esc(r.opp_abbr)}</span>
+        ${r.score ? `<span class="th-form-res ${r.result}">${r.result}</span><span class="th-form-score">${esc(r.score)}</span>` : ''}
+      </div>`).join('')
+      : '<div class="th-empty">—</div>';
+  };
+  scopeSel.onchange = paintSched;
+  paintSched();
+
+  // --- Injuries ---
+  const inj = p.injuries || {};
+  document.getElementById('panel-inj-body').innerHTML =
+    (inj.players || []).length
+      ? (inj.players || []).map(pl => `
+        <div class="th-lead-row${pl.id ? ' clickable' : ''}"${pl.id ? ` data-href="/player/${esc(pl.id)}" title="Open player profile"` : ''}>
+          <span class="nm">${esc(pl.name)}</span>
+          <span class="vl">${esc(pl.desc)} · ${esc(pl.out)} out</span>
+        </div>`).join('')
+      : '<div class="th-empty">No injuries</div>';
+
+  // --- Morale ---
+  const mo = p.morale || {};
+  document.getElementById('panel-morale-body').innerHTML = `
+    <div class="th-streak">AVG <b>${esc(mo.average)} · ${esc(mo.label)}</b></div>
+    ${(mo.bands || []).map(b => `
+      <div class="th-sched-row"><span>${esc(b.band)}</span><span class="vl">${b.count} players</span></div>`).join('')}`;
+
+  // --- Prospects ---
+  const pr = p.prospects || {};
+  document.getElementById('panel-prosp-body').innerHTML =
+    (pr.players || []).length
+      ? (pr.players || []).map(pl => `
+        <div class="th-lead-row${pl.id ? ' clickable' : ''}"${pl.id ? ` data-href="/player/${esc(pl.id)}" title="Open player profile"` : ''}>
+          <span class="nm">${esc(pl.name)} <em>${esc(pl.position)} · ${pl.age}</em></span>
+          <span class="vl">${esc(pl.potential)}${pl.tier ? ' · ' + esc(pl.tier) : ''}</span>
+        </div>`).join('')
+      : '<div class="th-empty">No prospects tracked</div>';
+
+  // --- Milestones ---
+  const mi = p.milestones || {};
+  document.getElementById('panel-mile-body').innerHTML =
+    (mi.items || []).length
+      ? (mi.items || []).map(m => `
+        <div class="th-sched-row clickable" data-href="/player/${esc(m.player_id)}" title="Open player profile">
+          <span class="nm">${esc(m.name)}</span><span class="vl">🏆 ${esc(m.text)}</span>
+        </div>`).join('')
+      : '<div class="th-empty">No milestones near</div>';
+
+  // --- Iconic games ---
+  const ic = p.iconic_games || {};
+  document.getElementById('panel-iconic-body').innerHTML =
+    (ic.entries || []).length
+      ? (ic.entries || []).map(e => `
+        <div class="th-sched-row">
+          <span class="nm">${e.starred ? '⭐ ' : ''}${esc(e.headline)}</span>
+          <span class="vl">${esc(e.date)}${e.score ? ' · ' + esc(e.score) : ''}</span>
+        </div>`).join('') +
+        (ic.more ? `<div class="th-empty">+${ic.more} more in League History</div>` : '')
+      : '<div class="th-empty">No iconic games yet</div>';
+
+  // --- Inbox recent ---
+  const ib = p.inbox_recent || {};
+  document.getElementById('panel-inbox-body').innerHTML =
+    (ib.messages || []).length
+      ? (ib.messages || []).map(m => `
+        <div class="th-sched-row clickable" data-href="/inbox" title="Open inbox">
+          <span class="nm${m.is_read ? '' : ' th-unread'}">${m.action ? '🔴 ' : ''}${m.urgent ? '🟡 ' : ''}${esc(m.subject)}</span>
+          <span class="vl">${esc(m.sender)}</span>
+        </div>`).join('') +
+        (ib.unread ? `<div class="th-empty">${ib.unread} unread</div>` : '')
+      : '<div class="th-empty">Inbox is quiet</div>';
+}
+
+/* ==================================================================
+ * Batch D: auto-advance loop (main.py:8639 _auto_advance parity).
+ * 800ms/tick through the normal Continue funnel. Stops on:
+ *   - blockers (Continue is blocked)
+ *   - the user's team playing today (game day)
+ *   - a NEW actionable message arriving (trade offer, RFA, etc.)
+ * ================================================================== */
+const AutoAdvance = {
+  timer: null,
+  seenActionable: null,
+
+  async toggle() {
+    if (this.timer) { this.stop('toggled off'); return; }
+    await this.start();
+  },
+
+  async start() {
+    const st = await (await fetch('/api/continue_state')).json().catch(() => null);
+    if (!st) return;
+    if (st.blocked) { showBlockerModal(st.blockers); return; }
+    this.seenActionable = await this.actionableCount();
+    this.timer = setInterval(() => this.tick(), 800);
+    const b = document.getElementById('btn-auto-advance');
+    b.classList.add('on');
+    b.textContent = '⏸ Auto-advancing…';
+    note('Auto-advance on — simming days until something needs you.');
+  },
+
+  stop(reason) {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    const b = document.getElementById('btn-auto-advance');
+    if (b) { b.classList.remove('on'); b.textContent = '▶ Auto-advance'; }
+    if (reason) note('Auto-advance stopped: ' + reason + '.');
+  },
+
+  async actionableCount() {
+    try {
+      const r = await fetch('/api/inbox?filter=action');
+      const msgs = await r.json();
+      return msgs.length;
+    } catch (e) { return 0; }
+  },
+
+  async tick() {
+    try {
+      const st = await (await fetch('/api/continue_state')).json();
+      if (st.blocked) {
+        this.stop('needs your attention');
+        showBlockerModal(st.blockers);
+        return;
+      }
+      if (st.has_games) {
+        this.stop('game day — your team plays today');
+        return;
+      }
+      const n = await this.actionableCount();
+      if (n > (this.seenActionable || 0)) {
+        this.stop('a message needs your answer');
+        window.location.href = '/inbox?filter=action';
+        return;
+      }
+      this.seenActionable = n;
+      await fetch('/api/command', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({op: 'advance_day'}),
+      });
+    } catch (e) {
+      this.stop('error — ' + e.message);
+    }
+  },
+};
+
+function note(msg) {
+  const n = document.getElementById('auto-note');
+  if (n) { n.textContent = msg; }
+}
+
+document.getElementById('btn-auto-advance')?.addEventListener('click', (e) => {
+  e.stopPropagation(); // the hero itself advances one day
+  AutoAdvance.toggle();
+});
+
+/* ==================================================================
+ * Batch D: global shortcuts.
+ *   Space = advance one day (Continue)
+ *   Ctrl+S = quicksave
+ *   ? = keyboard shortcut cheatsheet
+ * ================================================================== */
+function showCheatsheet() {
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov';
+  ov.id = 'cheatsheet-modal';
+  ov.innerHTML = `
+    <div class="modal-card">
+      <h2>Keyboard shortcuts</h2>
+      <div class="th-sched-row"><span><b>Space</b></span><span class="vl">Advance one day (Continue)</span></div>
+      <div class="th-sched-row"><span><b>Ctrl+S</b></span><span class="vl">Quick-save</span></div>
+      <div class="th-sched-row"><span><b>?</b></span><span class="vl">This cheatsheet</span></div>
+      <div class="th-sched-row"><span><b>Esc</b></span><span class="vl">Close dialogs</span></div>
+      <button class="modal-close" id="cheatsheet-close">Close</button>
+    </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  document.getElementById('cheatsheet-close').addEventListener('click', close);
+  ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+}
+
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  const typing = tag === 'input' || tag === 'textarea' || tag === 'select';
+  if (e.key === '?' && !typing) { showCheatsheet(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    fetch('/api/save/quicksave', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({nonce: Date.now().toString(36)}),
+    }).then(() => note('Quick-saved ✓')).catch(() => note('Quick-save failed.'));
+    return;
+  }
+  if (e.key === ' ' && !typing && !document.getElementById('blocker-modal')) {
+    // Skip when the hero itself has focus (it handles Space on its own).
+    if (e.target.closest && e.target.closest('#th-hero')) return;
+    e.preventDefault();
+    heroActivate();
+  }
+});
 
 function thTile(t, compact) {
   const el = document.createElement('button');

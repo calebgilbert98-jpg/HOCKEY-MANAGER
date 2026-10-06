@@ -114,15 +114,18 @@ const OfferModal = {
     this.playerId = playerId;
     this.data = null;
     this._primed = false;
+    this.clauseOpts = null;
     const aavInput = this.el('offer-aav');
     aavInput.value = '';
     aavInput.dataset.touched = '';
+    this.el('offer-signing-bonus').value = '0';
     this.el('offer-modal').hidden = false;
     this.el('offer-submit').disabled = true;
     this.el('offer-note').textContent = '';
     this.el('offer-ask').textContent = 'Loading terms…';
     this.el('offer-cap').textContent = '';
     this.refresh();
+    this.loadClauseOptions();
   },
 
   close() {
@@ -141,7 +144,8 @@ const OfferModal = {
     const years = parseInt(this.el('offer-years').value, 10) || 1;
     let aav = parseInt(String(this.el('offer-aav').value).replace(/[^0-9]/g, ''), 10);
     if (!aav || aav < 0) aav = 0;
-    return {years, aav};
+    const sb = parseInt(String(this.el('offer-signing-bonus').value).replace(/[^0-9]/g, ''), 10) || 0;
+    return {years, aav, signingBonus: Math.max(0, sb)};
   },
 
   async refresh() {
@@ -234,7 +238,9 @@ const OfferModal = {
   },
 
   async submit() {
-    const {years, aav} = this.terms();
+    const {years, aav, signingBonus} = this.terms();
+    const clause = this.el('offer-clause').value || 'none';
+    const clauseSize = parseInt(this.el('offer-clause-size').value, 10) || 10;
     const btn = this.el('offer-submit');
     btn.disabled = true;
     btn.textContent = 'Sending…';
@@ -242,7 +248,8 @@ const OfferModal = {
       const res = await fetch('/api/free_agents/offer', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({player_id: this.playerId, years, aav})
+        body: JSON.stringify({player_id: this.playerId, years, aav,
+          clause, clause_list_size: clauseSize, signing_bonus: signingBonus})
       });
       const data = await res.json();
       if (data.ok) {
@@ -303,9 +310,60 @@ const OfferModal = {
       this.refresh();
     });
     el('offer-submit').addEventListener('click', () => this.submit());
+    el('offer-clause').addEventListener('change', () => this.paintClauseHint());
+    el('offer-clause-size').addEventListener('input', e => {
+      this.el('offer-clause-size-val').textContent =
+        (parseInt(e.target.value, 10) || 10) + ' teams';
+    });
+    el('offer-signing-bonus').addEventListener('input', e => {
+      this.el('offer-signing-bonus-val').textContent = salaryStr(
+        parseInt(String(e.target.value).replace(/[^0-9]/g, ''), 10) || 0);
+    });
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape' && !el('offer-modal').hidden) this.close();
     });
+  },
+
+  /* Batch D: clause picker (same engine data as the extension modal). */
+  async loadClauseOptions() {
+    const sel = this.el('offer-clause');
+    sel.innerHTML = '<option>Loading…</option>';
+    try {
+      const res = await fetch('/api/contracts/clause_options?player_id=' + encodeURIComponent(this.playerId));
+      const d = await res.json();
+      this.clauseOpts = d;
+      sel.innerHTML = '';
+      for (const o of (d.options || [])) {
+        const opt = document.createElement('option');
+        opt.value = o.kind;
+        opt.textContent = o.kind === 'none' ? 'No trade protection'
+          : `${o.label} (≈${salaryStr(o.annual_value)}/yr value)`;
+        if (!d.eligible && o.kind !== 'none') opt.disabled = true;
+        sel.appendChild(opt);
+      }
+      sel.value = 'none';
+      this.paintClauseHint();
+    } catch (e) {
+      sel.innerHTML = '<option value="none">No trade protection</option>';
+    }
+  },
+
+  paintClauseHint() {
+    const d = this.clauseOpts;
+    const hint = this.el('offer-clause-hint');
+    const kind = this.el('offer-clause').value || 'none';
+    this.el('offer-clause-size-field').hidden = kind !== 'mntc';
+    if (!d || !d.ok) { hint.textContent = ''; return; }
+    if (!d.eligible) {
+      hint.textContent = d.eligibility_note || 'Trade protection unavailable.';
+      return;
+    }
+    const o = (d.options || []).find(x => x.kind === kind);
+    hint.textContent = kind === 'none'
+      ? (d.hint || '')
+      : `Offering ${o ? o.label : kind} — worth about ${salaryStr((o && o.annual_value) || 0)}/yr to him (counts toward the effective offer).`;
+    this.el('offer-clause-val').textContent = kind === 'none' ? '' :
+      salaryStr((o && o.annual_value) || 0) + '/yr value';
   }
 };
 OfferModal.bind();
@@ -766,3 +824,22 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
 });
+
+/* ---------- Batch D: FA Frenzy event banner + ?offer= deeplink ---------- */
+(async function frenzyBanner() {
+  try {
+    const res = await fetch('/api/fa_frenzy');
+    const d = await res.json();
+    if (d && d.active && (d.top_ufas || []).length) {
+      const b = document.getElementById('frenzy-banner');
+      if (b) b.hidden = false;
+    }
+  } catch (e) { /* banner is optional */ }
+})();
+
+(function offerDeeplink() {
+  try {
+    const pid = new URLSearchParams(window.location.search).get('offer');
+    if (pid) OfferModal.open(pid);
+  } catch (e) {}
+})();

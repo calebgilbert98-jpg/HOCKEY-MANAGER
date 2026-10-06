@@ -27,12 +27,15 @@
     <span><i class="dot gold"></i> Urgent</span>
     <span><i class="dot blue"></i> Unread</span>
   </div>
-  <div class="filters fpills" id="filters">
-    <button data-f="all" class="active">All</button>
-    <button data-f="unread">Unread</button>
-    <button data-f="action">Action needed</button>
-    <button data-f="urgent">Urgent</button>
-    <button data-f="saved">Saved</button>
+  <!-- Batch D: category pills (loaded live from /api/inbox/filters),
+       search, compose, mark-all-read -->
+  <div class="inbox-toolbar">
+    <div class="filters fpills" id="filters"></div>
+    <div class="inbox-tools">
+      <input type="text" id="inbox-search" class="nhl-input" placeholder="Search messages…">
+      <button class="btn-primary" id="btn-compose">✉ Compose</button>
+      <button class="btn-ghost" id="btn-mark-all">Mark all read</button>
+    </div>
   </div>
   <div class="msg-list" id="msg-list"></div>
 </main>
@@ -48,8 +51,49 @@
     </div>
     <div class="reader-body" id="r-body"></div>
     <div class="reader-actions">
+      <button id="r-reply">Reply</button>
+      <button id="r-forward">Forward</button>
+      <button id="r-flag">Save</button>
+      <button id="r-important">Mark important</button>
       <button id="r-read">Mark as read</button>
       <button id="r-delete" class="danger">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch D: compose / reply / forward editor modal -->
+<div class="cm-overlay" id="compose-modal" hidden>
+  <div class="cm-dialog wide">
+    <div class="cm-head">
+      <div class="cm-title" id="compose-title">Compose message</div>
+      <button class="cm-close" id="compose-close" aria-label="Close">✕</button>
+    </div>
+    <div class="cm-body">
+      <div class="cm-field">
+        <label for="compose-to">To</label>
+        <input type="text" id="compose-to" class="cm-input">
+      </div>
+      <div class="cm-field">
+        <label for="compose-subject">Subject</label>
+        <input type="text" id="compose-subject" class="cm-input">
+      </div>
+      <div class="cm-field">
+        <label for="compose-category">Category</label>
+        <select id="compose-category" class="cm-select">
+          <option>General</option><option>Trade</option><option>Scouting</option>
+          <option>Contracts</option><option>Injuries</option><option>Media</option>
+          <option>League</option>
+        </select>
+      </div>
+      <div class="cm-field">
+        <label for="compose-body">Message</label>
+        <textarea id="compose-body" class="cm-textarea" rows="8"></textarea>
+      </div>
+    </div>
+    <div class="cm-actions">
+      <span class="cm-note" id="compose-note"></span>
+      <button class="cm-cancel" id="compose-cancel">Cancel</button>
+      <button class="cm-submit" id="compose-send">Send</button>
     </div>
   </div>
 </div>
