@@ -501,11 +501,15 @@ def _build_health(p):
 
 
 def _build_personality(p, team):
+    # Core attributes are on the player object — always available.
+    # The reputation system only enhances with computed fields.
+    rs = None
     try:
-        import reputation_system as rs
-        rs.ensure_reputation_fields(p)
+        import reputation_system as _rs
+        _rs.ensure_reputation_fields(p)
+        rs = _rs
     except Exception:
-        return {"unavailable": True}
+        pass
     try:
         import player_decision as _pd
         _pd.ensure_decision_fields(p)
@@ -606,8 +610,37 @@ def _build_dynamics(p, team, league):
     return out
 
 
+def _basic_analytics_fallback(p, goalie):
+    """Simple rate stats from season totals when advanced metrics fail."""
+    gp = _safe(lambda: int(getattr(p, "games_played", 0) or 0), 0) or 1
+    if goalie:
+        w = _safe(lambda: int(getattr(p, "wins", 0) or 0), 0)
+        sv = _safe(lambda: float(getattr(p, "save_pct", 0) or 0), 0)
+        gaa = _safe(lambda: float(getattr(p, "gaa", 0) or 0), 0)
+        rows = [["Wins", str(w), ""], ["Save %", f"{sv:.3f}", ""],
+                ["GAA", f"{gaa:.2f}", ""]]
+        title = "Goaltending — Basic"
+    else:
+        g = _safe(lambda: int(getattr(p, "goals", 0) or 0), 0)
+        a = _safe(lambda: int(getattr(p, "assists", 0) or 0), 0)
+        pts = g + a
+        sog = _safe(lambda: int(getattr(p, "shots", 0) or 0), 0)
+        sh_pct = (g / sog * 100) if sog else 0
+        rows = [["Goals / game", f"{g / gp:.2f}", ""],
+                ["Points / game", f"{pts / gp:.2f}", ""],
+                ["Shooting %", f"{sh_pct:.1f}%", ""],
+                ["Shots", str(sog), ""]]
+        title = "Offense — Basic"
+    return {"goalie": goalie,
+            "sections": [{"title": title, "rows": rows}],
+            "shots": [], "n_games": 0}
+
+
 def _build_analytics(p, live, team):
-    import advanced_metrics as am
+    try:
+        import advanced_metrics as am
+    except Exception:
+        am = None
     goalie = _is_goalie(p)
     lens_team = _safe(lambda: getattr(live, "user_team", None)) or team
     date_str = str(_safe(lambda: getattr(live, "current_date", ""), ""))
@@ -725,7 +758,9 @@ def _build_analytics(p, live, team):
                 ]},
             ]
     except Exception as e:
-        return {"unavailable": str(e)}
+        # Fall back to basic rate stats computed from season totals
+        # instead of showing nothing.
+        return _basic_analytics_fallback(p, goalie)
     # --- shot map (real tracking data, last 10 simulated games) ---
     shots = []
     try:
@@ -767,7 +802,10 @@ def _build_analytics(p, live, team):
 
 
 def _build_scout(p, live, user_team):
-    import scout_perception as _sp
+    try:
+        import scout_perception as _sp
+    except Exception:
+        _sp = None
     out = {}
     # --- NHL readiness ---
     try:
