@@ -414,10 +414,13 @@ def api_free_agents_staff_hire():
     sid = str(data.get("staff_id") or "")
     if not sid:
         return jsonify({"ok": False, "error": "staff_id required"}), 400
-    enqueue_command({"op": "hire_staff", "staff_id": sid,
-                     "salary": int(data.get("salary") or 0),
-                     "years": int(data.get("years") or 3)})
-    return jsonify({"ok": True})
+    # NOTE: enqueue_command(op, **kwargs) -- never the dict-as-first-arg
+    # form, which builds {"op": {...}} and silently never dispatches.
+    enqueue_command("hire_staff", staff_id=sid,
+                    salary=int(data.get("salary") or 0),
+                    years=int(data.get("years") or 3),
+                    assignment=str(data.get("assignment") or "nhl"))
+    return jsonify({"ok": True, "queued": "hire_staff"})
 
 
 # --- Market Overview tab -------------------------------------------------

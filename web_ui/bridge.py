@@ -2795,38 +2795,146 @@ def _execute_command(app, cmd):
             except Exception:
                 pass
         elif op == "hire_staff":
+            # Batch B: port of windows.StaffContractView._resolve_staff_offer
+            # (the hiring negotiation chain). The acceptance roll happens
+            # FIRST against the same chance math as the desktop dialog
+            # (staff_market_ask + prestige + GM stature); the roster is only
+            # mutated on acceptance, through
+            # game_manager.sign_free_agent_staff() -- which enforces the
+            # league-wide staff budget, the carousel cleanup, and the
+            # new-head-coach / new-head-scout hooks. Outcome stashed for
+            # the confirmation read (/api/staff/hire-result).
             try:
+                import random as _random
+                from game_classes import (staff_market_ask as _ask,
+                                          to_100_scale as _to100,
+                                          team_can_afford_staff as _afford)
                 sid = str(cmd.get("staff_id", ""))
                 salary = int(cmd.get("salary") or 0)
                 years = int(cmd.get("years") or 3)
-                league = getattr(getattr(app, "game_manager", None),
-                                 "league", None)
-                team = getattr(app, "user_team", None)
-                if league is not None and team is not None and sid:
-                    pool = list(getattr(league, "free_agent_staff", None) or [])
+                assignment = str(cmd.get("assignment", "nhl") or "nhl")
+                gm = getattr(app, "game_manager", None)
+                league = getattr(gm, "league", None) \
+                    if gm is not None else None
+                team = getattr(gm, "user_team", None) \
+                    if gm is not None else None
+                result = {"kind": "hire_staff", "ok": False}
+                if league is None or team is None or not sid:
+                    result["error"] = "no live game or staff id"
+                else:
+                    pool = list(getattr(league, "free_agent_staff", None)
+                                or [])
                     target = None
                     for s in pool:
-                        if str(getattr(s, "id", "")) == sid:
-                            target = s
-                            break
-                    if target is not None:
                         try:
-                            pool.remove(target)
-                            league.free_agent_staff = pool
+                            if str(getattr(s, "id", "")) == sid:
+                                target = s
+                                break
                         except Exception:
-                            pass
+                            continue
+                    if target is None:
+                        result["error"] = "staffer no longer available"
+                    elif salary <= 0:
+                        result["error"] = "enter a salary offer"
+                    else:
+                        # Unique-role guard (GM / Head Coach can't double).
                         try:
-                            target.salary = salary or getattr(target, "salary", 100000)
-                            target.contract_years = years
-                            staff = getattr(team, "staff", None)
-                            if staff is None:
-                                team.staff = []
-                                staff = team.staff
-                            staff.append(target)
+                            from game_classes import Staff as _StaffCls
+                            blocked = False
+                            if _StaffCls.is_unique_role(
+                                    getattr(target, "role", None)):
+                                for s in (getattr(team, "staff", None) or []):
+                                    if (s is not target and getattr(
+                                            s, "role", None)
+                                            == getattr(target, "role",
+                                                        None)):
+                                        blocked = True
+                                        result["error"] = (
+                                            f"Team already has a "
+                                            f"{getattr(target.role, 'value', 'role')}: "
+                                            f"{getattr(s, 'full_name', '?')}. "
+                                            f"Reassign or release them first.")
+                                        break
                         except Exception:
-                            pass
-            except Exception:
-                pass
+                            blocked = False
+                        if not blocked and not _afford(team, salary):
+                            result["error"] = (
+                                f"That offer (${salary:,}/yr) exceeds your "
+                                f"available staff budget.")
+                            blocked = True
+                        if not blocked:
+                            # Desktop acceptance-chance math, display + roll.
+                            ask = _ask(target)
+                            salary_mult = salary / max(1, ask)
+                            try:
+                                rating = _to100(getattr(
+                                    target, "overall_rating", 60) or 60)
+                            except Exception:
+                                rating = 60
+                            prestige = _safe(
+                                lambda: getattr(team, "prestige", 50), 50)
+                            chance = (0.45 + (salary_mult - 1.0) * 1.4
+                                      + (prestige - 50) / 400
+                                      - (rating - 60) / 600)
+                            try:
+                                import reputation_system as _rs
+                                chance += _rs.gm_staff_accept_delta(team)
+                            except Exception:
+                                pass
+                            chance = max(0.05, min(0.98, chance))
+                            if _random.random() < chance:
+                                if gm is not None and gm.sign_free_agent_staff(
+                                        target, salary, years, assignment):
+                                    # Desktop hire hooks: assistant-coach
+                                    # onboarding + head-coach systems install.
+                                    try:
+                                        import assistant_coaches as _ac
+                                        _ac.on_assistant_hired(
+                                            team, target, app=app)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        _role = str(getattr(
+                                            getattr(target, "role", None),
+                                            "value", ""))
+                                        if "Head Coach" in _role:
+                                            import tactics as _tx
+                                            if (_tx.get_tactics_control(team)
+                                                    == "coach"):
+                                                _tx.install_coach_systems(
+                                                    team, target,
+                                                    reason="hired")
+                                    except Exception:
+                                        pass
+                                    result.update(
+                                        ok=True, accepted=True,
+                                        chance=round(chance, 3),
+                                        text=(f"{getattr(target, 'full_name', '?')} "
+                                              f"accepted: ${salary:,}/yr x "
+                                              f"{years}y."))
+                                else:
+                                    result.update(
+                                        ok=True, accepted=False,
+                                        chance=round(chance, 3),
+                                        text=("The handshake fell through -- "
+                                              "budget or pool issue. Try again."))
+                            else:
+                                result.update(
+                                    ok=True, accepted=False,
+                                    chance=round(chance, 3),
+                                    text=(f"{getattr(target, 'full_name', '?')} "
+                                          f"declined your offer. Consider a "
+                                          f"better salary."))
+                try:
+                    app._web_staff_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_staff_result = {"kind": "hire_staff",
+                                            "ok": False, "error": str(e)}
+                except Exception:
+                    pass
         elif op == "release_staff":
             # Release a staff member from the user's team.
             # Mirrors staff_management_window.release_selected_staff (which
@@ -3191,8 +3299,404 @@ def _execute_command(app, cmd):
                     # Toggle GM/coach line control
                     cur = getattr(team, "line_control", "coach") or "coach"
                     team.line_control = "gm" if cur == "coach" else "coach"
+                elif action == "advise_coach":
+                    # Batch B: port of morale_window.AdviseCoachPopup. The
+                    # 7 advice types from reputation_system.ADVICE_TYPES are
+                    # accepted in cmd["detail"] (a dict, or a bare advice
+                    # key). "feature_player" needs target player_id; the
+                    # "unfeature" flag rescinds a feature request. Real
+                    # effects run through rs.advise_coach() /
+                    # rs.unfeature_player(); the outcome is stashed for the
+                    # web confirmation read (/api/morale/advice-result).
+                    detail = cmd.get("detail") or {}
+                    if isinstance(detail, str):
+                        try:
+                            import json as _json
+                            detail = _json.loads(detail)
+                        except Exception:
+                            detail = {"advice": detail}
+                    if not isinstance(detail, dict):
+                        detail = {}
+                    advice = str(detail.get("advice", "") or "")
+                    pid = str(detail.get("player_id") or "")
+                    target = None
+                    if pid:
+                        for _p in roster:
+                            try:
+                                if str(getattr(_p, "id", "")) == pid:
+                                    target = _p
+                                    break
+                            except Exception:
+                                continue
+                    try:
+                        if bool(detail.get("unfeature")) and target is not None:
+                            out = _rs.unfeature_player(coach, target, team)
+                        elif coach is not None and advice:
+                            out = _rs.advise_coach(
+                                coach, advice, team, roster,
+                                target_player=target)
+                        else:
+                            out = None
+                        try:
+                            if out is None:
+                                app._web_morale_result = {
+                                    "kind": "advise_coach", "ok": False,
+                                    "error": "no coach or no advice given"}
+                            else:
+                                app._web_morale_result = {
+                                    "kind": "advise_coach", "ok": True,
+                                    "advice": advice,
+                                    "listened": bool(out.get(
+                                        "listened", out.get("ok", False))),
+                                    "probability": out.get("probability"),
+                                    "text": out.get("text", ""),
+                                    "gm_trust": out.get("gm_trust"),
+                                    "featured": out.get("featured"),
+                                }
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        try:
+                            app._web_morale_result = {
+                                "kind": "advise_coach", "ok": False,
+                                "error": str(e)}
+                        except Exception:
+                            pass
             except Exception as e:
                 print(f"morale_action failed: {e}")
+        elif op == "declare_rivalry":
+            # Batch B: port of morale_window.DeclareRivalPopup. kind "team"
+            # or "coach"; target = other team's team_name. Uses the real
+            # reputation_system.declare_rivalry_for_gm(); the confirmation
+            # is stashed for /api/morale/advice-result polling.
+            try:
+                import reputation_system as _rs
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) \
+                    or getattr(app, "user_team", None)
+                league = getattr(gm, "league", None) \
+                    or getattr(app, "league", None)
+                kind = str(cmd.get("kind", "team") or "team")
+                target_name = str(cmd.get("target", "") or "")
+                result = {"kind": "declare_rivalry", "ok": False}
+                if team is None or league is None:
+                    result["error"] = "no live game"
+                elif kind not in ("team", "coach"):
+                    result["error"] = "bad kind"
+                else:
+                    target = None
+                    for _t in list(getattr(league, "teams", []) or []):
+                        try:
+                            if str(getattr(_t, "team_name", "")) == target_name:
+                                target = _t
+                                break
+                        except Exception:
+                            continue
+                    if target is None:
+                        result["error"] = "team not found"
+                    else:
+                        try:
+                            rec, label = _rs.declare_rivalry_for_gm(
+                                league, team, target, target_kind=kind)
+                            result.update(
+                                ok=True, label=label, rival_kind=kind,
+                                intensity=_safe(
+                                    lambda: int(rec.get("intensity", 70)), 70),
+                                text=(f"Rivalry declared with {label}. The "
+                                      f"heat is at 70, those games turn "
+                                      f"hostile, and it never fades until "
+                                      f"renounced. The league heard about it."))
+                        except ValueError as e:
+                            result["error"] = str(e)
+                try:
+                    app._web_morale_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_morale_result = {"kind": "declare_rivalry",
+                                              "ok": False, "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "renounce_rivalry":
+            # Batch B: renounce a live GM-declared rivalry (never fades
+            # until renounced -- the desktop rule).
+            try:
+                import reputation_system as _rs
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) \
+                    or getattr(app, "user_team", None)
+                league = getattr(gm, "league", None) \
+                    or getattr(app, "league", None)
+                kind = str(cmd.get("kind", "team") or "team")
+                target_name = str(cmd.get("target", "") or "")
+                result = {"kind": "renounce_rivalry", "ok": False}
+                if team is None or league is None:
+                    result["error"] = "no live game"
+                else:
+                    target = None
+                    for _t in list(getattr(league, "teams", []) or []):
+                        try:
+                            if str(getattr(_t, "team_name", "")) == target_name:
+                                target = _t
+                                break
+                        except Exception:
+                            continue
+                    if target is None:
+                        result["error"] = "team not found"
+                    else:
+                        ok = _rs.renounce_rivalry_for_gm(
+                            league, team, target, target_kind=kind)
+                        result["ok"] = bool(ok)
+                        result["label"] = target_name
+                        result["text"] = (f"Rivalry with {target_name} "
+                                          f"renounced. The bad blood cools."
+                                          if ok else
+                                          f"No live declared rivalry with "
+                                          f"{target_name} to renounce.")
+                try:
+                    app._web_morale_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_morale_result = {"kind": "renounce_rivalry",
+                                              "ok": False, "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "resolve_captaincy_crisis":
+            # Batch B: port of the dressing-room captaincy-crisis flow
+            # (detect_captaincy_crisis + resolve_captaincy_crisis). choice:
+            # keep | challenge | strip | reassign; reassign takes
+            # new_captain_id (required -- never silently auto-strips).
+            try:
+                import dressing_room as _dr
+                team = getattr(app, "user_team", None)
+                choice = str(cmd.get("choice", "") or "")
+                result = {"kind": "crisis", "ok": False}
+                if team is None:
+                    result["error"] = "no team"
+                elif choice not in ("keep", "challenge", "strip",
+                                    "reassign"):
+                    result["error"] = "bad choice"
+                else:
+                    new_c = None
+                    ncid = str(cmd.get("new_captain_id") or "")
+                    if ncid:
+                        for _p in list(getattr(team, "roster", None) or []):
+                            try:
+                                if str(getattr(_p, "id", "")) == ncid:
+                                    new_c = _p
+                                    break
+                            except Exception:
+                                continue
+                    if choice == "reassign" and new_c is None:
+                        result["error"] = ("reassign needs a named successor "
+                                           "-- no auto-strip")
+                    else:
+                        try:
+                            date_str = app.current_date.isoformat()
+                        except Exception:
+                            date_str = ""
+                        lines = _dr.resolve_captaincy_crisis(
+                            team, choice, new_captain=new_c,
+                            date_str=date_str)
+                        result.update(ok=True, choice=choice, lines=lines)
+                try:
+                    app._web_morale_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_morale_result = {"kind": "crisis", "ok": False,
+                                              "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "fire_coach":
+            # Batch B: port of the dressing-room coach carousel fire path
+            # (dressing_room.fire_coach): carousel memory, room reaction,
+            # authority receipt, free-agent pool return.
+            try:
+                import dressing_room as _dr
+                team = getattr(app, "user_team", None)
+                gm = getattr(app, "game_manager", None)
+                league = getattr(gm, "league", None) \
+                    or getattr(app, "league", None)
+                result = {"kind": "fire_coach", "ok": False}
+                if team is None:
+                    result["error"] = "no team"
+                else:
+                    try:
+                        date_str = app.current_date.isoformat()
+                    except Exception:
+                        date_str = ""
+                    reason = str(cmd.get("reason", "fired") or "fired")
+                    entry = _dr.fire_coach(team, reason=reason,
+                                           date_str=date_str, league=league)
+                    if entry is None:
+                        result["error"] = "no head coach to fire"
+                    else:
+                        result.update(ok=True, name=entry.get("name", ""),
+                                      reason=reason,
+                                      text=(f"{entry.get('name', 'The coach')} "
+                                            f"is out. The room absorbs the "
+                                            f"shock."))
+                try:
+                    app._web_morale_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_morale_result = {"kind": "fire_coach",
+                                              "ok": False, "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "hire_coach":
+            # Batch B: port of the carousel hire path
+            # (dressing_room.hire_coach). candidate_idx indexes the list
+            # from coaching_candidates(), re-fetched on the main thread so
+            # the pick always matches the advertised list.
+            try:
+                import dressing_room as _dr
+                team = getattr(app, "user_team", None)
+                result = {"kind": "hire_coach", "ok": False}
+                if team is None:
+                    result["error"] = "no team"
+                else:
+                    cands = _dr.coaching_candidates(team)
+                    try:
+                        idx = int(cmd.get("candidate_idx", -1))
+                    except (TypeError, ValueError):
+                        idx = -1
+                    cand = cands[idx] if 0 <= idx < len(cands) else None
+                    if cand is None:
+                        result["error"] = "no such candidate"
+                    else:
+                        try:
+                            date_str = app.current_date.isoformat()
+                        except Exception:
+                            date_str = ""
+                        lines = _dr.hire_coach(team, cand, date_str=date_str)
+                        result.update(ok=True, name=cand.get("name", ""),
+                                      archetype=cand.get("archetype", ""),
+                                      lines=lines)
+                try:
+                    app._web_morale_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_morale_result = {"kind": "hire_coach",
+                                              "ok": False, "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "cancel_scout_assignment":
+            # Batch B: port of the desktop right-click "Cancel Assignment"
+            # (scouting_window_helpers.cancel_scout_assignment). The scout
+            # is freed; any report filed so far is kept.
+            try:
+                import scouting_window_helpers as _sh
+                pid = str(cmd.get("player_id", "") or "")
+                result = {"kind": "cancel_scout", "ok": False}
+                assigns = _safe(
+                    lambda: dict(getattr(app, "scouting_assignments", None)
+                                 or {}), {}) or {}
+                player = None
+                for _pl in assigns.keys():
+                    try:
+                        if str(getattr(_pl, "id", "")) == pid:
+                            player = _pl
+                            break
+                    except Exception:
+                        continue
+                if player is None:
+                    result["error"] = "assignment not found"
+                else:
+                    ok, msg = _sh.cancel_scout_assignment(app, player)
+                    result.update(ok=bool(ok), message=msg)
+                try:
+                    app._web_scout_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_scout_result = {"kind": "cancel_scout",
+                                            "ok": False, "error": str(e)}
+                except Exception:
+                    pass
+        elif op == "negotiate_staff_contract":
+            # Batch B: port of staff_management_window's extension
+            # negotiation (same mechanics as StaffContractView's
+            # renegotiate mode): demands + offer + staff.negotiate_contract
+            # roll. On agreement the new terms land.
+            try:
+                sid = str(cmd.get("staff_id", "") or "")
+                salary = int(cmd.get("salary") or 0)
+                years = int(cmd.get("years") or 0)
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) \
+                    or getattr(app, "user_team", None)
+                result = {"kind": "staff_negotiate", "ok": False}
+                if team is None or not sid:
+                    result["error"] = "no team or staff id"
+                elif salary <= 0 or not (1 <= years <= 5):
+                    result["error"] = "offer needs a salary and 1-5 years"
+                else:
+                    target = None
+                    for _s in list(getattr(team, "staff", []) or []):
+                        try:
+                            if str(getattr(_s, "id", "")) == sid:
+                                target = _s
+                                break
+                        except Exception:
+                            continue
+                    if target is None:
+                        result["error"] = "staff not found"
+                    else:
+                        accepted = bool(target.negotiate_contract(
+                            salary, years))
+                        if accepted:
+                            try:
+                                target.salary = salary
+                                target.contract_years = years
+                            except Exception:
+                                pass
+                            try:
+                                from game_classes import EmailMessage
+                                from datetime import date as _date
+                                app.send_email_to_user(EmailMessage(
+                                    sender="System", sender_type="System",
+                                    date_sent=_date.today(),
+                                    category="Contracts", priority=2,
+                                    subject=("Staff re-signed: "
+                                             f"{getattr(target, 'full_name', '?')}"),
+                                    content=(
+                                        f"Contract renegotiated with "
+                                        f"{getattr(target, 'full_name', '?')} "
+                                        f"({salary:,}/yr x {years}y).")))
+                            except Exception:
+                                pass
+                            result.update(
+                                ok=True, accepted=True,
+                                text=(f"{getattr(target, 'full_name', '?')} "
+                                      f"signed: ${salary:,}/yr x {years} "
+                                      f"year{'s' if years != 1 else ''}."))
+                        else:
+                            result.update(
+                                ok=True, accepted=False,
+                                text=(f"{getattr(target, 'full_name', '?')} "
+                                      f"turned the offer down. He wants more "
+                                      f"-- or is testing you."))
+                try:
+                    app._web_staff_result = result
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    app._web_staff_result = {"kind": "staff_negotiate",
+                                            "ok": False, "error": str(e)}
+                except Exception:
+                    pass
         elif op == "set_practice":
             try:
                 team = getattr(app, "user_team", None)
