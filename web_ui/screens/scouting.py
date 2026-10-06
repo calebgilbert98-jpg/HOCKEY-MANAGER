@@ -366,3 +366,271 @@ def api_assign_region():
     enqueued = enqueue_command("add_scouting_assignment_real",
                                scout_id=str(scout_id), region=region or "")
     return jsonify({"ok": enqueued, "message": msg})
+
+
+# ----------------------------------------------------------------------
+# Batch B: cancel assignment, scouting staff list, player database with
+# the desktop's advanced filters (professional_scouting_window parity).
+# ----------------------------------------------------------------------
+
+@bp.route("/api/scouting/assignment/cancel", methods=["POST"])
+def api_cancel_assignment():
+    """Cancel a live player-targeted assignment (desktop right-click ->
+    Cancel Assignment). The scout is freed; filed reports are kept."""
+    data = request.get_json(force=True, silent=True) or {}
+    pid = str(data.get("player_id") or "")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "error": "No live game."}), 503
+    assigns = _safe(lambda: dict(getattr(live, "scouting_assignments", None)
+                                 or {}), {}) or {}
+    found = False
+    for pl in assigns.keys():
+        try:
+            if str(getattr(pl, "id", "")) == pid:
+                found = True
+                break
+        except Exception:
+            continue
+    if not found:
+        return jsonify({"ok": False,
+                        "error": "assignment not found"}), 404
+    enqueued = enqueue_command("cancel_scout_assignment", player_id=pid)
+    return jsonify({"ok": enqueued, "queued": "cancel_scout_assignment"})
+
+
+@bp.route("/api/scouting/result")
+def api_scouting_result():
+    """Poll the outcome of the last scouting write (cancel)."""
+    live = _live()
+    if live is None:
+        return jsonify({"result": None})
+    return jsonify({"result": _safe(lambda: getattr(
+        live, "_web_scout_result", None))})
+
+
+def _scout_record_line(s):
+    try:
+        import analytics_scouting as _as
+        _as.ensure_analytics_fields(s)
+        return _as.scout_record_line(s)
+    except Exception:
+        return ""
+
+
+@bp.route("/api/scouting/staff")
+def api_scouting_staff():
+    """Scouting staff list (desktop Scouting Staff tab parity): overview
+    numbers + every scout with judging ratings, current region, workload
+    and track record."""
+    live = _live()
+    if live is None:
+        return jsonify({"overview": {}, "scouts": []})
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    try:
+        import scouting_window_helpers as _sh
+        scouts = _sh.scouts_of(live)
+    except Exception:
+        scouts = []
+    try:
+        assigns = _safe(lambda: dict(getattr(live, "scouting_assignments",
+                                             None) or {}), {}) or {}
+        reports = _safe(lambda: dict(getattr(team, "scouting_reports", None)
+                                     or {}), {}) or {}
+    except Exception:
+        assigns, reports = {}, {}
+    try:
+        region_map = _safe(lambda: dict(getattr(gm, "scout_region_assignments",
+                                                None) or {}), {}) \
+            if gm is not None else {}
+    except Exception:
+        region_map = {}
+    # Workload: how many live assignments each scout holds.
+    workload = {}
+    for _pl, _sc in (assigns or {}).items():
+        try:
+            sid = str(getattr(_sc, "id", ""))
+            workload[sid] = workload.get(sid, 0) + 1
+        except Exception:
+            continue
+    out = []
+    for s in scouts or []:
+        try:
+            sid = _safe(lambda: str(getattr(s, "id", id(s))))
+            role = _safe(lambda: str(getattr(getattr(s, "role", None),
+                                             "value",
+                                             getattr(s, "role", "") or "")), "")
+            out.append({
+                "id": sid,
+                "name": _safe(lambda: getattr(s, "full_name", "?"), "?"),
+                "role": role,
+                "judging_ability": _safe(
+                    lambda: int(getattr(s, "judging_player_ability", 0)
+                                or 0)),
+                "judging_potential": _safe(
+                    lambda: int(getattr(s, "judging_player_potential", 0)
+                                or 0)),
+                "region": region_map.get(
+                    _safe(lambda: getattr(s, "id", None))) or "",
+                "workload": workload.get(sid, 0),
+                "track_record": _scout_record_line(s),
+                "age": _safe(lambda: int(getattr(s, "age", 0) or 0), 0),
+                "experience": _safe(
+                    lambda: int(getattr(s, "experience", 0) or 0), 0),
+                "salary": _safe(lambda: int(getattr(s, "salary", 0) or 0),
+                                0),
+            })
+        except Exception:
+            continue
+    completed = sum(1 for r in (reports or {}).values()
+                    if _safe(lambda: getattr(r, "accuracy", "")) == "A")
+    overview = {
+        "staff_count": len(out),
+        "active_assignments": len(assigns or {}),
+        "completed_reports": completed,
+        "budget_remaining": _safe(
+            lambda: team.staff_budget_remaining(), None)
+        if team is not None else None,
+    }
+    return jsonify({"overview": overview, "scouts": out})
+
+
+_POSITION_GROUPS = {
+    "forwards": {"C", "LW", "RW", "Center", "Left Wing", "Right Wing",
+                 "CENTER", "LEFT_WING", "RIGHT_WING"},
+    "defensemen": {"D", "LD", "RD", "Defense", "Defence", "Defenseman",
+                   "DEFENSE"},
+    "goalies": {"G", "Goalie", "Goaltender", "GOALIE"},
+}
+
+
+def _db_position_group(pos):
+    p = str(pos or "").strip()
+    for group, vals in _POSITION_GROUPS.items():
+        if p in vals:
+            return group
+    pl = p.lower()
+    if "goal" in pl:
+        return "goalies"
+    if "defen" in pl or pl in ("d", "ld", "rd"):
+        return "defensemen"
+    if pl in ("c", "lw", "rw", "center", "wing"):
+        return "forwards"
+    return "forwards"
+
+
+@bp.route("/api/scouting/database")
+def api_player_database():
+    """Player database with the desktop's advanced filters: name search,
+    team, position group (All/Forwards/Defense/Goalies), status
+    (NHL/AHL/Prospects/Free Agents/Draft), age range, min OVR.
+    Paginated (limit/offset) -- the league-wide pool is large."""
+    live = _live()
+    if live is None:
+        return jsonify({"players": [], "total": 0, "teams": []})
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+
+    q = (request.args.get("q") or "").strip().lower()
+    pos = (request.args.get("position") or "all").strip().lower()
+    status = (request.args.get("status") or "all").strip().lower()
+    team_f = (request.args.get("team") or "").strip()
+    try:
+        age_min = int(request.args.get("age_min", 16) or 16)
+    except (TypeError, ValueError):
+        age_min = 16
+    try:
+        age_max = int(request.args.get("age_max", 60) or 60)
+    except (TypeError, ValueError):
+        age_max = 60
+    try:
+        ovr_min = int(request.args.get("ovr_min", 1) or 1)
+    except (TypeError, ValueError):
+        ovr_min = 1
+    try:
+        limit = min(500, max(1, int(request.args.get("limit", 200) or 200)))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        offset = max(0, int(request.args.get("offset", 0) or 0))
+    except (TypeError, ValueError):
+        offset = 0
+
+    pools = []  # (players, status_label, team_name)
+    try:
+        teams = list(getattr(league, "teams", []) or [])
+    except Exception:
+        teams = []
+    if status in ("all", "nhl"):
+        for t in teams:
+            pools.append((_safe(lambda: list(getattr(t, "roster", None)
+                                              or []), []) or [],
+                         "nhl", _safe(lambda: getattr(t, "team_name", ""),
+                                      "")))
+    if status in ("all", "ahl"):
+        for t in teams:
+            pools.append((_safe(lambda: list(getattr(t, "ahl_roster", None)
+                                              or []), []) or [],
+                         "ahl", _safe(lambda: getattr(t, "team_name", ""),
+                                      "")))
+    if status in ("all", "prospects") and team is not None:
+        pools.append((_safe(lambda: list(getattr(team, "prospects", None)
+                                          or []), []) or [],
+                     "prospects", _safe(lambda: getattr(team, "team_name",
+                                                        ""), "")))
+    if status in ("all", "free_agents") and league is not None:
+        pools.append((_safe(lambda: list(getattr(league, "free_agents",
+                                                  None) or []), []) or [],
+                     "free_agents", ""))
+    if status in ("all", "draft") and league is not None:
+        pools.append((_safe(lambda: list(getattr(
+            league, "draft_prospects", None) or []), []) or [],
+                     "draft", ""))
+
+    team_names = sorted({tn for _, _, tn in pools if tn})
+    rows = []
+    seen = set()
+    for plist, st, tn in pools:
+        for p in plist or []:
+            try:
+                pid = id(p)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                if team_f and tn != team_f:
+                    continue
+                age = int(getattr(p, "age", 0) or 0)
+                if age < age_min or age > age_max:
+                    continue
+                wp = to_web_player(p)
+                try:
+                    from web_ui.bridge import _player_ovr
+                    ovr = int(_player_ovr(p) or wp.get("overall") or 0)
+                except Exception:
+                    ovr = int(wp.get("overall") or 0)
+                if ovr < ovr_min:
+                    continue
+                if pos != "all" and _db_position_group(
+                        wp.get("position")) != pos:
+                    continue
+                if q and q not in str(wp.get("name", "")).lower():
+                    continue
+                wp["status"] = st
+                wp["team"] = tn
+                wp["overall"] = ovr
+                rows.append(wp)
+            except Exception:
+                continue
+    rows.sort(key=lambda r: (-int(r.get("overall") or 0),
+                             str(r.get("name") or "")))
+    total = len(rows)
+    return jsonify({"players": rows[offset:offset + limit], "total": total,
+                    "teams": team_names,
+                    "filters": {"q": q, "position": pos, "status": status,
+                                "team": team_f, "age_min": age_min,
+                                "age_max": age_max, "ovr_min": ovr_min,
+                                "limit": limit, "offset": offset}})

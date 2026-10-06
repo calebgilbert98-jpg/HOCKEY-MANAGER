@@ -30,10 +30,42 @@ function renderAssignments(items) {
       <div class="a-progress">
         <span class="acc ${acc}">${esc(r.accuracy || '?')}</span>
         <span class="a-detail">${r.viewings || 0} viewings · ${esc(r.region || '')} · ${r.reliability != null ? Math.round(r.reliability * 100) + '% reliable' : ''}</span>
+      </div>
+      <div class="a-actions">
+        <button class="btn-new cancel-assign" data-pid="${esc(p.id || '')}">Cancel assignment</button>
       </div>`;
     grid.appendChild(el);
   }
 }
+
+/* Cancel a live assignment (desktop right-click -> Cancel Assignment). */
+document.getElementById('assign-grid').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.cancel-assign');
+  if (!btn || !btn.dataset.pid) return;
+  if (!confirm('Stop scouting this player? The scout is freed up; any report filed so far is kept.')) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/scouting/assignment/cancel', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({player_id: btn.dataset.pid}),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setTimeout(async () => {
+        try {
+          const rr = await fetch('/api/scouting/result');
+          const rd = await rr.json();
+          const r = rd.result;
+          if (r && !r.ok) alert(r.error || 'Could not cancel.');
+        } catch (_) {}
+        loadScouting();
+      }, 1200);
+    } else {
+      alert('Could not cancel: ' + (data.error || 'unknown'));
+      btn.disabled = false;
+    }
+  } catch (err) { console.error(err); btn.disabled = false; }
+});
 
 function renderReports(items) {
   const list = document.getElementById('report-list');
@@ -193,4 +225,126 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('button, a, input, select, label')) return;
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
+});
+
+/* ================= Batch B: tabs, scouting staff, player database ================= */
+
+document.getElementById('scout-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  document.querySelectorAll('#scout-tabs button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const tab = btn.dataset.tab;
+  ['work', 'staff', 'database'].forEach(t =>
+    document.getElementById('view-' + t).classList.toggle('hidden', t !== tab));
+  if (tab === 'staff') renderScoutStaff();
+  if (tab === 'database') loadDatabase();
+});
+
+/* ---- Scouting staff list ---- */
+async function renderScoutStaff() {
+  const body = document.getElementById('scout-staff-body');
+  const ov = document.getElementById('scout-overview');
+  try {
+    const res = await fetch('/api/scouting/staff');
+    const d = await res.json();
+    const o = d.overview || {};
+    ov.innerHTML = `
+      <div class="ov-stat"><strong>${o.staff_count || 0}</strong><span>Scouts</span></div>
+      <div class="ov-stat"><strong>${o.active_assignments || 0}</strong><span>Active assignments</span></div>
+      <div class="ov-stat"><strong>${o.completed_reports || 0}</strong><span>Completed reports</span></div>
+      <div class="ov-stat"><strong>${o.budget_remaining != null ? '$' + Number(o.budget_remaining).toLocaleString() : '—'}</strong><span>Staff budget left</span></div>`;
+    body.innerHTML = (d.scouts || []).map(s => `
+      <tr>
+        <td>${s.id ? `<span class="clickable-text" data-href="/staff/${esc(s.id)}" title="Open staff profile"><strong>${esc(s.name)}</strong></span>` : `<strong>${esc(s.name)}</strong>`}</td>
+        <td>${esc(s.role || '—')}</td>
+        <td>${s.judging_ability}</td>
+        <td>${s.judging_potential}</td>
+        <td>${esc(s.region || '<i class="dim">—</i>')}</td>
+        <td>${s.workload || 0} active</td>
+        <td class="dim small">${esc(s.track_record || 'no graded calls yet')}</td>
+        <td>${s.age || '—'}</td>
+        <td>${s.experience || 0}y</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="dim">No scouts on staff.</td></tr>';
+  } catch (e) { console.error(e); }
+}
+
+/* ---- Player database with advanced filters ---- */
+const DB_AGE = {all: [16, 60], u18: [16, 17], 1822: [18, 22], 2329: [23, 29], '30p': [30, 60]};
+let dbState = {offset: 0, limit: 100, total: 0, teamsLoaded: false};
+
+function dbParams() {
+  const age = DB_AGE[document.getElementById('db-age').value] || DB_AGE.all;
+  return {
+    q: document.getElementById('db-q').value.trim(),
+    position: document.getElementById('db-position').value,
+    status: document.getElementById('db-status').value,
+    team: document.getElementById('db-team').value,
+    age_min: age[0], age_max: age[1],
+    ovr_min: document.getElementById('db-ovr').value,
+    limit: dbState.limit, offset: dbState.offset,
+  };
+}
+
+async function loadDatabase() {
+  const body = document.getElementById('db-body');
+  try {
+    const qs = new URLSearchParams(dbParams()).toString();
+    const res = await fetch('/api/scouting/database?' + qs);
+    const d = await res.json();
+    dbState.total = d.total || 0;
+    if (!dbState.teamsLoaded && (d.teams || []).length) {
+      dbState.teamsLoaded = true;
+      document.getElementById('db-team').innerHTML =
+        '<option value="">All teams</option>' +
+        d.teams.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('');
+    }
+    const stLabel = {nhl: 'NHL', ahl: 'AHL', prospects: 'Prospect', free_agents: 'FA', draft: 'Draft'};
+    body.innerHTML = (d.players || []).map(p => `
+      <tr>
+        <td>${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile"><strong>${esc(p.name)}</strong></span>` : `<strong>${esc(p.name)}</strong>`}</td>
+        <td>${esc(p.position || '—')}</td>
+        <td>${p.age || '—'}</td>
+        <td><strong>${p.overall || '—'}</strong></td>
+        <td>${esc(p.team || '—')}</td>
+        <td>${stLabel[p.status] || esc(p.status || '—')}</td>
+        <td>${p.games_played || 0}</td>
+        <td>${p.goals || 0}</td>
+        <td>${p.assists || 0}</td>
+        <td>${p.salary ? '$' + Number(p.salary).toLocaleString() : '—'}</td>
+      </tr>`).join('') || '<tr><td colspan="10" class="dim">No players match these filters.</td></tr>';
+    document.getElementById('db-count').textContent =
+      `${dbState.total.toLocaleString()} players`;
+    const pages = Math.max(1, Math.ceil(dbState.total / dbState.limit));
+    const page = Math.floor(dbState.offset / dbState.limit) + 1;
+    document.getElementById('db-page').textContent = `Page ${page} of ${pages}`;
+  } catch (e) { console.error(e); }
+}
+
+let dbDebounce = null;
+function dbRefresh(reset) {
+  if (reset) dbState.offset = 0;
+  clearTimeout(dbDebounce);
+  dbDebounce = setTimeout(loadDatabase, 250);
+}
+['db-q', 'db-position', 'db-status', 'db-team', 'db-age', 'db-ovr'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', () => dbRefresh(true));
+});
+document.getElementById('db-clear').addEventListener('click', () => {
+  document.getElementById('db-q').value = '';
+  document.getElementById('db-position').value = 'all';
+  document.getElementById('db-status').value = 'all';
+  document.getElementById('db-team').value = '';
+  document.getElementById('db-age').value = 'all';
+  document.getElementById('db-ovr').value = '1';
+  dbRefresh(true);
+});
+document.getElementById('db-prev').addEventListener('click', () => {
+  dbState.offset = Math.max(0, dbState.offset - dbState.limit);
+  loadDatabase();
+});
+document.getElementById('db-next').addEventListener('click', () => {
+  if (dbState.offset + dbState.limit < dbState.total) dbState.offset += dbState.limit;
+  loadDatabase();
 });
