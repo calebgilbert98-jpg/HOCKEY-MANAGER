@@ -139,6 +139,28 @@
   </section>
 
   <section>
+    <h2>Development Analytics <span class="sub">team overview + per-player focus</span></h2>
+    <div id="dev-analytics">
+      <div class="dev-overview" id="dev-overview"></div>
+      <div class="dev-analyses">
+        <div class="dev-card"><h3>Position Analysis</h3><div id="dev-positions"></div></div>
+        <div class="dev-card"><h3>Age Distribution</h3><div id="dev-ages"></div></div>
+      </div>
+      <div class="dev-filters">
+        <input id="dev-an-q" class="search nhl-input" type="search" placeholder="Search player…">
+        <select id="dev-an-squad" class="nhl-input">
+          <option value="all">All squads</option>
+          <option value="NHL">NHL</option>
+          <option value="AHL">AHL</option>
+          <option value="Prospect">Prospects</option>
+        </select>
+        <label class="bag-row"><input type="checkbox" id="dev-an-recs"> Only players with recommendations</label>
+      </div>
+      <div id="dev-player-cards"></div>
+    </div>
+  </section>
+
+  <section>
     <h2>Prospect Watchlist <span class="sub">age ≤ 23</span></h2>
     <div class="prospect-list" id="prospect-list"></div>
     <div class="empty" id="prospect-empty" hidden>No young prospects on the roster.</div>

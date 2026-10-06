@@ -523,3 +523,198 @@ def api_offseason_clear():
     ok, nonce = _enqueue("clear_offseason_program",
                          player_id=data.get("player_id"))
     return jsonify({"ok": ok, "nonce": nonce})
+
+
+# ----------------------------------------------------------------------
+# Batch B: development analytics + training recommendations
+# (player_development_window_professional parity: team overview, position
+# analysis, age analysis, per-player key attributes with grades, and the
+# top-3 development focus recommendations).
+# ----------------------------------------------------------------------
+
+_DEV_KEY_ATTRS = {
+    "C": ["skating", "passing", "faceoffs", "hockey_iq", "vision",
+          "determination"],
+    "LW": ["skating", "shooting", "passing", "checking", "determination",
+           "conditioning"],
+    "RW": ["skating", "shooting", "passing", "checking", "determination",
+           "conditioning"],
+    "D": ["skating", "defense", "passing", "checking", "positioning",
+          "hockey_iq"],
+    "G": ["goaltending", "reflexes", "positioning", "rebound_control",
+          "mental_toughness", "consistency"],
+}
+
+
+def _dev_pos_group(p):
+    """Primary position -> desktop key-attribute group."""
+    try:
+        pos = getattr(p, "primary_position", None)
+        v = str(getattr(pos, "value", pos) or "").upper()
+    except Exception:
+        v = ""
+    if v in ("C", "CENTER"):
+        return "C"
+    if v in ("LW", "LEFT_WING"):
+        return "LW"
+    if v in ("RW", "RIGHT_WING"):
+        return "RW"
+    if v in ("D", "LD", "RD", "DEFENSE", "DEFENCE", "DEFENSEMAN"):
+        return "D"
+    if v in ("G", "GOALIE", "GOALTENDER"):
+        return "G"
+    return "C"
+
+
+def _dev_grade(value):
+    """100-scale letter grade (desktop's 20-scale grades x5)."""
+    if value >= 90:
+        return "A+"
+    if value >= 80:
+        return "A"
+    if value >= 70:
+        return "B+"
+    if value >= 60:
+        return "B"
+    if value >= 50:
+        return "C+"
+    if value >= 40:
+        return "C"
+    return "D"
+
+
+def _dev_recommendations(p, key_attrs):
+    """Desktop _generate_recommendations parity: weakness-first, age and
+    position aware, top 3 with HIGH/MED/LOW priority."""
+    recs = []
+    vals = []
+    for attr in key_attrs:
+        try:
+            v = int(getattr(p, attr, 50) or 50)
+        except Exception:
+            v = 50
+        vals.append((attr, v))
+    vals.sort(key=lambda x: x[1])
+    if vals:
+        lowest_attr, lowest_val = vals[0]
+        if lowest_val < 70:
+            recs.append({
+                "area": lowest_attr.replace("_", " ").title(),
+                "reason": f"Currently {lowest_val}/100 -- below team standard",
+            })
+    try:
+        age = int(getattr(p, "age", 26) or 26)
+    except Exception:
+        age = 26
+    if age <= 20:
+        recs.append({"area": "Intensive Training",
+                     "reason": "Young age allows for rapid development"})
+    elif age >= 30:
+        recs.append({"area": "Maintenance Focus",
+                     "reason": "Prevent attribute decline due to age"})
+    if _dev_pos_group(p) == "G":
+        try:
+            mt = int(getattr(p, "mental_toughness", 50) or 50)
+        except Exception:
+            mt = 50
+        if mt < 75:
+            recs.append({"area": "Mental Training",
+                         "reason": "Critical for goalie consistency"})
+    prios = ["HIGH", "MED", "LOW"]
+    out = []
+    for i, r in enumerate(recs[:3]):
+        r = dict(r)
+        r["priority"] = prios[i] if i < len(prios) else "LOW"
+        out.append(r)
+    return out
+
+
+@bp.route("/api/development/analytics")
+def api_development_analytics():
+    live = _live()
+    if live is None:
+        return jsonify({"overview": {}, "positions": [], "age_bands": [],
+                        "players": []})
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    if team is None:
+        return jsonify({"overview": {}, "positions": [], "age_bands": [],
+                        "players": []})
+    roster = _safe(lambda: list(team.roster or []), []) or []
+    farm = _safe(lambda: list(getattr(team, "ahl_roster", None) or []), []) \
+        or []
+    prospects = _safe(lambda: list(getattr(team, "prospects", None) or []),
+                      []) or []
+    all_players = roster + farm + prospects
+
+    total = len(all_players)
+    overview = {
+        "total_players": total,
+        "avg_age": round(sum(_safe(lambda: int(getattr(p, "age", 0) or 0),
+                                          0) for p in all_players) / total, 1)
+        if total else 0,
+        "avg_potential": round(sum(_safe(
+            lambda: int(getattr(p, "potential", 50) or 50), 50)
+            for p in all_players) / total, 1) if total else 0,
+    }
+    # Position analysis
+    pos_groups = {}
+    for p in all_players:
+        g = _dev_pos_group(p)
+        pos_groups.setdefault(g, []).append(p)
+    positions = []
+    for g in ("C", "LW", "RW", "D", "G"):
+        ps = pos_groups.get(g, [])
+        if not ps:
+            continue
+        positions.append({
+            "position": g, "count": len(ps),
+            "avg_potential": round(sum(_safe(
+                lambda: int(getattr(p, "potential", 50) or 50), 50)
+                for p in ps) / len(ps), 1),
+        })
+    # Age analysis
+    bands = [("18-22", 18, 22), ("23-25", 23, 25), ("26-29", 26, 29),
+             ("30+", 30, 99)]
+    age_bands = []
+    for label, lo, hi in bands:
+        n = sum(1 for p in all_players
+                if lo <= _safe(lambda: int(getattr(p, "age", 0) or 0), 0)
+                <= hi)
+        age_bands.append({"band": label, "count": n})
+    # Per-player key attributes + recommendations
+    farm_ids = {_safe(lambda: id(p)) for p in farm}
+    prospect_ids = {_safe(lambda: id(p)) for p in prospects}
+    players = []
+    for p in all_players:
+        try:
+            g = _dev_pos_group(p)
+            key_attrs = _DEV_KEY_ATTRS[g]
+            attrs = []
+            for attr in key_attrs:
+                try:
+                    from game_classes import to_100_scale
+                    v = to_100_scale(getattr(p, attr, 50))
+                except Exception:
+                    v = 50
+                attrs.append({"name": attr.replace("_", " ").title(),
+                              "value": int(v), "grade": _dev_grade(v)})
+            wp = to_web_player(p)
+            pid = id(p)
+            players.append({
+                "id": wp.get("id"),
+                "name": wp.get("name"),
+                "position": wp.get("position"),
+                "age": wp.get("age"),
+                "overall": wp.get("overall"),
+                "squad": ("AHL" if pid in farm_ids
+                          else "Prospect" if pid in prospect_ids else "NHL"),
+                "key_attributes": attrs,
+                "recommendations": _dev_recommendations(p, key_attrs),
+            })
+        except Exception:
+            continue
+    players.sort(key=lambda e: (e.get("age") or 99,
+                                -(e.get("overall") or 0)))
+    return jsonify({"overview": overview, "positions": positions,
+                    "age_bands": age_bands, "players": players})

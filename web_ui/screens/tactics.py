@@ -90,8 +90,9 @@ def _team(live):
 
 
 def _coach(team):
+    from web_ui.bridge import _staff_role_str
     for s in _safe(lambda: list(getattr(team, "staff", [])), []) or []:
-        if "head coach" in str(_safe(lambda: getattr(s, "role", ""), "")).lower():
+        if "head coach" in _staff_role_str(s).lower():
             return s
     return None
 

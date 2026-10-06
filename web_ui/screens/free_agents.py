@@ -407,6 +407,63 @@ def api_free_agents_staff():
     return jsonify({"staff": out})
 
 
+@bp.route("/api/free_agents/staff/<sid>/offer-preview")
+def api_free_agents_staff_offer_preview(sid):
+    """Hiring negotiation preview (StaffContractView parity): the staffer's
+    market ask, the club's staff budget, and the acceptance-chance estimate
+    for a given salary offer."""
+    live = _live()
+    if live is None:
+        return jsonify({"error": "no game"}), 503
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    pool = _safe(lambda: list(getattr(league, "free_agent_staff", None)
+                             or []), []) or []
+    target = next((s for s in pool
+                   if str(_safe(lambda: getattr(s, "id", ""), "")) == str(sid)),
+                  None)
+    if target is None:
+        return jsonify({"error": "staffer no longer available"}), 404
+    try:
+        from game_classes import staff_market_ask
+        ask = int(staff_market_ask(target))
+    except Exception:
+        ask = 0
+    try:
+        from web_ui.screens.staff_detail import _staff_offer_chance
+        offer = int(request.args.get("salary") or 0)
+        chance = round(_staff_offer_chance(target, offer), 3) if offer else None
+    except Exception:
+        chance = None
+    budget = _safe(lambda: team.staff_budget_remaining(), None) \
+        if team is not None else None
+    # Unique-role conflict preview (GM / Head Coach can't double).
+    conflict = ""
+    try:
+        from game_classes import Staff as _StaffCls
+        if _StaffCls.is_unique_role(getattr(target, "role", None)):
+            holders = [s for s in (getattr(team, "staff", None) or [])
+                       if s is not target
+                       and getattr(s, "role", None)
+                       == getattr(target, "role", None)]
+            if holders:
+                conflict = (f"Team already has a "
+                            f"{getattr(target.role, 'value', 'role')}: "
+                            f"{getattr(holders[0], 'full_name', '?')}.")
+    except Exception:
+        pass
+    return jsonify({
+        "name": _safe(lambda: getattr(target, "full_name", "?"), "?"),
+        "role": _safe(lambda: str(getattr(getattr(target, "role", None),
+                                          "value", "")), ""),
+        "market_ask": ask,
+        "budget_remaining": budget,
+        "chance": chance,
+        "conflict": conflict,
+    })
+
+
 @bp.route("/api/free_agents/staff/hire", methods=["POST"])
 def api_free_agents_staff_hire():
     """Queue hiring a free-agent staff member."""
@@ -414,10 +471,13 @@ def api_free_agents_staff_hire():
     sid = str(data.get("staff_id") or "")
     if not sid:
         return jsonify({"ok": False, "error": "staff_id required"}), 400
-    enqueue_command({"op": "hire_staff", "staff_id": sid,
-                     "salary": int(data.get("salary") or 0),
-                     "years": int(data.get("years") or 3)})
-    return jsonify({"ok": True})
+    # NOTE: enqueue_command(op, **kwargs) -- never the dict-as-first-arg
+    # form, which builds {"op": {...}} and silently never dispatches.
+    enqueue_command("hire_staff", staff_id=sid,
+                    salary=int(data.get("salary") or 0),
+                    years=int(data.get("years") or 3),
+                    assignment=str(data.get("assignment") or "nhl"))
+    return jsonify({"ok": True, "queued": "hire_staff"})
 
 
 # --- Market Overview tab -------------------------------------------------

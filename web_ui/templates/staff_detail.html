@@ -20,7 +20,35 @@
   <div class="bcast-kicker">Staff Profile</div>
   <h1 class="sd-name" id="sd-name">—</h1>
   <div class="sd-role" id="sd-role">—</div>
+  <div class="sd-actions">
+    <button class="btn secondary" id="sd-negotiate">Negotiate Contract</button>
+  </div>
   <div class="sd-facts" id="sd-facts"><div class="empty">Loading…</div></div>
+
+  <nav class="sd-tabs" id="sd-tabs"></nav>
+  <div id="sd-tab-body"></div>
+
+  <!-- Extension negotiation modal -->
+  <div id="neg-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h3 id="neg-title">Contract Negotiation</h3>
+      <p class="dim" id="neg-ask"></p>
+      <p class="dim small" id="neg-budget"></p>
+      <label class="fld-label">Contract length</label>
+      <div class="pill-row" id="neg-years">
+        <button data-v="1">1</button><button data-v="2" class="active">2</button>
+        <button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button>
+      </div>
+      <label class="fld-label">Salary offer ($ / year)</label>
+      <input id="neg-salary" class="nhl-input" type="text" inputmode="numeric">
+      <div id="neg-chance" class="advice-result"></div>
+      <div id="neg-result" class="advice-result"></div>
+      <div class="action-row">
+        <button class="btn primary" id="neg-offer">Make Offer</button>
+        <button class="btn secondary" id="neg-close">Close</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script src="/static/js/staff_detail.js"></script>

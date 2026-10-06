@@ -220,3 +220,46 @@
 }
 .btn.primary:hover { transform: translateY(-1px); filter: brightness(1.07); }
 .btn.primary:disabled { opacity: .5; cursor: default; transform: none; }
+
+/* ---- Batch B: crisis, advice, rivalries, carousel ---- */
+.crisis-banner {
+  margin: 0 0 18px; padding: 16px 18px; border-radius: var(--nhl-r);
+  background: linear-gradient(135deg, rgba(244,67,54,.14), rgba(244,67,54,.05));
+  border: 1px solid rgba(244,67,54,.55);
+}
+.crisis-head { font-size: 14px; line-height: 1.5; margin-bottom: 12px; color: #fff; }
+.crisis-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.crisis-card { cursor: pointer; text-align: left; width: 100%; }
+.crisis-card:hover { border-color: #f44336; }
+#crisis-successor { margin-top: 12px; }
+.row-flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.receipt { padding: 10px 12px; margin-bottom: 10px; background: rgba(255,255,255,.03);
+  border: 1px solid rgba(255,255,255,.08); border-radius: var(--nhl-r-sm); font-size: 13px; }
+.receipt-head { margin-bottom: 6px; }
+.advice-result { margin-top: 12px; font-size: 13.5px; line-height: 1.5; min-height: 20px; }
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.62); z-index: 60;
+  display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px;
+}
+.modal-backdrop.hidden { display: none; }
+.modal-card {
+  width: min(560px, 100%); max-height: 86vh; overflow-y: auto;
+  background: #10141c; border: 1px solid rgba(59,130,246,.4); border-radius: var(--nhl-r);
+  padding: 22px 24px;
+}
+.modal-card h3 { margin: 0 0 4px; font-family: var(--nhl-cond); letter-spacing: 1.2px;
+  text-transform: uppercase; color: #fff; }
+#advise-types { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+#advise-types .advise-btn { text-align: left; }
+.candidate-row { padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+.candidate-row:last-child { border-bottom: none; }
+.candidate-head { font-size: 14px; margin-bottom: 4px; color: #fff; }
+.btn.danger {
+  background: linear-gradient(135deg, #a33, #7a2d2d); color: #fff; border: none;
+  border-radius: var(--nhl-r-sm); padding: 9px 18px; font-weight: 800;
+  font-family: var(--nhl-cond); letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
+}
+.btn.danger:hover { filter: brightness(1.12); }
+.btn.danger:disabled { opacity: .5; cursor: default; }
+.btn.small { padding: 5px 12px; font-size: 12px; margin-left: 8px; }
+.watch-item .btn.small { margin-left: 10px; }

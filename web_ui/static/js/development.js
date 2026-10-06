@@ -396,3 +396,80 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
 });
+
+/* ================= Batch B: development analytics + recommendations ================= */
+
+let DEV_AN = null;
+
+function gradeColor(g) {
+  if (g === 'A+' || g === 'A') return '#4CAF50';
+  if (g === 'B+' || g === 'B') return '#8BC34A';
+  if (g === 'C+' || g === 'C') return '#FFC107';
+  return '#F44336';
+}
+
+async function loadDevAnalytics() {
+  try {
+    const res = await fetch('/api/development/analytics');
+    DEV_AN = await res.json();
+    renderDevAnalytics();
+  } catch (e) { console.error(e); }
+}
+
+function renderDevAnalytics() {
+  const d = DEV_AN;
+  if (!d) return;
+  const o = d.overview || {};
+  document.getElementById('dev-overview').innerHTML = `
+    <div class="ov-stat"><strong>${o.total_players || 0}</strong><span>Total players</span></div>
+    <div class="ov-stat"><strong>${o.avg_age || 0}</strong><span>Average age</span></div>
+    <div class="ov-stat"><strong>${o.avg_potential || 0}</strong><span>Average potential</span></div>`;
+  document.getElementById('dev-positions').innerHTML = (d.positions || []).map(p => `
+    <div class="attr-row"><span><strong>${esc(p.position)}</strong></span>
+      <span class="dim">${p.count} players</span>
+      <span class="dim">Pot: ${p.avg_potential}</span></div>`).join('') ||
+    '<div class="dim">No data.</div>';
+  document.getElementById('dev-ages').innerHTML = (d.age_bands || []).map(b => `
+    <div class="attr-row"><span><strong>${esc(b.band)}</strong></span>
+      <span class="dim">${b.count} players</span>
+      <div class="mini-bar"><div class="mini-fill" style="width:${o.total_players ? Math.round(b.count / o.total_players * 100) : 0}%;background:#3B82F6"></div></div></div>`).join('');
+
+  const q = (document.getElementById('dev-an-q').value || '').toLowerCase();
+  const squad = document.getElementById('dev-an-squad').value || 'all';
+  const onlyRecs = document.getElementById('dev-an-recs').checked;
+  const prioColor = {HIGH: '#F44336', MED: '#FFC107', LOW: '#3B82F6'};
+  const players = (d.players || []).filter(p => {
+    if (q && !(p.name || '').toLowerCase().includes(q)) return false;
+    if (squad !== 'all' && p.squad !== squad) return false;
+    if (onlyRecs && !(p.recommendations || []).length) return false;
+    return true;
+  }).slice(0, 40);
+  document.getElementById('dev-player-cards').innerHTML = players.map(p => `
+    <div class="dev-card dev-player">
+      <div class="dev-player-head">
+        ${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile"><strong>${esc(p.name)}</strong></span>` : `<strong>${esc(p.name)}</strong>`}
+        <span class="dim">${esc(p.position || '')} · ${p.age} · OVR ${p.overall} · ${esc(p.squad || '')}</span>
+      </div>
+      <div class="dev-attrs">${(p.key_attributes || []).map(a => `
+        <div class="attr-row"><span>${esc(a.name)}</span>
+          <div class="mini-bar"><div class="mini-fill" style="width:${a.value}%;background:${gradeColor(a.grade)}"></div></div>
+          <strong>${a.value}</strong><span class="grade" style="color:${gradeColor(a.grade)}">${esc(a.grade)}</span>
+        </div>`).join('')}</div>
+      ${(p.recommendations || []).length ? `<div class="dev-recs">
+        <div class="recs-title">Development Focus Recommendations</div>
+        ${(p.recommendations || []).map(r => `
+          <div class="rec-row"><span class="prio" style="color:${prioColor[r.priority] || '#8b98ab'}">${esc(r.priority)}</span>
+            <span><strong>${esc(r.area)}:</strong> ${esc(r.reason)}</span></div>`).join('')}
+      </div>` : '<div class="dim small">No recommendations — a balanced profile.</div>'}
+    </div>`).join('') || '<div class="dim">No players match.</div>';
+}
+
+['dev-an-q', 'dev-an-squad', 'dev-an-recs'].forEach(id => {
+  const el = document.getElementById(id);
+  el.addEventListener(el.tagName === 'INPUT' && el.type !== 'checkbox' ? 'input' : 'change', () => {
+    clearTimeout(window._devAnT);
+    window._devAnT = setTimeout(renderDevAnalytics, 200);
+  });
+});
+
+loadDevAnalytics();

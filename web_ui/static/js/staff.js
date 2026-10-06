@@ -157,6 +157,83 @@ async function reassignStaff(btn, id, name, currentRole) {
 
 document.addEventListener('DOMContentLoaded', loadStaff);
 
+/* ---- Batch B: Org Chart + Staff Report views ---- */
+document.getElementById('staff-tabs').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-tab]');
+  if (!btn) return;
+  document.querySelectorAll('#staff-tabs button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const tab = btn.dataset.tab;
+  document.getElementById('staff-groups').classList.toggle('hidden', tab !== 'list');
+  document.getElementById('org-view').classList.toggle('hidden', tab !== 'org');
+  document.getElementById('report-view').classList.toggle('hidden', tab !== 'report');
+  if (tab === 'org') renderOrgChart();
+  if (tab === 'report') renderStaffReport();
+});
+
+function staffLink(s) {
+  if (!s) return '<span class="dim">Vacant</span>';
+  const money = s.salary >= 1e6 ? '$' + (s.salary / 1e6).toFixed(2) + 'M'
+    : s.salary ? '$' + Math.round(s.salary / 1e3) + 'K' : '';
+  return `<div class="org-person">${s.id
+    ? `<span class="clickable-text" data-href="/staff/${esc(s.id)}" title="Open staff profile"><strong>${esc(s.name)}</strong></span>`
+    : `<strong>${esc(s.name)}</strong>`}
+    <div class="dim small">${esc(s.role || '')} · ${s.rating || '?'} OVR${money ? ' · ' + money : ''}</div></div>`;
+}
+
+async function renderOrgChart() {
+  const host = document.getElementById('org-view');
+  try {
+    const res = await fetch('/api/staff/org-chart');
+    const d = await res.json();
+    if (d.error) { host.innerHTML = '<div class="dim">' + esc(d.error) + '</div>'; return; }
+    host.innerHTML = `<h2 class="sec-title">${esc(d.team || '')} Organizational Chart</h2>` +
+      (d.tree || []).map(level => `
+        <div class="org-level"><div class="org-level-title">${esc(level.level)}</div>
+          <div class="org-branches">${(level.reports || []).map(r => `
+            <div class="org-branch"><div class="org-role">${esc(r.role)}</div>
+              ${r.person !== undefined ? staffLink(r.person)
+                : (r.people || []).map(staffLink).join('') || '<span class="dim">—</span>'}
+            </div>`).join('')}</div>
+        </div>`).join('');
+  } catch (e) { console.error(e); }
+}
+
+async function renderStaffReport() {
+  const host = document.getElementById('report-view');
+  try {
+    const res = await fetch('/api/staff/report');
+    const d = await res.json();
+    if (d.error) { host.innerHTML = '<div class="dim">' + esc(d.error) + '</div>'; return; }
+    const s = d.summary || {};
+    const money = n => '$' + Number(n || 0).toLocaleString();
+    host.innerHTML = `
+      <h2 class="sec-title">${esc(d.team || '')} Staff Analysis Report</h2>
+      <div class="report-summary">
+        <div class="ov-stat"><strong>${s.total_staff || 0}</strong><span>Total staff</span></div>
+        <div class="ov-stat"><strong>${money(s.total_salary)}</strong><span>Total salary</span></div>
+        <div class="ov-stat"><strong>${s.avg_experience || 0}y</strong><span>Avg experience</span></div>
+        <div class="ov-stat"><strong>${s.avg_rating || 0}</strong><span>Avg rating</span></div>
+      </div>
+      ${(d.departments || []).map(dep => `
+        <div class="role-group"><div class="role-title">${esc(dep.name)} Department <span class="count">${dep.count}</span>
+          <span class="dim small">avg ${dep.avg_rating} · ${money(dep.total_salary)}</span></div>
+          <div class="report-rows">${(dep.members || []).map(m => `
+            <div class="report-row">${m.id
+              ? `<span class="clickable-text" data-href="/staff/${esc(m.id)}" title="Open staff profile">${esc(m.name)}</span>`
+              : esc(m.name)}
+              <span class="dim">${esc(m.role)} · ${m.rating} OVR · ${m.experience}y · ${money(m.salary)} · ${m.contract_years}y left · ${esc(m.status || '')}</span>
+            </div>`).join('')}</div>
+        </div>`).join('')}
+      ${(d.expiring || []).length ? `<div class="role-group"><div class="role-title">Contract Expirations</div>
+        <div class="report-rows">${d.expiring.map(x => `
+          <div class="report-row">• ${x.id
+            ? `<span class="clickable-text" data-href="/staff/${esc(x.id)}" title="Open staff profile">${esc(x.name)}</span>`
+            : esc(x.name)}
+            <span class="dim">${esc(x.role)} — ${x.contract_years} year(s) remaining</span></div>`).join('')}</div></div>` : ''}`;
+  } catch (e) { console.error(e); }
+}
+
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 // If the tab goes silent the game shuts itself down cleanly.
 (function () {

@@ -7,7 +7,7 @@ Speech, Practice, Back Room, Advise Coach, Line Control).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, enqueue_command
+from web_ui.bridge import _safe, _staff_role_str, enqueue_command
 
 bp = Blueprint("morale", __name__)
 
@@ -63,7 +63,7 @@ def api_morale():
             # Find head coach from staff
             staff = _safe(lambda: list(getattr(team, "staff", [])), []) or []
             for s in staff:
-                if "head coach" in str(_safe(lambda: getattr(s, "role", ""), "")).lower():
+                if "head coach" in _staff_role_str(s).lower():
                     coach = s
                     break
         except Exception:
@@ -454,4 +454,410 @@ def api_morale_action():
         return jsonify({"ok": False, "error": "bad action"}), 400
     ok = enqueue_command("morale_action", action=action,
                          detail=data.get("detail", ""))
+    return jsonify({"ok": ok})
+
+
+# ----------------------------------------------------------------------
+# Batch B: captaincy crisis, advise-coach, rivalries, coach carousel.
+# ----------------------------------------------------------------------
+
+def _dr_module():
+    try:
+        import dressing_room as _dr
+        return _dr
+    except Exception:
+        return None
+
+
+def _rs_module():
+    try:
+        import reputation_system as _rs
+        return _rs
+    except Exception:
+        return None
+
+
+def _team_league():
+    live = _live()
+    if live is None:
+        return None, None, None
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    return live, team, league
+
+
+@bp.route("/api/morale/crisis")
+def api_crisis():
+    """Captaincy-crisis banner state: the persisted crisis flag (set by the
+    weekly dressing-room tick) else a live detection. Plus named successor
+    candidates for the reassign path and recent authority receipts."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"crisis": None})
+    _dr = _dr_module()
+    detail = {}
+    try:
+        dr = _dr.ensure_dressing_room_fields(team) if _dr else {}
+        if dr.get("captaincy_crisis"):
+            detail = dict(dr.get("captaincy_crisis_detail") or {})
+    except Exception:
+        detail = {}
+    if not detail and _dr is not None:
+        try:
+            crisis = _dr.detect_captaincy_crisis(team, league)
+            if crisis is not None:
+                detail = {
+                    "captain_name": crisis.get("captain_name", ""),
+                    "challenger_names": crisis.get("challenger_names") or [],
+                    "severity": crisis.get("severity", 1),
+                }
+        except Exception:
+            pass
+    crisis = None
+    if detail:
+        # Named successors: challengers first, else highest-influence.
+        succ = []
+        try:
+            roster = list(getattr(team, "roster", None) or [])
+            names = [n for n in (detail.get("challenger_names") or []) if n]
+            by_name = {}
+            for p in roster:
+                try:
+                    by_name[_dr._name(p)] = p
+                except Exception:
+                    continue
+            matched = [by_name[n] for n in names if n in by_name]
+            if not matched:
+                cap = _dr.captain_of(team)
+                ranked = sorted(
+                    (p for p in roster if p is not cap),
+                    key=lambda p: _dr.influence_of(p), reverse=True)
+                matched = ranked[:3]
+            for p in matched[:4]:
+                succ.append({
+                    "id": _safe(lambda: str(getattr(p, "id", "")), ""),
+                    "name": _safe(lambda: _dr._name(p), "?"),
+                })
+        except Exception:
+            succ = []
+        crisis = {
+            "captain_name": detail.get("captain_name", ""),
+            "challenger_names": detail.get("challenger_names") or [],
+            "severity": detail.get("severity", 1),
+            "successors": succ,
+        }
+    # Authority receipts (crisis resolutions, firings, hires).
+    receipts = []
+    try:
+        dr = _dr.ensure_dressing_room_fields(team) if _dr else {}
+        for rec in reversed(list(dr.get("practice_receipts") or [])):
+            if not isinstance(rec, dict) or rec.get("kind") != "authority":
+                continue
+            receipts.append({
+                "date": rec.get("date", ""),
+                "title": rec.get("title", ""),
+                "choice": rec.get("choice", ""),
+                "gained": rec.get("gained") or [],
+                "paid": rec.get("paid") or [],
+                "relationships": rec.get("relationships") or [],
+                "goal_met": rec.get("goal_met"),
+            })
+            if len(receipts) >= 5:
+                break
+    except Exception:
+        receipts = []
+    return jsonify({"crisis": crisis, "receipts": receipts})
+
+
+@bp.route("/api/morale/crisis/resolve", methods=["POST"])
+def api_crisis_resolve():
+    """Resolve a captaincy crisis: keep | challenge | strip | reassign."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"ok": False, "error": "no team"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    choice = str(data.get("choice", "") or "")
+    if choice not in ("keep", "challenge", "strip", "reassign"):
+        return jsonify({"ok": False, "error": "bad choice"}), 400
+    if choice == "reassign" and not data.get("new_captain_id"):
+        # Never silently auto-strip the C (desktop rule).
+        return jsonify({"ok": False,
+                        "error": "reassign needs a named successor"}), 400
+    ok = enqueue_command("resolve_captaincy_crisis", choice=choice,
+                         new_captain_id=str(data.get("new_captain_id") or ""))
+    return jsonify({"ok": ok})
+
+
+@bp.route("/api/morale/advice-result")
+def api_advice_result():
+    """Poll the outcome of the last morale write (advice / rivalry /
+    crisis / coach-carousel): the confirmation the desktop shows in its
+    result label."""
+    live = _live()
+    if live is None:
+        return jsonify({"result": None})
+    return jsonify({"result": _safe(lambda: getattr(
+        live, "_web_morale_result", None))})
+
+
+@bp.route("/api/morale/advice-types")
+def api_advice_types():
+    """The 7 GM advice types, coach trust, currently-featured player."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"types": [], "coach": None})
+    _rs = _rs_module()
+    types = []
+    if _rs is not None:
+        try:
+            types = [{"key": k, "label": v}
+                     for k, v in _rs.ADVICE_TYPES.items()]
+        except Exception:
+            pass
+    coach = None
+    for s in list(getattr(team, "staff", None) or []):
+        try:
+            if "head coach" in _staff_role_str(s).lower():
+                coach = s
+                break
+        except Exception:
+            continue
+    featured = None
+    if coach is not None and _rs is not None:
+        try:
+            _rs.ensure_reputation_fields(coach)
+        except Exception:
+            pass
+    for p in list(getattr(team, "roster", None) or []):
+        try:
+            if getattr(p, "usage_featured", False):
+                featured = {
+                    "id": _safe(lambda: str(getattr(p, "id", "")), ""),
+                    "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                }
+                break
+        except Exception:
+            continue
+    line_control = _safe(lambda: getattr(team, "line_control", "coach"),
+                         "coach")
+    return jsonify({
+        "types": types,
+        "coach": ({"name": _safe(lambda: getattr(coach, "full_name", "Coach"),
+                                "Coach"),
+                   "gm_trust": _safe(lambda: int(getattr(
+                       coach, "gm_trust", 70) or 70), 70)}
+                  if coach is not None else None),
+        "featured": featured,
+        "line_control": line_control,
+    })
+
+
+@bp.route("/api/morale/rivalries")
+def api_rivalries():
+    """Rivalry panel (desktop MoraleView._refresh_rivalries parity): coach
+    beefs, team rivalries, loudest player beefs, declared rivals -- plus
+    the team picker for new declarations."""
+    live, team, league = _team_league()
+    if team is None or league is None:
+        return jsonify({"entries": [], "teams": [], "declared": []})
+    _rs = _rs_module()
+    entries, declared = [], []
+    if _rs is not None:
+        try:
+            rivalries = list(getattr(league, "rivalries", []) or [])
+            tname = getattr(team, "team_name", "")
+            # Coach beefs
+            coach = None
+            for s in list(getattr(team, "staff", None) or []):
+                try:
+                    if "head coach" in _staff_role_str(s).lower():
+                        coach = s
+                        break
+                except Exception:
+                    continue
+            cname = getattr(coach, "full_name", "") if coach else ""
+            for r in _rs.get_rivalries_for(rivalries, coach)[:3] \
+                    if coach is not None else []:
+                other = (r["b_name"] if r["a_name"] == cname
+                         else r["a_name"])
+                entries.append({
+                    "category": "coach", "label": other,
+                    "intensity": round(r.get("intensity", 0)),
+                    "origin": str(r.get("origin", "")).replace("_", " "),
+                    "solidified": bool(r.get("solidified")),
+                })
+            # Team rivalries
+            team_rs = [r for r in rivalries
+                       if r.get("kind") == "team_team"
+                       and (r.get("a", (None, ""))[1] == tname
+                            or r.get("b", (None, ""))[1] == tname)]
+            team_rs.sort(key=lambda r: -r.get("intensity", 0))
+            for r in team_rs[:3]:
+                other = (r["b_name"] if r.get("a", (None, ""))[1] == tname
+                         else r["a_name"])
+                entries.append({
+                    "category": "team", "label": other,
+                    "intensity": round(r.get("intensity", 0)),
+                    "origin": str(r.get("origin", "")).replace("_", " "),
+                    "solidified": bool(r.get("solidified")),
+                })
+            # Loudest player beefs on the roster
+            beefs = []
+            for p in list(getattr(team, "roster", None) or []):
+                beefs += _rs.get_rivalries_for(rivalries, p)
+            beefs.sort(key=lambda r: -r.get("intensity", 0))
+            for r in beefs[:2]:
+                entries.append({
+                    "category": "player",
+                    "label": f"{r['a_name']} vs {r['b_name']}",
+                    "intensity": round(r.get("intensity", 0)),
+                    "origin": str(r.get("origin", "")).replace("_", " "),
+                    "solidified": bool(r.get("solidified")),
+                })
+            # GM-declared (renounceable)
+            my_keys = {("team", tname), ("gm", tname)}
+            for r in _rs.declared_rivalries_for(rivalries, team):
+                other = (r["b_name"] if r.get("a") in my_keys
+                         else r["a_name"])
+                kind = ("team" if r.get("kind") == "team_team"
+                        else "coach")
+                declared.append({
+                    "label": other, "kind": kind,
+                    "intensity": round(r.get("intensity", 0)),
+                })
+        except Exception:
+            pass
+    teams = []
+    try:
+        tname = getattr(team, "team_name", "")
+        teams = sorted(
+            str(getattr(t, "team_name", ""))
+            for t in (getattr(league, "teams", []) or [])
+            if getattr(t, "team_name", "") and getattr(t, "team_name", "")
+            != tname)
+    except Exception:
+        pass
+    return jsonify({"entries": entries, "teams": teams,
+                    "declared": declared})
+
+
+@bp.route("/api/morale/rivalries/declare", methods=["POST"])
+def api_rivalry_declare():
+    """Declare a team rival or a personal beef with an opposing head coach."""
+    live, team, league = _team_league()
+    if team is None or league is None:
+        return jsonify({"ok": False, "error": "no game"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    kind = str(data.get("kind", "team") or "team")
+    target = str(data.get("target", "") or "")
+    if kind not in ("team", "coach") or not target:
+        return jsonify({"ok": False, "error": "kind and target required"}), 400
+    ok = enqueue_command("declare_rivalry", kind=kind, target=target)
+    return jsonify({"ok": ok})
+
+
+@bp.route("/api/morale/rivalries/renounce", methods=["POST"])
+def api_rivalry_renounce():
+    """Renounce a live GM-declared rivalry."""
+    live, team, league = _team_league()
+    if team is None or league is None:
+        return jsonify({"ok": False, "error": "no game"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    kind = str(data.get("kind", "team") or "team")
+    target = str(data.get("target", "") or "")
+    if kind not in ("team", "coach") or not target:
+        return jsonify({"ok": False, "error": "kind and target required"}), 400
+    ok = enqueue_command("renounce_rivalry", kind=kind, target=target)
+    return jsonify({"ok": ok})
+
+
+@bp.route("/api/morale/coach/candidates")
+def api_coach_candidates():
+    """Coach carousel: current chair (style, trust, hot seat) + candidates
+    (retreads, specialists, fresh-blood coordinators)."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"current": None, "candidates": [], "hot_seat": None})
+    _dr = _dr_module()
+    _rs = _rs_module()
+    current, candidates, hot = None, [], None
+    try:
+        coach = _dr._room_head_coach(team) if _dr else None
+        if coach is not None:
+            style = _rs.coach_style(coach) if _rs else {}
+            try:
+                axis = _dr.coach_demanding_axis(coach)
+                ax = ("Demanding" if axis >= 0.7 else "Players' coach"
+                      if axis <= 0.3 else "Balanced")
+            except Exception:
+                ax = ""
+            current = {
+                "id": _safe(lambda: str(getattr(coach, "id", "")), ""),
+                "name": _safe(lambda: getattr(
+                    coach, "name", getattr(coach, "full_name", "Coach")),
+                    "Coach"),
+                "style": _safe(lambda: style.get("label", ""), ""),
+                "style_key": _safe(lambda: style.get("key", ""), ""),
+                "axis": ax,
+                "gm_trust": _safe(lambda: int(getattr(
+                    coach, "gm_trust", 70) or 70), 70),
+                "shelf_weeks": _safe(lambda: int(getattr(
+                    coach, "shelf_weeks", 0) or 0), 0),
+            }
+    except Exception:
+        current = None
+    try:
+        if _dr is not None:
+            for i, c in enumerate(_dr.coaching_candidates(team)):
+                candidates.append({
+                    "idx": i,
+                    "name": c.get("name", "?"),
+                    "source": c.get("source", ""),
+                    "archetype": c.get("archetype", ""),
+                    "style": c.get("style", ""),
+                    "hot_seat": c.get("hot_seat", 0),
+                    "note": c.get("note", ""),
+                })
+    except Exception:
+        candidates = []
+    try:
+        # Read-only: surface the hot-seat state the weekly tick already
+        # computed. Never run coach_hot_seat_check() from a GET -- it can
+        # apply trust drift (a write).
+        if _dr is not None:
+            dr = _dr.ensure_dressing_room_fields(team)
+            hot = dr.get("coach_hot_seat")
+    except Exception:
+        hot = None
+    return jsonify({"current": current, "candidates": candidates,
+                    "hot_seat": hot})
+
+
+@bp.route("/api/morale/coach/fire", methods=["POST"])
+def api_coach_fire():
+    """Fire the head coach: carousel memory, room reaction, receipt."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"ok": False, "error": "no team"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    reason = str(data.get("reason", "fired") or "fired")
+    if reason not in ("fired", "resigned", "mutual"):
+        reason = "fired"
+    ok = enqueue_command("fire_coach", reason=reason)
+    return jsonify({"ok": ok})
+
+
+@bp.route("/api/morale/coach/hire", methods=["POST"])
+def api_coach_hire():
+    """Hire a carousel candidate (idx from /api/morale/coach/candidates)."""
+    live, team, league = _team_league()
+    if team is None:
+        return jsonify({"ok": False, "error": "no team"}), 503
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        idx = int(data.get("candidate_idx", -1))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad candidate"}), 400
+    ok = enqueue_command("hire_coach", candidate_idx=idx)
     return jsonify({"ok": ok})
