@@ -22,44 +22,114 @@
     <div class="bcast-kicker">Dressing Room</div>
     <h1 class="bcast-title">Team Morale</h1>
   </div>
-  <div class="morale-row">
-    <div class="morale-card" id="coach-card">
-      <h3>Coaching</h3>
-      <div id="coach-body"></div>
-      <div class="action-row">
-        <button class="btn secondary" data-action="bag_skate">Bag Skate</button>
-        <button class="btn secondary" data-action="speech">Speech</button>
-        <button class="btn secondary" data-action="practice">Practice</button>
-        <button class="btn secondary" data-action="back_room">Back Room</button>
-        <button class="btn secondary" data-action="line_control" id="line-control-btn">Lines: Coach</button>
+
+  <nav class="morale-tabs" id="morale-tabs">
+    <button data-tab="room" class="active">Room</button>
+    <button data-tab="groups">Social Groups</button>
+    <button data-tab="cascades">Cascades</button>
+    <button data-tab="talk">Team Talk</button>
+  </nav>
+
+  <section id="view-room">
+    <div class="morale-row">
+      <div class="morale-card" id="coach-card">
+        <h3>Coaching</h3>
+        <div id="coach-body"></div>
+        <div class="action-row">
+          <button class="btn secondary" data-action="bag_skate">Bag Skate</button>
+          <button class="btn secondary" data-action="speech">Speech</button>
+          <button class="btn secondary" data-action="practice">Practice</button>
+          <button class="btn secondary" data-action="back_room">Back Room</button>
+          <button class="btn secondary" data-action="line_control" id="line-control-btn">Lines: Coach</button>
+        </div>
+      </div>
+      <div class="morale-card" id="watch-card">
+        <h3>Watch List</h3>
+        <div id="watch-body"></div>
       </div>
     </div>
-    <div class="morale-card" id="watch-card">
-      <h3>Watch List</h3>
-      <div id="watch-body"></div>
-    </div>
-  </div>
 
-  <div class="morale-card">
-    <h3>Player Response to Coach</h3>
-    <div class="table-wrap">
-      <table class="morale-table">
-        <thead><tr><th>Player</th><th>Engagement</th><th>Response</th><th>Happiness</th><th>Morale</th><th>Tier</th></tr></thead>
-        <tbody id="response-body"></tbody>
-      </table>
+    <div class="morale-card">
+      <h3>Player Response to Coach</h3>
+      <div class="table-wrap">
+        <table class="morale-table">
+          <thead><tr><th>Player</th><th>Engagement</th><th>Response</th><th>Happiness</th><th>Morale</th><th>Tier</th></tr></thead>
+          <tbody id="response-body"></tbody>
+        </table>
+      </div>
     </div>
-  </div>
 
-  <div class="morale-row">
-    <div class="morale-card">
-      <h3>Dynamics Feed</h3>
-      <div id="feed-body" class="feed"></div>
+    <div class="morale-row">
+      <div class="morale-card">
+        <h3>Dynamics Feed</h3>
+        <div id="feed-body" class="feed"></div>
+      </div>
+      <div class="morale-card">
+        <h3>Hierarchy</h3>
+        <div id="hierarchy-body"></div>
+      </div>
     </div>
-    <div class="morale-card">
-      <h3>Hierarchy</h3>
-      <div id="hierarchy-body"></div>
+  </section>
+
+  <section id="view-groups" class="hidden">
+    <div class="morale-card" id="atmosphere-card">
+      <h3>Room Atmosphere</h3>
+      <div id="atmosphere-body"></div>
     </div>
-  </div>
+    <div id="clique-grid"></div>
+    <div class="morale-card">
+      <h3>Floaters</h3>
+      <p class="dim">No circle of their own — higher integration risk, lower cascade pull.</p>
+      <div id="floaters-body"></div>
+    </div>
+  </section>
+
+  <section id="view-cascades" class="hidden">
+    <div class="morale-row">
+      <div class="morale-card">
+        <h3>Room Log</h3>
+        <p class="dim">Every arrival, departure, talk, and press moment — and how the room absorbed it.</p>
+        <div id="cascade-log" class="feed"></div>
+      </div>
+      <div class="morale-card">
+        <h3>Recent Arrivals</h3>
+        <p class="dim">How settled each new face is. Integration grows with games played and having a circle.</p>
+        <div id="arrivals-body"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-talk" class="hidden">
+    <div class="morale-card">
+      <h3>Team Talk</h3>
+      <p class="dim">Address the room before the game or between periods. Tone, speaker, and moment all matter — the wrong words at the wrong time backfire. Repeats in the same situation get tuned out.</p>
+      <div id="talk-pending"></div>
+      <h4 class="talk-sub">Situation</h4>
+      <div class="pill-row" id="talk-situation">
+        <button data-v="pregame" class="active">Pregame</button>
+        <button data-v="intermission">Intermission</button>
+      </div>
+      <h4 class="talk-sub">Score State</h4>
+      <div class="pill-row" id="talk-score">
+        <button data-v="trailing">Trailing</button>
+        <button data-v="tied" class="active">Tied</button>
+        <button data-v="leading">Leading</button>
+      </div>
+      <h4 class="talk-sub">Speaker</h4>
+      <div class="pill-row" id="talk-speaker"></div>
+      <h4 class="talk-sub">Context</h4>
+      <div class="talk-ctx">
+        <label class="bag-row"><input type="checkbox" id="talk-rival"> Rivalry game</label>
+        <label class="bag-row">Losing/winning streak:
+          <input type="number" id="talk-streak" value="0" min="-20" max="20" style="width:64px">
+        </label>
+      </div>
+      <h4 class="talk-sub">Tone</h4>
+      <div id="talk-tones"></div>
+      <div class="talk-preview" id="talk-preview"></div>
+      <button class="btn primary" id="talk-deliver">Deliver Talk</button>
+    </div>
+  </section>
 </main>
 
 <script src="/static/js/morale.js"></script>

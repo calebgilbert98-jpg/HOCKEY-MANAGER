@@ -3053,6 +3053,88 @@ def _execute_command(app, cmd):
                     setattr(team, attr, value)
             except Exception:
                 pass
+        elif op == "set_tactic_system":
+            # E1 whiteboard module: install one named system from the catalog.
+            try:
+                import tactics as _tx
+                team = getattr(app, "user_team", None)
+                if team is not None:
+                    _tx.set_team_system(team, cmd.get("category", ""),
+                                        cmd.get("system_key", ""))
+            except Exception:
+                pass
+        elif op == "apply_identity_preset":
+            try:
+                import tactics as _tx
+                team = getattr(app, "user_team", None)
+                if team is not None:
+                    _tx.apply_identity_preset(team, cmd.get("preset", ""))
+            except Exception:
+                pass
+        elif op == "set_tactics_control":
+            try:
+                import tactics as _tx
+                team = getattr(app, "user_team", None)
+                who = cmd.get("who", "coach")
+                if team is not None:
+                    _tx.set_tactics_control(
+                        team, who if who in ("coach", "gm") else "coach")
+            except Exception:
+                pass
+        elif op == "coach_tactics":
+            # enforce: GM takes the whiteboard. takeover: the coach
+            # installs his own preferred systems (personality -> adoption).
+            try:
+                import tactics as _tx
+                team = getattr(app, "user_team", None)
+                mode = cmd.get("mode", "")
+                if team is None:
+                    return
+                if mode == "enforce":
+                    _tx.set_tactics_control(team, "gm")
+                elif mode == "takeover":
+                    coach = None
+                    for s in list(getattr(team, "staff", None) or []):
+                        if "head coach" in str(getattr(s, "role", "")).lower():
+                            coach = s
+                            break
+                    if coach is not None:
+                        _tx.set_tactics_control(team, "coach")
+                        _tx.install_coach_systems(team, coach)
+            except Exception:
+                pass
+        elif op == "team_talk":
+            # Dressing-room team talk through the real give_talk():
+            # tones, outcome tiers, repeat cooldown, momentum queue.
+            try:
+                import dressing_room as _dr
+                team = getattr(app, "user_team", None)
+                if team is None:
+                    return
+                tone = str(cmd.get("tone", "calm") or "calm")
+                if tone not in ("calm", "fired-up", "cautious"):
+                    tone = "calm"
+                situation = str(cmd.get("situation", "pregame") or "pregame")
+                if situation not in ("pregame", "intermission"):
+                    situation = "pregame"
+                score_state = str(cmd.get("score_state", "tied") or "tied")
+                if score_state not in ("leading", "trailing", "tied"):
+                    score_state = "tied"
+                speaker = str(cmd.get("speaker", "coach") or "coach")
+                if speaker not in ("coach", "captain"):
+                    speaker = "coach"
+                try:
+                    day_key = getattr(app, "current_date", None)
+                except Exception:
+                    day_key = None
+                _dr.give_talk(
+                    team, tone,
+                    {"situation": situation, "score_state": score_state,
+                     "rival": bool(cmd.get("rival", False)),
+                     "streak": int(cmd.get("streak", 0) or 0)},
+                    speaker, day_key=day_key)
+            except Exception:
+                pass
         elif op == "morale_action":
             try:
                 import reputation_system as _rs

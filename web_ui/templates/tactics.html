@@ -22,18 +22,60 @@
     <div class="bcast-kicker">Game Plan</div>
     <h1 class="bcast-title">Tactics</h1>
   </div>
-  <p class="tactics-intro">Your game plan shapes sim results in every situation.</p>
+  <p class="tactics-intro">Your game plan shapes sim results in every situation. Seven whiteboard modules drive the engine — pick each phase's system, or install a whole identity in one click.</p>
 
   <nav class="tactics-tabs" id="tactics-tabs">
     <button data-tab="systems" class="active">Systems</button>
+    <button data-tab="identity">Identity</button>
+    <button data-tab="analyst">Analyst</button>
+    <button data-tab="coach">Coach</button>
     <button data-tab="practice">Practice</button>
   </nav>
 
   <section id="view-systems">
-    <div id="tactic-groups"></div>
+    <div class="tactics-statusbar" id="tactics-statusbar"></div>
+    <div id="module-grid"></div>
+    <div class="tactic-group">
+      <h3>Game Management</h3>
+      <p class="dim">Legacy aggression sliders and home-ice deployment — they still fold into the engine.</p>
+      <div id="tactic-groups"></div>
+    </div>
     <div class="impact-card">
       <h3>Expected Impact</h3>
+      <div id="engine-lines"></div>
       <div id="impact-lines"></div>
+    </div>
+  </section>
+
+  <section id="view-identity" class="hidden">
+    <p class="dim" style="margin-bottom:14px">One click installs a unified identity across all seven modules. The room has to re-learn its reads — familiarity dips, then rebuilds.</p>
+    <div id="identity-grid"></div>
+  </section>
+
+  <section id="view-analyst" class="hidden">
+    <p class="dim" style="margin-bottom:14px">Analyst suggestions from your roster, your coach, and what's actually hurting opponents on film.</p>
+    <div id="intel-list"></div>
+  </section>
+
+  <section id="view-coach" class="hidden">
+    <div id="coach-whiteboard"></div>
+    <div class="tactic-group">
+      <h3>His Systems vs Yours</h3>
+      <p class="dim">What your head coach would run, from his coaching style — against what's on the whiteboard now.</p>
+      <div class="table-wrap"><table class="coach-table">
+        <thead><tr><th>Phase</th><th>Coach wants</th><th>Currently running</th><th></th></tr></thead>
+        <tbody id="coach-rows"></tbody>
+      </table></div>
+    </div>
+    <div class="tactic-group">
+      <h3>Coach Actions</h3>
+      <p class="dim">Suggest shows you his recommendation (this table). Enforce puts the whiteboard in your hands — he stops adjusting mid-game. Takeover hands it to him and installs his systems.</p>
+      <div class="action-row">
+        <button class="btn primary" id="coach-suggest">Suggest</button>
+        <button class="btn secondary" id="coach-enforce">Enforce My Systems</button>
+        <button class="btn secondary" id="coach-takeover">Coach Takeover</button>
+      </div>
+      <div id="coach-suggest-out" class="dim" style="margin-top:10px"></div>
     </div>
   </section>
 
