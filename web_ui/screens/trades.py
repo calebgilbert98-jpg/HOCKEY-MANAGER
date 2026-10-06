@@ -105,10 +105,13 @@ def api_trades_propose():
     parity).
 
     Gap 2: optional "retention" ({pid: pct}) and "pick_protection"
-    ({pick id: code}) terms. Hard server-side validation here (the UI
-    also clamps — never trust it): pct must be 1-50, codes must be the
-    engine's real set, and retention is dry-run through the engine's own
-    _retention_check (slot limit, two-club/75-day rules).
+    ({pick id: code}) terms, plus "retention_acquire" ({pid: pct} —
+    salary we ask the PARTNER to keep on players we acquire).
+    Hard server-side validation here (the UI also clamps — never trust
+    it): pct must be 1-50, codes must be the engine's real set, and
+    retention is dry-run through the engine's own _retention_check
+    (slot limit, two-club/75-day rules) against the retaining club —
+    ours for "retention", the partner for "retention_acquire".
     """
     data = request.get_json(force=True, silent=True) or {}
 
@@ -149,20 +152,54 @@ def api_trades_propose():
                                          f"{', '.join(PROTECTION_CODES)})"}), 400
         retention_terms = parse_retention_terms(raw_retention, set(give_pids))
         protection_terms = parse_protection_terms(raw_protection, set(give_picks))
+        # Opponent retention: salary we ask the PARTNER to keep on
+        # players we acquire (0/25/50%). Same wire format as
+        # "retention", validated against the partner club below.
+        raw_ret_acq = data.get("retention_acquire") or {}
+        if not isinstance(raw_ret_acq, dict):
+            raw_ret_acq = {}
+        for _k, _v in raw_ret_acq.items():
+            try:
+                _pct = float(_v)
+            except Exception:
+                return jsonify({"ok": False,
+                                "error": f"retention_acquire on {_k} is "
+                                         f"not a number"}), 400
+            if not (0 < _pct <= 50):
+                return jsonify({"ok": False,
+                                "error": f"retention_acquire on {_k} must be "
+                                         f"1-50% (got {_pct:g}%)"}), 400
         # Dry-run retention through the engine's real rules (slot limit,
-        # two-club/75-day CBA rules). Engine re-checks at execution too.
+        # two-club/75-day CBA rules). Ours dry-runs against OUR club;
+        # theirs dry-runs against the PARTNER club. Engine re-checks at
+        # execution too.
         live = _live()
-        if live is not None and retention_terms:
+        user_team = partner = None
+        if live is not None:
             _gm2 = _safe(lambda: live.game_manager)
-            user_team = _safe(lambda: _gm2.user_team) or _safe(lambda: live.user_team)
-            if user_team is not None:
-                _gplayers, _ = _resolve_assets(user_team, give_pids, [])
-                _ok, _errs = validate_retention_terms(
-                    user_team, _gplayers, retention_terms)
-                if not _ok:
-                    return jsonify({"ok": False,
-                                    "error": "retention invalid: "
-                                             + "; ".join(_errs)}), 400
+            user_team = _safe(lambda: _gm2.user_team) \
+                or _safe(lambda: live.user_team)
+            partner = _find_team(live, team_id)
+        if user_team is not None and retention_terms:
+            _gplayers, _ = _resolve_assets(user_team, give_pids, [])
+            _ok, _errs = validate_retention_terms(
+                user_team, _gplayers, retention_terms)
+            if not _ok:
+                return jsonify({"ok": False,
+                                "error": "retention invalid: "
+                                         + "; ".join(_errs)}), 400
+        acquire_terms = parse_retention_terms(raw_ret_acq, set(want_pids))
+        if acquire_terms:
+            if partner is None:
+                return jsonify({"ok": False,
+                                "error": "unknown trade partner"}), 400
+            _wplayers, _ = _resolve_assets(partner, want_pids, [])
+            _ok, _errs = validate_retention_terms(
+                partner, _wplayers, acquire_terms)
+            if not _ok:
+                return jsonify({"ok": False,
+                                "error": "retention_acquire invalid: "
+                                         + "; ".join(_errs)}), 400
 
         ok = enqueue_command(
             "execute_trade",
@@ -172,6 +209,7 @@ def api_trades_propose():
             want_pids=want_pids,
             want_picks=want_picks,
             retention=retention_terms,
+            retention_acquire=acquire_terms,
             pick_protection=protection_terms,
         )
         return jsonify({"ok": ok, "queued": "execute_trade", "team": team_id})
@@ -327,10 +365,11 @@ def api_trades_evaluate():
     """Read-only REAL AI verdict on a hypothetical deal.
 
     Query params: give_pids, give_picks, want_pids, want_picks (comma ids),
-    target_team_id. Gap 2 additions: retention ("pid:pct,pid:pct") and
-    protection ("pickid:code,pickid:code") — retention is passed to the
-    real ai_consider_trade() (its cap check is retention-aware) and both
-    term sets are echoed back for the UI.
+    target_team_id. Gap 2 additions: retention ("pid:pct,pid:pct"),
+    retention_acquire ("pid:pct,pid:pct" — salary we ask the partner to
+    keep on players we acquire) and protection ("pickid:code,pickid:code")
+    — retention is passed to the real ai_consider_trade() (its cap check
+    is retention-aware) and both term sets are echoed back for the UI.
     No state mutation: only calls trade_engine's read-only
     ai_consider_trade() + evaluate_trade(). Protection is never stamped
     on live picks here (that happens only at execution, in the bridge).
@@ -381,9 +420,20 @@ def api_trades_evaluate():
         {str(getattr(pk, "id", "")) for pk in give_pick_objs})
     ret_ok, ret_errors = validate_retention_terms(
         user_team, give_players, retention_terms)
+    # Opponent retention: salary we ask the PARTNER to keep on players
+    # we acquire. Validated against the partner club (their 3-slot
+    # limit, two-club/75-day rules); merged into the retention map for
+    # the AI verdict — the engine prices both sides generically.
+    acquire_terms = parse_retention_terms(
+        dict(_pair_csv(request.args.get("retention_acquire", ""))),
+        {str(getattr(p, "id", "")) for p in want_players})
+    acq_ok, acq_errors = validate_retention_terms(
+        partner, want_players, acquire_terms)
     prot_adj = protection_value_adjustment(give_pick_objs, protection_terms, te)
     terms_note = deal_terms_note(give_players, give_pick_objs,
-                                 retention_terms, protection_terms)
+                                 retention_terms, protection_terms,
+                                 want_players=want_players,
+                                 acquire_terms=acquire_terms)
 
     if not give_assets and not want_assets:
         return jsonify({"verdict": "reject",
@@ -404,12 +454,15 @@ def api_trades_evaluate():
 
     # REAL AI verdict — read-only; ai_consider_trade never mutates.
     # Retention is passed through: the AI's cap check prices the reduced
-    # incoming hit exactly like a real GM pricing retained money.
+    # incoming hit exactly like a real GM pricing retained money. Both
+    # sides' terms ride in one map (the engine splits them per side).
+    all_retention = {**retention_terms, **acquire_terms}
+
     def _verdict_call():
         try:
             return te.ai_consider_trade(
                 partner, give_assets, want_assets, user_team=user_team,
-                retention=retention_terms)
+                retention=all_retention)
         except TypeError:
             # Older ai_consider_trade without the retention kwarg.
             return te.ai_consider_trade(
@@ -429,10 +482,13 @@ def api_trades_evaluate():
         "give_count": len(give_assets),
         "get_count": len(want_assets),
         # Gap 2: deal terms reflected in the verdict.
-        "retention_terms": retention_terms,    # {pid: pct}
+        "retention_terms": retention_terms,    # {pid: pct} we retain
+        "retention_acquire_terms": acquire_terms,  # {pid: pct} they retain
         "protection_terms": protection_terms,  # {pick id: code}
         "retention_valid": ret_ok,
         "retention_errors": ret_errors,
+        "retention_acquire_valid": acq_ok,
+        "retention_acquire_errors": acq_errors,
         "protection_adjustment": prot_adj,     # heuristic pts (display)
         "terms_note": terms_note,
     })
@@ -456,6 +512,15 @@ def api_trades_result():
 #                   max 3 active slots per club (trade_engine.MAX_*
 #                   constants). Passed to ai_consider_trade() (its cap
 #                   check is retention-aware) and execute_trade().
+#   retention_acquire:
+#                   {player id (str): pct} — salary the user asks the
+#                   PARTNER club to keep on players the user acquires.
+#                   Same engine limits, dry-run against the PARTNER
+#                   (their slot count / aggregate / 75-day clock). The
+#                   bridge merges both maps into one retention dict for
+#                   send_offer/execute_trade (the engine splits per side:
+#                   the retaining club is whichever side traded the
+#                   player away).
 #   pick_protection:{pick id (str): code} — the engine's REAL protection
 #                   codes are "top-3" | "top-10" | "lottery" (see
 #                   trade_engine.protection_label). Applied at execution
@@ -619,7 +684,8 @@ def protection_value_adjustment(give_pick_objs, protection_terms, te=None):
 
 
 def deal_terms_note(give_players, give_pick_objs, retention_terms,
-                    protection_terms):
+                    protection_terms, want_players=None,
+                    acquire_terms=None):
     """Human-readable summary of the deal's retention/protection terms."""
     te = _trade_engine()
     bits = []
@@ -631,6 +697,15 @@ def deal_terms_note(give_players, give_pick_objs, retention_terms,
             amt = int(round(_player_cap_hit(p)
                             * min(float(pct), 50.0) / 100.0))
             bits.append(f"you retain {float(pct):g}% "
+                        f"({_fmt_money(amt)}) on {name}")
+    for p in want_players or []:
+        pct = (acquire_terms or {}).get(
+            str(_safe(lambda: getattr(p, "id", ""), "")))
+        if pct:
+            name = _safe(lambda: getattr(p, "full_name", "?"), "?")
+            amt = int(round(_player_cap_hit(p)
+                            * min(float(pct), 50.0) / 100.0))
+            bits.append(f"they retain {float(pct):g}% "
                         f"({_fmt_money(amt)}) on {name}")
     for pk in give_pick_objs or []:
         code = (protection_terms or {}).get(

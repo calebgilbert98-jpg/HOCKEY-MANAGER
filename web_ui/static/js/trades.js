@@ -25,9 +25,12 @@ const state = {
   wantPids: new Set(),
   wantPicks: new Set(),
   retention: {},      // pid -> pct (25/50) on players we trade away
+  retentionAcquire: {}, // pid -> pct (25/50) we ask the partner to keep on players we acquire
   protection: {},     // pickId -> 'top-3'|'top-10'|'lottery' on picks we trade away
   slotsUsed: 0,
   slotsMax: 3,
+  partnerSlotsUsed: 0,   // partner club's retention ledger (for acquire-side terms)
+  partnerSlotsMax: 3,
   protectionOptions: [],
   verdict: null,
   evalTimer: null,
@@ -143,8 +146,11 @@ async function selectPartner(id, name) {
   if (!id) {
     state.partnerPlayers = [];
     state.partnerPicks = [];
+    state.partnerSlotsUsed = 0;
+    state.retentionAcquire = {};
     renderGet();
     renderDeal();
+    updateSlots();
     resetVerdict('Select a partner team and add players or picks on both sides.');
     return;
   }
@@ -152,8 +158,13 @@ async function selectPartner(id, name) {
     const a = await fetchAssets(id);
     state.partnerPlayers = a.players || [];
     state.partnerPicks = a.picks || [];
+    state.partnerSlotsUsed = a.retention_slots_used || 0;
+    state.partnerSlotsMax = a.retention_slots_max || 3;
+    state.retentionAcquire = {};
+    pruneTerms();
     renderGet();
     renderDeal();
+    updateSlots();
     scheduleEvaluate();
   } catch (e) { console.error(e); }
 }
@@ -162,6 +173,9 @@ async function selectPartner(id, name) {
 function pruneTerms() {
   for (const k of Object.keys(state.retention)) {
     if (!state.givePids.has(k)) delete state.retention[k];
+  }
+  for (const k of Object.keys(state.retentionAcquire)) {
+    if (!state.wantPids.has(k)) delete state.retentionAcquire[k];
   }
   for (const k of Object.keys(state.protection)) {
     if (!state.givePicks.has(k)) delete state.protection[k];
@@ -174,12 +188,27 @@ function slotsRemaining() {
   return state.slotsMax - state.slotsUsed - fresh;
 }
 
+/* Partner retention slots left for NEW acquire-side terms. */
+function slotsRemainingAcquire() {
+  const fresh = Object.values(state.retentionAcquire).filter(v => v > 0).length;
+  return state.partnerSlotsMax - state.partnerSlotsUsed - fresh;
+}
+
 function updateSlots() {
   const pill = el('retention-slots');
   const fresh = Object.values(state.retention).filter(v => v > 0).length;
   const used = state.slotsUsed + fresh;
   pill.textContent = 'Retention: ' + used + '/' + state.slotsMax + ' slots';
   pill.classList.toggle('full', used >= state.slotsMax);
+  const ppill = el('retention-slots-partner');
+  if (ppill) {
+    const afresh = Object.values(state.retentionAcquire).filter(v => v > 0).length;
+    const aused = state.partnerSlotsUsed + afresh;
+    ppill.hidden = !state.partnerId;
+    ppill.textContent = (state.partnerName ? state.partnerName.split(' ').pop() : 'Partner') +
+      ' retention: ' + aused + '/' + state.partnerSlotsMax + ' slots';
+    ppill.classList.toggle('full', aused >= state.partnerSlotsMax);
+  }
 }
 
 function flashNote(msg) {
@@ -220,58 +249,72 @@ function assetCard(asset, kind, side, checked) {
     e.stopPropagation();
     window.location.href = nm.dataset.href;
   });
-  // Terms row (retention / protection) under give-side assets in the deal.
-  if (side === 'give' && checked) {
-    const t = termsRow(asset, kind);
+  // Terms row: retention / protection under give-side assets in the
+  // deal; retention requests under get-side players (ask the partner
+  // club to retain salary on players we acquire).
+  if (checked && (side === 'give' || (side === 'get' && kind === 'player'))) {
+    const t = termsRow(asset, kind, side);
     if (t) wrap.appendChild(t);
   }
   return wrap;
 }
 
-/* Terms selector under a give-side asset in the deal. */
-function termsRow(asset, kind) {
+/* Terms selector under an asset in the deal.
+ * side 'give': retention OUR club keeps on outgoing players/picks protection.
+ * side 'get':  retention we ask the PARTNER to keep on incoming players. */
+function termsRow(asset, kind, side) {
   const id = String(asset.id);
   const div = document.createElement('div');
   div.className = 'terms-row';
   // stopPropagation so changing terms doesn't toggle the card
   div.addEventListener('click', e => e.stopPropagation());
   if (kind === 'player') {
-    const cur = state.retention[id] || 0;
-    const noSlots = slotsRemaining() <= 0 && cur === 0;
+    const acquire = side === 'get';
+    const store = acquire ? state.retentionAcquire : state.retention;
+    const cur = store[id] || 0;
+    const remaining = acquire ? slotsRemainingAcquire() : slotsRemaining();
+    const maxSlots = acquire ? state.partnerSlotsMax : state.slotsMax;
+    const noSlots = remaining <= 0 && cur === 0;
     const capHit = asset.cap_hit || asset.salary || 0;
     const sel = document.createElement('select');
     sel.className = 'terms-select';
-    sel.title = noSlots
-      ? 'No retention slots left (max ' + state.slotsMax + ' per club)'
-      : 'Salary your club keeps on this player (NHL max 50%)';
+    sel.title = acquire
+      ? (noSlots
+        ? 'Partner has no retention slots left (max ' + maxSlots + ' per club)'
+        : 'Salary you ask ' + (state.partnerName || 'the partner') + ' to keep on this player (NHL max 50%)')
+      : (noSlots
+        ? 'No retention slots left (max ' + maxSlots + ' per club)'
+        : 'Salary your club keeps on this player (NHL max 50%)');
     for (const pct of RETENTION_PCTS) {
       const o = document.createElement('option');
       o.value = String(pct);
-      o.textContent = 'Retain ' + pct + '%';
+      o.textContent = (acquire ? 'Ask ' : 'Retain ') + pct + '%';
       if (pct === cur) o.selected = true;
       if (pct > 0 && noSlots) o.disabled = true;
       sel.appendChild(o);
     }
     sel.addEventListener('change', ev => {
       const pct = parseInt(ev.target.value, 10) || 0;
-      const prev = state.retention[id] || 0;
-      if (pct === 0) delete state.retention[id];
-      else state.retention[id] = pct;
-      if (slotsRemaining() < 0) {
-        if (prev === 0) delete state.retention[id];
-        else state.retention[id] = prev;
+      const prev = store[id] || 0;
+      if (pct === 0) delete store[id];
+      else store[id] = pct;
+      const left = acquire ? slotsRemainingAcquire() : slotsRemaining();
+      if (left < 0) {
+        if (prev === 0) delete store[id];
+        else store[id] = prev;
         ev.target.value = String(prev);
-        flashNote('Retention slot limit reached (' + state.slotsMax +
+        flashNote('Retention slot limit reached (' + maxSlots +
           ' per club) — remove a term to add another.');
         return;
       }
       updateSlots();
-      renderGive(); // refresh disabled states + previews
+      if (acquire) renderGet(); else renderGive(); // refresh disabled states + previews
       scheduleEvaluate();
     });
     const amt = document.createElement('span');
     amt.className = 'terms-amt';
-    amt.textContent = cur > 0 ? 'you keep ' + fmtSalary(Math.round(capHit * cur / 100)) : '';
+    amt.textContent = cur > 0
+      ? (acquire ? 'they keep ' : 'you keep ') + fmtSalary(Math.round(capHit * cur / 100)) : '';
     div.append(sel, amt);
   } else {
     const cur = state.protection[id] || '';
@@ -333,8 +376,9 @@ function toggleAsset(id, kind, side) {
   if (!set) return;
   set.has(id) ? set.delete(id) : set.add(id);
   pruneTerms();
-  if (side === 'give') { renderGive(); updateSlots(); }
+  if (side === 'give') renderGive();
   else renderGet();
+  updateSlots();
   renderDeal();
   scheduleEvaluate();
 }
@@ -351,7 +395,9 @@ function dealChip(asset, kind, side) {
       <span class="dc-x">✕</span>`;
   } else {
     const ret = side === 'give' && state.retention[id]
-      ? ' <span class="dc-ret">(' + state.retention[id] + '% ret.)</span>' : '';
+      ? ' <span class="dc-ret">(' + state.retention[id] + '% ret.)</span>'
+      : (side === 'get' && state.retentionAcquire[id]
+        ? ' <span class="dc-ret">(' + state.retentionAcquire[id] + '% ret. by them)</span>' : '');
     chip.innerHTML = `<span class="dc-ovr ${ovrClass(asset.overall)}">${asset.overall}</span>
       <span class="dc-info"><span class="dc-name">${esc(asset.name)}</span>
       <span class="dc-sub">${esc(asset.position)} · ${fmtSalary(asset.salary)}${ret}</span></span>
@@ -426,6 +472,8 @@ async function evaluate() {
     want_picks: [...state.wantPicks].join(','),
     retention: Object.entries(state.retention)
       .filter(([, v]) => v > 0).map(([k, v]) => k + ':' + v).join(','),
+    retention_acquire: Object.entries(state.retentionAcquire)
+      .filter(([, v]) => v > 0).map(([k, v]) => k + ':' + v).join(','),
     protection: Object.entries(state.protection)
       .map(([k, v]) => k + ':' + v).join(','),
   });
@@ -466,7 +514,9 @@ function renderVerdict(d) {
   // answer arrives 1-3 sim days later via the inbox (accept / counter /
   // reject), exactly like the desktop Trade Center.
   const retBad = (d.retention_errors && d.retention_errors.length) ||
-    d.retention_valid === false;
+    d.retention_valid === false ||
+    (d.retention_acquire_errors && d.retention_acquire_errors.length) ||
+    d.retention_acquire_valid === false;
   const hasAssets = state.givePids.size + state.givePicks.size +
     state.wantPids.size + state.wantPicks.size > 0;
   el('btn-propose').disabled = !hasAssets || !!retBad;
@@ -482,6 +532,9 @@ function renderVerdict(d) {
   }
   if (d.retention_errors && d.retention_errors.length) {
     bits.push('⚠ Retention problem: ' + d.retention_errors.join(' '));
+  }
+  if (d.retention_acquire_errors && d.retention_acquire_errors.length) {
+    bits.push('⚠ Partner retention problem: ' + d.retention_acquire_errors.join(' '));
   }
   termsEl.innerHTML = bits.map(b => '<div>' + esc(b) + '</div>').join('');
   termsEl.hidden = !bits.length;
@@ -505,6 +558,7 @@ async function propose() {
         want_pids: [...state.wantPids],
         want_picks: [...state.wantPicks],
         retention: state.retention,
+        retention_acquire: state.retentionAcquire,
         pick_protection: state.protection,
       }),
     });
@@ -555,6 +609,7 @@ async function pollResult() {
           state.givePids.clear(); state.givePicks.clear();
           state.wantPids.clear(); state.wantPicks.clear();
           state.retention = {};
+          state.retentionAcquire = {};
           state.protection = {};
           await loadMyAssets();
           selectPartner(state.partnerId, state.partnerName);
@@ -644,6 +699,7 @@ async function counterNegotiation(negId) {
         want_pids: [...state.wantPids],
         want_picks: [...state.wantPicks],
         retention: state.retention,
+        retention_acquire: state.retentionAcquire,
         pick_protection: state.protection,
       }),
     });

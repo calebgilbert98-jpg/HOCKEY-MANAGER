@@ -347,7 +347,11 @@ def send_offer(app, partner_team, user_assets, partner_assets,
     """User sends an offer. The AI GM replies in 1-3 days via the inbox --
     instantly on trade deadline day.
 
-    retention: {player id: pct} salary the user keeps on outgoing players.
+    retention: {player id: pct} retained-salary terms, BOTH sides:
+      terms on user-outgoing players = salary our club keeps;
+      terms on partner-outgoing players = salary we ask the partner
+      to keep (opponent retention). The engine routes each term to
+      the retaining club at execution.
     pick_protection: {pick id: "top-3"|"top-10"|"lottery"} on outgoing picks.
     """
     today = _today(app)
@@ -538,7 +542,10 @@ def _neg_terms(neg: TradeNegotiation, user_objs, partner_objs, stamp=True):
     """Resolve a negotiation's deal terms against live objects.
 
     Returns (retention, protected_picks):
-      retention: {player id: pct} for user-outgoing players still in the deal
+      retention: {player id: pct} for players still in the deal, BOTH
+      sides (user-outgoing and partner-outgoing/acquired). The engine's
+      execute_trade routes each term to the retaining club (whichever
+      side traded the player away).
       protected_picks: list of live DraftPick objects with protection stamped
     Stale terms (assets that left the deal during counters) are dropped.
     stamp=False resolves retention without touching the live picks (used
@@ -547,13 +554,14 @@ def _neg_terms(neg: TradeNegotiation, user_objs, partner_objs, stamp=True):
     from game_classes import DraftPick
     retention = {}
     try:
-        user_ids = {getattr(p, "id", None) for p in (user_objs or [])}
+        live_ids = ({getattr(p, "id", None) for p in (user_objs or [])}
+                    | {getattr(p, "id", None) for p in (partner_objs or [])})
         for k, v in (getattr(neg, "retention", None) or {}).items():
             if not _pct_ok(v):
                 continue
-            for p in (user_objs or []):
+            for p in list(user_objs or []) + list(partner_objs or []):
                 if str(getattr(p, "id", "")) == str(k) \
-                        and getattr(p, "id", None) in user_ids \
+                        and getattr(p, "id", None) in live_ids \
                         and not isinstance(p, DraftPick):
                     retention[getattr(p, "id", None)] = float(v)
                     break

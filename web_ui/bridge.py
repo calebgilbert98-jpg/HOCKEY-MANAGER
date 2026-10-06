@@ -1901,9 +1901,19 @@ def _wt_find_partner(league, target_id):
     return None
 
 
-def _wt_parse_terms(cmd, user_team, give_assets, te):
+def _wt_parse_terms(cmd, user_team, partner, give_assets, want_assets, te):
     """Gap 2 terms: validate retention/pick-protection like the propose
-    path. Returns (retention, protection, error) -- error is "" when OK."""
+    path. Returns (retention, protection, error) -- error is "" when OK.
+
+    retention merges BOTH sides into one {pid: pct} map (the engine's
+    execute_trade splits per side: the retaining club is whichever side
+    traded the player away):
+      - cmd["retention"]: salary OUR club keeps on players we trade away
+        (dry-run against user_team).
+      - cmd["retention_acquire"]: salary we ask the PARTNER to keep on
+        players we acquire (dry-run against the partner club: their
+        3-slot limit, two-club/75-day rules).
+    """
     try:
         from game_classes import DraftPick as _DP
     except Exception:
@@ -1944,6 +1954,41 @@ def _wt_parse_terms(cmd, user_team, give_assets, te):
                         "Retained-salary term on "
                         f"{getattr(_pl, 'full_name', _pid)} is "
                         f"illegal ({_msg2}).")
+        # Opponent retention: salary we ask the partner to keep on
+        # players we ACQUIRE. Same engine rules, but the retaining club
+        # is the partner (their slot limit / aggregate / 75-day clock).
+        _want_pids = {str(getattr(_p, "id", ""))
+                      for _p in (want_assets or [])
+                      if not isinstance(_p, _DP)}
+        _raw_acq = cmd.get("retention_acquire") or {}
+        _acq = {}
+        if isinstance(_raw_acq, dict):
+            for _k, _v in _raw_acq.items():
+                try:
+                    _pct = float(_v)
+                except Exception:
+                    continue
+                if 0 < _pct <= te.MAX_RETENTION_PCT \
+                        and str(_k) in _want_pids:
+                    _acq[str(_k)] = _pct
+        if _acq:
+            if partner is None:
+                return {}, {}, "Could not resolve the trade partner."
+            _wby_id = {str(getattr(_p, "id", "")): _p
+                       for _p in (want_assets or [])
+                       if not isinstance(_p, _DP)}
+            for _pid, _pct in _acq.items():
+                _pl = _wby_id.get(_pid)
+                _extra = {k: v for k, v in _acq.items()
+                          if k != _pid}
+                _ok3, _msg3 = te.apply_retention_dry_run(
+                    partner, _pl, _pct, extra=_extra)
+                if not _ok3:
+                    return {}, {}, (
+                        f"{getattr(partner, 'team_name', 'The partner')} "
+                        f"can't retain on "
+                        f"{getattr(_pl, 'full_name', _pid)} ({_msg3}).")
+            retention.update(_acq)
     except Exception:
         pass
     return retention, protection, ""
@@ -2247,6 +2292,97 @@ def _batchd_checkin_draft(team):
         return {"quarter": None, "game": 0, "stage": "opening",
                 "chosen": [], "topics": [], "deltas": {}, "notes": [],
                 "done": False}
+
+
+# ------------------------------------------------------------------
+# In-page Save/Load (web UI, 2026-10-06).
+#
+# The old "save_game"/"load_game" ops opened the hidden Tk SaveLoadView
+# (an invisible window — unusable from the web UI). These helpers run
+# the REAL GameSaveManager calls on the Tk main thread instead and
+# stash the outcome on app._web_save_result for GET /api/save/result
+# polling. tkinter.messagebox is suppressed during the calls so a
+# failure reports in-page instead of popping an OS dialog.
+# ------------------------------------------------------------------
+
+def _web_save_manager(app):
+    """GameSaveManager behind the live app (app or game_manager)."""
+    for fn in (lambda: getattr(app, "save_manager", None),
+               lambda: getattr(getattr(app, "game_manager", None),
+                               "save_manager", None)):
+        try:
+            sm = fn()
+        except Exception:
+            sm = None
+        if sm is not None:
+            return sm
+    return None
+
+
+def _web_saves_dir(sm):
+    import os as _os
+    d = getattr(sm, "save_directory", "saves") or "saves"
+    return _os.path.realpath(d)
+
+
+def _web_suppress_tk_popups():
+    """Silence tkinter.messagebox inside the block (web-safe save/load)."""
+    import contextlib as _cl
+    try:
+        import tkinter.messagebox as _mb
+    except Exception:
+        return _cl.nullcontext()
+
+    @_cl.contextmanager
+    def _quiet():
+        _o = (_mb.showerror, _mb.showinfo, _mb.showwarning)
+        _mb.showerror = lambda *a, **k: None
+        _mb.showinfo = lambda *a, **k: None
+        _mb.showwarning = lambda *a, **k: None
+        try:
+            yield
+        finally:
+            _mb.showerror, _mb.showinfo, _mb.showwarning = _o
+    return _quiet()
+
+
+def _web_save_filename(name):
+    """Sanitize a user save name -> 'name.hm'; None = engine default."""
+    import re as _re
+    name = _re.sub(r"[^\w\s\-]", "", str(name or "")).strip()
+    name = _re.sub(r"\s+", "_", name).strip("_")[:48]
+    if not name:
+        return None
+    if not name.lower().endswith(".hm"):
+        name += ".hm"
+    return name
+
+
+def _web_resolve_save_id(sm, save_id):
+    """save_id is a saves-dir-relative path. Returns the real path, or
+    None when it escapes the saves directory or isn't a file."""
+    import os as _os
+    if sm is None:
+        return None
+    base = _web_saves_dir(sm)
+    cand = _os.path.realpath(_os.path.join(base, str(save_id or "")))
+    if cand == base or not cand.startswith(base + _os.sep):
+        return None
+    if not _os.path.isfile(cand):
+        return None
+    return cand
+
+
+def _web_save_store(app, nonce, ok, message):
+    try:
+        app._web_save_result = {
+            "marker": "web_save",
+            "nonce": str(nonce or ""),
+            "ok": bool(ok),
+            "message": str(message or ""),
+        }
+    except Exception:
+        pass
 
 
 def _execute_command(app, cmd):
@@ -3402,20 +3538,95 @@ def _execute_command(app, cmd):
                 execute_roster_move(app, cmd)
             except Exception as e:
                 print(f"roster_move failed: {e}")
+        elif op == "save_game_web":
+            # In-page save: real GameSaveManager.save_game on the Tk
+            # main thread. Never opens the hidden Tk SaveLoadView.
+            # kwargs: name (optional custom name), nonce (result polling).
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _sm = _web_save_manager(app)
+                if _sm is None:
+                    _web_save_store(app, _nonce, False,
+                                    "Save system unavailable.")
+                else:
+                    _fname = _web_save_filename(cmd.get("name"))
+                    with _web_suppress_tk_popups():
+                        _ok = bool(_sm.save_game(_fname))
+                    _web_save_store(
+                        app, _nonce, _ok,
+                        "Game saved." if _ok else
+                        "Save failed — details in save_crash_log.txt "
+                        "inside the saves folder.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Save failed: {_e}")
+        elif op == "load_game_web":
+            # In-page load: real GameSaveManager.load_game on the Tk
+            # main thread + the desktop post-load hook. Never opens Tk.
+            # kwargs: save_id (saves-dir-relative path), nonce.
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _sm = _web_save_manager(app)
+                _path = _web_resolve_save_id(_sm, cmd.get("save_id"))
+                if not _path:
+                    _web_save_store(app, _nonce, False,
+                                    "Unknown save file.")
+                else:
+                    with _web_suppress_tk_popups():
+                        _ok = bool(_sm.load_game(_path))
+                    if _ok:
+                        try:
+                            _hook = getattr(app, "on_game_loaded", None)
+                            if callable(_hook):
+                                _hook()
+                        except Exception as _he:
+                            print(f"web load post-hook: {_he}")
+                    _web_save_store(
+                        app, _nonce, _ok,
+                        "Game loaded." if _ok else
+                        "Load failed — the save may be from an "
+                        "incompatible version.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Load failed: {_e}")
+        elif op == "delete_save_web":
+            # In-page save deletion (path-traversal guarded).
+            # kwargs: save_id (saves-dir-relative path), nonce.
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _sm = _web_save_manager(app)
+                _path = _web_resolve_save_id(_sm, cmd.get("save_id"))
+                if not _path:
+                    _web_save_store(app, _nonce, False,
+                                    "Unknown save file.")
+                else:
+                    import os as _os
+                    _os.remove(_path)
+                    _web_save_store(app, _nonce, True, "Save deleted.")
+            except Exception as _e:
+                _web_save_store(app, cmd.get("nonce") or "", False,
+                                f"Delete failed: {_e}")
         elif op == "save_game":
+            # Legacy op (pre in-page save/load): quick-save with the
+            # engine's auto filename. Never opens the Tk SaveLoadView.
             try:
-                fn = getattr(app, "open_save_window", None)
-                if callable(fn):
-                    fn()
-            except Exception:
-                pass
+                _sm = _web_save_manager(app)
+                if _sm is None:
+                    _web_save_store(app, "", False,
+                                    "Save system unavailable.")
+                else:
+                    with _web_suppress_tk_popups():
+                        _ok = bool(_sm.save_game(None))
+                    _web_save_store(app, "", _ok,
+                                    "Game saved." if _ok else "Save failed.")
+            except Exception as _e:
+                _web_save_store(app, "", False, f"Save failed: {_e}")
         elif op == "load_game":
-            try:
-                fn = getattr(app, "open_load_window", None)
-                if callable(fn):
-                    fn()
-            except Exception:
-                pass
+            # Legacy op: loading needs a chosen file — direct the user
+            # to the in-page Save/Load screen instead of the hidden Tk
+            # window.
+            _web_save_store(app, "", False,
+                            "Pick a save on the Save/Load page.")
         elif op == "sign_free_agent_real":
             # v2 web contract flow: validated UFA offer (years + AAV) from
             # the in-page modal. Re-validates with the real game gates,
@@ -3708,7 +3919,7 @@ def _execute_command(app, cmd):
                 #     double-retention clock, two-club rule) — a bad term
                 #     fails here with a clear message, not BLOCKED later.
                 _wt_retention, _wt_protection, _wt_err = _wt_parse_terms(
-                    cmd, user_team, give_assets, _te)
+                    cmd, user_team, partner, give_assets, want_assets, _te)
                 if _wt_err:
                     _wt_store(False, _wt_err, "")
                     return
@@ -3811,7 +4022,8 @@ def _execute_command(app, cmd):
                                 _wtc_store(False, "Empty counter-offer.")
                             else:
                                 _ret, _prot, _err = _wt_parse_terms(
-                                    cmd, user_team, give_assets, _te2)
+                                    cmd, user_team, partner, give_assets,
+                                    want_assets, _te2)
                                 if _err:
                                     _wtc_store(False, _err)
                                 else:

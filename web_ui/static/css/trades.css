@@ -10,6 +10,7 @@
   display: flex; align-items: flex-start; justify-content: space-between; gap: 16px;
 }
 .trades-hint { color: var(--dim); font-size: 13.5px; margin: 8px 0 0; }
+.retention-pills { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .retention-pill {
   flex: none; margin-top: 4px;
   font-family: var(--nhl-cond);

@@ -24,7 +24,10 @@
       <h1 class="bcast-title">Trade Center</h1>
       <p class="trades-hint">Pick a trade partner below, click players to build the deal — the verdict is the AI GM's likely reaction. Proposing sends an offer; their answer (accept, counter, reject) arrives in your inbox within 1-3 days.</p>
     </div>
-    <div class="retention-pill" id="retention-slots" title="NHL clubs may carry at most 3 active retained-salary transactions">Retention: 0/3 slots</div>
+    <div class="retention-pills">
+      <div class="retention-pill" id="retention-slots" title="NHL clubs may carry at most 3 active retained-salary transactions">Retention: 0/3 slots</div>
+      <div class="retention-pill" id="retention-slots-partner" hidden title="The partner club's retained-salary slots — asking them to keep salary on a player you acquire uses one of THEIR 3 slots">Partner retention: 0/3 slots</div>
+    </div>
   </div>
 
   <!-- Partner selector -->
@@ -43,7 +46,7 @@
         <div class="prop-title">You get <span class="col-val" id="get-val"></span></div>
         <div class="col-sub" id="partner-name">Select a partner team above</div>
       </div>
-      <div class="panel-label sub-label">Players</div>
+      <div class="panel-label sub-label">Players <span class="hint-inline">— click to add · ask them to retain salary below</span></div>
       <div class="asset-list" id="get-players"><div class="empty-note">—</div></div>
       <div class="panel-label sub-label">Draft picks</div>
       <div class="asset-list" id="get-picks"><div class="empty-note">—</div></div>
