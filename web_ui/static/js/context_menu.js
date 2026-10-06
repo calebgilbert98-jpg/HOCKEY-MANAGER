@@ -204,9 +204,9 @@
    * Only intercepts when we have a custom menu to show;
    * everything else keeps the native browser menu. */
   document.addEventListener('contextmenu', function (e) {
+    e.preventDefault(); /* never show the browser menu */
     var ent = entityFromEvent(e);
-    if (!ent) return; /* no custom menu — allow browser default */
-    e.preventDefault();
+    if (!ent) return; /* no custom menu — show nothing */
     if (ent.kind === 'player') playerMenu(ent, e.clientX, e.clientY);
     else if (ent.kind === 'team') teamMenu(ent, e.clientX, e.clientY);
     else if (ent.kind === 'staff') staffMenu(ent, e.clientX, e.clientY);

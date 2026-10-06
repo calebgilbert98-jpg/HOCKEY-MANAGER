@@ -178,7 +178,7 @@
 .attr-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
 .attr-row .an { width: 128px; flex: none; font-size: 12.5px; color: #9aa3b2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .attr-row .ab { flex: 1; height: 8px; background: #0a0f1a; border-radius: 4px; overflow: hidden; }
-.attr-row .ab .fill { height: 100%; border-radius: 4px; }
+.attr-row .ab .fill { display: block; height: 100%; border-radius: 4px; }
 .attr-row .av { width: 32px; text-align: right; font-size: 12.5px; font-weight: 700; color: #fff; }
 /* red / yellow / green by value — matches v0.18.4 */
 .fill.b5 { background: #4CAF50; }
