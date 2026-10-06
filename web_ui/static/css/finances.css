@@ -138,3 +138,43 @@
   .fin-value.big { font-size: 38px; }
   .fin-numbers { gap: 24px; }
 }
+
+/* Batch D: finances tabs */
+.fin-tabs { display: flex; gap: 6px; margin: 14px 0 12px; flex-wrap: wrap; }
+.fin-tab {
+  background: #1b2334; color: #c6cdd8; border: 1px solid #2a3550;
+  border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+}
+.fin-tab:hover { color: #f2f5fa; border-color: #3B82F6; }
+.fin-tab.active { background: #3B82F6; color: #fff; border-color: #3B82F6; font-weight: 600; }
+.fin-controls { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.fin-controls label { font-size: 13px; color: #9aa0aa; display: flex; gap: 8px; align-items: center; }
+.fin-hero-mini { display: flex; gap: 24px; margin-bottom: 12px; flex-wrap: wrap; }
+.st-badge {
+  display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 8px;
+  border-radius: 999px; background: #2a3550; color: #c6cdd8;
+  text-transform: capitalize;
+}
+.st-signed { background: #1f4d2e; color: #6ee7a0; }
+.st-ext { background: #4d3a17; color: #e8b93c; }
+.st-exp { background: #5c2a1e; color: #f0a27a; }
+.st-ufa { background: #5c1e3a; color: #f08bb0; }
+.st-rfa { background: #1e3a5c; color: #7fb8f0; }
+.st-elc { background: #2a3550; color: #9fb8d8; }
+.st-lt { background: #1f4d2e; color: #6ee7a0; }
+.st-over { background: #5c1e1e; color: #f08b8b; }
+.st-ntc { background: #3a2a5c; color: #c4a5f0; text-transform: uppercase; }
+.st-nmc { background: #3a2a5c; color: #c4a5f0; text-transform: uppercase; }
+.st-2w { background: #2a3550; color: #9aa0aa; text-transform: uppercase; }
+.rep-summary { margin-bottom: 12px; }
+.rep-notes { margin-top: 12px; font-size: 13px; color: #9aa0aa; line-height: 1.6; }
+.rec-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: #1b2334; border: 1px solid #2a3550; border-radius: 8px;
+  padding: 10px 12px; margin-bottom: 8px; font-size: 13px; color: #c6cdd8;
+}
+.rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #9aa0aa; margin-top: 5px; flex-shrink: 0; }
+.rec-row.lvl-warn .rec-dot { background: #e8b93c; }
+.rec-row.lvl-danger .rec-dot { background: #e5484d; }
+.rec-row.lvl-ok .rec-dot { background: #46c93a; }
+.mgmt-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }

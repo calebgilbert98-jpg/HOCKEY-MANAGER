@@ -34,6 +34,11 @@
     <div class="th-franchise-left">
       <div class="th-eyebrow" id="th-season">FRANCHISE · 2026-27 SEASON</div>
       <h1 class="th-team" id="th-team">BOSTON BRUINS</h1>
+      <!-- Batch D: date + streak pills -->
+      <div class="th-pills">
+        <span class="th-pill2" id="th-date-pill">📅 —</span>
+        <span class="th-pill2" id="th-streak-pill">🔥 —</span>
+      </div>
     </div>
     <div class="th-franchise-right">
       <div class="th-record" id="th-record">0-0-0</div>
@@ -53,6 +58,11 @@
         </span>
         <span class="th-next-text" id="th-next">Next: —</span>
       </div>
+    </div>
+    <div class="th-hero-foot">
+      <!-- Batch D: auto-advance toggle (desktop _auto_advance_toggle parity) -->
+      <button class="th-auto-btn" id="btn-auto-advance" title="Auto-advance: sim days automatically, stopping on game days, blockers, and messages that need you">▶ Auto-advance</button>
+      <span class="th-auto-note" id="auto-note"></span>
     </div>
   </section>
 
@@ -79,6 +89,41 @@
     <div class="th-panel" id="panel-form">
       <div class="th-panel-head">Recent Form</div>
       <div class="th-panel-body" id="panel-form-body"></div>
+    </div>
+    <!-- Batch D: dashboard_home.py cards the web was missing -->
+    <div class="th-panel" id="panel-schedule">
+      <div class="th-panel-head">
+        <span id="panel-sched-title">Schedule</span>
+        <select id="panel-sched-scope" class="th-scope" aria-label="Schedule scope">
+          <option value="upcoming">Upcoming</option>
+          <option value="results">Results</option>
+        </select>
+      </div>
+      <div class="th-panel-body" id="panel-sched-body"></div>
+    </div>
+    <div class="th-panel" id="panel-injuries">
+      <div class="th-panel-head clickable" data-href="/morale" title="Open dressing room">Injuries</div>
+      <div class="th-panel-body" id="panel-inj-body"></div>
+    </div>
+    <div class="th-panel" id="panel-morale">
+      <div class="th-panel-head clickable" data-href="/morale" title="Open dressing room">Morale</div>
+      <div class="th-panel-body" id="panel-morale-body"></div>
+    </div>
+    <div class="th-panel" id="panel-prospects">
+      <div class="th-panel-head clickable" data-href="/development" title="Open player development">Top Prospects</div>
+      <div class="th-panel-body" id="panel-prosp-body"></div>
+    </div>
+    <div class="th-panel" id="panel-milestones">
+      <div class="th-panel-head">Milestones</div>
+      <div class="th-panel-body" id="panel-mile-body"></div>
+    </div>
+    <div class="th-panel" id="panel-iconic">
+      <div class="th-panel-head clickable" data-href="/history" title="Open league history">Iconic Games</div>
+      <div class="th-panel-body" id="panel-iconic-body"></div>
+    </div>
+    <div class="th-panel" id="panel-inbox">
+      <div class="th-panel-head clickable" data-href="/inbox" title="Open inbox">Inbox — Recent</div>
+      <div class="th-panel-body" id="panel-inbox-body"></div>
     </div>
   </section>
 </main>

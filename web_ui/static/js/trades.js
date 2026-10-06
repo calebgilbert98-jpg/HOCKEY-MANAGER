@@ -545,6 +545,10 @@ function renderVerdict(d) {
 async function propose() {
   const btn = el('btn-propose');
   if (btn.disabled) return;
+  // Batch D: NTC/NMC waiver-consent preflight before anything goes out
+  // (desktop windows.py:~6212). Dismiss = safe default (don't send).
+  const send = await consentPreflight();
+  if (!send) return;
   btn.disabled = true;
   btn.textContent = 'Proposing…';
   const note = el('trade-note');
@@ -824,19 +828,22 @@ async function checkTradeWindow() {
     }
   } catch (e) { /* banner is best-effort; the server still enforces */ }
 }
-
-loadTeams().then(preselectFromURL);
+loadTeams().then(async () => { await preselectFromURL(); await restoreDeal(); });
 checkTradeWindow();
 loadNegotiations();
 setInterval(loadNegotiations, 30000); // keep the thread view fresh
 
-/* Pre-selection from context menus: /trades?team=<name>&player=<id> */
+/* Pre-selection from context menus: /trades?team=<name>&player=<id>
+ * Batch D: draft-day counter deeplinks also pass give_picks=/want_picks=
+ * (their offer as the starting point). */
 async function preselectFromURL() {
   try {
     const params = new URLSearchParams(window.location.search);
     const teamName = params.get('team');
     const playerId = params.get('player');
-    if (!teamName && !playerId) return;
+    const givePicks = (params.get('give_picks') || '').split(',').map(s => s.trim()).filter(Boolean);
+    const wantPicks = (params.get('want_picks') || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!teamName && !playerId && !givePicks.length && !wantPicks.length) return;
     /* Resolve team: explicit ?team= wins; otherwise look up the player's team. */
     let targetName = teamName;
     if (!targetName && playerId) {
@@ -857,7 +864,28 @@ async function preselectFromURL() {
       const found = state.partnerPlayers.some(p => String(p.id) === String(playerId));
       if (found) {
         state.wantPids.add(String(playerId));
-        renderGet(); renderDeal(); scheduleEvaluate();
+      }
+    }
+    // Batch D: draft-day counter starting point (their offer preloaded).
+    let touched = false;
+    for (const pid of givePicks) {
+      if (state.userPicks.some(p => String(p.id) === String(pid))) {
+        state.givePicks.add(String(pid));
+        touched = true;
+      }
+    }
+    for (const pid of wantPicks) {
+      if (state.partnerPicks.some(p => String(p.id) === String(pid))) {
+        state.wantPicks.add(String(pid));
+        touched = true;
+      }
+    }
+    if (touched || (playerId && state.wantPids.size)) {
+      renderGet(); renderGive(); renderDeal(); scheduleEvaluate();
+      const note = el('trade-note');
+      if (note && touched) {
+        note.textContent = 'Counter starting point loaded — adjust the deal and propose.';
+        note.className = 'prop-note';
       }
     }
   } catch (e) { console.error(e); }
@@ -877,3 +905,209 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
 });
+
+/* ==================================================================
+ * Batch D: NTC/NMC consent preflight + deal persistence + completed log.
+ *
+ * Desktop parity (windows.py:~6212): before a proposal goes out, both
+ * directions get a clause preflight. Non-blocking -- the user can still
+ * send, but never blind. The offer-sheet-match year is a hard block.
+ * Dismiss = safe default (don't send).
+ * ================================================================== */
+
+const DEAL_STORE_KEY = 'pd_trade_deal_v1';
+
+/* ---------- deal persistence across navigation (localStorage) ---------- */
+function persistDeal() {
+  try {
+    localStorage.setItem(DEAL_STORE_KEY, JSON.stringify({
+      partnerId: state.partnerId,
+      partnerName: state.partnerName,
+      givePids: [...state.givePids],
+      givePicks: [...state.givePicks],
+      wantPids: [...state.wantPids],
+      wantPicks: [...state.wantPicks],
+      retention: state.retention,
+      retentionAcquire: state.retentionAcquire,
+      protection: state.protection,
+    }));
+  } catch (e) { /* storage unavailable */ }
+}
+
+async function restoreDeal() {
+  // A URL deeplink (draft-day counter, context menu) is intentional --
+  // it wins over any stale persisted deal.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('team') || params.get('player')) return;
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(DEAL_STORE_KEY) || 'null'); }
+  catch (e) { return; }
+  if (!saved || !saved.partnerId) return;
+  const team = state.teams.find(t => (t.abbr || t.name) === saved.partnerId);
+  if (!team) return;
+  await selectPartner(team.abbr || team.name,
+    (team.city || '') + ' ' + (team.name || ''));
+  // Re-add only assets that still exist on the rosters (stale guard).
+  const mine = new Set([...state.userPlayers, ...state.userPicks].map(a => String(a.id)));
+  const theirs = new Set([...state.partnerPlayers, ...state.partnerPicks].map(a => String(a.id)));
+  for (const id of (saved.givePids || [])) if (mine.has(String(id))) state.givePids.add(String(id));
+  for (const id of (saved.givePicks || [])) if (mine.has(String(id))) state.givePicks.add(String(id));
+  for (const id of (saved.wantPids || [])) if (theirs.has(String(id))) state.wantPids.add(String(id));
+  for (const id of (saved.wantPicks || [])) if (theirs.has(String(id))) state.wantPicks.add(String(id));
+  state.retention = saved.retention || {};
+  state.retentionAcquire = saved.retentionAcquire || {};
+  state.protection = saved.protection || {};
+  pruneTerms();
+  renderGive(); renderGet(); renderDeal(); updateSlots(); scheduleEvaluate();
+  const note = el('trade-note');
+  if (note && (state.givePids.size || state.wantPids.size)) {
+    note.textContent = 'Restored your in-progress deal with ' + (saved.partnerName || 'the partner') + '.';
+    note.className = 'prop-note';
+  }
+}
+
+function clearPersistedDeal() {
+  try { localStorage.removeItem(DEAL_STORE_KEY); } catch (e) {}
+}
+
+// Persist on every deal change (reassign after the originals are defined).
+const _origToggle = toggleAsset;
+toggleAsset = function (id, kind, side) {
+  _origToggle(id, kind, side);
+  persistDeal();
+};
+const _origSelect = selectPartner;
+selectPartner = async function (id, name) {
+  await _origSelect(id, name);
+  persistDeal();
+};
+
+/* ---------- consent preflight modal ---------- */
+function clauseFlagCard(f, ours) {
+  const div = document.createElement('div');
+  div.className = 'consent-flag' + (f.hard_block ? ' hard' : '');
+  const waiveTxt = f.hard_block
+    ? 'Cannot be traded for one year — no consent ask applies. Remove this player to send the offer.'
+    : (f.waive_likely ? 'Likely to waive' : 'May refuse') +
+      (f.waive_note ? ': ' + f.waive_note : '');
+  div.innerHTML =
+    '<div class="cf-head"><span class="cf-name">' + esc(f.name) + '</span>' +
+    '<span class="cf-clause">' + esc(f.clause_label || f.clause) + '</span></div>' +
+    '<div class="cf-sub">' + esc(f.detail || '') + '</div>' +
+    '<div class="cf-waive ' + (f.hard_block ? 'hard' : (f.waive_likely ? 'likely' : 'risky')) + '">' +
+    esc(waiveTxt) + '</div>' +
+    (ours && !f.hard_block
+      ? '<div class="cf-ask">He will be asked to waive for a move to ' + esc(state.partnerName || 'the other club') + ' when the offer is sent.</div>'
+      : (!ours && !f.hard_block
+        ? '<div class="cf-ask">Their camp will be asked to waive — a refusal kills the deal 1-3 days from now.</div>' : ''));
+  return div;
+}
+
+function showConsentModal(flags) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'consent-overlay';
+    const hard = flags.hard_block;
+    const ours = flags.our_flags || [];
+    const theirs = flags.their_flags || [];
+    let html = '<div class="consent-card" role="dialog" aria-modal="true" aria-label="Trade protection">' +
+      '<div class="consent-title">' + (hard ? '⛔ Trade blocked' : '🛡 Trade protection') + '</div>';
+    if (ours.length) {
+      html += '<div class="consent-sec">Your players with clauses — each will be asked to waive:</div><div id="consent-ours"></div>';
+    }
+    if (theirs.length) {
+      html += '<div class="consent-sec">Their players with clauses — heads-up, refusal kills the deal:</div><div id="consent-theirs"></div>';
+    }
+    if (!ours.length && !theirs.length) {
+      html += '<div class="consent-sec">No trade protection on either side.</div>';
+    }
+    html += '<div class="consent-actions">';
+    if (!hard) {
+      html += '<button class="btn-ghost" id="consent-cancel">Keep editing (don\u2019t send)</button>' +
+        '<button class="btn-primary" id="consent-send">Send anyway</button>';
+    } else {
+      html += '<button class="btn-primary" id="consent-cancel">Back to the deal</button>';
+    }
+    html += '</div></div>';
+    overlay.innerHTML = html;
+    const oursBox = overlay.querySelector('#consent-ours');
+    if (oursBox) ours.forEach(f => oursBox.appendChild(clauseFlagCard(f, true)));
+    const theirsBox = overlay.querySelector('#consent-theirs');
+    if (theirsBox) theirs.forEach(f => theirsBox.appendChild(clauseFlagCard(f, false)));
+    document.body.appendChild(overlay);
+    const done = (send) => {
+      overlay.remove();
+      resolve(send && !hard);
+    };
+    overlay.querySelector('#consent-cancel').addEventListener('click', () => done(false));
+    const sendBtn = overlay.querySelector('#consent-send');
+    if (sendBtn) sendBtn.addEventListener('click', () => done(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) done(false); });
+  });
+}
+
+async function consentPreflight() {
+  const q = new URLSearchParams({
+    target_team_id: state.partnerId,
+    give_pids: [...state.givePids].join(','),
+    want_pids: [...state.wantPids].join(','),
+  });
+  try {
+    const res = await fetch('/api/trades/consent_preflight?' + q.toString());
+    const data = await res.json();
+    if (!data.ok) return true; // fail-open on engine trouble, like the desktop
+    if (!data.flags || !data.flags.length) return true;
+    return await showConsentModal(data);
+  } catch (e) {
+    console.error(e);
+    return true;
+  }
+}
+
+/* pollResult is patched below (Batch D) to clear the persisted deal once
+ * an offer actually goes out. Internal callers resolve the name at call
+ * time, so the patch below takes effect everywhere. */
+
+/* Clear the persisted deal once an offer actually goes out. */
+const _origPoll = pollResult;
+pollResult = function () {
+  clearPersistedDeal();
+  _origPoll();
+};
+
+/* ---------- completed-trade log ---------- */
+async function loadCompletedLog() {
+  const host = el('trade-log-list');
+  const sec = el('trade-log-section');
+  if (!host || !sec) return;
+  try {
+    const res = await fetch('/api/trades/completed_log');
+    const data = await res.json();
+    const trades = data.trades || [];
+    sec.hidden = false;
+    el('trade-log-count').textContent = trades.length ? '(' + trades.length + ')' : '';
+    if (!trades.length) {
+      host.innerHTML = '<div class="empty-note">No completed trades yet this career — the log fills in as deals get done.</div>';
+      return;
+    }
+    host.innerHTML = '';
+    for (const t of trades.slice(0, 30)) {
+      const row = document.createElement('div');
+      row.className = 'trade-log-row';
+      const gave = (t.a_gave || []).join(', ') || '—';
+      const got = (t.b_gave || []).join(', ') || '—';
+      row.innerHTML =
+        '<div class="tl-head"><span class="tl-teams">' + esc(t.team_a) + ' ⇄ ' + esc(t.team_b) + '</span>' +
+        '<span class="tl-date">' + esc(t.date) + '</span></div>' +
+        '<div class="tl-detail"><span><b>' + esc(t.team_a) + ' sent:</b> ' + esc(gave) + '</span>' +
+        '<span><b>' + esc(t.team_b) + ' sent:</b> ' + esc(got) + '</span></div>' +
+        (t.summary ? '<div class="tl-summary">' + esc(t.summary) + '</div>' : '');
+      host.appendChild(row);
+    }
+  } catch (e) { /* log is non-critical */ }
+}
+
+/* NOTE: init chain (loadTeams -> preselectFromURL -> restoreDeal) was
+ * updated above where the originals are defined; the appended Batch D
+ * block only adds helpers. */
+loadCompletedLog();

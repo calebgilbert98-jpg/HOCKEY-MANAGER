@@ -59,6 +59,53 @@
       </table>
     </div>
   </section>
+
+  <!-- Batch D: quick-save slots (save_load_system.py:3916) -->
+  <section class="save-panel">
+    <div class="panel-label">Quick-save slots <span class="save-count">Ctrl+S saves to the newest slot</span></div>
+    <div class="qs-grid" id="qs-grid"></div>
+  </section>
+
+  <!-- Batch D: autosave config + import/export -->
+  <section class="save-panel save-two">
+    <div class="save-col">
+      <div class="panel-label">Autosave</div>
+      <div class="save-row"><span>Enabled</span><b id="auto-enabled">—</b></div>
+      <div class="save-row"><span>Frequency</span>
+        <select id="auto-freq" class="nhl-input">
+          <option value="1">Every day</option>
+          <option value="7">Every 7 days</option>
+          <option value="14">Every 14 days</option>
+          <option value="30">Every 30 days</option>
+        </select>
+      </div>
+      <button class="btn-ghost" id="btn-autosave-save">Save autosave settings</button>
+      <p class="save-status" id="autosave-status"></p>
+    </div>
+    <div class="save-col">
+      <div class="panel-label">Export / Import</div>
+      <p class="save-hint">Export downloads the save as a .hm file. Import loads a .hm file from your computer.</p>
+      <div class="save-action-row">
+        <input type="file" id="import-file" accept=".hm" class="nhl-input" style="flex:1">
+        <button class="btn-ghost" id="btn-import">Import</button>
+      </div>
+      <p class="save-status" id="import-status"></p>
+    </div>
+  </section>
+
+  <!-- Batch D: save properties dialog -->
+  <div class="cm-overlay" id="props-modal" hidden>
+    <div class="cm-dialog">
+      <div class="cm-head">
+        <div class="cm-title">Save properties</div>
+        <button class="cm-close" id="props-close" aria-label="Close">✕</button>
+      </div>
+      <div id="props-body"></div>
+      <div class="cm-actions">
+        <button class="cm-cancel" id="props-ok">Close</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script src="/static/js/save.js"></script>

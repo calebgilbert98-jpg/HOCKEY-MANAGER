@@ -214,3 +214,20 @@
 .tb-btn:hover { border-color: var(--nhl-blue); }
 .tb-btn.tb-accent { background: var(--nhl-blue-soft); border-color: var(--nhl-line-blue); color: #cfe3ff; }
 .tb-btn.tb-accent:hover { background: var(--nhl-blue); color: #fff; }
+
+/* Batch D: clause picker, signing bonus, comparables, ELC */
+.cm-select, .cm-input {
+  width: 100%; background: #1b2334; color: #f2f5fa;
+  border: 1px solid #2a3550; border-radius: 6px;
+  padding: 8px 10px; font-size: 14px;
+}
+.cm-select:disabled { opacity: 0.5; }
+.comp-row {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 8px; padding: 6px 0; border-bottom: 1px solid #232c42;
+  font-size: 13px;
+}
+.comp-row:last-child { border-bottom: none; }
+.comp-name { color: #f2f5fa; font-weight: 600; }
+.comp-meta { color: #9aa0aa; font-size: 12px; flex: 1; text-align: right; }
+.comp-sal { color: #e8b93c; font-weight: 600; white-space: nowrap; }

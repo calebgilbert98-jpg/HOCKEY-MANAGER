@@ -51,3 +51,30 @@
 }
 .seg-toggle button:not(.active):hover { color: var(--text); }
 .set-hint { font-size: 12px; color: var(--dim); margin: 8px 0 0; }
+
+/* Batch D: 5-tab writable settings */
+.set-tabs { display: flex; gap: 6px; margin: 14px 0 12px; flex-wrap: wrap; }
+.set-tab {
+  background: #1b2334; color: #c6cdd8; border: 1px solid #2a3550;
+  border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer;
+}
+.set-tab:hover { color: #f2f5fa; border-color: #3B82F6; }
+.set-tab.active { background: #3B82F6; color: #fff; border-color: #3B82F6; font-weight: 600; }
+.set-save { font-size: 12px; color: #46c93a; }
+.set-card.wide { grid-column: 1 / -1; }
+.set-label { display: flex; flex-direction: column; gap: 3px; }
+.set-hint { color: #9aa0aa; font-size: 12px; line-height: 1.4; }
+.set-control { display: flex; align-items: center; }
+.set-select {
+  background: #1b2334; color: #f2f5fa; border: 1px solid #2a3550;
+  border-radius: 6px; padding: 7px 10px; font-size: 13px; min-width: 180px;
+}
+select[multiple] {
+  background: #1b2334; color: #f2f5fa; border: 1px solid #2a3550;
+  border-radius: 6px; padding: 6px; font-size: 13px; min-width: 220px;
+}
+.set-toggle {
+  min-width: 64px; padding: 7px 14px; border-radius: 999px; cursor: pointer;
+  background: #2a3550; color: #c6cdd8; border: 1px solid #3a4763; font-weight: 600;
+}
+.set-toggle.on { background: #3B82F6; border-color: #3B82F6; color: #fff; }

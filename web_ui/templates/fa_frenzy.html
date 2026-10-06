@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Free Agent Frenzy — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/fa_frenzy.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+<header class="topbar">
+  <a class="back" href="/free_agents">← Free Agents</a>
+  <div class="team-sub" id="frenzy-date">Free Agent Frenzy</div>
+</header>
+<main class="frenzy-main">
+  <div class="frenzy-head bcast-head">
+    <div>
+      <div class="bcast-kicker">Puck Dynasty · Event Day</div>
+      <h1 class="bcast-title" id="frenzy-title">FREE AGENT FRENZY</h1>
+      <p class="frenzy-tagline" id="frenzy-tagline"></p>
+    </div>
+    <div class="frenzy-actions">
+      <a class="btn-primary" href="/free_agents">Open FA Market</a>
+      <a class="btn-ghost" href="/finances">My Cap Space</a>
+      <a class="btn-ghost" href="/trades">Trade Center</a>
+    </div>
+  </div>
+
+  <div class="frenzy-cols">
+    <!-- LEFT: signing wire -->
+    <section class="frenzy-col bpanel">
+      <div class="panel-label">📡 Signing wire</div>
+      <div class="wire-box" id="frenzy-wire"></div>
+    </section>
+
+    <!-- CENTER: top UFAs -->
+    <section class="frenzy-col bpanel">
+      <div class="panel-label">⭐ Top available free agents</div>
+      <div id="frenzy-ufas"></div>
+    </section>
+
+    <!-- RIGHT: done deals + cap snapshot -->
+    <section class="frenzy-col">
+      <div class="bpanel" style="margin-bottom:12px">
+        <div class="panel-label">🤝 Done deals</div>
+        <div class="deals-box" id="frenzy-deals"></div>
+      </div>
+      <div class="bpanel">
+        <div class="panel-label">💰 Your cap picture</div>
+        <div id="frenzy-cap"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/fa_frenzy.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

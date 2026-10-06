@@ -330,3 +330,27 @@
   border-radius: 6px; padding: 8px 10px; font-size: 13px;
 }
 .lf-select:focus { border-color: var(--nhl-blue); outline: none; }
+
+/* Batch D: draft-day incoming call modal */
+.call-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(4, 8, 16, 0.72);
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+}
+.call-card {
+  background: #141a26; border: 1px solid #3B82F6; border-radius: 12px;
+  max-width: 580px; width: 100%; max-height: 88vh; overflow-y: auto;
+  padding: 20px 22px;
+}
+.call-kicker { font-size: 11px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.06em; }
+.call-caller { font-size: 18px; font-weight: 700; color: #f2f5fa; margin: 4px 0 8px; }
+.call-why { font-size: 13px; color: #e8b93c; font-weight: 600; }
+.call-sec { font-size: 11px; color: #9aa0aa; text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 6px; }
+.call-bullets { font-size: 13px; color: #c6cdd8; line-height: 1.6; }
+.call-target { background: #1b2334; border: 1px solid #2a3550; border-radius: 8px; padding: 10px 12px; font-size: 14px; color: #f2f5fa; }
+.call-pot { color: #e8b93c; }
+.call-deal-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.call-asset { font-size: 13px; color: #c6cdd8; padding: 3px 0; }
+.call-value { margin-top: 10px; font-size: 13px; color: #46c93a; font-weight: 600; }
+.call-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.call-note { font-size: 13px; color: #9aa0aa; margin-top: 10px; min-height: 18px; }

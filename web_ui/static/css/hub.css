@@ -1208,3 +1208,31 @@ tr.clickable { transition: background .15s ease; }
 tr.clickable:hover td { background: rgba(59,130,246,.12); }
 .card-clickable { cursor: pointer; transition: background .15s ease, box-shadow .15s ease; }
 .card-clickable:hover { background: rgba(59,130,246,.10); box-shadow: inset 0 0 0 1px rgba(59,130,246,.35); }
+
+/* Batch D: date/streak pills, auto-advance, new panels, scope dropdown */
+.th-pills { display: flex; gap: 8px; margin-top: 8px; }
+.th-pill2 {
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; color: #e5e9f0;
+}
+.th-hero-foot { display: flex; align-items: center; gap: 10px; padding: 10px 22px 14px; }
+.th-auto-btn {
+  background: #1b2334; color: #c6cdd8; border: 1px solid #2a3550;
+  border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+}
+.th-auto-btn:hover { border-color: #3B82F6; color: #f2f5fa; }
+.th-auto-btn.on { background: #3B82F6; border-color: #3B82F6; color: #fff; font-weight: 600; }
+.th-auto-note { font-size: 12px; color: #9aa0aa; }
+.th-scope {
+  background: #1b2334; color: #c6cdd8; border: 1px solid #2a3550;
+  border-radius: 6px; padding: 3px 8px; font-size: 11px; margin-left: 8px;
+}
+.th-panel-head { display: flex; justify-content: space-between; align-items: center; }
+.th-sched-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0; border-bottom: 1px solid #1e2637; font-size: 13px; color: #c6cdd8;
+}
+.th-sched-row:last-child { border-bottom: none; }
+.th-sched-date { color: #9aa0aa; min-width: 90px; }
+.th-sched-opp { flex: 1; color: #f2f5fa; }
+.th-unread { font-weight: 700; color: #f2f5fa; }

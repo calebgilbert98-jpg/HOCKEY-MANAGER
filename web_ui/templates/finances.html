@@ -71,7 +71,17 @@
     </section>
   </div>
 
-  <section class="bpanel">
+  <!-- Batch D: finances tabs (desktop FinancesWindow sections) -->
+  <nav class="fin-tabs" id="fin-tabs" role="tablist">
+    <button class="fin-tab active" data-tab="roster" role="tab">Top Cap Hits</button>
+    <button class="fin-tab" data-tab="projections" role="tab">Projections</button>
+    <button class="fin-tab" data-tab="reports" role="tab">Reports</button>
+    <button class="fin-tab" data-tab="management" role="tab">Management</button>
+    <button class="fin-tab" data-tab="contracts" role="tab">Contracts</button>
+    <button class="fin-tab" data-tab="cap" role="tab">Cap Position</button>
+  </nav>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-roster">
     <div class="bpanel-h">📋 Top Cap Hits</div>
     <table class="fin-table">
       <thead>
@@ -80,6 +90,63 @@
       </thead>
       <tbody id="fin-hits"></tbody>
     </table>
+  </section>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-projections" hidden>
+    <div class="bpanel-h">🔮 Future-Season Projections</div>
+    <div class="fin-controls">
+      <label>Target season <select id="proj-year" class="nhl-input"></select></label>
+    </div>
+    <div class="fin-hero-mini">
+      <div class="fin-number"><span class="fin-label">Committed payroll</span><span class="fin-value" id="proj-committed">—</span></div>
+      <div class="fin-number"><span class="fin-label">Projected cap</span><span class="fin-value" id="proj-cap">—</span></div>
+      <div class="fin-number"><span class="fin-label">Projected space</span><span class="fin-value big" id="proj-space">—</span></div>
+    </div>
+    <div class="bpanel-sub-h">Expiring contracts <span class="fin-note" id="proj-expiring-count"></span></div>
+    <table class="fin-table">
+      <thead><tr><th>Player</th><th>Pos</th><th>Age</th><th>Status</th>
+        <th class="num">Current</th><th class="num">Est. ask</th></tr></thead>
+      <tbody id="proj-expiring"></tbody>
+    </table>
+  </section>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-reports" hidden>
+    <div class="bpanel-h">📊 Financial Reports</div>
+    <div class="fin-controls">
+      <label>Report <select id="report-select" class="nhl-input"></select></label>
+    </div>
+    <div id="report-body"></div>
+  </section>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-management" hidden>
+    <div class="bpanel-h">🧭 Management Recommendations</div>
+    <div id="mgmt-list"></div>
+  </section>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-contracts" hidden>
+    <div class="bpanel-h">📝 Contracts</div>
+    <div class="fin-controls">
+      <label>Position <select id="ctr-pos" class="nhl-input">
+        <option value="">All</option><option>C</option><option>LW</option>
+        <option>RW</option><option>D</option><option>G</option>
+      </select></label>
+      <label>Status <select id="ctr-status" class="nhl-input">
+        <option value="">All</option>
+      </select></label>
+      <label>Search <input type="text" id="ctr-q" class="nhl-input" placeholder="player name…"></label>
+    </div>
+    <table class="fin-table">
+      <thead><tr><th>Player</th><th>Pos</th><th>Age</th><th>Status</th>
+        <th class="num">AAV</th><th class="num">Yrs left</th><th class="num">Est. ask</th></tr></thead>
+      <tbody id="ctr-rows"></tbody>
+    </table>
+  </section>
+
+  <section class="bpanel fin-tab-panel" id="fin-tab-cap" hidden>
+    <div class="bpanel-h">📍 Cap Position Breakdown</div>
+    <div id="cap-breakdown"></div>
+    <div class="bpanel-sub-h">AHL payroll</div>
+    <div id="cap-ahl"></div>
   </section>
 
   <section class="bpanel">

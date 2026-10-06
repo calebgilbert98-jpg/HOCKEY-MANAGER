@@ -83,3 +83,14 @@
   border-radius: var(--nhl-r);
   background: rgba(255,255,255,.015);
 }
+
+/* Batch D: waiver priority strip */
+.priority-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 10px 12px; }
+.prio-team {
+  background: #1b2334; border: 1px solid #2a3550; border-radius: 6px;
+  padding: 5px 10px; font-size: 12px; color: #c6cdd8;
+}
+.prio-team.me { border-color: #3B82F6; color: #f2f5fa; font-weight: 700; }
+.prio-rank { color: #e8b93c; font-weight: 700; margin-right: 4px; }
+.prio-sep { color: #3a4763; font-size: 11px; }
+.prio-basis { width: 100%; font-size: 12px; color: #9aa0aa; margin-top: 6px; }

@@ -267,3 +267,23 @@
 .tb-btn:hover:not(:disabled) { border-color: var(--nhl-blue); }
 .tb-btn:disabled { opacity: .5; cursor: default; }
 .panel-note { font-size: 11px; color: var(--dim); }
+
+/* Batch D: two-pane wire reader */
+.news-twopane { display: grid; grid-template-columns: 320px 1fr; gap: 12px; align-items: start; }
+@media (max-width: 900px) { .news-twopane { grid-template-columns: 1fr; } }
+.news-list { display: flex; flex-direction: column; gap: 4px; max-height: 640px; overflow-y: auto; }
+.news-list-row {
+  display: flex; gap: 8px; align-items: center; text-align: left;
+  background: #1b2334; border: 1px solid #2a3550; border-radius: 8px;
+  padding: 8px 10px; cursor: pointer; font-size: 13px; color: #c6cdd8;
+}
+.news-list-row:hover { border-color: #3B82F6; }
+.news-list-row.active { border-color: #3B82F6; background: #1e2a45; }
+.cat-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.news-list-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.news-list-date { font-size: 11px; color: #9aa0aa; flex-shrink: 0; }
+.news-reader {
+  background: #141a26; border: 1px solid #2a3550; border-left: 3px solid #3B82F6;
+  border-radius: 8px; padding: 16px 18px; min-height: 240px;
+}
+.news-reader p { font-size: 14px; line-height: 1.65; color: #d6dbe4; }

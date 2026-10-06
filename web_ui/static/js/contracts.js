@@ -83,19 +83,36 @@ const ExtModal = {
 
   el(id) { return document.getElementById(id); },
 
-  open(playerId) {
+  open(playerId, opts) {
+    opts = opts || {};
     this.playerId = playerId;
     this.data = null;
     this._primed = false;
+    this.isElc = !!opts.elc;
+    this.clauseOpts = null;
+    this.clauseChoice = 'none';
+    this.clauseSize = 10;
     const aavInput = this.el('ext-aav');
     aavInput.value = '';
     aavInput.dataset.touched = '';
+    this.el('ext-signing-bonus').value = '0';
+    this.el('ext-perf-bonus').value = '0';
     this.el('ext-modal').hidden = false;
     this.el('ext-submit').disabled = true;
     this.el('ext-note').textContent = '';
     this.el('ext-ask').textContent = 'Loading terms…';
     this.el('ext-cap').textContent = '';
+    // ELC mode: term locked by signing age, no trade protection (bonuses instead).
+    this.el('ext-title').textContent = this.isElc ? 'Entry-level contract' : 'Contract extension';
+    this.el('ext-submit').textContent = this.isElc ? 'Offer ELC' : 'Extend';
+    this.el('ext-perf-field').hidden = !this.isElc;
+    this.el('ext-clause-field').hidden = this.isElc;
+    this.el('ext-comps-field').hidden = this.isElc;
+    this.el('ext-years').disabled = this.isElc;
     this.refresh();
+    this.loadClauseOptions();
+    if (!this.isElc) this.loadComparables();
+    else this.el('ext-comps').innerHTML = '';
   },
 
   close() {
@@ -114,10 +131,13 @@ const ExtModal = {
     const years = parseInt(this.el('ext-years').value, 10) || 1;
     let aav = parseInt(String(this.el('ext-aav').value).replace(/[^0-9]/g, ''), 10);
     if (!aav || aav < 0) aav = 0;
-    return {years, aav};
+    const sb = parseInt(String(this.el('ext-signing-bonus').value).replace(/[^0-9]/g, ''), 10) || 0;
+    const pb = parseInt(String(this.el('ext-perf-bonus').value).replace(/[^0-9]/g, ''), 10) || 0;
+    return {years, aav, signingBonus: Math.max(0, sb), perfBonus: Math.max(0, pb)};
   },
 
   async refresh() {
+    if (this.isElc) { await this.refreshElc(); return; }
     const {years, aav} = this.terms();
     const pid = encodeURIComponent(this.playerId);
     const qs = aav > 0 ? `?player_id=${pid}&years=${years}&aav=${aav}`
@@ -137,6 +157,130 @@ const ExtModal = {
   refreshDebounced() {
     if (this.debounce) clearTimeout(this.debounce);
     this.debounce = setTimeout(() => this.refresh(), 250);
+  },
+
+  /* ---------- Batch D: ELC mode ---------- */
+  async refreshElc() {
+    const {aav, signingBonus, perfBonus} = this.terms();
+    try {
+      const res = await fetch('/api/contracts/elc_terms?player_id=' + encodeURIComponent(this.playerId));
+      const d = await res.json();
+      if (!d.ok) { this.showError(d.error || 'Not ELC-eligible'); return; }
+      this.data = d;
+      const p = d.player;
+      this.el('ext-player').textContent = `${p.name} · ${p.position} · Age ${p.age} · POT ${p.potential}`;
+      this.el('ext-years').value = d.years;
+      this.el('ext-years-val').textContent = `${d.years} yr${d.years > 1 ? 's' : ''} (locked by signing age)`;
+      if (!this.el('ext-aav').dataset.touched) {
+        const ask = (d.agent_ask && d.agent_ask.salary) || Math.round((d.floor + d.ceiling) / 2);
+        this.el('ext-aav').value = String(Math.min(Math.max(ask, d.floor), d.ceiling));
+      }
+      const base = parseInt(String(this.el('ext-aav').value).replace(/[^0-9]/g, ''), 10) || 0;
+      this.el('ext-aav-val').textContent = salaryStr(base) + '/yr';
+      this.el('ext-aav-hint').textContent =
+        `ELC band: ${salaryStr(d.floor)} – ${salaryStr(d.ceiling)}/yr base (CBA entry-level scale)`;
+      const maxSb = Math.round(base * d.signing_bonus_max_pct);
+      this.el('ext-signing-bonus-val').textContent = salaryStr(signingBonus) + '/yr';
+      this.el('ext-signing-bonus-hint').textContent =
+        `Capped at 10% of base (${salaryStr(maxSb)}/yr at this base).`;
+      this.el('ext-perf-bonus-val').textContent = salaryStr(perfBonus) + '/yr';
+      this.el('ext-perf-bonus-hint').textContent =
+        `Capped at ${salaryStr(d.perf_bonus_max)}/yr (Schedule A + B).`;
+      if (d.agent_ask && d.agent_ask.salary) {
+        this.el('ext-ask').textContent =
+          `Agent's ask: ${salaryStr(d.agent_ask.salary)}/yr × ${d.agent_ask.years} yr` +
+          (d.agent_ask.signing_bonus ? ` + ${salaryStr(d.agent_ask.signing_bonus)} SB` : '') +
+          (d.agent_ask.performance_bonus ? ` + ${salaryStr(d.agent_ask.performance_bonus)}/yr perf` : '') +
+          (d.agent_ask.flavor ? ` — ${d.agent_ask.flavor}` : '');
+      } else {
+        this.el('ext-ask').textContent = 'Entry-level deal — term is fixed, negotiate the base and bonuses.';
+      }
+      const total = (base + signingBonus + perfBonus) * d.years;
+      this.el('ext-cap').innerHTML =
+        `Total package: <b>${salaryStr(total)}</b> <span class="cm-dim">(${salaryStr(base)}/yr + ${salaryStr(signingBonus)} SB + ${salaryStr(perfBonus)} perf × ${d.years} yr)</span>`;
+      let ok = true, reason = '';
+      if (!(d.floor <= base && base <= d.ceiling)) { ok = false; reason = `Base must sit inside ${salaryStr(d.floor)}–${salaryStr(d.ceiling)}/yr.`; }
+      else if (signingBonus > maxSb) { ok = false; reason = `Signing bonus capped at ${salaryStr(maxSb)}/yr.`; }
+      else if (perfBonus > d.perf_bonus_max) { ok = false; reason = `Performance bonus capped at ${salaryStr(d.perf_bonus_max)}/yr.`; }
+      else if (base + signingBonus > d.max_annual_comp) { ok = false; reason = 'Base + signing bonus exceeds the ELC max annual compensation.'; }
+      this.el('ext-submit').disabled = !ok;
+      this.el('ext-note').textContent = ok ? '' : reason;
+    } catch (e) {
+      console.error(e);
+      this.showError('Could not load ELC terms (network error)');
+    }
+  },
+
+  /* ---------- Batch D: clause picker ---------- */
+  async loadClauseOptions() {
+    const sel = this.el('ext-clause');
+    sel.innerHTML = '<option>Loading…</option>';
+    try {
+      const res = await fetch('/api/contracts/clause_options?player_id=' + encodeURIComponent(this.playerId));
+      const d = await res.json();
+      this.clauseOpts = d;
+      sel.innerHTML = '';
+      for (const o of (d.options || [])) {
+        const opt = document.createElement('option');
+        opt.value = o.kind;
+        opt.textContent = o.kind === 'none' ? 'No trade protection'
+          : `${o.label} (≈${salaryStr(o.annual_value)}/yr value)`;
+        if (!d.eligible && o.kind !== 'none') opt.disabled = true;
+        sel.appendChild(opt);
+      }
+      sel.value = 'none';
+      this.paintClauseHint();
+    } catch (e) {
+      sel.innerHTML = '<option value="none">No trade protection</option>';
+    }
+  },
+
+  paintClauseHint() {
+    const d = this.clauseOpts;
+    const hint = this.el('ext-clause-hint');
+    const kind = this.el('ext-clause').value || 'none';
+    this.clauseChoice = kind;
+    this.el('ext-clause-size-field').hidden = kind !== 'mntc';
+    if (!d || !d.ok) { hint.textContent = ''; return; }
+    if (!d.eligible) {
+      hint.textContent = d.eligibility_note || 'Trade protection unavailable.';
+      return;
+    }
+    const o = (d.options || []).find(x => x.kind === kind);
+    if (kind === 'none') {
+      hint.textContent = d.hint || '';
+    } else if (o) {
+      hint.textContent = `Offering ${o.label} — worth about ${salaryStr(o.annual_value)}/yr to him (counts toward the effective offer).`;
+    }
+    this.el('ext-clause-val').textContent = kind === 'none' ? '' :
+      salaryStr((o && o.annual_value) || 0) + '/yr value';
+  },
+
+  /* ---------- Batch D: comparables ---------- */
+  async loadComparables() {
+    const host = this.el('ext-comps');
+    host.innerHTML = '<div class="cm-hint">Loading…</div>';
+    try {
+      const res = await fetch('/api/contracts/comparables?player_id=' + encodeURIComponent(this.playerId));
+      const d = await res.json();
+      const comps = d.comparables || [];
+      if (!comps.length) {
+        host.innerHTML = '<div class="cm-hint">No close comparables found.</div>';
+        return;
+      }
+      host.innerHTML = '';
+      for (const c of comps) {
+        const row = document.createElement('div');
+        row.className = 'comp-row';
+        row.innerHTML =
+          `<span class="comp-name">${esc(c.name)}</span>` +
+          `<span class="comp-meta">${esc(c.tier || '')} ${esc(c.team || '')}</span>` +
+          `<span class="comp-sal">${salaryStr(c.salary)}/yr × ${c.years_remaining}</span>`;
+        host.appendChild(row);
+      }
+    } catch (e) {
+      host.innerHTML = '<div class="cm-hint">Comparables unavailable.</div>';
+    }
   },
 
   showError(msg) {
@@ -174,6 +318,9 @@ const ExtModal = {
     this.el('ext-aav-hint').textContent =
       `Allowed: ${salaryStr(d.min_salary)} – ${salaryStr(d.max_salary)}/yr · ` +
       `Term: ${d.years_min}–${d.years_max} yrs`;
+    // Batch D: signing-bonus sweetener display.
+    const {signingBonus} = this.terms();
+    this.el('ext-signing-bonus-val').textContent = salaryStr(signingBonus);
     const c = d.preview;
     const fit = c.fits;
     this.el('ext-cap').innerHTML =
@@ -202,7 +349,10 @@ const ExtModal = {
   },
 
   async submit() {
-    const {years, aav} = this.terms();
+    if (this.isElc) { await this.submitElc(); return; }
+    const {years, aav, signingBonus} = this.terms();
+    const clause = this.el('ext-clause').value || 'none';
+    const clauseSize = parseInt(this.el('ext-clause-size').value, 10) || 10;
     const btn = this.el('ext-submit');
     btn.disabled = true;
     btn.textContent = 'Sending…';
@@ -210,7 +360,8 @@ const ExtModal = {
       const res = await fetch('/api/contracts/extend_real', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({player_id: this.playerId, years, aav})
+        body: JSON.stringify({player_id: this.playerId, years, aav,
+          clause, clause_list_size: clauseSize, signing_bonus: signingBonus})
       });
       const data = await res.json();
       if (data.ok) {
@@ -246,6 +397,41 @@ const ExtModal = {
     }
   },
 
+  async submitElc() {
+    const {aav, signingBonus, perfBonus} = this.terms();
+    const btn = this.el('ext-submit');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      const res = await fetch('/api/contracts/elc_offer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({player_id: this.playerId, salary: aav,
+          signing_bonus: signingBonus, performance_bonus: perfBonus})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        this.el('ext-note').textContent = 'ELC offer sent — waiting for the game thread…';
+        btn.textContent = 'Sent ✓';
+        const outcome = await this.pollResult();
+        if (outcome && outcome.marker === 'elc_offer') {
+          this.el('ext-note').textContent = outcome.ok
+            ? outcome.summary : 'ELC: ' + (outcome.summary || 'rejected');
+          if (!outcome.ok) { btn.disabled = false; btn.textContent = 'Offer ELC'; }
+        }
+      } else {
+        this.el('ext-note').textContent = 'Could not send ELC: ' + (data.error || 'unknown error');
+        btn.disabled = false;
+        btn.textContent = 'Offer ELC';
+      }
+    } catch (e) {
+      console.error(e);
+      this.el('ext-note').textContent = 'Could not send ELC (network error)';
+      btn.disabled = false;
+      btn.textContent = 'Offer ELC';
+    }
+  },
+
   bind() {
     const el = this.el.bind(this);
     el('ext-close').addEventListener('click', () => this.close());
@@ -271,6 +457,13 @@ const ExtModal = {
       this.refresh();
     });
     el('ext-submit').addEventListener('click', () => this.submit());
+    el('ext-clause').addEventListener('change', () => this.paintClauseHint());
+    el('ext-clause-size').addEventListener('input', e => {
+      this.clauseSize = parseInt(e.target.value, 10) || 10;
+      this.el('ext-clause-size-val').textContent = this.clauseSize + ' teams';
+    });
+    el('ext-signing-bonus').addEventListener('input', () => this.refreshDebounced());
+    el('ext-perf-bonus').addEventListener('input', () => this.refreshDebounced());
     document.addEventListener('keydown', e => {
       if (e.key === 'Escape' && !el('ext-modal').hidden) this.close();
     });
@@ -278,8 +471,8 @@ const ExtModal = {
 };
 ExtModal.bind();
 
-async function extendContract(btn, playerId, name) {
-  ExtModal.open(playerId);
+async function extendContract(btn, playerId, name, opts) {
+  ExtModal.open(playerId, opts);
 }
 
 function esc(s) {
@@ -549,12 +742,14 @@ NegModal.bind();
 loadContracts().then(preselectFromURL);
 
 /* Pre-selection from context menu: /contracts?player=<id> opens the
- * extension dialog for that player. */
+ * extension dialog for that player; &elc=1 opens the ELC offer flow
+ * (roster page "Offer ELC…" for unsigned prospects). */
 async function preselectFromURL() {
   try {
     const params = new URLSearchParams(window.location.search);
     const pid = params.get('player');
     if (!pid) return;
+    const isElc = params.get('elc') === '1';
     let name = 'Player';
     try {
       const pr = await fetch('/api/player/' + encodeURIComponent(pid));
@@ -563,7 +758,7 @@ async function preselectFromURL() {
         name = (pd.header && pd.header.name) || name;
       }
     } catch (e) { /* ignore */ }
-    extendContract(null, pid, name);
+    extendContract(null, pid, name, {elc: isElc});
   } catch (e) { console.error(e); }
 }
 
