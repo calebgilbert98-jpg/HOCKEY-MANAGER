@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AHL — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/ahl.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="ahl-sub">American Hockey League</div>
+</header>
+
+<main class="ahl-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Farm League</div>
+    <h1 class="bcast-title">AHL Hub</h1>
+  </div>
+
+  <nav class="tb-tabs" id="ahl-tabs" aria-label="AHL sections">
+    <button class="tb-tab active" data-tab="standings">Standings</button>
+    <button class="tb-tab" data-tab="scores">Scores</button>
+    <button class="tb-tab" data-tab="calder">Calder Cup</button>
+    <button class="tb-tab" data-tab="team">Team</button>
+    <button class="tb-tab" data-tab="prospects">Prospects</button>
+  </nav>
+
+  <section id="ahl-tab-standings" class="tb-panel">
+    <div class="stand-card"><table class="stand-table" id="ahl-standings"></table></div>
+  </section>
+
+  <section id="ahl-tab-scores" class="tb-panel hidden">
+    <div class="ahl-two">
+      <div class="stand-card">
+        <div class="conf-title ahl-card-title">Recent Finals</div>
+        <table class="stand-table" id="ahl-recent"></table>
+      </div>
+      <div class="stand-card">
+        <div class="conf-title ahl-card-title">Upcoming</div>
+        <table class="stand-table" id="ahl-upcoming"></table>
+      </div>
+    </div>
+    <p class="panel-note" id="ahl-scores-note"></p>
+  </section>
+
+  <section id="ahl-tab-calder" class="tb-panel hidden">
+    <div id="ahl-calder"></div>
+  </section>
+
+  <section id="ahl-tab-team" class="tb-panel hidden">
+    <div class="ahl-team-controls">
+      <span class="ctl-label">Farm club</span>
+      <select class="lf-select" id="ahl-team-picker"></select>
+    </div>
+    <div id="ahl-team-body"></div>
+  </section>
+
+  <section id="ahl-tab-prospects" class="tb-panel hidden">
+    <div class="ahl-two">
+      <div class="stand-card">
+        <div class="conf-title ahl-card-title">Top Scorers</div>
+        <table class="stand-table" id="ahl-pros-scorers"></table>
+      </div>
+      <div class="stand-card">
+        <div class="conf-title ahl-card-title gold">🔥 Who's Cooking <span class="panel-note">best P/GP · min 10 GP</span></div>
+        <table class="stand-table" id="ahl-pros-cooking"></table>
+      </div>
+    </div>
+    <div class="stand-card" style="margin-top:16px">
+      <div class="conf-title ahl-card-title">Top Goalies <span class="panel-note">min 5 GP</span></div>
+      <table class="stand-table" id="ahl-pros-goalies"></table>
+    </div>
+    <p class="panel-note" id="ahl-pros-note"></p>
+  </section>
+</main>
+
+<script src="/static/js/ahl.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

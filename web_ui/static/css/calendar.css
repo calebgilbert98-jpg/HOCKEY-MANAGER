@@ -125,3 +125,33 @@
   .cal-game { font-size: 11px; }
   .cal-weekday-row div { font-size: 10px; }
 }
+
+/* Batch C (League) minor: event markers + deadline-day banner. */
+.cal-deadline-bar {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(165deg, rgba(59,130,246,.14), rgba(59,130,246,.05));
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r);
+  padding: 10px 16px; margin-bottom: 14px; font-size: 13px; color: var(--dim);
+}
+.cal-deadline-bar.is-today {
+  background: linear-gradient(165deg, rgba(245,158,11,.16), rgba(245,158,11,.05));
+  border-color: rgba(245,158,11,.5);
+}
+.cal-deadline-bar a { color: #93c5fd; font-weight: 700; }
+.dlb-tag {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 900;
+  letter-spacing: 2px; text-transform: uppercase; color: #0b1220;
+  background: var(--nhl-blue); border-radius: 4px; padding: 3px 10px; white-space: nowrap;
+}
+.cal-deadline-bar.is-today .dlb-tag { background: #f59e0b; }
+
+.cal-event {
+  font-size: 10.5px; font-weight: 700; line-height: 1.3;
+  border-radius: 4px; padding: 3px 6px; margin-top: 3px;
+  display: flex; justify-content: space-between; align-items: center; gap: 4px;
+}
+.ev-deadline { background: rgba(245,158,11,.18); color: #fbbf24; border: 1px solid rgba(245,158,11,.4); }
+.ev-draft { background: rgba(59,130,246,.18); color: #93c5fd; border: 1px solid rgba(59,130,246,.4); }
+.ev-season { background: rgba(74,222,128,.12); color: #86efac; border: 1px solid rgba(74,222,128,.3); }
+.ev-action { color: inherit; text-decoration: none; font-weight: 900; }
+.ev-action:hover { text-decoration: underline; }

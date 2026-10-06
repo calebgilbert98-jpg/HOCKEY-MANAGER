@@ -22,6 +22,10 @@
     <div class="bcast-kicker">Postseason</div>
     <h1 class="bcast-title">Stanley Cup Playoffs</h1>
   </div>
+  <div class="proj-banner" id="proj-banner" hidden>
+    <span class="proj-tag">Projection</span>
+    <span id="proj-text">Based on current standings — the real bracket locks in when the regular season ends.</span>
+  </div>
   <div class="bracket" id="bracket"></div>
   <div class="empty-wrap" id="empty" hidden>
     <div class="empty-card">
@@ -32,6 +36,18 @@
     </div>
   </div>
 </main>
+
+<!-- Series detail modal (desktop SeriesDetailPopup / build_series_detail_content) -->
+<div class="cm-overlay" id="series-modal" hidden>
+  <div class="cm-card series-detail" role="dialog" aria-modal="true">
+    <div class="cm-head">
+      <div><div class="cm-title" id="series-title">Series</div>
+      <div class="cm-sub" id="series-sub"></div></div>
+      <button class="cm-close" id="series-close">✕</button>
+    </div>
+    <div id="series-body"></div>
+  </div>
+</div>
 
 <script src="/static/js/playoffs.js"></script>
 <script src="/static/js/nav.js"></script>

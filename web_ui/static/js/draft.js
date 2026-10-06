@@ -12,6 +12,7 @@ function renderDraft(d) {
   const summary = document.getElementById('draft-summary');
   document.getElementById('draft-count').textContent =
     d.active ? `Pick ${d.current_overall} of ${d.total_slots}` : '';
+  updateClock(d);
   if (!d.active) {
     document.getElementById('draft-title').textContent = 'Entry Draft';
     summary.innerHTML = '';
@@ -20,6 +21,12 @@ function renderDraft(d) {
   }
   document.getElementById('draft-title').textContent = d.year ? d.year + ' Entry Draft' : 'Entry Draft';
   const myPicks = d.user_picks || [];
+  // Is the on-clock pick ours? (drives the Trade This Pick button)
+  const cur = (d.board || []).find(b => b.is_current);
+  draftState.onClockUser = !!(cur && cur.is_user_pick && !cur.made);
+  draftState.currentOverall = d.current_overall;
+  draftState.myNextPick = myPicks.length ? myPicks[0] : null;
+  document.getElementById('btn-trade-pick').hidden = !draftState.onClockUser;
   summary.innerHTML =
     `<span class="sum-pill">${d.made_count} / ${d.total_slots} picks made</span>` +
     (myPicks.length
@@ -67,7 +74,9 @@ loadDraft();
 })();
 
 /* ---------- War room tabs ---------- */
-const draftState = { availPos: 'All', availQ: '', selected: null };
+const draftState = { availPos: 'All', availQ: '', selected: null,
+  onClockUser: false, currentOverall: null, myNextPick: null,
+  pace: 'off', paceTimer: null, paceLeft: 0 };
 document.getElementById('draft-tabs').addEventListener('click', e => {
   const b = e.target.closest('.tb-tab');
   if (!b) return;
@@ -77,6 +86,7 @@ document.getElementById('draft-tabs').addEventListener('click', e => {
     .forEach(p => p.classList.add('hidden'));
   document.getElementById('draft-tab-' + b.dataset.tab).classList.remove('hidden');
   if (b.dataset.tab === 'available') loadAvailable();
+  if (b.dataset.tab === 'shortlist') loadShortlist();
   if (b.dataset.tab === 'mypicks') loadMyPicks();
   if (b.dataset.tab === 'buzz') loadBuzz();
   if (b.dataset.tab === 'trades') loadTradeFeed();
@@ -97,6 +107,7 @@ function renderAvailable(prospects) {
   host.innerHTML = prospects.length ? '' : '<div class="empty">No prospects available.</div>';
   draftState.selected = null;
   document.getElementById('btn-draft-selected').disabled = true;
+  document.getElementById('btn-shortlist-add').disabled = true;
   for (const p of prospects) {
     const el = document.createElement('div');
     el.className = 'fa-card';
@@ -112,6 +123,7 @@ function renderAvailable(prospects) {
       el.classList.add('selected');
       draftState.selected = p;
       document.getElementById('btn-draft-selected').disabled = false;
+      document.getElementById('btn-shortlist-add').disabled = false;
     });
     el.addEventListener('dblclick', () => { draftState.selected = p; askDraftConfirm(p); });
     const nm = el.querySelector('.clickable-text[data-href]');
@@ -165,10 +177,9 @@ function askDraftConfirm(p) {
 document.getElementById('confirm-cancel').addEventListener('click', () =>
   document.getElementById('confirm-modal').hidden = true);
 
-/* Sim Pick */
+/* Sim Pick (manual button) */
 document.getElementById('btn-sim-pick').addEventListener('click', async () => {
-  await fetch('/api/draft/sim_pick', { method: 'POST' });
-  setTimeout(() => { loadDraft(); loadAvailable(); }, 800);
+  await doSimPick(false);
 });
 
 /* Scout Report (shared by Available tab and Buzz tab) */
@@ -384,3 +395,247 @@ function renderGrades(head, host, data) {
     host.appendChild(detail);
   });
 }
+
+/* ---------- Draft clock + pace (desktop SP clock ~7483) ----------
+   The desktop clock auto-picks on expiry; the web pace control drives
+   /api/draft/sim_pick on a timer: 1x = every 8s, 4x = every 2s,
+   "My pick" sims until the user's next on-clock pick. */
+const PACE_SECS = { '1x': 8, '4x': 2 };
+
+function updateClock(d) {
+  const bar = document.getElementById('draft-clockbar');
+  bar.hidden = !d.active;
+  if (!d.active) return;
+  const cur = (d.board || []).find(b => b.is_current);
+  document.getElementById('clock-team').textContent =
+    cur ? (cur.owner + (cur.is_user_pick ? ' ⭐ (you)' : '')) : '—';
+  document.getElementById('clock-time').textContent =
+    draftState.pace === 'off' ? 'manual'
+      : draftState.pace === 'sim' ? '▶▶ to your pick'
+      : draftState.paceLeft + 's';
+}
+
+document.getElementById('pace-pills').addEventListener('click', e => {
+  const b = e.target.closest('.tb-pill');
+  if (!b) return;
+  document.querySelectorAll('#pace-pills .tb-pill').forEach(p => p.classList.remove('active'));
+  b.classList.add('active');
+  setPace(b.dataset.v);
+});
+
+function setPace(mode) {
+  stopPace();
+  draftState.pace = mode;
+  if (mode === 'off') { loadDraft(); return; }
+  if (mode === 'sim') {
+    paceSimToMine();
+    return;
+  }
+  draftState.paceLeft = PACE_SECS[mode] || 8;
+  draftState.paceTimer = setInterval(() => {
+    draftState.paceLeft -= 1;
+    if (draftState.paceLeft <= 0) {
+      draftState.paceLeft = PACE_SECS[draftState.pace] || 8;
+      doSimPick(true);
+    } else {
+      const el = document.getElementById('clock-time');
+      if (el) el.textContent = draftState.paceLeft + 's';
+    }
+  }, 1000);
+  loadDraft();
+}
+
+function stopPace() {
+  if (draftState.paceTimer) { clearInterval(draftState.paceTimer); draftState.paceTimer = null; }
+}
+
+async function doSimPick(fromPace) {
+  await fetch('/api/draft/sim_pick', { method: 'POST' });
+  setTimeout(async () => {
+    await loadDraftData();
+    // Stop auto-pace when the draft ends or it's the user's pick.
+    const d = window._lastDraft;
+    if (!d || !d.active) { setPace('off'); paintPacePills(); return; }
+    if (draftState.onClockUser && draftState.pace !== 'off') {
+      setPace('off'); paintPacePills();
+    }
+  }, 900);
+}
+
+async function paceSimToMine() {
+  // Sim one pick at a time until the user's pick is on the clock.
+  for (let i = 0; i < 250; i++) {
+    const d = await loadDraftData();
+    if (!d || !d.active || draftState.onClockUser) break;
+    await fetch('/api/draft/sim_pick', { method: 'POST' });
+    await new Promise(r => setTimeout(r, 350));
+  }
+  setPace('off'); paintPacePills();
+}
+
+function paintPacePills() {
+  document.querySelectorAll('#pace-pills .tb-pill').forEach(p =>
+    p.classList.toggle('active', p.dataset.v === draftState.pace));
+}
+
+async function loadDraftData() {
+  try {
+    const res = await fetch('/api/draft');
+    const d = await res.json();
+    window._lastDraft = d;
+    renderDraft(d);
+    return d;
+  } catch (e) { console.error(e); return null; }
+}
+
+/* ---------- War-room shortlist (desktop ~7683/8822, capped at 8) ---------- */
+async function loadShortlist() {
+  const host = document.getElementById('shortlist-list');
+  try {
+    const d = await (await fetch('/api/draft/shortlist')).json();
+    const rows = d.shortlist || [];
+    document.getElementById('shortlist-count').textContent =
+      rows.length ? `(${rows.length})` : '';
+    host.innerHTML = rows.length ? '' : '<div class="empty">Shortlist is empty.<br>Select a prospect on the Available tab and hit + Shortlist.</div>';
+    for (const p of rows) {
+      const el = document.createElement('div');
+      el.className = 'fa-card';
+      el.innerHTML = `
+        <div class="fa-ov" style="--c:${barColor(p.overall)}">${p.overall}</div>
+        <div class="fa-info">
+          <div class="fa-name">${p.id ? `<span class="clickable-text" data-href="/player/${esc(p.id)}" title="Open player profile">${esc(p.name)}</span>` : esc(p.name)}</div>
+          <div class="fa-sub">${esc(p.position)} · Age ${p.age} · Potential ${esc(p.potential)}</div>
+        </div>
+        <button class="tb-btn sl-remove" data-id="${esc(p.id)}">Remove</button>`;
+      host.appendChild(el);
+    }
+    host.querySelectorAll('.sl-remove').forEach(b =>
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await fetch('/api/draft/shortlist', { method: 'DELETE',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ player_id: b.dataset.id }) });
+        loadShortlist();
+      }));
+  } catch (e) {
+    host.innerHTML = '<div class="empty">Could not load shortlist.</div>';
+  }
+}
+
+document.getElementById('btn-shortlist-add').addEventListener('click', async () => {
+  const p = draftState.selected;
+  if (!p) return;
+  await fetch('/api/draft/shortlist', { method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ player_id: p.id }) });
+  loadShortlist();
+});
+
+/* ---------- Trade this pick (desktop windows.py ~9785) ---------- */
+let tradePickSel = null;
+
+document.getElementById('btn-trade-pick').addEventListener('click', openTradePick);
+document.getElementById('tradepick-close').addEventListener('click', () =>
+  document.getElementById('tradepick-modal').hidden = true);
+document.getElementById('tradepick-cancel').addEventListener('click', () =>
+  document.getElementById('tradepick-modal').hidden = true);
+
+async function openTradePick() {
+  const modal = document.getElementById('tradepick-modal');
+  const body = document.getElementById('tradepick-body');
+  document.getElementById('tradepick-propose').disabled = true;
+  tradePickSel = null;
+  body.innerHTML = '<div class="empty">Loading trade partners…</div>';
+  modal.hidden = false;
+  try {
+    const d = await (await fetch('/api/draft/trade-pick')).json();
+    if (!d.can_trade) {
+      body.innerHTML = `<div class="empty">${esc(d.reason || 'Cannot trade this pick.')}</div>`;
+      return;
+    }
+    document.getElementById('tradepick-sub').textContent =
+      `Your pick: #${d.overall} (Round ${d.round}) · slot value ${d.my_value}`;
+    if (!d.partners.length) {
+      body.innerHTML = '<div class="empty">No partner picks available to trade for.</div>';
+      return;
+    }
+    body.innerHTML = `
+      <div class="lf-group" style="margin-bottom:10px">
+        <span class="lf-label">Partner</span>
+        <select class="lf-select" id="tp-partner" style="flex:1">
+          ${d.partners.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fa-list" id="tp-picks"></div>
+      <p class="panel-note" id="tp-info"></p>`;
+    const partners = d.partners;
+    const sel = document.getElementById('tp-partner');
+    const render = () => {
+      const p = partners.find(x => x.name === sel.value);
+      const host = document.getElementById('tp-picks');
+      host.innerHTML = '';
+      tradePickSel = null;
+      document.getElementById('tradepick-propose').disabled = true;
+      document.getElementById('tp-info').textContent = '';
+      for (const pk of (p ? p.picks : [])) {
+        const el = document.createElement('div');
+        el.className = 'fa-card tp-pick';
+        el.innerHTML = `<div class="pick-num">#${pk.overall}</div>
+          <div class="fa-info"><div class="fa-name">Round ${pk.round}</div>
+          <div class="fa-sub">slot value ${pk.value}</div></div>`;
+        el.addEventListener('click', () => {
+          host.querySelectorAll('.tp-pick').forEach(c => c.classList.remove('selected'));
+          el.classList.add('selected');
+          tradePickSel = { partner: p.name, overall: pk.overall, value: pk.value };
+          document.getElementById('tradepick-propose').disabled = false;
+          const uv = d.my_value, tv = pk.value;
+          document.getElementById('tp-info').textContent =
+            uv > tv ? `You give #${d.overall} (value ${uv}), get #${pk.overall} (value ${tv}). They may want more.`
+            : tv > uv ? `You give #${d.overall} (value ${uv}), get #${pk.overall} (value ${tv}). Good value for you.`
+            : 'Even swap on paper.';
+        });
+        host.appendChild(el);
+      }
+    };
+    sel.addEventListener('change', render);
+    render();
+  } catch (e) {
+    body.innerHTML = '<div class="empty">Could not load trade partners.</div>';
+  }
+}
+
+document.getElementById('tradepick-propose').addEventListener('click', async () => {
+  if (!tradePickSel) return;
+  document.getElementById('tradepick-propose').disabled = true;
+  document.getElementById('tp-info').textContent = 'Proposing… the other GM is thinking.';
+  await fetch('/api/draft/trade-pick', { method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ partner: tradePickSel.partner,
+      partner_overall: tradePickSel.overall }) });
+  // Poll for the AI verdict (the Tk thread runs ai_consider_trade).
+  for (let i = 0; i < 30; i++) {
+    await new Promise(r => setTimeout(r, 700));
+    try {
+      const d = await (await fetch('/api/draft/trade-pick/result')).json();
+      const res = d.result;
+      if (!res) continue;
+      if (res.ok) {
+        document.getElementById('tp-info').textContent = '✅ ' + res.summary;
+        setTimeout(() => {
+          document.getElementById('tradepick-modal').hidden = true;
+          loadDraft(); loadAvailable();
+        }, 1200);
+      } else if (res.counter) {
+        document.getElementById('tp-info').innerHTML =
+          `Counter-offer: ${esc(res.message || '')}<br>` +
+          (res.want_added && res.want_added.length ? `They want: ${res.want_added.map(esc).join(', ')}<br>` : '') +
+          (res.will_add && res.will_add.length ? `They add: ${res.will_add.map(esc).join(', ')}<br>` : '') +
+          '<span class="panel-note">Counters with extra assets aren\u2019t supported on the web war room yet — adjust in the Trade Center.</span>';
+      } else {
+        document.getElementById('tp-info').textContent =
+          '❌ ' + (res.message || res.error || 'Trade rejected.');
+      }
+      break;
+    } catch (e) { /* keep polling */ }
+  }
+});

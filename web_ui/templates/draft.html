@@ -24,9 +24,28 @@
   </div>
   <div class="draft-summary" id="draft-summary"></div>
 
+  <!-- Draft clock + pace (desktop SP clock / pace controls ~7483-7512) -->
+  <div class="draft-clockbar" id="draft-clockbar" hidden>
+    <div class="clock-box">
+      <div class="clock-label">On the clock</div>
+      <div class="clock-team" id="clock-team">—</div>
+      <div class="clock-time" id="clock-time">—</div>
+    </div>
+    <div class="pace-box">
+      <span class="clock-label">Pace</span>
+      <div class="tb-pills" id="pace-pills">
+        <button class="tb-pill" data-v="off">⏸ Manual</button>
+        <button class="tb-pill" data-v="1x">1×</button>
+        <button class="tb-pill" data-v="4x">4×</button>
+        <button class="tb-pill" data-v="sim">▶▶ My pick</button>
+      </div>
+    </div>
+  </div>
+
   <nav class="tb-tabs" id="draft-tabs">
     <button class="tb-tab active" data-tab="board">Draft Board</button>
     <button class="tb-tab" data-tab="available">Available</button>
+    <button class="tb-tab" data-tab="shortlist">Shortlist <span class="tab-count" id="shortlist-count"></span></button>
     <button class="tb-tab" data-tab="mypicks">My Picks</button>
     <button class="tb-tab" data-tab="buzz">Buzz</button>
     <button class="tb-tab" data-tab="trades">Trade Feed</button>
@@ -52,8 +71,15 @@
       <button class="tb-btn tb-accent" id="btn-draft-selected" disabled>Draft Selected</button>
       <button class="tb-btn" id="btn-sim-pick">Sim Pick</button>
       <button class="tb-btn" id="btn-scout">Scout Report</button>
+      <button class="tb-btn" id="btn-shortlist-add" disabled>+ Shortlist</button>
+      <button class="tb-btn" id="btn-trade-pick" hidden>⇄ Trade This Pick</button>
     </div>
     <div class="fa-list" id="available-list"></div>
+  </section>
+
+  <section id="draft-tab-shortlist" class="tb-panel hidden">
+    <p class="panel-note">Your war-room shortlist — prospects you're watching. Capped at 8.</p>
+    <div class="fa-list" id="shortlist-list"></div>
   </section>
 
   <section id="draft-tab-mypicks" class="tb-panel hidden">
@@ -93,6 +119,22 @@
     <div class="cm-actions">
       <button class="cm-cancel" id="confirm-cancel">Cancel</button>
       <button class="cm-submit" id="confirm-ok">Draft Him</button>
+    </div>
+  </div>
+</div>
+
+<!-- Trade this pick (desktop windows.py ~9785) -->
+<div class="cm-overlay" id="tradepick-modal" hidden>
+  <div class="cm-card" role="dialog" aria-modal="true" style="max-width:520px">
+    <div class="cm-head">
+      <div><div class="cm-title">Trade This Pick</div>
+      <div class="cm-sub" id="tradepick-sub"></div></div>
+      <button class="cm-close" id="tradepick-close">✕</button>
+    </div>
+    <div id="tradepick-body"></div>
+    <div class="cm-actions">
+      <button class="cm-cancel" id="tradepick-cancel">Cancel</button>
+      <button class="cm-submit" id="tradepick-propose" disabled>Propose Trade</button>
     </div>
   </div>
 </div>

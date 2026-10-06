@@ -22,7 +22,75 @@
     <div class="bcast-kicker">League</div>
     <h1 class="bcast-title">Standings</h1>
   </div>
-  <div id="stand-tables"></div>
+
+  <nav class="tb-tabs" id="stand-tabs" aria-label="Standings sections">
+    <button class="tb-tab active" data-tab="overview">Standings</button>
+    <button class="tb-tab" data-tab="analytics">Team Analytics</button>
+    <button class="tb-tab" data-tab="division">Division Analysis</button>
+    <button class="tb-tab" data-tab="grid">Divisions</button>
+  </nav>
+
+  <!-- Overview: 6 view modes (desktop stats_standings_window.py) -->
+  <section id="stand-tab-overview" class="tb-panel">
+    <div class="stand-controls">
+      <div class="ctl-group">
+        <span class="ctl-label">View</span>
+        <div class="tb-pills" id="view-pills"></div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-label">Sort</span>
+        <div class="tb-pills" id="sort-pills">
+          <button class="tb-pill active" data-v="Points">Points</button>
+          <button class="tb-pill" data-v="Wins">Wins</button>
+          <button class="tb-pill" data-v="Goal Differential">Goal Diff</button>
+        </div>
+      </div>
+      <label class="ctl-check"><input type="checkbox" id="adv-toggle" checked> Advanced metrics</label>
+    </div>
+    <div id="stand-tables"></div>
+  </section>
+
+  <!-- Team Analytics -->
+  <section id="stand-tab-analytics" class="tb-panel hidden">
+    <div class="stand-controls">
+      <div class="ctl-group">
+        <span class="ctl-label">Category</span>
+        <div class="tb-pills" id="ta-cat-pills"></div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-label">Mode</span>
+        <div class="tb-pills" id="ta-mode-pills">
+          <button class="tb-pill active" data-v="League Rankings">Rankings</button>
+          <button class="tb-pill" data-v="vs League Average">vs Average</button>
+        </div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-label">Teams</span>
+        <div class="tb-pills" id="ta-filter-pills"></div>
+      </div>
+    </div>
+    <div id="ta-table"></div>
+  </section>
+
+  <!-- Division Analysis -->
+  <section id="stand-tab-division" class="tb-panel hidden">
+    <div class="stand-controls">
+      <div class="ctl-group">
+        <span class="ctl-label">Division</span>
+        <div class="tb-pills" id="div-pills"></div>
+      </div>
+      <div class="ctl-group">
+        <span class="ctl-label">Analysis</span>
+        <div class="tb-pills" id="div-type-pills"></div>
+      </div>
+    </div>
+    <div id="div-body"></div>
+  </section>
+
+  <!-- Divisions grid -->
+  <section id="stand-tab-grid" class="tb-panel hidden">
+    <div class="div-grid" id="div-grid"></div>
+  </section>
 </main>
 
 <script src="/static/js/standings.js"></script>

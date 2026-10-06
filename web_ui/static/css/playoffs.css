@@ -99,3 +99,83 @@
 @media (max-width: 900px) {
   .playoffs-main { padding: 6px 16px 32px; }
 }
+
+/* Batch C (League): projection banner + series detail modal. */
+
+/* projection banner (desktop _set_projection_banner) */
+.proj-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(165deg, rgba(245,158,11,.14), rgba(245,158,11,.05));
+  border: 1px solid rgba(245,158,11,.5); border-radius: var(--nhl-r);
+  padding: 10px 16px; margin-bottom: 16px;
+  font-size: 13px; color: var(--dim);
+}
+.proj-banner[hidden] { display: none; }
+.proj-tag {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 900;
+  letter-spacing: 2px; text-transform: uppercase; color: #0b1220;
+  background: #f59e0b; border-radius: 4px; padding: 3px 10px; white-space: nowrap;
+}
+
+/* clickable series */
+.series-card.clickable-series { cursor: pointer; }
+.series-card.clickable-series:hover { border-color: var(--nhl-blue); transform: translateY(-2px); }
+
+/* modal (mirrors the shared .cm-* pattern) */
+.cm-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(4, 8, 14, .72); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center; padding: 18px;
+}
+.cm-overlay[hidden] { display: none; }
+.cm-card {
+  width: 560px; max-width: 100%; max-height: 92vh; overflow-y: auto;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r);
+  padding: 20px 22px; box-shadow: 0 24px 60px rgba(0,0,0,.6);
+}
+.cm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.cm-title {
+  font-family: var(--nhl-cond); font-size: 20px; font-weight: 900;
+  letter-spacing: 1px; text-transform: uppercase; color: #fff;
+}
+.cm-sub { font-size: 12px; color: var(--dimmer); margin-top: 2px; }
+.cm-close {
+  background: none; border: none; color: var(--dim); font-size: 16px;
+  cursor: pointer; padding: 4px 8px; border-radius: var(--nhl-r-sm);
+}
+.cm-close:hover { color: var(--text); background: rgba(255,255,255,.08); }
+
+/* series detail body (desktop build_series_detail_content) */
+.series-detail .sd-status {
+  font-size: 14px; font-style: italic; color: #f59e0b; margin: 8px 0 2px;
+}
+.series-detail .sd-score {
+  font-family: var(--nhl-cond); font-size: 26px; font-weight: 900; color: #fff;
+}
+.series-detail .sd-vs { display: flex; align-items: stretch; gap: 12px; margin: 14px 0; }
+.series-detail .sd-team {
+  flex: 1; background: rgba(255,255,255,.04);
+  border: 1px solid var(--nhl-line); border-radius: 8px; padding: 12px 14px;
+}
+.series-detail .sd-tabbr {
+  font-family: var(--nhl-cond); font-size: 22px; font-weight: 900; color: #93c5fd;
+}
+.series-detail .sd-tname { font-weight: 700; margin: 2px 0; }
+.series-detail .sd-vs-x {
+  align-self: center; font-family: var(--nhl-cond); font-weight: 900;
+  color: var(--dimmer); letter-spacing: 2px;
+}
+.series-detail .sd-h {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: #f59e0b;
+  margin: 16px 0 6px;
+}
+.series-detail .sd-list { margin: 0; padding-left: 18px; }
+.series-detail .sd-list li { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+.series-detail .panel-note { font-size: 12px; color: var(--dim); }
+.series-detail .stand-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.series-detail .stand-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); }
+.series-detail .stand-table .rank { font-family: var(--nhl-cond); font-weight: 800; color: var(--dimmer); }
+.series-detail .stand-table .tname { font-weight: 600; }
+.series-detail .stand-table .num { font-family: var(--nhl-cond); font-weight: 700; text-align: right; color: var(--dim); }

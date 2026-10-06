@@ -1,0 +1,115 @@
+/* Puck Dynasty Trade Deadline Center — broadcast skin. */
+.dl-main { max-width: 1100px; margin: 0 auto; padding: 6px 24px 40px; }
+
+/* countdown */
+.dl-countdown {
+  text-align: center;
+  background: radial-gradient(ellipse at 50% 0%, rgba(59,130,246,.14), transparent 65%),
+    linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r);
+  padding: 26px 20px; margin-bottom: 18px;
+}
+.dl-countdown.is-today { border-color: rgba(245,158,11,.6); }
+.dl-count-num {
+  font-family: var(--nhl-cond); font-size: 64px; font-weight: 900;
+  color: #fff; line-height: 1;
+  text-shadow: 0 0 30px rgba(59,130,246,.5);
+}
+.dl-count-label {
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 800;
+  letter-spacing: 2.5px; text-transform: uppercase; color: #93c5fd;
+  margin-top: 6px;
+}
+.dl-countdown.is-today .dl-count-label { color: #f59e0b; }
+.dl-count-date { font-size: 13px; color: var(--dimmer); margin-top: 6px; }
+
+.dl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 900px) { .dl-grid { grid-template-columns: 1fr; } }
+
+.dl-card { margin-bottom: 0; }
+.bpanel-h {
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase; color: #fff;
+  margin-bottom: 12px;
+}
+.panel-note { font-size: 11px; color: var(--dim); font-weight: 400; }
+
+/* stance */
+.stance-verdict {
+  font-family: var(--nhl-cond); font-size: 40px; font-weight: 900;
+  letter-spacing: 3px; margin-bottom: 4px;
+}
+.stance-verdict.buy { color: #4ade80; text-shadow: 0 0 24px rgba(74,222,128,.4); }
+.stance-verdict.sell { color: #f87171; text-shadow: 0 0 24px rgba(248,113,113,.4); }
+.stance-verdict.tween { color: #f59e0b; text-shadow: 0 0 24px rgba(245,158,11,.4); }
+.stance-record { font-size: 14px; color: var(--text); margin: 6px 0; }
+.stance-picker { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.ctl-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+}
+.dl-main .tb-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.dl-main .tb-pill {
+  font-size: 12px; font-weight: 700; padding: 7px 14px; border-radius: 999px;
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid var(--nhl-line); cursor: pointer; transition: all .12s ease;
+}
+.dl-main .tb-pill:hover { color: #fff; border-color: var(--nhl-blue); }
+.dl-main .tb-pill.active { background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue); }
+.need-row {
+  display: flex; justify-content: space-between; font-size: 13px;
+  padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.need-row .num { color: var(--dim); }
+.sd-h {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+  margin: 12px 0 4px;
+}
+
+/* market */
+.dl-market { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.dl-market-h {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px;
+}
+.dl-market-h.buy { color: #4ade80; }
+.dl-market-h.sell { color: #f87171; }
+.market-row {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,.05);
+  font-size: 13px;
+}
+.market-row.user { background: rgba(59,130,246,.1); border-radius: 6px; padding: 7px 8px; }
+.market-team { font-weight: 700; flex: 1; }
+.market-rec { color: var(--dim); font-size: 12px; }
+.market-pts { font-family: var(--nhl-cond); font-weight: 800; color: #fff; }
+
+/* impact players */
+.dl-impact { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.impact-card {
+  background: rgba(255,255,255,.04); border: 1px solid var(--nhl-line);
+  border-radius: 8px; padding: 10px 12px;
+}
+.impact-name { font-weight: 700; font-size: 14px; }
+.impact-val { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+.impact-val.high { color: #4ade80; }
+.impact-val.medium { color: #f59e0b; }
+.impact-val.low { color: var(--dimmer); }
+.pos-tag {
+  font-size: 10px; font-weight: 700; margin-left: 6px; padding: 2px 6px;
+  border-radius: 4px; background: rgba(59,130,246,.16); color: #93c5fd;
+}
+
+/* rumors + deals */
+.rumor-row {
+  display: flex; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05); font-size: 13px; line-height: 1.5;
+}
+.rumor-dot { color: #f59e0b; }
+
+.empty {
+  padding: 24px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+}

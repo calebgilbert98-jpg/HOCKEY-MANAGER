@@ -98,3 +98,111 @@ section:first-of-type .section-title { margin-top: 0; }
   .champ-card { flex-wrap: wrap; }
   .champ-meta { margin-left: 0; text-align: left; }
 }
+
+/* Batch C (League): history tabs. */
+.history-main .tb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+.history-main .tb-tab {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  background: var(--nhl-panel2); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 9px 18px; cursor: pointer; transition: all .12s ease;
+}
+.history-main .tb-tab:hover { color: #fff; border-color: var(--nhl-blue); }
+.history-main .tb-tab.active {
+  background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue);
+  box-shadow: 0 0 14px rgba(59,130,246,.45);
+}
+.history-main .tb-panel.hidden { display: none; }
+
+.hist-controls {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 10px 14px; flex-wrap: wrap;
+}
+.ctl-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+}
+.lf-select {
+  background: #0b1220; color: var(--text); border: 1px solid var(--nhl-line);
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.history-main .tb-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.history-main .tb-pill {
+  font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid var(--nhl-line); cursor: pointer; transition: all .12s ease;
+}
+.history-main .tb-pill:hover { color: #fff; border-color: var(--nhl-blue); }
+.history-main .tb-pill.active { background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue); }
+
+.hist-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.hist-table th {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+  text-align: left; padding: 10px 12px;
+  border-bottom: 1px solid var(--nhl-line-blue); white-space: nowrap;
+}
+.hist-table td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.045); }
+.hist-table tbody tr:hover { background: rgba(59,130,246,.07); }
+.hist-table .rank { font-family: var(--nhl-cond); font-weight: 800; color: var(--dimmer); width: 32px; }
+.hist-table .num { font-family: var(--nhl-cond); font-size: 15px; font-weight: 800; text-align: right; color: var(--dim); }
+.hist-table .stat { font-family: var(--nhl-cond); font-size: 16px; font-weight: 900; text-align: right; color: #fff; }
+.hist-table .pname { font-weight: 600; }
+
+.awards-list { display: grid; gap: 6px; }
+.award-row {
+  display: flex; gap: 14px; align-items: baseline;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: 8px; padding: 10px 14px;
+}
+.award-row .award-name {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase; color: #f59e0b;
+  min-width: 260px;
+}
+.award-row .award-winner { font-weight: 700; color: #fff; }
+
+.hof-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.hof-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid rgba(245,158,11,.3); border-radius: var(--nhl-r);
+  padding: 14px 16px;
+}
+.hof-name { font-size: 16px; font-weight: 800; color: #fff; }
+.hof-year { font-size: 12px; font-style: italic; color: var(--dimmer); margin: 2px 0 6px; }
+.hof-line { font-size: 13px; color: var(--dim); }
+.hof-cups { font-size: 13px; color: #f59e0b; margin-top: 4px; }
+
+.adv-leaders { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.adv-col {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: 8px; padding: 10px 12px;
+}
+.adv-col-h {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1px; color: #93c5fd; margin-bottom: 6px; cursor: help;
+}
+.adv-row { font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+.adv-row b { color: #fff; }
+
+.glossary { display: grid; gap: 8px; }
+.gloss-row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 12px;
+  background: rgba(255,255,255,.03); border: 1px solid var(--nhl-line);
+  border-radius: 8px; padding: 10px 14px;
+}
+.gloss-term {
+  font-family: var(--nhl-cond); font-weight: 800; color: #93c5fd;
+}
+.gloss-def { font-size: 13px; color: var(--dim); line-height: 1.5; }
+
+.review-card {
+  background: #0b1220; border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r); padding: 18px 20px;
+  font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.7;
+  color: var(--text); white-space: pre-wrap; word-wrap: break-word;
+  max-height: 560px; overflow-y: auto;
+}

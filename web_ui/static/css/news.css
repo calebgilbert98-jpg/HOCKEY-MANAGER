@@ -248,3 +248,22 @@
   .media-main { padding: 6px 16px 32px; }
   .fine-row { grid-template-columns: 1fr; }
 }
+
+/* Batch C (League) minor: news search + refresh toolbar. */
+.wire-toolbar {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+}
+.tb-search {
+  background: #0b1220; color: var(--text); border: 1px solid var(--nhl-line);
+  border-radius: 6px; padding: 8px 12px; font-size: 13px; min-width: 220px;
+}
+.tb-search::placeholder { color: var(--dimmer); }
+.tb-search:focus { border-color: var(--nhl-blue); outline: none; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: var(--text); border-radius: var(--nhl-r-sm);
+  padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-btn:hover:not(:disabled) { border-color: var(--nhl-blue); }
+.tb-btn:disabled { opacity: .5; cursor: default; }
+.panel-note { font-size: 11px; color: var(--dim); }

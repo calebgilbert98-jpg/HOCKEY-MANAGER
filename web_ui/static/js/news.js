@@ -4,6 +4,7 @@
 const MC = {
   tab: 'wire',
   wireFilter: 'All',
+  wireSearch: '',
   cache: {},
 };
 
@@ -97,8 +98,10 @@ function renderWire(data) {
   document.getElementById('wire-empty').hidden = items.length > 0;
   feed.innerHTML = '';
   let lastGroup = null;
+  const q = (MC.wireSearch || '').toLowerCase();
   for (const item of items) {
     if (MC.wireFilter !== 'All' && item.category !== MC.wireFilter) continue;
+    if (q && !(item.story || '').toLowerCase().includes(q)) continue;
     const groupKey = item.date_label || 'Unknown date';
     if (groupKey !== lastGroup) {
       const h = document.createElement('div');
@@ -131,9 +134,34 @@ function renderWire(data) {
     feed.appendChild(el);
   }
   if (feed.children.length === 0 && items.length > 0) {
-    feed.innerHTML = '<div class="filter-note">No stories in this category yet.</div>';
+    feed.innerHTML = '<div class="filter-note">No stories match this search/filter yet.</div>';
   }
 }
+
+/* ---------- wire search + refresh (Batch C minor) ---------- */
+document.getElementById('wire-search').addEventListener('input', e => {
+  MC.wireSearch = e.target.value;
+  if (MC.cache.wire) renderWire(MC.cache.wire);
+});
+document.getElementById('wire-refresh').addEventListener('click', async () => {
+  const btn = document.getElementById('wire-refresh');
+  const fresh = document.getElementById('wire-fresh');
+  btn.disabled = true;
+  try {
+    const d = await (await fetch('/api/news/refresh', { method: 'POST' })).json();
+    if (d.ok) {
+      delete MC.cache.wire; // force a re-pull of the wire
+      await loadTab('wire');
+      fresh.textContent = `${d.count} stories${d.latest ? ' · latest ' + d.latest : ''}`;
+    } else {
+      fresh.textContent = 'Refresh failed';
+    }
+  } catch (e) {
+    fresh.textContent = 'Refresh failed';
+  }
+  btn.disabled = false;
+  setTimeout(() => { fresh.textContent = ''; }, 8000);
+});
 
 document.addEventListener('click', e => {
   const chip = e.target.closest('#wire-chips .chip');

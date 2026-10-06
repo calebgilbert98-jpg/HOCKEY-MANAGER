@@ -23,12 +23,67 @@
     <h1 class="bcast-title">League History</h1>
   </div>
 
-  <section id="champions">
+  <nav class="tb-tabs" id="hist-tabs" aria-label="History sections">
+    <button class="tb-tab active" data-tab="champions">Champions</button>
+    <button class="tb-tab" data-tab="awards">Awards</button>
+    <button class="tb-tab" data-tab="leaders">Career Leaders</button>
+    <button class="tb-tab" data-tab="hof">Hall of Fame</button>
+    <button class="tb-tab" data-tab="advanced">Advanced Stats</button>
+    <button class="tb-tab" data-tab="reviews">Season Reviews</button>
+    <button class="tb-tab" data-tab="records">Franchise Records</button>
+  </nav>
+
+  <section id="hist-tab-champions" class="tb-panel">
     <div class="section-title"><span>🏆</span> Stanley Cup Champions</div>
     <div class="champ-list" id="champ-list"></div>
   </section>
 
-  <section id="records" hidden>
+  <section id="hist-tab-awards" class="tb-panel hidden">
+    <div class="hist-controls">
+      <span class="ctl-label">Season</span>
+      <select class="lf-select" id="awards-year"></select>
+    </div>
+    <div class="section-title"><span>🏅</span> Award Winners</div>
+    <div class="awards-list" id="awards-list"></div>
+  </section>
+
+  <section id="hist-tab-leaders" class="tb-panel hidden">
+    <div class="hist-controls">
+      <span class="ctl-label">Category</span>
+      <div class="tb-pills" id="leaders-cats"></div>
+    </div>
+    <div class="section-title"><span>📊</span> Career Leaders</div>
+    <table class="hist-table" id="leaders-table"></table>
+  </section>
+
+  <section id="hist-tab-hof" class="tb-panel hidden">
+    <div class="section-title"><span>⭐</span> Hall of Fame</div>
+    <p class="panel-note" id="hof-bar"></p>
+    <div class="hof-list" id="hof-list"></div>
+  </section>
+
+  <section id="hist-tab-advanced" class="tb-panel hidden">
+    <div class="section-title"><span>📈</span> Team Advanced Metrics <span class="panel-note">5v5 process</span></div>
+    <p class="panel-note" id="adv-note"></p>
+    <table class="hist-table" id="adv-teams"></table>
+    <div class="section-title"><span>🌟</span> League Leaders — Advanced</div>
+    <div class="adv-leaders" id="adv-leaders"></div>
+    <div class="section-title"><span>📖</span> Glossary</div>
+    <div class="glossary" id="glossary"></div>
+  </section>
+
+  <section id="hist-tab-reviews" class="tb-panel hidden">
+    <div class="hist-controls">
+      <span class="ctl-label">Club</span>
+      <select class="lf-select" id="reviews-team"></select>
+      <span class="ctl-label">Season</span>
+      <select class="lf-select" id="reviews-year"></select>
+    </div>
+    <div class="section-title"><span>📰</span> Season Review</div>
+    <pre class="review-card" id="review-card"></pre>
+  </section>
+
+  <section id="hist-tab-records" class="tb-panel hidden">
     <div class="section-title"><span>📖</span> Franchise Record Book</div>
     <div class="record-grid" id="record-grid"></div>
   </section>

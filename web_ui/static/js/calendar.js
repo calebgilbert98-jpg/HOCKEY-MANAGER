@@ -2,6 +2,8 @@
 let calGames = [];
 let calToday = '';          // 'YYYY-MM-DD'
 let calTeam = '';
+let calEvents = [];         // league event markers (Batch C minor)
+let calDeadline = null;     // trade deadline info
 let viewYear = 0;
 let viewMonth = 0;          // 0-11
 
@@ -20,6 +22,40 @@ async function loadCalendar() {
     renderCalendar();
     renderEmpty();
   } catch (e) { console.error(e); }
+  // League event markers + deadline info (Batch C minor).
+  try {
+    const ev = await (await fetch('/api/calendar/events')).json();
+    calEvents = ev.events || [];
+    calDeadline = ev.deadline || null;
+    renderCalendar();
+    renderDeadlineBanner();
+  } catch (e) { /* non-fatal */ }
+}
+
+/* Deadline-day banner with action (desktop deadline-day actions). */
+function renderDeadlineBanner() {
+  let bar = document.getElementById('cal-deadline-bar');
+  if (!calDeadline) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'cal-deadline-bar';
+    bar.className = 'cal-deadline-bar';
+    const main = document.querySelector('main');
+    main.insertBefore(bar, main.querySelector('.bcast-head').nextSibling);
+  }
+  const d = calDeadline;
+  if (d.is_today) {
+    bar.classList.add('is-today');
+    bar.innerHTML = `<span class="dlb-tag">Deadline Day</span>
+      <span>Deals lock at 3 PM ET — <a href="/deadline">open the Deadline Center →</a></span>`;
+  } else if (!d.passed && d.days_left != null) {
+    bar.classList.remove('is-today');
+    bar.innerHTML = `<span class="dlb-tag">Trade Deadline</span>
+      <span>${esc(d.label)} — ${d.days_left} day${d.days_left === 1 ? '' : 's'} away —
+      <a href="/deadline">open the Deadline Center →</a></span>`;
+  } else {
+    bar.remove();
+  }
 }
 
 function initView() {
@@ -89,6 +125,15 @@ function dayCell(dayNum, iso, games) {
   if (mine.length) cell.classList.add('has-mine');
 
   let html = `<div class="cal-date">${dayNum}</div>`;
+  // League event markers: deadline / draft / season bounds.
+  for (const ev of calEvents) {
+    if (ev.date !== iso) continue;
+    const cls = ev.kind === 'deadline' ? 'ev-deadline' : ev.kind === 'draft' ? 'ev-draft' : 'ev-season';
+    const action = ev.action
+      ? `<a class="ev-action" href="${esc(ev.action)}" title="${esc(ev.action_label || 'Open')}">→</a>`
+      : '';
+    html += `<div class="cal-event ${cls}" title="${esc(ev.label)}">${esc(ev.label)}${action}</div>`;
+  }
   for (const g of mine) {
     const ha = g.is_home ? 'vs' : '@';
     html += `<div class="cal-game${g.preseason ? ' pre' : ''}">`
