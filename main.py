@@ -8481,6 +8481,14 @@ class HockeyManagerGUI(tk.Tk):
             except Exception:
                 pass
             
+            # Daily news engine: 3-8 routine stories/day so the news feed
+            # never runs dry. Feed-only (no inbox, no headline cap).
+            try:
+                import daily_news
+                daily_news.generate_daily_news(self, self.current_date)
+            except Exception as _dne:
+                print(f"Daily news generation failed (non-fatal): {_dne}")
+            
             # Clear caches periodically to prevent memory bloat
             if self.current_date.day == 1:  # First day of each month
                 # Part 3: draft-season build-up beat (Jan-Jun, once per
