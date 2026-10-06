@@ -211,6 +211,61 @@ function refreshTeamPicker() {
     o.textContent = 'Random'; o.value = 'Random';
     sel.appendChild(o);
   }
+  updateStartButtons();
+}
+
+/* ---------- career action bar (outside the tabs) ---------- */
+function teamsLoaded() {
+  const sel = $('team-picker');
+  return !!(sel && sel.options.length &&
+    sel.options[0].textContent !== 'Loading teams…');
+}
+/* Start Career stays disabled until a real team is selected. */
+function updateStartButtons() {
+  const ok = teamsLoaded() && !!$('team-picker').value;
+  $('btn-new').disabled = !ok;
+  $('btn-quick').disabled = !teamsLoaded();
+  $('setup-actions-hint').textContent = ok
+    ? ''
+    : 'Select a team to start your career.';
+}
+/* Quick Start: basic defaults, randomized GM + team, straight in. */
+function basicConfig() {
+  const gm = gmProfile(); // already randomized by quickStart()
+  return {
+    mode: 'new',
+    team: $('team-picker').value,
+    gm_name: gm.name,
+    gm_profile: gm,
+    database_size: 'default',
+    leagues: ['NHL', 'AHL'],
+    sim_detail: { NHL: 'full', AHL: 'quick' },
+    fog_of_war: true,
+    fantasy_draft: false,
+    salary_cap: true,
+    injuries: true,
+    morale_system: true,
+    start_date: 'September 1, 2024',
+    season_length: 'Default (84 Games)',
+    difficulty: 'Professional',
+    trade_difficulty: 'Realistic',
+    cpu_gm_intelligence: 'Medium (Balanced)',
+    international_players: true,
+    start_without_cap_penalties: false,
+    realistic_progression: true,
+    show_composite_ratings: false,
+    playoff_format: 'divisional',
+    user_league: 'NHL',
+  };
+}
+async function quickStart() {
+  randomGMProfile();
+  const sel = $('team-picker');
+  if (sel.options.length > 0) {
+    sel.selectedIndex = Math.floor(Math.random() * sel.options.length);
+  }
+  updateStartButtons();
+  await startNew(basicConfig());
 }
 
 /* ---------- saves ---------- */
@@ -538,6 +593,9 @@ async function init() {
   $('btn-mp-start').addEventListener('click', mpStartGame);
 
   $('btn-new').addEventListener('click', () => startNew());
+  $('btn-quick').addEventListener('click', quickStart);
+  $('team-picker').addEventListener('change', updateStartButtons);
+  updateStartButtons();
   heartbeat();
   setInterval(heartbeat, 30000);
 }

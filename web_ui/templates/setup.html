@@ -193,8 +193,6 @@
           <button data-val="conference" title="Top 8 per conference, classic 1v8">Conference</button>
         </div>
       </div>
-
-      <button id="btn-new" class="primary">Start Career →</button>
     </div>
   </section>
 
@@ -318,6 +316,16 @@
     <div class="progress-card">
       <div class="spinner"></div>
       <p id="setup-detail">Starting…</p>
+    </div>
+  </div>
+
+  <!-- Career actions: outside the tabs, always visible. Start Career stays
+       disabled until a team is selected; Quick Start randomizes everything. -->
+  <div class="setup-actions" id="setup-actions">
+    <p class="setup-actions-hint" id="setup-actions-hint">Select a team to start your career.</p>
+    <div class="setup-actions-btns">
+      <button id="btn-quick" class="btn-ghost" disabled title="Random GM, random team, default settings — straight into the game">⚡ Quick Start</button>
+      <button id="btn-new" class="primary" disabled>Start Career →</button>
     </div>
   </div>
 
