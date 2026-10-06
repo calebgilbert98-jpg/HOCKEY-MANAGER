@@ -1369,8 +1369,15 @@ def _do_setup_new_game(cmd):
             except Exception:
                 gm_profile = None
 
+            # Map the launcher's lowercase size to a valid
+            # DATABASE_CONFIGURATIONS key (2026-10-06: 'Standard' is not a
+            # valid key and silently produced staff-less/AHL-less leagues).
+            _size_map = {"small": "Small", "default": "Default",
+                         "medium": "Medium", "large": "Large"}
+            _db_size = _size_map.get(str(cmd.get("database_size") or "default").lower(),
+                                     "Default")
             settings = {
-                'database_size': 'Standard',
+                'database_size': _db_size,
                 'database_config': db_config,
                 'fantasy_draft': bool(cmd.get("fantasy_draft")),
                 'user_team': wiz["user_team"],
@@ -1397,7 +1404,7 @@ def _do_setup_new_game(cmd):
         except Exception:
             # Fallback to the previous hardcoded defaults.
             settings = {
-                'database_size': 'Standard',
+                'database_size': 'Default',
                 'fantasy_draft': False,
                 'user_team': team,
                 'user_league': 'NHL',

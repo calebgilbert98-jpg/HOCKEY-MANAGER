@@ -271,15 +271,20 @@ class GameManager:
                     progress.update(percentage, status, detail)
                     debug_print(f"DEBUG: Progress - {percentage}% - {status} - {detail}")
                 
-                config = DATABASE_CONFIGURATIONS[database_size]
-                debug_print(f"DEBUG: Using config: {config.name}")
                 # New-game setup wizard can supply a custom DatabaseConfig
                 # (league selection); otherwise use the size preset.
+                # NOTE (2026-10-06): the size lookup must stay inside the else
+                # branch — a supplied database_config must not require a valid
+                # size key. The web launcher once passed 'Standard' here and
+                # the KeyError silently fell back to a staff-less/AHL-less
+                # bare league.
                 db_config = settings.get('database_config')
                 if db_config is not None:
                     debug_print(f"DEBUG: Using wizard database config: {db_config.name}")
                     generator = DatabaseGenerator(db_config)
                 else:
+                    config = DATABASE_CONFIGURATIONS[database_size]
+                    debug_print(f"DEBUG: Using config: {config.name}")
                     generator = DatabaseGenerator(config)
                 # Fantasy-draft starts are an even playing field: the
                 # generator skips the real-life day-one cap situations so
