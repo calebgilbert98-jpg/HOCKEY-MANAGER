@@ -189,7 +189,27 @@
 
 /* Special-teams tab (2026-10-05): tab bar + shared roster panel layout. */
 .le-tabs { display: flex; gap: 8px; margin: 4px 0 16px; }
-.le-tabs .le-filter { cursor: pointer; }
+/* Broadcast-style tab buttons (2026-10-06): own class so they never
+   collide with the roster .le-filter pills. */
+.le-tab {
+  font-family: var(--nhl-cond);
+  font-size: 14px; font-weight: 800; letter-spacing: 1.8px; text-transform: uppercase;
+  background: rgba(255,255,255,.04); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-bottom: 3px solid var(--nhl-line);
+  border-radius: var(--nhl-r-sm); padding: 10px 24px; cursor: pointer;
+  transition: all .13s ease;
+}
+.le-tab:hover { color: #fff; border-color: rgba(255,255,255,.3); }
+.le-tab.on {
+  background: var(--nhl-blue-soft); color: #fff;
+  border-color: var(--nhl-blue); border-bottom-color: var(--nhl-blue);
+  box-shadow: 0 3px 14px rgba(59,130,246,.4);
+}
+/* Roster filter pills: visible active state (were unstyled before). */
+.le-filters .le-filter.on {
+  background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff;
+  box-shadow: 0 3px 12px rgba(59,130,246,.4);
+}
 .le-tabwrap { min-width: 0; }
 .st-head { margin-bottom: 12px; }
 

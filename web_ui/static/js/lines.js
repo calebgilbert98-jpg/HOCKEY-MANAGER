@@ -588,9 +588,12 @@ function wireEvents() {
   $('btn-save').addEventListener('click', saveLines);
   $('roster-search').addEventListener('input', (e) => { S.q = e.target.value; renderRoster(); });
   $('roster-sort').addEventListener('change', (e) => { S.sort = e.target.value; renderRoster(); });
-  document.querySelectorAll('.le-filter').forEach((b) => {
+  // Roster filter pills only — scoped to the pill container so the
+  // Even Strength / Special Teams tab buttons (own .le-tab class) can
+  // never be hijacked into the filter logic (2026-10-06 bugfix).
+  document.querySelectorAll('.le-filters .le-filter').forEach((b) => {
     b.addEventListener('click', () => {
-      document.querySelectorAll('.le-filter').forEach((x) => x.classList.remove('on'));
+      document.querySelectorAll('.le-filters .le-filter').forEach((x) => x.classList.remove('on'));
       b.classList.add('on');
       S.filter = b.dataset.f;
       renderRoster();
