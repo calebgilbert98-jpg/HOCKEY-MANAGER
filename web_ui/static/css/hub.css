@@ -309,6 +309,23 @@ body {
 }
 .btn-auto:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.07); }
 .btn-auto:disabled { opacity: .55; cursor: default; }
+/* Batch A: blocker primary (deep blue) + secondary quick-fix buttons. */
+.btn-primary-blue {
+  padding: 9px 18px; border-radius: var(--radius-sm); text-decoration: none;
+  background: var(--accent); color: #fff; font-size: 13.5px; font-weight: 750;
+  border: 1px solid var(--accent);
+  box-shadow: 0 4px 14px rgba(59,130,246,.4);
+  transition: filter .15s ease;
+}
+.btn-primary-blue:hover { filter: brightness(1.08); }
+.btn-secondary {
+  padding: 9px 18px; border-radius: var(--radius-sm); cursor: pointer;
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.14); font-size: 13.5px; font-weight: 600;
+  transition: color .15s ease, border-color .15s ease;
+}
+.btn-secondary:hover:not(:disabled) { color: var(--text); border-color: rgba(255,255,255,.28); }
+.btn-secondary:disabled { opacity: .55; cursor: default; }
 .modal-close {
   width: 100%; margin-top: 10px; padding: 11px; border-radius: var(--radius-sm);
   background: none; border: 1px solid rgba(255,255,255,.12);
@@ -316,6 +333,59 @@ body {
   transition: color .15s ease, border-color .15s ease;
 }
 .modal-close:hover { color: var(--text); border-color: rgba(255,255,255,.25); }
+
+/* ---------- daily results modal (Batch A) ---------- */
+.modal-card.results-card { max-width: 720px; }
+.day-loading-card {
+  max-width: 300px; display: flex; flex-direction: column; gap: 14px;
+  align-items: center; text-align: center; color: var(--dim);
+}
+.res-tabs { display: flex; gap: 8px; margin: 4px 0 14px; }
+.res-tab {
+  background: rgba(255,255,255,.04); color: var(--dim);
+  border: 1px solid rgba(255,255,255,.1); border-radius: var(--radius-sm);
+  padding: 8px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.res-tab:hover { color: var(--text); }
+.res-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.res-pane { max-height: 46vh; overflow: auto; }
+.res-usergame {
+  background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.25);
+  border-radius: 12px; padding: 12px 14px; margin-bottom: 14px;
+}
+.res-usergame-title {
+  font-size: 11px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--accent); margin-bottom: 8px;
+}
+.res-hl { font-size: 13px; color: var(--dim); padding: 3px 0 3px 6px; }
+.res-game {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.res-team { color: var(--text); text-decoration: none; font-weight: 700; font-size: 14px; }
+.res-team:hover { color: var(--accent); }
+.res-score { font-weight: 800; font-size: 15px; color: var(--accent); }
+.res-note { font-size: 11px; font-weight: 800; color: var(--gold); }
+.res-box {
+  margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--accent);
+  text-decoration: none; white-space: nowrap;
+}
+.res-box:hover { text-decoration: underline; }
+.res-empty { padding: 24px; text-align: center; color: var(--dimmer); font-size: 13px; }
+.tbl-wrap { overflow-x: auto; }
+.res-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.res-table th {
+  text-align: left; color: var(--dimmer); font-size: 11px; letter-spacing: 1px;
+  text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid rgba(59,130,246,.25);
+}
+.res-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.05); color: var(--text); }
+.res-table tr.row-user td { background: rgba(59,130,246,.1); }
+.res-table .c-rank { color: var(--dimmer); }
+.res-table .c-pts { font-weight: 800; color: var(--accent); }
+.res-table .c-team a.plink { color: var(--text); text-decoration: none; font-weight: 700; }
+.res-table .c-team a.plink:hover { color: var(--accent); }
+.res-news-item { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.06); font-size: 13.5px; line-height: 1.55; }
+.res-news-date { color: var(--dimmer); font-size: 12px; margin-right: 8px; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1180px) {

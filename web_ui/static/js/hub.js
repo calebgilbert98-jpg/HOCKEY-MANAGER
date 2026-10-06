@@ -289,24 +289,142 @@ async function advanceDay(st) {
       return;
     }
   } catch (e) { /* fall through to quick sim */ }
+  // Batch A: after the day sims, show the daily results (desktop parity
+  // for _post_advance_landing) instead of a bare reload — when the simmed
+  // day had games. The results API also drives the inbox nudge.
+  showDayLoading();
   fetch('/api/command', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({op: 'advance_day'}),
-  }).then(() => setTimeout(() => window.location.reload(), 800));
+  }).then(() => setTimeout(showDailyResults, 1400))
+    .catch(() => { hideDayLoading(); window.location.reload(); });
+}
+
+async function showDailyResults() {
+  hideDayLoading();
+  let data = null;
+  try {
+    data = await (await fetch('/api/daily_results')).json();
+  } catch (e) { /* fall through to reload */ }
+  if (data && data.ok && data.games_played > 0) {
+    showResultsModal(data);
+    refreshInboxBadge();
+  } else {
+    window.location.reload();
+  }
+}
+
+async function refreshInboxBadge() {
+  try {
+    const s = await (await fetch('/api/state')).json();
+    const n = s && s.inbox ? (s.inbox.unread || 0) : 0;
+    const badge = document.querySelector('[aria-label="Inbox"] .th-badge');
+    if (badge) {
+      badge.textContent = n;
+      badge.style.display = n > 0 ? '' : 'none';
+    }
+  } catch (e) { /* best-effort */ }
+}
+
+function showDayLoading() {
+  closeResultsModal();
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov'; ov.id = 'day-loading';
+  ov.innerHTML = `<div class="modal-card day-loading-card">
+    <div class="th-spinner"></div><div>Simulating the day…</div></div>`;
+  document.body.appendChild(ov);
+}
+function hideDayLoading() {
+  const m = document.getElementById('day-loading');
+  if (m) m.remove();
+}
+
+/* ---------- daily results modal (Games / Standings / News tabs) ---------- */
+function closeResultsModal() {
+  const m = document.getElementById('results-modal');
+  if (m) m.remove();
+}
+
+function resultsGameRow(g) {
+  const note = g.note ? ` <span class="res-note">${esc(g.note)}</span>` : '';
+  const bs = g.date_iso
+    ? `<a class="res-box" href="${'/boxscore?' + new URLSearchParams({date: g.date_iso, home: g.home, away: g.away}).toString()}">Box&nbsp;Score&nbsp;→</a>`
+    : '';
+  return `<div class="res-game">
+    <a class="res-team" href="/team/${encodeURIComponent(g.away)}">${esc(g.away_abbr)}</a>
+    <span class="res-score">${g.away_score} – ${g.home_score}</span>
+    <a class="res-team" href="/team/${encodeURIComponent(g.home)}">${esc(g.home_abbr)}</a>
+    ${note}
+    ${bs}
+  </div>`;
+}
+
+function showResultsModal(d) {
+  closeResultsModal();
+  const ov = document.createElement('div');
+  ov.className = 'modal-ov'; ov.id = 'results-modal';
+  const gamesHtml = (d.games || []).map(resultsGameRow).join('') ||
+    '<div class="res-empty">No games recorded.</div>';
+  const userHtml = d.user_game ? `
+    <div class="res-usergame">
+      <div class="res-usergame-title">Your game</div>
+      ${resultsGameRow(d.user_game)}
+      ${(d.highlights || []).map(h => `<div class="res-hl">▸ ${esc(h)}</div>`).join('')}
+    </div>` : '';
+  const stRows = (d.standings || []).map((r, i) =>
+    `<tr class="${r.is_user ? 'row-user' : ''}"><td class="c-rank">${i + 1}</td>` +
+    `<td class="c-team"><a class="plink" href="/team/${encodeURIComponent(r.team)}">${esc(r.team)}</a></td>` +
+    `<td>${r.gp}</td><td>${r.w}</td><td>${r.l}</td><td>${r.otl}</td>` +
+    `<td class="c-pts">${r.pts}</td><td>${r.gf}</td><td>${r.ga}</td><td>${r.diff > 0 ? '+' : ''}${r.diff}</td></tr>`
+  ).join('');
+  const newsHtml = (d.news || []).map(n =>
+    `<div class="res-news-item"><span class="res-news-date">${esc(n.date)}</span>${esc(n.story)}</div>`
+  ).join('') || '<div class="res-empty">No news today.</div>';
+  ov.innerHTML = `
+  <div class="modal-card results-card">
+    <h2>Daily Results</h2>
+    <p class="modal-sub">${esc(d.date_label)} · ${d.games_played} game${d.games_played === 1 ? '' : 's'}</p>
+    ${userHtml}
+    <div class="res-tabs" role="tablist">
+      <button class="res-tab active" data-rtab="games">Games</button>
+      <button class="res-tab" data-rtab="standings">Standings</button>
+      <button class="res-tab" data-rtab="news">News</button>
+    </div>
+    <div class="res-pane" data-rpane="games">${gamesHtml}</div>
+    <div class="res-pane" data-rpane="standings" hidden>
+      <div class="tbl-wrap"><table class="res-table"><thead><tr>
+        <th>#</th><th>Team</th><th>GP</th><th>W</th><th>L</th><th>OTL</th><th>PTS</th><th>GF</th><th>GA</th><th>DIFF</th>
+      </tr></thead><tbody>${stRows}</tbody></table></div>
+    </div>
+    <div class="res-pane" data-rpane="news" hidden>${newsHtml}</div>
+    <button class="modal-close" id="results-close">Continue</button>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelectorAll('.res-tab').forEach(t => t.addEventListener('click', () => {
+    ov.querySelectorAll('.res-tab').forEach(x => x.classList.toggle('active', x === t));
+    ov.querySelectorAll('.res-pane').forEach(p => { p.hidden = p.dataset.rpane !== t.dataset.rtab; });
+  }));
+  const done = () => { closeResultsModal(); window.location.reload(); };
+  document.getElementById('results-close').addEventListener('click', done);
+  ov.addEventListener('click', e => { if (e.target === ov) done(); });
 }
 
 function showBlockerModal(blockers) {
   closeBlockerModal();
   const ov = document.createElement('div');
   ov.className = 'modal-ov'; ov.id = 'blocker-modal';
+  // Batch A: every blocker gets its desktop action set — primary jump
+  // (web route with the desktop's own button label), auto-resolve, and
+  // the secondary quick fix (e.g. "IR injured players").
   const cards = blockers.map(b => `
     <div class="blocker-card">
       <div class="b-title">${esc(b.title)}</div>
       <div class="b-detail">${esc(b.detail)}</div>
       <div class="b-actions">
-        ${b.web_route ? `<a class="btn-ghost" href="${b.web_route}">Fix it →</a>` : ''}
-        ${b.has_auto ? `<button class="btn-auto" data-bid="${esc(b.id)}">⚡ ${esc(b.auto_label)}</button>` : ''}
+        ${b.web_route ? `<a class="btn-primary-blue" href="${b.web_route}">${esc(b.primary_label || 'Fix it →')}</a>` : ''}
+        ${b.has_auto ? `<button class="btn-auto" data-bid="${esc(b.id)}" data-kind="auto">⚡ ${esc(b.auto_label)}</button>` : ''}
+        ${b.has_secondary ? `<button class="btn-secondary" data-bid="${esc(b.id)}" data-kind="secondary">${esc(b.secondary_label)}</button>` : ''}
       </div>
     </div>`).join('');
   ov.innerHTML = `
@@ -319,13 +437,13 @@ function showBlockerModal(blockers) {
   document.body.appendChild(ov);
   document.getElementById('blocker-close').addEventListener('click', closeBlockerModal);
   ov.addEventListener('click', e => { if (e.target === ov) closeBlockerModal(); });
-  ov.querySelectorAll('.btn-auto').forEach(btn =>
+  ov.querySelectorAll('.btn-auto, .btn-secondary').forEach(btn =>
     btn.addEventListener('click', async () => {
       btn.disabled = true; btn.textContent = 'Working…';
       await fetch('/api/command', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({op: 'resolve_blocker', blocker_id: btn.dataset.bid, kind: 'auto'}),
+        body: JSON.stringify({op: 'resolve_blocker', blocker_id: btn.dataset.bid, kind: btn.dataset.kind || 'auto'}),
       });
       setTimeout(async () => {
         const st = await (await fetch('/api/continue_state')).json();

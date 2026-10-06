@@ -25,12 +25,49 @@ def _safe(fn, default=None):
         return default
 
 
+def _norm_team_key(s):
+    """Normalize a team name/abbr for tolerant matching: lowercase,
+    collapse whitespace, strip punctuation."""
+    import re
+    s = str(s or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return re.sub(r"[^a-z0-9 ]", "", s).strip()
+
+
+def _team_abbrs(t):
+    """Candidate abbreviations for a team: explicit abbr fields plus the
+    bridge TEAM_ABBR map."""
+    out = []
+    for attr in ("abbr", "abbreviation", "team_abbr", "short_name"):
+        v = _safe(lambda: getattr(t, attr, ""), "") or ""
+        if v and str(v).strip():
+            out.append(str(v).strip())
+    try:
+        from web_ui.bridge import TEAM_ABBR
+        name = _safe(lambda: getattr(t, "team_name", ""), "") or ""
+        hit = TEAM_ABBR.get(name)
+        if hit:
+            out.append(hit)
+    except Exception:
+        pass
+    return out
+
+
 def _find_team(name):
-    """Find a Team object by team_name (URL-decoded)."""
+    """Find a Team object by team_name (URL-decoded).
+
+    Match order (first hit wins):
+      1. exact team_name (the primary, unchanged behavior),
+      2. normalized team_name (case/whitespace/punctuation tolerant),
+      3. abbreviation (exact, case-insensitive),
+      4. normalized abbreviation.
+    """
     live = _live()
     if live is None:
         return None
-    name = unquote(name).strip().lower()
+    raw = unquote(name or "")
+    want = raw.strip().lower()
+    want_norm = _norm_team_key(raw)
     gm = _safe(lambda: live.game_manager)
     league = _safe(lambda: getattr(gm, "league", None)) or \
              _safe(lambda: getattr(live, "league", None))
@@ -38,10 +75,28 @@ def _find_team(name):
     user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
     if user_team is not None and all(t is not user_team for t in teams):
         teams = [user_team] + teams
+    # 1. exact team_name (primary)
     for t in teams:
         tn = _safe(lambda: str(getattr(t, "team_name", "")).strip().lower(), "")
-        if tn == name:
+        if tn == want:
             return t
+    # 2. normalized team_name
+    if want_norm:
+        for t in teams:
+            if _norm_team_key(_safe(lambda: getattr(t, "team_name", ""), "")) == want_norm:
+                return t
+    # 3. abbreviation, exact (case-insensitive)
+    if want:
+        for t in teams:
+            for ab in _team_abbrs(t):
+                if ab.strip().lower() == want:
+                    return t
+    # 4. normalized abbreviation
+    if want_norm:
+        for t in teams:
+            for ab in _team_abbrs(t):
+                if _norm_team_key(ab) == want_norm:
+                    return t
     return None
 
 

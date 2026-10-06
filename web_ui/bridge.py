@@ -1157,15 +1157,20 @@ def _team_name(t):
 
 
 # Blocker ID -> web page that helps resolve it (None = desktop app only).
+# Batch A (2026-10-06): routes corrected to the page each blocker can
+# actually be fixed from -- the desktop primary actions are "Open Trade
+# Center" (cap), "Choose Captains" (captaincy), "Open Fantasy Draft",
+# "Open Draft War Room". season_integrity has no fix (desktop deliberately
+# offers none); it routes to the inbox where the league memo lives.
 BLOCKER_WEB_ROUTES = {
     "roster_limit_23": "/roster",
     "dress_minimum": "/roster",
-    "salary_cap": "/roster",
-    "salary_floor": "/roster",
-    "captaincy_choice": "/roster",
-    "fantasy_draft": None,
-    "entry_draft": None,
-    "season_integrity": None,
+    "salary_cap": "/trades",
+    "salary_floor": "/finances",
+    "captaincy_choice": "/captains",
+    "fantasy_draft": "/fantasy_draft",
+    "entry_draft": "/draft",
+    "season_integrity": "/inbox",
 }
 
 
@@ -1177,12 +1182,25 @@ def get_continue_state(app):
         try:
             bid = b.get("id", "")
             auto = b.get("auto_action")
+            # Batch A: surface the desktop primary/secondary action labels
+            # (the callables can't cross to JSON, so labels only; the
+            # primary jumps via web_route, the secondary runs through
+            # op=resolve_blocker&kind=secondary).
+            _prim = b.get("action")
+            _prim_label = (_prim[0] if isinstance(_prim, (list, tuple))
+                           and _prim else "")
+            _sec = b.get("secondary_action")
+            _sec_label = (_sec[0] if isinstance(_sec, (list, tuple))
+                          and _sec else "")
             web_blockers.append({
                 "id": bid,
                 "title": b.get("title", ""),
                 "detail": b.get("detail", ""),
                 "has_auto": bool(auto),
                 "auto_label": (auto[0] if isinstance(auto, (list, tuple)) and auto else "Auto-resolve"),
+                "primary_label": _prim_label,
+                "has_secondary": bool(_sec_label),
+                "secondary_label": _sec_label,
                 "web_route": BLOCKER_WEB_ROUTES.get(bid),
             })
         except Exception:
@@ -2419,6 +2437,229 @@ def _web_save_store(app, nonce, ok, message):
         pass
 
 
+def _advance_results_nudge(app):
+    """Inbox nudge after a web day-advance that simmed games.
+
+    Mirrors _post_advance_landing's rule: only when games were actually
+    played on the simmed day. Never raises.
+    """
+    try:
+        from datetime import date as _date, datetime as _dt, timedelta as _td
+        from game_classes import EmailMessage
+    except Exception:
+        return
+    try:
+        gm = _safe(lambda: app.game_manager)
+        today = _safe(lambda: getattr(gm, "current_date", None)) or \
+            _safe(lambda: getattr(app, "current_date", None))
+        if isinstance(today, _dt):
+            simmed = (today - _td(days=1)).date()
+        elif isinstance(today, _date):
+            simmed = today - _td(days=1)
+        else:
+            return
+        idx = getattr(app, "_results_by_date_index", None)
+        results = list(idx().get(simmed, [])) if callable(idx) else []
+        if not results:
+            return
+        team = _safe(lambda: getattr(gm, "user_team", None)) or \
+            _safe(lambda: getattr(app, "user_team", None))
+        inbox = _safe(lambda: getattr(team, "inbox", None))
+        if inbox is None:
+            return
+        my_name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
+        subject = f"\U0001f4ca Daily results — {simmed.strftime('%b %d, %Y')}"
+        # Dedup: don't stack a second nudge for the same day.
+        try:
+            for m in list(getattr(inbox, "messages", []) or []):
+                if _safe(lambda: getattr(m, "subject", ""), "") == subject:
+                    return
+        except Exception:
+            pass
+        lines = []
+        mine_first = sorted(
+            results,
+            key=lambda r: 0 if my_name in (
+                _team_name(r.get("home_team")), _team_name(r.get("away_team"))
+            ) else 1)
+        for r in mine_first[:16]:
+            try:
+                h = _team_name(r.get("home_team"))
+                a = _team_name(r.get("away_team"))
+                hs = int(r.get("home_score", 0) or 0)
+                aws = int(r.get("away_score", 0) or 0)
+                note = " (SO)" if r.get("shootout") else \
+                    (" (OT)" if r.get("overtime") else "")
+                mark = " \u25c0 YOUR GAME" if my_name in (h, a) else ""
+                lines.append(f"{a} {aws} @ {hs} {h}{note} — Final{mark}")
+            except Exception:
+                continue
+        if len(results) > 16:
+            lines.append(f"…and {len(results) - 16} more.")
+        lines.append("")
+        lines.append("Full scores, standings, and news are in the results "
+                     "recap; every final has a box score on the Schedule page.")
+        try:
+            inbox.add_message(EmailMessage(
+                sender="League Office",
+                sender_type="League",
+                subject=subject,
+                content="\n".join(lines),
+                category="League",
+                date_sent=simmed,
+                game_date_sent=simmed,
+            ))
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def _sim_missed_game(app, date_iso, home_name, away_name):
+    """Quick-sim one past, never-played scheduled game (desktop parity).
+
+    Mirrors windows.ScheduleView.simulate_selected_game + _build_game_result
+    + _update_team_stats_from_game: builds a game_results-compatible result
+    dict, records it, and updates team records. Never raises.
+    """
+    try:
+        from datetime import date as _date
+    except Exception:
+        return
+    try:
+        gm = _safe(lambda: app.game_manager)
+        league = _safe(lambda: getattr(gm, "league", None)) or \
+            _safe(lambda: getattr(app, "league", None))
+        if league is None or not date_iso or not home_name or not away_name:
+            return
+        try:
+            gdate = _date.fromisoformat(str(date_iso)[:10])
+        except Exception:
+            return
+        today = _safe(lambda: getattr(gm, "current_date", None)) or \
+            _safe(lambda: getattr(app, "current_date", None))
+        try:
+            today_key = today.date() if hasattr(today, "date") else today
+        except Exception:
+            today_key = today
+        # Desktop parity: today/future games belong to the season sim.
+        if not isinstance(gdate, _date) or not isinstance(today_key, _date):
+            return
+        if gdate >= today_key:
+            return
+        # Find the scheduled entry and make sure it was never played.
+        sched = _safe(lambda: list(getattr(league, "schedule", None) or []),
+                      []) or []
+        entry = None
+        for item in sched:
+            try:
+                if isinstance(item, tuple):
+                    if len(item) >= 3 and item[1] != "NHL_EVENT" and \
+                            _team_name(item[1]) == home_name and \
+                            _team_name(item[2]) == away_name:
+                        gd = item[0].date() if hasattr(item[0], "date") \
+                            else item[0]
+                        if gd == gdate:
+                            entry = item
+                            break
+                elif isinstance(item, dict):
+                    if _team_name(item.get("home_team")) == home_name and \
+                            _team_name(item.get("away_team")) == away_name:
+                        gd = item.get("date")
+                        gd = gd.date() if hasattr(gd, "date") else gd
+                        if gd == gdate and item.get("home_score") is None:
+                            entry = item
+                            break
+            except Exception:
+                continue
+        if entry is None:
+            # No matching unplayed schedule entry -- nothing to sim.
+            return
+        # Never double-record.
+        try:
+            idx = getattr(app, "_results_by_date_index", None)
+            existing = list(idx().get(gdate, [])) if callable(idx) else []
+            for r in existing:
+                if _team_name(r.get("home_team")) == home_name and \
+                        _team_name(r.get("away_team")) == away_name:
+                    return
+        except Exception:
+            pass
+        teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+        home_team = next((t for t in teams
+                          if _team_name(t) == home_name), None)
+        away_team = next((t for t in teams
+                          if _team_name(t) == away_name), None)
+        if home_team is None or away_team is None:
+            return
+        from simulation import GameSim
+        sim = GameSim(home_team, away_team)
+        sim.run()
+        home_score = int(getattr(sim, "home_score", 0) or 0)
+        away_score = int(getattr(sim, "away_score", 0) or 0)
+        winner = home_team if home_score > away_score else away_team
+        notable = _safe(lambda: list(getattr(sim, "notable_events", None) or []),
+                        []) or []
+        went_ot = any(isinstance(e, dict) and e.get("period", 0) > 3
+                      for e in notable)
+        went_so = any(isinstance(e, dict) and e.get("period", 0) == 5
+                      for e in notable)
+        game_result = {
+            "date": gdate,
+            "home_team": home_team,
+            "away_team": away_team,
+            "home_score": home_score,
+            "away_score": away_score,
+            "winner": winner,
+            "events": _safe(lambda: list(getattr(sim, "game_log", None) or []),
+                            []) or [],
+            "notable_events": notable,
+            "player_ratings": {},
+            "event_log": _safe(lambda: list(getattr(sim, "event_log", None) or []),
+                               []) or [],
+            "game_stats": _safe(lambda: dict(getattr(sim, "game_stats", None) or {}),
+                                {}) or {},
+            "team_stats": _safe(lambda: dict(getattr(sim, "team_stats", None) or {}),
+                                {}) or {},
+            "overtime": went_ot,
+            "shootout": went_so,
+        }
+        # Record (keeps the derived indexes in sync when available).
+        rec = getattr(app, "_record_game_result", None)
+        if callable(rec):
+            rec(game_result)
+        else:
+            _safe(lambda: getattr(app, "game_results", None).append(game_result))
+        # Stamp the schedule entry so the page shows Final.
+        try:
+            if isinstance(entry, dict):
+                entry["home_score"] = home_score
+                entry["away_score"] = away_score
+        except Exception:
+            pass
+        # Team records (mirrors _update_team_stats_from_game).
+        try:
+            home_team.goals_for = getattr(home_team, "goals_for", 0) + home_score
+            home_team.goals_against = getattr(home_team, "goals_against", 0) + away_score
+            away_team.goals_for = getattr(away_team, "goals_for", 0) + away_score
+            away_team.goals_against = getattr(away_team, "goals_against", 0) + home_score
+            if home_score > away_score:
+                home_team.update_record("WIN")
+                away_team.update_record("LOSS", overtime=went_ot)
+            elif away_score > home_score:
+                away_team.update_record("WIN")
+                home_team.update_record("LOSS", overtime=went_ot)
+        except Exception:
+            pass
+        try:
+            app.add_news(f"{away_name} {away_score} @ {home_score} {home_name} "
+                         f"(simmed {gdate.strftime('%b %d')}).")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def _execute_command(app, cmd):
     """Run one queued command on the main thread. Never raises."""
     try:
@@ -2438,6 +2679,23 @@ def _execute_command(app, cmd):
                   or getattr(app, "_on_continue", None))
             if callable(fn):
                 fn()
+            # Batch A: web parity for _post_advance_landing. When the
+            # simmed day had games, drop an inbox nudge with the scores
+            # (desktop shows the daily results window; the hub shows the
+            # same data as a modal via /api/daily_results).
+            try:
+                _advance_results_nudge(app)
+            except Exception:
+                pass
+        elif op == "sim_missed_game":
+            # Batch A: web port of ScheduleView.simulate_selected_game.
+            # Only past games that were never played can be simmed here;
+            # today's and future games belong to the season sim.
+            try:
+                _sim_missed_game(app, cmd.get("date_iso"),
+                                 cmd.get("home"), cmd.get("away"))
+            except Exception:
+                pass
         elif op == "mark_read":
             mid = cmd.get("message_id")
             team = getattr(app, "user_team", None)
@@ -4001,6 +4259,23 @@ def _execute_command(app, cmd):
                 gm = getattr(app, "game_manager", None)
                 league = (getattr(gm, "league", None)
                           or getattr(app, "league", None))
+
+                # Batch A: transaction-window enforcement (desktop parity).
+                # The holiday roster freeze (Dec 20-27) and the post-deadline
+                # freeze block even SENDING an offer -- the execution engine
+                # re-checks, but a proposal must never go out frozen.
+                try:
+                    import transaction_windows as _tw
+                    _today = _safe(lambda: getattr(gm, "current_date", None)) or \
+                        _safe(lambda: getattr(app, "current_date", None))
+                    _allowed, _why = _tw.check_window(
+                        "trade", _today,
+                        {"league": league, "date_str": str(_today)})
+                    if not _allowed:
+                        _wt_store(False, _why, "")
+                        return
+                except Exception:
+                    pass
 
                 # Find the partner team (abbr, name, team_name, "City Name").
                 partner = _wt_find_partner(league, cmd.get("target_team_id"))
