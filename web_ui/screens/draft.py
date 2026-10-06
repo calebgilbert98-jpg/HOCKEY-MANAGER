@@ -256,7 +256,7 @@ def api_draft_pick():
     if not pid:
         return jsonify({"ok": False, "error": "player_id required"}), 400
     import web_ui.bridge as _b
-    _b.enqueue_command({"op": "draft_pick", "player_id": pid})
+    _b.enqueue_command("draft_pick", player_id=pid)
     return jsonify({"ok": True})
 
 
@@ -264,7 +264,7 @@ def api_draft_pick():
 def api_draft_sim_pick():
     """Sim Pick: AI selects for the current slot."""
     import web_ui.bridge as _b
-    _b.enqueue_command({"op": "draft_sim_pick"})
+    _b.enqueue_command("draft_sim_pick")
     return jsonify({"ok": True})
 
 
@@ -717,8 +717,8 @@ def api_draft_trade_pick_propose():
             setattr(live, "_web_draft_trade_result", None)
         except Exception:
             pass
-    _b.enqueue_command({"op": "draft_trade_pick", "partner": partner,
-                        "partner_overall": partner_overall})
+    _b.enqueue_command("draft_trade_pick", partner=partner,
+                      partner_overall=partner_overall)
     return jsonify({"ok": True})
 
 

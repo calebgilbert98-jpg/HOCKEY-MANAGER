@@ -697,5 +697,5 @@ def _validate_neg_offer(live, player, aav, years, kind):
 def api_contracts_auto_negotiate():
     """Auto-Negotiate All: queue extension talks for every expiring deal."""
     import web_ui.bridge as _b
-    _b.enqueue_command({"op": "auto_negotiate_extensions"})
+    _b.enqueue_command("auto_negotiate_extensions")
     return jsonify({"ok": True})
