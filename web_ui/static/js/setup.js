@@ -343,6 +343,7 @@ async function mpStartGame() {
   // Collect full new-game config and start as host
   const cfg = collectConfig();
   cfg.multiplayer_host = true;
+  state.mpHostStart = true; // poll() will call /api/mp/start once ready
   await startNew(cfg);
 }
 
@@ -395,18 +396,63 @@ async function mpClaimTeam(teamId) {
 }
 
 let mpJoinPoll = null;
+let mpJoining = false;
 async function pollJoinStatus() {
   clearInterval(mpJoinPoll);
   mpJoinPoll = setInterval(async () => {
     try {
       const r = await fetch('/api/mp/status');
       const d = await r.json();
-      if (d.game_started) {
+      if (d.game_started && !mpJoining) {
+        mpJoining = true;
         clearInterval(mpJoinPoll);
-        window.location.href = '/';
+        await mpApplySnapshot();
       }
     } catch (e) {}
   }, 2000);
+}
+
+/* Host started the league: pull the snapshot and build the local game. */
+async function mpApplySnapshot() {
+  const st = $('mp-join-status');
+  try {
+    st.textContent = 'Host started — downloading game state…';
+    let d = null, tries = 0;
+    while (tries < 20) {
+      tries++;
+      const r = await fetch('/api/mp/snapshot');
+      d = await r.json();
+      if (d.ok) break;
+      if (!d.retry) { st.textContent = 'Failed: ' + (d.error || 'no snapshot'); mpJoining = false; return; }
+      st.textContent = 'Host started — syncing game state…';
+      await new Promise(res => setTimeout(res, 1500));
+    }
+    if (!d || !d.ok) { st.textContent = 'Timed out waiting for the host sync.'; mpJoining = false; return; }
+    st.textContent = 'Building your view of the league…';
+    const r2 = await fetch('/api/mp/apply_snapshot', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({save_b64: d.save_b64, label: d.label}),
+    });
+    const d2 = await r2.json();
+    if (!d2.ok) { st.textContent = 'Failed: ' + (d2.error || 'apply failed'); mpJoining = false; return; }
+    const nonce = d2.nonce;
+    const timer = setInterval(async () => {
+      try {
+        const r3 = await fetch('/api/save/result?nonce=' + encodeURIComponent(nonce));
+        const d3 = await r3.json();
+        if (!d3.pending) {
+          clearInterval(timer);
+          if (d3.result && d3.result.ok) {
+            st.textContent = 'Synced — entering the league…';
+            setTimeout(() => { window.location.href = '/'; }, 600);
+          } else {
+            st.textContent = 'Failed: ' + ((d3.result && d3.result.message) || 'could not load');
+            mpJoining = false;
+          }
+        }
+      } catch (e) {}
+    }, 1200);
+  } catch (e) { st.textContent = 'Failed: ' + e.message; mpJoining = false; }
 }
 
 /* ---------- new game ---------- */
@@ -473,7 +519,28 @@ async function poll() {
       if (d.detail) $('setup-detail').textContent = d.detail;
       if (d.status === 'ready' && d.game_ready) {
         clearInterval(pollTimer);
-        window.location.href = '/';
+        if (state.mpHostStart) {
+          // Host flow: the game exists and the lobby socket is bound --
+          // START the league (broadcast START_GAME + snapshot) before
+          // leaving the setup page. This is the /api/mp/start call the
+          // old flow never made.
+          $('setup-detail').textContent = 'Starting the multiplayer league…';
+          try {
+            const rs = await fetch('/api/mp/start', {method: 'POST'});
+            const ds = await rs.json();
+            if (!ds.ok) {
+              $('setup-detail').textContent = 'Start failed: ' + (ds.error || 'unknown');
+              document.querySelector('.setup-wrap').style.pointerEvents = '';
+              return;
+            }
+          } catch (e) {
+            $('setup-detail').textContent = 'Start failed: ' + e.message;
+            document.querySelector('.setup-wrap').style.pointerEvents = '';
+            return;
+          }
+          $('setup-detail').textContent = 'League started — welcome, Commissioner.';
+        }
+        setTimeout(() => { window.location.href = '/'; }, 700);
       } else if (d.status === 'error') {
         clearInterval(pollTimer);
         $('setup-detail').textContent = 'Error: ' + (d.detail || 'setup failed');
@@ -591,6 +658,10 @@ async function init() {
   $('btn-mp-host').addEventListener('click', mpHost);
   $('btn-mp-join').addEventListener('click', mpJoin);
   $('btn-mp-start').addEventListener('click', mpStartGame);
+  const specBtn = $('btn-mp-spectate');
+  if (specBtn) specBtn.addEventListener('click', () => {
+    $('mp-join-status').textContent = 'Spectating — waiting for the host to start…';
+  });
 
   $('btn-new').addEventListener('click', () => startNew());
   $('btn-quick').addEventListener('click', quickStart);

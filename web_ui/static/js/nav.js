@@ -1,5 +1,20 @@
 /* Puck Dynasty global nav behavior: dropdown toggles + current-page highlight. */
 (function () {
+  /* Multiplayer bar (Batch E): load the MP layer on every page. It
+     self-activates only when a multiplayer game is live. */
+  try {
+    var _mpCss = document.createElement('link');
+    _mpCss.rel = 'stylesheet';
+    _mpCss.href = '/static/css/mp_bar.css';
+    document.head.appendChild(_mpCss);
+    var _mpJs = document.createElement('script');
+    _mpJs.src = '/static/js/mp_bar.js';
+    _mpJs.defer = true;
+    document.head.appendChild(_mpJs);
+  } catch (e) {}
+})();
+
+(function () {
   var nav = document.getElementById('pd-nav');
   if (!nav) return;
 

@@ -1273,6 +1273,15 @@ def drain_commands(app, root):
             _execute_command(live, cmd)
     except Exception:
         pass
+    # Multiplayer (Batch E, 2026-10-06): the web game attaches to the
+    # already-running server, so the HockeyManagerGUI root never runs its
+    # own mainloop and its after()-scheduled _poll_multiplayer never
+    # fires. Pump the host/client network event queues here instead --
+    # this IS the scheduler (setup root's mainloop, ~4Hz).
+    try:
+        _pump_mp_web(live)
+    except Exception:
+        pass
     # Browser tab gone silent? Shut the game down cleanly so no ghost
     # process lingers (the Sept-2026 exit-hang lesson, web edition).
     if _web_app_ref is not None and heartbeat_expired():
@@ -1288,6 +1297,114 @@ def drain_commands(app, root):
 
 
 _setup_root = None  # the hidden Tk root whose mainloop pumps commands
+
+
+# ------------------------------------------------------------------
+# Multiplayer web helpers (Batch E, 2026-10-06)
+# ------------------------------------------------------------------
+def _mp_web_store(app, nonce, ok, message, blocked=False, blockers=None):
+    """Stash an MP op outcome for GET /api/mp/result polling."""
+    try:
+        app._web_mp_result = {
+            "marker": "mp_web",
+            "nonce": str(nonce or ""),
+            "ok": bool(ok),
+            "message": str(message or ""),
+            "blocked": bool(blocked),
+            "blockers": [
+                {"id": b.get("id", ""), "title": b.get("title", ""),
+                 "detail": b.get("detail", "")}
+                for b in (blockers or []) if isinstance(b, dict)
+            ],
+        }
+    except Exception:
+        pass
+
+
+def _mp_find_team_by_name(app, name):
+    """Resolve a team display name to the live Team object."""
+    try:
+        gm = getattr(app, "game_manager", None)
+        league = getattr(gm, "league", None) or getattr(app, "league", None)
+        want = str(name or "").strip().lower()
+        for t in (getattr(league, "teams", None) or []):
+            if str(getattr(t, "team_name", "")).strip().lower() == want:
+                return t
+    except Exception:
+        pass
+    return None
+
+
+def _mp_team_player(app, team, player_id):
+    """Find a roster player by id (mirrors main._mp_team_player)."""
+    try:
+        pid = str(player_id or "")
+        for p in (getattr(team, "roster", None) or []):
+            if str(getattr(p, "id", "")) == pid:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+# ------------------------------------------------------------------
+# Multiplayer web pump (Batch E, 2026-10-06)
+# ------------------------------------------------------------------
+def _pump_mp_web(live):
+    """Drain multiplayer network queues on the Tk main thread.
+
+    Host: network threads push action/readiness/chat/trade events onto
+    host.events; apply them through the app's existing _handle_host_event
+    (client intents are applied to canonical state via the _mp_*
+    handlers, exactly like the desktop). Blocking Tk dialogs are
+    diverted by the web-mode guards in main.py.
+
+    Client: client events are JSON-safe-copied into the web inbox
+    (web_ui.screens.multiplayer) for /api/mp/game polling. The
+    desktop _handle_client_event pops Tk dialogs, which don't exist
+    here, so the web client routes events through the inbox instead.
+    """
+    app = live if live is not None else _web_app_ref
+    if app is None:
+        return
+    host = getattr(app, "mp_host", None)
+    if host is not None:
+        try:
+            handler = getattr(app, "_handle_host_event", None)
+            mirror = None
+            try:
+                from web_ui.screens import multiplayer as _mpmod2
+                mirror = getattr(_mpmod2, "mirror_host_event", None)
+            except Exception:
+                pass
+            if callable(handler):
+                for kind, payload in host.poll_events():
+                    try:
+                        handler(kind, payload)
+                    except Exception:
+                        pass
+                    # Mirror chat into the web inbox so the host's own
+                    # chat drawer shows the conversation too.
+                    try:
+                        if kind == "chat" and callable(mirror):
+                            mirror(kind, payload)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    client = getattr(app, "mp_client", None)
+    if client is not None and host is None:
+        try:
+            from web_ui.screens import multiplayer as _mpmod
+            route = getattr(_mpmod, "web_client_event", None)
+            if callable(route):
+                for kind, payload in client.poll_events():
+                    try:
+                        route(app, kind, payload)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 def _shutdown(root):
@@ -2431,6 +2548,343 @@ def _execute_command(app, cmd):
                   or getattr(app, "_on_continue", None))
             if callable(fn):
                 fn()
+        elif op == "mp_apply_snapshot":
+            # Multiplayer client: apply the host's snapshot bytes (Batch E).
+            # Two cases, both on the Tk main thread:
+            #  - no game yet (join flow): build the full local game from the
+            #    snapshot, point user_team at the claimed club (or flag
+            #    spectator), build the dashboard, attach to the web server.
+            #    Mirrors the desktop client's _apply_multiplayer_snapshot.
+            #  - game already exists (day-advance re-sync): restore the
+            #    snapshot into the live game; the web UI re-reads live
+            #    objects per request, so a page reload picks it up.
+            # kwargs: save_b64, label, nonce.
+            try:
+                import base64 as _b64
+                import gzip as _gzip
+                import pickle as _pickle
+                _nonce = cmd.get("nonce") or ""
+                _raw = _b64.b64decode(cmd.get("save_b64") or "")
+                _data = _pickle.loads(_gzip.decompress(_raw))
+                from web_ui.screens import multiplayer as _mpmod
+                _client = _mpmod.get_client()
+                if _client is None:
+                    _web_save_store(app, _nonce, False,
+                                    "Not connected to a host.")
+                    return
+                _existing = (app if app is not None
+                             and getattr(app, "mp_client", None) is not None
+                             else None)
+                if _existing is not None:
+                    # --- re-sync into the live client game ---
+                    with _web_suppress_tk_popups():
+                        _ok = bool(
+                            _existing.save_manager._restore_game_state(_data))
+                    if not _ok:
+                        _web_save_store(app, _nonce, False,
+                                        "Could not apply the host's update.")
+                        return
+                    try:
+                        _gm3 = _existing.game_manager
+                        _existing.league = _gm3.league
+                        _existing.current_date = _gm3.current_date
+                        _tid = getattr(_client, "team_id", None)
+                        _tm = None
+                        if _tid:
+                            for _t in (getattr(_existing.league, "teams",
+                                               None) or []):
+                                if str(getattr(_t, "team_name", "")) \
+                                        == str(_tid):
+                                    _tm = _t
+                                    break
+                        if _tm is not None:
+                            _gm3.user_team = _tm
+                            _existing.user_team = _tm
+                            _existing._mp_spectator = False
+                        else:
+                            _existing._mp_spectator = True
+                        _existing.refresh_all_views()
+                    except Exception:
+                        pass
+                    try:
+                        _mpmod.consume_last_sync()
+                    except Exception:
+                        pass
+                    _web_save_store(
+                        app, _nonce, True,
+                        f"Synced: {cmd.get('label') or 'update'}")
+                    return
+                # --- initial build (join flow) ---
+                import main as _main
+                _gm = _main.GameManager()
+                _capp = _main.HockeyManagerGUI(_gm, mp_client=_client)
+                try:
+                    _capp.withdraw()
+                except Exception:
+                    pass
+                with _web_suppress_tk_popups():
+                    _ok = bool(_capp.save_manager._restore_game_state(_data))
+                if not _ok:
+                    _web_save_store(app, _nonce, False,
+                                    "Could not load the host's game state.")
+                    return
+                # Claimed team / spectator (desktop parity).
+                try:
+                    _capp.league = _capp.game_manager.league
+                    _capp.current_date = _capp.game_manager.current_date
+                    _team_id = getattr(_client, "team_id", None)
+                    _team = None
+                    if _team_id:
+                        for _t in (getattr(_capp.league, "teams", None)
+                                   or []):
+                            if str(getattr(_t, "team_name", "")) \
+                                    == str(_team_id):
+                                _team = _t
+                                break
+                    if _team is not None:
+                        _capp.game_manager.user_team = _team
+                        _capp.user_team = _team
+                        _capp._mp_spectator = False
+                    else:
+                        _capp._mp_spectator = True
+                except Exception:
+                    pass
+                # Build the dashboard (the constructor deferred it: the
+                # team arrives via the host snapshot, never a picker).
+                try:
+                    for _w in _capp.winfo_children():
+                        _w.destroy()
+                except Exception:
+                    pass
+                try:
+                    _capp._finalize_phase2_initialization()
+                    _capp._create_main_dashboard()
+                    _capp._apply_phase3_optimizations()
+                    _capp.setup_close_protocol()
+                    _capp.update_all_views()
+                except Exception as _de:
+                    print(f"mp snapshot dashboard build: {_de}")
+                try:
+                    _capp.withdraw()
+                except Exception:
+                    pass
+                set_app(_capp)
+                try:
+                    _mpmod.clear_client_snapshot()
+                except Exception:
+                    pass
+                _web_save_store(
+                    app, _nonce, True,
+                    f"Synced: {cmd.get('label') or 'Joined game'}")
+            except Exception as _e:
+                try:
+                    _web_save_store(app, cmd.get("nonce") or "", False,
+                                    f"Snapshot load failed: {_e}")
+                except Exception:
+                    pass
+        elif op == "mp_toggle_ready":
+            # EHM ready gate: toggle this machine's ready vote (Batch E).
+            # Blockers are checked first so the vote can't stand on a
+            # blocked club; the desktop handlers do the rest.
+            try:
+                _nonce = cmd.get("nonce") or ""
+                try:
+                    _, _blockers = app.get_continue_state()
+                except Exception:
+                    _blockers = []
+                if _blockers:
+                    _mp_web_store(app, _nonce, False,
+                                  "Resolve the blockers before voting ready.",
+                                  blocked=True, blockers=_blockers)
+                elif getattr(app, "mp_host", None) is not None:
+                    app._mp_toggle_host_ready()
+                    _mp_web_store(app, _nonce, True, "Ready vote toggled.")
+                elif getattr(app, "mp_client", None) is not None:
+                    app._mp_toggle_client_ready()
+                    _mp_web_store(app, _nonce, True, "Ready vote toggled.")
+                else:
+                    _mp_web_store(app, _nonce, False,
+                                  "Not in a multiplayer game.")
+            except Exception as _e:
+                _mp_web_store(app, cmd.get("nonce") or "", False, str(_e))
+        elif op == "mp_trade_propose":
+            # Host machine: run the desktop _mp_propose_trade path for a
+            # human-to-human offer (Batch E). If the host's own club has
+            # movement-clause vetoes, roll the engine's own will_waive_ntc
+            # (the same roll AI clubs get) instead of a blocking dialog.
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _team = _mp_find_team_by_name(
+                    app, cmd.get("team_id") or "")
+                _partner = _mp_find_team_by_name(
+                    app, cmd.get("partner_team_id") or "")
+                if _team is None or _partner is None:
+                    _mp_web_store(app, _nonce, False,
+                                  "Could not resolve the clubs.")
+                    return
+                _offer = cmd.get("offer") or {}
+                _params = {"team_id": _team.team_name,
+                           "partner_team_id": _partner.team_name,
+                           "offer": _offer}
+                try:
+                    import trade_engine as _te
+                    _league = getattr(app, "league", None)
+                    _out = [_mp_team_player(app, _team, pid)
+                            for pid in (_offer.get("players_out") or [])]
+                    _out = [p for p in _out if p is not None]
+                    for _v in (_te.trade_vetoes(
+                            _team, _partner, _out, _league) or []):
+                        _p = _v.get("player")
+                        _okv, _why = _te.will_waive_ntc(
+                            _p, _team, _partner, _league)
+                        if _okv:
+                            try:
+                                _p.contract.ntc_waiver_for = \
+                                    _partner.team_name
+                            except Exception:
+                                pass
+                        else:
+                            _mp_web_store(
+                                app, _nonce, False,
+                                f"{getattr(_p, 'full_name', 'A player')} "
+                                f"refused to waive his clause -- deal "
+                                f"is dead.")
+                            return
+                except Exception:
+                    pass
+                _res = app._mp_propose_trade(
+                    _params, _team, getattr(app, "gm_name", "Host"))
+                _ok = bool(_res[0]) if isinstance(_res, (list, tuple)) \
+                    else bool(_res)
+                _detail = str(_res[1]) if isinstance(_res, (list, tuple)) \
+                    and len(_res) > 1 else ""
+                _mp_web_store(app, _nonce, _ok, _detail or "Offer processed.")
+            except Exception as _e:
+                _mp_web_store(app, cmd.get("nonce") or "", False, str(_e))
+        elif op == "mp_trade_answer":
+            # Host answers an offer targeting its own club (Batch E).
+            try:
+                _nonce = cmd.get("nonce") or ""
+                _offers = getattr(app, "_mp_web_host_offers", None)
+                _entry = (_offers or {}).pop(cmd.get("offer_id") or "", None)
+                if _entry is None:
+                    _mp_web_store(app, _nonce, False, "Offer expired.")
+                    return
+                _proposal = _entry.get("proposal") or {}
+                if str(cmd.get("decision") or "") == "accept":
+                    _ok, _detail = app._mp_execute_mp_trade(_proposal)
+                    _mp_web_store(app, _nonce, bool(_ok), str(_detail))
+                else:
+                    app._mp_clear_proposal_waivers(_proposal)
+                    try:
+                        _host = getattr(app, "mp_host", None)
+                        if _host is not None:
+                            _host.broadcast_chat(
+                                f"Trade {_proposal.get('proposer_team_id')}"
+                                f" -> {_proposal.get('partner_team_id')} "
+                                f"rejected.")
+                    except Exception:
+                        pass
+                    _mp_web_store(app, _nonce, True, "Offer rejected.")
+            except Exception as _e:
+                _mp_web_store(app, cmd.get("nonce") or "", False, str(_e))
+        elif op == "mp_promote":
+            # Host migration: this client takes over as host from its last
+            # synced checkpoint (Batch E). Mirrors main._mp_promote_to_host
+            # minus the blocking Tk dialogs (web answers in-page).
+            try:
+                import os as _os
+                import gzip as _gzip2
+                import pickle as _pickle2
+                _nonce = cmd.get("nonce") or ""
+                from web_ui.screens import multiplayer as _mpmod2
+                _ckpt = _os.path.join("saves", "checkpoints",
+                                      "client_last_sync.hm")
+                if not _os.path.exists(_ckpt):
+                    _mp_web_store(app, _nonce, False,
+                                  "No fallback checkpoint found.")
+                    return
+                with _gzip2.open(_ckpt, "rb") as _fh:
+                    _data = _pickle2.load(_fh)
+                _ok = False
+                try:
+                    _ok = bool(app.save_manager._restore_game_state(_data))
+                except Exception:
+                    _ok = False
+                if not _ok:
+                    _mp_web_store(app, _nonce, False,
+                                  "Could not load the checkpoint.")
+                    return
+                try:
+                    app.refresh_all_views()
+                except Exception:
+                    pass
+                from multiplayer import net_host as _nh
+                from multiplayer import protocol as _p
+                _save_mgr = app.save_manager
+                _gm2 = getattr(app, "game_manager", None)
+
+                def _state_provider2():
+                    _blob = _gzip2.compress(_pickle2.dumps(
+                        _save_mgr.create_save_data(),
+                        protocol=_pickle2.HIGHEST_PROTOCOL))
+                    return (_blob, str(getattr(app, "current_date", "")),
+                            "host-sync")
+
+                def _get_teams2():
+                    try:
+                        return [{"id": t.team_name, "name": t.team_name,
+                                 "reserved_by":
+                                     getattr(t, "mp_gm_name", "") or ""}
+                                for t in _gm2.league.teams]
+                    except Exception:
+                        return []
+
+                _port = 0
+                try:
+                    _old_client = _mpmod2.get_client()
+                    _port = int(getattr(_old_client, "port", 0) or 0)
+                    try:
+                        _old_client.disconnect()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+                _port = _port or _p.DEFAULT_PORT
+                _host = _nh.MultiplayerHost(
+                    _state_provider2,
+                    host_name=f"{getattr(getattr(app, 'user_team', None), 'team_name', 'Host')} (promoted)",
+                    port=_port, get_teams=_get_teams2)
+                _host.start()
+                app.mp_host = _host
+                app.mp_client = None
+                try:
+                    app._mp_web_host_offers = {}
+                except Exception:
+                    pass
+                try:
+                    _seed2 = getattr(app, "_mp_seed_host_reservations", None)
+                    if callable(_seed2):
+                        _seed2(_host)
+                except Exception:
+                    pass
+                _mp_web_store(app, _nonce, True,
+                              f"You are now the host (port {_port}). "
+                              f"Other managers can reconnect to continue.")
+            except Exception as _e:
+                _mp_web_store(app, cmd.get("nonce") or "", False, str(_e))
+        elif op == "mp_force_advance":
+            # Host override for an AFK manager (Batch E): fire the
+            # authorized advance directly (web confirms in-page first).
+            try:
+                _nonce = cmd.get("nonce") or ""
+                if getattr(app, "mp_host", None) is None:
+                    _mp_web_store(app, _nonce, False, "Not hosting.")
+                    return
+                app._mp_fire_authorized_advance()
+                _mp_web_store(app, _nonce, True, "Day advanced (forced).")
+            except Exception as _e:
+                _mp_web_store(app, cmd.get("nonce") or "", False, str(_e))
         elif op == "mark_read":
             mid = cmd.get("message_id")
             team = getattr(app, "user_team", None)
@@ -4416,12 +4870,28 @@ def create_app(game_app=None):
             return jsonify({"label": "Continue", "blocked": False, "blockers": []})
         return jsonify(get_continue_state(live))
 
+    # Ops a multiplayer spectator may run (everything else is refused:
+    # spectators browse; management actions are disabled -- desktop parity).
+    _SPECTATOR_ALLOW_OPS = frozenset({
+        "mp_toggle_ready", "mp_apply_snapshot", "mp_promote",
+        "mark_read", "delete_message", "save_game_web",
+    })
+
     @app.route("/api/command", methods=["POST"])
     def command():
         data = request.get_json(force=True, silent=True) or {}
         op = data.get("op")
         if not op:
             return jsonify({"ok": False, "error": "no op"}), 400
+        try:
+            _live = _web_app_ref
+            if _live is not None and getattr(_live, "_mp_spectator", False) \
+                    and op not in _SPECTATOR_ALLOW_OPS:
+                return jsonify({"ok": False, "error":
+                                "Spectator mode: management actions are "
+                                "disabled."}), 403
+        except Exception:
+            pass
         ok = enqueue_command(op, **{k: v for k, v in data.items() if k != "op"})
         return jsonify({"ok": ok, "queued": op})
 

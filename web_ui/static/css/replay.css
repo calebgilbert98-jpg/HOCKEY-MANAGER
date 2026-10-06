@@ -1,0 +1,65 @@
+/* Game replay page (Batch E). */
+.replay-wrap { max-width: 1280px; margin: 0 auto; padding: 18px 20px 60px; color: #e8eef6; }
+.replay-head h1 { margin: 6px 0 2px; font-size: 24px; }
+.replay-head .dim { color: #8fa1bd; margin: 0 0 12px; }
+.replay-head .back { color: #9fc0f5; text-decoration: none; font-weight: 700; }
+.replay-picker { margin: 10px 0 16px; }
+.replay-picker label { font-weight: 700; font-size: 13px; color: #b9c8de; }
+.replay-picker select {
+  margin-left: 8px; background: #0b1424; color: #e8eef6;
+  border: 1px solid #3b82f6; border-radius: 8px; padding: 8px 12px; font-size: 14px;
+  max-width: 70vw;
+}
+.replay-scorebug {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  background: #0d1420; border: 1px solid #22314d; border-radius: 12px;
+  padding: 12px; margin-bottom: 12px; font-size: 18px; font-weight: 800;
+}
+.replay-scorebug .sb-score { font-size: 26px; color: #fff; }
+.replay-scorebug .sb-team { color: #9fc0f5; }
+.replay-scorebug .sb-period { color: #8fa1bd; font-size: 13px; }
+.replay-modes { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.rm-tab {
+  background: #1c2942; color: #dbe6f5; border: 1px solid #334155;
+  border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.rm-tab.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+.rm-next { margin-left: auto; border-color: #b45309; }
+.rm-next:hover { background: #7c4a12; }
+.replay-cols { display: grid; grid-template-columns: minmax(320px, 5fr) minmax(420px, 7fr); gap: 16px; align-items: start; }
+.replay-feed {
+  background: #0b1424; border: 1px solid #22314d; border-radius: 12px;
+  padding: 10px 12px; max-height: 72vh; overflow-y: auto; font-size: 13.5px;
+}
+.rp-event { padding: 6px 4px; border-bottom: 1px solid #142036; color: #dbe6f5; }
+.rp-big { background: rgba(59, 130, 246, .08); border-radius: 6px; }
+.rp-line { padding: 2px 4px; color: #c6d4ea; font-size: 12.5px; }
+.rp-flash { outline: 2px solid #3b82f6; border-radius: 6px; }
+.replay-box-pane .boxscore { max-height: 72vh; overflow-y: auto; }
+@media (max-width: 980px) {
+  .replay-cols { grid-template-columns: 1fr; }
+}
+/* shared box-score tab styles (also used by watch_modes.js live box) */
+.bs-tabs { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
+.bs-tab {
+  background: #1c2942; color: #dbe6f5; border: 1px solid #334155;
+  border-radius: 8px; padding: 7px 13px; font-size: 12.5px; font-weight: 700; cursor: pointer;
+}
+.bs-tab.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+.bs-stars { display: flex; gap: 14px; flex-wrap: wrap; margin: 8px 2px; font-size: 13px; }
+.bs-star { color: #b9c8de; }
+.bs-star.first { color: #fbbf24; font-weight: 800; }
+.bs-goal {
+  display: flex; justify-content: space-between; align-items: center;
+  background: #0b1424; border: 1px solid #22314d; border-radius: 8px;
+  padding: 8px 12px; margin: 6px 0; font-size: 13px;
+}
+.bs-goal-score { font-weight: 800; color: #9fc0f5; white-space: nowrap; margin-left: 12px; }
+.bs-line-head {
+  display: flex; justify-content: space-between; align-items: center;
+  margin: 10px 2px 2px; font-weight: 800; font-size: 13px; color: #9fc0f5;
+}
+.bs-grade { font-weight: 800; }
+.bs-grade.g { color: #22c55e; }
+.bs-grade.y { color: #fbbf24; }
+.bs-grade.r { color: #f87171; }

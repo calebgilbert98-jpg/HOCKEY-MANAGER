@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Replay — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/watch.css">
+<link rel="stylesheet" href="/static/css/replay.css">
+</head>
+<body>
+{% include "_nav.html" %}
+<div class="replay-wrap">
+  <header class="replay-head">
+    <a class="back" href="/">← Hub</a>
+    <h1>Game Replay</h1>
+    <p class="dim">Pick a completed game, replay its play-by-play and dig into the full box score.</p>
+  </header>
+
+  <section class="replay-picker" aria-label="Completed games">
+    <label>Game
+      <select id="replay-select"><option value="">— select a game —</option></select>
+    </label>
+  </section>
+
+  <section id="replay-main" class="hidden">
+    <div class="replay-scorebug" id="replay-scorebug"></div>
+
+    <nav class="replay-modes" aria-label="Replay modes">
+      <button class="rm-tab active" data-rmode="all" title="Full play-by-play">📺 Watch All</button>
+      <button class="rm-tab" data-rmode="highlights" title="Goals, big saves, majors">✨ Highlights</button>
+      <button class="rm-tab" data-rmode="text" title="Compact broadcast transcript">📝 Text</button>
+      <button class="rm-tab rm-next" id="btn-next-moment" title="Jump to the next big moment (goal, penalty, fight)">⏭ Next Big Moment</button>
+    </nav>
+
+    <div class="replay-cols">
+      <section class="replay-feed-pane" aria-label="Play by play">
+        <div class="replay-feed" id="replay-feed"></div>
+      </section>
+      <section class="replay-box-pane" aria-label="Box score">
+        <div class="boxscore" id="replay-boxscore"></div>
+      </section>
+    </div>
+  </section>
+</div>
+<script src="/static/js/watch_modes.js"></script>
+<script src="/static/js/replay.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

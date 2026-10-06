@@ -190,3 +190,50 @@ html, body { height: 100%; margin: 0; }
 @media (max-width: 900px) {
   .chart-layout { grid-template-columns: 1fr; }
 }
+
+/* ---- presentation strip (Batch E: pbp_visual_sim parity) ---- */
+#wp-strip {
+  background: #0a0f1c; border-bottom: 2px solid #1c2a45;
+  padding: 8px 16px 10px; flex: none; z-index: 9;
+}
+.wp-row { display: flex; gap: 18px; align-items: center; }
+.wp-row.wp-btns { margin-top: 8px; gap: 8px; flex-wrap: wrap; }
+.wp-block { flex: 1; min-width: 180px; }
+.wp-label { font-size: 10px; letter-spacing: 2px; color: #5b6a8c; font-weight: 800; margin-bottom: 4px; }
+.wp-label span { color: #fff; }
+.wp-bar {
+  position: relative; height: 22px; background: #16213a; border-radius: 6px;
+  overflow: hidden; border: 1px solid #2a3c5f;
+}
+.wp-fill-home, .wp-fill-away { position: absolute; top: 0; bottom: 0; transition: width .5s ease; }
+.wp-fill-home { left: 0; background: #1d4ed8; }
+.wp-fill-away { right: 0; background: #b91c1c; }
+.wp-mom .wp-fill-home { background: #1d4ed8; }
+.wp-mom .wp-fill-away { background: #b91c1c; }
+.wp-teams {
+  position: absolute; inset: 0; display: flex; justify-content: space-between;
+  align-items: center; padding: 0 10px; font-size: 11px; font-weight: 900;
+  letter-spacing: 1px; color: #fff; text-shadow: 0 1px 3px #000; pointer-events: none;
+}
+.wp-meter { height: 10px; background: #16213a; border-radius: 5px; overflow: hidden; border: 1px solid #2a3c5f; }
+.wp-meter-fill { height: 100%; width: 0; background: linear-gradient(90deg, #1d4ed8, #f59e0b, #dc2626); transition: width .5s ease; }
+.wp-ten { cursor: pointer; }
+#wp-strip button {
+  background: #16213a; border: 1px solid #2a3c5f; color: #fff;
+  border-radius: 6px; padding: 7px 13px; font-size: 12.5px; font-weight: 800; cursor: pointer;
+}
+#wp-strip button:hover { background: #1d4ed8; border-color: #3b82f6; }
+#wp-strip button.active { background: #1d4ed8; border-color: #60a5fa; }
+.wp-detail-lab { font-size: 11px; letter-spacing: 1.5px; color: #5b6a8c; font-weight: 800; margin-left: 6px; }
+.wp-panel {
+  margin-top: 8px; background: #0d1424; border: 1px solid #2a3c5f;
+  border-radius: 8px; padding: 10px 14px; max-height: 220px; overflow-y: auto;
+}
+.wp-panel-title { font-size: 12px; letter-spacing: 2px; color: #93c5fd; font-weight: 900; margin-bottom: 6px; }
+.wp-ten-row {
+  display: flex; justify-content: space-between; padding: 5px 2px;
+  border-bottom: 1px solid rgba(255,255,255,.05); font-size: 13px; color: #dbe4f5;
+}
+.wp-ten-row b { color: #fff; }
+.wp-ten-row .dim, .dim { color: #8fa1bd; }
+.rp-flash { outline: 2px solid #3b82f6; border-radius: 4px; }

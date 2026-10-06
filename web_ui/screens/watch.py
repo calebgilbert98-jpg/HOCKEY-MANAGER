@@ -634,50 +634,205 @@ def watch_events():
                     "home_abbr": habbr, "away_abbr": aabbr})
 
 
+def _pos_short(p):
+    try:
+        pos = getattr(p, "primary_position", None)
+        return str(getattr(pos, "value", None)
+                   or getattr(pos, "name", "") or "")
+    except Exception:
+        return ""
+
+
+def _normalize_gs(game_stats):
+    """{str(pid): stats} regardless of key type."""
+    out = {}
+    try:
+        for pid, st in (game_stats or {}).items():
+            if isinstance(st, dict):
+                out[str(pid)] = st
+    except Exception:
+        pass
+    return out
+
+
+def _lines_grades_payload(team_obj, team_idx, team_name, gs, by_id):
+    """Lines tab: per-line grades via the desktop's compute_line_ratings.
+
+    gs/by_id keyed by str(pid). Returns JSON-safe lines list.
+    """
+    try:
+        from game_box_score import compute_line_ratings
+        from game_classes import snapshot_team_lines
+    except Exception:
+        return []
+    try:
+        snap = snapshot_team_lines(team_obj)
+        if not snap:
+            return []
+        snap = {
+            "Forwards": [[str(i) for i in (line or [])]
+                         for line in (snap.get("Forwards") or [])],
+            "Defense": [[str(i) for i in (pair or [])]
+                        for pair in (snap.get("Defense") or [])],
+        }
+        lines = compute_line_ratings(snap, gs, by_id)
+    except Exception:
+        return []
+    out = []
+    for L in (lines or []):
+        try:
+            players = []
+            for pl in (L.get("players") or []):
+                p = pl.get("player")
+                grade = pl.get("grade")
+                players.append({
+                    "name": _player_name(p),
+                    "pos": pl.get("pos", ""),
+                    "g": int(pl.get("g", 0) or 0),
+                    "a": int(pl.get("a", 0) or 0),
+                    "p": int(pl.get("p", 0) or 0),
+                    "grade": round(float(grade), 1)
+                    if grade is not None else None,
+                    "why": pl.get("why") or "",
+                })
+            rating = L.get("rating")
+            out.append({
+                "label": L.get("label", ""),
+                "rating": round(float(rating), 1)
+                if rating is not None else None,
+                "players": players,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def _team_stats_from_gs(gs, meta):
+    """Aggregate per-team stats from normalized game_stats."""
+    agg = {0: {"goals": 0, "shots": 0, "saves": 0, "hits": 0,
+               "blocks": 0, "fo_won": 0, "takeaways": 0, "giveaways": 0},
+           1: {"goals": 0, "shots": 0, "saves": 0, "hits": 0,
+               "blocks": 0, "fo_won": 0, "takeaways": 0, "giveaways": 0}}
+    for pid, st in (gs or {}).items():
+        try:
+            m = meta.get(str(pid), {})
+            ti = 0 if m.get("team", 0) == 0 else 1
+            a = agg[ti]
+            if m.get("goalie"):
+                a["saves"] += int(st.get("saves", 0) or 0)
+            else:
+                a["goals"] += int(st.get("g", 0) or 0)
+                a["shots"] += int(st.get("shots_on_goal", 0) or 0)
+                a["hits"] += int(st.get("hits", 0) or 0)
+                a["blocks"] += int(st.get("blocked_shots", 0) or 0) + \
+                    int(st.get("blocked_shots_by", 0) or 0)
+                a["fo_won"] += int(st.get("faceoffs_won", 0) or 0)
+                a["takeaways"] += int(st.get("takeaways", 0) or 0)
+                a["giveaways"] += int(st.get("giveaways", 0) or 0)
+        except Exception:
+            continue
+    return agg
+
+
+def _scoring_from_events(events, home_name):
+    """Scoring summary from the JSON-safe event log (live sim)."""
+    out = []
+    for ev in (events or []):
+        try:
+            if not isinstance(ev, dict) or ev.get("type") != "goal":
+                continue
+            scoring = str(ev.get("scoring_team") or "")
+            team = 0 if (home_name and scoring
+                         and scoring.strip().lower()
+                         == str(home_name).strip().lower()) else 1
+            assists = ev.get("assists") or []
+            out.append({
+                "period": int(ev.get("period", 1) or 1),
+                "clock": _fmt_clock(ev.get("clock", 0)),
+                "elapsed": int(ev.get("elapsed", 0) or 0),
+                "scorer": str(ev.get("shooter") or "?"),
+                "assists": [str(a) for a in assists],
+                "team": team,
+                "team_name": scoring,
+                "empty_net": bool(ev.get("empty_net")),
+                "shot_type": str(ev.get("shot_type") or ""),
+            })
+        except Exception:
+            continue
+    out.sort(key=lambda e: (e["period"], e["elapsed"]))
+    return out
+
+
 def _boxscore_payload():
-    """Live box score from the sim's game_stats (read-only snapshot)."""
+    """Live box score from the sim's game_stats (read-only snapshot).
+
+    Full depth (Batch E): Blocks/FO columns, scoring summary, lines
+    grades, team stats, 3 stars -- mirrors game_box_score.py's tabs.
+    """
     with _watch_lock:
         sim = _watch["sim"]
         meta = dict(_watch["id_meta"])
         home, away = _watch["home"], _watch["away"]
         habbr, aabbr = _watch["home_abbr"], _watch["away_abbr"]
+        events = list(_watch["events"])
     if sim is None:
         return None
     try:
-        gs = getattr(sim, "game_stats", None)
+        gs = _normalize_gs(getattr(sim, "game_stats", None))
         if not gs:
             return None
-        items = list(gs.items())
     except Exception:
         return None
 
+    # Player lookup for lines grades: rosters of both clubs.
+    by_id = {}
+    try:
+        for team_obj in (getattr(sim, "home_team", None),
+                         getattr(sim, "away_team", None)):
+            for p in (getattr(team_obj, "roster", None) or []):
+                try:
+                    by_id[str(getattr(p, "id", ""))] = p
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
     skaters, goalies = [], []
-    for pid, st in items:
+    for pid, st in gs.items():
         try:
             m = meta.get(str(pid), {})
-            name = m.get("name") or "Unknown"
+            p = by_id.get(str(pid))
+            name = m.get("name") or _player_name(p)
             is_g = bool(m.get("goalie"))
             row = {
                 "id": str(pid),
                 "name": name,
                 "team": 0 if m.get("team", 0) == 0 else 1,
                 "jersey": m.get("jersey", ""),
-                "pos": "G" if is_g else "",
+                "pos": "G" if is_g else _pos_short(p),
             }
             if is_g:
                 sa = int(st.get("shots_against", 0) or 0)
                 sv = int(st.get("saves", 0) or 0)
+                ga = int(st.get("goals_against", 0) or 0)
+                if sa <= sv:  # engine didn't track shots against; derive
+                    sa = sv + ga
                 row.update({
-                    "sa": sa, "saves": sv, "ga": int(st.get("goals_against", 0) or 0),
+                    "sa": sa, "saves": sv, "ga": ga,
                     "sv_pct": round(sv / sa, 3) if sa else 0.0,
                 })
                 goalies.append(row)
             else:
+                fw = int(st.get("faceoffs_won", 0) or 0)
+                fl = int(st.get("faceoffs_lost", 0) or 0)
                 row.update({
                     "g": int(st.get("g", 0) or 0),
                     "a": int(st.get("a", 0) or 0),
                     "sog": int(st.get("shots_on_goal", 0) or 0),
                     "hits": int(st.get("hits", 0) or 0),
+                    "blk": int(st.get("blocked_shots", 0) or 0)
+                    + int(st.get("blocked_shots_by", 0) or 0),
+                    "fo": f"{fw}-{fl}",
                 })
                 row["pts"] = row["g"] + row["a"]
                 skaters.append(row)
@@ -691,18 +846,42 @@ def _boxscore_payload():
         period = int(getattr(sim, "period", 1) or 1)
     except Exception:
         hs, aws, period = 0, 0, 1
+
+    # Lines grades per club (current combos -- the live sim's lines).
+    lines = {}
+    try:
+        for idx, team_obj, tname in (
+                (0, getattr(sim, "home_team", None), home),
+                (1, getattr(sim, "away_team", None), away)):
+            if team_obj is not None:
+                lines[str(idx)] = _lines_grades_payload(
+                    team_obj, idx, tname, gs, by_id)
+    except Exception:
+        pass
+
+    stars = [{
+        "name": r["name"],
+        "team": r["team"],
+        "team_name": home if r["team"] == 0 else away,
+        "g": r["g"], "a": r["a"],
+    } for r in skaters[:3]]
+
     return {
         "home": home, "away": away,
         "home_abbr": habbr, "away_abbr": aabbr,
         "score": {"home": hs, "away": aws},
         "period": period,
         "skaters": skaters, "goalies": goalies,
+        "scoring": _scoring_from_events(events, home),
+        "lines": lines,
+        "team_stats": _team_stats_from_gs(gs, meta),
+        "stars": stars,
     }
 
 
 @bp.route("/api/watch/boxscore")
 def watch_boxscore():
-    """Live box score for the box-score drill-down mode."""
+    """Live box score for the box-score drill-down mode (full depth)."""
     st = _ensure_live_sim()
     if st is None:
         return jsonify({"live": False, "skaters": [], "goalies": []})
@@ -712,3 +891,420 @@ def watch_boxscore():
                         "home": _watch["home"], "away": _watch["away"]})
     payload["live"] = True
     return jsonify(payload)
+
+
+# ------------------------------------------------------------------
+# Completed-game replay (Batch E, 2026-10-06).
+#
+# GAME_VIEWER.py (Watch All / Highlights / Text) vs web /watch = next
+# game only. These endpoints expose completed games: pick a past game,
+# replay its play-by-play (All / Highlights / Text via the client-side
+# filter) and drill into the same full-depth box score (scoring
+# summary, player stats, lines grades, team stats, 3 stars) built from
+# the stored game_result -- the same data GameBoxScoreView uses.
+# ------------------------------------------------------------------
+
+def _result_team_name(t):
+    try:
+        return str(getattr(t, "team_name", None) or t or "")
+    except Exception:
+        return ""
+
+
+def _result_date_str(d):
+    try:
+        if hasattr(d, "strftime"):
+            return d.strftime("%b %d, %Y")
+        return str(d or "")
+    except Exception:
+        return ""
+
+
+def _past_results():
+    """Completed game_results, newest first (defensive)."""
+    try:
+        live = _safe(lambda: _bridge._web_app_ref)
+        if live is None:
+            return []
+        results = _safe(lambda: list(getattr(live, "game_results", None)
+                                    or []), []) or []
+    except Exception:
+        return []
+    return results
+
+
+@bp.route("/replay")
+def replay_page():
+    """Completed-game replay: pick a past game, replay its PBP."""
+    return render_template("replay.html")
+
+
+@bp.route("/api/watch/past_games")
+def watch_past_games():
+    """List completed games for the replay picker."""
+    out = []
+    for idx, r in enumerate(reversed(_past_results())):
+        try:
+            if not isinstance(r, dict):
+                continue
+            hn = _result_team_name(r.get("home_team"))
+            an = _result_team_name(r.get("away_team"))
+            if not hn or not an:
+                continue
+            out.append({
+                "idx": idx,  # index into the reversed list
+                "date": _result_date_str(r.get("date")),
+                "home": hn, "away": an,
+                "home_score": int(r.get("home_score", 0) or 0),
+                "away_score": int(r.get("away_score", 0) or 0),
+                "overtime": bool(r.get("overtime")),
+                "shootout": bool(r.get("shootout")),
+                "watched": bool(r.get("watched")),
+            })
+        except Exception:
+            continue
+    return jsonify({"games": out})
+
+
+def _get_past_result(idx):
+    try:
+        results = list(reversed(_past_results()))
+        r = results[int(idx)]
+        return r if isinstance(r, dict) else None
+    except Exception:
+        return None
+
+
+def _result_roster_lookup(result):
+    """{str(pid): Player} from the game's clubs (defensive)."""
+    by_id = {}
+    for key in ("home_team", "away_team"):
+        try:
+            team = result.get(key)
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    by_id[str(getattr(p, "id", ""))] = p
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    # Merge game_stats-embedded players (traded away since, etc.).
+    try:
+        for pid, gs in ((result.get("game_stats") or {}).items()):
+            try:
+                p = gs.get("player") if isinstance(gs, dict) else None
+                if p is not None and str(pid) not in by_id:
+                    by_id[str(pid)] = p
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return by_id
+
+
+def _result_player_team(pid, gs, by_id):
+    p = gs.get("player") if isinstance(gs, dict) else None
+    if p is None:
+        p = by_id.get(str(pid))
+    try:
+        return str(getattr(p, "team_name", "") or "")
+    except Exception:
+        return ""
+
+
+def _result_boxscore(result):
+    """Full-depth box score from a stored game_result (JSON-safe)."""
+    home = _result_team_name(result.get("home_team"))
+    away = _result_team_name(result.get("away_team"))
+    try:
+        from web_ui.bridge import TEAM_ABBR
+        habbr = TEAM_ABBR.get(home) or "".join(
+            w[0] for w in home.split()[:2]).upper()
+        aabbr = TEAM_ABBR.get(away) or "".join(
+            w[0] for w in away.split()[:2]).upper()
+    except Exception:
+        habbr, aabbr = "", ""
+    hs = int(result.get("home_score", 0) or 0)
+    aws = int(result.get("away_score", 0) or 0)
+    by_id = _result_roster_lookup(result)
+    gs = _normalize_gs(result.get("game_stats"))
+
+    def _is_goalie(pid, st):
+        p = by_id.get(str(pid))
+        try:
+            pos = getattr(p, "primary_position", None)
+            pv = str(getattr(pos, "value", None)
+                     or getattr(pos, "name", "") or "").upper()
+            if "GOALIE" in pv:
+                return True
+        except Exception:
+            pass
+        return False
+
+    skaters, goalies = [], []
+    for pid, st in gs.items():
+        try:
+            p = by_id.get(str(pid))
+            tname = _result_player_team(pid, st, by_id)
+            ti = 0 if tname == home else 1
+            name = _player_name(p)
+            if _is_goalie(pid, st):
+                sa = int(st.get("shots_against", 0) or 0)
+                sv = int(st.get("saves", 0) or 0)
+                ga = int(st.get("goals_against", 0) or 0)
+                if sa <= sv:
+                    sa = sv + ga
+                goalies.append({
+                    "id": str(pid), "name": name, "team": ti,
+                    "jersey": str(_safe(
+                        lambda: getattr(p, "jersey_number", "")) or ""),
+                    "pos": "G", "sa": sa, "saves": sv, "ga": ga,
+                    "sv_pct": round(sv / sa, 3) if sa else 0.0,
+                })
+            else:
+                fw = int(st.get("faceoffs_won", 0) or 0)
+                fl = int(st.get("faceoffs_lost", 0) or 0)
+                g = int(st.get("g", 0) or 0)
+                a = int(st.get("a", 0) or 0)
+                skaters.append({
+                    "id": str(pid), "name": name, "team": ti,
+                    "jersey": str(_safe(
+                        lambda: getattr(p, "jersey_number", "")) or ""),
+                    "pos": _pos_short(p),
+                    "g": g, "a": a, "pts": g + a,
+                    "sog": int(st.get("shots_on_goal", 0) or 0),
+                    "hits": int(st.get("hits", 0) or 0),
+                    "blk": int(st.get("blocked_shots", 0) or 0)
+                    + int(st.get("blocked_shots_by", 0) or 0),
+                    "fo": f"{fw}-{fl}",
+                })
+        except Exception:
+            continue
+    skaters.sort(key=lambda r: (-r["pts"], -r["g"], r["name"]))
+    goalies.sort(key=lambda r: (-r["saves"], r["name"]))
+
+    # Scoring summary from GOAL_ADVANCED events.
+    scoring = []
+    try:
+        goals = [e for e in (result.get("event_log") or [])
+                 if isinstance(e, dict)
+                 and e.get("type") == "GOAL_ADVANCED"]
+        home_run = away_run = 0
+
+        def _gkey(e):
+            d = e.get("details", {}) or {}
+            return (d.get("period", 99), e.get("timestamp", 0))
+
+        for e in sorted(goals, key=_gkey):
+            d = e.get("details", {}) or {}
+            scorer = _player_name(by_id.get(str(d.get("scorer_id"))))
+            assists = [_player_name(by_id.get(str(a)))
+                       for a in (d.get("assist_ids") or [])]
+            sp = by_id.get(str(d.get("scorer_id")))
+            stname = ""
+            try:
+                stname = str(getattr(sp, "team_name", "") or "")
+            except Exception:
+                pass
+            ti = 0 if stname == home else 1
+            if ti == 0:
+                home_run += 1
+            else:
+                away_run += 1
+            strength = str(d.get("strength", "EV") or "EV")
+            scoring.append({
+                "period": int(d.get("period", 1) or 1),
+                "clock": str(d.get("time_str", "") or ""),
+                "scorer": scorer, "assists": assists,
+                "team": ti, "team_name": stname,
+                "strength": strength,
+                "goal_type": str(d.get("goal_type", "") or "")
+                .replace("_", " ").title(),
+                "running": f"{aabbr} {away_run} - {home_run} {habbr}",
+            })
+    except Exception:
+        pass
+
+    # Lines grades from the stamped snapshot (desktop parity).
+    lines = {}
+    try:
+        from game_box_score import compute_line_ratings
+        for idx, tname in ((0, home), (1, away)):
+            snap = (result.get("lines") or {}).get(tname)
+            if not snap:
+                continue
+            snap = {
+                "Forwards": [[str(i) for i in (line or [])]
+                             for line in (snap.get("Forwards") or [])],
+                "Defense": [[str(i) for i in (pair or [])]
+                            for pair in (snap.get("Defense") or [])],
+            }
+            # compute_line_ratings works on the snapshot directly
+            # (same helper the desktop Lines tab uses).
+            units = compute_line_ratings(snap, gs, by_id)
+            rendered = []
+            for L in (units or []):
+                players = []
+                for pl in (L.get("players") or []):
+                    grade = pl.get("grade")
+                    players.append({
+                        "name": _player_name(pl.get("player")),
+                        "pos": pl.get("pos", ""),
+                        "g": int(pl.get("g", 0) or 0),
+                        "a": int(pl.get("a", 0) or 0),
+                        "p": int(pl.get("p", 0) or 0),
+                        "grade": round(float(grade), 1)
+                        if grade is not None else None,
+                        "why": pl.get("why") or "",
+                    })
+                rating = L.get("rating")
+                rendered.append({
+                    "label": L.get("label", ""),
+                    "rating": round(float(rating), 1)
+                    if rating is not None else None,
+                    "players": players,
+                })
+            lines[str(idx)] = rendered
+    except Exception:
+        pass
+
+    # Team stats (stored aggregates, keyed by team name).
+    team_stats = {0: {}, 1: {}}
+    try:
+        ts = result.get("team_stats") or {}
+        for idx, tname in ((0, home), (1, away)):
+            d = ts.get(tname) or {}
+            team_stats[idx] = {
+                "goals": hs if idx == 0 else aws,
+                "shots": int(d.get("shots_on_goal", d.get("shots", 0)) or 0),
+                "saves": int(d.get("saves", 0) or 0),
+                "hits": int(d.get("hits", 0) or 0),
+                "blocks": int(d.get("blocked_shots_by_team",
+                                    d.get("blocked_shots", 0)) or 0),
+                "fo_won": int(d.get("faceoffs_won", 0) or 0),
+                "takeaways": int(d.get("takeaways", 0) or 0),
+                "giveaways": int(d.get("giveaways", 0) or 0),
+                "pp": f"{int(d.get('power_play_goals', 0) or 0)}/"
+                      f"{int(d.get('power_play_opportunities', 0) or 0)}",
+                "shg": int(d.get("short_handed_goals", 0) or 0),
+            }
+    except Exception:
+        pass
+
+    # 3 stars: recorded stars first, ratings fallback (desktop parity).
+    stars = []
+    try:
+        saved = result.get("three_stars") or []
+        if saved:
+            for s in saved[:3]:
+                if isinstance(s, dict):
+                    tn = s.get("team_name", "")
+                    stars.append({
+                        "name": s.get("name", "?"), "team_name": tn,
+                        "team": 0 if tn == home else 1,
+                    })
+        else:
+            ratings = result.get("player_ratings") or {}
+            cand = []
+            for tname, pmap in ratings.items():
+                if not isinstance(pmap, dict):
+                    continue
+                for pid, rating in pmap.items():
+                    try:
+                        cand.append((float(rating),
+                                     _player_name(by_id.get(str(pid))),
+                                     tname))
+                    except Exception:
+                        continue
+            cand.sort(key=lambda x: x[0], reverse=True)
+            for rating, name, tname in cand[:3]:
+                stars.append({"name": name, "team_name": tname,
+                              "team": 0 if tname == home else 1})
+    except Exception:
+        pass
+    if not stars:
+        stars = [{
+            "name": r["name"], "team_name": home if r["team"] == 0 else away,
+            "team": r["team"],
+        } for r in skaters[:3]]
+
+    return {
+        "home": home, "away": away,
+        "home_abbr": habbr, "away_abbr": aabbr,
+        "score": {"home": hs, "away": aws},
+        "date": _result_date_str(result.get("date")),
+        "overtime": bool(result.get("overtime")),
+        "shootout": bool(result.get("shootout")),
+        "skaters": skaters, "goalies": goalies,
+        "scoring": scoring, "lines": lines,
+        "team_stats": team_stats, "stars": stars,
+    }
+
+
+@bp.route("/api/watch/boxscore_history")
+def watch_boxscore_history():
+    """Full-depth box score for a completed game (?idx=, see past_games)."""
+    idx = request.args.get("idx", "0")
+    r = _get_past_result(idx)
+    if r is None:
+        return jsonify({"ok": False, "error": "unknown game"}), 404
+    payload = _result_boxscore(r)
+    payload["ok"] = True
+    payload["idx"] = idx
+    return jsonify(payload)
+
+
+@bp.route("/api/watch/replay_events")
+def watch_replay_events():
+    """JSON-safe event log for a completed game (?idx=), for PBP replay."""
+    idx = request.args.get("idx", "0")
+    r = _get_past_result(idx)
+    if r is None:
+        return jsonify({"ok": False, "error": "unknown game"}), 404
+    home = _result_team_name(r.get("home_team"))
+    away = _result_team_name(r.get("away_team"))
+    by_id = _result_roster_lookup(r)
+    out = []
+    for e in (r.get("event_log") or []):
+        try:
+            if not isinstance(e, dict):
+                continue
+            d = e.get("details", {}) or {}
+            item = {
+                "type": str(e.get("type", "")),
+                "period": int(d.get("period", e.get("period", 1)) or 1),
+                "timestamp": float(e.get("timestamp", 0) or 0),
+                "desc": str(e.get("desc", "") or ""),
+            }
+            # Resolve the interesting name fields for display.
+            for key in ("scorer_id", "shooter_id", "goaltender_id",
+                        "player_id", "hitting_player_id",
+                        "target_player_id"):
+                if d.get(key) is not None:
+                    item[key] = _player_name(by_id.get(str(d.get(key))))
+            aids = d.get("assist_ids") or []
+            if aids:
+                item["assist_ids"] = [_player_name(by_id.get(str(a)))
+                                     for a in aids]
+            sq = d.get("shot_quality")
+            if sq:
+                item["shot_quality"] = str(sq)
+            mins = d.get("minutes")
+            if mins is not None:
+                try:
+                    item["minutes"] = int(mins)
+                except Exception:
+                    pass
+            out.append(item)
+        except Exception:
+            continue
+    try:
+        from web_ui.bridge import TEAM_ABBR
+        habbr = TEAM_ABBR.get(home, "")
+        aabbr = TEAM_ABBR.get(away, "")
+    except Exception:
+        habbr = aabbr = ""
+    return jsonify({"ok": True, "events": out, "home": home, "away": away,
+                    "home_abbr": habbr, "away_abbr": aabbr,
+                    "home_score": int(r.get("home_score", 0) or 0),
+                    "away_score": int(r.get("away_score", 0) or 0)})
