@@ -5,10 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Player Profile — Puck Dynasty</title>
 <link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
 <link rel="stylesheet" href="/static/css/player.css">
 </head>
 <body data-pid="{{ pid }}">
 <div class="arena-bg"></div>
+{% include '_nav.html' %}
 
 <header class="topbar">
   <a class="back" href="javascript:history.back()">← Back</a>
@@ -152,5 +154,6 @@
 </main>
 
 <script src="/static/js/player.js"></script>
+<script src="/static/js/nav.js"></script>
 </body>
 </html>

@@ -1,0 +1,69 @@
+/* Puck Dynasty global nav — NHL 14 broadcast style. Dark, condensed uppercase,
+   deep blue accents, no teal. Mirrors v0.18.4's menu bar. */
+.pd-nav {
+  position: sticky; top: 0; z-index: 90;
+  display: flex; align-items: stretch; gap: 4px;
+  background: rgba(5, 8, 15, 0.96);
+  border-bottom: 2px solid #3B82F6;
+  padding: 0 18px;
+  font-family: "Oswald", "Arial Narrow", "Helvetica Neue Condensed", sans-serif;
+  backdrop-filter: blur(8px);
+}
+.pd-nav-brand {
+  display: flex; align-items: center;
+  color: #fff; text-decoration: none;
+  font-weight: 800; font-size: 17px; letter-spacing: 2px; text-transform: uppercase;
+  padding: 12px 16px 12px 0; margin-right: 12px;
+  border-right: 1px solid rgba(255,255,255,0.08);
+  white-space: nowrap;
+}
+.pd-nav-brand:hover { color: #93c5fd; }
+.pd-nav-menus { display: flex; align-items: stretch; flex: 1; }
+.pd-nav-drop { position: relative; display: flex; }
+.pd-nav-btn {
+  background: transparent; border: none; cursor: pointer;
+  color: #cbd5e1; font: inherit; font-weight: 700; font-size: 14px;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 12px 16px;
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+}
+.pd-nav-btn:hover, .pd-nav-drop.open .pd-nav-btn {
+  color: #fff; background: rgba(59,130,246,0.12);
+  border-bottom-color: #3B82F6;
+}
+.pd-nav-drop.active-parent .pd-nav-btn { color: #93c5fd; border-bottom-color: #3B82F6; }
+.pd-nav-list {
+  display: none;
+  position: absolute; top: 100%; left: 0; min-width: 220px;
+  background: #0a0f1c;
+  border: 1px solid rgba(59,130,246,0.35);
+  border-top: 2px solid #3B82F6;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  padding: 6px 0;
+}
+.pd-nav-drop.open .pd-nav-list { display: block; }
+.pd-nav-list a {
+  display: block; padding: 9px 18px;
+  color: #cbd5e1; text-decoration: none;
+  font-size: 13.5px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+  white-space: nowrap;
+}
+.pd-nav-list a:hover { background: rgba(59,130,246,0.18); color: #fff; }
+.pd-nav-list a.nav-current { color: #93c5fd; background: rgba(59,130,246,0.12); }
+.pd-nav-right { display: flex; align-items: stretch; margin-left: auto; }
+.pd-nav-link {
+  display: flex; align-items: center;
+  color: #cbd5e1; text-decoration: none;
+  font-weight: 700; font-size: 13px; letter-spacing: 1.5px; text-transform: uppercase;
+  padding: 12px 14px;
+  border-bottom: 3px solid transparent;
+  white-space: nowrap;
+}
+.pd-nav-link:hover { color: #fff; background: rgba(59,130,246,0.12); border-bottom-color: #3B82F6; }
+.pd-nav-link.nav-current { color: #93c5fd; border-bottom-color: #3B82F6; }
+
+@media (max-width: 1100px) {
+  .pd-nav { overflow-x: auto; }
+  .pd-nav-btn, .pd-nav-link { padding: 12px 10px; font-size: 12.5px; }
+}
