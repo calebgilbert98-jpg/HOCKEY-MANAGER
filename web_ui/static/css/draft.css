@@ -286,3 +286,47 @@
 .gpick-vals .pos { color: #4ade80; }
 .gpick-vals .neg { color: #f87171; }
 .grade-why { font-size: 13px; color: var(--dim); }
+
+/* Batch C (League): draft clock/pace, shortlist, trade-pick modal. */
+.cm-overlay[hidden] { display: none; }
+
+.draft-clockbar {
+  display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r);
+  padding: 12px 16px; margin: 12px 0;
+}
+.draft-clockbar[hidden] { display: none; }
+.clock-box { display: flex; align-items: baseline; gap: 12px; }
+.clock-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+}
+.clock-team { font-weight: 800; font-size: 15px; color: #93c5fd; }
+.clock-time {
+  font-family: var(--nhl-cond); font-size: 22px; font-weight: 900; color: #fff;
+}
+.pace-box { display: flex; align-items: center; gap: 10px; }
+
+.tab-count { font-size: 11px; color: var(--dimmer); }
+.sl-remove { margin-left: auto; }
+
+.tp-pick { cursor: pointer; }
+.tp-pick .pick-num {
+  font-family: var(--nhl-cond); font-size: 20px; font-weight: 900; color: #fff;
+  min-width: 52px;
+}
+.cm-sub { font-size: 12px; color: var(--dimmer); margin-top: 2px; }
+#tp-info { margin-top: 10px; font-size: 13px; color: var(--dim); }
+
+/* trade-pick modal form controls */
+.lf-group { display: flex; align-items: center; gap: 8px; }
+.lf-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.6px; text-transform: uppercase; color: var(--dimmer);
+}
+.lf-select {
+  background: #0b1220; color: var(--text); border: 1px solid var(--nhl-line);
+  border-radius: 6px; padding: 8px 10px; font-size: 13px;
+}
+.lf-select:focus { border-color: var(--nhl-blue); outline: none; }

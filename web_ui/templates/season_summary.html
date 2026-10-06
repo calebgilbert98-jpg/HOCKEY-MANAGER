@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Season Summary — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/season_summary.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="ss-sub"></div>
+</header>
+
+<main class="ss-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">End of Season</div>
+    <h1 class="bcast-title" id="ss-title">Season Summary</h1>
+  </div>
+
+  <nav class="tb-tabs" id="ss-tabs" aria-label="Season summary sections">
+    <button class="tb-tab active" data-tab="awards">Awards</button>
+    <button class="tb-tab" data-tab="leaders">League Leaders</button>
+    <button class="tb-tab" data-tab="team">Your Team</button>
+    <button class="tb-tab" data-tab="ceremony">🏆 Awards Ceremony</button>
+  </nav>
+
+  <section id="ss-tab-awards" class="tb-panel">
+    <div class="awards-grid" id="ss-awards"></div>
+  </section>
+
+  <section id="ss-tab-leaders" class="tb-panel hidden">
+    <div class="leaders-grid" id="ss-leaders"></div>
+  </section>
+
+  <section id="ss-tab-team" class="tb-panel hidden">
+    <div id="ss-team"></div>
+  </section>
+
+  <section id="ss-tab-ceremony" class="tb-panel hidden">
+    <div id="ss-ceremony"></div>
+  </section>
+</main>
+
+<script src="/static/js/season_summary.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

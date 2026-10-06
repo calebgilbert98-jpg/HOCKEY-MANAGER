@@ -33,6 +33,11 @@
 
   <!-- 1. News wire -->
   <section id="tab-wire" class="media-pane">
+    <div class="wire-toolbar">
+      <input class="tb-search" id="wire-search" placeholder="Search stories…">
+      <button class="tb-btn" id="wire-refresh" title="Re-check the wire">⟳ Refresh</button>
+      <span class="panel-note" id="wire-fresh"></span>
+    </div>
     <div class="chip-row" id="wire-chips" hidden></div>
     <div class="news-feed" id="wire-feed"></div>
     <div class="empty-wrap" id="wire-empty" hidden>

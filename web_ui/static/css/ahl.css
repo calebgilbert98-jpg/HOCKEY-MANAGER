@@ -1,0 +1,99 @@
+/* Puck Dynasty AHL hub — broadcast skin, deep blue accent. */
+.ahl-main { max-width: 1100px; margin: 0 auto; padding: 6px 24px 40px; }
+
+.ahl-main .tb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+.ahl-main .tb-tab {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  background: var(--nhl-panel2); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 9px 18px; cursor: pointer; transition: all .12s ease;
+}
+.ahl-main .tb-tab:hover { color: #fff; border-color: var(--nhl-blue); }
+.ahl-main .tb-tab.active {
+  background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue);
+  box-shadow: 0 0 14px rgba(59,130,246,.45);
+}
+.ahl-main .tb-panel.hidden { display: none; }
+
+.ahl-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .ahl-two { grid-template-columns: 1fr; } }
+
+.stand-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  overflow: hidden; box-shadow: 0 4px 18px rgba(0,0,0,.4);
+  padding: 4px 6px 10px;
+}
+.stand-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.stand-table th {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+  text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--nhl-line-blue);
+  white-space: nowrap;
+}
+.stand-table td { padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,.045); vertical-align: middle; }
+.stand-table tr:last-child td { border-bottom: none; }
+.stand-table tbody tr:hover { background: rgba(59,130,246,.07); }
+.stand-table .num { font-family: var(--nhl-cond); font-size: 15px; font-weight: 800; text-align: right; color: var(--dim); }
+.stand-table .pts { font-family: var(--nhl-cond); font-size: 17px; font-weight: 900; color: #fff; text-align: right; }
+.stand-table .rank { font-family: var(--nhl-cond); font-weight: 800; color: var(--dimmer); width: 40px; }
+.stand-table .tname { font-weight: 700; letter-spacing: .4px; }
+.stand-table .pname { font-weight: 600; }
+
+.conf-title {
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 2px; color: var(--dim);
+  margin-bottom: 8px;
+}
+.ahl-card-title { padding: 10px 12px 4px; color: #93c5fd; }
+.ahl-card-title.gold { color: #f59e0b; }
+.panel-note { font-size: 11px; color: var(--dim); font-weight: 400; letter-spacing: .3px; }
+
+/* Calder Cup */
+.calder-round { margin: 14px 0; }
+.calder-round-h {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 2px; color: var(--dimmer);
+  margin-bottom: 6px;
+}
+.calder-series {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: 8px;
+  padding: 10px 14px; margin-bottom: 6px;
+}
+.calder-match { font-weight: 700; }
+.calder-result { font-size: 13px; color: #f59e0b; font-weight: 700; }
+.calder-champ {
+  font-family: var(--nhl-cond); font-size: 20px; font-weight: 900;
+  color: #f59e0b; text-align: center; margin: 18px 0 6px;
+  letter-spacing: 1px;
+}
+
+/* team tab */
+.ahl-team-controls {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 10px 14px;
+}
+.ctl-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: var(--dimmer);
+}
+.lf-select {
+  background: #0b1220; color: var(--text); border: 1px solid var(--nhl-line);
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.ahl-team-head { margin-bottom: 12px; }
+.ahl-team-name {
+  font-family: var(--nhl-cond); font-size: 22px; font-weight: 900;
+  color: #fff; letter-spacing: .5px;
+}
+
+.empty {
+  padding: 24px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+}

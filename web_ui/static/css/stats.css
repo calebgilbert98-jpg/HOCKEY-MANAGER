@@ -103,3 +103,51 @@
 .xg-legend { display: flex; gap: 18px; padding: 8px 14px 12px; color: #8b98b8; font-size: 12px; }
 .xg-legend .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 6px; }
 #xg-momentum { width: 100%; display: block; border-radius: 6px; margin: 12px 14px 0; max-width: calc(100% - 28px); }
+
+/* Batch C (League): leader sub-tabs + global filters + NHL records. */
+.leader-tabs {
+  display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 10px;
+}
+.lt-tab {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  background: rgba(255,255,255,.04); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-radius: 999px;
+  padding: 7px 14px; cursor: pointer; transition: all .12s ease;
+}
+.lt-tab:hover { color: #fff; border-color: var(--nhl-blue); }
+.lt-tab.active { background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue); }
+
+.leader-filters {
+  display: flex; flex-wrap: wrap; gap: 16px; align-items: center;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 10px 14px; margin-bottom: 14px;
+}
+.lf-group { display: flex; align-items: center; gap: 8px; }
+.lf-label {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.6px; text-transform: uppercase; color: var(--dimmer);
+}
+.lf-input, .lf-select {
+  background: #0b1220; color: var(--text); border: 1px solid var(--nhl-line);
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.lf-input:focus, .lf-select:focus { border-color: var(--nhl-blue); outline: none; }
+
+#award-race-bar { margin-bottom: 14px; }
+.award-desc {
+  margin: 8px 0 0; font-size: 13px; font-style: italic; color: var(--dim);
+}
+
+.stats-main .tb-pills { display: flex; gap: 6px; flex-wrap: wrap; }
+.stats-main .tb-pill {
+  font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px;
+  background: rgba(255,255,255,.05); color: var(--dim);
+  border: 1px solid var(--nhl-line); cursor: pointer; transition: all .12s ease;
+}
+.stats-main .tb-pill:hover { color: #fff; border-color: var(--nhl-blue); }
+.stats-main .tb-pill.active { background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue); }
+
+.rec-season { font-size: 11px; color: var(--dimmer); }
+.panel-note a { color: #93c5fd; }

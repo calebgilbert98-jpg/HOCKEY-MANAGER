@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Deadline Center — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/deadline.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="dl-sub">Trade Deadline Center</div>
+</header>
+
+<main class="dl-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Transactions</div>
+    <h1 class="bcast-title">Trade Deadline Center</h1>
+  </div>
+
+  <!-- Countdown (desktop countdown clock) -->
+  <section class="dl-countdown" id="dl-countdown">
+    <div class="dl-count-num" id="dl-days">—</div>
+    <div class="dl-count-label" id="dl-count-label">days to the deadline</div>
+    <div class="dl-count-date" id="dl-date"></div>
+  </section>
+
+  <div class="dl-grid">
+    <!-- Stance picker (desktop _create_stance_panel / _compute_stance) -->
+    <section class="bpanel dl-card">
+      <div class="bpanel-h">🎯 Your Deadline Stance</div>
+      <div id="dl-stance"></div>
+      <div class="stance-picker">
+        <span class="ctl-label">Declare:</span>
+        <div class="tb-pills" id="stance-pills">
+          <button class="tb-pill" data-v="buyer">Buyer</button>
+          <button class="tb-pill" data-v="seller">Seller</button>
+          <button class="tb-pill" data-v="stand pat">Stand Pat</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Market: buyers/sellers (desktop buyers_sellers_tab ~2038) -->
+    <section class="bpanel dl-card">
+      <div class="bpanel-h">📊 Trade Market <span class="panel-note">from real standings</span></div>
+      <div class="dl-market">
+        <div>
+          <div class="dl-market-h buy">▲ Buyers</div>
+          <div id="dl-buyers"></div>
+        </div>
+        <div>
+          <div class="dl-market-h sell">▼ Sellers</div>
+          <div id="dl-sellers"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Impact players (desktop "Impact Players Available" panel) -->
+  <section class="bpanel dl-card">
+    <div class="bpanel-h">💥 Impact Players Available <span class="panel-note">trade blocks · expiring deals · unhappy stars</span></div>
+    <div class="dl-impact" id="dl-impact"></div>
+  </section>
+
+  <div class="dl-grid">
+    <!-- Rumor feed (desktop media_rumors.generate_rumors) -->
+    <section class="bpanel dl-card">
+      <div class="bpanel-h">🗞️ Rumor Mill <span class="panel-note">the media is wrong sometimes</span></div>
+      <div id="dl-rumors"></div>
+    </section>
+    <!-- Recent deadline deals -->
+    <section class="bpanel dl-card">
+      <div class="bpanel-h">🤝 Recent Deals</div>
+      <div id="dl-deals"></div>
+    </section>
+  </div>
+</main>
+
+<script src="/static/js/deadline.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

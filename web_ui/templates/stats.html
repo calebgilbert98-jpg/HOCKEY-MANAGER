@@ -26,23 +26,48 @@
     <button class="st-tab active" data-tab="nhl">🏆 NHL Leaders</button>
     <button class="st-tab" data-tab="ahl">🚜 AHL</button>
     <button class="st-tab" data-tab="records">📜 Records</button>
+    <button class="st-tab" data-tab="nhlrecords">⭐ NHL Records</button>
     <button class="st-tab" data-tab="xg">📈 xG Analytics</button>
   </nav>
 
   <div class="stats-pane" id="pane-nhl">
-    <div class="leaders-grid">
-      <section class="bpanel leader-card">
-        <div class="bpanel-h">🏆 Scoring Leaders <span class="panel-note">Top 10</span></div>
-        <table class="leader-table" id="scorers-table"></table>
-      </section>
-      <section class="bpanel leader-card">
-        <div class="bpanel-h">🥅 Goal Leaders <span class="panel-note">Top 5</span></div>
-        <table class="leader-table" id="goals-table"></table>
-      </section>
-      <section class="bpanel leader-card">
-        <div class="bpanel-h">🧤 Save % Leaders <span class="panel-note" id="goalie-min-note"></span></div>
-        <table class="leader-table" id="goalies-table"></table>
-      </section>
+    <!-- Leader sub-tabs (desktop stats_standings_window.py LEADER_TABS) -->
+    <nav class="leader-tabs" id="leader-tabs" aria-label="Leader boards">
+      <button class="lt-tab active" data-ltab="scoring">Scoring</button>
+      <button class="lt-tab" data-ltab="advanced">Advanced</button>
+      <button class="lt-tab" data-ltab="goaltending">Goaltending</button>
+      <button class="lt-tab" data-ltab="breakout">Breakout</button>
+      <button class="lt-tab" data-ltab="rookies">Rookies</button>
+      <button class="lt-tab" data-ltab="awards">Award Races</button>
+      <button class="lt-tab" data-ltab="milestones">Milestones</button>
+    </nav>
+    <!-- Global filters -->
+    <div class="leader-filters">
+      <div class="lf-group">
+        <span class="lf-label">Pos</span>
+        <div class="tb-pills" id="lf-pos">
+          <button class="tb-pill active" data-v="All">All</button>
+          <button class="tb-pill" data-v="F">F</button>
+          <button class="tb-pill" data-v="D">D</button>
+          <button class="tb-pill" data-v="G">G</button>
+        </div>
+      </div>
+      <div class="lf-group">
+        <span class="lf-label">Min GP</span>
+        <input class="lf-input" id="lf-min-gp" type="number" min="0" value="0" style="width:64px">
+      </div>
+      <div class="lf-group">
+        <span class="lf-label">Team</span>
+        <select class="lf-select" id="lf-team"><option value="All">All teams</option></select>
+      </div>
+    </div>
+    <div class="leaders-grid" id="leaders-body"></div>
+    <div id="award-race-bar" hidden>
+      <div class="lf-group">
+        <span class="lf-label">Award</span>
+        <div class="tb-pills" id="award-pills"></div>
+      </div>
+      <p class="award-desc" id="award-desc"></p>
     </div>
   </div>
 
@@ -61,6 +86,7 @@
       <div class="bpanel-h">📊 AHL Standings</div>
       <table class="leader-table" id="ahl-standings"></table>
     </section>
+    <p class="panel-note" style="margin-top:8px">Full AHL hub: <a href="/ahl">standings, scores, Calder Cup, teams &amp; prospects →</a></p>
   </div>
 
   <div class="stats-pane hidden" id="pane-records">
@@ -69,6 +95,21 @@
       <table class="leader-table" id="champions-table"></table>
     </section>
     <div class="records-teams" id="records-teams"></div>
+  </div>
+
+  <div class="stats-pane hidden" id="pane-nhlrecords">
+    <nav class="leader-tabs" id="nhlrec-tabs" aria-label="NHL record books">
+      <button class="lt-tab active" data-rtab="season">Season Records</button>
+      <button class="lt-tab" data-rtab="career">Career Records</button>
+      <button class="lt-tab" data-rtab="team">Team Records</button>
+      <button class="lt-tab" data-rtab="special">Special</button>
+      <button class="lt-tab" data-rtab="chase">Record Chase</button>
+      <button class="lt-tab" data-rtab="achievements">Achievements</button>
+    </nav>
+    <div class="bpanel leader-card">
+      <div class="bpanel-h" id="nhlrec-head">⭐ NHL Records</div>
+      <div id="nhlrec-body"></div>
+    </div>
   </div>
 
   <div class="stats-pane hidden" id="pane-xg">

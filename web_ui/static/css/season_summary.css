@@ -1,0 +1,96 @@
+/* Puck Dynasty season summary + awards ceremony — broadcast skin. */
+.ss-main { max-width: 1100px; margin: 0 auto; padding: 6px 24px 40px; }
+
+.ss-main .tb-tabs { display: flex; gap: 8px; margin: 14px 0; flex-wrap: wrap; }
+.ss-main .tb-tab {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  background: var(--nhl-panel2); color: var(--dim);
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 9px 18px; cursor: pointer; transition: all .12s ease;
+}
+.ss-main .tb-tab:hover { color: #fff; border-color: var(--nhl-blue); }
+.ss-main .tb-tab.active {
+  background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue);
+  box-shadow: 0 0 14px rgba(59,130,246,.45);
+}
+.ss-main .tb-panel.hidden { display: none; }
+
+.awards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.award-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  padding: 14px 16px; transition: transform .14s ease, border-color .14s ease;
+}
+.award-card:hover { transform: translateY(-3px); border-color: var(--nhl-blue); }
+.award-name {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase; color: #f59e0b;
+  margin-bottom: 8px;
+}
+.award-winner { font-size: 16px; font-weight: 800; color: #fff; }
+.award-team { font-size: 13px; color: var(--dim); margin: 2px 0 4px; }
+.panel-note { font-size: 11px; color: var(--dim); }
+
+.leaders-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 900px) { .leaders-grid { grid-template-columns: 1fr; } }
+.ss-record {
+  font-family: var(--nhl-cond); font-size: 30px; font-weight: 900; color: #fff;
+  margin: 6px 0 10px;
+}
+.sd-h {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 1.8px; text-transform: uppercase; color: #93c5fd;
+  margin: 16px 0 6px;
+}
+.sd-h.gold { color: #f59e0b; }
+
+/* awards ceremony stage (desktop AwardsCeremonyWindow) */
+.ceremony-stage {
+  background: radial-gradient(ellipse at 50% 0%, rgba(245,158,11,.08), transparent 60%),
+    linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid rgba(245,158,11,.35); border-radius: var(--nhl-r);
+  padding: 28px 32px; text-align: center;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5);
+}
+.ceremony-kicker {
+  font-family: var(--nhl-cond); font-size: 15px; font-weight: 900;
+  letter-spacing: 4px; text-transform: uppercase; color: #f59e0b;
+}
+.ceremony-progress { font-size: 12px; color: var(--dimmer); margin-top: 4px; }
+.ceremony-dots { margin: 8px 0; }
+.cdot { color: #3a3f45; font-size: 12px; margin: 0 3px; }
+.cdot.done { color: #f59e0b; }
+.cdot.cur { color: #fff; }
+.ceremony-trophy {
+  font-family: var(--nhl-cond); font-size: 28px; font-weight: 900;
+  color: #fff; margin: 10px 0 2px;
+}
+.ceremony-flavor { font-size: 14px; font-style: italic; color: var(--dim); margin-bottom: 14px; }
+.ceremony-finalists { text-align: left; max-width: 560px; margin: 0 auto; }
+.finalist-card {
+  background: rgba(255,255,255,.04); border: 1px solid var(--nhl-line);
+  border-radius: 8px; padding: 10px 14px; margin-bottom: 8px;
+}
+.finalist-name { font-weight: 700; font-size: 15px; }
+.ceremony-winner { margin-top: 18px; }
+.ceremony-winner[hidden] { display: none; }
+.winner-name {
+  font-family: var(--nhl-cond); font-size: 34px; font-weight: 900; color: #f59e0b;
+  text-shadow: 0 0 24px rgba(245,158,11,.5);
+}
+.vote-story { font-size: 13px; color: var(--dim); font-style: italic; max-width: 600px; margin: 10px auto 0; }
+.ceremony-controls { display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+.tb-btn {
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12);
+  color: var(--text); border-radius: var(--nhl-r-sm);
+  padding: 10px 20px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+.tb-btn:hover { border-color: var(--nhl-blue); }
+.tb-btn.tb-accent { background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff; }
+
+.empty {
+  padding: 24px; text-align: center;
+  font-family: var(--nhl-cond); font-size: 14px; font-weight: 700;
+  letter-spacing: 1.5px; text-transform: uppercase; color: var(--dimmer);
+}
