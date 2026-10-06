@@ -1,7 +1,7 @@
 """Finances screen: salary cap, payroll, owner budget (read-only v1)."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _web_app_ref, _safe, enqueue_command
+from web_ui.bridge import _web_app_ref, _safe, enqueue_command, _player_ovr
 
 bp = Blueprint("finances", __name__)
 
@@ -106,7 +106,7 @@ def api_finances():
                 "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
                 "position": _safe(lambda: getattr(p, "position", "?"), "?"),
                 "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
-                "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0), 0),
+                "overall": _player_ovr(p),
                 "salary": _player_cap_hit(p),
                 "injured": _safe(lambda: bool(getattr(p, "injured", False)), False),
             })

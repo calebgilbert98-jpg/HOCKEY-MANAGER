@@ -46,7 +46,7 @@ def _find_team(name):
 
 
 def _team_payload(t):
-    from web_ui.bridge import to_web_player, player_portrait, _safe as _bsafe
+    from web_ui.bridge import to_web_player, player_portrait, _safe as _bsafe, _player_ovr
     live = _live()
     gm = _safe(lambda: live.game_manager)
     league = _safe(lambda: getattr(gm, "league", None)) or \
@@ -150,7 +150,7 @@ def _team_payload(t):
                 "id": pid,
                 "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
                 "position": _safe(lambda: getattr(p, "primary_position", ""), ""),
-                "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0), 0),
+                "overall": _player_ovr(p),
                 "portrait": player_portrait(pid) if pid else None,
             })
         except Exception:

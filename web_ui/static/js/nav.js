@@ -38,4 +38,10 @@
       if (drop) drop.classList.add('active-parent');
     }
   });
+
+  /* Suppress browser context menu globally — right-click should only
+     ever show our coded menus, never the browser default. */
+  document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+  });
 })();

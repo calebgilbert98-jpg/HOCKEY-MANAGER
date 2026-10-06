@@ -6,7 +6,7 @@ validation, and player context actions.
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import player_portrait
+from web_ui.bridge import player_portrait, _player_ovr
 
 bp = Blueprint("roster", __name__)
 
@@ -91,8 +91,8 @@ def to_roster_player(p):
         "position": _safe(lambda: str(getattr(p, "primary_position", "") or "?")),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
         "jersey": _safe(lambda: getattr(p, "jersey_number", ""), ""),
-        "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0)),
-        "tier": _tier_label(_safe(lambda: getattr(p, "overall", 0))),
+        "overall": _player_ovr(p),
+        "tier": _tier_label(_player_ovr(p)),
         "potential": _safe(lambda: getattr(p, "potential", 0), 0),
         "salary": _safe(lambda: int(getattr(p, "salary", 0) or 0)),
         "salary_fmt": _fmt_money(_safe(lambda: (

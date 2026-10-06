@@ -1,7 +1,7 @@
 """Development screen: active training programs + prospect watchlist."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, to_web_player
+from web_ui.bridge import _safe, to_web_player, _player_ovr
 
 bp = Blueprint("development", __name__)
 
@@ -122,7 +122,7 @@ def get_development(live):
         age = _safe(lambda: int(getattr(p, "age", 0) or 0), 99)
         if age <= 23:
             prospects.append(p)
-    prospects.sort(key=lambda p: _safe(lambda: int(getattr(p, "overall", 0) or 0), 0),
+    prospects.sort(key=lambda p: _player_ovr(p),
                    reverse=True)
     farm_ids = {_safe(lambda: id(p)) for p in farm}
     web_prospects = []

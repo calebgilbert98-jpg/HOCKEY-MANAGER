@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Entry draft screen: draft board with pick order and results."""
 from flask import Blueprint, jsonify, render_template, request
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _player_ovr
 
 bp = Blueprint("draft", __name__)
 
@@ -67,7 +67,7 @@ def get_draft_state(app):
             "name": _safe(lambda: getattr(p, "full_name", "?")),
             "position": _safe(lambda: getattr(p, "position", "?")),
             "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
-            "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0)),
+            "overall": _player_ovr(p),
         }
 
     board = []
@@ -172,7 +172,7 @@ def _available_prospects(live):
                 "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
                 "position": _prospect_pos(p),
                 "age": _safe(lambda: int(getattr(p, "age", 0) or 0), 0),
-                "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0), 0),
+                "overall": _player_ovr(p),
                 "potential": _safe(lambda: str(getattr(p, "potential_grade", "?") or "?"), "?"),
             })
         except Exception:

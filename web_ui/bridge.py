@@ -71,6 +71,18 @@ def _safe(fn, default=None):
         return default
 
 
+def _overall(p):
+    """Get player overall: tries overall_rating() method first (game_classes),
+    then overall attribute, then 0."""
+    v = _safe(lambda: p.overall_rating())
+    if v is None:
+        v = _safe(lambda: getattr(p, "overall", 0), 0)
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_TEAM_PRIMARY = "#3B82F6"    # deep blue (current UI accent)
 _DEFAULT_TEAM_SECONDARY = "#1E40AF"
@@ -206,7 +218,7 @@ def to_web_player(p):
         "name": _safe(lambda: getattr(p, "full_name", "?")),
         "position": _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?"),
         "age": _safe(lambda: int(getattr(p, "age", 0) or 0)),
-        "overall": _safe(lambda: int(getattr(p, "overall", 0) or 0)),
+        "overall": _overall(p),
         "salary": _safe(lambda: int(
             getattr(p, "salary", 0)
             or getattr(getattr(p, "contract", None), "salary", 0)
@@ -416,14 +428,18 @@ def _stat_strip(team, gm, t):
 
 
 def _player_ovr(p):
-    """Best-effort 1-100 overall for a player object. Never raises."""
+    """Best-effort 1-100 overall for a player object. Never raises.
+    Tries overall_rating() method first (the real game_classes API),
+    then overall attribute as fallback."""
     try:
+        fn = getattr(p, "overall_rating", None)
+        if callable(fn):
+            v = fn()
+            if v:
+                return int(v)
         v = getattr(p, "overall", None)
         if v:
             return int(v)
-        fn = getattr(p, "overall_rating", None)
-        if callable(fn):
-            return int(fn())
     except Exception:
         pass
     return 0
