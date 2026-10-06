@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>News Wire — Puck Dynasty</title>
+<title>Media Center — Puck Dynasty</title>
 <link rel="stylesheet" href="/static/css/hub.css">
 <link rel="stylesheet" href="/static/css/nav.css">
 <link rel="stylesheet" href="/static/css/news.css">
@@ -17,20 +17,89 @@
   <div class="team-sub" id="news-count"></div>
 </header>
 
-<main class="news-main">
+<main class="media-main">
   <div class="bcast-head">
     <div class="bcast-kicker">League</div>
-    <h1 class="bcast-title">League News Wire</h1>
+    <h1 class="bcast-title">Media Center</h1>
   </div>
-  <div class="news-feed" id="news-feed"></div>
-  <div class="empty-wrap" id="news-empty" hidden>
-    <div class="empty-card">
-      <div class="empty-icon">📰</div>
-      <h2>No news yet</h2>
-      <p>League stories — trades, injuries, suspensions and awards — will be
-      reported here as the season unfolds.</p>
+
+  <nav class="tb-tabs" id="media-tabs">
+    <button class="tb-tab active" data-tab="wire">News Wire <span class="tb-badge" id="badge-wire"></span></button>
+    <button class="tb-tab" data-tab="journalists">Journalists <span class="tb-badge" id="badge-journalists"></span></button>
+    <button class="tb-tab" data-tab="narratives">Narratives <span class="tb-badge" id="badge-narratives"></span></button>
+    <button class="tb-tab" data-tab="fines">Fines <span class="tb-badge" id="badge-fines"></span></button>
+    <button class="tb-tab" data-tab="fanbuzz">Fan Buzz <span class="tb-badge" id="badge-fanbuzz"></span></button>
+  </nav>
+
+  <!-- 1. News wire -->
+  <section id="tab-wire" class="media-pane">
+    <div class="chip-row" id="wire-chips" hidden></div>
+    <div class="news-feed" id="wire-feed"></div>
+    <div class="empty-wrap" id="wire-empty" hidden>
+      <div class="empty-card">
+        <div class="empty-icon">📰</div>
+        <h2>No news yet</h2>
+        <p>League stories — trades, injuries, suspensions, awards and the daily
+        beat — will be reported here as the season unfolds.</p>
+      </div>
     </div>
-  </div>
+  </section>
+
+  <!-- 2. Journalists -->
+  <section id="tab-journalists" class="media-pane" hidden>
+    <div class="jour-intro" id="jour-intro"></div>
+    <div class="jour-grid" id="jour-grid"></div>
+    <div class="empty-wrap" id="jour-empty" hidden>
+      <div class="empty-card">
+        <div class="empty-icon">🎙️</div>
+        <h2>No press corps</h2>
+        <p>Reporters assemble once the league media state initializes.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. Narratives & beefs -->
+  <section id="tab-narratives" class="media-pane" hidden>
+    <div class="narr-section-head" id="narr-head" hidden><span>Ongoing storylines</span></div>
+    <div id="narr-list"></div>
+    <div class="narr-section-head" id="beef-head" hidden><span>Coach vs. media beefs</span></div>
+    <div id="beef-list"></div>
+    <div class="empty-wrap" id="narr-empty" hidden>
+      <div class="empty-card">
+        <div class="empty-icon">📣</div>
+        <h2>Quiet around the league</h2>
+        <p>No ongoing media narratives or coach-reporter feuds right now.
+        Slumps, controversies and heated losses will start them.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Fines ledger -->
+  <section id="tab-fines" class="media-pane" hidden>
+    <div class="fines-summary" id="fines-summary" hidden></div>
+    <div class="fines-list" id="fines-list"></div>
+    <div class="empty-wrap" id="fines-empty" hidden>
+      <div class="empty-card">
+        <div class="empty-icon">⚖️</div>
+        <h2>No fines this season</h2>
+        <p>Player outbursts and skipped media availabilities land here,
+        with a running season total.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. Fan buzz -->
+  <section id="tab-fanbuzz" class="media-pane" hidden>
+    <div class="buzz-summary" id="buzz-summary" hidden></div>
+    <div class="buzz-grid" id="buzz-grid"></div>
+    <div class="empty-wrap" id="buzz-empty" hidden>
+      <div class="empty-card">
+        <div class="empty-icon">📢</div>
+        <h2>No fan data</h2>
+        <p>Fan sentiment per team will appear here once the season is underway.</p>
+      </div>
+    </div>
+  </section>
 </main>
 
 <script src="/static/js/news.js"></script>

@@ -1,8 +1,47 @@
-/* Puck Dynasty web news wire — NHL 14 broadcast skin.
+/* Puck Dynasty Media Center — NHL 14 broadcast skin.
+   Dark broadcast look, deep blue #3B82F6 accent. NO teal anywhere.
    Items are broadcast panels; day headers in condensed type; headlines uppercase. */
 
 .news-main { max-width: 820px; margin: 0 auto; padding: 6px 32px 40px; }
+.media-main { margin: 0 auto; padding: 6px 32px 40px; max-width: 1400px; }
+.media-pane { margin-top: 6px; }
 
+/* --- tabs (same pattern as contracts/draft/free_agents) --- */
+.tb-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0 12px; }
+.tb-tab {
+  font-family: var(--nhl-cond);
+  background: transparent; border: 1px solid rgba(255,255,255,.15);
+  color: var(--dim); border-radius: var(--nhl-r-sm);
+  padding: 6px 16px; font-size: 12.5px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase; cursor: pointer;
+  transition: all .13s ease;
+}
+.tb-tab:hover { color: #fff; border-color: rgba(255,255,255,.35); }
+.tb-tab.active {
+  background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff;
+  box-shadow: 0 3px 12px rgba(59,130,246,.4);
+}
+.tb-badge {
+  display: inline-block; min-width: 20px; text-align: center;
+  background: var(--nhl-blue); color: #fff; border-radius: var(--nhl-r-sm);
+  font-size: 11px; padding: 1px 6px; margin-left: 4px;
+}
+.tb-tab.active .tb-badge { background: rgba(255,255,255,.25); }
+
+/* --- category filter chips --- */
+.chip-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+.chip {
+  font-family: var(--nhl-cond);
+  background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.14);
+  color: var(--dim); border-radius: 20px; padding: 4px 14px;
+  font-size: 12px; font-weight: 800; letter-spacing: 1px;
+  text-transform: uppercase; cursor: pointer; transition: all .13s ease;
+}
+.chip:hover { color: #fff; border-color: rgba(255,255,255,.35); }
+.chip.active { background: var(--nhl-blue); border-color: var(--nhl-blue); color: #fff; }
+.filter-note { color: var(--dim); text-align: center; padding: 40px 0; font-size: 14px; }
+
+/* --- news wire --- */
 .news-day {
   font-family: var(--nhl-cond);
   font-size: 14px; font-weight: 800; text-transform: uppercase;
@@ -25,15 +64,169 @@
   padding: 15px 20px; margin-bottom: 10px;
   border-left: 3px solid var(--nhl-blue);
   transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  cursor: pointer;
 }
 .news-item:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 26px rgba(0,0,0,.5), var(--nhl-glow);
   border-color: var(--nhl-blue);
-  border-left-color: var(--nhl-blue);
 }
-.news-item p { font-size: 14.5px; line-height: 1.6; }
+.news-item p { font-size: 14.5px; line-height: 1.6; margin: 8px 0 0; }
+.news-item-head { display: flex; align-items: center; gap: 10px; }
+.news-date { font-size: 12px; color: var(--dimmer); font-weight: 700; letter-spacing: .6px; }
+.news-detail { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--nhl-line); display: flex; flex-direction: column; gap: 6px; }
+.news-item.expanded { border-color: var(--nhl-blue); }
+.detail-k {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--dimmer);
+  margin-right: 10px;
+}
+.news-teams { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.news-full-date { font-size: 13px; color: var(--dim); }
 
+.cat-tag {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.6px; text-transform: uppercase;
+  border: 1px solid; border-radius: var(--nhl-r-sm); padding: 2px 9px;
+  white-space: nowrap;
+}
+.team-chip {
+  display: inline-block; font-size: 12.5px; font-weight: 700;
+  color: #cfe0ff; background: var(--nhl-blue-soft);
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r-sm);
+  padding: 2px 10px; text-decoration: none; transition: all .13s ease;
+}
+.team-chip:hover { background: var(--nhl-blue); color: #fff; border-color: var(--nhl-blue); }
+.dim { color: var(--dim); }
+
+/* --- journalists --- */
+.jour-intro { color: var(--dim); font-size: 13.5px; margin: 4px 0 14px; display: flex; gap: 14px; flex-wrap: wrap; }
+.jour-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.jour-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  box-shadow: 0 4px 18px rgba(0,0,0,.4); padding: 16px 18px;
+}
+.jour-card:hover { border-color: var(--nhl-blue); }
+.jour-market {
+  font-family: var(--nhl-cond); font-size: 17px; font-weight: 800;
+  letter-spacing: 1px; text-transform: uppercase; color: #fff;
+  text-decoration: none;
+}
+.jour-market:hover { color: var(--nhl-blue); }
+.jour-prof { margin: 10px 0 12px; display: flex; flex-direction: column; gap: 5px; }
+.prof-row { display: grid; grid-template-columns: 86px 1fr 30px; align-items: center; gap: 8px; }
+.prof-k { font-size: 11px; color: var(--dim); font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+.prof-bar { height: 6px; background: rgba(255,255,255,.08); border-radius: 3px; overflow: hidden; }
+.prof-fill { height: 100%; background: var(--nhl-blue); border-radius: 3px; }
+.prof-v { font-size: 11.5px; color: var(--dim); text-align: right; font-weight: 700; }
+.jour-reps { display: flex; flex-direction: column; gap: 8px; }
+.jour-rep { background: rgba(255,255,255,.03); border: 1px solid var(--nhl-line); border-radius: var(--nhl-r-sm); padding: 9px 12px; }
+.jour-rep-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.jour-name { font-size: 14px; font-weight: 700; color: #fff; }
+.arch-tag {
+  font-family: var(--nhl-cond); font-size: 10.5px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase;
+  border: 1px solid; border-radius: var(--nhl-r-sm); padding: 2px 8px; white-space: nowrap;
+}
+.jour-blurb { font-size: 12px; color: var(--dim); margin-top: 4px; font-style: italic; }
+.jour-stats { display: flex; gap: 14px; margin-top: 6px; font-size: 12px; color: var(--dim); font-weight: 700; }
+
+/* --- narratives & beefs --- */
+.narr-section-head {
+  font-family: var(--nhl-cond); font-size: 13px; font-weight: 800;
+  letter-spacing: 2.5px; text-transform: uppercase; color: var(--dim);
+  margin: 22px 0 10px; display: flex; align-items: center; gap: 8px;
+}
+.narr-section-head:first-of-type { margin-top: 4px; }
+.narr-section-head::after {
+  content: ''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--nhl-line-blue), transparent);
+}
+.narr-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-left: 3px solid var(--nhl-blue);
+  border-radius: var(--nhl-r); box-shadow: 0 4px 18px rgba(0,0,0,.4);
+  padding: 15px 20px; margin-bottom: 10px;
+}
+.narr-card.beef { border-left-color: #f59e0b; }
+.narr-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.narr-title { font-size: 16px; font-weight: 700; color: #fff; margin-top: 8px; line-height: 1.45; }
+.narr-subs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.subj-chip {
+  font-size: 12.5px; font-weight: 700; color: #cfe0ff;
+  background: rgba(255,255,255,.05); border: 1px solid var(--nhl-line);
+  border-radius: var(--nhl-r-sm); padding: 2px 10px;
+}
+.heat-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.heat-bar { flex: 1; height: 8px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; }
+.heat-fill { height: 100%; border-radius: 4px; transition: width .3s ease; }
+.heat-v { font-size: 13px; font-weight: 800; color: #fff; min-width: 34px; text-align: right; }
+
+/* --- fines ledger --- */
+.fines-summary {
+  display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line-blue); border-radius: var(--nhl-r);
+  padding: 16px 22px; margin-bottom: 14px;
+}
+.fines-total-k {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 2.5px; text-transform: uppercase; color: var(--dim);
+}
+.fines-total-v { font-family: var(--nhl-cond); font-size: 30px; font-weight: 800; color: #fff; }
+.fines-list { display: flex; flex-direction: column; gap: 8px; }
+.fine-row {
+  display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: start;
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-left: 3px solid #f59e0b;
+  border-radius: var(--nhl-r); padding: 12px 18px;
+}
+.fine-row:hover { border-color: #f59e0b; }
+.fine-amount { font-family: var(--nhl-cond); font-size: 19px; font-weight: 800; color: #fbbf24; }
+.fine-name { font-size: 14px; font-weight: 700; color: #fff; }
+.fine-reason { font-size: 13px; color: var(--dim); margin-top: 3px; line-height: 1.5; }
+.fine-meta { margin-top: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* --- fan buzz --- */
+.buzz-summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+.buzz-pill {
+  font-family: var(--nhl-cond); font-size: 12px; font-weight: 800;
+  letter-spacing: 1.4px; text-transform: uppercase;
+  border: 1px solid; border-radius: var(--nhl-r-sm); padding: 4px 12px;
+}
+.buzz-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.buzz-card {
+  background: linear-gradient(165deg, var(--nhl-panel2), var(--nhl-panel));
+  border: 1px solid var(--nhl-line); border-radius: var(--nhl-r);
+  box-shadow: 0 4px 18px rgba(0,0,0,.4); padding: 16px 18px;
+}
+.buzz-card:hover { border-color: var(--nhl-blue); }
+.buzz-team {
+  font-family: var(--nhl-cond); font-size: 16px; font-weight: 800;
+  letter-spacing: 1px; text-transform: uppercase; color: #fff; text-decoration: none;
+}
+.buzz-team:hover { color: var(--nhl-blue); }
+.buzz-line { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+.buzz-val { font-family: var(--nhl-cond); font-size: 22px; font-weight: 800; color: #fff; }
+.sent-tag {
+  font-family: var(--nhl-cond); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.6px; text-transform: uppercase;
+  border: 1px solid; border-radius: var(--nhl-r-sm); padding: 2px 9px;
+}
+.sent-bar { height: 8px; background: rgba(255,255,255,.08); border-radius: 4px; overflow: hidden; margin-top: 8px; }
+.sent-fill { height: 100%; border-radius: 4px; transition: width .3s ease; }
+.buzz-tone { font-size: 12.5px; margin-top: 8px; }
+.buzz-tone b { color: #cfe0ff; }
+.buzz-drivers { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.driver { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.driver-delta { font-weight: 800; min-width: 44px; color: var(--dim); }
+.driver-delta.up { color: #4ade80; }
+.driver-delta.down { color: #f87171; }
+.driver-reason { color: var(--dim); flex: 1; line-height: 1.4; }
+.driver-date { font-size: 11px; white-space: nowrap; }
+
+/* --- empty states --- */
 .empty-wrap { display: flex; justify-content: center; padding: 60px 0; }
 .empty-card {
   text-align: center; max-width: 420px;
@@ -52,4 +245,6 @@
 
 @media (max-width: 900px) {
   .news-main { padding: 6px 16px 32px; }
+  .media-main { padding: 6px 16px 32px; }
+  .fine-row { grid-template-columns: 1fr; }
 }
