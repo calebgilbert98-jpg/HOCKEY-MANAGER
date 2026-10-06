@@ -54,5 +54,9 @@ jobs:
         with:
           tag_name: v${{ steps.version.outputs.APP_VERSION }}
           name: Puck Dynasty v${{ steps.version.outputs.APP_VERSION }}
+          # Pin the tag to the commit that was actually built. Without this,
+          # GitHub defaults the tag to the default branch HEAD, which mistagged
+          # every web-ui release v0.25.1-v0.25.7 to main's HEAD (fixed 2026-10-06).
+          target_commitish: ${{ github.sha }}
           files: dist/PuckDynasty-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
           fail_on_unmatched_files: true
