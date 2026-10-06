@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compare Players — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/compare.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/roster">← Roster</a>
+  <span class="tb-kicker">Player Comparison</span>
+</header>
+
+<main class="cmp-main">
+  <div class="cmp-head">
+    <div>
+      <div class="bcast-kicker">Head to Head</div>
+      <h1 class="cmp-title">COMPARE PLAYERS</h1>
+      <p class="cmp-sub">Add up to 4 players. Best value in each row is highlighted green.</p>
+    </div>
+    <div class="cmp-slots" id="cmp-slots"></div>
+  </div>
+
+  <div id="cmp-search-wrap" class="cmp-search-wrap" hidden>
+    <input id="cmp-search" type="text" placeholder="Type a player name…" autocomplete="off">
+    <div id="cmp-results" class="cmp-results"></div>
+  </div>
+
+  <div id="cmp-empty" class="cmp-empty">
+    <p>Select at least two players to start comparing.</p>
+  </div>
+
+  <div id="cmp-table-wrap" class="cmp-table-wrap" hidden>
+    <table class="cmp-table" id="cmp-table">
+      <thead id="cmp-thead"></thead>
+      <tbody id="cmp-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<script src="/static/js/compare.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

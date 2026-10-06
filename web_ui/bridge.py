@@ -1460,6 +1460,53 @@ def _execute_command(app, cmd):
                         fn(player, team)
             except Exception:
                 pass
+        elif op == "place_on_waivers":
+            # Place one of the user's own roster players on the waiver wire.
+            # Mirrors windows.py place_on_waivers minus the Tkinter dialogs:
+            # NMC blocks placement (safe default), transaction window enforced.
+            pid = cmd.get("player_id")
+            try:
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) or getattr(app, "user_team", None)
+                if team is None:
+                    print("place_on_waivers: no user team")
+                    return
+                roster = list(getattr(team, "roster", []) or [])
+                player = next((p for p in roster
+                               if str(getattr(p, "id", "")) == str(pid)), None)
+                if player is None:
+                    print(f"place_on_waivers: player {pid} not on roster")
+                    return
+                try:
+                    import transaction_windows as _tw
+                    _ok, _why = _tw.check_window(
+                        "waiver_place", getattr(app, "current_date", None))
+                    if not _ok:
+                        print(f"place_on_waivers blocked: {_why}")
+                        return
+                except Exception:
+                    pass
+                try:
+                    import trade_engine as _te
+                    _kind, _detail = _te.clause_of(player)
+                    if _kind == "NMC":
+                        print(f"place_on_waivers blocked: {player.full_name} has NMC")
+                        return
+                except Exception:
+                    pass
+                player.on_waivers = True
+                wire = getattr(app, "waiver_list", None)
+                if wire is not None and player not in wire:
+                    wire.append(player)
+                try:
+                    _news = getattr(app, "add_news", None)
+                    if callable(_news):
+                        _news(f"{player.full_name} placed on waivers by "
+                              f"{getattr(team, 'team_name', 'your team')}.")
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"place_on_waivers failed: {e}")
         elif op == "set_captains":
             try:
                 team = getattr(app, "user_team", None)
@@ -1658,6 +1705,32 @@ def _execute_command(app, cmd):
                             pass
             except Exception:
                 pass
+        elif op == "release_staff":
+            # Release a staff member from the user's team.
+            # Mirrors staff_management_window.release_staff_action.
+            try:
+                sid = str(cmd.get("staff_id", ""))
+                gm = getattr(app, "game_manager", None)
+                team = getattr(gm, "user_team", None) or getattr(app, "user_team", None)
+                if team is None or not sid:
+                    print("release_staff: no team or id")
+                    return
+                staff = list(getattr(team, "staff", []) or [])
+                target = next((s for s in staff
+                               if str(getattr(s, "id", "")) == sid), None)
+                if target is not None and target in getattr(team, "staff", []):
+                    team.staff.remove(target)
+                    try:
+                        _news = getattr(app, "add_news", None)
+                        if callable(_news):
+                            _news(f"{getattr(target, 'full_name', 'Staff member')} "
+                                  f"released by {getattr(team, 'team_name', 'your team')}.")
+                    except Exception:
+                        pass
+                else:
+                    print(f"release_staff: staff {sid} not found")
+            except Exception as e:
+                print(f"release_staff failed: {e}")
         elif op == "draft_pick":
             # User drafts a prospect: record via the live session.
             try:

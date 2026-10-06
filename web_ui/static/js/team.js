@@ -33,7 +33,10 @@ function renderTeam(d) {
   if (d.div_rank) bits.push(`${d.div_rank}${['st','nd','rd'][d.div_rank-1] || 'th'} in ${esc(d.division)}`);
   bits.push(`Streak ${esc(d.streak || '—')}`);
   bits.push(`Cap space ${fmtCap(d.cap_space)}`);
-  if (d.is_user) bits.push('<a href="/roster">Full roster →</a>');
+  if (d.is_user) {
+    bits.push('<a href="/roster">Full roster →</a>');
+    document.querySelector('.tm-head').setAttribute('data-is-user-team', '1');
+  }
   document.getElementById('tm-sub').innerHTML = bits.join(' · ');
 
   // Leaders

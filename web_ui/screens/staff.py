@@ -60,3 +60,15 @@ def api_staff():
         except Exception:
             continue
     return jsonify({"staff": out, "count": len(out)})
+
+
+@bp.route("/api/staff/release", methods=["POST"])
+def api_staff_release():
+    """Release a staff member from the user's team."""
+    from flask import request
+    data = request.get_json(force=True, silent=True) or {}
+    sid = data.get("staff_id")
+    if not sid:
+        return jsonify({"ok": False, "error": "staff_id required"}), 400
+    ok = enqueue_command("release_staff", staff_id=str(sid))
+    return jsonify({"ok": ok, "queued": "release_staff"})

@@ -39,9 +39,6 @@
     }
   });
 
-  /* Suppress browser context menu globally — right-click should only
-     ever show our coded menus, never the browser default. */
-  document.addEventListener('contextmenu', function (e) {
-    e.preventDefault();
-  });
+  /* Right-click handling lives in context_menu.js: it shows a custom menu
+     for players/teams/staff and leaves the browser menu alone otherwise. */
 })();

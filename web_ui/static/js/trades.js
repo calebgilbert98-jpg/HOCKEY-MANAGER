@@ -569,7 +569,40 @@ async function pollResult() {
 el('team-search').addEventListener('input', e => renderTeams(e.target.value));
 el('btn-propose').addEventListener('click', propose);
 
-loadTeams();
+loadTeams().then(preselectFromURL);
+
+/* Pre-selection from context menus: /trades?team=<name>&player=<id> */
+async function preselectFromURL() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const teamName = params.get('team');
+    const playerId = params.get('player');
+    if (!teamName && !playerId) return;
+    /* Resolve team: explicit ?team= wins; otherwise look up the player's team. */
+    let targetName = teamName;
+    if (!targetName && playerId) {
+      try {
+        const pr = await fetch('/api/player/' + encodeURIComponent(playerId));
+        if (pr.ok) {
+          const pd = await pr.json();
+          targetName = (pd.header && pd.header.team_name) || null;
+        }
+      } catch (e) { /* ignore */ }
+    }
+    if (!targetName || !state.teams) return;
+    const team = state.teams.find(t =>
+      (t.name || '').toLowerCase() === targetName.toLowerCase());
+    if (!team) return;
+    await selectPartner(team.id, team.name);
+    if (playerId && state.partnerPlayers) {
+      const found = state.partnerPlayers.some(p => String(p.id) === String(playerId));
+      if (found) {
+        state.wantPids.add(String(playerId));
+        renderGet(); renderDeal(); scheduleEvaluate();
+      }
+    }
+  } catch (e) { console.error(e); }
+}
 
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 (function () {

@@ -546,7 +546,26 @@ const NegModal = {
 };
 NegModal.bind();
 
-loadContracts();
+loadContracts().then(preselectFromURL);
+
+/* Pre-selection from context menu: /contracts?player=<id> opens the
+ * extension dialog for that player. */
+async function preselectFromURL() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get('player');
+    if (!pid) return;
+    let name = 'Player';
+    try {
+      const pr = await fetch('/api/player/' + encodeURIComponent(pid));
+      if (pr.ok) {
+        const pd = await pr.json();
+        name = (pd.header && pd.header.name) || name;
+      }
+    } catch (e) { /* ignore */ }
+    extendContract(null, pid, name);
+  } catch (e) { console.error(e); }
+}
 
 // Shared heartbeat: tells the game the tab is still open (every 30s).
 // If the tab goes silent the game shuts itself down cleanly.

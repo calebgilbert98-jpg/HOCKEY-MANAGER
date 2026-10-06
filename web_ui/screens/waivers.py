@@ -59,3 +59,15 @@ def api_waivers_claim():
         return jsonify({"ok": False, "error": "player_id required"}), 400
     ok = enqueue_command("claim_waiver", player_id=str(pid))
     return jsonify({"ok": ok, "queued": "claim_waiver"})
+
+
+@bp.route("/api/waivers/place", methods=["POST"])
+def api_waivers_place():
+    """Place one of the user's own players on waivers."""
+    from flask import request
+    data = request.get_json(force=True, silent=True) or {}
+    pid = data.get("player_id")
+    if not pid:
+        return jsonify({"ok": False, "error": "player_id required"}), 400
+    ok = enqueue_command("place_on_waivers", player_id=str(pid))
+    return jsonify({"ok": ok, "queued": "place_on_waivers"})

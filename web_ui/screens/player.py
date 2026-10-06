@@ -294,6 +294,7 @@ def _build_header(p, team):
         "id": pid,
         "portrait": player_portrait(pid),
         "name": name,
+        "team_name": team_name,
         "pos_class": pos_class,
         "initials": _safe(
             lambda: f"{p.first_name[0]}{p.last_name[0]}".upper(), "?"),
