@@ -267,3 +267,14 @@
 .neg-hist-by.by-ai { color: #f5c518; }
 .neg-hist-by.by-system { color: #6b7280; }
 .neg-actions { display: flex; gap: 8px; align-items: center; }
+
+/* Batch A: trade-freeze banner — visible while the transaction window is
+   frozen (holiday Dec 20-27, post-deadline). */
+.freeze-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: linear-gradient(165deg, #2a1416, #1a0e10);
+  border: 1px solid rgba(239, 68, 68, .45); border-radius: var(--nhl-r);
+  color: #fecaca; font-size: 14px; font-weight: 600;
+  padding: 12px 18px; margin-bottom: 16px;
+}
+.freeze-ico { font-size: 18px; }

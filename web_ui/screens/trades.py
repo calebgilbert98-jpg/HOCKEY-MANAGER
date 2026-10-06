@@ -115,6 +115,13 @@ def api_trades_propose():
     """
     data = request.get_json(force=True, silent=True) or {}
 
+    # Batch A: fail fast during a trade freeze (holiday Dec 20-27 or
+    # post-deadline). The execute_trade queue op re-checks on the Tk
+    # thread; this gives the client an immediate, clear error.
+    frozen, reason = _trade_window_state(_live())
+    if frozen:
+        return jsonify({"ok": False, "error": reason}), 400
+
     # -- v2: trade-builder modal payload (players + picks, AI-gated) -----
     if "target_team_id" in data:
         team_id = data.get("target_team_id")
@@ -815,3 +822,47 @@ def api_trades_negotiations():
     # Most recent first.
     out.sort(key=lambda d: (d.get("created") or ""), reverse=True)
     return jsonify({"negotiations": out})
+
+
+# ======================================================================
+# Trade-freeze enforcement (Batch A, 2026-10-06).
+# Appended; existing routes untouched.
+#
+# - GET /api/trades/window -> {frozen, reason, opens}. Powers the freeze
+#   banner on the Trade Center page.
+# - POST /api/trades/propose now fails fast with 400 during a freeze
+#   (the execute_trade queue op re-checks on the Tk thread as the
+#   authoritative backstop).
+# Both read the same transaction_windows.check_window("trade") rulebook
+# the desktop uses: holiday freeze (Dec 20-27) + post-deadline freeze.
+# ======================================================================
+
+def _trade_window_state(live):
+    """(frozen: bool, reason: str). Never raises."""
+    try:
+        import transaction_windows as _tw
+    except Exception:
+        return False, ""
+    try:
+        gm = _safe(lambda: live.game_manager)
+        league = _safe(lambda: getattr(gm, "league", None)) or \
+            _safe(lambda: getattr(live, "league", None))
+        today = _safe(lambda: getattr(gm, "current_date", None)) or \
+            _safe(lambda: getattr(live, "current_date", None))
+        allowed, reason = _tw.check_window(
+            "trade", today, {"league": league, "date_str": str(today)})
+        if not allowed:
+            return True, str(reason or "Trades are frozen.")
+        return False, ""
+    except Exception:
+        return False, ""
+
+
+@bp.route("/api/trades/window")
+def api_trades_window():
+    """Is trading frozen right now? {frozen, reason}."""
+    live = _live()
+    if live is None:
+        return jsonify({"frozen": False, "reason": ""})
+    frozen, reason = _trade_window_state(live)
+    return jsonify({"frozen": frozen, "reason": reason})

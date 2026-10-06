@@ -519,7 +519,8 @@ function renderVerdict(d) {
     d.retention_acquire_valid === false;
   const hasAssets = state.givePids.size + state.givePicks.size +
     state.wantPids.size + state.wantPicks.size > 0;
-  el('btn-propose').disabled = !hasAssets || !!retBad;
+  // Batch A: the freeze keeps the propose button off no matter what.
+  el('btn-propose').disabled = !hasAssets || !!retBad || !!state.frozen;
   el('trade-note').textContent = '';
   el('trade-note').className = 'prop-note';
 
@@ -719,7 +720,35 @@ async function counterNegotiation(negId) {
 el('team-search').addEventListener('input', e => renderTeams(e.target.value));
 el('btn-propose').addEventListener('click', propose);
 
+/* Batch A: trade-freeze banner. When frozen, proposals are blocked
+   server-side (transaction_windows.check_window("trade")); the banner
+   explains why and the propose button stays disabled. */
+async function checkTradeWindow() {
+  try {
+    const res = await fetch('/api/trades/window');
+    const w = await res.json();
+    state.frozen = !!w.frozen;
+    let banner = el('trade-freeze-banner');
+    if (w.frozen) {
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'trade-freeze-banner';
+        banner.className = 'freeze-banner';
+        const main = document.querySelector('.trades-main');
+        main.insertBefore(banner, main.firstChild);
+      }
+      banner.innerHTML = `<span class="freeze-ico">⛔</span><span>${esc(w.reason || 'Trades are frozen.')}</span>`;
+      banner.hidden = false;
+      const btn = el('btn-propose');
+      if (btn) { btn.disabled = true; btn.title = w.reason || 'Trades are frozen'; }
+    } else if (banner) {
+      banner.hidden = true;
+    }
+  } catch (e) { /* banner is best-effort; the server still enforces */ }
+}
+
 loadTeams().then(preselectFromURL);
+checkTradeWindow();
 loadNegotiations();
 setInterval(loadNegotiations, 30000); // keep the thread view fresh
 
