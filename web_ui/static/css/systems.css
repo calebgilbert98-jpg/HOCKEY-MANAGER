@@ -1,0 +1,108 @@
+/* Systems pages (Batch F): Clutch Factors, Circumstance Shifts, Discipline
+   List, Rivalry Dashboard, Ice-Time Deployment, Roster Condition.
+   Dense broadcast style; deep blue accent (#3B82F6 family, no teal). */
+
+/* [hidden] guard: author display rules below would otherwise defeat the
+   UA [hidden]{display:none} rule (author origin beats UA origin). */
+.sys-wrap [hidden] { display: none !important; }
+
+.sys-wrap { max-width: 1180px; margin: 0 auto; padding: 0 18px 40px; }
+
+.sys-card {
+  background: var(--card);
+  border: 1px solid rgba(148,163,184,.14);
+  border-radius: var(--radius-sm);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-tile);
+}
+.sys-card > h2 {
+  margin: 0 0 4px;
+  font-family: var(--nhl-cond, 'Arial Narrow', sans-serif);
+  font-size: 20px; font-weight: 800; letter-spacing: 1.5px;
+  text-transform: uppercase; color: #fff;
+}
+.sys-sub { color: var(--dim); font-size: 13px; margin: 0 0 12px; }
+.sys-note { color: var(--dim); font-size: 13px; }
+.sys-empty { color: var(--dimmer); font-style: italic; padding: 8px 0; }
+
+/* verdict banner (clutch) */
+.sys-verdict {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; border-radius: var(--radius-sm);
+  background: var(--card2);
+  border: 1px solid rgba(148,163,184,.16);
+  margin-bottom: 14px;
+}
+.sys-verdict .sys-blurb { color: var(--text); font-size: 14px; }
+.sys-verdict .sys-fine { color: var(--dimmer); font-size: 12px; margin-top: 4px; }
+
+/* chips */
+.sys-chip {
+  display: inline-flex; align-items: center;
+  font-size: 11px; font-weight: 800; letter-spacing: 1px;
+  padding: 4px 10px; border-radius: 999px;
+  text-transform: uppercase; white-space: nowrap; flex: none;
+  border: 1px solid transparent;
+}
+.sys-chip.green { color: var(--green); border-color: rgba(52,211,153,.4); background: rgba(52,211,153,.10); }
+.sys-chip.red   { color: var(--red);   border-color: rgba(239,68,68,.4);   background: rgba(239,68,68,.10); }
+.sys-chip.gold  { color: var(--gold);  border-color: rgba(232,185,60,.4);  background: rgba(232,185,60,.10); }
+.sys-chip.blue  { color: var(--accent); border-color: rgba(59,130,246,.45); background: var(--accent-soft); }
+.sys-chip.slate { color: #aeb9cc; border-color: rgba(148,163,184,.35); background: rgba(148,163,184,.10); }
+
+/* factor / rivalry rows */
+.sys-row {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 10px 4px; border-top: 1px solid rgba(148,163,184,.08);
+}
+.sys-row:first-of-type { border-top: 0; }
+.sys-row .sys-row-body { min-width: 0; flex: 1; }
+.sys-row .sys-row-title { color: #fff; font-weight: 700; font-size: 14px; }
+.sys-row .sys-row-title .sys-sign { font-weight: 800; }
+.sys-row .sys-row-story { color: var(--dim); font-size: 13px; margin-top: 2px; }
+.sys-row .sys-row-meta { color: var(--dimmer); font-size: 12px; margin-top: 3px; }
+
+/* bars */
+.sys-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; flex: none; }
+.sys-bar > i { display: block; height: 100%; border-radius: 4px; }
+
+/* tables */
+.sys-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.sys-table th {
+  text-align: left; color: var(--dim); font-size: 11px; font-weight: 800;
+  letter-spacing: 1.2px; text-transform: uppercase;
+  padding: 6px 10px 6px 0; border-bottom: 1px solid rgba(148,163,184,.18);
+  white-space: nowrap;
+}
+.sys-table td { padding: 7px 10px 7px 0; border-bottom: 1px solid rgba(148,163,184,.07); color: var(--text); vertical-align: middle; }
+.sys-table tr:last-child td { border-bottom: 0; }
+.sys-table td.num, .sys-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sys-table td.dim { color: var(--dim); }
+
+/* clickable names */
+a.sys-name { color: #fff; font-weight: 600; text-decoration: none; border-bottom: 1px dotted rgba(59,130,246,.55); }
+a.sys-name:hover { color: var(--accent); border-bottom-style: solid; }
+
+/* inline portrait thumb */
+.sys-face {
+  width: 26px; height: 26px; border-radius: 50%; object-fit: cover;
+  vertical-align: middle; margin-right: 8px; background: var(--card3);
+}
+
+/* summary bits */
+.sys-bits { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--dim); font-size: 13px; }
+.sys-bits b { color: #fff; }
+
+/* composite picker */
+.sys-picker { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.sys-picker label { color: var(--dim); font-size: 13px; font-weight: 700; letter-spacing: .5px; }
+.sys-picker select {
+  background: var(--card2); color: var(--text);
+  border: 1px solid rgba(148,163,184,.25); border-radius: 8px;
+  padding: 8px 12px; font-size: 14px; font-family: inherit;
+}
+.sys-ctx { color: var(--dim); font-size: 13px; }
+
+.pos { color: var(--green); font-weight: 700; }
+.neg { color: var(--red); font-weight: 700; }
