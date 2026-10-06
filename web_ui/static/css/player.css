@@ -51,6 +51,11 @@
   font-size: 44px; font-weight: 800; color: #fff;
   background: linear-gradient(135deg, #3B82F6, #1e3a8a);
 }
+/* [hidden] must win here: author display rules above defeat the UA
+   [hidden]{display:none} (author origin beats UA origin), which left the
+   "?" fallback permanently painted over real portraits. */
+.p-portrait img[hidden], .p-portrait-fallback[hidden],
+.shot-legend[hidden] { display: none !important; }
 .p-head-info { position: relative; min-width: 0; flex: 1; }
 .p-name {
   margin: 0 0 10px;

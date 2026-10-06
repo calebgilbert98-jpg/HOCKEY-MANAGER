@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ice-Time Deployment — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/systems.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub">Systems</div>
+</header>
+
+<main class="sys-wrap">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Systems · Coach's Ice Plan</div>
+    <h1 class="bcast-title">Ice-Time Deployment</h1>
+  </div>
+
+  <div class="sys-card">
+    <h2>Deployment policy in effect</h2>
+    <p class="sys-sub">Neutral game state (0-0, 1st period) — score and clock tilt this live.</p>
+    <div id="dp-policy"></div>
+  </div>
+
+  <div class="sys-card">
+    <h2>Line deployment shares</h2>
+    <p class="sys-sub">Share of each unit's ice the coach plans at the base policy.</p>
+    <div id="dp-shares"></div>
+  </div>
+
+  <div class="sys-card">
+    <h2>Soft-cap governor</h2>
+    <p class="sys-sub">Elite skaters are sheltered once total TOI binds; deployment shifts to the next lines.</p>
+    <div id="dp-caps"></div>
+  </div>
+
+  <div class="sys-card">
+    <h2>Honored GM advice</h2>
+    <p class="sys-sub">Standing instructions from Advise Coach the coach is carrying.</p>
+    <div id="dp-advice"></div>
+  </div>
+</main>
+
+<script src="/static/js/systems_deployment.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

@@ -39,14 +39,20 @@
   function renderHeader(h) {
     document.title = h.name + ' — Puck Dynasty';
     const img = $('p-portrait-img');
+    const fb = $('p-portrait-fallback');
+    fb.textContent = h.initials || '?';
+    // Attach the error handler BEFORE setting src: a synchronously-failing
+    // (cached) load can otherwise fire before the handler exists.
+    img.onerror = () => { img.hidden = true; fb.hidden = false; };
     if (h.portrait) {
-      img.src = h.portrait;
+      fb.hidden = true;
       img.hidden = false;
-      img.onerror = () => { img.hidden = true; $('p-portrait-fallback').hidden = false; };
+      img.src = h.portrait;
     } else {
-      $('p-portrait-fallback').textContent = h.initials || '?';
+      img.removeAttribute('src');
+      img.hidden = true;
+      fb.hidden = false;
     }
-    if (h.portrait) $('p-portrait-fallback').hidden = true;
     $('p-name').textContent = h.name;
     let pills = (h.pills || []).map((p) =>
       `<span class="pill kind-${esc(p.kind || '')}"${p.fg ? ` style="color:${esc(p.fg)}"` : ''}>${esc(p.text)}</span>`

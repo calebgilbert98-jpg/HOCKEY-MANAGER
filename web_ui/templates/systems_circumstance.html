@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Circumstance Shifts — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/systems.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub">Systems</div>
+</header>
+
+<main class="sys-wrap">
+  <div class="bcast-head">
+    <div class="bcast-kicker">Systems · Game-State Engine</div>
+    <h1 class="bcast-title">Circumstance Shifts</h1>
+  </div>
+
+  <div class="sys-picker">
+    <label for="cs-composite">Composite:</label>
+    <select id="cs-composite"></select>
+    <span class="sys-ctx" id="cs-note"></span>
+  </div>
+
+  <div class="sys-card" id="cs-opp-card" hidden>
+    <h2>Opponent read</h2>
+    <p class="sys-sub">Qualitative only — their room is their business.</p>
+    <div id="cs-opp"></div>
+  </div>
+
+  <div class="sys-card">
+    <h2 id="cs-table-title">Applied shifts</h2>
+    <p class="sys-sub">Composite points added per event at tonight's baseline. Components verified to sum to the engine's own total.</p>
+    <div id="cs-table"></div>
+  </div>
+</main>
+
+<script src="/static/js/systems_circumstance.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>
