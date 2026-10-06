@@ -246,7 +246,7 @@ def player_portrait(player_id):
 def to_web_player(p):
     """Player -> JSON-safe dict."""
     pid = _safe(lambda: str(getattr(p, "id", id(p))))
-    return {
+    d = {
         "id": pid,
         "portrait": player_portrait(pid),
         "name": _safe(lambda: getattr(p, "full_name", "?")),
@@ -261,7 +261,32 @@ def to_web_player(p):
         "injured": _safe(lambda: bool(getattr(p, "is_injured", False))),
         "morale": _safe(lambda: int(getattr(p, "morale", 70) or 70)),
         "condition": _safe(lambda: int(getattr(p, "condition", 100) or 100)),
+        "goals": _safe(lambda: int(getattr(p, "goals", 0) or 0)),
+        "assists": _safe(lambda: int(getattr(p, "assists", 0) or 0)),
+        "games_played": _safe(lambda: int(getattr(p, "games_played", 0) or 0)),
+        "save_pct": _safe(lambda: round(float(getattr(p, "save_percentage", 0) or 0), 3)),
+        "gaa": _safe(lambda: round(float(getattr(p, "goals_against_avg", 0) or 0), 2)),
     }
+    # Hot/cold form: point streaks are tracked on the player; a cold flag
+    # is derived (scoreless with meaningful games at a subpar rate).
+    try:
+        ps = int(getattr(p, "current_point_streak", 0) or 0)
+        gs = int(getattr(p, "current_goal_streak", 0) or 0)
+        best = max(ps, gs)
+        d["hot_streak"] = best if best >= 3 else 0
+        gp = d["games_played"]
+        pts = d["goals"] + d["assists"]
+        ppg = (pts / gp) if gp else 0
+        pos = d["position"]
+        # Cold = scoreless, enough games, producing under 0.5 P/G, and good
+        # enough (72+ OVR) that the drought matters. Grinders aren't "cold",
+        # they're just grinders.
+        d["cold"] = bool(ps == 0 and gp >= 5 and ppg < 0.5 and pos != "G"
+                         and float(d["overall"] or 0) >= 72)
+    except Exception:
+        d["hot_streak"] = 0
+        d["cold"] = False
+    return d
 
 
 def to_web_message(m):

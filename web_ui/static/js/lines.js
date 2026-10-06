@@ -77,12 +77,13 @@ function ovrBand(ovr) {
 /* Per-unit quality: average OVR of filled slots + fit breakdown.
  * Powers the NHL-14-style line rating badge in each unit header. */
 function unitStats(slots, slotMap) {
-  let sum = 0, filled = 0, green = 0, yellow = 0, red = 0;
+  let sum = 0, filled = 0, green = 0, yellow = 0, red = 0, pts = 0;
   for (const slot of slots) {
     const p = slotMap[slot];
     if (!p) continue;
     filled++;
     sum += Number(p.overall || 0);
+    pts += Number(p.goals || 0) + Number(p.assists || 0);
     const f = fitClass(p, slot);
     if (f === 'fit-green') green++;
     else if (f === 'fit-yellow') yellow++;
@@ -91,6 +92,7 @@ function unitStats(slots, slotMap) {
   return {
     filled, total: slots.length,
     avg: filled ? Math.round(sum / filled) : null,
+    pts,
     green, yellow, red,
   };
 }
@@ -98,14 +100,27 @@ function moraleBand(m) {
   m = Number(m || 70);
   return m >= 70 ? 'mor-hi' : m >= 50 ? 'mor-mid' : 'mor-lo';
 }
-/* Badges shared by roster cards and slot chips: INJ / C / A / FATIGUED. */
+/* Badges shared by roster cards and slot chips: INJ / C / A / FATIGUED / HOT / COLD. */
 function badgeHtml(p) {
   let h = '';
   const cap = String(p.captaincy || '').toUpperCase();
   if (cap === 'C' || cap === 'A') h += '<span class="cap-badge" title="Team captaincy">' + esc(cap) + '</span>';
+  const hs = Number(p.hot_streak || 0);
+  if (hs > 0) h += '<span class="hot-badge" title="' + hs + '-game point streak — red hot">🔥' + hs + '</span>';
+  else if (p.cold) h += '<span class="cold-badge" title="Scoreless drought (under 0.5 P/G, 72+ OVR)">❄️</span>';
   if (p.injured) h += '<span class="inj-badge" title="Injured">INJ</span>';
   else if (Number(p.condition || 100) < 80) h += '<span class="fat-badge" title="Low condition">TIRED</span>';
   return h;
+}
+/* Compact season stat line: "20 GP · 12-18-30" for skaters, ".915 SV%" for goalies. */
+function statLine(p) {
+  const gp = Number(p.games_played || 0);
+  if (String(p.position || '').toUpperCase() === 'G') {
+    const sv = p.save_pct != null ? Number(p.save_pct).toFixed(3).replace(/^0/, '') : '—';
+    return gp + ' GP · ' + sv + ' SV%';
+  }
+  if (!gp) return 'No games yet';
+  return gp + ' GP · ' + (p.goals || 0) + '-' + (p.assists || 0) + '-' + ((p.goals || 0) + (p.assists || 0));
 }
 /* Swap every slot of unit A with the matching slot of unit B
  * (LW1<->LW2, C1<->C2, ...). Works for ES and ST unit shapes. */
@@ -124,6 +139,7 @@ const S = {
   slots: {},      // slot -> player object | null
   initial: {},    // slot -> playerId snapshot (for cancel/dirty)
   filter: 'ALL',
+  sort: 'ovr',
   q: '',
   sel: null,      // {kind:'roster', id} | {kind:'slot', slot}
   dirty: false,
@@ -190,10 +206,23 @@ function applyInitial(data) {
 /* ---------------- roster panel ---------------- */
 function rosterList() {
   const q = S.q.trim().toLowerCase();
-  return Object.values(S.byId)
-    .filter((p) => S.filter === 'ALL' || posGroup(p) === S.filter)
-    .filter((p) => !q || String(p.name || '').toLowerCase().includes(q))
-    .sort((a, b) => (b.overall || 0) - (a.overall || 0));
+  const filtered = Object.values(S.byId)
+    .filter((p) => {
+      if (S.filter === 'ALL') return true;
+      if (S.filter === 'HOT') return Number(p.hot_streak || 0) > 0;
+      if (S.filter === 'COLD') return !!p.cold;
+      return posGroup(p) === S.filter;
+    })
+    .filter((p) => !q || String(p.name || '').toLowerCase().includes(q));
+  const pts = (p) => (Number(p.goals || 0) + Number(p.assists || 0));
+  switch (S.sort) {
+    case 'pts': filtered.sort((a, b) => pts(b) - pts(a) || (b.overall || 0) - (a.overall || 0)); break;
+    case 'hot': filtered.sort((a, b) => (b.hot_streak || 0) - (a.hot_streak || 0) || pts(b) - pts(a)); break;
+    case 'age': filtered.sort((a, b) => (a.age || 0) - (b.age || 0)); break;
+    case 'name': filtered.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))); break;
+    default: filtered.sort((a, b) => (b.overall || 0) - (a.overall || 0));
+  }
+  return filtered;
 }
 function renderRoster() {
   const host = $('roster-list');
@@ -218,7 +247,7 @@ function rosterCard(p) {
     '<span class="ovr ' + ovrBand(p.overall) + '">' + esc(p.overall) + '</span>' +
     face +
     '<span class="nm clickable-text" data-href="/player/' + esc(pid) + '" title="Open player profile"><span class="n">' + esc(p.name) + '</span>' +
-    '<span class="s">Age ' + esc(p.age) + '</span></span>' +
+    '<span class="s">Age ' + esc(p.age) + ' · ' + esc(statLine(p)) + '</span></span>' +
     badgeHtml(p) +
     '<span class="pos">' + esc(p.position) + '</span>' +
     (dressed ? '<span class="dressed">' + esc(dressed) + '</span>' : '') +
@@ -267,7 +296,7 @@ function renderUnits() {
       if (st.avg != null) {
         const badge = document.createElement('span');
         badge.className = 'unit-ovr ' + ovrBand(st.avg);
-        badge.title = st.filled + '/' + st.total + ' slots filled · ' +
+        badge.title = st.filled + '/' + st.total + ' slots filled · ' + st.pts + ' PTS · ' +
           st.green + ' natural, ' + st.yellow + ' playable, ' + st.red + ' out of position';
         badge.textContent = st.avg + ' OVR';
         lab.appendChild(badge);
@@ -558,6 +587,7 @@ function wireEvents() {
   $('btn-cancel').addEventListener('click', cancelEdits);
   $('btn-save').addEventListener('click', saveLines);
   $('roster-search').addEventListener('input', (e) => { S.q = e.target.value; renderRoster(); });
+  $('roster-sort').addEventListener('change', (e) => { S.sort = e.target.value; renderRoster(); });
   document.querySelectorAll('.le-filter').forEach((b) => {
     b.addEventListener('click', () => {
       document.querySelectorAll('.le-filter').forEach((x) => x.classList.remove('on'));

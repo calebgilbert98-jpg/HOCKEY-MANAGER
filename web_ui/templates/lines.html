@@ -46,6 +46,18 @@
           <button class="le-filter" data-f="F">F</button>
           <button class="le-filter" data-f="D">D</button>
           <button class="le-filter" data-f="G">G</button>
+          <button class="le-filter" data-f="HOT" title="Players on a 3+ game point streak">🔥</button>
+          <button class="le-filter" data-f="COLD" title="Scoreless drought">❄️</button>
+        </div>
+        <div class="le-sort-row">
+          <label for="roster-sort">Sort</label>
+          <select id="roster-sort" class="nhl-input">
+            <option value="ovr">Overall</option>
+            <option value="pts">Points</option>
+            <option value="hot">Hot streak</option>
+            <option value="age">Age (youngest)</option>
+            <option value="name">Name</option>
+          </select>
         </div>
       </div>
       <div class="le-roster-count" id="roster-count"></div>
