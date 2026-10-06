@@ -67,6 +67,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,  # windowed app -- no console popup
+    icon='puck_dynasty_icon.ico',  # exe icon (2026-10-06)
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
