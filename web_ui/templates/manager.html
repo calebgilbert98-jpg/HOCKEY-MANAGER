@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manager Hub — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/manager.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/">← Hub</a>
+  <div class="team-sub" id="manager-sub">Manager Hub</div>
+</header>
+
+<main class="mgr-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker" id="mgr-kicker">Front Office</div>
+    <h1 class="bcast-title">Manager Hub</h1>
+  </div>
+
+  <div class="mgr-grid">
+    <div class="mgr-col">
+      <!-- Board -->
+      <section class="bpanel" id="mgr-board">
+        <div class="bpanel-h">Board of Directors <span class="panel-note" id="board-job"></span></div>
+        <div class="mgr-empty" id="board-body">Loading board…</div>
+      </section>
+
+      <!-- Season goals -->
+      <section class="bpanel" id="mgr-goals">
+        <div class="bpanel-h">Season Goals <span class="panel-note" id="goals-note"></span></div>
+        <div class="mgr-empty" id="goals-body">Loading goals…</div>
+      </section>
+
+      <!-- Press -->
+      <section class="bpanel" id="mgr-press">
+        <div class="bpanel-h">Press Conference History</div>
+        <div class="mgr-empty" id="press-body">Loading…</div>
+      </section>
+    </div>
+
+    <div class="mgr-col">
+      <!-- Profile -->
+      <section class="bpanel" id="mgr-profile">
+        <div class="bpanel-h">Manager Profile</div>
+        <div class="mgr-empty" id="profile-body">Loading profile…</div>
+      </section>
+
+      <!-- Analytics -->
+      <section class="bpanel" id="mgr-analytics">
+        <div class="bpanel-h">Team Analytics <span class="panel-note" id="analytics-note"></span></div>
+        <div class="mgr-empty" id="analytics-body">Loading analytics…</div>
+      </section>
+
+      <!-- GM relationships -->
+      <section class="bpanel" id="mgr-rels">
+        <div class="bpanel-h">GM Relationships <span class="panel-note" id="rels-note"></span></div>
+        <div class="mgr-empty" id="rels-body">Loading relationships…</div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script src="/static/js/manager.js"></script>
+</body>
+</html>
