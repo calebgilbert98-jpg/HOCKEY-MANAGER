@@ -6,7 +6,7 @@ ahl_stats_window.py ("Who's Cooking"). The stats-tab tables already on
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, _player_ovr
+from web_ui.bridge import _safe, _player_ovr, _resolve_gm
 
 bp = Blueprint("ahl", __name__)
 
@@ -19,7 +19,7 @@ def _live():
 
 
 def _league(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.league)
 
 
@@ -80,7 +80,7 @@ def _scores_payload(league, live):
     recent, upcoming = [], []
     try:
         from ahl_league import get_ahl_recent_results, get_ahl_upcoming
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         today = _safe(lambda: gm.current_date)
         for r in get_ahl_recent_results(league, n=20):
             try:
@@ -277,7 +277,7 @@ def _team_payload(league, live, idx):
     sched = []
     try:
         from ahl_league import get_ahl_team_schedule
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         today = _safe(lambda: gm.current_date)
         for g in get_ahl_team_schedule(league, idx, today, n=12):
             sched.append({
@@ -308,7 +308,7 @@ def _team_payload(league, live, idx):
 def _user_farm_idx(league, live):
     """Index of the user's farm club (desktop _user_farm_idx)."""
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         user = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         uname = _safe(lambda: user.team_name, "")
         teams = _ahl_teams(league)

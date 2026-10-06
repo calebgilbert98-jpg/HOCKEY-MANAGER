@@ -1,7 +1,7 @@
 """Staff screen: coaches & management (read-only v1)."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, enqueue_command
+from web_ui.bridge import _safe, enqueue_command, _resolve_gm
 
 bp = Blueprint("staff", __name__)
 
@@ -50,7 +50,7 @@ def api_staff():
     live = _live()
     if live is None:
         return jsonify({"staff": [], "count": 0})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(team.staff), []) or [] if team else []
     out = []
@@ -73,7 +73,7 @@ def api_staff_release():
     live = _live()
     if live is None:
         return jsonify({"ok": False, "error": "no live game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(getattr(team, "staff", None) or []), []) or [] \
         if team else []
@@ -121,7 +121,7 @@ def api_staff_reassign():
     except Exception:
         return jsonify({"ok": False,
                         "error": f"unknown role: {role_name}"}), 422
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(getattr(team, "staff", None) or []), []) or [] \
         if team else []

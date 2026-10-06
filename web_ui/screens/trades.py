@@ -1,7 +1,7 @@
 """Trades screen: trade center proposal builder (v1, read-only-friendly)."""
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import (
+from web_ui.bridge import (_resolve_gm,
     _safe,
     enqueue_command,
     to_web_player,
@@ -33,7 +33,7 @@ def api_trades_teams():
     live = _live()
     if live is None:
         return jsonify({"teams": [], "user_team": None, "trade_block_count": 0})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     teams = _safe(lambda: list(getattr(getattr(gm, "league", None), "teams", None) or []), []) or []
     my_name = _safe(lambda: gm.user_team.team_name) or _safe(lambda: live.user_team.team_name)
 
@@ -68,7 +68,7 @@ def api_trades_roster():
     if live is None:
         return jsonify({"team": None, "players": [], "my_roster": []})
     want = request.args.get("team", "")
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     teams = _safe(lambda: list(getattr(getattr(gm, "league", None), "teams", None) or []), []) or []
 
     target = None
@@ -183,7 +183,7 @@ def api_trades_propose():
         live = _live()
         user_team = partner = None
         if live is not None:
-            _gm2 = _safe(lambda: live.game_manager)
+            _gm2 = _resolve_gm(live)
             user_team = _safe(lambda: _gm2.user_team) \
                 or _safe(lambda: live.user_team)
             partner = _find_team(live, team_id)
@@ -308,7 +308,7 @@ def _find_team(live, team_id):
     """Match a team by abbreviation, name, team_name, or 'City Name'."""
     if not team_id:
         return None
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     teams = _safe(lambda: list(getattr(getattr(gm, "league", None), "teams", None) or []), []) or []
     want = str(team_id).strip().lower()
     for t in teams:
@@ -401,7 +401,7 @@ def api_trades_evaluate():
             "label": "Demo",
         })
 
-    _gm3 = _safe(lambda: live.game_manager)
+    _gm3 = _resolve_gm(live)
     user_team = _safe(lambda: _gm3.user_team) or _safe(lambda: live.user_team)
     partner = _find_team(live, target_id)
     te = _trade_engine()
@@ -763,7 +763,7 @@ def api_trades_negotiations():
     live = _live()
     if live is None:
         return jsonify({"negotiations": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     store = _safe(lambda: list(getattr(gm, "trade_negotiations", None) or []),
                   []) or []
     try:
@@ -845,7 +845,7 @@ def _trade_window_state(live):
     except Exception:
         return False, ""
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: getattr(gm, "league", None)) or \
             _safe(lambda: getattr(live, "league", None))
         today = _safe(lambda: getattr(gm, "current_date", None)) or \
@@ -943,7 +943,7 @@ def api_trades_consent_preflight():
         raw = request.args.get(name, "") or ""
         return [s.strip() for s in raw.split(",") if s.strip()]
 
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     user_team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     partner = None
     target_id = request.args.get("target_team_id", "")
@@ -991,7 +991,7 @@ def api_trades_completed_log():
     live = _live()
     if live is None:
         return jsonify({"trades": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     recs = _safe(lambda: list(getattr(gm, "trade_history", None) or []),
                  []) or []
     out = []

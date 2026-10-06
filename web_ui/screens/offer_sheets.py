@@ -11,7 +11,7 @@ engine on the main thread).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, to_web_player, enqueue_command, _player_ovr
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _player_ovr, _resolve_gm
 
 bp = Blueprint("offer_sheets", __name__)
 
@@ -22,7 +22,7 @@ def _live():
 
 
 def _gm(live):
-    return _safe(lambda: live.game_manager)
+    return _resolve_gm(live)
 
 
 def _user_team(live):

@@ -1,6 +1,6 @@
 """Standings screen: league standings grouped by conference."""
 from flask import Blueprint, jsonify, render_template
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("standings", __name__)
 
@@ -11,7 +11,7 @@ def _live():
 
 
 def _standings_payload(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     if league is None:
         return {"conferences": {}, "user_team": None}
@@ -81,7 +81,7 @@ def _rich_team_rows(live):
 
     Mirrors StatsStandingsView's enhanced standings table data.
     """
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     if league is None:
         return [], None
@@ -210,7 +210,7 @@ def _team_analytics_rows(live, category):
     All from real team attributes; no fabricated rates.
     """
     rows, user_team = _rich_team_rows(live)
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     teams_by_name = {}
     if league is not None:
@@ -369,7 +369,7 @@ def api_standings_division_analysis():
                 lg_pts / lg_gp, 2)
         elif analysis == "Strength of Schedule":
             # Remaining-schedule difficulty from opponent point pct.
-            gm = _safe(lambda: live.game_manager)
+            gm = _resolve_gm(live)
             league = _safe(lambda: gm.league)
             sched = _safe(lambda: list(getattr(league, "schedule", None)
                                        or []), []) or []

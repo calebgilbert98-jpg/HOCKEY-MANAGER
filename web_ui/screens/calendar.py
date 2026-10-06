@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, _team_name
+from web_ui.bridge import _safe, _team_name, _resolve_gm
 
 bp = Blueprint("calendar", __name__)
 
@@ -94,7 +94,7 @@ def _calendar_events(live):
 
     Never raises; dates are ISO strings.
     """
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     events = []
     if league is None:
@@ -168,7 +168,7 @@ def api_calendar_events():
     live = _live()
     if live is None:
         return jsonify({"events": [], "deadline": None})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) if gm else None
     deadline = None
     if league is not None:

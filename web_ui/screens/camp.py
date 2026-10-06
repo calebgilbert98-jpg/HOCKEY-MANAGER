@@ -1,7 +1,7 @@
 """Camp screen: training camp report card (storylines timeline)."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("camp", __name__)
 
@@ -42,7 +42,7 @@ def _story_entries(stories):
 
 def get_camp(live):
     """JSON-safe payload: camp storyline timeline + roster note."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) if gm is not None else None
     stories = _safe(lambda: league.preseason_stories, []) if league else []
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)

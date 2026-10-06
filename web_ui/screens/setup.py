@@ -10,7 +10,7 @@ progress for the page to poll.
 import os
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, enqueue_command
+from web_ui.bridge import _safe, enqueue_command, _resolve_gm
 import web_ui.bridge as _bridge
 
 bp = Blueprint("setup", __name__)

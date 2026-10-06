@@ -68,7 +68,7 @@ CATEGORY_HINTS = {
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -85,12 +85,12 @@ def _tx():
 
 
 def _team(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
 
 
 def _coach(team):
-    from web_ui.bridge import _staff_role_str
+    from web_ui.bridge import _staff_role_str, _resolve_gm
     for s in _safe(lambda: list(getattr(team, "staff", [])), []) or []:
         if "head coach" in _staff_role_str(s).lower():
             return s
@@ -279,7 +279,7 @@ def _intel_payload(tx, team, live, coach):
 
     # 3. Opponent intel: which of your systems are actually hurting teams?
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: gm.league) or _safe(lambda: live.league)
         teams = _safe(lambda: list(league.teams), []) or []
         hits = []
@@ -427,7 +427,7 @@ def api_tactics_system():
             return jsonify({"ok": False, "error": "unknown system"}), 400
     except Exception:
         return jsonify({"ok": False, "error": "tactics unavailable"}), 503
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("set_tactic_system", category=category,
                          system_key=system)
     return jsonify({"ok": ok})
@@ -447,7 +447,7 @@ def api_tactics_preset():
             return jsonify({"ok": False, "error": "unknown preset"}), 400
     except Exception:
         return jsonify({"ok": False, "error": "tactics unavailable"}), 503
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("apply_identity_preset", preset=preset)
     return jsonify({"ok": ok})
 
@@ -462,7 +462,7 @@ def api_tactics_control():
     who = data.get("who", "")
     if who not in ("coach", "gm"):
         return jsonify({"ok": False, "error": "bad owner"}), 400
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("set_tactics_control", who=who)
     return jsonify({"ok": ok})
 
@@ -479,7 +479,7 @@ def api_tactics_coach():
     mode = data.get("mode", "")
     if mode not in ("enforce", "takeover"):
         return jsonify({"ok": False, "error": "bad mode"}), 400
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("coach_tactics", mode=mode)
     return jsonify({"ok": ok})
 
@@ -496,7 +496,7 @@ def api_tactics_set():
     valid = {a for _, a, _, _, _ in TACTIC_GROUPS}
     if attr not in valid:
         return jsonify({"ok": False, "error": "bad attr"}), 400
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("set_tactic", attr=attr, value=value)
     return jsonify({"ok": ok})
 
@@ -530,7 +530,7 @@ def api_practice_set():
     if live is None:
         return jsonify({"ok": False}), 503
     data = request.get_json(force=True, silent=True) or {}
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("set_practice",
                          focus=data.get("focus"),
                          intensity=data.get("intensity"),

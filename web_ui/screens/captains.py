@@ -9,7 +9,7 @@ handler that finds the players by id on app.user_team.roster, clears the
 old C/A flags, and sets .captaincy = 'C' / 'A' / '' accordingly.
 """
 from flask import Blueprint, jsonify, render_template, request
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("captains", __name__)
 

@@ -12,13 +12,13 @@ to an "unavailable" note, never a 500.
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import player_portrait
+from web_ui.bridge import player_portrait, _resolve_gm
 
 bp = Blueprint("player", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 

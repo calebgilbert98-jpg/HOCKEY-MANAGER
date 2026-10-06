@@ -14,7 +14,7 @@ bp = Blueprint("team", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -43,7 +43,7 @@ def _team_abbrs(t):
         if v and str(v).strip():
             out.append(str(v).strip())
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from web_ui.bridge import TEAM_ABBR, _resolve_gm
         name = _safe(lambda: getattr(t, "team_name", ""), "") or ""
         hit = TEAM_ABBR.get(name)
         if hit:
@@ -68,7 +68,7 @@ def _find_team(name):
     raw = unquote(name or "")
     want = raw.strip().lower()
     want_norm = _norm_team_key(raw)
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: getattr(gm, "league", None)) or \
              _safe(lambda: getattr(live, "league", None))
     teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
@@ -101,9 +101,9 @@ def _find_team(name):
 
 
 def _team_payload(t):
-    from web_ui.bridge import to_web_player, player_portrait, _safe as _bsafe, _player_ovr
+    from web_ui.bridge import to_web_player, player_portrait, _safe as _bsafe, _player_ovr, _resolve_gm
     live = _live()
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: getattr(gm, "league", None)) or \
              _safe(lambda: getattr(live, "league", None))
     user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))

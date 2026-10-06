@@ -1,7 +1,7 @@
 """Playoffs screen: Stanley Cup playoff bracket (read-only v1)."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, to_web_team
+from web_ui.bridge import _safe, to_web_team, _resolve_gm
 
 bp = Blueprint("playoffs", __name__)
 
@@ -112,7 +112,7 @@ def api_playoffs():
 
 def _series_index(live):
     """Map series id -> (series, bracket) for detail lookup."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) if gm else None
     bracket = _safe(lambda: getattr(league, "playoff_bracket", None)) \
         if league else None
@@ -131,7 +131,7 @@ def _series_index(live):
 def _projection_bracket(live):
     """Standings-based projection bracket (desktop _build_projection_bracket
     ~2209): Round 1 shown as a projection before the playoffs start."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) if gm else None
     if league is None:
         return None

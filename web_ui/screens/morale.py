@@ -7,7 +7,7 @@ Speech, Practice, Back Room, Advise Coach, Line Control).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, _staff_role_str, enqueue_command
+from web_ui.bridge import _safe, _staff_role_str, enqueue_command, _resolve_gm
 
 bp = Blueprint("morale", __name__)
 
@@ -27,7 +27,7 @@ def api_morale():
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no team"}), 503
@@ -388,7 +388,7 @@ def api_talk_preview():
     live = _live()
     if live is None:
         return jsonify({"ok": False}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"ok": False}), 503
@@ -481,7 +481,7 @@ def _team_league():
     live = _live()
     if live is None:
         return None, None, None
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     return live, team, league

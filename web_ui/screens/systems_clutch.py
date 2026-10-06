@@ -10,7 +10,7 @@ never reach the screen.
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("systems_clutch", __name__)
 
@@ -36,13 +36,13 @@ _FACTOR_ORDER = ("talent", "temperament", "traits", "morale",
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
 def _team():
     live = _live()
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
 
 

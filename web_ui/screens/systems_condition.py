@@ -7,7 +7,7 @@ re-derived or invented.
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, player_portrait
+from web_ui.bridge import _safe, player_portrait, _resolve_gm
 
 bp = Blueprint("systems_condition", __name__)
 
@@ -17,13 +17,13 @@ _TIER_RANK = {"GASSED": 0, "WORN": 1, "GOOD": 2, "FRESH": 3}
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
 def _ctx():
     live = _live()
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     today = _safe(lambda: getattr(live, "current_date", None))

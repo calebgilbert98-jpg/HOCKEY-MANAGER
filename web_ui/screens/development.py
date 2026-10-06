@@ -9,7 +9,7 @@ app._web_dev_result via /api/development/result.
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, to_web_player, _player_ovr
+from web_ui.bridge import _safe, to_web_player, _player_ovr, _resolve_gm
 
 bp = Blueprint("development", __name__)
 
@@ -43,7 +43,7 @@ def _program_sources(live):
     """All known homes for training-program data, most specific first."""
     out = []
     out.append(_safe(lambda: live.training_programs))
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     if gm is not None:
         out.append(_safe(lambda: gm.training_programs))
     try:
@@ -72,7 +72,7 @@ def _player_index(players):
 
 
 def _squads(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return [], []
@@ -93,7 +93,7 @@ def _resolve_player(pid, idx):
 
 
 def _team_prospects(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     return _safe(lambda: list(getattr(team, "prospects", None) or []), []) or []
 
@@ -119,7 +119,7 @@ def api_development():
 
 def _dev_engine():
     try:
-        from web_ui.bridge import _batchd_engine
+        from web_ui.bridge import _batchd_engine, _resolve_gm
         return _batchd_engine()
     except Exception:
         return None
@@ -191,7 +191,7 @@ def _dev_players(live, roster, farm, prospects):
     except Exception:
         _pt = None
 
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     gm_programs = _safe(lambda: gm.training_programs, {}) or {}
     prog_ids = set()
     for src in (gm_programs, ACTIVE_TRAINING_PROGRAMS):
@@ -357,7 +357,7 @@ def get_development(live):
 def _enqueue(op, **kwargs):
     """Enqueue a dev command; returns (ok, nonce)."""
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex
     ok = enqueue_command(op, nonce=nonce, **kwargs)
     return ok, nonce
@@ -424,7 +424,7 @@ def api_practice_can():
 
 def _practice_can(live, pid, drill_key, intensity_key):
     from enhanced_practice_system import PracticeType, PracticeIntensity
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return {"ok": False, "reason": "No team."}
@@ -635,7 +635,7 @@ def api_development_analytics():
     if live is None:
         return jsonify({"overview": {}, "positions": [], "age_bands": [],
                         "players": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"overview": {}, "positions": [], "age_bands": [],

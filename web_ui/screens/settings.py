@@ -24,7 +24,7 @@ import os
 
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("settings", __name__)
 

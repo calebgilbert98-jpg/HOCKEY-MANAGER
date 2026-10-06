@@ -6,7 +6,7 @@ bridge._execute_command / the game's waiver claim path).
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("waivers", __name__)
 
@@ -82,7 +82,7 @@ def api_waivers_place():
             return jsonify({"ok": False, "error": why}), 422
     except Exception:
         pass
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or []
     player = next((p for p in roster
@@ -125,7 +125,7 @@ def api_waivers_eligible():
     live = _live()
     if live is None:
         return jsonify({"players": [], "error": "no live game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or []
     try:
@@ -169,7 +169,7 @@ def api_waivers_priority():
         return jsonify({"order": [], "my_rank": None, "basis": ""})
     try:
         import waiver_logic as _wl
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: gm.league)
         today = _safe(lambda: getattr(gm, "current_date", None))
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)

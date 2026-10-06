@@ -7,7 +7,7 @@ bridge._execute_command / the game's signing path).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("free_agents", __name__)
 
@@ -204,7 +204,7 @@ def _ask_price(p, live):
         asking = max(int(asking), 750_000)
         try:
             import trade_engine as _te
-            gm = _safe(lambda: live.game_manager)
+            gm = _resolve_gm(live)
             team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
             if _te.clause_demand_score(p, team, league) >= 0.65:
                 asking = int(asking * 1.08)
@@ -248,7 +248,7 @@ def _cap_state(live, offer_salary=0, extension=False, current_hit=0):
     try:
         from salary_cap_system import total_cap_charge
         cap = _live_cap(live)
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         charge = int(_safe(lambda: total_cap_charge(team), 0))
         proj = charge + int(offer_salary or 0)
@@ -440,7 +440,7 @@ def api_free_agents_staff_offer_preview(sid):
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     pool = _safe(lambda: list(getattr(league, "free_agent_staff", None)
@@ -719,7 +719,7 @@ def _frenzy_deals(live):
 
 def _frenzy_cap_snapshot(live):
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         from salary_cap_system import total_cap_charge
         cap = int(_live_cap(live))

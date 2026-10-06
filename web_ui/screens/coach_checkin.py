@@ -14,7 +14,7 @@ bp = Blueprint("coach_checkin", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -265,7 +265,7 @@ def _ckm():
 
 
 def _team(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
 
 
@@ -416,7 +416,7 @@ def api_coach_checkin_answer():
     if beat not in valid_beats:
         return jsonify({"ok": False, "error": "bad beat"}), 400
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex
     ok = enqueue_command("coach_checkin_beat", beat=beat,
                          framing=framing, nonce=nonce)
@@ -429,7 +429,7 @@ def api_coach_checkin_finish():
     if live is None:
         return jsonify({"ok": False}), 503
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex
     ok = enqueue_command("coach_checkin_finish", nonce=nonce)
     return jsonify({"ok": ok, "nonce": nonce})

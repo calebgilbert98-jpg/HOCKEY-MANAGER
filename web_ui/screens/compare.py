@@ -16,7 +16,7 @@ MAX_PLAYERS = 4
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -46,7 +46,7 @@ def _player_payload(pid):
         _SKATER_TECHNICAL, _SKATER_MENTAL, _SKATER_PHYSICAL,
         _GOALIE_TECHNICAL, _GOALIE_MENTAL, _GOALIE_PHYSICAL,
     )
-    from web_ui.bridge import _player_ovr, player_portrait
+    from web_ui.bridge import _player_ovr, player_portrait, _resolve_gm
 
     p, team, list_name = _find_player(pid)
     if p is None:
@@ -179,7 +179,7 @@ def api_compare_search():
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    from web_ui.bridge import _player_ovr, player_portrait
+    from web_ui.bridge import _player_ovr, player_portrait, _resolve_gm
     q = (request.args.get("q", "") or "").strip().lower()
     if len(q) < 2:
         return jsonify({"results": []})

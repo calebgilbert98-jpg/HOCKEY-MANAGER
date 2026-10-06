@@ -13,7 +13,7 @@ two full pages (fantasy draft, lottery reveal).
 from flask import Blueprint, jsonify, render_template, request
 
 import web_ui.bridge as _bridge
-from web_ui.bridge import (
+from web_ui.bridge import (_resolve_gm,
     _safe, _inbox_special_action, _player_ovr,
     enqueue_command, to_web_message, to_web_player,
 )

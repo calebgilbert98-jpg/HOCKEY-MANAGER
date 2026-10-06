@@ -1,6 +1,6 @@
 """Stats screen: league leaders (scorers, goals, goalies)."""
 from flask import Blueprint, jsonify, render_template
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("stats", __name__)
 
@@ -15,7 +15,7 @@ def _player_stat(p):
     def _num(attr, default=0):
         return _safe(lambda: float(getattr(p, attr, default) or 0), default) or 0
 
-    from web_ui.bridge import _clean_position
+    from web_ui.bridge import _clean_position, _resolve_gm
     pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
     return {
         "id": _safe(lambda: str(getattr(p, "id", id(p)))),
@@ -37,7 +37,7 @@ def _player_stat(p):
 
 
 def _stats_payload(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     if league is None:
         return {"scorers": [], "goals": [], "goalies": []}
@@ -55,7 +55,7 @@ def _stats_payload(live):
 
     def _pos_group(p):
         try:
-            from web_ui.bridge import _clean_position
+            from web_ui.bridge import _clean_position, _resolve_gm
             pos = _clean_position(getattr(p, "primary_position", ""))
             if pos.upper() == "G":
                 return "G"
@@ -135,7 +135,7 @@ def api_stats():
 # ------------------------------------------------------------------
 
 def _ahl_payload(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     if league is None:
         return {"skaters": [], "goalies": [], "standings": []}
@@ -152,7 +152,7 @@ def _ahl_payload(live):
                 return float(getattr(ledger, a, d) or 0)
             except Exception:
                 return d
-        from web_ui.bridge import _clean_position
+        from web_ui.bridge import _clean_position, _resolve_gm
         pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
         gp = int(_n("games_played"))
         base = {
@@ -239,7 +239,7 @@ _TEAM_RECORD_LABELS = {
 def _records_payload(live):
     hist = _safe(lambda: getattr(live, "league_history", None))
     if hist is None:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         hist = _safe(lambda: getattr(gm, "league_history", None))
     if hist is None:
         return {"teams": [], "champions": [], "empty": True}
@@ -488,7 +488,7 @@ def _analytics_payload(live):
     except Exception:
         pass
     # 2. Fall back to the most recent archived shot-chart game.
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     store = _safe(lambda: getattr(gm, "shot_chart_store", None))
     games = _safe(lambda: list(getattr(store, "games", []) or []), []) or []
     if games:
@@ -535,7 +535,7 @@ _MILESTONE_WATCH_GOALIES = [
 
 def _leader_players(live):
     """All NHL skaters/goalies as (player, team_name) pairs."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league)
     if league is None:
         return [], {}
@@ -564,7 +564,7 @@ def _is_goalie(p):
 
 def _pos_group(p):
     try:
-        from web_ui.bridge import _clean_position
+        from web_ui.bridge import _clean_position, _resolve_gm
         pos = _clean_position(getattr(p, "primary_position", ""))
         if pos.upper() == "G":
             return "G"
@@ -593,7 +593,7 @@ def _apply_leader_filters(pairs, pos="All", min_gp=0, team="All"):
 
 
 def _leader_row(p, tname, extra=None):
-    from web_ui.bridge import _clean_position
+    from web_ui.bridge import _clean_position, _resolve_gm
     pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
     gp = int(getattr(p, "games_played", 0) or 0)
     g = int(getattr(p, "goals", 0) or 0)
@@ -752,7 +752,7 @@ def api_stats_rookies():
         import awards_race as ar
         pairs, _ = _leader_players(live)
         players = [p for p, _ in pairs]
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         d = _safe(lambda: gm.current_date)
         syr = ar.calder_season_year(d) if d is not None else None
 
@@ -811,7 +811,7 @@ def api_stats_award_races():
             gp = getattr(t, "games_played", 0) or 0
             pts = getattr(t, "points", 0) or 0
             team_pct[tname] = (pts / (2 * gp)) if gp else 0.5
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         d = _safe(lambda: gm.current_date)
 
         race = []
@@ -878,7 +878,7 @@ def api_stats_milestones():
     if live is None:
         return jsonify({"watch": []})
     try:
-        from web_ui.bridge import _clean_position
+        from web_ui.bridge import _clean_position, _resolve_gm
         pairs, _ = _leader_players(live)
         watch = []
         for p, tname in pairs:
@@ -943,7 +943,7 @@ def api_stats_nhl_records():
     if live is None:
         return jsonify(empty)
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         rm = _safe(lambda: getattr(gm, "record_manager", None))
         nhl = _safe(lambda: getattr(rm, "nhl_records", None))
         records = _safe(lambda: dict(getattr(nhl, "records", None) or {}), {}) or {}
@@ -996,7 +996,7 @@ def api_stats_nhl_records():
                 ("single_season_shutouts", "Shutouts",
                  lambda p: int(getattr(p, "shutouts", 0) or 0)),
             ]
-            from web_ui.bridge import _clean_position
+            from web_ui.bridge import _clean_position, _resolve_gm
             for key, label, fn in chase_cats:
                 rec = records.get(key)
                 entry = (getattr(rec, "single_season", None)

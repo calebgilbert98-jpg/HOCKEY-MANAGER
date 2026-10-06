@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("news", __name__)
 
@@ -35,7 +35,7 @@ def _live():
 
 def _league(live):
     """gm-first league lookup."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: getattr(gm, "league", None))
     if league is None:
         league = _safe(lambda: getattr(live, "league", None))

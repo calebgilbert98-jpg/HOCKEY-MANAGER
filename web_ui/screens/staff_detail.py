@@ -5,13 +5,13 @@ experience, years with team, salary, morale. All defensive.
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import enqueue_command
+from web_ui.bridge import enqueue_command, _resolve_gm
 
 bp = Blueprint("staff_detail", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -26,7 +26,7 @@ def _find_staff(sid):
     live = _live()
     if live is None:
         return None
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     staff = _safe(lambda: list(getattr(team, "staff", []) or []), []) or []
     for s in staff:
@@ -277,7 +277,7 @@ def _analytics_tab(s):
         sid = _safe(lambda: str(getattr(s, "id", "")), "")
         if sid and _find_staff(sid) is not None:
             live = _live()
-            gm = _safe(lambda: live.game_manager) if live else None
+            gm = _resolve_gm(live) if live else None
             team = _safe(lambda: gm.user_team) if gm else None
             if team is not None:
                 club_q = int(getattr(team, "analytics_quality", personal)
@@ -304,7 +304,7 @@ def _staff_offer_chance(s, salary):
         from game_classes import staff_market_ask, to_100_scale
         import reputation_system as _rs
         live = _live()
-        gm = _safe(lambda: live.game_manager) if live else None
+        gm = _resolve_gm(live) if live else None
         team = _safe(lambda: gm.user_team) if gm else None
         ask = staff_market_ask(s)
         salary_mult = salary / max(1, ask)
@@ -332,7 +332,7 @@ def api_staff_negotiate_preview(sid):
     if s is None:
         return jsonify({"error": "not found"}), 404
     live = _live()
-    gm = _safe(lambda: live.game_manager) if live else None
+    gm = _resolve_gm(live) if live else None
     team = _safe(lambda: gm.user_team) if gm else None
     salary = _safe(lambda: int(getattr(s, "salary", 0) or 0), 0)
     rep = _safe(lambda: float(getattr(s, "reputation", 10) or 10), 10.0)
@@ -492,7 +492,7 @@ def api_staff_org_chart():
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no team"}), 503
@@ -506,7 +506,7 @@ def api_staff_report():
     live = _live()
     if live is None:
         return jsonify({"error": "no game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no team"}), 503

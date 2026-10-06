@@ -1,7 +1,7 @@
 """History screen: league champions + records (read-only v1)."""
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("history", __name__)
 
@@ -128,7 +128,7 @@ def api_history_career_leaders():
                         "leaders": []})
     try:
         from league_history import LeagueHistory
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: gm.league)
         players = []
         for t in (_safe(lambda: list(league.teams), []) or []):
@@ -213,7 +213,7 @@ def api_history_advanced():
     try:
         from advanced_metrics import (team_advanced,
                                       league_leaders_advanced, GLOSSARY)
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: gm.league)
         teams = _safe(lambda: list(league.teams), []) or []
         trows = []
@@ -277,7 +277,7 @@ def api_history_season_reviews():
         return jsonify({"teams": [], "team": "", "years": [],
                         "year": "", "lines": []})
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         league = _safe(lambda: gm.league)
         clubs = [t for t in (_safe(lambda: list(league.teams), []) or [])
                  if getattr(t, "league_name", "") ==

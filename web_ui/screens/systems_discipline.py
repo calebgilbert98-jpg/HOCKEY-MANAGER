@@ -9,19 +9,19 @@ reads).
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe, player_portrait
+from web_ui.bridge import _safe, player_portrait, _resolve_gm
 
 bp = Blueprint("systems_discipline", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
 def _league():
     live = _live()
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.league) or _safe(lambda: live.league)
 
 

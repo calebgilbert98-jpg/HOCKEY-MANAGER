@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Entry draft screen: draft board with pick order and results."""
 from flask import Blueprint, jsonify, render_template, request
-from web_ui.bridge import _safe, _player_ovr
+from web_ui.bridge import _safe, _player_ovr, _resolve_gm
 
 bp = Blueprint("draft", __name__)
 
@@ -127,7 +127,7 @@ def api_draft():
 
 
 def _draft_session(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     return _safe(lambda: getattr(league, "entry_draft_session", None))
 
@@ -148,7 +148,7 @@ def _prospect_pos(p):
 
 def _available_prospects(live):
     """Draftable prospects not yet picked."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     if league is None:
         return []
@@ -213,7 +213,7 @@ def api_draft_scout_report():
     for p in _available_prospects(live):
         if p["id"] == pid:
             # Find the real object for attributes
-            gm = _safe(lambda: live.game_manager)
+            gm = _resolve_gm(live)
             league = _safe(lambda: gm.league) or _safe(lambda: live.league)
             for q in (_safe(lambda: list(getattr(league, "draft_prospects", None) or []), []) or []):
                 if str(getattr(q, "id", "")) == pid:
@@ -272,7 +272,7 @@ def api_draft_sim_pick():
 
 
 def _draft_league(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.league) or _safe(lambda: live.league)
 
 
@@ -286,7 +286,7 @@ def _draft_year_for(league, session):
 
 def _game_month(live):
     """Month of the in-game date; defaults to draft month (June)."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     d = _safe(lambda: gm.current_date)
     try:
         m = int(d.month)
@@ -472,7 +472,7 @@ def api_draft_trade_feed():
     live = _live()
     if live is None:
         return jsonify({"deals": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _draft_league(live)
     if league is None:
         return jsonify({"deals": []})
@@ -641,7 +641,7 @@ def api_draft_trade_pick_info():
     if not state.get("active"):
         return jsonify({"can_trade": False, "reason": "no draft active"})
     overall, rnd, owner = _on_clock_slot(live)
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     user_name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
     if owner != user_name:
@@ -739,7 +739,7 @@ _shortlists = {}
 
 
 def _shortlist_key(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     return id(league) if league is not None else 0
 
@@ -796,7 +796,7 @@ def api_draft_shortlist_remove():
 # ======================================================================
 
 def _ddt_session(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     return _safe(lambda: getattr(league, "entry_draft_session", None))
 
@@ -880,7 +880,7 @@ def _ddt_build_call(live):
     session = _ddt_session(live)
     if session is None:
         return None
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     user_team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     year = _safe(lambda: int(getattr(session, "year", 0) or 0), 0)
@@ -1049,7 +1049,7 @@ def api_draft_incoming_call_answer():
             },
         })
     if action == "accept":
-        from web_ui.bridge import enqueue_command
+        from web_ui.bridge import enqueue_command, _resolve_gm
         ok = enqueue_command("draft_day_trade_accept",
                              caller=str(call.get("caller") or ""),
                              overall=int(call.get("overall", 0) or 0))

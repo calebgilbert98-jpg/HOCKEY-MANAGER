@@ -1,7 +1,7 @@
 """Finances screen: salary cap, payroll, owner budget (read-only v1)."""
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _web_app_ref, _safe, enqueue_command, _player_ovr
+from web_ui.bridge import _web_app_ref, _safe, enqueue_command, _player_ovr, _resolve_gm
 
 bp = Blueprint("finances", __name__)
 
@@ -52,7 +52,7 @@ def api_finances():
     live = _live()
     if live is None:
         return jsonify({"error": "no live game bound", "cap": None})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"error": "no user team"})
@@ -204,7 +204,7 @@ def api_finances_buyouts():
     live = _live()
     if live is None:
         return jsonify({"candidates": [], "error": "no live game"}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({"candidates": [], "error": "no user team"}), 503
@@ -253,7 +253,7 @@ def api_finances_buyouts_execute():
             return jsonify({"ok": False, "error": why}), 422
     except Exception:
         pass
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     roster = _safe(lambda: list(getattr(team, "roster", None) or []), []) or [] \
         if team else []
@@ -285,12 +285,12 @@ def api_finances_buyouts_execute():
 # ======================================================================
 
 def _fin_team(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
 
 
 def _fin_season(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: int(getattr(getattr(gm, "league", None),
                                     "season_year", 0) or 0), 0)
 

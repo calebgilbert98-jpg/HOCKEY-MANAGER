@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Puck Dynasty contributors. All rights reserved.
 """Scouting screen: assignments + reports."""
 from flask import Blueprint, jsonify, render_template, request
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("scouting", __name__)
 
@@ -428,7 +428,7 @@ def api_scouting_staff():
     live = _live()
     if live is None:
         return jsonify({"overview": {}, "scouts": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     try:
         import scouting_window_helpers as _sh
@@ -531,7 +531,7 @@ def api_player_database():
     live = _live()
     if live is None:
         return jsonify({"players": [], "total": 0, "teams": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
 
@@ -608,7 +608,7 @@ def api_player_database():
                     continue
                 wp = to_web_player(p)
                 try:
-                    from web_ui.bridge import _player_ovr
+                    from web_ui.bridge import _player_ovr, _resolve_gm
                     ovr = int(_player_ovr(p) or wp.get("overall") or 0)
                 except Exception:
                     ovr = int(wp.get("overall") or 0)

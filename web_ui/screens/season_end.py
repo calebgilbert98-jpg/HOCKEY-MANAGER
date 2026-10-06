@@ -12,7 +12,7 @@ when the season is actually over (regular season complete).
 """
 from flask import Blueprint, jsonify, render_template
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("season_end", __name__)
 
@@ -23,7 +23,7 @@ def _live():
 
 
 def _league(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: gm.league)
 
 
@@ -131,7 +131,7 @@ def _calc_season_awards(league):
 
 def _ceremony_proxy(live, league):
     """Thin proxy so awards_ceremony.build_ceremony_data(gui) runs on web."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
 
     class _Proxy:
         pass
@@ -280,7 +280,7 @@ def api_season_summary():
         # Your team (desktop _create_team_summary_section).
         team_info = None
         try:
-            gm = _safe(lambda: live.game_manager)
+            gm = _resolve_gm(live)
             ut = _safe(lambda: gm.user_team) or \
                 _safe(lambda: live.user_team)
             if ut is not None:

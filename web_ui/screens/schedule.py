@@ -23,7 +23,7 @@ from datetime import date, datetime, timedelta
 
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("schedule", __name__)
 
@@ -34,7 +34,7 @@ def _live():
 
 
 def _league(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: getattr(gm, "league", None)) or \
         _safe(lambda: getattr(live, "league", None))
 
@@ -47,7 +47,7 @@ def _team_name(t):
 
 def _team_abbr(name):
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from web_ui.bridge import TEAM_ABBR, _resolve_gm
         hit = TEAM_ABBR.get(name)
         if hit:
             return hit
@@ -141,7 +141,7 @@ def _find_game_result(live, date_iso, home_name, away_name=None):
 
 
 def _current_date(live):
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     return _safe(lambda: getattr(gm, "current_date", None)) or \
         _safe(lambda: getattr(live, "current_date", None))
 
@@ -204,7 +204,7 @@ def api_schedule_full():
     live = _live()
     if live is None:
         return jsonify({"user_team": None, "months": [], "games": []})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     user_team = _safe(lambda: getattr(gm, "user_team", None)) or \
         _safe(lambda: getattr(live, "user_team", None))
     my_name = _safe(lambda: getattr(user_team, "team_name", ""), "") or ""
@@ -288,7 +288,7 @@ def _standings_rows(live):
     league = _league(live)
     table = _safe(lambda: dict(getattr(league, "standings", None) or {}), {}) or {}
     teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     my_name = _safe(lambda: getattr(getattr(gm, "user_team", None),
                                     "team_name", ""), "") or ""
     rows = []
@@ -391,7 +391,7 @@ def api_daily_results():
             results = list(_results_by_date(live).get(simmed, []))
     except Exception:
         pass
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     my_name = _safe(lambda: getattr(getattr(gm, "user_team", None),
                                     "team_name", ""), "") or ""
     games = [_game_summary(r) for r in results]

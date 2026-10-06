@@ -7,7 +7,7 @@ bridge._execute_command / the game's extension path).
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("contracts", __name__)
 
@@ -59,7 +59,7 @@ def api_contracts():
     live = _live()
     if live is None:
         return jsonify({"contracts": [], "summary": {}})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     from flask import request as _rq
     only_expiring = (_rq.args.get("tab") or "all") == "expiring"
     team = _safe(lambda: getattr(gm, "user_team", None)) or \
@@ -107,7 +107,7 @@ def api_contracts_result():
 def _find_roster_player(live, pid):
     """Roster player by id. Never raises."""
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         _ut = _safe(lambda: getattr(gm, "user_team", None)) or \
               _safe(lambda: getattr(live, "user_team", None))
         roster = _safe(lambda: list(getattr(_ut, "roster", None)
@@ -162,7 +162,7 @@ def _cap_state(live, offer_salary=0, extension=False, current_hit=0):
     try:
         from salary_cap_system import total_cap_charge
         cap = _live_cap(live)
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         charge = int(_safe(lambda: total_cap_charge(team), 0))
         proj = charge + int(offer_salary or 0)
@@ -768,7 +768,7 @@ def _find_any_player(live, pid):
     pid_s = str(pid)
     pools = []
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         league = _safe(lambda: gm.league) or _safe(lambda: live.league)
         pools.append(list(getattr(team, "roster", None) or []))
@@ -796,7 +796,7 @@ def _clause_info(live, p):
     except Exception:
         out["eligibility_note"] = "Trade engine unavailable."
         return out
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     eligible = bool(_safe(lambda: te.clause_eligible(p), False))
@@ -864,7 +864,7 @@ def api_contracts_comparables():
         from attribute_composites import talent_tier as _tt
     except Exception:
         _tt = None
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     league = _safe(lambda: gm.league) or _safe(lambda: live.league)
     teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
     comps = []
@@ -937,7 +937,7 @@ def _elc_eligible_prospect(live, pid):
     """Unsigned rights-held prospect of the user's team (the exact guard
     handle_elc_offer enforces). Never raises."""
     pid_s = str(pid)
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     tname = _safe(lambda: getattr(team, "team_name", ""), "")
     pool = _safe(lambda: list(getattr(team, "prospects", None) or []),

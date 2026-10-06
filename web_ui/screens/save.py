@@ -20,7 +20,7 @@ import uuid
 
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, enqueue_command
+from web_ui.bridge import _safe, enqueue_command, _resolve_gm
 
 bp = Blueprint("save", __name__)
 
@@ -31,7 +31,7 @@ def _live():
 
 
 def _save_manager(live):
-    from web_ui.bridge import _web_save_manager
+    from web_ui.bridge import _web_save_manager, _resolve_gm
     return _web_save_manager(live) if live is not None else None
 
 
@@ -86,7 +86,7 @@ def api_save_list():
     if live is None:
         return jsonify({"saves": [], "autosave": {"enabled": False}})
     try:
-        from web_ui.bridge import _web_saves_dir
+        from web_ui.bridge import _web_saves_dir, _resolve_gm
         sm = _save_manager(live)
         if sm is None:
             return jsonify({"saves": [], "autosave": {"enabled": False}})
@@ -225,7 +225,7 @@ def _quick_slots(live):
     Never raises."""
     out = []
     try:
-        from web_ui.bridge import _web_saves_dir as _sdir
+        from web_ui.bridge import _web_saves_dir as _sdir, _resolve_gm
         sm = _save_manager(live)
         if sm is None:
             return out
@@ -301,7 +301,7 @@ def api_save_properties():
     if live is None or not sid:
         return jsonify({"ok": False}), 400
     try:
-        from web_ui.bridge import _web_resolve_save_id, _web_saves_dir
+        from web_ui.bridge import _web_resolve_save_id, _web_saves_dir, _resolve_gm
         sm = _save_manager(live)
         fp = _web_resolve_save_id(sm, sid)
         if not fp or not os.path.exists(fp):
@@ -334,7 +334,7 @@ def api_save_export():
     if live is None or not sid:
         return jsonify({"ok": False, "error": "save_id required"}), 400
     try:
-        from web_ui.bridge import _web_resolve_save_id
+        from web_ui.bridge import _web_resolve_save_id, _resolve_gm
         sm = _save_manager(live)
         fp = _web_resolve_save_id(sm, sid)
         if not fp or not os.path.exists(fp):
@@ -363,7 +363,7 @@ def api_save_import():
     if not safe:
         return jsonify({"ok": False, "error": "bad filename"}), 400
     try:
-        from web_ui.bridge import _web_saves_dir
+        from web_ui.bridge import _web_saves_dir, _resolve_gm
         sm = _save_manager(live)
         if sm is None:
             return jsonify({"ok": False, "error": "no save manager"}), 503

@@ -6,13 +6,13 @@ validation, and player context actions.
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import player_portrait, _player_ovr
+from web_ui.bridge import player_portrait, _player_ovr, _resolve_gm
 
 bp = Blueprint("roster", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -113,7 +113,7 @@ def to_roster_player(p):
 
 def _get_team_lists(live):
     """Return (nhl, ahl, prospects) player lists."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return [], [], []
@@ -169,7 +169,7 @@ def api_cap():
     live = _live()
     if live is None:
         return jsonify({})
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return jsonify({})
@@ -368,7 +368,7 @@ def api_move():
     if not player_ids or frm not in ("nhl", "ahl", "prospects") \
             or to not in ("nhl", "ahl", "prospects"):
         return jsonify({"ok": False, "error": "bad request"}), 400
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     ok = enqueue_command("roster_move", player_ids=player_ids,
                          from_roster=frm, to_roster=to)
     return jsonify({"ok": ok, "queued": len(player_ids)})
@@ -428,7 +428,7 @@ def _jersey_validation(live, team, player, number):
 def _find_team_player(live, pid):
     """Player by id on the user's NHL or AHL roster. Never raises."""
     try:
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
         for attr in ("roster", "ahl_roster"):
             for p in (_safe(lambda: list(getattr(team, attr, None) or []), []) or []):
@@ -445,7 +445,7 @@ def api_jersey_numbers():
     live = _live()
     if live is None:
         return jsonify({"players": []}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     out = []
     for attr in ("roster", "ahl_roster"):
@@ -492,6 +492,6 @@ def api_jersey_numbers_set():
     ok, reason = _jersey_validation(live, team, player, want)
     if not ok:
         return jsonify({"ok": False, "error": reason}), 422
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     queued = enqueue_command("set_jersey_number", player_id=str(pid), number=want)
     return jsonify({"ok": bool(queued), "queued": "set_jersey_number", "number": want})

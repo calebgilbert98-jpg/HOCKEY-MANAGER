@@ -415,7 +415,7 @@ def _human_teams(app):
                 tn = str(getattr(t, "team_name", ""))
                 abbr = ""
                 try:
-                    from web_ui.bridge import TEAM_ABBR
+                    from web_ui.bridge import TEAM_ABBR, _resolve_gm
                     abbr = TEAM_ABBR.get(tn, "")
                 except Exception:
                     pass
@@ -542,7 +542,7 @@ def api_mp_game():
 def _serialize_host_offer(offer_id, entry):
     """JSON-safe view of a trade offer targeting the host's own club."""
     try:
-        from web_ui.bridge import _safe
+        from web_ui.bridge import _safe, _resolve_gm
         proposal = (entry or {}).get("proposal") or {}
         offer = {"offer_id": offer_id,
                  "from_team": proposal.get("proposer_team_id", ""),
@@ -588,7 +588,7 @@ def api_mp_humans():
 def api_mp_ready():
     """Toggle this machine's ready vote (EHM ready gate)."""
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex[:12]
     ok = enqueue_command("mp_toggle_ready", nonce=nonce)
     return jsonify({"ok": bool(ok), "nonce": nonce})
@@ -647,7 +647,7 @@ def api_mp_trade_propose():
     want_picks, retention?, pick_protection?}
     """
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     data = request.get_json(force=True, silent=True) or {}
     app = _live_app()
     partner = str(data.get("partner_team_id") or "")
@@ -710,7 +710,7 @@ def api_mp_trade_respond():
 def api_mp_trade_respond_host():
     """Answer an offer targeting the host's own club (host machine)."""
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     data = request.get_json(force=True, silent=True) or {}
     decision = str(data.get("decision") or "")
     offer_id = str(data.get("offer_id") or "")
@@ -788,7 +788,7 @@ def api_mp_sync():
 def api_mp_promote():
     """Promote this client to host after a host disconnect (host migration)."""
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex[:12]
     ok = enqueue_command("mp_promote", nonce=nonce)
     return jsonify({"ok": bool(ok), "nonce": nonce})
@@ -798,7 +798,7 @@ def api_mp_promote():
 def api_mp_force():
     """Host override: advance the day even if some managers aren't ready."""
     import uuid as _uuid
-    from web_ui.bridge import enqueue_command
+    from web_ui.bridge import enqueue_command, _resolve_gm
     nonce = _uuid.uuid4().hex[:12]
     ok = enqueue_command("mp_force_advance", nonce=nonce)
     return jsonify({"ok": bool(ok), "nonce": nonce})

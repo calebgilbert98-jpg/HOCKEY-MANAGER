@@ -14,7 +14,7 @@ All reads via _safe(). No Tk from Flask.
 """
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe, to_web_player
+from web_ui.bridge import _safe, to_web_player, _resolve_gm
 
 bp = Blueprint("trade_block", __name__)
 

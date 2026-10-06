@@ -21,7 +21,7 @@ import time
 from flask import Blueprint, Response, jsonify, render_template, request
 
 import web_ui.bridge as _bridge
-from web_ui.bridge import _safe, get_schedule
+from web_ui.bridge import _safe, get_schedule, _resolve_gm
 
 bp = Blueprint("watch", __name__)
 
@@ -96,7 +96,7 @@ def _player_name(p):
 
 def _find_team_by_name(live, name):
     """Resolve a team display name to the live Team object."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     teams = _safe(lambda: list(getattr(getattr(gm, "league", None), "teams", None) or []), []) or []
     want = str(name or "").strip().lower()
     for t in teams:
@@ -107,7 +107,7 @@ def _find_team_by_name(live, name):
 
 def _team_abbr(team):
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from web_ui.bridge import TEAM_ABBR, _resolve_gm
         name = _safe(lambda: team.team_name, "")
         return TEAM_ABBR.get(name) or "".join(w[0] for w in name.split()[:2]).upper()
     except Exception:
@@ -267,7 +267,7 @@ def _mark_game_watched(home_team, away_team, home_score, away_score):
         live = _safe(lambda: _bridge._web_app_ref)
         if live is None:
             return
-        gm = _safe(lambda: live.game_manager)
+        gm = _resolve_gm(live)
         if gm is None:
             return
         from datetime import date as _date
@@ -1017,7 +1017,7 @@ def _result_boxscore(result):
     home = _result_team_name(result.get("home_team"))
     away = _result_team_name(result.get("away_team"))
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from web_ui.bridge import TEAM_ABBR, _resolve_gm
         habbr = TEAM_ABBR.get(home) or "".join(
             w[0] for w in home.split()[:2]).upper()
         aabbr = TEAM_ABBR.get(away) or "".join(
@@ -1299,7 +1299,7 @@ def watch_replay_events():
         except Exception:
             continue
     try:
-        from web_ui.bridge import TEAM_ABBR
+        from web_ui.bridge import TEAM_ABBR, _resolve_gm
         habbr = TEAM_ABBR.get(home, "")
         aabbr = TEAM_ABBR.get(away, "")
     except Exception:

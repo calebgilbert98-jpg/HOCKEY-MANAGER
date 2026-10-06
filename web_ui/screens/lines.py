@@ -6,7 +6,7 @@ enable web editing; until then this is a read-only display.
 """
 import re
 from flask import Blueprint, jsonify, render_template, request
-from web_ui.bridge import _safe, to_web_player, enqueue_command
+from web_ui.bridge import _safe, to_web_player, enqueue_command, _resolve_gm
 
 bp = Blueprint("lines", __name__)
 
@@ -480,7 +480,7 @@ def api_set_st_lines():
     live = _live()
     if live is None:
         return jsonify({"ok": False, "error": "No live game."}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     ok, err, _resolved = validate_st_payload(team, st_lines)
     if not ok:
@@ -508,7 +508,7 @@ def api_set_lines():
     live = _live()
     if live is None:
         return jsonify({"ok": False, "error": "No live game."}), 503
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     ok, err, _resolved = validate_lines_payload(team, slot_lines)
     if not ok:

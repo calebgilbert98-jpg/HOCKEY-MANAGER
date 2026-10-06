@@ -87,6 +87,13 @@ def should_exit_now():
     if heartbeat_expired():
         return True
     return False
+def _resolve_gm(obj):
+    """Game manager whether obj IS the manager or wraps it in .game_manager.
+    (2026-10-06: app is often the HockeyManagerGUI itself, which has no
+    .game_manager attribute — without the fallback, gm is None and every
+    gm.league / gm.user_team read silently fails.)"""
+    return _safe(lambda: obj.game_manager) or obj
+
 
 
 # ------------------------------------------------------------------
@@ -880,7 +887,10 @@ def _hub_auto_advance_settings():
 
 def get_hub_state(app):
     """Full hub payload from the live game."""
-    gm = _safe(lambda: app.game_manager)
+    # app may BE the game manager (HockeyManagerGUI) or a wrapper with
+    # .game_manager — handle both (2026-10-06: gm was None when app was
+    # the manager itself, emptying every dashboard panel).
+    gm = _resolve_gm(app)
     team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     inbox = _safe(lambda: team.inbox) if team else None
 
@@ -1426,7 +1436,7 @@ def _hub_panels_extra(team, gm, sched, today, me_name):
 
 def _iconic_toggle_handler(live, entry_id):
     """Toggle an iconic-game memory's star (desktop toggle_star)."""
-    gm = _safe(lambda: live.game_manager)
+    gm = _resolve_gm(live)
     team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
     if team is None:
         return {"ok": False, "error": "no user team"}
@@ -1442,7 +1452,7 @@ def _iconic_toggle_handler(live, entry_id):
 
 def get_inbox_messages(app, filter_type="all"):
     """Inbox messages for the web UI, newest first."""
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     inbox = _safe(lambda: team.inbox) if team else None
     if inbox is None:
@@ -1499,7 +1509,7 @@ def _inbox_special_action(app, gm, m):
 
 def get_roster(app):
     """User team roster for the web UI."""
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if team is None:
         return []
@@ -1567,7 +1577,7 @@ def get_continue_state(app):
     try:
         sched = get_schedule(app, limit=1)
         if sched:
-            gm = _safe(lambda: app.game_manager)
+            gm = _resolve_gm(app)
             today = _safe(lambda: gm.current_date)
             # get_schedule returns date strings like "Mon 10/05"; compare
             # against today's formatted string.
@@ -1582,7 +1592,7 @@ def get_continue_state(app):
 
 def get_schedule(app, limit=40):
     """Upcoming games for the user team, chronological."""
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     team = _safe(lambda: gm.user_team) or _safe(lambda: app.user_team)
     if gm is None or team is None:
         return []
@@ -1988,7 +1998,7 @@ def _do_setup_load_game(cmd):
 
 def _find_inbox_message(app, message_id):
     """Find an inbox message by ID. Returns (inbox, message) or (None, None)."""
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     team = (_safe(lambda: gm.user_team)
             or _safe(lambda: getattr(app, "user_team", None)))
     inbox = _safe(lambda: getattr(team, "inbox", None))
@@ -2107,7 +2117,7 @@ def _fantasy_draft_manager(app, create=False):
         import fantasy_draft as _fd
     except Exception as e:
         return None, f"fantasy_draft module unavailable: {e}"
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     league = _safe(lambda: gm.league) if gm is not None else None
     if league is None:
         return None, "no league loaded"
@@ -2165,14 +2175,14 @@ def _fantasy_draft_begin(app):
     if mgr is None:
         return err or "draft unavailable"
     try:
-        gm = _safe(lambda: app.game_manager)
+        gm = _resolve_gm(app)
         if gm is not None and hasattr(gm, "_web_fantasy_completed"):
             gm._web_fantasy_completed = None  # fresh draft, clear old record
     except Exception:
         pass
     if bool(getattr(mgr, "draft_started", False)):
         try:
-            gm = _safe(lambda: app.game_manager)
+            gm = _resolve_gm(app)
             if gm is not None and hasattr(gm, "pending_fantasy_draft"):
                 gm.pending_fantasy_draft = True
         except Exception:
@@ -2295,7 +2305,7 @@ def _fantasy_draft_complete(app, mgr):
     pending flag, normalize rosters, strip letters, arm the deferred
     captaincy check, deliver the completion inbox message, and release
     the league-owned session. Never raises."""
-    gm = _safe(lambda: app.game_manager)
+    gm = _resolve_gm(app)
     league = _safe(lambda: gm.league) if gm is not None else None
     try:
         if gm is not None and hasattr(gm, "pending_fantasy_draft"):
@@ -2927,7 +2937,7 @@ def _advance_results_nudge(app):
     except Exception:
         return
     try:
-        gm = _safe(lambda: app.game_manager)
+        gm = _resolve_gm(app)
         today = _safe(lambda: getattr(gm, "current_date", None)) or \
             _safe(lambda: getattr(app, "current_date", None))
         if isinstance(today, _dt):
@@ -3005,7 +3015,7 @@ def _sim_missed_game(app, date_iso, home_name, away_name):
     except Exception:
         return
     try:
-        gm = _safe(lambda: app.game_manager)
+        gm = _resolve_gm(app)
         league = _safe(lambda: getattr(gm, "league", None)) or \
             _safe(lambda: getattr(app, "league", None))
         if league is None or not date_iso or not home_name or not away_name:
@@ -6087,7 +6097,7 @@ def _execute_command(app, cmd):
             # Desktop _watch_lottery_reveal clears _pending_lottery_reveal
             # when the reveal screen closes.
             try:
-                gm = _safe(lambda: app.game_manager)
+                gm = _resolve_gm(app)
                 if (gm is not None
                         and getattr(gm, "_pending_lottery_reveal", None)
                         is not None):

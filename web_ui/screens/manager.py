@@ -26,7 +26,7 @@ bp = Blueprint("manager", __name__)
 
 
 def _live():
-    from web_ui.bridge import _web_app_ref
+    from web_ui.bridge import _web_app_ref, _resolve_gm
     return _web_app_ref
 
 
@@ -39,7 +39,7 @@ def _safe(fn, default=None):
 
 def _gm():
     live = _live()
-    return _safe(lambda: live.game_manager) if live is not None else None
+    return _resolve_gm(live) if live is not None else None
 
 
 def _league(gm):

@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 from flask import Blueprint, jsonify, render_template, request
 
-from web_ui.bridge import _safe
+from web_ui.bridge import _safe, _resolve_gm
 
 bp = Blueprint("deadline", __name__)
 
@@ -24,7 +24,7 @@ def _live():
 
 
 def _gm(live):
-    return _safe(lambda: live.game_manager)
+    return _resolve_gm(live)
 
 
 def _league(live):
