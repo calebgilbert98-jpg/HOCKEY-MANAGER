@@ -79,8 +79,8 @@ function updateCamera(now, dt) {
   // desired target
   if (punchUntil > now) {
     camTarget.cx = punchX; camTarget.cy = punchY; camTarget.zoom = punchZoom;
-  } else if (camMode === 'follow' && cur && cur.type === 'skate' && cur.puck) {
-    camTarget.cx = cur.puck.x; camTarget.cy = cur.puck.y; camTarget.zoom = 1.55;
+  } else if (camMode === 'follow' && cur && cur.type === 'skate') {
+    camTarget.cx = renderPuck.x; camTarget.cy = renderPuck.y; camTarget.zoom = 1.55;
   } else {
     camTarget.cx = 100; camTarget.cy = 42.5; camTarget.zoom = 1;
   }
@@ -165,61 +165,63 @@ function paintRink(c) {
   c.fillStyle = vg;
   c.fillRect(0, 0, W, H);
 
-  // ice: layered radial gradient — brighter center, cool edges
+  // ice: bright white like real NHL ice, subtle cool tint at edges
   const g = c.createRadialGradient(W / 2, H / 2, 10, W / 2, H / 2, Math.max(W, H) * 0.7);
-  g.addColorStop(0, '#1d2f52');
-  g.addColorStop(0.45, '#142441');
-  g.addColorStop(0.8, '#0c1628');
-  g.addColorStop(1, '#080f1d');
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(0.6, '#f4f8fc');
+  g.addColorStop(1, '#dfe9f2');
   c.fillStyle = g;
   R(Xc(-2), Yc(-2), (RL + 4) * scale, (RW + 4) * scale, 20 * scale); c.fill();
 
-  // ice sheen: diagonal light streaks (arena lighting)
+  // ice sheen: diagonal light streaks (arena lighting reflections)
   const sheen = c.createLinearGradient(0, 0, W, H);
-  sheen.addColorStop(0, 'rgba(150,190,255,0.045)');
-  sheen.addColorStop(0.5, 'rgba(150,190,255,0)');
-  sheen.addColorStop(1, 'rgba(150,190,255,0.03)');
+  sheen.addColorStop(0, 'rgba(255,255,255,0.25)');
+  sheen.addColorStop(0.4, 'rgba(255,255,255,0)');
+  sheen.addColorStop(0.6, 'rgba(180,210,240,0.08)');
+  sheen.addColorStop(1, 'rgba(255,255,255,0.12)');
   c.fillStyle = sheen;
   R(Xc(-2), Yc(-2), (RL + 4) * scale, (RW + 4) * scale, 20 * scale); c.fill();
 
-  // skate scratches: more numerous, varied
+  // skate scratches: subtle gray marks like real worn ice
   c.lineWidth = 1;
   for (let i = 0; i < 90; i++) {
     const y0 = Yc(3 + ((i * 37) % 79));
     const x0 = Xc(4 + ((i * 53) % 192));
     const len = (8 + ((i * 29) % 22)) * scale / 4;
-    c.strokeStyle = 'rgba(140,170,220,' + (0.03 + ((i * 13) % 5) * 0.012).toFixed(3) + ')';
+    c.strokeStyle = 'rgba(120,140,170,' + (0.05 + ((i * 13) % 5) * 0.02).toFixed(3) + ')';
     c.beginPath(); c.moveTo(x0, y0);
     c.lineTo(x0 + len, y0 + len * 0.25); c.stroke();
   }
 
   const lw = Math.max(1.5, scale * 0.55);
-  const RED = '#f0433a', BLUE = '#4d9fff';
+  const RED = '#d42a1e', BLUE = '#1a56db';
 
   // boards: dark steel with glass reflection hint on top edge
+  // boards: white with yellow kickplate (NHL style)
   c.lineWidth = Math.max(6, scale * 1.6);
-  c.strokeStyle = '#1e2f4d';
+  c.strokeStyle = '#f8fafc';
   R(Xc(0), Yc(0), RL * scale, RW * scale, 18 * scale); c.stroke();
+  // yellow kickplate stripe at bottom of boards
+  c.lineWidth = Math.max(2, scale * 0.5);
+  c.strokeStyle = '#facc15';
+  R(Xc(0), Yc(0), RL * scale, RW * scale, 18 * scale); c.stroke();
+  // glass above boards
   c.lineWidth = Math.max(1.5, scale * 0.28);
   const glass = c.createLinearGradient(Xc(0), Yc(-2), Xc(0), Yc(6));
-  glass.addColorStop(0, 'rgba(170,205,255,0.55)');
-  glass.addColorStop(1, 'rgba(170,205,255,0.08)');
+  glass.addColorStop(0, 'rgba(180,210,240,0.35)');
+  glass.addColorStop(1, 'rgba(180,210,240,0.05)');
   c.strokeStyle = glass;
   R(Xc(0), Yc(0), RL * scale, RW * scale, 18 * scale); c.stroke();
 
-  // center red line (with white edge)
-  c.strokeStyle = 'rgba(240,244,250,0.25)'; c.lineWidth = lw * 1.9;
-  c.beginPath(); c.moveTo(Xc(100), Yc(2)); c.lineTo(Xc(100), Yc(83)); c.stroke();
+  // center red line: solid NHL red
   c.strokeStyle = RED; c.lineWidth = lw * 1.2;
   c.beginPath(); c.moveTo(Xc(100), Yc(2)); c.lineTo(Xc(100), Yc(83)); c.stroke();
 
-  // blue lines: brighter, with subtle glow
-  c.shadowColor = 'rgba(77,159,255,0.5)'; c.shadowBlur = 6;
+  // blue lines: solid NHL blue
   c.strokeStyle = BLUE; c.lineWidth = lw * 2.6;
   for (const bx of [75, 125]) {
     c.beginPath(); c.moveTo(Xc(bx), Yc(2)); c.lineTo(Xc(bx), Yc(83)); c.stroke();
   }
-  c.shadowBlur = 0;
 
   // goal lines
   c.strokeStyle = RED; c.lineWidth = lw * 0.9;
@@ -229,26 +231,26 @@ function paintRink(c) {
 
   // center-ice: double ring + dot (broadcast style)
   c.strokeStyle = 'rgba(77,159,255,0.85)'; c.lineWidth = lw;
-  c.beginPath(); c.arc(Xc(100), Yc(42.5), 15 * scale / 4, 0, Math.PI * 2); c.stroke();
-  c.strokeStyle = 'rgba(77,159,255,0.35)'; c.lineWidth = lw * 0.6;
-  c.beginPath(); c.arc(Xc(100), Yc(42.5), 13 * scale / 4, 0, Math.PI * 2); c.stroke();
+  // center-ice faceoff circle: solid NHL blue ring + dot
+  c.strokeStyle = BLUE; c.lineWidth = lw;
+  c.beginPath(); c.arc(Xc(100), Yc(42.5), 7.5 * scale, 0, Math.PI * 2); c.stroke();
   c.fillStyle = BLUE;
-  c.beginPath(); c.arc(Xc(100), Yc(42.5), 1.6 * scale / 4, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(Xc(100), Yc(42.5), 0.5 * scale, 0, Math.PI * 2); c.fill();
 
   // end-zone faceoff circles with proper hash marks
   for (const gx of [11, 189]) {
     const sgn = gx < 100 ? 1 : -1;
     for (const dy of [20.5, 64.5]) {
       const ex = Xc(gx + 20 * sgn), ey = Yc(dy);
-      // outer ring
-      c.strokeStyle = 'rgba(240,67,58,0.85)'; c.lineWidth = lw * 0.9;
-      c.beginPath(); c.arc(ex, ey, 15 * scale / 4, 0, Math.PI * 2); c.stroke();
-      // center dot
+      // outer ring: solid NHL red
+      c.strokeStyle = RED; c.lineWidth = lw * 0.9;
+      c.beginPath(); c.arc(ex, ey, 7.5 * scale, 0, Math.PI * 2); c.stroke();
+      // center dot: solid red
       c.fillStyle = RED;
-      c.beginPath(); c.arc(ex, ey, 1.7 * scale / 4, 0, Math.PI * 2); c.fill();
-      // L-shaped hash marks (4 per circle, broadcast style)
-      c.strokeStyle = 'rgba(240,67,58,0.7)'; c.lineWidth = lw * 0.75;
-      const hr = 15 * scale / 4, hl = 4 * scale / 4;
+      c.beginPath(); c.arc(ex, ey, 1.0 * scale, 0, Math.PI * 2); c.fill();
+      // hash marks: solid red, 2 ft long
+      c.strokeStyle = RED; c.lineWidth = lw * 0.75;
+      const hr = 7.5 * scale, hl = 1.0 * scale;
       for (const a of [Math.PI * 0.32, Math.PI * 0.68, Math.PI * 1.32, Math.PI * 1.68]) {
         const hx = ex + Math.cos(a) * hr, hy = ey + Math.sin(a) * hr;
         const tx = Math.cos(a + Math.PI / 2), ty = Math.sin(a + Math.PI / 2);
@@ -259,24 +261,21 @@ function paintRink(c) {
       }
     }
   }
-  // neutral-zone dots
-  c.fillStyle = 'rgba(240,67,58,0.9)';
+  // neutral-zone dots: solid red
+  c.fillStyle = RED;
   for (const [dx, dy] of [[80, 20.5], [80, 64.5], [120, 20.5], [120, 64.5]]) {
-    c.beginPath(); c.arc(Xc(dx), Yc(dy), 1.3 * scale / 4, 0, Math.PI * 2); c.fill();
+    c.beginPath(); c.arc(Xc(dx), Yc(dy), 1.0 * scale, 0, Math.PI * 2); c.fill();
   }
 
-  // creases: ice-blue fill with white edge
+  // creases: NHL light blue with red edge
   for (const gx of [11, 189]) {
     const dir = gx < 100 ? 1 : -1;
     const a0 = dir > 0 ? -Math.PI / 2 : Math.PI / 2;
     const a1 = dir > 0 ? Math.PI / 2 : Math.PI * 1.5;
-    const cg = c.createRadialGradient(Xc(gx), Yc(42.5), 1, Xc(gx), Yc(42.5), 6 * scale / 4);
-    cg.addColorStop(0, 'rgba(140,190,250,0.28)');
-    cg.addColorStop(1, 'rgba(140,190,250,0.10)');
-    c.fillStyle = cg;
-    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, a0, a1); c.closePath(); c.fill();
-    c.strokeStyle = 'rgba(240,244,250,0.55)'; c.lineWidth = lw * 0.7;
-    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale / 4, a0, a1); c.stroke();
+    c.fillStyle = '#bfe0f5';
+    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale, a0, a1); c.closePath(); c.fill();
+    c.strokeStyle = RED; c.lineWidth = lw * 0.7;
+    c.beginPath(); c.arc(Xc(gx), Yc(42.5), 6 * scale, a0, a1); c.stroke();
 
     // net: white frame + mesh hint
     c.strokeStyle = 'rgba(200,215,235,0.25)'; c.lineWidth = 1;
@@ -361,8 +360,12 @@ function drawSkater(x, y, team, opts) {
   bodyG.addColorStop(1, shade(col, -28));
   ctx.fillStyle = bodyG;
   ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
-  ctx.lineWidth = Math.max(2, r * 0.22);
-  ctx.strokeStyle = '#f2f6fc';
+  // dark outline for visibility on white ice, then thin white inner ring
+  ctx.lineWidth = Math.max(2.5, r * 0.28);
+  ctx.strokeStyle = 'rgba(15,23,42,0.85)';
+  ctx.stroke();
+  ctx.lineWidth = Math.max(1, r * 0.1);
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
   ctx.stroke();
 
   // facing indicator: small wedge in movement direction
@@ -677,29 +680,84 @@ function esc(s) {
 
 /* ---------------- frame ---------------- */
 function lerp(a, b, t) { return a + (b - a) * t; }
+/* Smoothstep for natural easing (no linear hitch at endpoints). */
+function smooth(t) { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); }
 let lastFrameT = 0;
 
-function drawWorld(now, tc) {
-  const A = prev || cur, B = cur;
-  if (!B || B.type !== 'skate') return;
-  const n = Math.min(A.skaters ? A.skaters.length : 0, B.skaters.length);
-  for (let i = 0; i < n; i++) {
-    const a = A.skaters[i], b = B.skaters[i];
-    const x = lerp(a.x, b.x, tc), y = lerp(a.y, b.y, tc);
-    const hasPuck = B.possession === b.team &&
-      Math.hypot(B.puck.x - b.x, B.puck.y - b.y) < 4;
-    drawSkater(x, y, b.team, {
-      name: b.name, jersey: b.jersey, hasPuck: hasPuck, goalie: false,
-      key: b.team + '|' + (b.name || i),
+/* ---- Persistent render state with spring physics ----
+ * Each skater/puck has a render position that springs toward the latest
+ * server target. This gives buttery motion even with irregular updates:
+ * no index-matching, no teleporting, no linear-easing hitches. */
+const renderSkaters = new Map(); // key -> {x,y,vx,vy,tx,ty,team,name,jersey,goalie}
+const renderPuck = { x: 100, y: 42.5, vx: 0, vy: 0, tx: 100, ty: 42.5 };
+
+function skaterRenderKey(team, name, goalie) {
+  return (goalie ? 'G|' : 'S|') + team + '|' + (name || '?');
+}
+
+/* Spring constants: stiff enough to track, loose enough to look like skating. */
+const SPRING_K = 90;   // spring stiffness (1/s^2)
+const SPRING_D = 14;   // damping (1/s) — critically damped-ish for no overshoot
+
+function springStep(s, dt) {
+  // Semi-implicit Euler: stable and smooth.
+  const ax = SPRING_K * (s.tx - s.x) - SPRING_D * s.vx;
+  const ay = SPRING_K * (s.ty - s.y) - SPRING_D * s.vy;
+  s.vx += ax * dt;
+  s.vy += ay * dt;
+  s.x += s.vx * dt;
+  s.y += s.vy * dt;
+}
+
+function updateRenderTargets(msg) {
+  if (!msg || msg.type !== 'skate') return;
+  const seen = new Set();
+  for (const sk of (msg.skaters || [])) {
+    const key = skaterRenderKey(sk.team, sk.name, false);
+    seen.add(key);
+    let r = renderSkaters.get(key);
+    if (!r) {
+      r = { x: sk.x, y: sk.y, vx: 0, vy: 0, tx: sk.x, ty: sk.y,
+            team: sk.team, name: sk.name, jersey: sk.jersey, goalie: false };
+      renderSkaters.set(key, r);
+    }
+    r.tx = sk.x; r.ty = sk.y;
+    r.team = sk.team; r.name = sk.name; r.jersey = sk.jersey;
+  }
+  for (const gl of (msg.goalies || [])) {
+    const key = skaterRenderKey(gl.team, gl.name, true);
+    seen.add(key);
+    let r = renderSkaters.get(key);
+    if (!r) {
+      r = { x: gl.x, y: gl.y, vx: 0, vy: 0, tx: gl.x, ty: gl.y,
+            team: gl.team, name: gl.name, jersey: gl.jersey, goalie: true };
+      renderSkaters.set(key, r);
+    }
+    r.tx = gl.x; r.ty = gl.y;
+  }
+  // Remove skaters who left the ice (line change) — fade them out.
+  for (const key of renderSkaters.keys()) {
+    if (!seen.has(key)) renderSkaters.delete(key);
+  }
+  if (msg.puck) { renderPuck.tx = msg.puck.x; renderPuck.ty = msg.puck.y; }
+}
+
+function drawWorld(now, dt) {
+  if (!cur || cur.type !== 'skate') return;
+  // Spring every render entity toward its target.
+  for (const r of renderSkaters.values()) springStep(r, dt);
+  springStep(renderPuck, dt);
+
+  const puckX = renderPuck.x, puckY = renderPuck.y;
+  for (const r of renderSkaters.values()) {
+    const hasPuck = !r.goalie && cur.possession === r.team &&
+      Math.hypot(puckX - r.x, puckY - r.y) < 4;
+    drawSkater(r.x, r.y, r.team, {
+      name: r.name, jersey: r.jersey, hasPuck: hasPuck, goalie: r.goalie,
+      key: skaterRenderKey(r.team, r.name, r.goalie),
     });
   }
-  for (const gl of (B.goalies || [])) {
-    drawSkater(gl.x, gl.y, gl.team, {
-      name: gl.name, jersey: gl.jersey, hasPuck: false, goalie: true,
-      key: gl.team + '|G|' + (gl.name || ''),
-    });
-  }
-  drawPuck(lerp(A.puck.x, B.puck.x, tc), lerp(A.puck.y, B.puck.y, tc));
+  drawPuck(puckX, puckY);
 }
 
 function frame(now) {
@@ -714,9 +772,7 @@ function frame(now) {
   drawRink();
   drawShotMarkers(now);
   if (!paused && cur) {
-    const span = Math.max(1, curT - prevT);
-    const t = Math.min(1.15, Math.max(0, (now - prevT) / span));
-    drawWorld(now, Math.min(1, t));
+    drawWorld(now, dt);
   } else if (cur && cur.type === 'skate') {
     // paused: static frame (no trail growth)
     const B = cur;
@@ -825,6 +881,7 @@ function handleMessage(e) {
   if (msg.type === 'skate') {
     prev = cur; prevT = curT;
     cur = msg; curT = performance.now();
+    updateRenderTargets(msg);
     setScorebug(msg);
   }
 }
