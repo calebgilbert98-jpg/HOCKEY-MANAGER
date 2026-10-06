@@ -36,6 +36,8 @@ _watch_lock = threading.Lock()
 _watch = {
     "thread": None,     # sim thread (daemon)
     "queue": None,      # queue.Queue of raw pbp events
+    "sim": None,        # GameSim reference (read-only box-score access)
+    "events": [],       # JSON-safe event log for text/shot-chart modes
     "done": False,      # sim finished
     "home": "",         # home team name
     "away": "",         # away team name
@@ -44,6 +46,36 @@ _watch = {
     "id_meta": {},      # player id (str) -> {"team": 0/1, "name": str, "goalie": bool}
     "error": None,
 }
+
+# Cap on the retained event log (a full game is ~2-4k events).
+_EVENTS_CAP = 8000
+
+
+def _ev_json(ev):
+    """Deep-convert a pbp event to JSON-safe primitives.
+
+    Player objects -> display name; tuples/sets -> lists; enums ->
+    their value; anything else unknown -> str().
+    """
+    def _conv(v):
+        if v is None or isinstance(v, (bool, int, float, str)):
+            return v
+        if isinstance(v, dict):
+            return {str(k): _conv(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple, set)):
+            return [_conv(x) for x in v]
+        # Player-like objects: prefer display name, never leak the object.
+        nm = getattr(v, "full_name", None) or getattr(v, "name", None)
+        if nm:
+            return str(nm)
+        val = getattr(v, "value", None)
+        if isinstance(val, (bool, int, float, str)):
+            return val
+        return str(v)
+    try:
+        return _conv(dict(ev))
+    except Exception:
+        return {"type": str(ev.get("type", "?")) if isinstance(ev, dict) else "?"}
 
 
 def _fmt_clock(seconds):
@@ -168,6 +200,14 @@ def _ensure_live_sim():
                 q.put(dict(ev))
             except Exception:
                 pass
+            # Retain a JSON-safe copy for text/shot-chart/box-score modes.
+            try:
+                with _watch_lock:
+                    _watch["events"].append(_ev_json(ev))
+                    if len(_watch["events"]) > _EVENTS_CAP:
+                        del _watch["events"][: len(_watch["events"]) - _EVENTS_CAP]
+            except Exception:
+                pass
 
         try:
             sim.pbp_listeners.append(_listener)
@@ -207,6 +247,7 @@ def _ensure_live_sim():
                                   name="puck-watch-sim")
         _watch.update(
             thread=thread, queue=q, done=False, error=None,
+            sim=sim, events=[],
             home=_safe(lambda: home.team_name, ""),
             away=_safe(lambda: away.team_name, ""),
             home_abbr=_team_abbr(home), away_abbr=_team_abbr(away),
@@ -569,3 +610,105 @@ def watch_status():
             "home": _watch["home"],
             "away": _watch["away"],
         })
+
+
+@bp.route("/api/watch/events")
+def watch_events():
+    """Full JSON-safe event log for text and shot-chart modes.
+
+    Starts the live sim on first call (same as the SSE stream) so the
+    modes work even if the visualizer tab was never opened.
+    """
+    st = _ensure_live_sim()
+    with _watch_lock:
+        evs = list(_watch["events"])
+        done = _watch["done"]
+        home, away = _watch["home"], _watch["away"]
+        habbr, aabbr = _watch["home_abbr"], _watch["away_abbr"]
+    if st is None:
+        return jsonify({"events": [], "live": False, "done": done,
+                        "home": home, "away": away,
+                        "home_abbr": habbr, "away_abbr": aabbr})
+    return jsonify({"events": evs, "live": True, "done": done,
+                    "home": home, "away": away,
+                    "home_abbr": habbr, "away_abbr": aabbr})
+
+
+def _boxscore_payload():
+    """Live box score from the sim's game_stats (read-only snapshot)."""
+    with _watch_lock:
+        sim = _watch["sim"]
+        meta = dict(_watch["id_meta"])
+        home, away = _watch["home"], _watch["away"]
+        habbr, aabbr = _watch["home_abbr"], _watch["away_abbr"]
+    if sim is None:
+        return None
+    try:
+        gs = getattr(sim, "game_stats", None)
+        if not gs:
+            return None
+        items = list(gs.items())
+    except Exception:
+        return None
+
+    skaters, goalies = [], []
+    for pid, st in items:
+        try:
+            m = meta.get(str(pid), {})
+            name = m.get("name") or "Unknown"
+            is_g = bool(m.get("goalie"))
+            row = {
+                "id": str(pid),
+                "name": name,
+                "team": 0 if m.get("team", 0) == 0 else 1,
+                "jersey": m.get("jersey", ""),
+                "pos": "G" if is_g else "",
+            }
+            if is_g:
+                sa = int(st.get("shots_against", 0) or 0)
+                sv = int(st.get("saves", 0) or 0)
+                row.update({
+                    "sa": sa, "saves": sv, "ga": int(st.get("goals_against", 0) or 0),
+                    "sv_pct": round(sv / sa, 3) if sa else 0.0,
+                })
+                goalies.append(row)
+            else:
+                row.update({
+                    "g": int(st.get("g", 0) or 0),
+                    "a": int(st.get("a", 0) or 0),
+                    "sog": int(st.get("shots_on_goal", 0) or 0),
+                    "hits": int(st.get("hits", 0) or 0),
+                })
+                row["pts"] = row["g"] + row["a"]
+                skaters.append(row)
+        except Exception:
+            continue
+    skaters.sort(key=lambda r: (-r["pts"], -r["g"], r["name"]))
+    goalies.sort(key=lambda r: (-r["saves"], r["name"]))
+    try:
+        hs = int(getattr(sim, "home_score", 0) or 0)
+        aws = int(getattr(sim, "away_score", 0) or 0)
+        period = int(getattr(sim, "period", 1) or 1)
+    except Exception:
+        hs, aws, period = 0, 0, 1
+    return {
+        "home": home, "away": away,
+        "home_abbr": habbr, "away_abbr": aabbr,
+        "score": {"home": hs, "away": aws},
+        "period": period,
+        "skaters": skaters, "goalies": goalies,
+    }
+
+
+@bp.route("/api/watch/boxscore")
+def watch_boxscore():
+    """Live box score for the box-score drill-down mode."""
+    st = _ensure_live_sim()
+    if st is None:
+        return jsonify({"live": False, "skaters": [], "goalies": []})
+    payload = _boxscore_payload()
+    if payload is None:
+        return jsonify({"live": True, "skaters": [], "goalies": [],
+                        "home": _watch["home"], "away": _watch["away"]})
+    payload["live"] = True
+    return jsonify(payload)
