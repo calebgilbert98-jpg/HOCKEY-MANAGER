@@ -28,7 +28,11 @@
     <button data-tab="groups">Social Groups</button>
     <button data-tab="cascades">Cascades</button>
     <button data-tab="talk">Team Talk</button>
+    <button data-tab="rivalries">Rivalries</button>
+    <button data-tab="coach">Coach Carousel</button>
   </nav>
+
+  <div id="crisis-banner" class="crisis-banner hidden"></div>
 
   <section id="view-room">
     <div class="morale-row">
@@ -40,6 +44,7 @@
           <button class="btn secondary" data-action="speech">Speech</button>
           <button class="btn secondary" data-action="practice">Practice</button>
           <button class="btn secondary" data-action="back_room">Back Room</button>
+          <button class="btn secondary" data-action="advise_coach" id="advise-btn">Advise Coach</button>
           <button class="btn secondary" data-action="line_control" id="line-control-btn">Lines: Coach</button>
         </div>
       </div>
@@ -47,6 +52,12 @@
         <h3>Watch List</h3>
         <div id="watch-body"></div>
       </div>
+    </div>
+
+    <div class="morale-card" id="receipts-card">
+      <h3>Recent Room Decisions</h3>
+      <p class="dim">Causal receipts: who approved it, who gained, who paid, which relationship shifted.</p>
+      <div id="receipts-body"></div>
     </div>
 
     <div class="morale-card">
@@ -130,6 +141,69 @@
       <button class="btn primary" id="talk-deliver">Deliver Talk</button>
     </div>
   </section>
+
+  <section id="view-rivalries" class="hidden">
+    <div class="morale-row">
+      <div class="morale-card">
+        <h3>Bad Blood on Record</h3>
+        <div id="rivalries-body"></div>
+      </div>
+      <div class="morale-card">
+        <h3>Declare a Rival</h3>
+        <p class="dim">Name your enemy. A declaration sets the heat to 70, makes those games genuinely hostile, and never fades until you renounce it. The league will hear about it.</p>
+        <h4 class="talk-sub">Team rival</h4>
+        <div class="row-flex">
+          <select id="rival-team-pick" class="nhl-input"></select>
+          <button class="btn secondary" id="declare-team-rival">Declare team rival</button>
+        </div>
+        <h4 class="talk-sub">Personal beef</h4>
+        <p class="dim small">A personal feud with an opposing head coach — declared through their team.</p>
+        <div class="row-flex">
+          <select id="rival-coach-pick" class="nhl-input"></select>
+          <button class="btn secondary" id="declare-coach-rival">Declare coach beef</button>
+        </div>
+        <h4 class="talk-sub">Declared rivalries</h4>
+        <div id="declared-body"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="view-coach" class="hidden">
+    <div class="morale-row">
+      <div class="morale-card">
+        <h3>Behind the Bench</h3>
+        <div id="carousel-current"></div>
+        <div id="hotseat-body"></div>
+        <div class="action-row">
+          <button class="btn danger" id="fire-coach-btn">Fire Coach</button>
+        </div>
+      </div>
+      <div class="morale-card">
+        <h3>The Carousel</h3>
+        <p class="dim">Fired coaches carry their hot-seat reputation, tactical identity, player bonds and grudges into their next chair. Coordinators who earned interviews sit below.</p>
+        <div id="carousel-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Advise Coach modal -->
+  <div id="advise-modal" class="modal-backdrop hidden">
+    <div class="modal-card">
+      <h3 id="advise-title">Advise the Coach</h3>
+      <p class="dim" id="advise-sub"></p>
+      <div id="advise-types"></div>
+      <h4 class="talk-sub">Feature a player — more ice time, bigger role</h4>
+      <div class="row-flex">
+        <select id="feature-pick" class="nhl-input"></select>
+        <button class="btn secondary" id="feature-request">Request</button>
+        <button class="btn secondary" id="feature-rescind">Rescind</button>
+      </div>
+      <div id="advise-result" class="advice-result"></div>
+      <div class="action-row">
+        <button class="btn secondary" id="advise-close">Close</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script src="/static/js/morale.js"></script>

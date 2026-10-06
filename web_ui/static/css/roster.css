@@ -240,3 +240,11 @@ tr.injured .p-portrait { filter: grayscale(0.6); }
   text-underline-offset: 3px;
 }
 .jersey-cell:hover { color: var(--nhl-blue); text-decoration-color: var(--nhl-blue); }
+
+/* Batch B: crisis banner shared style (mirrors morale.css) */
+.crisis-banner {
+  margin: 0 0 18px; padding: 16px 18px; border-radius: var(--nhl-r);
+  background: linear-gradient(135deg, rgba(244,67,54,.14), rgba(244,67,54,.05));
+  border: 1px solid rgba(244,67,54,.55);
+}
+.crisis-head { font-size: 14px; line-height: 1.5; margin-bottom: 10px; color: #fff; }

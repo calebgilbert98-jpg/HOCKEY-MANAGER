@@ -428,3 +428,22 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('.clickable[data-href], .clickable-text[data-href], .card-clickable[data-href]');
   if (t) window.location.href = t.dataset.href;
 });
+
+/* ---- Batch B: captaincy-crisis banner (resolution UI lives on /morale) ---- */
+async function loadRosterCrisisBanner() {
+  const host = document.getElementById('roster-crisis-banner');
+  if (!host) return;
+  try {
+    const res = await fetch('/api/morale/crisis');
+    const d = await res.json();
+    const c = d.crisis;
+    if (!c) { host.classList.add('hidden'); return; }
+    const sev = '🔴'.repeat(Math.max(1, c.severity || 1));
+    host.innerHTML = `
+      <div class="crisis-head">${sev} <strong>Captaincy crisis:</strong>
+        ${String(c.captain_name).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))} is losing the room.</div>
+      <a class="btn secondary" href="/morale" style="text-decoration:none">Open the dressing room to resolve it</a>`;
+    host.classList.remove('hidden');
+  } catch (e) { /* banner stays hidden */ }
+}
+loadRosterCrisisBanner();
