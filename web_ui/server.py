@@ -10,11 +10,26 @@ Run:  python3 web_ui/server.py
 Then: http://localhost:5050/
 """
 import os
+import sys
 from flask import Flask, jsonify, render_template
 
+def _bundle_base():
+    """Base directory for bundled resources (PyInstaller _MEIPASS or dev)."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass and os.path.isdir(meipass):
+        return meipass
+    return os.path.dirname(os.path.abspath(__file__))
+
+_base = _bundle_base()
+# In PyInstaller bundle, web_ui/ is at _MEIPASS/web_ui/; in dev, it's the file's dir.
+if os.path.basename(_base) != "web_ui":
+    _webui = os.path.join(_base, "web_ui")
+    if os.path.isdir(_webui):
+        _base = _webui
+
 app = Flask(__name__,
-            template_folder=os.path.join(os.path.dirname(__file__), "templates"),
-            static_folder=os.path.join(os.path.dirname(__file__), "static"))
+            template_folder=os.path.join(_base, "templates"),
+            static_folder=os.path.join(_base, "static"))
 
 # ------------------------------------------------------------------
 # Mock game state (shaped like the real objects; the real bridge will
