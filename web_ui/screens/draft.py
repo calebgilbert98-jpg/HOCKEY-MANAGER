@@ -607,3 +607,179 @@ def api_draft_grades():
                 continue
         return jsonify({"source": "final", "year": y, "grades": rows})
     return jsonify({"source": "none", "year": None, "grades": []})
+
+
+# ------------------------------------------------------------------
+# Batch C (League): trade-this-pick dialog + war-room shortlist.
+# Ported from windows.py DraftView (trade dialog ~9785, shortlist
+# ~7683/8822). The draft clock/pace lives client-side (draft.js):
+# the desktop's SP clock auto-picks on expiry; the web pace control
+# (1x/4x/sim-to-my-pick) drives /api/draft/sim_pick on a timer.
+# ------------------------------------------------------------------
+
+def _on_clock_slot(live):
+    """Current on-clock slot: (overall, round, owner) or (None,...)."""
+    state = get_draft_state(live)
+    if not state.get("active"):
+        return None, None, None
+    cur = state.get("current_overall")
+    for b in state.get("board", []):
+        if b.get("overall") == cur:
+            return cur, b.get("round"), b.get("owner")
+    return None, None, None
+
+
+@bp.route("/api/draft/trade-pick", methods=["GET"])
+def api_draft_trade_pick_info():
+    """Trade-this-pick dialog data: the on-clock pick + every partner's
+    upcoming picks with engine trade values (trade_engine.pick_trade_value,
+    same as the desktop dialog)."""
+    live = _live()
+    if live is None:
+        return jsonify({"can_trade": False, "reason": "no game"})
+    state = get_draft_state(live)
+    if not state.get("active"):
+        return jsonify({"can_trade": False, "reason": "no draft active"})
+    overall, rnd, owner = _on_clock_slot(live)
+    gm = _safe(lambda: live.game_manager)
+    team = _safe(lambda: gm.user_team) or _safe(lambda: live.user_team)
+    user_name = _safe(lambda: getattr(team, "team_name", ""), "") or ""
+    if owner != user_name:
+        return jsonify({"can_trade": False,
+                        "reason": "Not your pick \u2014 you can only trade your own pick.",
+                        "owner": owner, "overall": overall})
+
+    try:
+        import trade_engine as te
+        import draft_night as dn
+    except Exception:
+        return jsonify({"can_trade": False, "reason": "engine unavailable"})
+
+    partners = []
+    for b in state.get("board", []):
+        try:
+            if b.get("made") or b.get("overall", 0) <= (overall or 0):
+                continue
+            pname = b.get("owner", "")
+            if not pname or pname == user_name:
+                continue
+            val = 0
+            try:
+                # pick_trade_value takes a DraftPick; fall back to the
+                # slot-value curve when pick objects aren't handy.
+                val = int(dn.pick_slot_value(b["overall"]))
+            except Exception:
+                pass
+            pe = next((p for p in partners if p["name"] == pname), None)
+            if pe is None:
+                pe = {"name": pname, "picks": []}
+                partners.append(pe)
+            pe["picks"].append({
+                "overall": b["overall"], "round": b.get("round", 0),
+                "value": val,
+            })
+        except Exception:
+            continue
+    partners.sort(key=lambda p: p["name"])
+    for pe in partners:
+        pe["picks"].sort(key=lambda x: x["overall"])
+
+    my_value = 0
+    try:
+        my_value = int(dn.pick_slot_value(overall))
+    except Exception:
+        pass
+    return jsonify({
+        "can_trade": True,
+        "overall": overall, "round": rnd, "my_value": my_value,
+        "partners": partners,
+    })
+
+
+@bp.route("/api/draft/trade-pick", methods=["POST"])
+def api_draft_trade_pick_propose():
+    """Propose the pick swap: queues draft_trade_pick (Tk thread runs
+    trade_engine.ai_consider_trade, swaps slot owners on accept, stashes
+    the outcome / counter on app._web_draft_trade_result)."""
+    data = request.get_json(force=True, silent=True) or {}
+    partner = str(data.get("partner") or "")
+    partner_overall = data.get("partner_overall")
+    if not partner or partner_overall is None:
+        return jsonify({"ok": False, "error": "partner + partner_overall required"}), 400
+    try:
+        partner_overall = int(partner_overall)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "bad partner_overall"}), 400
+    import web_ui.bridge as _b
+    live = _live()
+    if live is not None:
+        try:
+            setattr(live, "_web_draft_trade_result", None)
+        except Exception:
+            pass
+    _b.enqueue_command({"op": "draft_trade_pick", "partner": partner,
+                        "partner_overall": partner_overall})
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/draft/trade-pick/result")
+def api_draft_trade_pick_result():
+    """Last queued draft_trade_pick outcome (stashed by the Tk-thread
+    handler). Client polls after proposing."""
+    live = _live()
+    result = _safe(lambda: getattr(live, "_web_draft_trade_result", None)) \
+        if live else None
+    return jsonify({"result": result})
+
+
+# --- War-room shortlist (web-UI scratch state, like the desktop view's
+# in-memory shortlist) ----------------------------------------------
+
+_shortlists = {}
+
+
+def _shortlist_key(live):
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league) or _safe(lambda: live.league)
+    return id(league) if league is not None else 0
+
+
+def _shortlist_get(live):
+    return _shortlists.setdefault(_shortlist_key(live), [])
+
+
+@bp.route("/api/draft/shortlist", methods=["GET"])
+def api_draft_shortlist_get():
+    live = _live()
+    if live is None:
+        return jsonify({"shortlist": []})
+    ids = _shortlist_get(live)
+    avail = {p["id"]: p for p in _available_prospects(live)}
+    return jsonify({"shortlist": [avail[i] for i in ids if i in avail]})
+
+
+@bp.route("/api/draft/shortlist", methods=["POST"])
+def api_draft_shortlist_add():
+    data = request.get_json(force=True, silent=True) or {}
+    pid = str(data.get("player_id") or "")
+    live = _live()
+    if not pid or live is None:
+        return jsonify({"ok": False}), 400
+    ids = _shortlist_get(live)
+    if pid not in ids:
+        ids.append(pid)
+        _shortlists[_shortlist_key(live)] = ids[:8]  # desktop caps at 8
+    return jsonify({"ok": True, "count": len(_shortlists[_shortlist_key(live)])})
+
+
+@bp.route("/api/draft/shortlist", methods=["DELETE"])
+def api_draft_shortlist_remove():
+    data = request.get_json(force=True, silent=True) or {}
+    pid = str(data.get("player_id") or "")
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False}), 400
+    ids = _shortlist_get(live)
+    if pid in ids:
+        ids.remove(pid)
+    return jsonify({"ok": True, "count": len(ids)})

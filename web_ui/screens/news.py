@@ -520,3 +520,26 @@ def api_news_fanbuzz():
     if live is None:
         return jsonify({"teams": [], "count": 0, "summary": {}})
     return jsonify(_fanbuzz_payload(live))
+
+
+# ------------------------------------------------------------------
+# Batch C (League) minor: news refresh endpoint. The wire payload is
+# already live on every fetch; this returns the lightweight freshness
+# signal the refresh button shows ("N stories, updated <time>").
+# ------------------------------------------------------------------
+
+@bp.route("/api/news/refresh", methods=["POST"])
+def api_news_refresh():
+    """Re-read the wire and report freshness. Read-only: the engine owns
+    story generation; this just re-pulls the latest."""
+    live = _live()
+    if live is None:
+        return jsonify({"ok": False, "count": 0})
+    try:
+        payload = _news_payload(live)
+        items = payload.get("items", [])
+        latest = items[0].get("date_label", "") if items else ""
+        return jsonify({"ok": True, "count": len(items),
+                        "latest": latest})
+    except Exception:
+        return jsonify({"ok": False, "count": 0})

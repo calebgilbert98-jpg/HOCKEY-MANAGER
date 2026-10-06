@@ -43,15 +43,43 @@ def _stats_payload(live):
         return {"scorers": [], "goals": [], "goalies": []}
     teams = _safe(lambda: list(league.teams), []) or []
 
+    # Batch C (League): global leader filters (desktop on_filter_change).
+    # Optional query params; no params = unfiltered (backward compatible).
+    from flask import request as _req
+    fpos = (_req.args.get("pos") or "All").strip()
+    try:
+        fmin_gp = max(0, int(_req.args.get("min_gp") or 0))
+    except (TypeError, ValueError):
+        fmin_gp = 0
+    fteam = (_req.args.get("team") or "All").strip() or "All"
+
+    def _pos_group(p):
+        try:
+            from web_ui.bridge import _clean_position
+            pos = _clean_position(getattr(p, "primary_position", ""))
+            if pos.upper() == "G":
+                return "G"
+            if pos.upper() in ("LD", "RD", "D"):
+                return "D"
+            return "F"
+        except Exception:
+            return "F"
+
     skaters, goalies = [], []
     for t in teams:
         try:
             team_name = _safe(lambda: t.team_name, "")
+            if fteam != "All" and team_name != fteam:
+                continue
             for p in _safe(lambda: list(t.roster), []) or []:
                 try:
                     row = _player_stat(p)
                     if not row["team"]:
                         row["team"] = team_name
+                    if fpos != "All" and _pos_group(p) != fpos:
+                        continue
+                    if row["gp"] < fmin_gp:
+                        continue
                     (goalies if row["is_goalie"] else skaters).append(row)
                 except Exception:
                     continue
@@ -481,3 +509,549 @@ def api_stats_analytics():
         return jsonify(_analytics_payload(live))
     except Exception:
         return jsonify({"empty": True, "reason": "Analytics failed to load."})
+
+
+# ------------------------------------------------------------------
+# Batch C (League): player-leader sub-tabs ported from
+# stats_standings_window.py (LEADER_TABS ~57; advanced ~3189,
+# breakout/rookie/award/milestone sections; global filters).
+#
+# Global filters (query params, all tabs): pos (F|D|G|All), min_gp,
+# team (team name or All), sort override for scoring.
+# ------------------------------------------------------------------
+
+_MILESTONE_WATCH_SKATERS = [
+    ('career_goals', 'goals', 'Goals', (100, 200, 300, 400, 500, 600, 700), 12),
+    ('career_assists', 'assists', 'Assists', (200, 300, 400, 500, 600, 800, 1000), 12),
+    ('career_points', 'points', 'Points', (500, 750, 1000, 1250, 1500), 18),
+    ('career_games', 'games_played', 'Games Played', (500, 1000, 1500), 25),
+]
+_MILESTONE_WATCH_GOALIES = [
+    ('career_wins', 'wins', 'Wins', (100, 200, 300), 8),
+    ('career_shutouts', 'shutouts', 'Shutouts', (25, 50, 75, 100), 4),
+    ('career_games_goalie', 'games_played', 'Games Played', (300, 500), 20),
+]
+
+
+def _leader_players(live):
+    """All NHL skaters/goalies as (player, team_name) pairs."""
+    gm = _safe(lambda: live.game_manager)
+    league = _safe(lambda: gm.league)
+    if league is None:
+        return [], {}
+    teams = _safe(lambda: list(league.teams), []) or []
+    pairs, team_map = [], {}
+    for t in teams:
+        try:
+            tname = _safe(lambda: t.team_name, "")
+            if tname:
+                team_map[tname] = t
+            for p in _safe(lambda: list(t.roster), []) or []:
+                pairs.append((p, tname))
+        except Exception:
+            continue
+    return pairs, team_map
+
+
+def _is_goalie(p):
+    try:
+        pos = getattr(p, "primary_position", None)
+        pname = getattr(pos, "name", str(pos))
+        return "GOALIE" in str(pname).upper()
+    except Exception:
+        return False
+
+
+def _pos_group(p):
+    try:
+        from web_ui.bridge import _clean_position
+        pos = _clean_position(getattr(p, "primary_position", ""))
+        if pos.upper() == "G":
+            return "G"
+        if pos.upper() in ("LD", "RD", "D"):
+            return "D"
+        return "F"
+    except Exception:
+        return "F"
+
+
+def _apply_leader_filters(pairs, pos="All", min_gp=0, team="All"):
+    out = []
+    for p, tname in pairs:
+        try:
+            if pos != "All" and _pos_group(p) != pos:
+                continue
+            gp = int(getattr(p, "games_played", 0) or 0)
+            if gp < min_gp:
+                continue
+            if team != "All" and tname != team:
+                continue
+            out.append((p, tname))
+        except Exception:
+            continue
+    return out
+
+
+def _leader_row(p, tname, extra=None):
+    from web_ui.bridge import _clean_position
+    pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
+    gp = int(getattr(p, "games_played", 0) or 0)
+    g = int(getattr(p, "goals", 0) or 0)
+    a = int(getattr(p, "assists", 0) or 0)
+    row = {
+        "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+        "name": _safe(lambda: getattr(p, "full_name", "?"), "?") or "?",
+        "team": tname, "pos": pos, "gp": gp, "g": g, "a": a,
+        "pts": g + a,
+        "ppg": round((g + a) / gp, 2) if gp else 0.0,
+        "pm": int(getattr(p, "plus_minus", 0) or 0),
+        "pim": int(getattr(p, "penalty_minutes", 0) or 0),
+        "sog": int(getattr(p, "shots", 0) or getattr(p, "shots_on_goal", 0) or 0),
+        "age": int(getattr(p, "age", 0) or 0),
+        "is_goalie": _is_goalie(p),
+    }
+    if row["is_goalie"]:
+        row["w"] = int(getattr(p, "wins", 0) or 0)
+        row["l"] = int(getattr(p, "losses", 0) or 0)
+        row["sv_pct"] = round(float(getattr(p, "save_percentage", 0) or 0), 3)
+        row["gaa"] = round(float(getattr(p, "goals_against_avg", 0) or 0), 2)
+        row["so"] = int(getattr(p, "shutouts", 0) or 0)
+        row["sa"] = int(getattr(p, "shots_against", 0) or 0)
+    if extra:
+        row.update(extra)
+    return row
+
+
+def _leader_filter_params():
+    from flask import request as _req
+    pos = (_req.args.get("pos") or "All").strip()
+    if pos not in ("All", "F", "D", "G"):
+        pos = "All"
+    try:
+        min_gp = max(0, int(_req.args.get("min_gp") or 0))
+    except (TypeError, ValueError):
+        min_gp = 0
+    team = (_req.args.get("team") or "All").strip() or "All"
+    return pos, min_gp, team
+
+
+@bp.route("/api/stats/advanced")
+def api_stats_advanced():
+    """Advanced Stats leader tab: ixG/CF%/xGF%/PDO/P60/GSc/SH% via
+    advanced_metrics (desktop ~3189). Goalies get GSAx/HDSV%."""
+    live = _live()
+    if live is None:
+        return jsonify({"skaters": [], "goalies": []})
+    pos, min_gp, team = _leader_filter_params()
+    try:
+        import advanced_metrics as am
+        pairs, _ = _leader_players(live)
+        skaters, goalies = [], []
+        for p, tname in _apply_leader_filters(pairs, pos, min_gp, team):
+            try:
+                if _is_goalie(p):
+                    m = am.goalie_advanced(p)
+                    r = _leader_row(p, tname)
+                    r.update({
+                        "gsax": round(float(getattr(m, "gsax", 0) or 0), 1),
+                        "hdsv": round(float(getattr(m, "hd_sv_pct", 0)
+                                            or getattr(m, "hdsv_pct", 0) or 0), 3),
+                    })
+                    goalies.append(r)
+                else:
+                    m = am.skater_advanced(p)
+                    r = _leader_row(p, tname)
+                    r.update({
+                        "ixg": round(float(getattr(m, "ixg", 0) or 0), 1),
+                        "cf_pct": round(float(getattr(m, "cf_pct", 0) or 0), 1),
+                        "xgf_pct": round(float(getattr(m, "xgf_pct", 0) or 0), 1),
+                        "pdo": round(float(getattr(m, "pdo", 0) or 0), 1),
+                        "p_per60": round(float(getattr(m, "p_per60", 0) or 0), 2),
+                        "game_score": round(float(getattr(m, "game_score", 0) or 0), 2),
+                        "sh_pct": round(float(getattr(m, "sh_pct", 0) or 0), 1),
+                    })
+                    skaters.append(r)
+            except Exception:
+                continue
+        skaters.sort(key=lambda r: (-r.get("game_score", 0), -r["pts"]))
+        goalies.sort(key=lambda r: (-r.get("gsax", 0), -r.get("sv_pct", 0)))
+        return jsonify({"skaters": skaters[:100], "goalies": goalies[:50],
+                        "filters": {"pos": pos, "min_gp": min_gp,
+                                    "team": team}})
+    except Exception:
+        return jsonify({"skaters": [], "goalies": []})
+
+
+@bp.route("/api/stats/breakout")
+def api_stats_breakout():
+    """Breakout Players tab: young skaters with elite process signals
+    (desktop ~3883: xGF% + ixG-vs-goals regression + PDO + youth + P/60)."""
+    live = _live()
+    if live is None:
+        return jsonify({"players": []})
+    pos, min_gp, team = _leader_filter_params()
+    try:
+        import advanced_metrics as am
+        pairs, _ = _leader_players(live)
+        out = []
+        for p, tname in _apply_leader_filters(pairs, pos, min_gp, team):
+            try:
+                if _is_goalie(p):
+                    continue
+                age = int(getattr(p, "age", 99) or 99)
+                if age > 26:
+                    continue
+                m = am.skater_advanced(p)
+                goals = int(getattr(p, "goals", 0) or 0)
+                xgf_pct = float(getattr(m, "xgf_pct", 50) or 50)
+                ixg = float(getattr(m, "ixg", 0) or 0)
+                pdo = float(getattr(m, "pdo", 100) or 100)
+                p60 = float(getattr(m, "p_per60", 0) or 0)
+                score = ((xgf_pct - 50) * 2.0
+                         + max(0, ixg - goals) * 1.5
+                         + max(0, 100.0 - pdo) * 2.0
+                         + max(0, 25 - age) * 1.2
+                         + p60 * 3.0)
+                signals = []
+                if xgf_pct >= 55:
+                    signals.append("Elite on-ice impact")
+                if ixg - goals >= 3:
+                    signals.append("Goals due (ixG > G)")
+                if pdo < 98:
+                    signals.append("Unlucky shooting/luck")
+                if p60 >= 2.0:
+                    signals.append("Top-line scoring rate")
+                r = _leader_row(p, tname)
+                r.update({
+                    "breakout_score": round(score, 1),
+                    "xgf_pct": round(xgf_pct, 1),
+                    "ixg_vs_g": round(ixg - goals, 1),
+                    "pdo": round(pdo, 1),
+                    "p_per60": round(p60, 2),
+                    "signal": "; ".join(signals) or "Watch list",
+                })
+                out.append(r)
+            except Exception:
+                continue
+        out.sort(key=lambda r: -r["breakout_score"])
+        return jsonify({"players": out[:50],
+                        "filters": {"pos": pos, "min_gp": min_gp,
+                                    "team": team}})
+    except Exception:
+        return jsonify({"players": []})
+
+
+@bp.route("/api/stats/rookies")
+def api_stats_rookies():
+    """Rookie Leaders tab: Calder-eligible skaters + goalies
+    (desktop ~799, via awards_race)."""
+    live = _live()
+    if live is None:
+        return jsonify({"skaters": [], "goalies": []})
+    try:
+        import awards_race as ar
+        pairs, _ = _leader_players(live)
+        players = [p for p, _ in pairs]
+        gm = _safe(lambda: live.game_manager)
+        d = _safe(lambda: gm.current_date)
+        syr = ar.calder_season_year(d) if d is not None else None
+
+        def _row(r, goalie=False):
+            p = r["player"]
+            tname = _safe(lambda: p.team.team_name, "") or \
+                _safe(lambda: getattr(p, "team_name", ""), "")
+            base = _leader_row(p, tname)
+            if goalie:
+                base["sv_pct"] = round(float(r.get("sv_pct", 0) or 0), 3)
+                base["gaa"] = round(float(r.get("gaa", 0) or 0), 2)
+                base["w"] = int(r.get("wins", 0) or 0)
+            else:
+                base["g"] = int(r.get("goals", 0) or 0)
+                base["a"] = int(r.get("assists", 0) or 0)
+                base["pts"] = int(r.get("points", 0) or 0)
+                base["gp"] = int(r.get("gp", 0) or 0)
+            return base
+
+        skaters = [_row(r) for r in
+                   ar.rookie_skaters(players, season_year=syr)[:25]]
+        goalies = [_row(r, goalie=True) for r in
+                   ar.rookie_goalies(players, season_year=syr)[:15]]
+        return jsonify({"skaters": skaters, "goalies": goalies,
+                        "season_year": syr})
+    except Exception:
+        return jsonify({"skaters": [], "goalies": []})
+
+
+@bp.route("/api/stats/award-races")
+def api_stats_award_races():
+    """Award Races tab: per-award candidate rankings (desktop ~871).
+
+    Query: award (hart|ted_lindsay|art_ross|rocket|norris|selke|byng|
+    calder|vezina|jennings|adams).
+    """
+    live = _live()
+    if live is None:
+        return jsonify({"awards": [], "award": "", "rows": []})
+    from flask import request as _req
+    award = (_req.args.get("award") or "hart").strip()
+    try:
+        import awards_race as ar
+        defs = [(n, d, k) for n, d, k in ar.AWARD_DEFINITIONS]
+        keys = [k for _, _, k in defs]
+        if award not in keys:
+            award = keys[0] if keys else "hart"
+        name = next((n for n, _, k in defs if k == award), award)
+        desc = next((d for _, d, k in defs if k == award), "")
+
+        pairs, team_map = _leader_players(live)
+        players = [p for p, _ in pairs]
+        roster_map = ar.roster_team_map(list(team_map.values()))
+        team_pct = {}
+        for tname, t in team_map.items():
+            gp = getattr(t, "games_played", 0) or 0
+            pts = getattr(t, "points", 0) or 0
+            team_pct[tname] = (pts / (2 * gp)) if gp else 0.5
+        gm = _safe(lambda: live.game_manager)
+        d = _safe(lambda: gm.current_date)
+
+        race = []
+        if award == "hart":
+            race = ar.hart_race(players, team_pct, roster_map=roster_map)
+        elif award == "ted_lindsay":
+            race = ar.lindsay_race(players, team_pct, roster_map=roster_map)
+        elif award == "art_ross":
+            race = ar.art_ross_race(players)
+        elif award == "rocket":
+            race = ar.rocket_race(players)
+        elif award == "norris":
+            race = ar.norris_race(players)
+        elif award == "selke":
+            race = ar.selke_race(players)
+        elif award == "byng":
+            race = ar.byng_race(players)
+        elif award == "calder":
+            syr = ar.calder_season_year(d) if d is not None else None
+            race = ar.calder_race(players, season_year=syr)
+        elif award == "vezina":
+            goalies = [p for p in players if _is_goalie(p)]
+            race = ar.vezina_race(goalies)
+        elif award == "jennings":
+            race = ar.jennings_race(list(team_map.values()))
+        elif award == "adams":
+            race = ar.adams_race(list(team_map.values()))
+
+        rows = []
+        for i, r in enumerate(race[:15], 1):
+            try:
+                p = r.get("player")
+                tname = ""
+                if p is not None:
+                    pid = int(getattr(p, "id", -1) or -1)
+                    tname = roster_map.get(pid, "") or \
+                        _safe(lambda: getattr(p, "team_name", ""), "")
+                rows.append({
+                    "rank": i,
+                    "name": r.get("name") or
+                    (_safe(lambda: getattr(p, "full_name", "?"), "?") if p is not None else "?"),
+                    "team": tname,
+                    "score": round(float(r.get("score", 0) or 0), 1),
+                    "detail": str(r.get("detail", "") or r.get("note", "") or ""),
+                    "id": _safe(lambda: str(getattr(p, "id", "")), "") if p is not None else "",
+                    "is_team": p is None,
+                })
+            except Exception:
+                continue
+        return jsonify({
+            "awards": [{"key": k, "name": n} for n, _, k in defs],
+            "award": award, "name": name, "description": desc,
+            "rows": rows,
+        })
+    except Exception:
+        return jsonify({"awards": [], "award": award, "rows": []})
+
+
+@bp.route("/api/stats/milestones")
+def api_stats_milestones():
+    """Milestone Watch tab: players within reach of career marks
+    (desktop ~1154; defs at ~622)."""
+    live = _live()
+    if live is None:
+        return jsonify({"watch": []})
+    try:
+        from web_ui.bridge import _clean_position
+        pairs, _ = _leader_players(live)
+        watch = []
+        for p, tname in pairs:
+            try:
+                is_g = _is_goalie(p)
+                defs = (_MILESTONE_WATCH_GOALIES if is_g
+                        else _MILESTONE_WATCH_SKATERS)
+                pos = _clean_position(getattr(p, "primary_position", ""))
+                for career_attr, season_attr, label, marks, within in defs:
+                    current = getattr(p, career_attr, 0) or 0
+                    if current <= 0:
+                        continue
+                    upcoming = [m for m in marks if m > current]
+                    if not upcoming:
+                        continue
+                    target = upcoming[0]
+                    needed = target - current
+                    if needed <= within:
+                        watch.append({
+                            "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+                            "player": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                            "team": tname, "pos": pos,
+                            "milestone": f"{target} {label}",
+                            "current": int(current), "needed": int(needed),
+                            "season": int(getattr(p, season_attr, 0) or 0),
+                        })
+            except Exception:
+                continue
+        watch.sort(key=lambda w: (w["needed"], -w["current"]))
+        return jsonify({"watch": watch[:40]})
+    except Exception:
+        return jsonify({"watch": []})
+
+
+# ------------------------------------------------------------------
+# NHL Records (league records, NOT the franchise book): Season
+# Records, Career Records, Record Chase, Achievements. Ported from
+# stats_standings_window.py RECORD_TABS (~1266-1460), backed by
+# game_manager.record_manager.nhl_records.
+# ------------------------------------------------------------------
+
+def _nhl_entry_dict(entry):
+    try:
+        return {
+            "player": getattr(entry, "player_name", "?"),
+            "value": getattr(entry, "value", 0),
+            "season": getattr(entry, "season", ""),
+            "team": getattr(entry, "team", ""),
+            "games": getattr(entry, "games_played", None),
+            "info": getattr(entry, "additional_info", "") or "",
+        }
+    except Exception:
+        return None
+
+
+@bp.route("/api/stats/nhl-records")
+def api_stats_nhl_records():
+    """League NHL records hub: season/career/current/chase/achievements."""
+    live = _live()
+    empty = {"season": [], "career": [], "team": [], "special": [],
+             "chase": [], "achievements": [], "empty": True}
+    if live is None:
+        return jsonify(empty)
+    try:
+        gm = _safe(lambda: live.game_manager)
+        rm = _safe(lambda: getattr(gm, "record_manager", None))
+        nhl = _safe(lambda: getattr(rm, "nhl_records", None))
+        records = _safe(lambda: dict(getattr(nhl, "records", None) or {}), {}) or {}
+        if not records:
+            return jsonify(empty)
+
+        def _label(key):
+            return key.replace("single_season_", "").replace("career_", "") \
+                .replace("team_", "").replace("_", " ").title()
+
+        season, career, team_recs, special = [], [], [], []
+        for key, rec in records.items():
+            try:
+                is_season = key.startswith("single_season_")
+                is_career = key.startswith("career_")
+                is_team = key.startswith("team_")
+                main = (getattr(rec, "single_season", None)
+                        or getattr(rec, "all_time", None) or rec)
+                row = {"key": key, "label": _label(key),
+                       "record": _nhl_entry_dict(main)}
+                rookie = getattr(rec, "rookie_record", None)
+                if rookie is not None:
+                    row["rookie_record"] = _nhl_entry_dict(rookie)
+                if is_season:
+                    season.append(row)
+                elif is_career:
+                    career.append(row)
+                elif is_team:
+                    team_recs.append(row)
+                else:
+                    special.append(row)
+            except Exception:
+                continue
+
+        # Record Chase: players >= 25% toward a season record (desktop
+        # ~4353).
+        chase = []
+        try:
+            pairs, _ = _leader_players(live)
+            chase_cats = [
+                ("single_season_goals", "Goals",
+                 lambda p: int(getattr(p, "goals", 0) or 0)),
+                ("single_season_assists", "Assists",
+                 lambda p: int(getattr(p, "assists", 0) or 0)),
+                ("single_season_points", "Points",
+                 lambda p: (int(getattr(p, "goals", 0) or 0)
+                            + int(getattr(p, "assists", 0) or 0))),
+                ("single_season_wins", "Wins",
+                 lambda p: int(getattr(p, "wins", 0) or 0)),
+                ("single_season_shutouts", "Shutouts",
+                 lambda p: int(getattr(p, "shutouts", 0) or 0)),
+            ]
+            from web_ui.bridge import _clean_position
+            for key, label, fn in chase_cats:
+                rec = records.get(key)
+                entry = (getattr(rec, "single_season", None)
+                         or getattr(rec, "all_time", None) or rec)
+                target = getattr(entry, "value", 0) or 0
+                if not target:
+                    continue
+                for p, tname in pairs:
+                    try:
+                        cur = fn(p)
+                        if cur <= 0:
+                            continue
+                        pct = cur / target * 100
+                        if pct >= 25.0:
+                            chase.append({
+                                "player": _safe(lambda: getattr(p, "full_name", "?"), "?"),
+                                "id": _safe(lambda: str(getattr(p, "id", id(p)))),
+                                "team": tname,
+                                "pos": _clean_position(getattr(p, "primary_position", "")),
+                                "record": label,
+                                "current": cur, "target": target,
+                                "needed": target - cur,
+                                "pct": round(pct, 1),
+                            })
+                    except Exception:
+                        continue
+            chase.sort(key=lambda c: -c["pct"])
+            chase = chase[:20]
+        except Exception:
+            pass
+
+        # Achievements: recently broken records (desktop ~4452).
+        achievements = []
+        try:
+            recent = _safe(lambda: rm.get_recent_records(20), []) or []
+            for r in recent:
+                if isinstance(r, dict):
+                    achievements.append({
+                        "date": str(r.get("date", "") or ""),
+                        "player": str(r.get("player", r.get("player_name", "")) or ""),
+                        "record": str(r.get("record", r.get("record_type", "")) or ""),
+                        "value": r.get("value", ""),
+                        "previous": r.get("previous", ""),
+                    })
+        except Exception:
+            pass
+
+        n_recs = len(season) + len(career) + len(team_recs) + len(special)
+        return jsonify({
+            "season": season, "career": career, "team": team_recs,
+            "special": special, "chase": chase,
+            "achievements": achievements,
+            "total": n_recs,
+            "achievements_count": len(achievements),
+            "empty": False,
+        })
+    except Exception:
+        return jsonify(empty)
