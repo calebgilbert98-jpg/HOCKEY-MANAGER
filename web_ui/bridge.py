@@ -83,6 +83,40 @@ def _overall(p):
         return 0
 
 
+def _json_safe(value, _depth=0):
+    """Recursively convert inbox action_data into JSON-safe primitives.
+
+    Dict keys are stringified; dates become ISO strings; anything else
+    unserializable degrades to str(). Never raises.
+    """
+    try:
+        if _depth > 8 or value is None:
+            return value if value is None else None
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            out = {}
+            for k, v in value.items():
+                try:
+                    out[str(k)] = _json_safe(v, _depth + 1)
+                except Exception:
+                    continue
+            return out
+        if isinstance(value, (list, tuple)):
+            return [_json_safe(v, _depth + 1) for v in value]
+        if hasattr(value, "isoformat"):
+            try:
+                return value.isoformat()
+            except Exception:
+                pass
+        return str(value)
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return None
+
+
 _HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 _DEFAULT_TEAM_PRIMARY = "#3B82F6"    # deep blue (current UI accent)
 _DEFAULT_TEAM_SECONDARY = "#1E40AF"
@@ -263,6 +297,8 @@ def to_web_message(m):
         "is_saved": _safe(lambda: bool(getattr(m, "is_saved", False))),
         "priority": _safe(lambda: int(getattr(m, "priority", 1) or 1)),
         "action_type": _safe(lambda: getattr(m, "action_type", None)),
+        "action_done": _safe(lambda: bool(getattr(m, "action_done", False)), False),
+        "action_data": _json_safe(_safe(lambda: getattr(m, "action_data", None) or {}, {})),
         "content": _safe(lambda: getattr(m, "content", ""), ""),
     }
 
@@ -1045,7 +1081,37 @@ def get_inbox_messages(app, filter_type="all"):
                 if _safe(lambda: m.requires_response, False)]
     elif filter_type == "saved":
         msgs = [m for m in msgs if _safe(lambda: m.is_saved, False)]
-    return [to_web_message(m) for m in msgs]
+    out = []
+    for m in msgs:
+        try:
+            d = to_web_message(m)
+            d["special_action"] = _inbox_special_action(app, gm, m)
+            out.append(d)
+        except Exception:
+            continue
+    return out
+
+
+def _inbox_special_action(app, gm, m):
+    """Desktop parity for the inbox's two special header buttons
+    (main:inbox_window.py _handle_fantasy_draft_button /
+    _handle_lottery_reveal_button). Returns "fantasy_draft",
+    "lottery_reveal", or "".
+    """
+    try:
+        subject = str(getattr(m, "subject", "") or "").upper()
+        sender_type = str(getattr(m, "sender_type", "") or "")
+        if ("FANTASY DRAFT" in subject and sender_type == "League"
+                and gm is not None
+                and bool(getattr(gm, "pending_fantasy_draft", False))):
+            return "fantasy_draft"
+        pending = getattr(gm, "_pending_lottery_reveal", None) if gm else None
+        if ("DRAFT LOTTERY" in subject and sender_type == "Media"
+                and pending):
+            return "lottery_reveal"
+    except Exception:
+        pass
+    return ""
 
 
 def get_roster(app):
@@ -1392,7 +1458,9 @@ def _do_setup_load_game(cmd):
 
 def _find_inbox_message(app, message_id):
     """Find an inbox message by ID. Returns (inbox, message) or (None, None)."""
-    team = _safe(lambda: getattr(app, "user_team", None))
+    gm = _safe(lambda: app.game_manager)
+    team = (_safe(lambda: gm.user_team)
+            or _safe(lambda: getattr(app, "user_team", None)))
     inbox = _safe(lambda: getattr(team, "inbox", None))
     if not inbox or not message_id:
         return None, None
@@ -1400,6 +1468,407 @@ def _find_inbox_message(app, message_id):
         if str(_safe(lambda: getattr(m, "id", ""), "")) == str(message_id):
             return inbox, m
     return inbox, None
+
+
+# ------------------------------------------------------------------
+# Batch A: inbox action helpers (ported from v0.18.4 desktop logic)
+# ------------------------------------------------------------------
+def _resolve_gameday_bundle(app, message_id, watch):
+    """Web mirror of HockeyManagerGUI._resolve_game_day (main.py).
+
+    Marks the game-day bundle done, records the GM's presser/team-talk/
+    instruction choices in app._game_day_resolution (consumed by the day
+    advance, exactly like desktop), and sets the web watch mode. The
+    caller navigates to /watch (watch=True) or enqueues advance_day
+    (watch=False). Never raises.
+    """
+    try:
+        _, msg = _find_inbox_message(app, message_id)
+        talk_boost = 1.0
+        instruction = None
+        if msg is not None:
+            data = getattr(msg, "action_data", None) or {}
+            try:
+                talk_boost = float(data.get("talk_boost", 1.0) or 1.0)
+            except Exception:
+                talk_boost = 1.0
+            instruction = data.get("instruction_chosen")
+            try:
+                msg.action_done = True
+            except Exception:
+                pass
+        today = (_safe(lambda: app.game_manager.current_date)
+                 or _safe(lambda: getattr(app, "current_date", None)))
+        try:
+            app._game_day_resolution = {
+                "watch": bool(watch), "talk_boost": talk_boost,
+                "instruction": instruction, "date": today,
+                # Web-set marker: main._process_todays_games must not open
+                # the desktop Tk PBP viewer for this (the /watch page is
+                # the web viewer); it degrades to quick sim instead.
+                "web": True,
+            }
+        except Exception:
+            pass
+        # Desktop sets this because daily maintenance already ran before
+        # the bundle opened; the web day-advance honors the same flag.
+        try:
+            app._continue_after_bundle = True
+        except Exception:
+            pass
+        global _watch_mode
+        _watch_mode = "watch" if watch else "quick"
+    except Exception:
+        pass
+
+
+def _same_team(a, b):
+    if a is None or b is None:
+        return False
+    if a is b:
+        return True
+    na = _safe(lambda: getattr(a, "team_name", None))
+    nb = _safe(lambda: getattr(b, "team_name", None))
+    return na is not None and na == nb
+
+
+def _fantasy_draft_collect(nhl_teams, gm):
+    """Port of FantasyDraftView.collect_all_nhl_players (non-Tk part):
+    every NHL/AHL/prospect player becomes draftable."""
+    all_players = []
+    for team in nhl_teams or []:
+        team_players = []
+        for attr in ("roster", "ahl_roster", "prospects"):
+            try:
+                team_players.extend(list(getattr(team, attr, None) or []))
+            except Exception:
+                pass
+        for player in team_players:
+            try:
+                if hasattr(player, "full_name"):
+                    player.former_team = getattr(
+                        team, "team_name", "")
+                    all_players.append(player)
+            except Exception:
+                pass
+    if not all_players and gm is not None:
+        try:
+            league = getattr(gm, "league", None)
+            if hasattr(league, "get_all_players"):
+                league_players = league.get_all_players() or []
+                for p in league_players:
+                    try:
+                        p.former_team = getattr(p, "team_name", "") or ""
+                    except Exception:
+                        pass
+                all_players = list(league_players)
+        except Exception:
+            pass
+    return all_players
+
+
+def _fantasy_draft_manager(app, create=False):
+    """Return (manager, error). Attaches to the league-owned live
+    FantasyDraftManager, or creates a fresh one when `create` is True and
+    a draft is genuinely pending. Mirrors the non-Tk logic of
+    FantasyDraftView._bind_draft_manager (v0.18.4). Never raises.
+    """
+    try:
+        import fantasy_draft as _fd
+    except Exception as e:
+        return None, f"fantasy_draft module unavailable: {e}"
+    gm = _safe(lambda: app.game_manager)
+    league = _safe(lambda: gm.league) if gm is not None else None
+    if league is None:
+        return None, "no league loaded"
+    mgr = _fd.get_fantasy_draft_manager(gm)
+    if mgr is not None and _fd.fantasy_session_valid(mgr, league):
+        try:
+            mgr.user_team = _safe(lambda: gm.user_team)
+        except Exception:
+            pass
+        return mgr, ""
+    if mgr is not None:
+        return None, ("The saved fantasy draft session is damaged and "
+                      "can't be resumed. No new draft was started -- your "
+                      "rosters are untouched.")
+    if not create:
+        return None, "no live draft session"
+    try:
+        pending = bool(getattr(gm, "pending_fantasy_draft", False))
+    except Exception:
+        pending = False
+    if not pending:
+        return None, ("No fantasy draft is pending. No new draft was "
+                      "started -- your rosters are untouched.")
+    # Fresh draft: the pre-draft safety checkpoint is taken BEFORE the
+    # pool collection wipes the rosters (same as desktop).
+    try:
+        cpm = getattr(gm, "checkpoint_manager", None)
+        if cpm is not None:
+            cpm.checkpoint("Before Fantasy Draft")
+    except Exception as e:
+        print(f"Pre-draft checkpoint failed (non-fatal): {e}")
+    nhl_teams = [t for t in
+                 (_safe(lambda: list(getattr(league, "teams", None)), [])
+                  or [])
+                 if _safe(lambda: getattr(t, "league_name", ""), "")
+                 == "National Hockey League"]
+    all_players = _fantasy_draft_collect(nhl_teams, gm)
+    mgr = _fd.FantasyDraftManager(nhl_teams, all_players)
+    try:
+        mgr.user_team = _safe(lambda: gm.user_team)
+    except Exception:
+        pass
+    try:
+        league.fantasy_draft_manager = mgr
+    except Exception:
+        pass
+    return mgr, ""
+
+
+def _fantasy_draft_begin(app):
+    """Port of FantasyDraftView.begin_fantasy_draft (non-Tk part): clear
+    every club's rosters and mark the draft started. Re-entry on a
+    started draft never wipes rosters. Never raises."""
+    mgr, err = _fantasy_draft_manager(app, create=True)
+    if mgr is None:
+        return err or "draft unavailable"
+    try:
+        gm = _safe(lambda: app.game_manager)
+        if gm is not None and hasattr(gm, "_web_fantasy_completed"):
+            gm._web_fantasy_completed = None  # fresh draft, clear old record
+    except Exception:
+        pass
+    if bool(getattr(mgr, "draft_started", False)):
+        try:
+            gm = _safe(lambda: app.game_manager)
+            if gm is not None and hasattr(gm, "pending_fantasy_draft"):
+                gm.pending_fantasy_draft = True
+        except Exception:
+            pass
+        return ""
+    try:
+        for team in getattr(mgr, "teams", None) or []:
+            for attr in ("roster", "ahl_roster", "prospects"):
+                try:
+                    lst = getattr(team, attr, None)
+                    if isinstance(lst, list):
+                        lst.clear()
+                    else:
+                        setattr(team, attr, [])
+                except Exception:
+                    pass
+            try:
+                players = getattr(team, "players", None)
+                if isinstance(players, dict):
+                    for k, v in players.items():
+                        if isinstance(v, list):
+                            v.clear()
+                elif isinstance(players, list):
+                    players.clear()
+            except Exception:
+                pass
+        mgr.draft_started = True
+    except Exception as e:
+        return f"could not start draft: {e}"
+    return ""
+
+
+def _fantasy_draft_run_ai(mgr, max_picks=4000):
+    """Run AI picks until the user's next pick or draft completion.
+    Mirrors the desktop auto-draft chain (continue_auto_draft)."""
+    n = 0
+    while n < max_picks and not mgr.is_draft_complete():
+        try:
+            cur = mgr.get_current_pick()
+        except Exception:
+            break
+        if cur is None:
+            break
+        if _same_team(getattr(cur, "team", None),
+                      getattr(mgr, "user_team", None)):
+            break
+        try:
+            ai_pick = mgr.make_ai_pick(cur.team)
+        except Exception:
+            break
+        if ai_pick is None:
+            break
+        try:
+            ok = mgr.make_pick(ai_pick)
+        except Exception:
+            break
+        if not ok:
+            break
+        try:
+            mgr.assign_drafted_player(cur.team, ai_pick)
+        except Exception:
+            pass
+        n += 1
+
+
+def _fantasy_draft_pick(app, player_id):
+    """Human pick + AI auto-run until the next user pick. Ports the
+    desktop draft_player() pick path and complete_draft(). Never raises."""
+    mgr, err = _fantasy_draft_manager(app, create=False)
+    if mgr is None:
+        return err or "no live draft session"
+    try:
+        cur = mgr.get_current_pick()
+    except Exception:
+        return "could not read draft state"
+    if cur is None or mgr.is_draft_complete():
+        return "the draft is already complete"
+    user_team = getattr(mgr, "user_team", None)
+    if user_team is None:
+        try:
+            user_team = _safe(lambda: app.game_manager.user_team)
+            mgr.user_team = user_team
+        except Exception:
+            pass
+    if not _same_team(getattr(cur, "team", None), user_team):
+        try:
+            tn = getattr(cur.team, "team_name", "?")
+        except Exception:
+            tn = "?"
+        return f"not your turn -- {tn} is on the clock"
+    player = None
+    try:
+        for p in mgr.get_available_players():
+            pid = _safe(lambda: getattr(p, "id", id(p)))
+            if str(pid) == str(player_id):
+                player = p
+                break
+    except Exception:
+        pass
+    if player is None:
+        return "that player is not available"
+    try:
+        ok = mgr.make_pick(player)
+    except Exception:
+        return "pick failed"
+    if not ok:
+        return "pick failed"
+    try:
+        mgr.assign_drafted_player(cur.team, player)
+    except Exception:
+        pass
+    _fantasy_draft_run_ai(mgr)
+    if mgr.is_draft_complete():
+        _fantasy_draft_complete(app, mgr)
+    return ""
+
+
+def _fantasy_draft_complete(app, mgr):
+    """Port of FantasyDraftView.complete_draft (non-Tk parts): clear the
+    pending flag, normalize rosters, strip letters, arm the deferred
+    captaincy check, deliver the completion inbox message, and release
+    the league-owned session. Never raises."""
+    gm = _safe(lambda: app.game_manager)
+    league = _safe(lambda: gm.league) if gm is not None else None
+    try:
+        if gm is not None and hasattr(gm, "pending_fantasy_draft"):
+            gm.pending_fantasy_draft = False
+    except Exception:
+        pass
+    try:
+        from coach_season_meeting import on_fantasy_draft_complete
+        on_fantasy_draft_complete(gm)
+    except Exception:
+        pass
+    try:
+        mgr.normalize_post_draft_rosters()
+    except Exception:
+        pass
+    # Backstop: no club skates with letters after the draft.
+    try:
+        for t in (getattr(league, "teams", None) or []):
+            for p in (getattr(t, "roster", None) or []):
+                try:
+                    p.captaincy = ""
+                    p.captain_tenure_years = 0
+                    p.alternate_tenure_years = 0
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        if gm is not None:
+            gm._fantasy_draft_captaincy_deferred = True
+    except Exception:
+        pass
+    # Completion inbox message (port of add_draft_completion_message).
+    try:
+        from game_classes import EmailMessage
+        from datetime import date as _date
+        issues = []
+        try:
+            import fantasy_draft as _fd
+            issues = _fd.audit_fantasy_draft(mgr, league) or []
+        except Exception:
+            pass
+        audit_line = ""
+        if issues:
+            audit_line = ("\n\nLEAGUE AUDIT NOTE:\n"
+                          + "\n".join(f"\u2022 {i}" for i in issues[:8])
+                          + "\n")
+        email = EmailMessage(
+            sender="NHL Commissioner",
+            sender_type="League",
+            subject="\U0001F3C6 Fantasy Draft Complete - Results Summary",
+            content=(
+                "Dear General Manager,\n\n"
+                "The Fantasy Draft has been successfully completed!\n\n"
+                "DRAFT RESULTS:\n"
+                f"\u2022 Total players redistributed: "
+                f"{len(getattr(mgr, 'all_players', None) or [])}\n"
+                f"\u2022 Draft rounds completed: "
+                f"{getattr(getattr(mgr, 'config', None), 'rounds', '?')}\n"
+                f"\u2022 Your team's final roster has been updated\n"
+                f"{audit_line}\n"
+                "All players have been assigned to their new teams based on "
+                "the draft results. You can now review your new roster and "
+                "begin planning for the upcoming season.\n\n"
+                "Thank you for participating in the Fantasy Draft!\n\n"
+                "Best regards,\nNHL League Office"),
+            date_sent=_date.today(),
+            is_important=True,
+            category="League",
+            priority=3,
+        )
+        user_team = _safe(lambda: gm.user_team) if gm is not None else None
+        inbox = _safe(lambda: getattr(user_team, "inbox", None))
+        if inbox is not None:
+            inbox.add_message(email)
+    except Exception as e:
+        print(f"Error adding completion message: {e}")
+    # Release the league-owned session so a later open starts clean.
+    # The web UI keeps a small completion record so the draft page can
+    # show "complete" instead of "no draft pending".
+    try:
+        if gm is not None:
+            gm._web_fantasy_completed = {
+                "rounds": _safe(lambda: int(
+                    getattr(getattr(mgr, "config", None), "rounds", 0)
+                    or 0), 0),
+                "total_picks": _safe(lambda: len(
+                    getattr(mgr, "draft_picks", None) or []), 0),
+            }
+    except Exception:
+        pass
+    try:
+        if (league is not None
+                and getattr(league, "fantasy_draft_manager", None) is mgr):
+            league.fantasy_draft_manager = None
+    except Exception:
+        pass
+    try:
+        fn = getattr(app, "update_all_views", None)
+        if callable(fn):
+            fn()
+    except Exception:
+        pass
 
 
 def _wt_resolve_trade_assets(team, pid_set, pick_set):
@@ -3396,6 +3865,139 @@ def _execute_command(app, cmd):
                     msg.action_done = True
                 except Exception:
                     pass
+        # ------- Batch A: inbox action types ported from v0.18.4 -------
+        elif op == "inbox_presser_answer":
+            # Game-day pre-match presser: answer one question.
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app._answer_bundle_presser(
+                        msg, int(cmd.get("q", -1)), int(cmd.get("a", -1)))
+                except Exception:
+                    pass
+        elif op == "inbox_presser_skip":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app._skip_bundle_presser(msg)
+                except Exception:
+                    pass
+        elif op == "inbox_team_talk":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app._answer_bundle_team_talk(
+                        msg, int(cmd.get("option", -1)))
+                except Exception:
+                    pass
+        elif op == "inbox_instruction":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app._answer_bundle_instruction(
+                        msg, cmd.get("option_id"))
+                except Exception:
+                    pass
+        elif op == "inbox_gameday_watch":
+            # Mirrors main._resolve_game_day(True) minus the Tk parts:
+            # the reader navigates to /watch afterwards.
+            _resolve_gameday_bundle(app, cmd.get("message_id"), watch=True)
+        elif op == "inbox_gameday_quick":
+            # Mirrors main._resolve_game_day(False); the caller enqueues
+            # advance_day right after (FIFO queue preserves the order).
+            _resolve_gameday_bundle(app, cmd.get("message_id"), watch=False)
+        elif op == "inbox_postmatch_answer":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app._answer_postmatch_presser(
+                        msg, int(cmd.get("q", -1)), int(cmd.get("a", -1)))
+                except Exception:
+                    pass
+        elif op == "inbox_rfa_qualify":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app.apply_rfa_qualifying_decision(
+                        msg, cmd.get("player_id"), bool(cmd.get("qualify")))
+                except Exception:
+                    pass
+        elif op == "inbox_buyout_decide":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app.apply_buyout_decision(
+                        msg, cmd.get("player_id"), bool(cmd.get("buyout")))
+                except Exception:
+                    pass
+        elif op == "inbox_staff_renew":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    years = cmd.get("years")
+                    years = None if years in (None, "", "walk") else int(years)
+                    app.apply_staff_renewal_decision(
+                        msg, cmd.get("staff_id"), years)
+                except Exception:
+                    pass
+        elif op == "inbox_fine_respond":
+            # Mirrors inbox_window._on_fine_response: resolve via
+            # media_engine, stamp the outcome, mark done.
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    import media_engine
+                    outcome = media_engine.resolve_fine_appeal(
+                        app, getattr(msg, "action_data", None) or {},
+                        cmd.get("choice") or "accept")
+                    try:
+                        data = getattr(msg, "action_data", None) or {}
+                        data["outcome"] = outcome
+                        msg.action_data = data
+                        msg.action_done = True
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        elif op == "inbox_offer_sheet_match":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app.apply_offer_sheet_match_decision(
+                        msg, bool(cmd.get("match")))
+                except Exception:
+                    pass
+        elif op == "inbox_offer_sheet_trade":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app.apply_offer_sheet_trade_alt_decision(
+                        msg, bool(cmd.get("accept")))
+                except Exception:
+                    pass
+        elif op == "inbox_arbitration":
+            _, msg = _find_inbox_message(app, cmd.get("message_id"))
+            if msg is not None:
+                try:
+                    app.apply_arbitration_walkaway_decision(
+                        msg, bool(cmd.get("walk_away")))
+                except Exception:
+                    pass
+        elif op == "inbox_lottery_clear":
+            # Desktop _watch_lottery_reveal clears _pending_lottery_reveal
+            # when the reveal screen closes.
+            try:
+                gm = _safe(lambda: app.game_manager)
+                if (gm is not None
+                        and getattr(gm, "_pending_lottery_reveal", None)
+                        is not None):
+                    delattr(gm, "_pending_lottery_reveal")
+            except Exception:
+                pass
+        elif op == "fantasy_draft_begin":
+            _fantasy_draft_begin(app)
+        elif op == "fantasy_draft_pick":
+            _fantasy_draft_pick(app, cmd.get("player_id"))
         elif op == "delete_message":
             mid = cmd.get("message_id")
             team = getattr(app, "user_team", None)

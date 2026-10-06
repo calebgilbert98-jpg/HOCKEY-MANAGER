@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fantasy Draft — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/draft.css">
+<link rel="stylesheet" href="/static/css/fantasy_draft.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/inbox">← Inbox</a>
+  <div class="team-sub" id="fd-count"></div>
+</header>
+
+<main class="draft-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">League Event</div>
+    <h1 class="bcast-title">Fantasy Draft</h1>
+  </div>
+
+  <div id="fd-status" class="fd-status"></div>
+
+  <div id="fd-begin-wrap" class="fd-begin" hidden>
+    <p>Every NHL roster will be emptied into one draft pool and redistributed
+       snake-style over 40 rounds. A safety checkpoint is taken first.</p>
+    <button class="btn-primary" id="fd-begin">Begin Draft</button>
+  </div>
+
+  <nav class="tb-tabs" id="fd-tabs" hidden>
+    <button class="tb-tab active" data-tab="available">Available</button>
+    <button class="tb-tab" data-tab="mypicks">My Picks</button>
+    <button class="tb-tab" data-tab="recent">Recent Picks</button>
+    <button class="tb-tab" data-tab="order">Draft Order</button>
+  </nav>
+
+  <section id="fd-tab-available" class="tb-panel" hidden>
+    <div class="fa-filters">
+      <input class="tb-search" id="fd-q" placeholder="Search players…">
+      <div class="tb-pills" id="fd-pos">
+        <button class="tb-pill active" data-pos="">All</button>
+        <button class="tb-pill" data-pos="C">C</button>
+        <button class="tb-pill" data-pos="LW">LW</button>
+        <button class="tb-pill" data-pos="RW">RW</button>
+        <button class="tb-pill" data-pos="LD">LD</button>
+        <button class="tb-pill" data-pos="RD">RD</button>
+        <button class="tb-pill" data-pos="G">G</button>
+      </div>
+    </div>
+    <div class="board" id="fd-available"></div>
+  </section>
+
+  <section id="fd-tab-mypicks" class="tb-panel" hidden>
+    <div class="board" id="fd-mypicks"></div>
+  </section>
+
+  <section id="fd-tab-recent" class="tb-panel" hidden>
+    <div class="board" id="fd-recent"></div>
+  </section>
+
+  <section id="fd-tab-order" class="tb-panel" hidden>
+    <div class="board" id="fd-order"></div>
+  </section>
+</main>
+
+<script src="/static/js/fantasy_draft.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

@@ -13062,7 +13062,15 @@ class HockeyManagerGUI(tk.Tk):
                               and _bundle_res.get("date") == self.current_date)
             _bundle_instruction = None  # D1: only the bundle carries one
             if _bundle_active:
-                use_game_viewer = bool(_bundle_res.get("watch"))
+                # Web UI (Batch A, 2026-10-05): a web-set resolution is
+                # consumed by the /watch page, never by the desktop Tk
+                # PBP viewer -- opening it server-side would hang the day
+                # advance on a window nobody can see. Degrade to quick sim;
+                # the bundle's talk boost and instruction still apply.
+                if _bundle_res.get("web"):
+                    use_game_viewer = False
+                else:
+                    use_game_viewer = bool(_bundle_res.get("watch"))
                 _bundle_talk_boost = float(_bundle_res.get("talk_boost", 1.0) or 1.0)
                 # D1: the user's explicit coach instruction from the bundle.
                 _bundle_instruction = _bundle_res.get("instruction")

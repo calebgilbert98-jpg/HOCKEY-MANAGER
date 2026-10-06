@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Draft Lottery — Puck Dynasty</title>
+<link rel="stylesheet" href="/static/css/hub.css">
+<link rel="stylesheet" href="/static/css/nav.css">
+<link rel="stylesheet" href="/static/css/lottery.css">
+</head>
+<body>
+<div class="arena-bg"></div>
+{% include '_nav.html' %}
+
+<header class="topbar">
+  <a class="back" href="/inbox">← Inbox</a>
+  <div class="team-sub" id="lot-year"></div>
+</header>
+
+<main class="lot-main">
+  <div class="bcast-head">
+    <div class="bcast-kicker">League Event</div>
+    <h1 class="bcast-title">Draft Lottery</h1>
+    <div class="bcast-sub" id="lot-sub">The televised reveal · picks 16 to 1</div>
+  </div>
+
+  <div class="lot-stage" id="lot-stage">
+    <div class="lot-pick" id="lot-pick">…</div>
+    <div class="lot-team" id="lot-team">The balls are in the machine…</div>
+    <div class="lot-detail" id="lot-detail"></div>
+  </div>
+
+  <div class="lot-controls">
+    <button class="btn-primary" id="lot-next">Reveal next pick</button>
+    <button class="btn-ghost" id="lot-skip">Skip to results</button>
+  </div>
+
+  <h2 class="lot-board-h">Results board</h2>
+  <div class="lot-board" id="lot-board"></div>
+
+  <div class="lot-finale" id="lot-finale" hidden>
+    <button class="btn-primary" id="lot-draft">Open Draft Central</button>
+    <button class="btn-ghost" id="lot-done">Done</button>
+  </div>
+</main>
+
+<script src="/static/js/lottery.js"></script>
+<script src="/static/js/nav.js"></script>
+<script src="/static/js/context_menu.js"></script>
+</body>
+</html>

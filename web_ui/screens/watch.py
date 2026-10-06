@@ -138,6 +138,30 @@ def _ensure_live_sim():
             sim.league = _safe(lambda: live.game_manager.league)
         except Exception:
             pass
+        # Game-day inbox bundle (Batch A): the GM's pre-game team talk
+        # boost and coach's instruction apply to the watched sim, exactly
+        # like the desktop viewer path (main._process_todays_games).
+        try:
+            _res = getattr(live, "_game_day_resolution", None)
+            _today = _safe(lambda: live.game_manager.current_date)
+            if (_res is not None and _res.get("date") == _today
+                    and bool(_res.get("watch"))):
+                _tb = float(_res.get("talk_boost", 1.0) or 1.0)
+                _instr = _res.get("instruction")
+                _uname = _safe(lambda: live.game_manager.user_team.team_name, "")
+                if _tb != 1.0 and _uname:
+                    try:
+                        sim.set_team_talk_boost(_uname, _tb)
+                    except Exception:
+                        pass
+                if _instr and _uname:
+                    try:
+                        sim.set_coach_instruction(_uname, _instr)
+                    except Exception:
+                        pass
+                live._game_day_resolution = None  # consume once
+        except Exception:
+            pass
 
         def _listener(ev):
             try:
