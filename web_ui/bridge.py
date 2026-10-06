@@ -415,10 +415,266 @@ def _stat_strip(team, gm, t):
     return strip
 
 
-def _ticker_items(app, gm):
-    """Scrolling ticker: recent league scores + news log. Newest first."""
-    items = []
+def _player_ovr(p):
+    """Best-effort 1-100 overall for a player object. Never raises."""
     try:
+        v = getattr(p, "overall", None)
+        if v:
+            return int(v)
+        fn = getattr(p, "overall_rating", None)
+        if callable(fn):
+            return int(fn())
+    except Exception:
+        pass
+    return 0
+
+
+def _player_full_name(p):
+    """'First Last' for a player object. Never raises."""
+    try:
+        fn = _safe(lambda: getattr(p, "first_name", ""), "")
+        ln = _safe(lambda: getattr(p, "last_name", ""), "")
+        name = f"{fn} {ln}".strip()
+        if name:
+            return name
+        return str(_safe(lambda: getattr(p, "name", ""), "") or "Unknown")
+    except Exception:
+        return "Unknown"
+
+
+def _notable_events(app, gm):
+    """Detect genuinely notable league events, highest priority first.
+
+    Returns list of {"kind", "text", "priority"} where lower priority
+    number = more notable. Used by _ticker_items() to lead the ticker
+    with the big stories instead of raw chronological news.
+    """
+    notable = []
+    seen = set()  # dedupe keys
+
+    def add(priority, kind, text, dedupe_key=None):
+        try:
+            text = (text or "").strip()
+            if not text:
+                return
+            key = dedupe_key or text[:80].lower()
+            if key in seen:
+                return
+            seen.add(key)
+            notable.append({"priority": priority, "kind": kind, "text": text,
+                            "src_key": key})
+        except Exception:
+            pass
+
+    try:
+        league = _safe(lambda: gm.league)
+        teams = _safe(lambda: list(getattr(league, "teams", None) or []), []) or []
+
+        # --- star name index (80+ OVR) for enriching trade stories ---
+        stars = {}  # lower name -> (name, ovr)
+        for t in teams:
+            try:
+                roster = _safe(lambda: list(getattr(t, "roster", None) or []), []) or []
+                for p in roster:
+                    ovr = _player_ovr(p)
+                    if ovr >= 80:
+                        nm = _player_full_name(p)
+                        stars[nm.lower()] = (nm, ovr)
+            except Exception:
+                continue
+
+        # --- news log: parse for notable stories ---
+        raw_news = _safe(lambda: list(getattr(app, "news_log", None) or []), []) or []
+        for entry in raw_news:
+            try:
+                story = entry.get("story", "") if isinstance(entry, dict) else str(entry)
+                story = (story or "").strip()
+                if not story:
+                    continue
+                slow = story.lower()
+
+                # BLOCKBUSTER trades: 80+ OVR player, 1st-round pick, or 3+ assets
+                if slow.startswith("trade:") or "trade:" in slow[:20]:
+                    is_blockbuster = False
+                    clean = re.sub(r"^trade:\s*", "", story, flags=re.I)
+                    # star involved?
+                    for sname, (nm, ovr) in stars.items():
+                        if sname in slow:
+                            add(1, "blockbuster",
+                                f"🚨 BLOCKBUSTER: {clean} ({nm} {ovr} OVR)",
+                                dedupe_key=f"src:{story[:80].lower()}")
+                            is_blockbuster = True
+                            break
+                    # 1st-round pick involved?
+                    if not is_blockbuster and re.search(
+                            r"1st[\s-]?round|first[\s-]?round", slow):
+                        add(1, "blockbuster",
+                            f"🚨 BLOCKBUSTER: {clean}",
+                            dedupe_key=f"src:{story[:80].lower()}")
+                        is_blockbuster = True
+                    # 3+ assets? (rough: count " and " + commas in the deal)
+                    if not is_blockbuster:
+                        assets = slow.count(" and ") + slow.count(",")
+                        if assets >= 2:
+                            add(1, "blockbuster",
+                                f"🚨 BLOCKBUSTER: {clean}",
+                                dedupe_key=f"src:{story[:80].lower()}")
+                            is_blockbuster = True
+                    if not is_blockbuster:
+                        add(6, "trade", f"🔄 {story}",
+                            dedupe_key=f"src:{story[:80].lower()}")
+                    continue
+
+                # MEGADEAL signings: $8M+/yr
+                if "$" in story and ("sign" in slow or "extend" in slow or
+                                     "contract" in slow):
+                    m = re.search(r"\$([\d.]+)\s*[mM]", story)
+                    if m:
+                        try:
+                            amt = float(m.group(1))
+                            if amt >= 8.0:
+                                add(3, "megadeal",
+                                    f"💰 MEGADEAL: {story}",
+                                    dedupe_key=f"src:{story[:80].lower()}")
+                                continue
+                        except Exception:
+                            pass
+                    # long term (6+ years) also notable
+                    m2 = re.search(r"(\d+)[\s-]?year", slow)
+                    if m2:
+                        try:
+                            if int(m2.group(1)) >= 6:
+                                add(3, "megadeal",
+                                    f"💰 MEGADEAL: {story}",
+                                    dedupe_key=f"src:{story[:80].lower()}")
+                                continue
+                        except Exception:
+                            pass
+
+                # Star injuries in news text
+                if ("injur" in slow or "out " in slow or "sidelined" in slow
+                        or "🏥" in story):
+                    for sname, (nm, ovr) in stars.items():
+                        if sname in slow and ovr >= 75:
+                            add(2, "star_injury",
+                                f"🏥 {story} ({nm} {ovr} OVR)")
+                            break
+                    else:
+                        # not a star, keep as routine news (handled by caller)
+                        pass
+                    continue
+
+                # Hat tricks / shutouts / milestones in news text
+                if ("hat trick" in slow or "hat-trick" in slow):
+                    add(4, "hat_trick", f"🎩 {story}",
+                        dedupe_key=f"src:{story[:80].lower()}")
+                    continue
+                if "shutout" in slow:
+                    add(4, "shutout", f"🧱 {story}",
+                        dedupe_key=f"src:{story[:80].lower()}")
+                    continue
+                if ("milestone" in slow or "career goal" in slow or
+                        "career point" in slow or "500th" in slow or
+                        "1000th" in slow):
+                    add(5, "milestone", f"⭐ {story}",
+                        dedupe_key=f"src:{story[:80].lower()}")
+                    continue
+            except Exception:
+                continue
+
+        # --- direct star injury scan (catches injuries with no news story) ---
+        for t in teams:
+            try:
+                roster = _safe(lambda: list(getattr(t, "roster", None) or []), []) or []
+                tname = _team_name(t)
+                for p in roster:
+                    try:
+                        if not _safe(lambda: getattr(p, "is_injured", False), False):
+                            continue
+                        ovr = _player_ovr(p)
+                        if ovr < 75:
+                            continue
+                        nm = _player_full_name(p)
+                        itype = _safe(lambda: getattr(p, "injury_type", ""), "") or ""
+                        gr = _safe(lambda: getattr(p, "games_remaining_injured", 0), 0)
+                        dur = f" — out ~{gr} games" if gr else ""
+                        if itype and itype.lower() not in ("none", ""):
+                            dur = f" ({itype}{dur})" if dur else f" ({itype})"
+                        add(2, "star_injury",
+                            f"🏥 {nm} ({ovr} OVR, {tname}) injured{dur}",
+                            dedupe_key=f"inj:{nm.lower()}")
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        # --- win streaks: 5+ from recent schedule ---
+        try:
+            sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
+            done = [g for g in sched
+                    if isinstance(g, dict) and g.get("home_score") is not None]
+            # sort by date ascending, then walk backwards per team
+            def _dkey(g):
+                d = g.get("date")
+                return (d is None, d)
+            done.sort(key=_dkey)
+            streaks = {}
+            for g in reversed(done):
+                try:
+                    hn = _team_name(g.get("home_team"))
+                    an = _team_name(g.get("away_team"))
+                    hs = int(g.get("home_score") or 0)
+                    aws = int(g.get("away_score") or 0)
+                    if hs == aws:
+                        continue
+                    winner = hn if hs > aws else an
+                    loser = an if hs > aws else hn
+                    # winner extends, loser resets
+                    if winner not in streaks:
+                        streaks[winner] = 0
+                    if loser not in streaks:
+                        streaks[loser] = 0
+                    # only count consecutive from most recent
+                    if streaks[winner] >= 0:
+                        streaks[winner] += 1
+                    streaks[loser] = -999  # broken
+                except Exception:
+                    continue
+            for tname, st in streaks.items():
+                if st >= 5:
+                    add(5, "streak",
+                        f"🔥 {tname} have won {st} straight",
+                        dedupe_key=f"streak:{tname.lower()}")
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    notable.sort(key=lambda x: x["priority"])
+    return notable
+
+
+def _ticker_items(app, gm):
+    """Scrolling ticker: notable events first, then scores, then routine news.
+
+    Editorial order: blockbusters > star injuries > megadeals > big
+    performances > streaks/milestones > recent scores > routine news.
+    """
+    items = []
+    notable_keys = set()
+    try:
+        # 1) Notable events lead the ticker
+        for n in _notable_events(app, gm):
+            items.append({"kind": n["kind"], "text": n["text"]})
+            # remember source keys so the raw news pass skips dupes
+            try:
+                notable_keys.add(n["text"][:60].lower())
+                if n.get("src_key"):
+                    notable_keys.add(n["src_key"])
+            except Exception:
+                pass
+
         league = _safe(lambda: gm.league)
         sched = _safe(lambda: list(getattr(league, "schedule", None) or []), []) or []
         scored = []
@@ -441,9 +697,9 @@ def _ticker_items(app, gm):
             except Exception:
                 continue
         scored.sort(key=lambda g: (g["d"] is None, g["d"]), reverse=True)
-        items.extend(scored[:12])
+        items.extend(scored[:10])
 
-        # News log: signings, trades, injuries, callups
+        # 2) Routine news log (skip anything already covered as notable)
         raw = _safe(lambda: list(getattr(app, "news_log", None) or []), []) or []
         news = []
         for entry in raw:
@@ -451,6 +707,16 @@ def _ticker_items(app, gm):
                 story = entry.get("story", "") if isinstance(entry, dict) else str(entry)
                 story = (story or "").strip()
                 if not story:
+                    continue
+                # dedupe against notable items (labeled text + source keys)
+                if story[:60].lower() in notable_keys:
+                    continue
+                if f"src:{story[:80].lower()}" in notable_keys:
+                    continue
+                # skip stories already elevated (they're in items)
+                slow = story.lower()
+                if slow.startswith("trade:") and any(
+                        k in slow for k in ("blockbuster",)):
                     continue
                 d = entry.get("date") if isinstance(entry, dict) else None
                 news.append({"d": d, "kind": "news", "text": story})
@@ -460,7 +726,9 @@ def _ticker_items(app, gm):
             news.sort(key=lambda x: str(x["d"] or ""), reverse=True)
         except Exception:
             pass
-        items.extend(news[:12])
+        # fill remaining slots with routine news
+        room = max(0, 24 - len(items))
+        items.extend(news[:room])
     except Exception:
         pass
     return [{"kind": i["kind"], "text": i["text"]} for i in items[:24]]
