@@ -35,7 +35,7 @@
 .pd-nav-drop.active-parent .pd-nav-btn { color: #93c5fd; border-bottom-color: #3B82F6; }
 .pd-nav-list {
   display: none;
-  position: absolute; top: 100%; left: 0; min-width: 220px;
+  position: absolute; top: 100%; left: 0; min-width: 220px; z-index: 1000;
   background: #0a0f1c;
   border: 1px solid rgba(59,130,246,0.35);
   border-top: 2px solid #3B82F6;
