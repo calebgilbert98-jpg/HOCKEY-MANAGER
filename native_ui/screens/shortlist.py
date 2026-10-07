@@ -52,7 +52,10 @@ class AddPlayerDialog(QDialog):
         layout = QFormLayout(self)
 
         self._table = PlayerTable()
-        self._table.set_main_window(self.main_window)
+        # Get main_window from parent (the screen) if available
+        main_window = getattr(parent, "main_window", None)
+        if main_window:
+            self._table.set_main_window(main_window)
         self._selected = None
         self._table.player_clicked.connect(self._on_pick)
         layout.addRow(self._table)
@@ -239,8 +242,24 @@ class ShortlistScreen(BaseScreen):
                     text += f" ({notes[:40]})"
                 item = QListWidgetItem(text)
                 item.setData(Qt.UserRole, getattr(e, "player_id", ""))
-                # Try to resolve the player object for double-click nav
-                item.setData(Qt.UserRole + 1, None)
+                # Resolve the player object for double-click nav
+                player_obj = None
+                try:
+                    pid = getattr(e, "player_id", "")
+                    if pid and hasattr(self, "game"):
+                        # Search all teams for the player
+                        league = getattr(self.game, "league", None)
+                        if league:
+                            for team in getattr(league, "teams", []):
+                                for p in getattr(team, "roster", []):
+                                    if str(getattr(p, "player_id", "")) == str(pid):
+                                        player_obj = p
+                                        break
+                                if player_obj:
+                                    break
+                except Exception:
+                    pass
+                item.setData(Qt.UserRole + 1, player_obj)
                 self._list.addItem(item)
                 shown += 1
             if not shown:
