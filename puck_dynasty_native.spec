@@ -8,7 +8,12 @@ import os as _os
 # dynamic __import__ in MainWindow._register_all_screens, which PyInstaller's
 # static analysis cannot see -- without this, the Windows bundle ships with
 # NO screens (setup wizard never appears, all nav clicks silently fail).
-from PyInstaller.utils.hooks import collect_submodules as _collect_submodules
+#
+# NOTE: We scan the filesystem directly instead of using
+# PyInstaller.utils.hooks.collect_submodules, because collect_submodules
+# needs the package importable at spec-parse time and can return empty
+# silently on the GitHub runner.  This scan cannot fail silently.
+from PyInstaller.utils.hooks import collect_submodules as _collect_submodules  # noqa: F401 (kept for reference)
 
 block_cipher = None
 
@@ -19,6 +24,20 @@ _first_party = sorted(
     and _f not in ('main.py', 'puck_dynasty_native.py')
     and not _f.startswith(('qa_', 'pt'))
 )
+
+def _collect_screens():
+    """Scan native_ui/screens/*.py and native_ui/widgets/*.py directly."""
+    mods = []
+    for pkg, subdir in [('native_ui.screens', 'native_ui/screens'),
+                        ('native_ui.widgets', 'native_ui/widgets')]:
+        d = _os.path.join(_spec_dir, subdir)
+        if _os.path.isdir(d):
+            for f in _os.listdir(d):
+                if f.endswith('.py') and f != '__init__.py':
+                    mods.append(f"{pkg}.{f[:-3]}")
+    return sorted(mods)
+
+_screen_mods = _collect_screens()
 
 a = Analysis(
     ['puck_dynasty_native.py'],
@@ -38,8 +57,7 @@ a = Analysis(
         'native_ui.screens', 'native_ui.screens.base',
         'native_ui.widgets', 'native_ui.widgets.player_table',
         'native_ui.widgets.attribute_bar',
-    ] + _collect_submodules('native_ui.screens') \
-      + _collect_submodules('native_ui.widgets') \
+    ] + _screen_mods \
       + _first_party,
     hookspath=[],
     hooksconfig={},
