@@ -19,7 +19,7 @@ Game methods / engine functions used (all real, same as the web bridge):
   - trade_engine.ai_consider_trade, execute_trade, asset_label,
     asset_value, pick_trade_value, CompletedTrade
   - gm.trade_history, gm.user_team, gm.league, gm.current_date
-  - app.add_news_story
+  - app.add_news
 
 MP fantasy-draft contract (see native_ui/MP_FANTASY_DRAFT_BUG.md):
   this screen is the single-player ENTRY draft only. It never reads or

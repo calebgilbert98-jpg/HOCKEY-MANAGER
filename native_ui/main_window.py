@@ -405,8 +405,6 @@ class MainWindow(QMainWindow):
         try:
             if self.game and hasattr(self.game, "save_manager"):
                 self.game.save_manager.save_game()
-            elif self.game and hasattr(self.game, "save_game"):
-                self.game.save_game()
         except Exception as e:
             print(f"[native] save failed: {e}")
 
