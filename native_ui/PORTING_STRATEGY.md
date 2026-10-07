@@ -113,3 +113,45 @@ For each web UI screen:
 - No page reloads (the 30s back-button delay is gone)
 - Direct object access (no JSON round-trip)
 - Qt's model/view is faster than DOM for large tables
+
+## Deep Audit Findings (Oct 6, 4-bot audit)
+
+Caleb was right — the first audit missed significant surface area.
+
+### Total Scope
+- **60 full screens** (via `open_*` methods)
+- **22 popup dialogs** (modal + non-modal + automatic event-driven)
+- **342 API routes** (14 core + 328 screen blueprints)
+- **106 `/api/command` ops** (the master write dispatcher)
+- **15-item player context menu**
+
+### Critical Port-Risk Items
+
+**Interaction patterns:**
+1. Lines drag-and-drop with green/yellow/red position-fit feedback + `justDragged` 150ms anti-misclick guard
+2. Non-modal popups (Jersey Numbers, Offseason Programs, Season Goals) stay open during navigation
+3. Nested dialogs ("Set Goal" inside Season Goals)
+4. Right-click context menus EVERYWHERE (roster rows, players, teams, staff) — Qt `customContextMenuPolicy`
+5. Keyboard shortcuts: `?` cheatsheet, `Space` advance/pause, `Ctrl+S` quicksave, `C` camera, `Escape` closes everything
+
+**Hidden features (no nav entry):**
+6. Hub auto-advance loop (800ms state machine, stops on blockers/game days)
+7. Staged reveals: lottery + awards ceremony (client-side theater)
+8. Fantasy draft + lottery hidden inside `inbox_actions.py` (not own modules)
+9. Daily results + boxscore inside `schedule.py`; Replay inside `watch.py`
+10. Staff hiring inside `free_agents.py`; Jersey numbers inside `roster.py`
+11. Season goals + GM relationships inside `manager.py` (endpoints exist, not linked)
+12. MP bar injected into every page via nav.js (invisible in single-player)
+13. Iconic game starring (`/api/hub/iconic_toggle`)
+
+**URL deep-links (must preserve):**
+- `/compare?p1=&p2=&p3=&p4=` (bookmarkable)
+- `/contracts?player=` (+`&elc=1`)
+- `/trades?team=&player=` (+ draft-day pick params)
+- `/replay?idx=N`, boxscore `?date=&home=&away=`
+
+**Stateful flows:**
+14. Coach check-in multi-beat conversation (answer → nonce → poll → finish)
+15. Draft war room: incoming-call polling, pace system (1x/4x), sessionStorage counter handoff
+16. Contract negotiation: two-step counter, 3s live sync, ELC validation chain
+17. Morale: two-step fire-coach arm (4s auto-disarm), talk preview with outcome tiers
