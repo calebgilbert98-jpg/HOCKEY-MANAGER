@@ -15,6 +15,7 @@ from game_classes import (
     ScoutingReport, to_100_scale, position_label,
 )
 from game_classes import debug_print
+from player_development_system import PlayerDevelopmentEngine
 
 try:
     from database_manager import initialize_game_database
