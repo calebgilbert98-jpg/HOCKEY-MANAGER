@@ -97,6 +97,11 @@ def _find_team(name):
             for ab in _team_abbrs(t):
                 if _norm_team_key(ab) == want_norm:
                     return t
+    # 5. Last resort: if we have a user team and the name didn't match,
+    # return it anyway (better than 404). The user is most likely clicking
+    # their own team.
+    if user_team is not None:
+        return user_team
     return None
 
 

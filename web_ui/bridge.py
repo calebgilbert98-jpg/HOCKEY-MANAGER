@@ -1545,8 +1545,15 @@ BLOCKER_WEB_ROUTES = {
 }
 
 
+_continue_state_cache = {"at": 0.0, "data": None}
+
 def get_continue_state(app):
-    """Continue button state + JSON-safe blockers for the web modal."""
+    """Continue button state + JSON-safe blockers for the web modal.
+    Cached for 5s (2026-10-06: the desktop computation takes 25s)."""
+    import time
+    now = time.time()
+    if _continue_state_cache["data"] is not None and now - _continue_state_cache["at"] < 5.0:
+        return _continue_state_cache["data"]
     label, blockers = _safe(lambda: app.get_continue_state(), ("Continue", [])) or ("Continue", [])
     web_blockers = []
     for b in blockers or []:
@@ -1591,8 +1598,11 @@ def get_continue_state(app):
                 has_games = sched[0].get("date") == today_str
     except Exception:
         pass
-    return {"label": label, "blocked": bool(web_blockers), "blockers": web_blockers,
+    result = {"label": label, "blocked": bool(web_blockers), "blockers": web_blockers,
             "has_games": has_games}
+    _continue_state_cache["at"] = now
+    _continue_state_cache["data"] = result
+    return result
 
 
 def get_schedule(app, limit=40):
@@ -3172,6 +3182,12 @@ def _execute_command(app, cmd):
                   or getattr(app, "_on_continue", None))
             if callable(fn):
                 fn()
+            # Invalidate the blocker cache — the day changed.
+            try:
+                _continue_state_cache["at"] = 0.0
+                _continue_state_cache["data"] = None
+            except Exception:
+                pass
             # Batch A: web parity for _post_advance_landing. When the
             # simmed day had games, drop an inbox nudge with the scores
             # (desktop shows the daily results window; the hub shows the
