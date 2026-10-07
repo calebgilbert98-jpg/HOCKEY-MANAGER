@@ -49,10 +49,13 @@ def server_running():
 
 
 def note_heartbeat():
-    global _last_heartbeat, _heartbeat_seen
+    global _last_heartbeat, _heartbeat_seen, _shutdown_requested_at
     import time
     _last_heartbeat = time.time()
     _heartbeat_seen = True
+    # A fresh heartbeat means the user is still here (e.g. they navigated
+    # to a new page, not closed the window) — cancel any pending shutdown.
+    _shutdown_requested_at = 0.0
 
 
 def heartbeat_expired(timeout_s=60):
@@ -80,8 +83,10 @@ def should_exit_now():
     if _shutting_down:
         return False
     now = time.time()
-    # Window closed: 12s grace for navigation, then exit.
-    if _shutdown_requested_at > 0 and now - _last_heartbeat > 12:
+    # Window closed: 30s grace for navigation/slow page loads, then exit.
+    # (A fresh heartbeat cancels the shutdown, so this only fires when the
+    # user actually closed the window.)
+    if _shutdown_requested_at > 0 and now - _last_heartbeat > 30:
         return True
     # Tab silent (crash/kill): heartbeat timeout.
     if heartbeat_expired():
