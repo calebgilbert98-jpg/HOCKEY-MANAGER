@@ -5781,67 +5781,17 @@ NHL League Office""",
             self._quick_sim_playoffs_headless()
             self._start_offseason()
 
-    def after_idle(self, func, *args, **kwargs):
-        """UI-agnostic: execute directly (no Tk event loop)."""
-        try:
-            return func(*args, **kwargs)
-        except Exception:
-            pass
-
     def _ask_game_mode_dialog(self, home_team, away_team):
-            """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'."""
-            choice = {'mode': 'quick'}
-            dlg = InGamePopup(self)
-            dlg.title("Game Day")
-            dlg.configure(bg="#0e0e11")
-            dlg.resizable(False, False)
-            try:
-                dlg.transient(self)
-                dlg.grab_set()
-            except Exception:
-                pass
-            w, h = 420, 260
-            try:
-                x = self.winfo_x() + (self.winfo_width() - w) // 2
-                y = self.winfo_y() + (self.winfo_height() - h) // 2
-                dlg.geometry(f"{w}x{h}+{max(x, 0)}+{max(y, 0)}")
-            except Exception:
-                dlg.geometry(f"{w}x{h}")
+        """Pre-game modal: Quick Sim or Watch Live? Returns 'quick'/'watch'.
 
-            tk.Label(dlg, text="GAME DAY", bg="#0e0e11", fg="#3B82F6",
-                     font=("Segoe UI", 11, "bold")).pack(pady=(18, 4))
-            matchup = f"{getattr(home_team, 'team_name', home_team)}  vs  " \
-                      f"{getattr(away_team, 'team_name', away_team)}"
-            tk.Label(dlg, text=matchup, bg="#0e0e11", fg="#E8ECF1",
-                     font=("Segoe UI", 14, "bold"), wraplength=380,
-                     justify="center").pack(pady=4)
-            tk.Label(dlg, text="How do you want to play this one?",
-                     bg="#0e0e11", fg="#8B93A5",
-                     font=("Segoe UI", 10)).pack(pady=(0, 16))
+        UI-agnostic: asks via _ui_notify, defaults to 'quick' headless.
+        UI subclasses override with a real dialog.
+        """
+        result = self._ui_notify("ask_game_mode", home_team, away_team)
+        if isinstance(result, str) and result in ('quick', 'watch'):
+            return result
+        return 'quick'
 
-            btns = tk.Frame(dlg, bg="#0e0e11")
-            btns.pack(pady=6)
-
-            def _pick(m):
-                choice['mode'] = m
-                try:
-                    dlg.grab_release()
-                except Exception:
-                    pass
-                dlg.destroy()
-
-            for label, m, bgc in (("Quick Sim", "quick", "#16161a"),
-                                  ("Watch Live", "watch", "#3B82F6")):
-                b = tk.Button(btns, text=label, font=("Segoe UI", 12, "bold"),
-                              bg=bgc, fg="white", activebackground=bgc,
-                              activeforeground="white", relief="flat",
-                              padx=28, pady=12, cursor="hand2",
-                              command=lambda m=m: _pick(m))
-                b.pack(side="left", padx=10)
-            dlg.bind("<Escape>", lambda e: _pick('quick'))
-            dlg.protocol("WM_DELETE_WINDOW", lambda: _pick('quick'))
-            dlg.wait_window()
-            return choice['mode']
 
     def _cap_compliance_blocker(self):
             """Return a blocker dict if the NHL roster exceeds the salary cap.
@@ -6077,8 +6027,17 @@ NHL League Office""",
             # Epoch guard: a save/load under a waiting talk orphans this
             # frame's game objects. on_game_loaded bumps the epoch and wakes
             # us; a mismatch here aborts instead of simming on dead state.
+            # UI-agnostic: Tk dialog only when a Tk runtime is present.
+            # Headless/Qt: fall through to neutral 1.0 via _ui_notify.
+            try:
+                import tkinter as _tk
+            except ImportError:
+                _tk = None
+            if _tk is None:
+                self._ui_notify("team_talk", opponent)
+                return 1.0
             _epoch = getattr(self, "_team_talk_epoch", 0)
-            wake = tk.BooleanVar(master=self, value=False)
+            wake = _tk.BooleanVar(master=self, value=False)
             self._active_team_talk = {
                 "session_id": session_id, "wake": wake, "epoch": _epoch,
             }
