@@ -10,8 +10,8 @@ Can view by game, team (last 5 games aggregated), or player.
 from PySide6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPolygon
 
 from .base import BaseScreen
 
@@ -97,8 +97,6 @@ class RinkWidget(QWidget):
                     pts = [(int(px), int(py - 6)),
                            (int(px - 6), int(py + 5)),
                            (int(px + 6), int(py + 5))]
-                    from PySide6.QtGui import QPolygon
-                    from PySide6.QtCore import QPoint
                     p.drawPolygon(QPolygon([QPoint(*pt) for pt in pts]))
                 else:  # miss
                     p.setPen(QPen(base, 2))
