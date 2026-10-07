@@ -581,32 +581,49 @@ class MainWindow(QMainWindow):
             d.setWordWrap(True)
             cl.addWidget(t)
             cl.addWidget(d)
-            # Render action button if blocker provides one (label, callable)
-            action = b.get("action")
-            if action:
+            # Render action button if blocker provides one
+            # New format: action_id + action_label (UI-agnostic)
+            # Old format: action tuple (label, callable) - deprecated
+            action_id = b.get("action_id")
+            action_label = b.get("action_label", "Open")
+            if action_id:
                 try:
-                    label, callback = action
-                    btn = QPushButton(label)
+                    btn = QPushButton(action_label)
                     btn.setObjectName("primary-btn")
-                    # Map known blocker IDs to native screens instead of
-                    # calling Tkinter methods from main.py
-                    blocker_id = b.get("id", "")
+                    # Map action IDs to native screens
                     native_target = {
                         "fantasy_draft": "fantasy_draft",
                         "entry_draft": "draft",
                         "captaincy": "captains",
-                    }.get(blocker_id)
+                    }.get(action_id)
                     if native_target:
                         btn.clicked.connect(
                             lambda _=False, n=native_target: (
                                 dlg.accept(), self.show_screen(n)))
-                    else:
-                        # Close dialog then run the action
-                        btn.clicked.connect(
-                            lambda _=False, cb=callback: (dlg.accept(), cb()))
                     cl.addWidget(btn)
                 except Exception:
                     pass
+            else:
+                # Fallback: old tuple format
+                action = b.get("action")
+                if action:
+                    try:
+                        label, callback = action
+                        btn = QPushButton(label)
+                        btn.setObjectName("primary-btn")
+                        blocker_id = b.get("id", "")
+                        native_target = {
+                            "fantasy_draft": "fantasy_draft",
+                            "entry_draft": "draft",
+                            "captaincy": "captains",
+                        }.get(blocker_id)
+                        if native_target:
+                            btn.clicked.connect(
+                                lambda _=False, n=native_target: (
+                                    dlg.accept(), self.show_screen(n)))
+                        cl.addWidget(btn)
+                    except Exception:
+                        pass
             layout.addWidget(card)
         close = QPushButton("Close")
         close.clicked.connect(dlg.accept)
