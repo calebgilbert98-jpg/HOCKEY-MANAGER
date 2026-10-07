@@ -186,13 +186,46 @@ class LinesScreen(BaseScreen):
             full_map = {}
             for tab_id, tab in self._line_tabs.items():
                 full_map.update(tab.get_slot_map())
-            # Save to game: user_team.lineup
+            # Convert native slot IDs (LW1, C1, RW1) to sim format (F1_LW, F1_C, F1_RW)
+            # The sim reads F1_LW..F4_RW / D1_L..D3_R / G1 keys
+            sim_map = self._to_sim_format(full_map)
+            # Save to game: user_team.lineup (both formats for compatibility)
             user_team = getattr(self.game, "user_team", None)
             if user_team is not None:
-                user_team.lineup = full_map
+                # Merge: keep native keys for load-back, add sim keys for the engine
+                merged = dict(full_map)
+                merged.update(sim_map)
+                user_team.lineup = merged
             QMessageBox.information(self, "Lines", "Lines saved.")
         except Exception as e:
             QMessageBox.warning(self, "Lines", f"Save failed: {e}")
+
+    @staticmethod
+    def _to_sim_format(slot_map):
+        """Convert native slot IDs to sim-readable F1_LW format."""
+        import re
+        sim = {}
+        # LW1 -> F1_LW, C1 -> F1_C, RW1 -> F1_RW
+        for slot_id, player in slot_map.items():
+            if not player:
+                continue
+            m = re.match(r'^(LW|C|RW)(\d+)$', slot_id)
+            if m:
+                pos, num = m.groups()
+                sim[f'F{num}_{pos}'] = player
+                continue
+            # D1, D2 -> D1_L, D1_R (pair them)
+            m = re.match(r'^D(\d+)$', slot_id)
+            if m:
+                num = int(m.group(1))
+                pair = (num + 1) // 2  # D1,D2 -> D1 pair; D3,D4 -> D2 pair
+                side = 'L' if num % 2 == 1 else 'R'
+                sim[f'D{pair}_{side}'] = player
+                continue
+            # G1 -> G1 (already correct)
+            if slot_id == 'G1':
+                sim['G1'] = player
+        return sim
 
     def refresh(self):
         """Load current lines from game object."""
