@@ -75,6 +75,9 @@ class GameManager:
         # News log for league stories
         self.news_log = [{'date': self.current_date,
                           'story': "Welcome to the new season!"}]
+        # Waiver wire and trade block (game state, not UI state)
+        self.waiver_list = []
+        self.trade_block = []
         # D10: reputation_system stamps everything in GAME time. Register
         # the providers once here; the module falls back to wall-clock
         # when headless/unregistered.
