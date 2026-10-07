@@ -80,7 +80,6 @@ a = Analysis(
     excludes=[
         'flask', 'werkzeug', 'jinja2',
         'tkinter', 'customtkinter',
-        'web_ui',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
