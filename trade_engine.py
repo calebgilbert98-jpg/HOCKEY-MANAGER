@@ -1184,6 +1184,31 @@ def player_trade_value(player, perceiver_team=None, trade_context=False) -> int:
     except Exception:
         pass
 
+    # Trade request discount: a player who wants out has no leverage.
+    # Everyone knows he's available, so the return is discounted.
+    # - wants_out (boolean): 25% discount
+    # - trade_request_risk (0-100): scales 0% to 35% discount
+    # A 35yo generational player demanding a trade with 1 year left
+    # going for a good young player + picks is just hockey.
+    try:
+        _wants_out = False
+        try:
+            from player_decision import wants_out as _wo
+            _wants_out = bool(_wo(player))
+        except Exception:
+            pass
+        _risk = float(getattr(player, "trade_request_risk", 0) or 0)
+        if _wants_out:
+            base *= 0.75
+        elif _risk >= 75:
+            base *= 0.70  # Imminent request, heavy discount
+        elif _risk >= 50:
+            base *= 0.80
+        elif _risk >= 25:
+            base *= 0.90
+    except Exception:
+        pass
+
     return max(10, int(base))
 
 
