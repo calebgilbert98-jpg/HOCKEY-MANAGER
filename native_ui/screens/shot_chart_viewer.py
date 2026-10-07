@@ -141,7 +141,7 @@ class ShotChartViewerScreen(BaseScreen):
             elif player_id:
                 shots = store.for_player(player_id)
                 self._chart_title = "Shot Chart: Player"
-            self._shots = shots
+            self._shots = list(shots or [])
             self.refresh()
         except Exception:
             pass
@@ -171,7 +171,9 @@ class ShotChartViewerScreen(BaseScreen):
 
     def refresh(self):
         self._title_label.setText(self._chart_title)
-        self._rink.set_shots(self._shots)
-        n = len(self._shots)
-        goals = sum(1 for s in self._shots if s.get("result") == "goal")
+        self._rink.set_shots(self._shots or [])
+        shots = self._shots or []
+        n = len(shots)
+        goals = sum(1 for s in shots
+                    if isinstance(s, dict) and s.get("result") == "goal")
         self._count_label.setText(f"{n} shots, {goals} goals")

@@ -53,6 +53,7 @@ class RecallPickerDialog(QDialog):
         layout.addWidget(note)
 
         self._list = QListWidget()
+        self._list.itemDoubleClicked.connect(self._recall)
         layout.addWidget(self._list, 1)
 
         btn_row = QHBoxLayout()
@@ -98,7 +99,6 @@ class RecallPickerDialog(QDialog):
                 item.setData(Qt.UserRole, p)
                 self._list.addItem(item)
 
-            self._list.itemDoubleClicked.connect(self._recall)
         except Exception as e:
             self._need_label.setText(f"Could not load candidates: {e}")
 

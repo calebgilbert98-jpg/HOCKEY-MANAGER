@@ -121,7 +121,7 @@ class JerseyNumbersScreen(BaseScreen):
             roster = sorted(
                 list(getattr(team, "roster", None) or []),
                 key=lambda p: (int(getattr(p, "jersey_number", 99) or 99),
-                               getattr(p, "full_name", "")))
+                               getattr(p, "full_name", "") or ""))
         except Exception:
             team, roster = None, []
         self._players = roster

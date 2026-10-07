@@ -119,7 +119,7 @@ class OffseasonProgramsScreen(BaseScreen):
             team = getattr(self.game, "user_team", None)
             roster = sorted(
                 list(getattr(team, "roster", None) or []),
-                key=lambda p: getattr(p, "full_name", ""))
+                key=lambda p: getattr(p, "full_name", "") or "")
         except Exception:
             roster = []
         self._players = roster

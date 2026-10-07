@@ -173,7 +173,7 @@ class SeasonGoalsScreen(BaseScreen):
         try:
             team = getattr(self.game, "user_team", None)
             roster = list(getattr(team, "roster", None) or [])
-            roster.sort(key=lambda p: getattr(p, "full_name", ""))
+            roster.sort(key=lambda p: getattr(p, "full_name", "") or "")
             return team, roster
         except Exception:
             return None, []
