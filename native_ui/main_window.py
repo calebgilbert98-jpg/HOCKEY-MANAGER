@@ -225,8 +225,140 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QFrame.NoFrame)
         self.stack.addWidget(scroll)
 
+        # Screen registry: name -> widget
+        self._screens = {"hub": scroll}
+        self._screen_classes = {}
+        self._register_all_screens()
+
         # Apply theme
         self.setStyleSheet(THEME_QSS)
+
+    def _register_all_screens(self):
+        """Register all ported screens for lazy instantiation."""
+        # Map of screen name -> (module, class name)
+        _registry = {
+            "roster": ("native_ui.screens.roster", "RosterScreen"),
+            "player": ("native_ui.screens.player_profile", "PlayerProfileScreen"),
+            "lines": ("native_ui.screens.lines", "LinesScreen"),
+            "setup": ("native_ui.screens.setup", "SetupScreen"),
+            "multiplayer": ("native_ui.screens.multiplayer", "MultiplayerScreen"),
+            "practice_center": ("native_ui.screens.practice_center", "PracticeCenterScreen"),
+            "camp": ("native_ui.screens.camp", "CampScreen"),
+            "captains": ("native_ui.screens.captains", "CaptainsScreen"),
+            "staff": ("native_ui.screens.staff", "StaffScreen"),
+            "staff_detail": ("native_ui.screens.staff_detail", "StaffDetailScreen"),
+            "contracts": ("native_ui.screens.contracts", "ContractsScreen"),
+            "morale": ("native_ui.screens.morale", "MoraleScreen"),
+            "development": ("native_ui.screens.development", "DevelopmentScreen"),
+            "tactics": ("native_ui.screens.tactics", "TacticsScreen"),
+            "season_goals": ("native_ui.screens.season_goals", "SeasonGoalsScreen"),
+            "offseason_programs": ("native_ui.screens.offseason_programs", "OffseasonProgramsScreen"),
+            "jersey_numbers": ("native_ui.screens.jersey_numbers", "JerseyNumbersScreen"),
+            "gm_relationships": ("native_ui.screens.gm_relationships", "GMRelationshipsScreen"),
+            "trades": ("native_ui.screens.trades", "TradesScreen"),
+            "free_agents": ("native_ui.screens.free_agents", "FreeAgentsScreen"),
+            "waivers": ("native_ui.screens.waivers", "WaiversScreen"),
+            "offer_sheets": ("native_ui.screens.offer_sheets", "OfferSheetsScreen"),
+            "trade_block": ("native_ui.screens.trade_block", "TradeBlockScreen"),
+            "deadline": ("native_ui.screens.deadline", "DeadlineScreen"),
+            "standings": ("native_ui.screens.standings", "StandingsScreen"),
+            "stats": ("native_ui.screens.stats", "StatsScreen"),
+            "schedule": ("native_ui.screens.schedule", "ScheduleScreen"),
+            "playoffs": ("native_ui.screens.playoffs", "PlayoffsScreen"),
+            "draft": ("native_ui.screens.draft", "DraftScreen"),
+            "lottery": ("native_ui.screens.lottery", "LotteryScreen"),
+            "history": ("native_ui.screens.history", "HistoryScreen"),
+            "season_summary": ("native_ui.screens.season_summary", "SeasonSummaryScreen"),
+            "ahl": ("native_ui.screens.ahl", "AHLScreen"),
+            "calendar": ("native_ui.screens.calendar", "CalendarScreen"),
+            "team": ("native_ui.screens.team", "TeamScreen"),
+            "inbox": ("native_ui.screens.inbox", "InboxScreen"),
+            "news": ("native_ui.screens.news", "NewsScreen"),
+            "finances": ("native_ui.screens.finances", "FinancesScreen"),
+            "settings": ("native_ui.screens.settings", "SettingsScreen"),
+            "save": ("native_ui.screens.save", "SaveScreen"),
+            "watch": ("native_ui.screens.watch", "WatchScreen"),
+            "replay": ("native_ui.screens.replay", "ReplayScreen"),
+            "compare": ("native_ui.screens.compare", "CompareScreen"),
+            "coach_checkin": ("native_ui.screens.coach_checkin", "CoachCheckinScreen"),
+            "manager": ("native_ui.screens.manager", "ManagerScreen"),
+            "fa_frenzy": ("native_ui.screens.fa_frenzy", "FAFrenzyScreen"),
+            "fantasy_draft": ("native_ui.screens.fantasy_draft", "FantasyDraftScreen"),
+        }
+        # Systems pages
+        for sys_name in ["clutch", "circumstance", "discipline",
+                         "rivalry", "deployment", "condition"]:
+            _registry[f"systems_{sys_name}"] = (
+                f"native_ui.screens.systems_{sys_name}",
+                f"Systems{sys_name.title()}Screen")
+
+        for name, (mod_path, cls_name) in _registry.items():
+            try:
+                mod = __import__(mod_path, fromlist=[cls_name])
+                cls = getattr(mod, cls_name)
+                self._screen_classes[name] = cls
+            except Exception as e:
+                print(f"[nav] failed to register {name}: {e}")
+
+    def register_screen(self, name, screen_class):
+        """Register a screen class for lazy instantiation."""
+        self._screen_classes[name] = screen_class
+
+    def show_screen(self, name):
+        """Navigate to a registered screen, instantiating on first use."""
+        if name in self._screens:
+            self.stack.setCurrentWidget(self._screens[name])
+            # Refresh the screen if it has a refresh method
+            widget = self._screens[name]
+            # Unwrap scroll area if present
+            inner = widget.widget() if hasattr(widget, "widget") else widget
+            if hasattr(inner, "refresh"):
+                try:
+                    inner.refresh()
+                except Exception as e:
+                    print(f"[nav] refresh {name} failed: {e}")
+            return
+        # Lazy instantiate
+        cls = self._screen_classes.get(name)
+        if cls:
+            try:
+                screen = cls(self.game, self)
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setWidget(screen)
+                scroll.setFrameShape(QFrame.NoFrame)
+                self._screens[name] = scroll
+                self.stack.addWidget(scroll)
+                self.stack.setCurrentWidget(scroll)
+                if hasattr(screen, "refresh"):
+                    screen.refresh()
+            except Exception as e:
+                print(f"[nav] failed to create screen {name}: {e}")
+        else:
+            print(f"[nav] unknown screen: {name}")
+
+    def show_player(self, player):
+        """Open a player profile. Used by roster double-click, context menus."""
+        self.show_screen("player")
+        # Get the inner screen and set the player
+        scroll = self._screens.get("player")
+        if scroll and hasattr(scroll, "widget"):
+            inner = scroll.widget()
+            if hasattr(inner, "set_player"):
+                inner.set_player(player)
+
+    def open_player(self, player):
+        """Alias for show_player (some screens call this)."""
+        self.show_player(player)
+
+    def open_team(self, team_name):
+        """Open a team overview page."""
+        self.show_screen("team")
+        scroll = self._screens.get("team")
+        if scroll and hasattr(scroll, "widget"):
+            inner = scroll.widget()
+            if hasattr(inner, "set_team"):
+                inner.set_team(team_name)
 
     def _wrap_topbar(self):
         from PySide6.QtWidgets import QToolBar
