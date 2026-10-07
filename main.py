@@ -19240,7 +19240,7 @@ class HockeyManagerGUI(tk.Tk):
             if team is None:
                 return
             # 1. First-run: set board expectation from squad strength
-            if not career.career_start_date:
+            if not getattr(career, "career_start_date", None):
                 career.career_start_date = self.current_date.isoformat()
                 strength = self._career_team_strength(team)
                 career.board.auto_expectation(strength)
