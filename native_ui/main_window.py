@@ -11,7 +11,7 @@ import re
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
-    QSizePolicy,
+    QSizePolicy, QComboBox,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
@@ -334,17 +334,36 @@ class HubPage(QWidget):
         outer.addLayout(strip)
         outer.addSpacing(12)
 
-        # ---- panels row ----
-        panels = QHBoxLayout()
+        # ---- panels grid (4 columns, matching HTML .th-panels) ----
+        panels = QGridLayout()
         panels.setSpacing(12)
         self.panel_next = self._make_panel("NEXT GAME")
-        panels.addWidget(self.panel_next, 11)
+        panels.addWidget(self.panel_next, 0, 0)
         self.panel_stand = self._make_panel("DIVISION")
-        panels.addWidget(self.panel_stand, 13)
+        panels.addWidget(self.panel_stand, 0, 1)
         self.panel_lead = self._make_panel("TEAM LEADERS")
-        panels.addWidget(self.panel_lead, 15)
+        panels.addWidget(self.panel_lead, 0, 2)
         self.panel_form = self._make_panel("RECENT FORM")
-        panels.addWidget(self.panel_form, 10)
+        panels.addWidget(self.panel_form, 0, 3)
+        # Batch D: the 7 HTML panels the native hub was missing
+        self.panel_sched = self._make_panel("SCHEDULE")
+        panels.addWidget(self.panel_sched, 1, 0)
+        self.panel_inj = self._make_panel("INJURIES", click_screen="dressing_room")
+        panels.addWidget(self.panel_inj, 1, 1)
+        self.panel_morale = self._make_panel("MORALE", click_screen="dressing_room")
+        panels.addWidget(self.panel_morale, 1, 2)
+        self.panel_prosp = self._make_panel("TOP PROSPECTS", click_screen="development")
+        panels.addWidget(self.panel_prosp, 1, 3)
+        self.panel_mile = self._make_panel("MILESTONES")
+        panels.addWidget(self.panel_mile, 2, 0)
+        self.panel_iconic = self._make_panel("ICONIC GAMES", click_screen="history")
+        panels.addWidget(self.panel_iconic, 2, 1)
+        self.panel_inbox = self._make_panel("INBOX \u2014 RECENT", click_screen="inbox")
+        panels.addWidget(self.panel_inbox, 2, 2)
+        panels.setColumnStretch(0, 11)
+        panels.setColumnStretch(1, 13)
+        panels.setColumnStretch(2, 15)
+        panels.setColumnStretch(3, 10)
         outer.addLayout(panels)
 
         outer.addStretch()
@@ -517,7 +536,7 @@ class HubPage(QWidget):
         cell._sub = sub
         return cell
 
-    def _make_panel(self, title):
+    def _make_panel(self, title, click_screen=None):
         panel = QFrame()
         panel.setObjectName("hub-panel")
         lay = QVBoxLayout(panel)
@@ -525,6 +544,14 @@ class HubPage(QWidget):
         lay.setSpacing(0)
         head = QLabel(title)
         head.setObjectName("hub-panel-head")
+        if click_screen:
+            head.setCursor(Qt.PointingHandCursor)
+            head.setStyleSheet(
+                "font-size: 12px; font-weight: 800; letter-spacing: 2px;"
+                " color: #9aa3b2; padding: 10px 12px 0 12px;"
+                " background: transparent; text-decoration: underline;")
+            head.mousePressEvent = (
+                lambda e, s=click_screen: self._main.show_screen(s))
         lay.addWidget(head)
         body_wrap = QWidget()
         body = QVBoxLayout(body_wrap)
@@ -627,6 +654,17 @@ class HubPage(QWidget):
 
     def _sched_played(self, g):
         return bool(self._game_val(g, "played", default=False))
+
+    def _sched_scores(self, g):
+        """Return (home_score, away_score) or (None, None) if not played."""
+        hs = self._game_val(g, "home_score", default=None)
+        aws = self._game_val(g, "away_score", default=None)
+        if hs is None or aws is None:
+            return None, None
+        try:
+            return int(hs), int(aws)
+        except Exception:
+            return None, None
 
     def _pstat(self, p, field, default=0):
         """Authoritative season stat for a player.
@@ -876,6 +914,14 @@ class HubPage(QWidget):
             self._fill_standings(div_teams, team, division, primary, wash)
             self._fill_leaders(team)
             self._fill_form(team, gm)
+            # Batch D: the 7 HTML panels the native hub was missing
+            self._fill_sched_panel(game, gm, team, team_name)
+            self._fill_injuries(team)
+            self._fill_morale_panel(team)
+            self._fill_prospects(team)
+            self._fill_milestones(team)
+            self._fill_iconic(team)
+            self._fill_inbox_recent(team)
 
             # ---- ticker ----
             self._fill_ticker(game, gm)
@@ -1081,6 +1127,340 @@ class HubPage(QWidget):
             panel._body.addLayout(row)
         except Exception as e:
             print("[hub] form failed: %s" % e)
+
+    # ---------- Batch D panels (HTML hub parity) ----------
+    def _hub_empty_label(self, text):
+        e = QLabel(text)
+        e.setStyleSheet(
+            "color: #6b7280; font-size: 12px; padding: 6px 0;"
+            " background: transparent;")
+        return e
+
+    def _hub_row(self, left_text, right_text, left_bold=False):
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        nm = QLabel(left_text)
+        nm.setStyleSheet(
+            "font-size: 12.5px; %s color: #f4f6fb; background: transparent;"
+            % ("font-weight: 700;" if left_bold else ""))
+        vl = QLabel(right_text)
+        vl.setStyleSheet(
+            "font-size: 12px; color: #9aa3b2; background: transparent;")
+        vl.setAlignment(Qt.AlignRight)
+        row.addWidget(nm, 1)
+        row.addWidget(vl)
+        return row
+
+    def _fill_sched_panel(self, game, gm, team, team_name):
+        panel = self.panel_sched
+        self._clear_panel(panel)
+        try:
+            league = getattr(game, "league", None) or getattr(gm, "league", None)
+            sched = getattr(league, "schedule", None) or []
+            today = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+            upcoming, results = [], []
+            for g in sched:
+                try:
+                    if not self._sched_is_game(g):
+                        continue
+                    home, away = self._sched_teams(g)
+                    if team_name and team_name not in (home, away):
+                        continue
+                    gd = self._sched_date(g)
+                    ds = gd.strftime("%a %b %d") if hasattr(gd, "strftime") else str(gd or "")
+                    opp = away if home == team_name else home
+                    opp_abbr = self._team_abbr(opp)
+                    where = "vs" if home == team_name else "at"
+                    hs, aws = self._sched_scores(g)
+                    if hs is None:
+                        upcoming.append((gd, ds, where, opp_abbr))
+                    else:
+                        mine = hs if home == team_name else aws
+                        theirs = aws if home == team_name else hs
+                        wl = "W" if mine > theirs else ("OTL" if abs(mine - theirs) == 1 else "L")
+                        results.append((gd, ds, where, opp_abbr, "%d-%d" % (mine, theirs), wl))
+                except Exception:
+                    continue
+            upcoming.sort(key=lambda r: (r[0] is None, r[0]))
+            results.sort(key=lambda r: (r[0] is None, r[0]), reverse=True)
+
+            scope = QComboBox()
+            scope.addItems(["Upcoming", "Results"])
+            scope.setStyleSheet(
+                "font-size: 11px; color: #c7d0e0; background: #131a26;"
+                " border: 1px solid rgba(255,255,255,0.12); border-radius: 4px;"
+                " padding: 3px 6px;")
+            body_rows = QVBoxLayout()
+            body_rows.setSpacing(6)
+
+            def paint():
+                while body_rows.count():
+                    it = body_rows.takeAt(0)
+                    w = it.widget()
+                    if w:
+                        w.deleteLater()
+                    else:
+                        sub = it.layout()
+                        if sub:
+                            while sub.count():
+                                si = sub.takeAt(0)
+                                sw = si.widget()
+                                if sw:
+                                    sw.deleteLater()
+                rows = upcoming[:5] if scope.currentText() == "Upcoming" else results[:5]
+                if not rows:
+                    body_rows.addWidget(self._hub_empty_label("\u2014"))
+                    return
+                for r in rows:
+                    if len(r) == 4:
+                        _, ds, where, opp_abbr = r
+                        row = QHBoxLayout()
+                        row.setSpacing(6)
+                        d = QLabel(ds)
+                        d.setStyleSheet("font-size: 12px; color: #9aa3b2; background: transparent;")
+                        o = QLabel("%s %s" % (where, opp_abbr))
+                        o.setStyleSheet("font-size: 12.5px; color: #f4f6fb; background: transparent;")
+                        row.addWidget(d)
+                        row.addWidget(o, 1)
+                        body_rows.addLayout(row)
+                    else:
+                        _, ds, where, opp_abbr, score, wl = r
+                        row = QHBoxLayout()
+                        row.setSpacing(6)
+                        d = QLabel(ds)
+                        d.setStyleSheet("font-size: 12px; color: #9aa3b2; background: transparent;")
+                        o = QLabel("%s %s" % (where, opp_abbr))
+                        o.setStyleSheet("font-size: 12.5px; color: #f4f6fb; background: transparent;")
+                        res = QLabel(wl)
+                        bg = "#16a34a" if wl == "W" else ("#b45309" if wl == "OTL" else "#dc2626")
+                        res.setStyleSheet(
+                            "font-size: 11px; font-weight: 800; color: #ffffff;"
+                            " background: %s; border-radius: 3px; padding: 2px 6px;" % bg)
+                        sc = QLabel(score)
+                        sc.setStyleSheet("font-size: 12px; color: #9aa3b2; background: transparent;")
+                        row.addWidget(d)
+                        row.addWidget(o, 1)
+                        row.addWidget(res)
+                        row.addWidget(sc)
+                        body_rows.addLayout(row)
+
+            scope.currentTextChanged.connect(lambda _t: paint())
+            panel._body.addWidget(scope)
+            panel._body.addLayout(body_rows)
+            paint()
+        except Exception as e:
+            print("[hub] schedule panel failed: %s" % e)
+
+    def _fill_injuries(self, team):
+        panel = self.panel_inj
+        self._clear_panel(panel)
+        try:
+            injured = []
+            for p in (getattr(team, "roster", None) or []):
+                try:
+                    inj = getattr(p, "injury", None)
+                    name = getattr(p, "full_name", "?") or "?"
+                    if inj:
+                        desc = (getattr(inj, "description", None)
+                                or getattr(inj, "injury_type", "Injured"))
+                        games = getattr(inj, "games_remaining",
+                                        getattr(inj, "days_remaining", "?"))
+                        injured.append((name, "%s \u00b7 %s out" % (desc, games)))
+                    elif getattr(p, "is_injured", False):
+                        injured.append((name, "Injured \u00b7 ? out"))
+                except Exception:
+                    continue
+            if not injured:
+                panel._body.addWidget(self._hub_empty_label("No injuries"))
+                return
+            for name, desc in injured[:5]:
+                panel._body.addLayout(self._hub_row(name, desc))
+        except Exception as e:
+            print("[hub] injuries panel failed: %s" % e)
+
+    def _fill_morale_panel(self, team):
+        panel = self.panel_morale
+        self._clear_panel(panel)
+        try:
+            roster = getattr(team, "roster", None) or []
+            mors = [float(getattr(p, "morale", 70) or 70) for p in roster]
+            if not mors:
+                panel._body.addWidget(self._hub_empty_label("\u2014"))
+                return
+            avg = sum(mors) / len(mors)
+            label = self._morale_label(avg)
+            head = QLabel("AVG   %.1f \u00b7 %s" % (avg, label))
+            head.setStyleSheet(
+                "font-size: 12px; letter-spacing: 2px; color: #9aa3b2;"
+                " background: transparent;")
+            panel._body.addWidget(head)
+            bands = {}
+            for m in mors:
+                b = self._morale_label(m)
+                bands[b] = bands.get(b, 0) + 1
+            for b in ("Superb", "Good", "Okay", "Poor", "Abysmal"):
+                if bands.get(b):
+                    panel._body.addLayout(
+                        self._hub_row(b, "%d players" % bands[b]))
+        except Exception as e:
+            print("[hub] morale panel failed: %s" % e)
+
+    @staticmethod
+    def _morale_label(m):
+        try:
+            from career import morale_label as _ml
+            return _ml(int(m))
+        except Exception:
+            pass
+        m = int(m)
+        if m >= 85:
+            return "Superb"
+        if m >= 65:
+            return "Good"
+        if m >= 45:
+            return "Okay"
+        if m >= 25:
+            return "Poor"
+        return "Abysmal"
+
+    def _fill_prospects(self, team):
+        panel = self.panel_prosp
+        self._clear_panel(panel)
+        try:
+            pool = (list(getattr(team, "prospects", None) or [])
+                    + list(getattr(team, "ahl_roster", None) or []))
+            ladder = ["F", "D", "C-", "C", "C+", "B-", "B", "B+", "A-", "A", "A+"]
+
+            def _pot_rank(p):
+                g = str(getattr(p, "potential_grade", "C") or "C").strip().upper()
+                return ladder.index(g) if g in ladder else 4
+
+            scored = []
+            for p in pool:
+                try:
+                    ovr = float(p.overall_rating()) if hasattr(p, "overall_rating") else 0.0
+                    scored.append((_pot_rank(p), ovr, p))
+                except Exception:
+                    continue
+            scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+            if not scored:
+                panel._body.addWidget(self._hub_empty_label("No prospects tracked"))
+                return
+            try:
+                from attribute_composites import talent_tier_for_player as _ttfp
+            except Exception:
+                _ttfp = None
+            for _, _, p in scored[:5]:
+                name = getattr(p, "full_name", "?") or "?"
+                pos = getattr(p, "primary_position", "?") or "?"
+                age = getattr(p, "age", 0) or 0
+                pot = getattr(p, "potential_grade", "?") or "?"
+                left = "%s  %s \u00b7 %s" % (name, pos, age)
+                right = pot
+                if _ttfp:
+                    try:
+                        tier = _ttfp(p)
+                        if tier:
+                            right = "%s \u00b7 %s" % (pot, tier)
+                    except Exception:
+                        pass
+                panel._body.addLayout(self._hub_row(left, right))
+        except Exception as e:
+            print("[hub] prospects panel failed: %s" % e)
+
+    def _fill_milestones(self, team):
+        panel = self.panel_mile
+        self._clear_panel(panel)
+        try:
+            roster = getattr(team, "roster", None) or []
+            hits = []
+            for p in roster:
+                try:
+                    pos = str(getattr(p, "primary_position", "") or "")
+                    if "GOALIE" in pos.upper():
+                        continue
+                    name = getattr(p, "full_name", "?") or "?"
+                    pts = (int(getattr(p, "goals", 0) or 0)
+                           + int(getattr(p, "assists", 0) or 0))
+                    for m in (25, 50, 75, 100):
+                        if pts < m <= pts + 8:
+                            hits.append((m - pts, name, "%d PTS from %d" % (m - pts, m)))
+                    cg = int(getattr(p, "career_games", 0) or 0)
+                    for m in (500, 1000, 1500):
+                        if cg < m <= cg + 10:
+                            hits.append((m - cg, name, "%d GP from %d career" % (m - cg, m)))
+                except Exception:
+                    continue
+            hits.sort(key=lambda h: h[0])
+            if not hits:
+                panel._body.addWidget(self._hub_empty_label("No milestones near"))
+                return
+            for _, name, text in hits[:6]:
+                panel._body.addLayout(self._hub_row(name, "\U0001f3c6 " + text))
+        except Exception as e:
+            print("[hub] milestones panel failed: %s" % e)
+
+    def _fill_iconic(self, team):
+        panel = self.panel_iconic
+        self._clear_panel(panel)
+        try:
+            entries = [e for e in (getattr(team, "iconic_games", None) or [])
+                       if isinstance(e, dict)]
+            entries.sort(key=lambda e: (not bool(e.get("starred")),
+                                        str(e.get("date", ""))))
+            if not entries:
+                panel._body.addWidget(self._hub_empty_label("No iconic games yet"))
+                return
+            for e in entries[:6]:
+                star = "\u2b50 " if e.get("starred") else ""
+                head = star + str(e.get("headline", "Unforgettable night") or "")
+                sub = str(e.get("date", "") or "")
+                if e.get("score"):
+                    sub = (sub + " \u00b7 " + str(e["score"])).strip(" \u00b7")
+                panel._body.addLayout(self._hub_row(head, sub))
+            more = len(entries) - 6
+            if more > 0:
+                panel._body.addWidget(
+                    self._hub_empty_label("+%d more in League History" % more))
+        except Exception as e:
+            print("[hub] iconic panel failed: %s" % e)
+
+    def _fill_inbox_recent(self, team):
+        panel = self.panel_inbox
+        self._clear_panel(panel)
+        try:
+            inbox = getattr(team, "inbox", None)
+            msgs = list(getattr(inbox, "messages", None) or []) if inbox else []
+            if not msgs:
+                panel._body.addWidget(self._hub_empty_label("Inbox is quiet"))
+                return
+            unread = 0
+            for m in msgs[:5]:
+                try:
+                    subject = getattr(m, "subject", "") or ""
+                    sender = getattr(m, "sender", "") or ""
+                    is_read = getattr(m, "read", True)
+                    if isinstance(m, dict):
+                        subject = m.get("subject", "")
+                        sender = m.get("sender", "")
+                        is_read = m.get("read", True)
+                    if not is_read:
+                        unread += 1
+                    prefix = ""
+                    if getattr(m, "requires_response", False):
+                        prefix += "\U0001f534 "
+                    if getattr(m, "is_urgent", False):
+                        prefix += "\U0001f7e1 "
+                    left = prefix + subject
+                    row = self._hub_row(left, sender, left_bold=not is_read)
+                    panel._body.addLayout(row)
+                except Exception:
+                    continue
+            if unread:
+                panel._body.addWidget(
+                    self._hub_empty_label("%d unread" % unread))
+        except Exception as e:
+            print("[hub] inbox-recent panel failed: %s" % e)
 
     def _fill_ticker(self, game, gm):
         items = []
