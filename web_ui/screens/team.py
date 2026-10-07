@@ -246,11 +246,23 @@ def api_team(name):
         return jsonify({"error": "no game"}), 503
     t = _find_team(name)
     if t is None:
-        # Debug logging (2026-10-06): log available team names
+        # Debug info in response (2026-10-06): help diagnose why lookup fails
         gm = _resolve_gm(live)
         league = _safe(lambda: getattr(gm, "league", None))
         teams = _safe(lambda: list(getattr(league, "teams", []) or []), []) or []
-        names = [_safe(lambda: getattr(x, "team_name", "?"), "?") for x in teams[:5]]
-        print(f"=== /api/team 404: requested={name!r}, league_teams={len(teams)}, sample={names} ===")
-        return jsonify({"error": "not found"}), 404
+        names = [_safe(lambda: getattr(x, "team_name", "?"), "?") for x in teams[:10]]
+        user_team = _safe(lambda: getattr(gm, "user_team", None)) or _safe(lambda: getattr(live, "user_team", None))
+        user_name = _safe(lambda: getattr(user_team, "team_name", "None"), "None")
+        print(f"=== /api/team 404: requested={name!r}, league_teams={len(teams)}, user={user_name}, sample={names} ===")
+        return jsonify({
+            "error": "not found",
+            "debug": {
+                "requested": name,
+                "league_teams": len(teams),
+                "user_team": user_name,
+                "sample_names": names,
+                "has_gm": gm is not None,
+                "has_league": league is not None,
+            }
+        }), 404
     return jsonify(_team_payload(t))

@@ -15,7 +15,12 @@ async function loadTeam() {
   let d;
   try {
     const res = await fetch('/api/team/' + encodeURIComponent(TEAM_NAME));
-    if (!res.ok) { document.getElementById('tm-name').textContent = 'Team not found'; return; }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const dbg = err.debug ? `<br><small style="font-size:12px">Requested: ${esc(err.debug.requested)}<br>Teams in league: ${err.debug.league_teams}<br>User team: ${esc(err.debug.user_team)}<br>Sample: ${esc((err.debug.sample_names||[]).join(', '))}</small>` : '';
+      document.getElementById('tm-name').innerHTML = 'Team not found' + dbg;
+      return;
+    }
     d = await res.json();
   } catch (e) { console.error(e); return; }
   renderTeam(d);
