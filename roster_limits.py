@@ -316,9 +316,12 @@ def roster_limit_blockers(app):
                         return
                     from auto_resolve import auto_fix_roster_limit
                     demoted, err = auto_fix_roster_limit(_t, _over_by)
-                    if err:
-                        _app.add_news(f"Auto-demote failed: {err}")
-                        return
+                    # Apply partial progress even when the safe-demotion
+                    # list falls short: each applied demotion shrinks the
+                    # roster, so the blocker converges over successive
+                    # days instead of re-firing forever (the old code
+                    # returned here without applying the safe ones it
+                    # had found, freezing the calendar permanently).
                     for p in demoted:
                         try:
                             # Move to minors: remove from NHL roster, add to
@@ -342,6 +345,15 @@ def roster_limit_blockers(app):
                             pass
                     _names = ", ".join(
                         getattr(p, 'full_name', '?') for p in demoted)
+                    if err:
+                        if demoted:
+                            _app.add_news(
+                                f"Auto-demoted {len(demoted)} player(s) to "
+                                f"AHL ({_names}). Still over the limit: "
+                                f"{err}")
+                        else:
+                            _app.add_news(f"Auto-demote failed: {err}")
+                        return
                     _app.add_news(
                         f"Auto-demoted {len(demoted)} player(s) to AHL "
                         f"({_names}). All were waiver-exempt or low-risk.")
