@@ -41,7 +41,7 @@ QPushButton#nav-btn {
     font-size: 13px;
     font-weight: 700;
     letter-spacing: 1px;
-    padding: 10px 16px;
+    padding: 10px 10px;
 }
 QPushButton#nav-btn:hover {
     color: #ffffff;

@@ -8788,6 +8788,34 @@ NHL League Office""",
                 self._results_by_matchup[
                     (key, id(game_result.get('home_team')),
                      id(game_result.get('away_team')))] = game_result
+        # Feed team.recent_results (read by hub, arena atmosphere, fan
+        # sentiment). Bounded at 30 entries, oldest dropped.
+        try:
+            home = game_result.get('home_team')
+            away = game_result.get('away_team')
+            winner = game_result.get('winner')
+            wname = getattr(winner, 'team_name', None)
+            went_ot = bool(game_result.get('overtime') or game_result.get('shootout'))
+            for t in (home, away):
+                if t is None:
+                    continue
+                rr = getattr(t, 'recent_results', None)
+                if not isinstance(rr, list):
+                    rr = []
+                    try:
+                        t.recent_results = rr
+                    except Exception:
+                        continue
+                tname = getattr(t, 'team_name', None)
+                if wname is not None and tname == wname:
+                    rr.append('W')
+                elif went_ot:
+                    rr.append('OTL')
+                else:
+                    rr.append('L')
+                del rr[:-30]
+        except Exception:
+            pass
 
     def _sim_game_guaranteed(self, home_team, away_team, game, game_date,
                              is_preseason=False):

@@ -58,6 +58,22 @@ def _is_goalie(p):
         return False
 
 
+def _pstat(p, field, default=0):
+    """Authoritative season stat for a player.
+
+    The sim writes season totals to p.stats (PlayerStats); the direct
+    Player attributes (p.goals etc.) are legacy and never updated by the
+    sim (see awards_race.py). Falls back to the direct attribute so
+    non-Player objects and old saves still work.
+    """
+    st = getattr(p, "stats", None)
+    if st is not None:
+        v = getattr(st, field, None)
+        if v is not None:
+            return v
+    return getattr(p, field, default)
+
+
 def _pos_group(p):
     pos = _clean_position(getattr(p, "primary_position", ""))
     if pos.upper() == "G":
@@ -92,7 +108,7 @@ def _apply_leader_filters(pairs, pos="All", min_gp=0, team="All"):
         try:
             if pos != "All" and _pos_group(p) != pos:
                 continue
-            gp = int(getattr(p, "games_played", 0) or 0)
+            gp = int(_pstat(p, "games_played") or 0)
             if gp < min_gp:
                 continue
             if team != "All" and tname != team:
@@ -105,9 +121,9 @@ def _apply_leader_filters(pairs, pos="All", min_gp=0, team="All"):
 
 def _leader_row(p, tname, extra=None):
     pos = _safe(lambda: _clean_position(getattr(p, "primary_position", "")), "?")
-    gp = int(getattr(p, "games_played", 0) or 0)
-    g = int(getattr(p, "goals", 0) or 0)
-    a = int(getattr(p, "assists", 0) or 0)
+    gp = int(_pstat(p, "games_played") or 0)
+    g = int(_pstat(p, "goals") or 0)
+    a = int(_pstat(p, "assists") or 0)
     row = {
         "player": p,
         "id": _safe(lambda: str(getattr(p, "id", id(p))), ""),
@@ -115,19 +131,19 @@ def _leader_row(p, tname, extra=None):
         "team": tname, "pos": pos, "gp": gp, "g": g, "a": a,
         "pts": g + a,
         "ppg": round((g + a) / gp, 2) if gp else 0.0,
-        "pm": int(getattr(p, "plus_minus", 0) or 0),
-        "pim": int(getattr(p, "penalty_minutes", 0) or 0),
-        "sog": int(getattr(p, "shots", 0) or getattr(p, "shots_on_goal", 0) or 0),
+        "pm": int(_pstat(p, "plus_minus") or 0),
+        "pim": int(_pstat(p, "penalty_minutes") or 0),
+        "sog": int(_pstat(p, "shots") or getattr(p, "shots_on_goal", 0) or 0),
         "age": int(getattr(p, "age", 0) or 0),
         "is_goalie": _is_goalie(p),
     }
     if row["is_goalie"]:
-        row["w"] = int(getattr(p, "wins", 0) or 0)
-        row["l"] = int(getattr(p, "losses", 0) or 0)
-        row["sv_pct"] = round(float(getattr(p, "save_percentage", 0) or 0), 3)
-        row["gaa"] = round(float(getattr(p, "goals_against_avg", 0) or 0), 2)
-        row["so"] = int(getattr(p, "shutouts", 0) or 0)
-        row["sa"] = int(getattr(p, "shots_against", 0) or 0)
+        row["w"] = int(_pstat(p, "wins") or 0)
+        row["l"] = int(_pstat(p, "losses") or 0)
+        row["sv_pct"] = round(float(_pstat(p, "save_percentage") or 0), 3)
+        row["gaa"] = round(float(_pstat(p, "goals_against_avg") or 0), 2)
+        row["so"] = int(_pstat(p, "shutouts") or 0)
+        row["sa"] = int(_pstat(p, "shots_against") or 0)
     if extra:
         row.update(extra)
     return row
@@ -236,6 +252,10 @@ class StatsScreen(BaseScreen):
         t.setSelectionBehavior(QTableWidget.SelectRows)
         t.verticalHeader().setVisible(False)
         t.horizontalHeader().setStretchLastSection(True)
+        # Keep headers readable when the table is empty: without a minimum,
+        # resizeColumnsToContents() collapses columns and clips labels
+        # ("Player" -> "laye").
+        t.horizontalHeader().setMinimumSectionSize(70)
         t.cellClicked.connect(self._on_cell_clicked)
         t._row_players = {}  # row -> player object for click navigation
         return t
@@ -399,7 +419,7 @@ class StatsScreen(BaseScreen):
     def _render_scoring(self, pg):
         pairs = self._filtered_pairs()
         skaters = [_leader_row(p, t) for p, t in pairs
-                   if not _is_goalie(p) and int(getattr(p, "games_played", 0) or 0) > 0]
+                   if not _is_goalie(p) and int(_pstat(p, "games_played") or 0) > 0]
         scorers = sorted(skaters, key=lambda r: (-r["pts"], -r["g"], -r["a"],
                                                  r["name"]))[:10]
         goals = sorted(skaters, key=lambda r: (-r["g"], -r["a"], -r["pts"],
@@ -540,7 +560,7 @@ class StatsScreen(BaseScreen):
                 if age > 26:
                     continue
                 m = am.skater_advanced(p)
-                goals = int(getattr(p, "goals", 0) or 0)
+                goals = int(_pstat(p, "goals") or 0)
                 xgf_pct = float(getattr(m, "xgf_pct", 50) or 50)
                 ixg = float(getattr(m, "ixg", 0) or 0)
                 pdo = float(getattr(m, "pdo", 100) or 100)
@@ -1100,16 +1120,16 @@ class StatsScreen(BaseScreen):
             pairs, _ = _leader_players(self.game)
             chase_cats = [
                 ("single_season_goals", "Goals",
-                 lambda p: int(getattr(p, "goals", 0) or 0)),
+                 lambda p: int(_pstat(p, "goals") or 0)),
                 ("single_season_assists", "Assists",
-                 lambda p: int(getattr(p, "assists", 0) or 0)),
+                 lambda p: int(_pstat(p, "assists") or 0)),
                 ("single_season_points", "Points",
-                 lambda p: (int(getattr(p, "goals", 0) or 0)
-                            + int(getattr(p, "assists", 0) or 0))),
+                 lambda p: (int(_pstat(p, "goals") or 0)
+                            + int(_pstat(p, "assists") or 0))),
                 ("single_season_wins", "Wins",
-                 lambda p: int(getattr(p, "wins", 0) or 0)),
+                 lambda p: int(_pstat(p, "wins") or 0)),
                 ("single_season_shutouts", "Shutouts",
-                 lambda p: int(getattr(p, "shutouts", 0) or 0)),
+                 lambda p: int(_pstat(p, "shutouts") or 0)),
             ]
             for key, label, fn in chase_cats:
                 rec = records.get(key)

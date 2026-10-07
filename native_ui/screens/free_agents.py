@@ -78,6 +78,13 @@ def _fa_pos_label(p):
 
 
 def _fa_pool(game):
+    # Prefer the GameManager.free_agents property: it reads the
+    # database_manager (players with team_name == "Free Agent"), while
+    # league.free_agents is a legacy list that stays empty on fresh careers.
+    gm = _resolve_gm(game)
+    pool = _safe(lambda: list(getattr(gm, "free_agents", None) or []), None)
+    if pool:
+        return pool
     league = _user_league(game)
     return _safe(lambda: list(getattr(league, "free_agents", None) or []),
                  []) or []

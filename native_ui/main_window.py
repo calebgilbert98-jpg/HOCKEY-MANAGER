@@ -11,6 +11,7 @@ import re
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QStackedWidget, QScrollArea, QFrame, QGridLayout,
+    QSizePolicy,
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QShortcut, QKeySequence
@@ -30,25 +31,29 @@ class TopBar(QWidget):
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(8)
 
-        # Brand
+        # Brand (never shrink below content: truncated "PUCK DYN." otherwise)
         brand_box = QVBoxLayout()
         brand_box.setSpacing(0)
         brand = QLabel("PUCK DYNASTY")
         brand.setObjectName("brand")
+        brand.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         brand_sub = QLabel("HOCKEY MANAGER")
         brand_sub.setObjectName("brand-sub")
+        brand_sub.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         brand_box.addWidget(brand)
         brand_box.addWidget(brand_sub)
         layout.addLayout(brand_box)
         layout.addSpacing(24)
 
-        # Nav buttons
+        # Nav buttons (Minimum horizontal policy: never elide labels like
+        # "TRANSACTIONS" -> "RANSACTION" when the window is at 1280px)
         self._nav_buttons = {}
         for name in ["CLUB", "PERSONNEL", "LEAGUE", "TRANSACTIONS",
                      "FINANCES", "SYSTEMS"]:
             btn = QPushButton(name)
             btn.setObjectName("nav-btn")
             btn.setCheckable(True)
+            btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(
                 lambda checked, n=name: self._main.show_section(n))
@@ -60,18 +65,21 @@ class TopBar(QWidget):
         # Inbox + Save
         self.inbox_btn = QPushButton("INBOX")
         self.inbox_btn.setObjectName("nav-btn")
+        self.inbox_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.inbox_btn.setCursor(Qt.PointingHandCursor)
         self.inbox_btn.clicked.connect(self._main.show_inbox)
         layout.addWidget(self.inbox_btn)
 
         self.save_btn = QPushButton("SAVE")
         self.save_btn.setObjectName("nav-btn")
+        self.save_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.save_btn.setCursor(Qt.PointingHandCursor)
         self.save_btn.clicked.connect(lambda: self._main.show_screen("save"))
         layout.addWidget(self.save_btn)
 
         self.mp_btn = QPushButton("MULTIPLAYER")
         self.mp_btn.setObjectName("nav-btn")
+        self.mp_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.mp_btn.setCursor(Qt.PointingHandCursor)
         self.mp_btn.clicked.connect(
             lambda: self._main.show_screen("multiplayer"))
@@ -79,6 +87,7 @@ class TopBar(QWidget):
 
         self.settings_btn = QPushButton("SETTINGS")
         self.settings_btn.setObjectName("nav-btn")
+        self.settings_btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
         self.settings_btn.setCursor(Qt.PointingHandCursor)
         self.settings_btn.clicked.connect(
             lambda: self._main.show_screen("settings"))
@@ -86,6 +95,7 @@ class TopBar(QWidget):
 
         self.shortcuts_btn = QPushButton("?")
         self.shortcuts_btn.setObjectName("nav-btn")
+        self.shortcuts_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         self.shortcuts_btn.setCursor(Qt.PointingHandCursor)
         self.shortcuts_btn.setToolTip("Keyboard shortcuts (?)")
         self.shortcuts_btn.clicked.connect(
@@ -550,13 +560,87 @@ class HubPage(QWidget):
                 return v
         return default
 
+    @staticmethod
+    def _team_name_of(t):
+        """Normalize a schedule team ref (Team object or plain string) to a name."""
+        if t is None:
+            return ""
+        if isinstance(t, str):
+            return t
+        return getattr(t, "team_name", "") or ""
+
+    def _sched_date(self, g):
+        if isinstance(g, (tuple, list)) and len(g) >= 1:
+            return g[0]
+        return self._game_val(g, "date")
+
     def _sched_teams(self, g):
-        home = self._game_val(g, "home_team", "home", default="?")
-        away = self._game_val(g, "away_team", "away", default="?")
-        return home, away
+        if isinstance(g, (tuple, list)):
+            home = g[1] if len(g) > 1 else None
+            away = g[2] if len(g) > 2 else None
+        else:
+            home = self._game_val(g, "home_team", "home", default=None)
+            away = self._game_val(g, "away_team", "away", default=None)
+        return self._team_name_of(home), self._team_name_of(away)
+
+    def _sched_is_game(self, g):
+        """True if this schedule entry is a real game (not an event marker)."""
+        if isinstance(g, (tuple, list)):
+            return len(g) >= 3 and g[1] != 'NHL_EVENT'
+        if self._game_val(g, "event_type") == 'NHL_EVENT':
+            return False
+        if self._game_val(g, "playoff"):
+            return False
+        if (self._game_val(g, "league", default="NHL") or "NHL") != "NHL":
+            return False
+        return True
 
     def _sched_played(self, g):
         return bool(self._game_val(g, "played", default=False))
+
+    def _pstat(self, p, field, default=0):
+        """Authoritative season stat for a player.
+
+        The sim writes season totals to p.stats (PlayerStats); the direct
+        Player attributes (p.goals etc.) are legacy and never updated.
+        Falls back to the direct attribute for non-Player objects.
+        """
+        st = getattr(p, "stats", None)
+        if st is not None:
+            v = getattr(st, field, None)
+            if v is not None:
+                return v
+        return getattr(p, field, default)
+
+    def _team_recent_results(self, gm, team, n=10):
+        """Last-n W/L/OTL results for team, oldest first.
+
+        Prefers team.recent_results; derives from gm.game_results when the
+        attribute was never populated (root cause of the empty STREAK tile).
+        """
+        recent = getattr(team, "recent_results", None) or []
+        if recent:
+            return [str(r) for r in recent[-n:]]
+        tname = getattr(team, "team_name", "") or ""
+        if not tname:
+            return []
+        results = getattr(gm, "game_results", None) or []
+        out = []
+        for r in results:
+            if not isinstance(r, dict):
+                continue
+            h = self._team_name_of(r.get("home_team"))
+            a = self._team_name_of(r.get("away_team"))
+            if tname not in (h, a):
+                continue
+            w = self._team_name_of(r.get("winner"))
+            if w == tname:
+                out.append("W")
+            elif r.get("overtime") or r.get("shootout"):
+                out.append("OTL")
+            else:
+                out.append("L")
+        return out[-n:]
 
     # ---------- refresh ----------
     def refresh(self, game=None):
@@ -618,7 +702,7 @@ class HubPage(QWidget):
                 pass
 
             try:
-                recent = getattr(team, "recent_results", None) or []
+                recent = self._team_recent_results(gm, team, 10)
                 if recent:
                     self.streak_pill.setText(
                         "\U0001f525 " + str(recent[-1]).upper())
@@ -679,7 +763,7 @@ class HubPage(QWidget):
                 pass
 
             try:
-                recent = getattr(team, "recent_results", None) or []
+                recent = self._team_recent_results(gm, team, 10)
                 if recent:
                     last10 = recent[-10:]
                     w = sum(1 for r in last10 if str(r).upper().startswith("W"))
@@ -702,17 +786,33 @@ class HubPage(QWidget):
             except Exception:
                 pass
 
-            # ---- next game (dict-safe) ----
+            # ---- next game (date-driven: the schedule carries no 'played'
+            # flag; games sim when their date == current_date, so upcoming
+            # means date > today and involving the user's team) ----
             next_txt = "Next: \u2014"
             next_game = None
             try:
                 league = getattr(game, "league", None) or getattr(gm, "league", None)
                 sched = getattr(league, "schedule", None) or []
-                upcoming = [g for g in sched
-                            if not self._sched_played(g)
-                            and team_name in self._sched_teams(g)]
+                today = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+                upcoming = []
+                for g in sched:
+                    try:
+                        if not self._sched_is_game(g):
+                            continue
+                        gd = self._sched_date(g)
+                        if gd is None:
+                            continue
+                        if today is not None and gd <= today:
+                            continue
+                        home, away = self._sched_teams(g)
+                        if team_name and team_name in (home, away):
+                            upcoming.append((gd, g))
+                    except Exception:
+                        continue
+                upcoming.sort(key=lambda x: x[0])
                 if upcoming:
-                    next_game = upcoming[0]
+                    next_game = upcoming[0][1]
                     home, away = self._sched_teams(next_game)
                     if home == team_name:
                         next_txt = "Next: %s at %s" % (away, team_name)
@@ -745,7 +845,7 @@ class HubPage(QWidget):
             # ---- panels ----
             self._fill_standings(div_teams, team, division, primary, wash)
             self._fill_leaders(team)
-            self._fill_form(team)
+            self._fill_form(team, gm)
 
             # ---- ticker ----
             self._fill_ticker(game, gm)
@@ -871,10 +971,9 @@ class HubPage(QWidget):
             cols = QHBoxLayout()
             cols.setSpacing(10)
             for title, keyfn in [
-                    ("POINTS", lambda p: (getattr(p, "goals", 0) or 0)
-                     + (getattr(p, "assists", 0) or 0)),
-                    ("GOALS", lambda p: getattr(p, "goals", 0) or 0),
-                    ("ASSISTS", lambda p: getattr(p, "assists", 0) or 0)]:
+                    ("POINTS", lambda p: self._pstat(p, "goals") + self._pstat(p, "assists")),
+                    ("GOALS", lambda p: self._pstat(p, "goals")),
+                    ("ASSISTS", lambda p: self._pstat(p, "assists"))]:
                 col = QVBoxLayout()
                 col.setSpacing(2)
                 t = QLabel(title)
@@ -912,11 +1011,12 @@ class HubPage(QWidget):
         except Exception as e:
             print("[hub] leaders failed: %s" % e)
 
-    def _fill_form(self, team):
+    def _fill_form(self, team, gm=None):
         panel = self.panel_form
         self._clear_panel(panel)
         try:
-            recent = getattr(team, "recent_results", None) or []
+            gm = gm or getattr(self._main, "game", None)
+            recent = self._team_recent_results(gm, team, 10)
             if recent:
                 streak_l = QLabel("STREAK   " + str(recent[-1]).upper())
             else:
@@ -971,8 +1071,26 @@ class HubPage(QWidget):
             try:
                 league = getattr(game, "league", None) or getattr(gm, "league", None)
                 sched = getattr(league, "schedule", None) or []
-                played = [g for g in sched if self._sched_played(g)]
-                for g in played[-15:]:
+                today = getattr(game, "current_date", None) or getattr(gm, "current_date", None)
+                played = []
+                for g in sched:
+                    try:
+                        if not self._sched_is_game(g):
+                            continue
+                        gd = self._sched_date(g)
+                        if gd is None:
+                            continue
+                        # date-driven: a game is played once its date has passed
+                        if self._game_val(g, "played", default=None) is not None:
+                            if not self._sched_played(g):
+                                continue
+                        elif today is not None and gd > today:
+                            continue
+                        played.append((gd, g))
+                    except Exception:
+                        continue
+                played.sort(key=lambda x: x[0])
+                for _, g in played[-15:]:
                     home, away = self._sched_teams(g)
                     hs = self._game_val(g, "home_score", "home_goals", default=0)
                     aws = self._game_val(g, "away_score", "away_goals", default=0)
@@ -1332,7 +1450,15 @@ class MainWindow(QMainWindow):
         close = QPushButton("Close")
         close.clicked.connect(dlg.accept)
         layout.addWidget(close)
-        dlg.exec()
+        # Automation bypass: modal exec() hard-blocks scripted UI drivers
+        # (visual test bots). PUCK_DYNASTY_NO_MODAL=1 logs the blockers and
+        # skips the dialog instead of blocking forever. Real users unaffected.
+        if os.environ.get("PUCK_DYNASTY_NO_MODAL"):
+            print("[blockers] (%d, auto-skipped modal): %s" % (
+                len(blockers),
+                "; ".join(b.get("title", "?") for b in blockers)))
+        else:
+            dlg.exec()
         # If the club can't dress 18+2, offer the AHL recall picker.
         # maybe_open_recall_picker is a no-op when there's no shortfall.
         try:

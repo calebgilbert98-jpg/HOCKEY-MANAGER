@@ -141,6 +141,13 @@ def _morale_label(v):
 
 
 def _player_salary(p):
+    """Per-player cap hit: contract salary first (matches finances screen),
+    then direct .salary. The direct Player.salary attr is legacy/unset."""
+    c = _safe(lambda: getattr(p, "contract", None))
+    if c is not None:
+        hit = _safe(lambda: int(getattr(c, "salary", 0) or 0), 0)
+        if hit:
+            return hit
     return _safe(lambda: int(getattr(p, "salary", 0) or 0), 0) or 0
 
 
@@ -273,7 +280,9 @@ class RosterTable(PlayerTable):
         c = _safe(lambda: getattr(p, "contract", None))
         ovr = _player_ovr(p)
         sal = _player_salary(p)
-        morale100 = _safe(lambda: int(getattr(p, "morale", 0) or 0), 0) * 10
+        # Morale is 1-100 on the Player (the old x10 display mapping was a bug
+        # and was removed; the hub already shows the raw 1-100 value).
+        morale100 = _safe(lambda: int(getattr(p, "morale", 0) or 0), 0)
         vals = {
             "jersey": str(_safe(lambda: getattr(p, "jersey_number", ""), "")),
             "name": _safe(lambda: getattr(p, "full_name", "?"), "?"),
