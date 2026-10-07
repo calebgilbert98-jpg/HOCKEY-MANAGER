@@ -255,18 +255,37 @@ def rfa_rights_at_impasse(player) -> bool:
 # Offer-sheet compensation
 # ---------------------------------------------------------------------------
 
-def offer_sheet_compensation(aav: int) -> Tuple[str, List[int]]:
+OFFER_SHEET_COMPENSATION_BASE_CAP = 88_000_000  # 2025 cap when bands were set
+
+def _scaled_offer_sheet_bands(cap: int = 0):
+    """Scale compensation bands by current cap vs 2025 base."""
+    base = OFFER_SHEET_COMPENSATION_BASE_CAP
+    try:
+        cap = int(cap or 0)
+        if cap <= 0:
+            return OFFER_SHEET_COMPENSATION
+        scale = cap / base
+        return [
+            (int(upper * scale), label, picks)
+            for upper, label, picks in OFFER_SHEET_COMPENSATION
+        ]
+    except Exception:
+        return OFFER_SHEET_COMPENSATION
+
+def offer_sheet_compensation(aav: int, cap: int = 0) -> Tuple[str, List[int]]:
     """(label, picks) for an offer sheet at the given AAV.
 
     Returns ([], "No compensation") below the first band.
+    Bands scale with the salary cap (2025 base: $88M).
     """
     a = int(aav or 0)
-    for upper, label, picks in OFFER_SHEET_COMPENSATION:
+    bands = _scaled_offer_sheet_bands(cap)
+    for upper, label, picks in bands:
         if a <= upper:
             return label, list(picks)
     # Above the top band: the maximum compensation.
-    if OFFER_SHEET_COMPENSATION:
-        label, picks = OFFER_SHEET_COMPENSATION[-1][1], OFFER_SHEET_COMPENSATION[-1][2]
+    if bands:
+        label, picks = bands[-1][1], bands[-1][2]
         return label, list(picks)
     return "No compensation", []
 

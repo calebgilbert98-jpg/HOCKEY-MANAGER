@@ -157,6 +157,16 @@ def place_on_ltir(team: Any, player: Any, current_date: Any = None) -> Tuple[boo
         roster = getattr(team, "roster", None) or []
         if player not in roster:
             return False, "Player is not on the NHL roster."
+        # Track cap space at placement for correct relief calculation
+        # (relief = max(0, hit - space_at_placement), per CBA)
+        try:
+            import salary_cap_system as _scs
+            cap = int(getattr(team, "salary_cap", _scs.DEFAULT_CAP) or _scs.DEFAULT_CAP)
+            total_hit = sum(_player_cap_hit(p) for p in roster)
+            space = max(0, cap - total_hit)
+            player.ltir_space_at_placement = space
+        except Exception:
+            player.ltir_space_at_placement = 0
         player.ir_status = "LTIR"
         player.ir_placed_date = _today_iso(current_date)
         return True, ""
@@ -183,9 +193,16 @@ def ir_players(team: Any) -> List[Any]:
 
 
 def ltir_relief(team: Any) -> int:
-    """Cap relief pool: sum of LTIR players' cap hits. Never raises."""
+    """Cap relief pool: sum of (hit - space_at_placement) for LTIR players.
+    Per CBA, relief = max(0, hit - cap_space_when_placed_on_LTIR).
+    Never raises."""
     try:
-        return sum(_player_cap_hit(p) for p in ltir_players(team))
+        total = 0
+        for p in ltir_players(team):
+            hit = _player_cap_hit(p)
+            space = int(getattr(p, "ltir_space_at_placement", 0) or 0)
+            total += max(0, hit - space)
+        return total
     except Exception:
         return 0
 

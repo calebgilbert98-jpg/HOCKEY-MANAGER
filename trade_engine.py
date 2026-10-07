@@ -1273,8 +1273,8 @@ def player_trade_value_breakdown(player, perceiver_team=None, trade_context=Fals
         })
 
     _age_mult, _age_why = 1.0, ""
-    if age <= 21:
-        _age_mult, _age_why = 1.3, "21-and-under"
+    if age <= 23:
+        _age_mult, _age_why = 1.3, "23-and-under"
     elif 24 <= age <= 29:
         _age_mult, _age_why = 1.2, "prime age 24-29"
     elif age >= 35:

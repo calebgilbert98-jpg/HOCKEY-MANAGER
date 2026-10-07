@@ -3747,7 +3747,10 @@ class DraftPick:
         if self.is_expired:
             return 1
         # Base value decreases with later rounds and later years
-        base_values = {1: 1000, 2: 500, 3: 250, 4: 125, 5: 100, 6: 75, 7: 50}
+        # Real NHL pick values (1000-scale, round averages):
+        # 1st=1000, 2nd~140, 3rd~60, 4th~30, 5th~20, 6th~12, 7th~7
+        # (Previous values overvalued non-1sts by 3-10x, enabling pick-hoarding exploits)
+        base_values = {1: 1000, 2: 140, 3: 60, 4: 30, 5: 20, 6: 12, 7: 7}
         base_value = base_values.get(self.round, 25)
 
         # Decrease value for future years (anchored to the upcoming draft

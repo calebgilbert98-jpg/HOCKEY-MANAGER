@@ -4198,6 +4198,21 @@ NHL League Office""",
             except Exception:
                 pass
     def handle_contract_offer(self, person, extension=False, notify="popup"):
+        # CBA: player bought out cannot re-sign with same team for 1 year
+        if not extension:
+            try:
+                from buyout_window import buyout_re_sign_banned
+                user_team = getattr(self, "user_team", None)
+                team_name = getattr(user_team, "team_name", "") if user_team else ""
+                if team_name and buyout_re_sign_banned(person, team_name):
+                    try:
+                        self._ui_notify("warning", "Can't sign",
+                            f"{getattr(person, 'full_name', 'Player')} was bought out by this team - CBA prohibits re-signing for 1 year.")
+                    except Exception:
+                        pass
+                    return False
+            except Exception:
+                pass
         # R1 (roster limits): Dec-1 ineligible RFAs can't sign anywhere --
         # refuse the offer up front with the real reason.
         try:
