@@ -1586,6 +1586,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.deadline import DeadlineScreen
         from native_ui.screens.development import DevelopmentScreen
         from native_ui.screens.draft import DraftScreen
+        from native_ui.screens.draft_central import DraftCentralScreen
         from native_ui.screens.dressing_room import DressingRoomScreen
         from native_ui.screens.fa_frenzy import FaFrenzyScreen
         from native_ui.screens.fantasy_draft import FantasyDraftScreen
@@ -1615,6 +1616,7 @@ class MainWindow(QMainWindow):
         from native_ui.screens.schedule import ScheduleScreen
         from native_ui.screens.scouting import ScoutingScreen
         from native_ui.screens.season_goals import SeasonGoalsScreen
+        from native_ui.screens.season_meeting import SeasonMeetingScreen
         from native_ui.screens.season_summary import SeasonSummaryScreen
         from native_ui.screens.settings import SettingsScreen
         from native_ui.screens.setup import SetupScreen
@@ -1669,6 +1671,7 @@ class MainWindow(QMainWindow):
             "schedule": ScheduleScreen,
             "playoffs": PlayoffsScreen,
             "draft": DraftScreen,
+            "draft_central": DraftCentralScreen,
             "lottery": LotteryScreen,
             "history": HistoryScreen,
             "season_summary": SeasonSummaryScreen,
