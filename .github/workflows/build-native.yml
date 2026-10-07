@@ -193,8 +193,12 @@ jobs:
           prerelease: false
 
       - name: Post to Discord
-        # Announces the release in the Quickmuck #dev-updates forum's "Releases"
-        # thread (one thread, one message per release -- no duplicate threads).
+        # Announces the release in the Quickmuck #dev-updates forum:
+        # - the "Releases" thread ALWAYS gets the release announcement;
+        # - the "Gameplay mechanics log", "Playtest results", and
+        #   "UI Screenshots" threads get per-release commit summaries when
+        #   the commits since the previous release tag match their keywords
+        #   (a thread with no matching commits is skipped -- never an empty post).
         # Uses the DISCORD_BOT_TOKEN repo secret -- never hardcode the token.
         # A Discord outage must not fail the release, so failures warn only.
         if: success()
@@ -203,7 +207,11 @@ jobs:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           python - << 'PYEOF'
-          import os, json, urllib.request, urllib.error
+          import json
+          import os
+          import subprocess
+          import urllib.request
+          import urllib.error
 
           token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
           if not token:
@@ -211,36 +219,125 @@ jobs:
               raise SystemExit(0)
 
           version = "${{ steps.version.outputs.APP_VERSION }}"
-          thread_id = "1557519153404055593"  # Quickmuck #dev-updates "Releases" thread
 
-          content = (
+          # Quickmuck #dev-updates forum threads.
+          THREADS = {
+              "releases": "1557519153404055593",  # Releases
+              "gameplay": "1557494907105443873",  # Gameplay mechanics log
+              "playtest": "1557494914927824898",  # Playtest results
+              "ui":       "1557494927116476526",  # UI Screenshots
+          }
+
+          # Keyword -> thread key (case-insensitive substring match).
+          # One commit can land in more than one bucket.
+          CATEGORIES = {
+              "ui":       ["ui", "hub", "screen", "launcher", "panel", "theme",
+                           "visual"],
+              "gameplay": ["sim", "blocker", "roster", "trade", "ai", "exploit",
+                           "mechanic", "gameplay"],
+              "playtest": ["bot", "playtest", "730", "sim run"],
+          }
+          CATEGORY_LABELS = {
+              "ui": "UI",
+              "gameplay": "Gameplay",
+              "playtest": "Playtest",
+          }
+
+          def discord_post(thread_id, content):
+              """Post one message; warn (never fail the workflow) on errors."""
+              payload = json.dumps({"content": content[:2000]}).encode("utf-8")
+              req = urllib.request.Request(
+                  f"https://discord.com/api/v10/channels/{thread_id}/messages",
+                  data=payload,
+                  headers={
+                      "Authorization": f"Bot {token}",
+                      "Content-Type": "application/json",
+                      "User-Agent": "PuckDynastyBot/1.0",
+                  },
+                  method="POST",
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as resp:
+                      result = json.load(resp)
+                      print(f"Posted to thread {thread_id}: "
+                            f"message id={result.get('id')}")
+              except urllib.error.HTTPError as e:
+                  err_body = e.read().decode("utf-8", "replace")[:500]
+                  print(f"::warning::Discord post to {thread_id} failed: "
+                        f"HTTP {e.code}: {err_body}")
+              except Exception as e:
+                  print(f"::warning::Discord post to {thread_id} failed: {e}")
+
+          def run_git(args):
+              try:
+                  return subprocess.run(
+                      ["git"] + args,
+                      capture_output=True, text=True, timeout=120,
+                  )
+              except Exception as e:
+                  print(f"::warning::git {' '.join(args)} failed: {e}")
+                  return None
+
+          # 1. The Releases thread always gets the announcement.
+          discord_post(
+              THREADS["releases"],
               f"v{version} is live! "
               f"Download: https://github.com/calebgilbert98-jpg/HOCKEY-MANAGER"
-              f"/releases/tag/native-v{version}"
+              f"/releases/tag/native-v{version}",
           )
-          content = content[:2000]
 
-          payload = json.dumps({
-              "content": content,
-          }).encode("utf-8")
+          # 2. Collect commits since the previous release tag.
+          # actions/checkout is shallow by default, so unshallow first.
+          r = run_git(["rev-parse", "--is-shallow-repository"])
+          if r is not None and r.returncode == 0 and r.stdout.strip() == "true":
+              run_git(["fetch", "--unshallow", "--tags", "--quiet"])
+          else:
+              run_git(["fetch", "--tags", "--quiet"])
 
-          req = urllib.request.Request(
-              f"https://discord.com/api/v10/channels/{thread_id}/messages",
-              data=payload,
-              headers={
-                  "Authorization": f"Bot {token}",
-                  "Content-Type": "application/json",
-                  "User-Agent": "PuckDynastyBot/1.0",
-              },
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=30) as resp:
-                  result = json.load(resp)
-                  print(f"Posted to Discord: message id={result.get('id')}")
-          except urllib.error.HTTPError as e:
-              err_body = e.read().decode("utf-8", "replace")[:500]
-              print(f"::warning::Discord post failed: HTTP {e.code}: {err_body}")
-          except Exception as e:
-              print(f"::warning::Discord post failed: {e}")
+          prev_tag = None
+          r = run_git(["tag", "--list", "native-v*", "--sort=-v:refname"])
+          if r is not None and r.returncode == 0:
+              tags = [t.strip() for t in r.stdout.splitlines() if t.strip()]
+              cur = f"native-v{version}"
+              if cur in tags:
+                  idx = tags.index(cur)
+                  if idx + 1 < len(tags):
+                      prev_tag = tags[idx + 1]
+              elif tags:
+                  # Current tag not visible yet (fetch race); use the newest
+                  # visible tag as the baseline.
+                  prev_tag = tags[0]
+                  print(f"::warning::{cur} not in tag list; using {prev_tag} "
+                        f"as previous-release baseline")
+
+          commits = []
+          if prev_tag:
+              r = run_git(["log", f"{prev_tag}..HEAD", "--oneline",
+                           "--no-decorate"])
+              if r is not None and r.returncode == 0:
+                  commits = [c.strip() for c in r.stdout.splitlines()
+                             if c.strip()]
+              print(f"Found {len(commits)} commits since {prev_tag}")
+          else:
+              print("::warning::Could not determine previous release tag -- "
+                    "skipping categorized thread posts")
+
+          # 3. Bucket commits by keyword; post a summary per matching thread.
+          buckets = {key: [] for key in CATEGORIES}
+          for commit in commits:
+              lowered = commit.lower()
+              for key, keywords in CATEGORIES.items():
+                  if any(kw in lowered for kw in keywords):
+                      buckets[key].append(commit)
+
+          for key in ("ui", "gameplay", "playtest"):
+              items = buckets[key]
+              if not items:
+                  continue  # nothing relevant: skip the thread entirely
+              label = CATEGORY_LABELS[key]
+              lines = ([f"v{version} {label} updates:"]
+                       + [f"- {c}" for c in items])
+              discord_post(THREADS[key], "\n".join(lines))
+
+          print("Discord posting complete.")
           PYEOF
