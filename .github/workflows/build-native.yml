@@ -193,7 +193,8 @@ jobs:
           prerelease: false
 
       - name: Post to Discord
-        # Announces the release in the Quickmuck #dev-updates forum.
+        # Announces the release in the Quickmuck #dev-updates forum's "Releases"
+        # thread (one thread, one message per release -- no duplicate threads).
         # Uses the DISCORD_BOT_TOKEN repo secret -- never hardcode the token.
         # A Discord outage must not fail the release, so failures warn only.
         if: success()
@@ -210,25 +211,21 @@ jobs:
               raise SystemExit(0)
 
           version = "${{ steps.version.outputs.APP_VERSION }}"
-          forum_id = "1557494208871407796"  # Quickmuck #dev-updates forum
+          thread_id = "1557519153404055593"  # Quickmuck #dev-updates "Releases" thread
 
-          title = f"v{version} released"
-          body = (
-              f"Puck Dynasty Native v{version} is live!\n\n"
+          content = (
+              f"v{version} is live! "
               f"Download: https://github.com/calebgilbert98-jpg/HOCKEY-MANAGER"
-              f"/releases/tag/native-v{version}\n\n"
-              f"Native Qt build (Steam target). No browser, no extensions."
+              f"/releases/tag/native-v{version}"
           )
-          title = title[:100]
-          body = body[:2000]
+          content = content[:2000]
 
           payload = json.dumps({
-              "name": title,
-              "message": {"content": body},
+              "content": content,
           }).encode("utf-8")
 
           req = urllib.request.Request(
-              f"https://discord.com/api/v10/channels/{forum_id}/threads",
+              f"https://discord.com/api/v10/channels/{thread_id}/messages",
               data=payload,
               headers={
                   "Authorization": f"Bot {token}",
@@ -240,7 +237,7 @@ jobs:
           try:
               with urllib.request.urlopen(req, timeout=30) as resp:
                   result = json.load(resp)
-                  print(f"Posted to Discord: forum post id={result.get('id')}")
+                  print(f"Posted to Discord: message id={result.get('id')}")
           except urllib.error.HTTPError as e:
               err_body = e.read().decode("utf-8", "replace")[:500]
               print(f"::warning::Discord post failed: HTTP {e.code}: {err_body}")
