@@ -59,4 +59,4 @@ jobs:
             Direct Python calls -- no HTTP overhead.
           files: dist/PuckDynasty-Native-v${{ steps.version.outputs.APP_VERSION }}-Windows.zip
           draft: false
-          prerelease: true
+          prerelease: false
