@@ -1004,7 +1004,7 @@ def do_trade_pick_propose(game, partner, partner_overall, info=None):
                         except Exception:
                             pass
                         try:
-                            game.add_news_story("DRAFT TRADE: " + summary)
+                            game.add_news("DRAFT TRADE: " + summary)
                         except Exception:
                             pass
                         result = {"ok": True, "summary": summary}

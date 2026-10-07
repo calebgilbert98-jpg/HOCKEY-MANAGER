@@ -440,7 +440,7 @@ class MainWindow(QMainWindow):
             print(f"[native] continue failed: {e}")
 
     def show_blockers(self, blockers):
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFrame
         dlg = QDialog(self)
         dlg.setWindowTitle("Can't advance yet")
         dlg.setMinimumWidth(600)
@@ -459,6 +459,18 @@ class MainWindow(QMainWindow):
             d.setWordWrap(True)
             cl.addWidget(t)
             cl.addWidget(d)
+            # Render action button if blocker provides one (label, callable)
+            action = b.get("action")
+            if action:
+                try:
+                    label, callback = action
+                    btn = QPushButton(label)
+                    btn.setObjectName("primary-btn")
+                    # Close dialog then run the action
+                    btn.clicked.connect(lambda _=False, cb=callback: (dlg.accept(), cb()))
+                    cl.addWidget(btn)
+                except Exception:
+                    pass
             layout.addWidget(card)
         close = QPushButton("Close")
         close.clicked.connect(dlg.accept)
