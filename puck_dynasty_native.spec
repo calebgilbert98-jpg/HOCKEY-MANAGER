@@ -39,9 +39,24 @@ def _collect_screens():
 
 _screen_mods = _collect_screens()
 
+# Fail fast at spec-parse time if the scan found nothing -- a broken
+# bundle (0 screens) is worse than a failed build.  This turns the
+# silent v0.26.25-v0.26.28 failure into a loud build error.
+if not _screen_mods:
+    raise RuntimeError(
+        "FATAL: _collect_screens() found 0 modules in native_ui/screens/ "
+        f"and native_ui/widgets/ under {_spec_dir}. Refusing to build a "
+        "bundle with no screens."
+    )
+print(f"### puck_dynasty_native.spec: {_screen_mods.__len__()} screen/widget modules will be bundled as hiddenimports")
+
 a = Analysis(
     ['puck_dynasty_native.py'],
-    pathex=[],
+    # Explicit pathex: PyInstaller must resolve hiddenimports like
+    # 'native_ui.screens.setup' against the repo root.  Relying on the
+    # implicit script-dir entry proved fragile (2 modules silently
+    # dropped in v0.26.29).
+    pathex=[_spec_dir],
     binaries=[],
     datas=[
         ('*.png', '.'),

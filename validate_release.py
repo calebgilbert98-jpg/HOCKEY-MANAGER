@@ -36,6 +36,9 @@ MIN_ZIP_MB = 50
 MAX_ZIP_MB = 200
 MIN_SCREENS_BUNDLED = 60  # we expect 63+; allow a small margin
 
+# Repo root = directory containing this script.
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # Screens that MUST be registered for the app to function at all.
 # Note: "hub" is instantiated directly (self.hub = HubPage), not via the
 # lazy _screen_classes registry, so it's checked separately.
@@ -146,29 +149,40 @@ def check_bundle_contents(zip_path, work_dir):
     ok("_internal folder present")
 
     print("Check 4: screen modules are bundled (the v0.26.25-27 bug)...")
-    # PyInstaller puts packages under _internal/<pkg>/ as .pyc, or in a
-    # PYZ archive. Check both.
-    screens_dir = os.path.join(internal, "native_ui", "screens")
+    # PyInstaller 6.x with a one-dir COLLECT build embeds pure-Python
+    # modules in a PYZ archive *inside the exe itself* (no separate .pyz
+    # file, no _internal/native_ui/ directory).  The module names appear
+    # uncompressed in the PYZ table of contents, so a byte search of the
+    # exe for b'native_ui.screens.<name>' is the reliable detection.
+    # (Searching for .pyc files on disk misses PYZ-embedded modules.)
     bundled = 0
-    if os.path.isdir(screens_dir):
-        bundled = len([f for f in os.listdir(screens_dir)
-                       if f.endswith((".pyc", ".py")) and f != "__init__"])
-        ok(f"found {bundled} screen modules in _internal/native_ui/screens/")
-    else:
-        # Fallback: search the whole tree for screen module names
-        found = set()
-        for root, dirs, files in os.walk(internal):
-            for f in files:
-                if f.startswith(("roster.", "setup.", "standings.")) and f.endswith(".pyc"):
-                    found.add(f)
-        bundled = len(found)
-        if bundled:
-            ok(f"found {bundled} screen modules via tree search")
+    try:
+        with open(exe, "rb") as f:
+            exe_bytes = f.read()
+    except Exception as e:
+        fail(f"could not read exe for module scan: {e}")
+    # Build the expected module list from the repo source
+    expected = set()
+    repo_screens = os.path.join(REPO_DIR, "native_ui", "screens")
+    repo_widgets = os.path.join(REPO_DIR, "native_ui", "widgets")
+    for pkg, d in (("native_ui.screens", repo_screens),
+                   ("native_ui.widgets", repo_widgets)):
+        if os.path.isdir(d):
+            for fn in os.listdir(d):
+                if fn.endswith(".py") and fn != "__init__.py":
+                    expected.add(f"{pkg}.{fn[:-3]}".encode())
+    found = {m.decode() for m in expected if m in exe_bytes}
+    bundled = len(found)
+    if bundled:
+        ok(f"found {bundled}/{len(expected)} screen/widget modules in exe PYZ TOC")
+        missing = sorted(m.decode() for m in expected - {m.encode() for m in found})
+        if missing:
+            print(f"    missing: {', '.join(missing)}")
     if bundled < MIN_SCREENS_BUNDLED:
         fail(
             f"only {bundled} screen modules bundled (need >= {MIN_SCREENS_BUNDLED}). "
             "This is the missing-modules bug: check puck_dynasty_native.spec "
-            "hiddenimports includes collect_submodules('native_ui.screens')."
+            "hiddenimports includes the _collect_screens() filesystem scan."
         )
     ok(f"screen module count OK ({bundled} >= {MIN_SCREENS_BUNDLED})")
     return True
