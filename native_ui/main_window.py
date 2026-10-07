@@ -284,6 +284,13 @@ class MainWindow(QMainWindow):
             "manager": ("native_ui.screens.manager", "ManagerScreen"),
             "fa_frenzy": ("native_ui.screens.fa_frenzy", "FAFrenzyScreen"),
             "fantasy_draft": ("native_ui.screens.fantasy_draft", "FantasyDraftScreen"),
+            "scouting": ("native_ui.screens.scouting", "ScoutingScreen"),
+            "contract_negotiation": ("native_ui.screens.contract_negotiation", "ContractNegotiationScreen"),
+            "dressing_room": ("native_ui.screens.dressing_room", "DressingRoomScreen"),
+            "media_center": ("native_ui.screens.media_center", "MediaCenterScreen"),
+            "records": ("native_ui.screens.records", "RecordsScreen"),
+            "shortlist": ("native_ui.screens.shortlist", "ShortlistScreen"),
+            "shot_chart_viewer": ("native_ui.screens.shot_chart_viewer", "ShotChartViewerScreen"),
         }
         # Systems pages
         for sys_name in ["clutch", "circumstance", "discipline",
