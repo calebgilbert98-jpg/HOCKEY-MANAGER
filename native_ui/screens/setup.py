@@ -90,10 +90,22 @@ class SetupScreen(BaseScreen):
         """Randomize GM profile and team, start immediately."""
         try:
             import random
-            # TODO: call game.new_career with random settings
-            QMessageBox.information(
-                self, "Quick Start",
-                "Quick Start will create a random career.")
+            teams = getattr(self.game.league, "teams", []) if hasattr(self.game, "league") else []
+            if not teams:
+                QMessageBox.warning(self, "Quick Start", "No teams available.")
+                return
+            team = random.choice(teams)
+            team_name = getattr(team, "name", str(team))
+            gm_name = f"GM {random.choice(['Alex', 'Sam', 'Jordan', 'Taylor', 'Chris'])}"
+
+            # Apply settings and start
+            if hasattr(self.game, "startup_settings"):
+                self.game.startup_settings = {"gm_name": gm_name, "user_team": team_name}
+            self.game.set_user_team(team_name)
+            self.game.setup_new_game()
+
+            # Navigate to hub
+            self.main_window.show_screen("hub")
         except Exception as e:
             QMessageBox.warning(self, "Quick Start", f"Failed: {e}")
 
@@ -101,11 +113,19 @@ class SetupScreen(BaseScreen):
         """Start a new career with the selected options."""
         try:
             gm_name = self._gm_name.text().strip()
-            team = self._team_combo.currentData()
-            # TODO: call game.new_career(gm_name, team)
-            QMessageBox.information(
-                self, "New Career",
-                f"Starting career as {gm_name}...")
+            team_name = self._team_combo.currentData()
+            if not team_name:
+                QMessageBox.warning(self, "New Career", "Please select a team.")
+                return
+
+            # Apply settings and start
+            if hasattr(self.game, "startup_settings"):
+                self.game.startup_settings = {"gm_name": gm_name, "user_team": team_name}
+            self.game.set_user_team(team_name)
+            self.game.setup_new_game()
+
+            # Navigate to hub
+            self.main_window.show_screen("hub")
         except Exception as e:
             QMessageBox.warning(self, "New Career", f"Failed: {e}")
 
@@ -113,8 +133,9 @@ class SetupScreen(BaseScreen):
         """Populate team list."""
         try:
             self._team_combo.clear()
-            # TODO: get team list from game
-            # For now, placeholder
-            pass
+            teams = getattr(self.game.league, "teams", []) if hasattr(self.game, "league") else []
+            for team in teams:
+                team_name = getattr(team, "name", str(team))
+                self._team_combo.addItem(team_name, team_name)
         except Exception:
             pass

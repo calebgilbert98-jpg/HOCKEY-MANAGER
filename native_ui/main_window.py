@@ -378,17 +378,45 @@ class MainWindow(QMainWindow):
     # --- Navigation ---
     def show_section(self, name):
         self.topbar.set_active(name)
-        # TODO: switch to section pages
-        print(f"[native] show_section: {name}")
+        # Map section names to screens
+        section_map = {
+            "hub": "hub",
+            "roster": "roster",
+            "lines": "lines",
+            "team": "team",
+            "league": "standings",
+            "transactions": "trades",
+            "inbox": "inbox",
+        }
+        screen = section_map.get(name, "hub")
+        self.show_screen(screen)
 
     def show_inbox(self):
-        print("[native] show_inbox")
+        self.show_screen("inbox")
 
     def save_game(self):
-        print("[native] save_game")
+        try:
+            if self.game and hasattr(self.game, "save_manager"):
+                self.game.save_manager.save_game()
+            elif self.game and hasattr(self.game, "save_game"):
+                self.game.save_game()
+        except Exception as e:
+            print(f"[native] save failed: {e}")
 
     def on_tile_click(self, title):
-        print(f"[native] tile clicked: {title}")
+        # Map hub tile titles to screens
+        tile_map = {
+            "Roster": "roster",
+            "Lines": "lines",
+            "Standings": "standings",
+            "Schedule": "schedule",
+            "Trades": "trades",
+            "Inbox": "inbox",
+            "Finances": "finances",
+            "Staff": "staff",
+        }
+        screen = tile_map.get(title, "hub")
+        self.show_screen(screen)
 
     def on_continue(self):
         """Direct Python call -- no HTTP round-trip."""
@@ -399,8 +427,15 @@ class MainWindow(QMainWindow):
             if blockers:
                 self.show_blockers(blockers)
             else:
-                # TODO: advance day
-                print(f"[native] continue: {label}")
+                # Advance the day
+                if hasattr(self.game, "simulate_day"):
+                    self.game.simulate_day()
+                # Refresh current screen
+                current = self._stack.currentWidget() if hasattr(self, "_stack") else None
+                if current and hasattr(current, "refresh"):
+                    current.refresh()
+                elif hasattr(self, "hub"):
+                    self.hub.refresh(self.game)
         except Exception as e:
             print(f"[native] continue failed: {e}")
 

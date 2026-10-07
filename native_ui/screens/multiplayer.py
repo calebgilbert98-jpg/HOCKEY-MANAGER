@@ -241,9 +241,12 @@ class MultiplayerScreen(BaseScreen):
         for their picks (infrastructure already exists in protocol.py).
         """
         try:
-            # TODO: wire into the actual draft system
-            # For now, mark that the draft flow is starting
-            print("[mp] starting fantasy draft for all players")
+            game = getattr(self.main_window, "game", None)
+            if game and hasattr(game, "start_interactive_fantasy_draft"):
+                game.start_interactive_fantasy_draft()
+                # Open the draft window for the host
+                if hasattr(game, "open_fantasy_draft_window"):
+                    game.open_fantasy_draft_window()
             self._status.setText("Fantasy draft starting...")
         except Exception as e:
             QMessageBox.warning(

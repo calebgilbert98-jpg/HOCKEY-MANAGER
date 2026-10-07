@@ -185,12 +185,34 @@ class LinesScreen(BaseScreen):
             full_map = {}
             for tab_id, tab in self._line_tabs.items():
                 full_map.update(tab.get_slot_map())
-            # TODO: call game.set_lines(full_map) or equivalent
-            print(f"[lines] saving {len(full_map)} slots")
+            # Save to game: user_team.lineup
+            user_team = getattr(self.game, "user_team", None)
+            if user_team is not None:
+                user_team.lineup = full_map
             QMessageBox.information(self, "Lines", "Lines saved.")
         except Exception as e:
             QMessageBox.warning(self, "Lines", f"Save failed: {e}")
 
     def refresh(self):
-        # TODO: load current lines from game object
-        pass
+        """Load current lines from game object."""
+        try:
+            user_team = getattr(self.game, "user_team", None)
+            if user_team is None:
+                return
+            lineup = getattr(user_team, "lineup", None)
+            if not lineup:
+                return
+            # Populate slots from saved lineup
+            for tab_id, tab in self._line_tabs.items():
+                slot_map = tab.get_slot_map()
+                for slot_id in slot_map:
+                    if slot_id in lineup:
+                        player = lineup[slot_id]
+                        # Find the slot widget and set player
+                        for i in range(tab.layout().count()):
+                            widget = tab.layout().itemAt(i).widget()
+                            if hasattr(widget, "slot_id") and widget.slot_id == slot_id:
+                                widget.set_player(player)
+                                break
+        except Exception:
+            pass

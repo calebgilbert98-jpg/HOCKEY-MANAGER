@@ -116,8 +116,16 @@ class EntityContextMenu(QMenu):
             QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             try:
-                # TODO: call game.place_on_waivers(player)
-                print(f"[ctx] placing {player} on waivers")
+                # Add to waiver list and flag the player
+                if hasattr(game, "waiver_list"):
+                    if player not in game.waiver_list:
+                        game.waiver_list.append(player)
+                player.on_waivers = True
+                # Remove from active roster if present
+                user_team = getattr(game, "user_team", None)
+                if user_team and hasattr(user_team, "roster"):
+                    if player in user_team.roster:
+                        user_team.roster.remove(player)
             except Exception as e:
                 print(f"[ctx] waivers failed: {e}")
 
@@ -130,8 +138,11 @@ class EntityContextMenu(QMenu):
             QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             try:
-                # TODO: call game.release_staff(staff)
-                print(f"[ctx] releasing {staff}")
+                game = getattr(main_window, "game", None)
+                if game and hasattr(game, "release_staff"):
+                    game.release_staff(staff)
+                else:
+                    print(f"[ctx] no release_staff on game")
             except Exception as e:
                 print(f"[ctx] release failed: {e}")
 
